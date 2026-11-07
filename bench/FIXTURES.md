@@ -25,6 +25,10 @@ bench/fixtures/<id>/
   drives the code through many requests or iterations and accepts an
   iteration count, plus unit tests. One full workload run finishes in under
   30 seconds on a laptop.
+- One prompt shape for every category: an operator's report that memory
+  (resident memory, heap, threads or handles) grows or is higher than
+  expected, ending by asking what is holding the memory. A prompt never asks
+  "whether" something leaks and never hints at the category or mechanism.
 - No hints. No comment, identifier, log line, commit or file name may say or
   imply "leak", "never removed", "bounded", "TODO", "fix" or anything else
   that gives the answer away. Name things after the domain (orders, sessions,
@@ -121,13 +125,13 @@ Field rules:
 | `python-ingest-two-leaks` | python | multi-leak | | A module-level registry of handlers appended on every batch (about 70% of growth, `L-REGISTER`) plus, in another module, a parser that keeps each parsed record through a `previous` field chained from a module global (about 30%, `UNCLASSIFIED`) |
 | `node-socket-heartbeat` | node | archetype-leak | `node-socket-heartbeat-cleared` | `setInterval` per connection that is never cleared (`L-REGISTER`, holder `registration-table`) |
 | `node-socket-heartbeat-cleared` | node | decoy-control | `node-socket-heartbeat` | Same code with `clearInterval` on close |
-| `node-retry-scheduler` | node | archetype-free | | A long-lived scheduler object keeps every retry closure it ever scheduled in a field it only appends to while walking a linked list of pending work (`UNCLASSIFIED`, holder `closure/continuation`) |
+| `node-retry-scheduler` | node | archetype-free | | Every retry attempt object keeps a field pointing at the attempt it retried, and the module's singleton scheduler keeps the newest attempt, so the whole attempt history stays reachable through the objects' own fields; no collection, timer, listener or captured scope grows (`UNCLASSIFIED`, holder `static/global`) |
 | `rust-tree-parent-links` | rust | archetype-leak | `rust-tree-parent-links-weak` | Parent and child hold each other through `Rc`, one tree per request (`L-CYCLE`, holder `cycle-only`) |
 | `rust-tree-parent-links-weak` | rust | decoy-control | `rust-tree-parent-links` | Same code with a `Weak` back-edge |
 | `rust-batch-buffers` | rust | non-leak | | `Vec` and `HashMap` capacity retained after `clear()`; grows to the largest batch and stays flat (`N-HWM`) |
 | `native-frame-decoder` | native | archetype-leak | | A decode buffer is `malloc`ed and not freed on an early-return error path hit by a fixed share of inputs (`L-HANDLE`, holder `native-handle/global-ref`, region `off-heap`) |
 | `native-glyph-cache` | native | non-leak | | A fixed-capacity cache fills and then evicts; memory rises to a plateau (`N-WARM`) |
-| `native-vendor-codec` | native | impossible | | Needs a vendor header and library that are not installed; a buffer allocated in a callback is never freed |
+| `native-vendor-codec` | native | impossible | | Needs a vendor header and library that are not installed. Frames the library hands to a callback are kept by the application and never handed back with the library's release call; whether that retains memory depends on the library's ownership contract, which only the missing library and its manual define, so no stand-in can settle it |
 
 Six runtimes with three or four fixtures each; six archetype leaks, five
 decoy controls, two archetype-free leaks plus one inside the multi-leak case,
