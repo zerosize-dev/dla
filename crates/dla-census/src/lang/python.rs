@@ -8,8 +8,8 @@ use regex::Regex;
 use super::{CallRule, Cx, Table, class_path, dedupe, describe, join_owner, link_name, rules};
 use crate::{
     ast::{ancestors, field_text, line, text, visit},
-    model::{Raw, Scope},
-    parse::{Lang, tree_sitter::Node},
+    model::{ProjectInfo, Raw, Scope},
+    parse::{Lang, parse, tree_sitter::Node},
     vocab,
 };
 
@@ -33,6 +33,56 @@ fn container_call() -> &'static Regex {
     R.get_or_init(|| {
         Regex::new(r"(?:^|\.)(?:dict|list|set|deque|defaultdict|OrderedDict|Counter|ChainMap|WeakValueDictionary|WeakKeyDictionary|WeakSet|bytearray|array|Queue|SimpleQueue|LifoQueue|PriorityQueue|ExitStack|WeakMethod)(?:\.\w+)?$").expect("static")
     })
+}
+
+fn singleton_marker() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)singleton|\b(?:cls|type\(self\))\._instance\b|get_instance|\b_instance\s*=\s*None")
+            .expect("static")
+    })
+}
+
+/// Records which classes are plausibly process-lifetime (instantiated at module
+/// level or from startup code, singleton-shaped) and which types each class holds.
+pub fn collect(src: &str, info: &mut ProjectInfo) {
+    let Ok(tree) = parse(Lang::Python, src) else {
+        return;
+    };
+    visit(tree.root_node(), &mut |n| match n.kind() {
+        "class_definition" => {
+            let name = field_text(n, "name", src).unwrap_or("");
+            if singleton_marker().is_match(text(n, src)) {
+                info.longlived.insert(name.to_owned());
+            }
+        }
+        "assignment" => {
+            let (Some(l), Some(r)) = (
+                n.child_by_field_name("left"),
+                n.child_by_field_name("right"),
+            ) else {
+                return;
+            };
+            if !text(l, src).starts_with("self.") {
+                return;
+            }
+            if let Some(c) = ancestors(n).find(|a| a.kind() == "class_definition") {
+                let cname = field_text(c, "name", src).unwrap_or("");
+                info.note_fields(cname, text(r, src));
+            }
+        }
+        "function_definition" => {
+            if super::entry_fn_name(field_text(n, "name", src).unwrap_or("")) {
+                info.longlived.extend(super::caps_idents(text(n, src)));
+            }
+        }
+        "call" if !ancestors(n).any(|a| a.kind() == "function_definition") => {
+            if let Some(f) = n.child_by_field_name("function") {
+                info.longlived.extend(super::caps_idents(text(f, src)));
+            }
+        }
+        _ => {}
+    });
 }
 
 fn cache_decorator() -> &'static Regex {
@@ -126,6 +176,7 @@ pub fn holders(cx: &mut Cx<'_>, root: Node<'_>) {
     let src = cx.src();
     let prefix = cx.owner_prefix();
     let mut found: Vec<Raw> = Vec::new();
+    let mut seen_attr: std::collections::HashSet<String> = std::collections::HashSet::new();
     visit(root, &mut |n| match n.kind() {
         "assignment" => {
             let (Some(l), Some(r)) = (
@@ -202,7 +253,21 @@ pub fn holders(cx: &mut Cx<'_>, root: Node<'_>) {
                         Holder::RegistrationTable => ("registry-field", Holder::RegistrationTable),
                         other => ("instance-field", other),
                     };
-                    let _ = kind;
+                    if h == Holder::ContainerField {
+                        // Only collections (or the link of a linked structure) held by
+                        // a plausibly process-lifetime class are container fields.
+                        let owner_class = cp.rsplit('.').next().unwrap_or("");
+                        if !(kind == "container" || kind == "instance" || link_name(attr))
+                            || !(cx.info.is_long_lived(owner_class)
+                                || cx.info.selfref.contains(owner_class))
+                        {
+                            return;
+                        }
+                    }
+                    // Repeated assignments to one attribute are one holder.
+                    if !seen_attr.insert(format!("{cp}.{attr}")) {
+                        return;
+                    }
                     let scope = if attr.starts_with('_') {
                         Scope::File
                     } else {
@@ -290,7 +355,9 @@ mod tests {
             lang: Lang::Python,
             is_test: false,
         };
-        let info = ProjectInfo::default();
+        let mut info = ProjectInfo::default();
+        collect(src, &mut info);
+        info.finish();
         let tree = parse(Lang::Python, src).unwrap();
         let mut cx = Cx::new(&f, &info);
         holders(&mut cx, tree.root_node());
@@ -299,7 +366,7 @@ mod tests {
 
     #[test]
     fn module_class_instance_and_calls() {
-        let src = "import threading\n_LISTENERS = {}\nLIMITS = (1, 2)\nNAMES = ['a']\nstore = Store()\nclass C:\n    seen = set()\n    def __init__(self):\n        self.rows = []\n        self.n = 0\n        self.lock = threading.local()\n@lru_cache(maxsize=None)\ndef f(x):\n    t = threading.Thread(target=g)\n    with open('p') as fh:\n        pass\n    signal.signal(2, h)\n";
+        let src = "import threading\n_LISTENERS = {}\nLIMITS = (1, 2)\nNAMES = ['a']\nstore = Store()\nclass C:\n    seen = set()\n    def __init__(self):\n        self.rows = []\n        self.n = 0\n        self.lock = threading.local()\n@lru_cache(maxsize=None)\ndef f(x):\n    t = threading.Thread(target=g)\n    with open('p') as fh:\n        pass\n    signal.signal(2, h)\napp = C()\n";
         let r = run(src);
         let got: Vec<(u32, &str, &str)> = r
             .iter()
@@ -316,9 +383,31 @@ mod tests {
                 (12, "cache-decorator", "static/global"),
                 (14, "spawn", "blocked-stack"),
                 (17, "registration", "registration-table"),
+                (18, "module-global", "static/global"),
             ]
         );
         assert_eq!(r[0].owner, "pkg.reg._LISTENERS");
         assert_eq!(r[3].owner, "pkg.reg.C.rows");
+    }
+
+    #[test]
+    fn transient_owners_and_non_collections_are_not_container_fields() {
+        // `Parsed` is a result object; `Server` is a role name; `Worker` is built at
+        // module level; `_fut` is rebound but is not a collection or a link.
+        let src = "class Parsed:\n    def __init__(self):\n        self.hits = []\n\nclass Server:\n    def __init__(self):\n        self._waiters = []\n        self._fut = None\n    def start(self):\n        self._waiters = []\n        self._fut = None\n\nclass Worker:\n    def __init__(self):\n        self.jobs = {}\n\nw = Worker()\n";
+        let r = run(src);
+        let fields: Vec<&str> = r
+            .iter()
+            .filter(|h| h.kind == "instance-field")
+            .map(|h| h.owner.as_str())
+            .collect();
+        assert_eq!(fields, ["pkg.reg.Server._waiters", "pkg.reg.Worker.jobs"]);
+    }
+
+    #[test]
+    fn class_held_by_a_long_lived_class_is_reachable() {
+        let src = "class Entry:\n    def __init__(self):\n        self.tags = []\n\nclass Registry:\n    def __init__(self):\n        self.e = Entry()\n";
+        let r = run(src);
+        assert!(r.iter().any(|h| h.owner == "pkg.reg.Entry.tags"), "{r:?}");
     }
 }

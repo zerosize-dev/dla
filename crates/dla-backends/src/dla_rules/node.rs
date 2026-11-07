@@ -17,7 +17,7 @@ const TIMER: &str = "node-timer-no-cleanup";
 const LISTENER: &str = "node-listener-no-removal";
 const CACHE: &str = "node-module-cache-unbounded";
 
-/// Rule table (mirrors `data/detectors/node.dla-fragment.toml`).
+/// Rule table (mirrors the `backend = "dla"` rows of `data/detectors/node.toml`).
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: CHAIN,

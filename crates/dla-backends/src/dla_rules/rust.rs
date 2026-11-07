@@ -18,7 +18,7 @@ const FORGET: &str = "rust-mem-forget";
 const INTO_RAW: &str = "rust-into-raw-unpaired";
 const RC_CYCLE: &str = "rust-rc-strong-cycle";
 
-/// Rule table (mirrors `data/detectors/rust.dla-fragment.toml`).
+/// Rule table (mirrors the `backend = "dla"` rows of `data/detectors/rust.toml`).
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: CHANNEL,

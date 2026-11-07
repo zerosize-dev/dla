@@ -1,7 +1,7 @@
 //! JVM rules (Java and Kotlin): unbounded static/singleton collections, listener
 //! registration without removal, Micrometer tags fed by request data.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::LazyLock;
 
 use dla_census::parse::{Lang, tree_sitter::Node};
@@ -19,7 +19,7 @@ const UNBOUNDED: &str = "jvm-unbounded-collection";
 const LISTENER: &str = "jvm-listener-no-removal";
 const MICROMETER: &str = "jvm-micrometer-request-tag";
 
-/// Rule table (mirrors `data/detectors/jvm.dla-fragment.toml`).
+/// Rule table (mirrors the `backend = "dla"` rows of `data/detectors/jvm.toml`).
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: CHAIN,
@@ -173,7 +173,70 @@ fn is_unbounded_container(type_and_init: &str) -> bool {
         && !CAPPED_QUEUE.is_match(type_and_init)
 }
 
-fn java_decls(idx: usize, file: &SrcFile, out: &mut Vec<Decl>) {
+/// Method names that register a long-lived subscriber on the owner.
+static REGISTRATION_METHOD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(subscribe|register|(add|attach)\w*(Listener|Observer|Subscriber|Handler|Callback|Hook))")
+        .expect("regex")
+});
+
+fn class_name_of<'a>(class: Node<'_>, src: &'a str) -> &'a str {
+    class
+        .child_by_field_name("name")
+        .map_or("", |n| txt(n, src))
+}
+
+/// True when the class itself is annotated as a singleton, exposes `getInstance`, or has a
+/// registration method (`subscribe`, `register...`) that makes its instances registries.
+fn class_is_long_lived(class: Node<'_>, src: &str) -> bool {
+    let cm = child_of_kind(class, &["modifiers"]).map_or("", |m| txt(m, src));
+    let body = txt(class, src);
+    has_singleton_annotation(cm)
+        || body.contains("getInstance(")
+        || body.contains("static final ") && body.contains(" INSTANCE")
+        || find_all(class, &["method_declaration"])
+            .into_iter()
+            .any(|m| {
+                m.child_by_field_name("name")
+                    .is_some_and(|n| REGISTRATION_METHOD.is_match(txt(n, src)))
+            })
+}
+
+/// Names of Java classes whose instances live as long as a singleton does: the singleton
+/// itself and every class on its `extends` chain, since the superclass fields live in it.
+fn long_lived_classes(files: &[SrcFile]) -> HashSet<String> {
+    let mut parent: HashMap<String, String> = HashMap::new();
+    let mut roots: Vec<String> = Vec::new();
+    for f in files.iter().filter(|f| f.lang == Lang::Java) {
+        let src = f.text.as_str();
+        for class in find_all(f.tree.root_node(), &["class_declaration"]) {
+            let name = class_name_of(class, src);
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(sup) = class.child_by_field_name("superclass") {
+                if let Some(base) = tokens(txt(sup, src)).into_iter().find(|t| *t != "extends") {
+                    parent.insert(name.to_owned(), base.to_owned());
+                }
+            }
+            if class_is_long_lived(class, src) {
+                roots.push(name.to_owned());
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    for r in roots {
+        let mut cur = Some(r);
+        while let Some(c) = cur {
+            if !out.insert(c.clone()) {
+                break;
+            }
+            cur = parent.get(&c).cloned();
+        }
+    }
+    out
+}
+
+fn java_decls(idx: usize, file: &SrcFile, long_lived: &HashSet<String>, out: &mut Vec<Decl>) {
     let src = file.text.as_str();
     for f in find_all(file.tree.root_node(), &["field_declaration"]) {
         let modifiers = child_of_kind(f, &["modifiers"]).map_or("", |m| txt(m, src));
@@ -188,13 +251,8 @@ fn java_decls(idx: usize, file: &SrcFile, out: &mut Vec<Decl>) {
         let Some(class) = class else { continue };
         let is_interface = class.kind() == "interface_declaration";
         let is_static = is_interface || modifiers.split_whitespace().any(|w| w == "static");
-        let singleton = {
-            let cm = child_of_kind(class, &["modifiers"]).map_or("", |m| txt(m, src));
-            let body = txt(class, src);
-            has_singleton_annotation(cm)
-                || body.contains("getInstance(")
-                || body.contains("static final ") && body.contains(" INSTANCE")
-        };
+        let singleton =
+            long_lived.contains(class_name_of(class, src)) || class_is_long_lived(class, src);
         if !(is_static || singleton) {
             continue;
         }
@@ -312,9 +370,10 @@ fn unbounded_collections(
     uses: &UseIndex,
 ) -> Vec<StaticHit> {
     let mut decls = Vec::new();
+    let long_lived = long_lived_classes(files);
     for (i, f) in files.iter().enumerate() {
         match f.lang {
-            Lang::Java => java_decls(i, f, &mut decls),
+            Lang::Java => java_decls(i, f, &long_lived, &mut decls),
             Lang::Kotlin => kotlin_decls(i, f, &mut decls),
             _ => {}
         }
@@ -675,6 +734,23 @@ mod tests {
 
     fn run(sources: &[(&str, &str)]) -> Vec<StaticHit> {
         check(&parse_sources(sources))
+    }
+
+    #[test]
+    fn collections_in_superclass_of_singleton_and_registries_are_flagged() {
+        let inherited = "import java.util.*;\nabstract class Base {\n  protected final Map<String, Object> store = new HashMap<>();\n  protected void remember(String k, Object v) { store.put(k, v); }\n}\n@Service\nclass SessionService extends Base {\n  void open(String id) { remember(id, new Object()); }\n}\n";
+        let hits = run(&[("src/S.java", inherited)]);
+        assert_eq!(sites(&hits, UNBOUNDED), ["src/S.java:3"]);
+        let bus = "import java.util.*;\nclass Bus {\n  private final List<Runnable> subs = new ArrayList<>();\n  void subscribe(Runnable r) { subs.add(r); }\n}\n";
+        let hits = run(&[("src/Bus.java", bus)]);
+        assert_eq!(sites(&hits, UNBOUNDED), ["src/Bus.java:3"]);
+        let with_removal = bus.replace(
+            "}\n}\n",
+            "}\n  void unsubscribe(Runnable r) { subs.remove(r); }\n}\nclass User { void f(Bus b, Runnable r) { b.unsubscribe(r); } void g(Bus b, Runnable r) { f(b, r); } }\n",
+        );
+        assert!(sites(&run(&[("src/Bus.java", &with_removal)]), UNBOUNDED).is_empty());
+        let transient = "import java.util.*;\nclass Plain {\n  private final List<String> xs = new ArrayList<>();\n  void put(String s) { xs.add(s); }\n}\n";
+        assert!(sites(&run(&[("src/P.java", transient)]), UNBOUNDED).is_empty());
     }
 
     #[test]

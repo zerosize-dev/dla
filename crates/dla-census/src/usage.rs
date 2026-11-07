@@ -33,6 +33,7 @@ const R_PREFIX: &str = "remove|delete|clear|pop|poll|drain|evict|unregister|unsu
 const R_EXACT: &str = "take|discard|off|close|free|stop|reset|truncate|shift|splice|swap_remove|unlink|kill|cache_clear|Delete|Close|Stop|Swap|Clear|Pop";
 const EMPTY_RHS: &str = r"^(?:nil|None|null|undefined|NULL|nullptr|0|false|\[\s*\]|\{\s*\}|\x22\x22|(?:Vec|HashMap|HashSet|BTreeMap|BTreeSet|VecDeque|dict|list|set|deque|Map|Set|Array)(?:::new)?(?:<[^>]*>)?\(\s*\)|new\s+(?:Map|Set|Array|WeakMap|WeakSet|[A-Z]\w*)(?:<[^>]*>)?\(\s*\)|make\([^)]*\)|None\s*;?)\s*[;,]?\s*(?://.*|#.*)?$";
 
+#[derive(Clone)]
 struct Patterns {
     writer_call: Regex,
     remover_call: Regex,
@@ -126,24 +127,39 @@ pub fn find(raws: &[Raw], files: &[SourceFile]) -> Vec<Usage> {
     let mut cache: HashMap<(String, bool), Option<Patterns>> = HashMap::new();
     let mut out = Vec::with_capacity(raws.len());
     for r in raws {
-        let Some(name) = r
-            .name
-            .as_deref()
-            .filter(|n| n.len() > 1 || matches!(r.scope, Scope::Lines(..) | Scope::File))
-        else {
+        let Some(name) = r.name.as_deref().filter(|n| {
+            n.len() > 1 || matches!(r.scope, Scope::Lines(..) | Scope::File | Scope::Project)
+        }) else {
             out.push(Usage::default());
             continue;
         };
+        // A one-character name is too common to chase across the project: look in the
+        // declaring file only.
+        let scope = match &r.scope {
+            Scope::Project if name.len() == 1 => &Scope::File,
+            other => other,
+        };
         let pats = cache
             .entry((name.to_owned(), r.member_access))
-            .or_insert_with(|| build(name, r.member_access));
+            .or_insert_with(|| build(name, r.member_access))
+            .clone();
         let Some(p) = pats.as_ref() else {
             out.push(Usage::default());
             continue;
         };
+        // Inside the declaring file of a JVM class, a field is also used unqualified
+        // (`store.put(..)` with no `this.`); elsewhere only `x.name` counts.
+        let bare = if r.member_access {
+            cache
+                .entry((name.to_owned(), false))
+                .or_insert_with(|| build(name, false))
+                .clone()
+        } else {
+            None
+        };
         let mut u = Usage::default();
         for c in &code {
-            let in_scope = match &r.scope {
+            let in_scope = match scope {
                 Scope::Project => true,
                 Scope::Dir(d) => dir_of(&c.file.rel) == d,
                 Scope::File | Scope::Lines(..) => c.file.rel == r.file,
@@ -151,8 +167,8 @@ pub fn find(raws: &[Raw], files: &[SourceFile]) -> Vec<Usage> {
             if !in_scope {
                 continue;
             }
-            let (lo, hi) = match r.scope {
-                Scope::Lines(a, b) => (a, b),
+            let (lo, hi) = match scope {
+                Scope::Lines(a, b) => (*a, *b),
                 _ => (1, u32::MAX),
             };
             for (i, l) in c.lines.iter().enumerate() {
@@ -163,6 +179,12 @@ pub fn find(raws: &[Raw], files: &[SourceFile]) -> Vec<Usage> {
                 if c.file.rel == r.file && ln == r.line {
                     continue;
                 }
+                let jvm_same_file =
+                    c.file.rel == r.file && matches!(c.file.lang, Lang::Java | Lang::Kotlin);
+                let p = match (&bare, jvm_same_file) {
+                    (Some(b), true) => b,
+                    _ => p,
+                };
                 classify(p, l, &mut u, &format!("{}:{ln}", c.file.rel));
             }
         }
@@ -276,5 +298,28 @@ mod tests {
         let u = find(&[raw("items", "a.js", 9, Scope::Project, false)], &[t, f]);
         assert_eq!(u[0].writers, ["a.js:2"]);
         assert!(u[0].removers.is_empty());
+    }
+
+    #[test]
+    fn java_unqualified_field_use_and_short_static_names() {
+        let f = file(
+            "p/B.java",
+            "class B {\n  protected final Map store = new HashMap();\n  void a(String k) { store.put(k, k); }\n  void b(String k) { store.remove(k); }\n}\nclass Z {\n  static final Deque D = new ArrayDeque();\n  static void p(String s) { D.addLast(s); }\n  static String q() { return D.pollFirst(); }\n}\n",
+        );
+        let other = file(
+            "p/O.java",
+            "class O { void f() { store.put(1, 2); D.addLast(1); } }\n",
+        );
+        let u = find(
+            &[
+                raw("store", "p/B.java", 2, Scope::Project, true),
+                raw("D", "p/B.java", 7, Scope::Project, false),
+            ],
+            &[f, other],
+        );
+        assert_eq!(u[0].writers, ["p/B.java:3"]);
+        assert_eq!(u[0].removers, ["p/B.java:4"]);
+        assert_eq!(u[1].writers, ["p/B.java:8"]);
+        assert_eq!(u[1].removers, ["p/B.java:9"]);
     }
 }

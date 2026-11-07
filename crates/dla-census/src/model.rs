@@ -111,4 +111,52 @@ pub struct ProjectInfo {
     pub rc_edges: std::collections::HashMap<String, Vec<(String, bool)>>,
     /// Rust: structs that hold a `Weak` pointer to the named type.
     pub weak: std::collections::HashSet<(String, String)>,
+    /// Owner types that are plausibly process-lifetime: named by a static or module
+    /// global, constructed in `main`/`init`/startup code, self-recursive structures,
+    /// or reached from another long-lived owner (see [`ProjectInfo::finish`]).
+    pub longlived: std::collections::HashSet<String>,
+    /// For each owner type, the type names mentioned by its fields.
+    pub holds: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl ProjectInfo {
+    /// Closes `longlived` over `holds`: whatever a long-lived owner holds is reachable
+    /// for as long as the owner is.
+    pub fn finish(&mut self) {
+        let named = self
+            .holds
+            .keys()
+            .filter(|t| crate::vocab::longlived_type_name().is_match(t))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.longlived.extend(named);
+        let mut work: Vec<String> = self.longlived.iter().cloned().collect();
+        while let Some(t) = work.pop() {
+            if let Some(next) = self.holds.get(&t) {
+                for n in next {
+                    if self.longlived.insert(n.clone()) {
+                        work.push(n.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    /// True when instances of `ty` are plausibly alive for the whole process: a
+    /// project-derived fact or a role name such as `Registry`, `Cache` or `Server`.
+    pub fn is_long_lived(&self, ty: &str) -> bool {
+        self.longlived.contains(ty) || crate::vocab::longlived_type_name().is_match(ty)
+    }
+
+    /// Records that `owner` mentions the types named in `ty_text` and, when
+    /// `owner` itself appears in it, that it is a recursive structure.
+    pub fn note_fields(&mut self, owner: &str, ty_text: &str) {
+        for t in crate::lang::caps_idents(ty_text) {
+            if t == owner {
+                self.longlived.insert(owner.to_owned());
+            } else {
+                self.holds.entry(owner.to_owned()).or_default().push(t);
+            }
+        }
+    }
 }

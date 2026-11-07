@@ -333,3 +333,23 @@ pub fn assigned_times(text: &str, prefix: &str, name: &str, min: usize) -> bool 
     ));
     re.is_ok_and(|r| r.find_iter(text).count() >= min)
 }
+
+/// Capitalised identifiers of a text (type names, in the languages that capitalise
+/// them).
+pub fn caps_idents(t: &str) -> Vec<String> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\b[A-Z][A-Za-z0-9_]*\b").expect("static"))
+        .find_iter(t)
+        .map(|m| m.as_str().to_owned())
+        .collect()
+}
+
+/// True for the name of a function that runs once at process start.
+pub fn entry_fn_name(name: &str) -> bool {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)^(?:main|init|initialize|setup|bootstrap|startup|start|serve|run|create_app|make_app|build_app|new_app|app|(?:init|setup|start|boot)_\w+)$")
+            .expect("static")
+    })
+    .is_match(name)
+}

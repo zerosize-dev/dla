@@ -6,7 +6,8 @@ use dla_census::parse::tree_sitter::Node;
 use dla_core::static_hit::StaticHit;
 
 use super::ast::{
-    CallSite, calls, child_of_kind, find_all, last_token, line, named_children, tokens, txt, walk,
+    CallSite, ancestor, calls, child_of_kind, find_all, last_token, line, named_children, tokens,
+    txt, walk,
 };
 use super::{RuleInfo, SrcFile, hit};
 
@@ -14,7 +15,7 @@ const GOROUTINE: &str = "go-goroutine-no-stop-path";
 const TICK: &str = "go-time-tick";
 const TICKER: &str = "go-ticker-no-stop";
 
-/// Rule table (mirrors `data/detectors/go.dla-fragment.toml`).
+/// Rule table (mirrors the `backend = "dla"` rows of `data/detectors/go.toml`).
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: GOROUTINE,
@@ -124,12 +125,71 @@ struct Index<'t> {
     funcs: HashMap<String, Vec<(usize, Node<'t>)>>,
     chans: HashSet<String>,
     closed: HashSet<String>,
+    /// Function name to its parameter names, in order (variadics and unnamed ones included as "").
+    params: HashMap<String, Vec<String>>,
+    /// Every call: callee name, last token of each argument, and the enclosing function name.
+    call_args: Vec<(String, Vec<String>, String)>,
+}
+
+fn param_names(func: Node<'_>, src: &str) -> Vec<String> {
+    let Some(list) = func.child_by_field_name("parameters") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in named_children(list) {
+        let names: Vec<String> = named_children(p)
+            .into_iter()
+            .filter(|c| c.kind() == "identifier")
+            .map(|c| txt(c, src).to_owned())
+            .collect();
+        if names.is_empty() {
+            out.push(String::new());
+        } else {
+            out.extend(names);
+        }
+    }
+    out
+}
+
+fn enclosing_func_name(n: Node<'_>, src: &str) -> String {
+    ancestor(n, &["function_declaration", "method_declaration"])
+        .and_then(|f| f.child_by_field_name("name"))
+        .map(|nm| txt(nm, src).to_owned())
+        .unwrap_or_default()
+}
+
+impl Index<'_> {
+    /// True when `name`, used inside function `func`, is closed somewhere in the project,
+    /// directly or under another name at a call site where it is passed as an argument.
+    fn is_closed(&self, name: &str, func: &str, depth: u8) -> bool {
+        if self.closed.contains(name) {
+            return true;
+        }
+        if depth == 0 || func.is_empty() {
+            return false;
+        }
+        let Some(pos) = self
+            .params
+            .get(func)
+            .and_then(|ps| ps.iter().position(|p| p == name))
+        else {
+            return false;
+        };
+        self.call_args.iter().any(|(callee, args, caller)| {
+            callee == func
+                && args
+                    .get(pos)
+                    .is_some_and(|a| self.is_closed(a, caller, depth - 1))
+        })
+    }
 }
 
 fn build_index<'t>(files: &'t [SrcFile], calls_by_file: &[Vec<CallSite<'t>>]) -> Index<'t> {
     let mut funcs: HashMap<String, Vec<(usize, Node<'t>)>> = HashMap::new();
     let mut chans = HashSet::new();
     let mut closed = HashSet::new();
+    let mut params: HashMap<String, Vec<String>> = HashMap::new();
+    let mut call_args = Vec::new();
     for (i, f) in files.iter().enumerate() {
         let src = f.text.as_str();
         walk(f.tree.root_node(), &mut |n| match n.kind() {
@@ -137,6 +197,9 @@ fn build_index<'t>(files: &'t [SrcFile], calls_by_file: &[Vec<CallSite<'t>>]) ->
                 if let (Some(name), Some(body)) =
                     (n.child_by_field_name("name"), n.child_by_field_name("body"))
                 {
+                    params
+                        .entry(txt(name, src).to_owned())
+                        .or_insert_with(|| param_names(n, src));
                     funcs
                         .entry(txt(name, src).to_owned())
                         .or_default()
@@ -176,6 +239,11 @@ fn build_index<'t>(files: &'t [SrcFile], calls_by_file: &[Vec<CallSite<'t>>]) ->
             _ => {}
         });
         for c in &calls_by_file[i] {
+            call_args.push((
+                c.name.clone(),
+                c.args.iter().map(|a| last_token(txt(*a, src))).collect(),
+                enclosing_func_name(c.node, src),
+            ));
             if c.name == "close" && c.recv.is_empty() {
                 if let Some(a) = c.args.first() {
                     closed.insert(last_token(txt(*a, src)));
@@ -187,6 +255,8 @@ fn build_index<'t>(files: &'t [SrcFile], calls_by_file: &[Vec<CallSite<'t>>]) ->
         funcs,
         chans,
         closed,
+        params,
+        call_args,
     }
 }
 
@@ -224,7 +294,8 @@ fn leaky_loop(l: Node<'_>, src: &str, idx: &Index<'_>) -> Option<String> {
                 }
                 return Some("ranges over a ticker with no stop path".to_owned());
             }
-            if idx.chans.contains(&name) && !idx.closed.contains(&name) {
+            let func = enclosing_func_name(l, src);
+            if idx.chans.contains(&name) && !idx.is_closed(&name, &func, 4) {
                 if body.is_some_and(|b| has_stop_signal(b, src) && can_exit(b, src, false)) {
                     return None;
                 }
@@ -392,6 +463,18 @@ mod tests {
         assert!(run(&[("a.go", closed)]).is_empty());
         let slice = "package p\n\nfunc start(items []int) {\n\tgo func() {\n\t\tfor _, i := range items {\n\t\t\tuse(i)\n\t\t}\n\t}()\n}\n";
         assert!(run(&[("a.go", slice)]).is_empty());
+    }
+
+    #[test]
+    fn channel_closed_under_another_name_is_quiet() {
+        let renamed = "package p\n\nfunc consume(jobs <-chan int) {\n\tfor j := range jobs {\n\t\tuse(j)\n\t}\n}\n\nfunc main() {\n\tqueue := make(chan int)\n\tgo consume(queue)\n\tqueue <- 1\n\tclose(queue)\n}\n";
+        assert!(run(&[("a.go", renamed)]).is_empty());
+        let deferred = "package p\n\nfunc drain(in <-chan int) {\n\tgo func() {\n\t\tfor v := range in {\n\t\t\tuse(v)\n\t\t}\n\t}()\n}\n\nfunc main() {\n\tch := make(chan int)\n\tdefer close(ch)\n\tdrain(ch)\n}\n";
+        assert!(run(&[("a.go", deferred)]).is_empty());
+        let relayed = "package p\n\nfunc consume(jobs <-chan int) {\n\tgo func() {\n\t\tfor j := range jobs {\n\t\t\tuse(j)\n\t\t}\n\t}()\n}\n\nfunc mid(q <-chan int) { consume(q) }\n\nfunc main() {\n\tc := make(chan int)\n\tmid(c)\n\tclose(c)\n}\n";
+        assert!(run(&[("a.go", relayed)]).is_empty());
+        let never = renamed.replace("\tclose(queue)\n", "");
+        assert_eq!(sites(&run(&[("a.go", &never)]), GOROUTINE).len(), 1);
     }
 
     #[test]

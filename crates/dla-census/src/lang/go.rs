@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use super::{CallRule, Cx, Table, dedupe, describe, join_owner, rules};
 use crate::{
     ast::{self, children_of, first_word, last_word, text, visit},
-    model::{Raw, Scope},
+    model::{ProjectInfo, Raw, Scope},
     parse::{Lang, parse, tree_sitter::Node},
     vocab,
 };
@@ -44,6 +44,49 @@ pub fn selfref(src: &str) -> Vec<String> {
         }
     });
     out
+}
+
+/// Records which struct types are plausibly process-lifetime (named by a package
+/// variable, referenced from `main`/`init`) and which types each struct holds.
+pub fn collect(src: &str, info: &mut ProjectInfo) {
+    let Ok(tree) = parse(Lang::Go, src) else {
+        return;
+    };
+    visit(tree.root_node(), &mut |n| match n.kind() {
+        "type_spec" => {
+            let (Some(name), Some(ty)) =
+                (n.child_by_field_name("name"), n.child_by_field_name("type"))
+            else {
+                return;
+            };
+            if ty.kind() == "struct_type" {
+                info.note_fields(text(name, src), text(ty, src));
+            }
+        }
+        "var_spec"
+            if !ast::ancestors(n).any(|a| {
+                matches!(
+                    a.kind(),
+                    "function_declaration" | "method_declaration" | "func_literal"
+                )
+            }) =>
+        {
+            info.longlived.extend(super::caps_idents(text(n, src)));
+        }
+        "function_declaration" => {
+            let name = n.child_by_field_name("name").map_or("", |c| text(c, src));
+            if super::entry_fn_name(name) {
+                let body = text(n, src);
+                for t in super::caps_idents(body) {
+                    if let Some(rest) = t.strip_prefix("New") {
+                        info.longlived.insert(rest.to_owned());
+                    }
+                    info.longlived.insert(t);
+                }
+            }
+        }
+        _ => {}
+    });
 }
 
 fn container_type() -> &'static Regex {
@@ -157,6 +200,9 @@ pub fn holders(cx: &mut Cx<'_>, root: Node<'_>) {
                         || (cx.info.selfref.contains(base)
                             && (base == tname || ty.starts_with('*') || ty.starts_with("[]")))
                     {
+                        if !cx.info.is_long_lived(tname) && !cx.info.selfref.contains(tname) {
+                            continue;
+                        }
                         ("container-field", Holder::ContainerField, Region::Heap)
                     } else if handle_type().is_match(ty) {
                         (
@@ -309,6 +355,8 @@ mod tests {
         };
         let mut info = ProjectInfo::default();
         info.selfref.extend(selfref(src));
+        collect(src, &mut info);
+        info.finish();
         let tree = parse(Lang::Go, src).unwrap();
         let mut cx = Cx::new(&f, &info);
         holders(&mut cx, tree.root_node());
@@ -334,5 +382,14 @@ mod tests {
         );
         assert_eq!(r[4].owner, "p.a.Pool.Run -> func literal");
         assert_eq!(r[5].name.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn container_fields_need_a_long_lived_owner() {
+        let transient = "package p\ntype Result struct {\n\tHits []int\n}\nfunc Parse() Result { return Result{} }\n";
+        assert!(run(transient).is_empty());
+        let built = "package p\ntype Hub struct {\n\tsubs []int\n}\ntype Inner struct {\n\titems map[string]int\n}\ntype App struct {\n\tin *Inner\n}\nfunc main() {\n\t_ = &App{}\n}\n";
+        let owners: Vec<String> = run(built).iter().map(|h| h.owner.clone()).collect();
+        assert_eq!(owners, ["p.a.Hub.subs", "p.a.Inner.items"]);
     }
 }

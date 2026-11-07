@@ -42,3 +42,7 @@ re!(
     jvm_lockish_name,
     r"(?i)^(lock|mutex|monitor|log|logger|serialversionuid|random|rng|gson|mapper)$"
 );
+re!(
+    longlived_type_name,
+    r"(?:Registry|Cache|Pool|Manager|Service|Server|Store|Bus|Hub|Broker|Scheduler|Engine|Dispatcher|Tracker|Interner|Arena|Supervisor|Controller|Repository|Gateway|Router|Ledger|Runtime|Reactor|Loop|Daemon|Singleton|Global|Shared|Executor|Selector|Allocator|Registrar)s?$"
+);

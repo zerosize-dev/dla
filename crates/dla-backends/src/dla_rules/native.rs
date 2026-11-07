@@ -15,7 +15,7 @@ use super::{RuleInfo, SrcFile, hit};
 const MALLOC: &str = "native-malloc-leak-path";
 const FOPEN: &str = "native-fopen-no-fclose";
 
-/// Rule table (mirrors `data/detectors/native.dla-fragment.toml`).
+/// Rule table (mirrors the `backend = "dla"` rows of `data/detectors/native.toml`).
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: MALLOC,
@@ -148,14 +148,51 @@ fn target_name(n: Node<'_>, src: &str) -> Option<String> {
     }
 }
 
+/// Names declared locally in a function: parameters and every declaration in the body.
+fn declared_names(func: Node<'_>, body: Node<'_>, src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut add = |d: Node<'_>| {
+        let d = if d.kind() == "init_declarator" {
+            d.child_by_field_name("declarator").unwrap_or(d)
+        } else {
+            d
+        };
+        if let Some(n) = target_name(d, src) {
+            out.push(n);
+        }
+    };
+    for decl in find_all(body, &["declaration", "for_range_loop"]) {
+        let mut c = decl.walk();
+        for d in decl.children_by_field_name("declarator", &mut c) {
+            add(d);
+        }
+    }
+    for p in find_all(func, &["parameter_declaration"]) {
+        if let Some(d) = p.child_by_field_name("declarator") {
+            add(d);
+        }
+    }
+    out
+}
+
+/// True when `func` is a C++ member function (defined in a class body or out of line as `T::f`).
+fn is_member_function(func: Node<'_>) -> bool {
+    ancestor(func, &["class_specifier", "struct_specifier"]).is_some()
+        || func
+            .child_by_field_name("declarator")
+            .is_some_and(|d| !find_all(d, &["qualified_identifier"]).is_empty())
+}
+
 struct Acq<'t> {
     var: String,
     call: Node<'t>,
     stmt_end: usize,
 }
 
-fn acquisitions<'t>(body: Node<'t>, src: &str, spec: &Spec) -> Vec<Acq<'t>> {
+fn acquisitions<'t>(func: Node<'t>, body: Node<'t>, src: &str, spec: &Spec) -> Vec<Acq<'t>> {
     let mut out = Vec::new();
+    let member_fn = is_member_function(func);
+    let locals = declared_names(func, body, src);
     for n in find_all(body, &["init_declarator", "assignment_expression"]) {
         let (target, value) = if n.kind() == "init_declarator" {
             (
@@ -176,6 +213,11 @@ fn acquisitions<'t>(body: Node<'t>, src: &str, spec: &Spec) -> Vec<Acq<'t>> {
         };
         let v = unwrap_value(v);
         if v.kind() != "call_expression" || !spec.acquire.contains(&callee_name(v, src).as_str()) {
+            continue;
+        }
+        // Assigning to a name that is not declared in the function stores into a member
+        // (or a global); in a member function the owning object is responsible for it.
+        if n.kind() == "assignment_expression" && member_fn && !locals.contains(&var) {
             continue;
         }
         out.push(Acq {
@@ -270,7 +312,7 @@ fn check_function(f: &SrcFile, func: Node<'_>, spec: &Spec, out: &mut Vec<Static
     let Some(body) = func.child_by_field_name("body") else {
         return;
     };
-    let acqs = acquisitions(body, src, spec);
+    let acqs = acquisitions(func, body, src, spec);
     if acqs.is_empty() {
         return;
     }
@@ -446,6 +488,19 @@ mod tests {
         assert!(run(ok).is_empty());
         let never = "void f(void) {\n    FILE *fp;\n    fp = fopen(\"x\", \"w\");\n    fprintf(fp, \"hi\");\n}\n";
         assert_eq!(sites(&run(never), FOPEN), ["src/a.c:3"]);
+    }
+
+    #[test]
+    fn member_stores_in_member_functions_are_not_leaks() {
+        let run_cpp = |src: &str| check(&parse_sources(&[("src/a.cpp", src)]));
+        let inline = "struct W {\n    FILE *f;\n    W(const char *n) { f = fopen(n, \"r\"); }\n    ~W() { fclose(f); }\n};\n";
+        assert!(run_cpp(inline).is_empty());
+        let outline = "W::W(const char *n) {\n    f = fopen(n, \"r\");\n}\n";
+        assert!(run_cpp(outline).is_empty());
+        let local = "struct W {\n    void g(const char *n) {\n        FILE *f;\n        f = fopen(n, \"r\");\n        use(f);\n    }\n};\n";
+        assert_eq!(sites(&run_cpp(local), FOPEN), ["src/a.cpp:4"]);
+        let global = "FILE *g;\nvoid f(const char *n) {\n    g = fopen(n, \"r\");\n}\n";
+        assert_eq!(sites(&run_cpp(global), FOPEN), ["src/a.cpp:3"]);
     }
 
     #[test]

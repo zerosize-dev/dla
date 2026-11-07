@@ -20,7 +20,7 @@ const CACHE_METHOD: &str = "python-cache-method";
 const CACHE_FUNCTION: &str = "python-unbounded-cache";
 const HANDLER: &str = "python-handler-registration-in-function";
 
-/// Rule table (mirrors `data/detectors/python.dla-fragment.toml`).
+/// Rule table (mirrors the `backend = "dla"` rows of `data/detectors/python.toml`).
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: CHAIN,

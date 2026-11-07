@@ -54,6 +54,25 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
         return;
     };
     visit(tree.root_node(), &mut |n| {
+        match n.kind() {
+            "static_item" | "macro_invocation" | "const_item" => {
+                if n.kind() != "macro_invocation"
+                    || text(n, src).starts_with("lazy_static")
+                    || text(n, src).starts_with("thread_local")
+                {
+                    info.longlived.extend(super::caps_idents(text(n, src)));
+                }
+                return;
+            }
+            "function_item" => {
+                let name = n.child_by_field_name("name").map_or("", |c| text(c, src));
+                if super::entry_fn_name(name) {
+                    info.longlived.extend(super::caps_idents(text(n, src)));
+                }
+                return;
+            }
+            _ => {}
+        }
         if n.kind() != "struct_item" {
             return;
         }
@@ -68,6 +87,7 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
                 continue;
             };
             let ty = text(t, src);
+            info.note_fields(&name, ty);
             if let Some(w) = weak_target(ty) {
                 info.weak.insert((name.clone(), w));
             }
@@ -245,8 +265,10 @@ pub fn holders(cx: &mut Cx<'_>, root: Node<'_>) {
                     } else if container().is_match(ty) {
                         if vocab::registration_name().is_match(name) {
                             ("registry-field", Holder::RegistrationTable)
-                        } else {
+                        } else if cx.info.is_long_lived(sname) {
                             ("container-field", Holder::ContainerField)
+                        } else {
+                            return;
                         }
                     } else {
                         return;
@@ -294,6 +316,7 @@ mod tests {
         };
         let mut info = ProjectInfo::default();
         collect(src, &mut info);
+        info.finish();
         let tree = parse(Lang::Rust, src).unwrap();
         let mut cx = Cx::new(&f, &info);
         holders(&mut cx, tree.root_node());
@@ -333,5 +356,18 @@ mod tests {
             ]
         );
         assert_eq!(r[2].name.as_deref(), Some("h"));
+    }
+
+    #[test]
+    fn container_fields_need_a_long_lived_owner() {
+        let transient = "struct Parsed {\n    hits: Vec<u8>,\n}\nfn parse() -> Parsed {\n    Parsed { hits: Vec::new() }\n}\n";
+        assert!(run(transient).is_empty());
+        let role = "struct SessionCache {\n    rows: Vec<u8>,\n}\n";
+        assert_eq!(run(role).len(), 1);
+        let built = "struct Collector {\n    rows: Vec<u8>,\n}\nfn main() {\n    let c = Collector { rows: Vec::new() };\n}\n";
+        assert_eq!(run(built).len(), 1);
+        let held = "static APP: Mutex<App> = Mutex::new(App::new());\nstruct App {\n    jobs: Vec<Job>,\n}\nstruct Job {\n    rules: Vec<u8>,\n}\n";
+        let owners: Vec<String> = run(held).iter().map(|h| h.owner.clone()).collect();
+        assert_eq!(owners, ["src.a.APP", "src.a.App.jobs", "src.a.Job.rules"]);
     }
 }

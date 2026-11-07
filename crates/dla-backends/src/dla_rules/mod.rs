@@ -3,7 +3,7 @@
 //!
 //! Entry point: [`run`]. Rules are per runtime (`jvm`, `node`, `go`, `rust`, `python`,
 //! `native`); each module lists its rules in a `RULES` table (id, suggested archetype,
-//! precision prior) that must agree with `data/detectors/<lang>.dla-fragment.toml`
+//! precision prior) that must agree with the `backend = "dla"` rows of `data/detectors/<lang>.toml`
 //! (a unit test checks this). The rules look at the whole project at once, because
 //! "no removal anywhere" is a project-wide claim, and favour precision: a hit says
 //! "this shape is present and nothing in the project undoes it", which is a candidate

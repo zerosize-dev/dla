@@ -222,11 +222,16 @@ fn enumerate(ctx: &ToolCtx, runtime: Runtime, files: &[SourceFile]) -> Found {
     for f in files {
         match f.lang {
             Lang::Java => info.selfref.extend(lang::java::selfref(&f.text)),
-            Lang::Go => info.selfref.extend(lang::go::selfref(&f.text)),
+            Lang::Go => {
+                info.selfref.extend(lang::go::selfref(&f.text));
+                lang::go::collect(&f.text, &mut info);
+            }
+            Lang::Python => lang::python::collect(&f.text, &mut info),
             Lang::Rust => lang::rust::collect(&f.text, &mut info),
             _ => {}
         }
     }
+    info.finish();
     for f in files
         .iter()
         .filter(|f| !f.is_test && !covered.contains(&f.rel))
