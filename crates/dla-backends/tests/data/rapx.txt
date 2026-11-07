@@ -1,0 +1,16 @@
+    Checking probe-rs v0.1.0 (/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-rs)
+17:51:16|RAPx|WARN|: Memory Leak detected in function b
+17:51:16|RAPx|WARN|: warning: Memory Leak detected.
+ --> src/lib.rs:6:14
+  |
+4 | pub fn b() {
+5 |     let v = Box::new(5u32);
+6 |     let _p = Box::into_raw(v);
+  |              ---------------- Memory Leak Candidates.
+7 | }
+  |
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.59s
+
+real	0m0.796s
+user	0m0.440s
+sys	0m0.259s

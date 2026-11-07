@@ -1,0 +1,25 @@
+# External analyzer rows for native. DLA-owned rows (backend dla) live in native.dla-fragment.toml and are merged into this file by the orchestrator.
+# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+
+# No off-the-shelf analyzer is wired for native code; the dla rules cover it.
+
+# DLA-owned rules (backend "dla"), implemented in crates/dla-backends/src/dla_rules.
+[[detector]]
+id = "dla/native-malloc-leak-path"
+backend = "dla"
+rule = "native-malloc-leak-path"
+suggested_archetype = "L-OWNERSHIP"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "malloc/calloc/strdup result not freed, returned or stored on some return path of the same function."
+
+[[detector]]
+id = "dla/native-fopen-no-fclose"
+backend = "dla"
+rule = "native-fopen-no-fclose"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.55
+default_enabled = true
+note = "fopen result not closed, returned or stored on some return path of the same function."

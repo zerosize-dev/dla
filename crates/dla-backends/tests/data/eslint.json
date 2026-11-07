@@ -1,0 +1,78 @@
+[
+ {
+  "errorCount": 4,
+  "fatalErrorCount": 0,
+  "filePath": "/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/sw-p/node/project/a.ts",
+  "fixableErrorCount": 0,
+  "fixableWarningCount": 0,
+  "messages": [
+   {
+    "column": 5,
+    "endColumn": 14,
+    "endLine": 6,
+    "line": 6,
+    "message": "Ignoring returned subscriptions is forbidden.",
+    "messageId": "forbidden",
+    "ruleId": "rxjs-x/no-ignored-subscription",
+    "severity": 2
+   },
+   {
+    "column": 25,
+    "endColumn": 34,
+    "endLine": 6,
+    "line": 6,
+    "message": "Nested subscribe calls are forbidden.",
+    "messageId": "forbidden",
+    "ruleId": "rxjs-x/no-nested-subscribe",
+    "severity": 2
+   },
+   {
+    "column": 25,
+    "endColumn": 34,
+    "endLine": 6,
+    "line": 6,
+    "message": "Ignoring returned subscriptions is forbidden.",
+    "messageId": "forbidden",
+    "ruleId": "rxjs-x/no-ignored-subscription",
+    "severity": 2
+   },
+   {
+    "column": 3,
+    "endColumn": 10,
+    "endLine": 8,
+    "line": 8,
+    "message": "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator.",
+    "messageId": "floatingVoid",
+    "ruleId": "@typescript-eslint/no-floating-promises",
+    "severity": 2,
+    "suggestions": [
+     {
+      "desc": "Add void operator to ignore.",
+      "fix": {
+       "range": [
+        318,
+        318
+       ],
+       "text": "void "
+      },
+      "messageId": "floatingFixVoid"
+     },
+     {
+      "desc": "Add await operator.",
+      "fix": {
+       "range": [
+        318,
+        318
+       ],
+       "text": "await "
+      },
+      "messageId": "floatingFixAwait"
+     }
+    ]
+   }
+  ],
+  "suppressedMessages": [],
+  "usedDeprecatedRules": [],
+  "warningCount": 0
+ }
+]

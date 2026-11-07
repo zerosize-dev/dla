@@ -1,0 +1,153 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "Staticcheck",
+     "version": "2025.1.1",
+     "informationUri": "https://staticcheck.dev",
+     "rules": []
+    }
+   },
+   "results": [
+    {
+     "ruleId": "SA5003",
+     "kind": "fail",
+     "message": {
+      "text": "defers in this infinite loop will never run"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "p.go",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "startLine": 51,
+         "startColumn": 3,
+         "endLine": 51,
+         "endColumn": 21
+        }
+       }
+      }
+     ],
+     "suppressions": []
+    },
+    {
+     "ruleId": "SA2001",
+     "kind": "fail",
+     "message": {
+      "text": "empty critical section"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "p.go",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "startLine": 62,
+         "startColumn": 2,
+         "endLine": 62,
+         "endColumn": 12
+        }
+       }
+      }
+     ],
+     "suppressions": []
+    },
+    {
+     "ruleId": "SA2003",
+     "kind": "fail",
+     "message": {
+      "text": "deferring Lock right after having locked already; did you mean to defer Unlock?"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "p.go",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "startLine": 64,
+         "startColumn": 2,
+         "endLine": 64,
+         "endColumn": 16
+        }
+       }
+      }
+     ],
+     "suppressions": []
+    },
+    {
+     "ruleId": "SA6002",
+     "kind": "fail",
+     "message": {
+      "text": "argument should be pointer-like to avoid allocations"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "q.go",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "startLine": 14,
+         "startColumn": 21,
+         "endLine": 14,
+         "endColumn": 30
+        }
+       }
+      }
+     ],
+     "suppressions": []
+    },
+    {
+     "ruleId": "SA9001",
+     "kind": "fail",
+     "message": {
+      "text": "defers in this range loop won't run unless the channel gets closed"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "q.go",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "startLine": 25,
+         "startColumn": 3,
+         "endLine": 25,
+         "endColumn": 21
+        }
+       }
+      }
+     ],
+     "suppressions": []
+    }
+   ],
+   "invocations": [
+    {
+     "arguments": [
+      "-checks",
+      "SA1015,SA2001,SA2003,SA5003,SA5005,SA6002,SA9001",
+      "-f",
+      "sarif",
+      "./..."
+     ],
+     "workingDirectory": {
+      "uri": "file:///tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-go"
+     },
+     "executionSuccessful": true
+    }
+   ]
+  }
+ ]
+}

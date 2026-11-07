@@ -1,6 +1,9 @@
 //! `dla probe [--build]` → [`dla_probe::run`].
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use clap::Args;
 use serde_json::{Value, json};
@@ -13,12 +16,19 @@ pub struct ProbeArgs {
     /// Also run each detected runtime's build command (needs consent tier 1).
     #[arg(long)]
     build: bool,
+    /// Seconds each build command may run before it is killed.
+    #[arg(long, value_name = "SECS", default_value_t = 300, requires = "build")]
+    build_timeout: u64,
 }
 
 /// Runs `dla probe`.
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: ProbeArgs) -> Res<Value> {
     let tc = stage::tool_ctx(project, ctx, data);
-    let opts = dla_probe::ProbeOptions { build: a.build };
+    let opts = dla_probe::ProbeOptions {
+        build: a.build,
+        build_timeout: Duration::from_secs(a.build_timeout.max(1)),
+        ..dla_probe::ProbeOptions::default()
+    };
     stage::finish(
         "probe",
         json!({"build": a.build}),

@@ -1,0 +1,389 @@
+//! JVM census from class files: static fields, singletons, instance collection
+//! fields, `<clinit>` registrations and call sites, mapped back to source lines with
+//! the `LineNumberTable` and `SourceFile` attribute.
+
+use std::{collections::HashSet, fs, path::Path};
+
+use dla_core::finding::{Holder, Region};
+use regex::Regex;
+
+use crate::{
+    classfile::{
+        ACC_ENUM, ACC_NATIVE, ACC_STATIC, ACC_SYNTHETIC, ClassFile, Method, Op, descriptor_type,
+        parse, simple_name,
+    },
+    lang::{
+        java::{FieldSpec, call_table, classify_field},
+        package_of,
+    },
+    model::{ProjectInfo, Raw, Scope, SourceFile},
+    vocab,
+    walk::{is_test_path, list_files},
+};
+
+/// Class files found under the project, parsed. Unreadable files are counted.
+pub struct Loaded {
+    /// `(project-relative class path, parsed class)`.
+    pub classes: Vec<(String, ClassFile)>,
+    /// Class files that could not be parsed.
+    pub unreadable: usize,
+}
+
+/// Reads every `*.class` under `root` (build output directories included), except
+/// test class directories.
+pub fn load(root: &Path) -> Loaded {
+    let rels = list_files(root, true, &|r| {
+        r.ends_with(".class")
+            && !r.contains("test-classes")
+            && !r.contains("/test/")
+            && !r.starts_with("test/")
+    });
+    let mut classes = Vec::new();
+    let mut unreadable = 0;
+    for rel in rels {
+        match fs::read(root.join(&rel)).map(|b| parse(&b)) {
+            Ok(Ok(c)) => classes.push((rel, c)),
+            _ => unreadable += 1,
+        }
+    }
+    Loaded {
+        classes,
+        unreadable,
+    }
+}
+
+/// Finds the source file of a class among the project's sources.
+fn source_of<'a>(c: &ClassFile, sources: &'a [SourceFile]) -> Option<&'a SourceFile> {
+    let sf = c.source_file.as_deref()?;
+    let pkg_path = c.name.rsplit_once('/').map_or("", |(p, _)| p);
+    let want = if pkg_path.is_empty() {
+        sf.to_owned()
+    } else {
+        format!("{pkg_path}/{sf}")
+    };
+    let named: Vec<&SourceFile> = sources
+        .iter()
+        .filter(|s| s.rel == sf || s.rel.ends_with(&format!("/{sf}")))
+        .collect();
+    named
+        .iter()
+        .find(|s| s.rel == want || s.rel.ends_with(&format!("/{want}")))
+        .or_else(|| {
+            named
+                .iter()
+                .find(|s| package_of(&s.text).is_some_and(|p| p == pkg_path.replace('/', ".")))
+        })
+        .or_else(|| (named.len() == 1).then(|| &named[0]))
+        .copied()
+}
+
+fn decl_line(text: &str, name: &str) -> Option<u32> {
+    let re = Regex::new(&format!(r"\b{}\b\s*(?:=|;|,|:|\()", regex::escape(name))).ok()?;
+    text.lines()
+        .position(|l| re.is_match(l))
+        .and_then(|i| u32::try_from(i + 1).ok())
+}
+
+/// The line declaring field `name` (a type, then the name, then `=`, `;` or `,`).
+fn field_line(text: &str, name: &str) -> Option<u32> {
+    let re = Regex::new(&format!(
+        r"^\s*(?:(?:private|public|protected|static|final|volatile|transient)\s+)*[\w<>\[\],.? ]+\s+{}\s*[=;,)]",
+        regex::escape(name)
+    ))
+    .ok()?;
+    text.lines()
+        .position(|l| re.is_match(l) && !l.trim_start().starts_with("return"))
+        .and_then(|i| u32::try_from(i + 1).ok())
+}
+
+fn assigned_on_line(text: &str, line: u32) -> Option<String> {
+    let l = text
+        .lines()
+        .nth(usize::try_from(line).ok()?.checked_sub(1)?)?;
+    let re = Regex::new(r"([A-Za-z_]\w*)\s*=[^=]").ok()?;
+    re.captures(l).map(|c| c[1].to_owned())
+}
+
+fn dotted(internal: &str) -> String {
+    internal.replace('/', ".")
+}
+
+/// The result of reading class files: holders and the source files they cover.
+pub struct FromClasses {
+    /// Holders found.
+    pub raws: Vec<Raw>,
+    /// Source files (project-relative) a class file covers; tree-sitter skips them.
+    pub covered: HashSet<String>,
+    /// Number of classes read.
+    pub classes: usize,
+    /// Class files that could not be parsed.
+    pub unreadable: usize,
+}
+
+/// Turns the project's class files into holders.
+pub fn holders(root: &Path, sources: &[SourceFile]) -> FromClasses {
+    let loaded = load(root);
+    let mut raws = Vec::new();
+    let mut covered = HashSet::new();
+    let mut info = ProjectInfo::default();
+    for (_, c) in &loaded.classes {
+        let own = format!("L{};", c.name);
+        if c.fields.iter().any(|f| f.descriptor == own) {
+            info.selfref.insert(simple_name(&c.name).to_owned());
+        }
+    }
+    let mut count = 0;
+    for (path, c) in &loaded.classes {
+        let src = source_of(c, sources);
+        if src.is_some_and(|s| s.is_test) {
+            continue;
+        }
+        if c.name.ends_with("module-info") || c.name.ends_with("package-info") {
+            continue;
+        }
+        count += 1;
+        let (file, text) = match src {
+            Some(s) => {
+                covered.insert(s.rel.clone());
+                (s.rel.clone(), s.text.as_str())
+            }
+            None => {
+                if is_test_path(path) {
+                    continue;
+                }
+                (path.clone(), "")
+            }
+        };
+        class_holders(c, &file, text, &info, &mut raws);
+    }
+    FromClasses {
+        raws,
+        covered,
+        classes: count,
+        unreadable: loaded.unreadable,
+    }
+}
+
+fn class_holders(c: &ClassFile, file: &str, text: &str, info: &ProjectInfo, out: &mut Vec<Raw>) {
+    let class_dotted = dotted(&c.name);
+    let own_desc = format!("L{};", c.name);
+    let singleton = c.access & ACC_ENUM != 0
+        || c.fields
+            .iter()
+            .any(|f| f.access & ACC_STATIC != 0 && f.descriptor == own_desc);
+    let clinit = c.methods.iter().find(|m| m.name == "<clinit>");
+    let init = c.methods.iter().find(|m| m.name == "<init>");
+    let first_line = c
+        .methods
+        .iter()
+        .flat_map(|m| m.lines.iter().map(|(_, l)| u32::from(*l)))
+        .min()
+        .unwrap_or(1);
+    for f in &c.fields {
+        if f.access & ACC_SYNTHETIC != 0 || f.access & ACC_ENUM != 0 {
+            continue;
+        }
+        if matches!(
+            f.name.as_str(),
+            "$VALUES" | "$assertionsDisabled" | "serialVersionUID"
+        ) || f.name.starts_with("$jacoco")
+        {
+            continue;
+        }
+        let is_static = f.access & ACC_STATIC != 0;
+        let full = descriptor_type(&f.descriptor);
+        let ty = full.rsplit('.').next().unwrap_or(&full).replace('$', ".");
+        if is_static && f.descriptor == own_desc {
+            let line = put_line(clinit, &c.name, &f.name)
+                .or_else(|| decl_line(text, &f.name))
+                .unwrap_or(first_line);
+            out.push(
+                Raw::new(
+                    "singleton-instance",
+                    Holder::StaticGlobal,
+                    Region::Heap,
+                    file,
+                    line,
+                    format!("{class_dotted}.{}", f.name),
+                )
+                .tracking(&f.name, Scope::Project, false),
+            );
+            continue;
+        }
+        if is_static && f.name == "Companion" {
+            let line = put_line(clinit, &c.name, &f.name)
+                .or_else(|| decl_line(text, "companion"))
+                .unwrap_or(first_line);
+            out.push(Raw::new(
+                "companion",
+                Holder::StaticGlobal,
+                Region::Heap,
+                file,
+                line,
+                format!("{class_dotted}.Companion"),
+            ));
+            continue;
+        }
+        let spec = FieldSpec {
+            ty: &ty,
+            name: &f.name,
+            is_static,
+            class: simple_name(&c.name),
+            init: "",
+        };
+        let Some((kind, holder, region)) = classify_field(&spec, info) else {
+            continue;
+        };
+        let kind = if singleton && !is_static && holder == Holder::ContainerField {
+            "singleton-field"
+        } else {
+            kind
+        };
+        let line = if is_static {
+            put_line(clinit, &c.name, &f.name).or_else(|| field_line(text, &f.name))
+        } else {
+            field_line(text, &f.name).or_else(|| put_line(init, &c.name, &f.name))
+        }
+        .or_else(|| decl_line(text, &f.name))
+        .unwrap_or(first_line);
+        let private = f.access & crate::classfile::ACC_PRIVATE != 0;
+        let scope = if private && !is_static {
+            Scope::File
+        } else {
+            Scope::Project
+        };
+        out.push(
+            Raw::new(
+                kind,
+                holder,
+                region,
+                file,
+                line,
+                format!("{class_dotted}.{}", f.name),
+            )
+            .tracking(&f.name, scope, !is_static && !private),
+        );
+    }
+    for m in &c.methods {
+        if m.access & ACC_NATIVE != 0 {
+            let line = decl_line(text, &m.name).unwrap_or(first_line);
+            out.push(Raw::new(
+                "native-method",
+                Holder::NativeHandleGlobalRef,
+                Region::OffHeap,
+                file,
+                line,
+                format!("{class_dotted}.{}", m.name),
+            ));
+        }
+        method_calls(m, file, text, &class_dotted, out);
+    }
+}
+
+fn put_line(m: Option<&Method>, class: &str, field: &str) -> Option<u32> {
+    let m = m?;
+    m.insns
+        .iter()
+        .find(|i| matches!(&i.op, Op::PutStatic(o, n) | Op::PutField(o, n) if o == class && n == field))
+        .and_then(|i| m.line_at(i.pc))
+}
+
+fn method_calls(m: &Method, file: &str, text: &str, class_dotted: &str, out: &mut Vec<Raw>) {
+    let table = call_table();
+    let in_clinit = m.name == "<clinit>";
+    let owner = format!("{class_dotted}.{}", m.name);
+    for i in &m.insns {
+        let callee = match &i.op {
+            Op::New(cl) => format!("new {}", dotted(cl)),
+            Op::Invoke(o, n, _, _) => format!("{}.{n}", dotted(o)),
+            _ => continue,
+        };
+        let line = m.line_at(i.pc).unwrap_or(1);
+        if let Some(rule) = table.iter().find(|r| r.re.is_match(&callee)) {
+            let mut raw = Raw::new(
+                rule.kind,
+                rule.holder,
+                rule.region,
+                file,
+                line,
+                owner.clone(),
+            );
+            if let Some(n) = assigned_on_line(text, line).filter(|_| rule.assigned) {
+                raw = raw.tracking(&n, Scope::File, false);
+            }
+            out.push(raw);
+            continue;
+        }
+        if in_clinit && let Op::Invoke(o, n, _, true) = &i.op {
+            let verb = n.starts_with("add")
+                || n.starts_with("put")
+                || n.starts_with("register")
+                || n.starts_with("offer");
+            let simple = simple_name(o);
+            if verb
+                && (vocab::jvm_container().is_match(simple)
+                    || vocab::registration_name().is_match(simple)
+                    || vocab::registration_name().is_match(n))
+            {
+                out.push(Raw::new(
+                    "static-init-registration",
+                    Holder::RegistrationTable,
+                    Region::Heap,
+                    file,
+                    line,
+                    owner.clone(),
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::classfile::testutil::sample;
+
+    #[test]
+    fn static_field_gets_the_clinit_line_and_the_source_file() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("target/classes/a/b");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("Foo.class"),
+            sample("a/b/Foo", "CACHE", "Ljava/util/Map;"),
+        )
+        .unwrap();
+        let src = SourceFile {
+            rel: "src/a/b/Foo.java".into(),
+            text: "package a.b;\nclass Foo {\n}\n".into(),
+            lang: crate::parse::Lang::Java,
+            is_test: false,
+        };
+        let r = holders(t.path(), std::slice::from_ref(&src));
+        assert_eq!(r.classes, 1);
+        assert!(r.covered.contains("src/a/b/Foo.java"));
+        let got: Vec<(String, u32, String, String)> = r
+            .raws
+            .iter()
+            .map(|h| {
+                (
+                    h.file.clone(),
+                    h.line,
+                    h.holder.as_str().to_owned(),
+                    h.kind.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got[0],
+            (
+                "src/a/b/Foo.java".into(),
+                7,
+                "static/global".into(),
+                "static-container".into()
+            )
+        );
+        // The class also does `new Thread` in its static initializer.
+        assert_eq!(got[1].3, "thread");
+    }
+}

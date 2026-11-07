@@ -1,0 +1,20 @@
+/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-java/P.java:3: warning: [ThreadLocalUsage] ThreadLocals should be stored in static fields
+  ThreadLocal<byte[]> tl = new ThreadLocal<>();
+                           ^
+    (see https://errorprone.info/bugpattern/ThreadLocalUsage)
+/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-java/P.java:4: warning: [ClassCanBeStatic] Inner class is non-static but does not reference enclosing class
+  class Inner { int x; }
+  ^
+    (see https://errorprone.info/bugpattern/ClassCanBeStatic)
+  Did you mean 'static class Inner { int x; }'?
+/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-java/P.java:5: warning: [StreamResourceLeak] Streams that encapsulate a closeable resource should be closed using try-with-resources
+  long n() throws IOException { Stream<String> s = Files.lines(Paths.get("x")); return s.count(); }
+                                                              ^
+    (see https://errorprone.info/bugpattern/StreamResourceLeak)
+  Did you mean 'long n() throws IOException { try (Stream<String> s = Files.lines(Paths.get("x"))) { return s.count();} }'?
+/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-java/Q.java:6: warning: [ClassCanBeStatic] Inner class is non-static but does not reference enclosing class
+  class Inner { int x; }
+  ^
+    (see https://errorprone.info/bugpattern/ClassCanBeStatic)
+  Did you mean 'static class Inner { int x; }'?
+4 warnings

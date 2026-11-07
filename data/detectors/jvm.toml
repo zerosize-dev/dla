@@ -1,0 +1,263 @@
+# External analyzer rows for jvm. DLA-owned rows (backend dla) live in jvm.dla-fragment.toml and are merged into this file by the orchestrator.
+# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+
+[[detector]]
+id = "codeql/java/input-resource-leak"
+backend = "codeql"
+rule = "java/input-resource-leak"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.6
+default_enabled = false
+note = "Input stream or reader not always closed. Query id read from the CodeQL bundle (java-queries 1.12.0); the query suite decides what runs."
+
+[[detector]]
+id = "codeql/java/output-resource-leak"
+backend = "codeql"
+rule = "java/output-resource-leak"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.6
+default_enabled = false
+note = "Output stream or writer not always closed. Query id read from the CodeQL bundle (java-queries 1.12.0); the query suite decides what runs."
+
+[[detector]]
+id = "codeql/java/database-resource-leak"
+backend = "codeql"
+rule = "java/database-resource-leak"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.6
+default_enabled = false
+note = "JDBC connection, statement or result set not always closed. Query id read from the CodeQL bundle (java-queries 1.12.0); the query suite decides what runs."
+
+[[detector]]
+id = "errorprone/StreamResourceLeak"
+backend = "errorprone"
+rule = "StreamResourceLeak"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.6
+default_enabled = true
+note = "Stream over a closeable resource not closed (WARNING by default)."
+
+[[detector]]
+id = "errorprone/MustBeClosedChecker"
+backend = "errorprone"
+rule = "MustBeClosedChecker"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.6
+default_enabled = true
+note = "Only fires on APIs annotated @MustBeClosed, so error_prone_annotations must be on the classpath."
+
+[[detector]]
+id = "errorprone/ThreadLocalUsage"
+backend = "errorprone"
+rule = "ThreadLocalUsage"
+suggested_archetype = "L-TLS"
+verified = true
+precision_prior = 0.3
+default_enabled = true
+note = "ThreadLocal stored in a non-static field."
+
+[[detector]]
+id = "errorprone/ClassCanBeStatic"
+backend = "errorprone"
+rule = "ClassCanBeStatic"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.08
+default_enabled = true
+note = "Inner class that does not use the enclosing instance. A hint for retained outer references, mostly noise."
+
+[[detector]]
+id = "spotbugs/OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE"
+backend = "spotbugs"
+rule = "OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.55
+default_enabled = false
+note = "Resource not cleaned up on a checked-exception edge. Experimental category: needs -experimental."
+
+[[detector]]
+id = "spotbugs/OBL_UNSATISFIED_OBLIGATION"
+backend = "spotbugs"
+rule = "OBL_UNSATISFIED_OBLIGATION"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.55
+default_enabled = false
+note = "Resource not cleaned up. Experimental category: needs -experimental."
+
+[[detector]]
+id = "spotbugs/OS_OPEN_STREAM"
+backend = "spotbugs"
+rule = "OS_OPEN_STREAM"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.55
+default_enabled = true
+note = "Method may fail to close a stream."
+
+[[detector]]
+id = "spotbugs/OS_OPEN_STREAM_EXCEPTION_PATH"
+backend = "spotbugs"
+rule = "OS_OPEN_STREAM_EXCEPTION_PATH"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "Method may fail to close a stream on an exception path."
+
+[[detector]]
+id = "spotbugs/ODR_OPEN_DATABASE_RESOURCE"
+backend = "spotbugs"
+rule = "ODR_OPEN_DATABASE_RESOURCE"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.55
+default_enabled = true
+note = "Method may fail to close a database resource. Did not fire on the verification probe (OBL_* fired instead)."
+
+[[detector]]
+id = "spotbugs/ODR_OPEN_DATABASE_RESOURCE_EXCEPTION_PATH"
+backend = "spotbugs"
+rule = "ODR_OPEN_DATABASE_RESOURCE_EXCEPTION_PATH"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "Database resource not closed on an exception path."
+
+[[detector]]
+id = "spotbugs/SIC_THREADLOCAL_DEADLY_EMBRACE"
+backend = "spotbugs"
+rule = "SIC_THREADLOCAL_DEADLY_EMBRACE"
+suggested_archetype = "L-TLS"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "Inner class and ThreadLocal in the same outer class can pin the class loader."
+
+[[detector]]
+id = "spotbugs/SIC_INNER_SHOULD_BE_STATIC"
+backend = "spotbugs"
+rule = "SIC_INNER_SHOULD_BE_STATIC"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.08
+default_enabled = true
+note = "Inner class that could be static. Modern javac omits the unused this$0, so this rarely fires."
+
+[[detector]]
+id = "spotbugs/SIC_INNER_SHOULD_BE_STATIC_ANON"
+backend = "spotbugs"
+rule = "SIC_INNER_SHOULD_BE_STATIC_ANON"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.08
+default_enabled = true
+note = "Anonymous inner class that could be static."
+
+[[detector]]
+id = "spotbugs/SIC_INNER_SHOULD_BE_STATIC_NEEDS_THIS"
+backend = "spotbugs"
+rule = "SIC_INNER_SHOULD_BE_STATIC_NEEDS_THIS"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.08
+default_enabled = true
+note = "Inner class that needs this but could be static."
+
+[[detector]]
+id = "detekt/GlobalCoroutineUsage"
+backend = "detekt"
+rule = "GlobalCoroutineUsage"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.45
+default_enabled = false
+note = "GlobalScope usage; the coroutine outlives its caller. Works in light mode. Off by default; DLA enables it."
+
+[[detector]]
+id = "detekt/SuspendFunSwallowedCancellation"
+backend = "detekt"
+rule = "SuspendFunSwallowedCancellation"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.45
+default_enabled = false
+note = "Suspend call in try with a catch that swallows CancellationException. Needs full analysis mode and the coroutines classpath. Off by default; DLA enables it."
+
+[[detector]]
+id = "detekt/SuspendFunInFinallySection"
+backend = "detekt"
+rule = "SuspendFunInFinallySection"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.45
+default_enabled = false
+note = "Suspend call in finally without NonCancellable. detekt 2.x only (absent from 1.23.8). Needs full analysis mode. Off by default; DLA enables it."
+
+[[detector]]
+id = "sonar/S5164"
+backend = "sonar"
+rule = "S5164"
+suggested_archetype = "L-TLS"
+verified = false
+precision_prior = 0.5
+default_enabled = true
+note = "ThreadLocal.remove not called. Needs a SonarQube or SonarCloud server; the id could not be checked here."
+
+[[detector]]
+id = "sonar/S2095"
+backend = "sonar"
+rule = "S2095"
+suggested_archetype = "L-HANDLE"
+verified = false
+precision_prior = 0.55
+default_enabled = true
+note = "Resources should be closed. Needs a SonarQube or SonarCloud server; the id could not be checked here."
+
+# DLA-owned rules (backend "dla"), implemented in crates/dla-backends/src/dla_rules.
+[[detector]]
+id = "dla/jvm-unbounded-collection"
+backend = "dla"
+rule = "jvm-unbounded-collection"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "Static, companion, Kotlin object or singleton-bean collection that the project adds to and never removes from, clears or size-checks."
+
+[[detector]]
+id = "dla/jvm-listener-no-removal"
+backend = "dla"
+rule = "jvm-listener-no-removal"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "add/register/attach of a listener, observer, callback or handler where no matching remove/unregister/detach call exists in the project."
+
+[[detector]]
+id = "dla/jvm-micrometer-request-tag"
+backend = "dla"
+rule = "jvm-micrometer-request-tag"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.55
+default_enabled = true
+note = "Micrometer tag value built from request data (parameters, headers, URI, ids), so meters grow with distinct inputs."
+
+[[detector]]
+id = "dla/jvm-chain-head-growth"
+backend = "dla"
+rule = "jvm-chain-head-growth"
+suggested_archetype = "L-CAPTURE"
+verified = true
+precision_prior = 0.3
+default_enabled = true
+note = "A static, global or long-lived member head is advanced to a new object that keeps the previous head, and nothing unlinks older entries (retention chain)."

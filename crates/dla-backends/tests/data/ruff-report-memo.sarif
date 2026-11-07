@@ -1,0 +1,40 @@
+{
+ "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+ "runs": [
+  {
+   "results": [
+    {
+     "level": "error",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "file:///tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/python-report-memo/reports/builder.py"
+        },
+        "region": {
+         "endColumn": 39,
+         "endLine": 14,
+         "startColumn": 5,
+         "startLine": 14
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Use of `functools.lru_cache` or `functools.cache` on methods can lead to memory leaks"
+     },
+     "ruleId": "B019"
+    }
+   ],
+   "tool": {
+    "driver": {
+     "informationUri": "https://github.com/astral-sh/ruff",
+     "name": "ruff",
+     "rules": [],
+     "version": "0.16.9"
+    }
+   }
+  }
+ ],
+ "version": "2.1.0"
+}

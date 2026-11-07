@@ -1,0 +1,73 @@
+# External analyzer rows for rust. DLA-owned rows (backend dla) live in rust.dla-fragment.toml and are merged into this file by the orchestrator.
+# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+
+[[detector]]
+id = "rapx/leak"
+backend = "rapx"
+rule = "leak"
+suggested_archetype = "L-OWNERSHIP"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "RAPx memory-leak checker (cargo +nightly rapx check -m). Fired on Box::into_raw; did not fire on mem::forget or raw allocation in the verification probe. The documented -mleak flag no longer exists."
+
+# DLA-owned rules (backend "dla"), implemented in crates/dla-backends/src/dla_rules.
+[[detector]]
+id = "dla/rust-unbounded-channel"
+backend = "dla"
+rule = "rust-unbounded-channel"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.35
+default_enabled = true
+note = "unbounded_channel, std mpsc::channel() or crossbeam/flume unbounded(): the queue grows when the consumer stalls."
+
+[[detector]]
+id = "dla/rust-detached-task"
+backend = "dla"
+rule = "rust-detached-task"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "tokio::spawn or thread::spawn with the handle discarded inside a loop or a handler-like function."
+
+[[detector]]
+id = "dla/rust-box-leak"
+backend = "dla"
+rule = "rust-box-leak"
+suggested_archetype = "L-OWNERSHIP"
+verified = true
+precision_prior = 0.3
+default_enabled = true
+note = "Box::leak outside main or one-time initialisation."
+
+[[detector]]
+id = "dla/rust-mem-forget"
+backend = "dla"
+rule = "rust-mem-forget"
+suggested_archetype = "L-OWNERSHIP"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "mem::forget of a value, which skips its Drop."
+
+[[detector]]
+id = "dla/rust-into-raw-unpaired"
+backend = "dla"
+rule = "rust-into-raw-unpaired"
+suggested_archetype = "L-OWNERSHIP"
+verified = true
+precision_prior = 0.45
+default_enabled = true
+note = "into_raw with no from_raw in the same file."
+
+[[detector]]
+id = "dla/rust-rc-strong-cycle"
+backend = "dla"
+rule = "rust-rc-strong-cycle"
+suggested_archetype = "L-CYCLE"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "Struct holding strong Rc/Arc references to its own type in two fields (parent and children) and no Weak."

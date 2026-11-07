@@ -11,16 +11,35 @@
 //! `dla_core::detectors::DetectorFile::parse` (which refuses with file and line), runs
 //! every backend the table names for the language, and writes per backend: raw output
 //! `.dla/<run>/sweep/<backend>.json`, ONE `static-hit` evidence record, one candidate
-//! per `(rule, site)` with origin `detector:<backend>/<rule>` (use
+//! per `(rule, site)` with origin `detector:<backend>/<rule>` (via
 //! `dla_core::toolctx::CandidateWriter`), and the backend's entry in `coverage.json`
-//! (`missing` + install hint, `blocked` + reason, or `ran` with `enumerated` = candidates
-//! added). The always-available `dla` rule backend runs over the tree-sitter parsers of
-//! `dla-census`.
+//! (`missing` + install hint, `blocked` + reason, or `ran` with `enumerated` = the
+//! distinct `(rule, site)` pairs the backend reported). The always-available `dla`
+//! rule backend ([`dla_rules`]) runs over the tree-sitter parsers of `dla-census`.
+//!
+//! # Layout
+//!
+//! * [`adapters`]: one module per tool family, `run(&Job) -> Outcome` plus pure parsers
+//!   tested against recorded outputs in `tests/data/`.
+//! * [`registry`]: which runtimes a backend serves and its install hint.
+//! * [`install`]: one recipe per backend; the same step list builds the command
+//!   printed to the user when an install fails.
+//! * [`exec`]: process execution with a hard timeout and bounded capture.
+//! * [`fsx`]: tool discovery, project walking, tool path normalisation.
+
+pub mod adapters;
+pub mod dla_rules;
+pub mod exec;
+pub mod fsx;
+pub mod install;
+pub mod registry;
+pub mod sarif;
+pub mod sweep;
 
 use dla_core::{
     Refusal,
     runtime::Runtime,
-    toolctx::{StageOutcome, ToolCtx, not_implemented},
+    toolctx::{StageOutcome, ToolCtx},
 };
 
 /// Runs every static backend the detector table of `lang` names and turns hits into
@@ -30,11 +49,9 @@ use dla_core::{
 /// timeout, and never write into the project. The summary in [`StageOutcome::summary`]
 /// lists, per backend, `ran` / `blocked` / `missing` and the number of candidates.
 /// Refuses with `invalid-data-file` (file and line) when the table is invalid and with
-/// `no-data-dir` when the data files cannot be found; until implemented, with
-/// `not-implemented`.
+/// `no-data-dir` when the data files cannot be found.
 pub fn sweep(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
-    let _ = (ctx, lang);
-    Err(not_implemented("dla sweep"))
+    sweep::sweep(ctx, lang)
 }
 
 /// Installs one backend (`backend` is one of `dla_core::detectors::KNOWN_BACKENDS`, the
@@ -45,8 +62,7 @@ pub fn sweep(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
 /// tools directory; project files are never touched. On success the outcome's
 /// `summary` carries `{"backend", "version"}`. On failure the call returns a [`Refusal`]
 /// with code `tool-failed` whose `fix` is the exact command for the user, and the
-/// backend stays `missing` in coverage. Until implemented: `not-implemented`.
+/// backend stays `missing` in coverage.
 pub fn install(ctx: &ToolCtx, backend: &str) -> Result<StageOutcome, Refusal> {
-    let _ = (ctx, backend);
-    Err(not_implemented("dla install"))
+    install::install(ctx, backend)
 }

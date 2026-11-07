@@ -1,0 +1,113 @@
+# External analyzer rows for python. DLA-owned rows (backend dla) live in python.dla-fragment.toml and are merged into this file by the orchestrator.
+# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+
+[[detector]]
+id = "ruff/B019"
+backend = "ruff"
+rule = "B019"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "lru_cache or cache on a method pins self. Also fires on bounded caches (maxsize=N), so demote when the bound is finite."
+
+[[detector]]
+id = "ruff/RUF006"
+backend = "ruff"
+rule = "RUF006"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.15
+default_enabled = false
+note = "asyncio.create_task result dropped; the task can be garbage collected mid-flight, the opposite failure to a leak."
+
+[[detector]]
+id = "ruff/SIM115"
+backend = "ruff"
+rule = "SIM115"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "open() without a context manager."
+
+[[detector]]
+id = "pylint/W1518"
+backend = "pylint"
+rule = "W1518"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.7
+default_enabled = true
+note = "method-cache-max-size-none: unbounded lru_cache or cache on a method. W1516 and W1517 are old names of this message, not separate rules."
+
+[[detector]]
+id = "codeql/py/file-not-closed"
+backend = "codeql"
+rule = "py/file-not-closed"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.6
+default_enabled = false
+note = "File opened and not always closed. Query id read from the CodeQL bundle (python-queries 1.9.0)."
+
+[[detector]]
+id = "codeql/py/should-use-with"
+backend = "codeql"
+rule = "py/should-use-with"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.4
+default_enabled = false
+note = "Resource should be managed with a with statement. Query id read from the CodeQL bundle."
+
+# DLA-owned rules (backend "dla"), implemented in crates/dla-backends/src/dla_rules.
+[[detector]]
+id = "dla/python-global-container-growth"
+backend = "dla"
+rule = "python-global-container-growth"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "Module-level or class-level container mutated inside functions with no removal, eviction or size check."
+
+[[detector]]
+id = "dla/python-cache-method"
+backend = "dla"
+rule = "python-cache-method"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.6
+default_enabled = true
+note = "functools.cache or lru_cache(maxsize=None) on a method: the cache pins every instance."
+
+[[detector]]
+id = "dla/python-unbounded-cache"
+backend = "dla"
+rule = "python-unbounded-cache"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "functools.cache or lru_cache(maxsize=None) on a function with parameters: one entry per distinct argument tuple."
+
+[[detector]]
+id = "dla/python-handler-registration-in-function"
+backend = "dla"
+rule = "python-handler-registration-in-function"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.45
+default_enabled = true
+note = "addHandler, atexit.register or signal.signal called inside a function that can run more than once."
+
+[[detector]]
+id = "dla/python-chain-head-growth"
+backend = "dla"
+rule = "python-chain-head-growth"
+suggested_archetype = "L-CAPTURE"
+verified = true
+precision_prior = 0.3
+default_enabled = true
+note = "A static, global or long-lived member head is advanced to a new object that keeps the previous head, and nothing unlinks older entries (retention chain)."

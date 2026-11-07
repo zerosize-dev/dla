@@ -1,0 +1,46 @@
+{
+ "messages": [
+  {
+   "type": "warning",
+   "symbol": "method-cache-max-size-none",
+   "message": "'lru_cache(maxsize=None)' or 'cache' will keep all method args alive indefinitely, including 'self'",
+   "messageId": "W1518",
+   "confidence": "INFERENCE",
+   "module": "leaks",
+   "obj": "A",
+   "line": 3,
+   "column": 5,
+   "endLine": 3,
+   "endColumn": 38,
+   "path": "leaks.py",
+   "absolutePath": "/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-py/leaks.py"
+  },
+  {
+   "type": "warning",
+   "symbol": "method-cache-max-size-none",
+   "message": "'lru_cache(maxsize=None)' or 'cache' will keep all method args alive indefinitely, including 'self'",
+   "messageId": "W1518",
+   "confidence": "INFERENCE",
+   "module": "leaks",
+   "obj": "A",
+   "line": 5,
+   "column": 5,
+   "endLine": 5,
+   "endColumn": 20,
+   "path": "leaks.py",
+   "absolutePath": "/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-py/leaks.py"
+  }
+ ],
+ "statistics": {
+  "messageTypeCount": {
+   "fatal": 0,
+   "error": 0,
+   "warning": 2,
+   "refactor": 0,
+   "convention": 0,
+   "info": 0
+  },
+  "modulesLinted": 4,
+  "score": 8.181818181818182
+ }
+}

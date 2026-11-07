@@ -1,0 +1,95 @@
+{
+ "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+ "version": "2.1.0",
+ "runs": [
+  {
+   "results": [
+    {
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "A.kt",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 42,
+         "endLine": 2,
+         "startColumn": 11,
+         "startLine": 2
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "This use of GlobalScope should be replaced by `CoroutineScope` or `coroutineScope`."
+     },
+     "partialFingerprints": {
+      "signature/v1": "09b22a910062a63c457817229d068b9625193b4d"
+     },
+     "ruleId": "detekt.coroutines.GlobalCoroutineUsage"
+    },
+    {
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "A.kt",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 71,
+         "endLine": 3,
+         "startColumn": 36,
+         "startLine": 3
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "You should always catch and re-throw CancellationExceptions in a try block from a suspending function. The exception should be re-thrown immediately after catching it - it's intended to completely kill any running jobs in your coroutine."
+     },
+     "partialFingerprints": {
+      "signature/v1": "c30beb1f6a17677cacd3604f7cab5de22e94e42a"
+     },
+     "ruleId": "detekt.coroutines.SuspendFunSwallowedCancellation"
+    },
+    {
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "A.kt",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "endColumn": 87,
+         "endLine": 3,
+         "startColumn": 82,
+         "startLine": 3
+        }
+       }
+      }
+     ],
+     "message": {
+      "text": "Suspend functions should not be called from a 'finally' section without using 'NonCancellable' context as they won't execute if parent coroutine scope is cancelled."
+     },
+     "partialFingerprints": {
+      "signature/v1": "ab464f0252045aaf075411f0f1a6aed0797306c1"
+     },
+     "ruleId": "detekt.coroutines.SuspendFunInFinallySection"
+    }
+   ],
+   "tool": {
+    "driver": {
+     "guid": "022ca8c2-f6a2-4c95-b107-bb72c43263f3",
+     "informationUri": "https://detekt.dev",
+     "language": "en",
+     "name": "detekt",
+     "organization": "detekt",
+     "rules": []
+    }
+   }
+  }
+ ]
+}

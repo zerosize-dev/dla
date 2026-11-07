@@ -1605,34 +1605,45 @@ fn annotate_refuses_unknown_findings_bad_sites_and_empty_annotations() {
     assert_eq!(o.code, 1);
 }
 
-// ---- stage commands (stubs until their crates are implemented)
+// ---- stage commands
 
 #[test]
-fn stage_commands_parse_their_arguments_and_refuse_as_not_implemented() {
+fn stage_commands_run_on_an_empty_project() {
     let (dir, _) = fresh_run();
     for args in [
         vec!["probe"],
-        vec!["probe", "--build"],
         vec!["sweep", "--lang", "go"],
         vec!["census", "--lang", "jvm"],
         vec!["workload", "discover"],
         vec!["workload", "discover", "--lang", "python"],
-        vec!["install", "ruff"],
     ] {
-        let e = refused(dir.path(), &args);
-        assert_eq!(e["code"], "not-implemented", "{args:?}");
+        let o = ok(dir.path(), &args);
+        assert_eq!(o["candidates"], 0, "{args:?}");
+        assert!(
+            o["evidence"].as_array().is_some_and(|e| e.len() == 1),
+            "{args:?}"
+        );
     }
-    // --data is a global flag.
-    let e = refused(dir.path(), &["--data", "/nonexistent", "probe"]);
-    assert_eq!(e["code"], "not-implemented");
+    // Building and installing need tier-1 consent first.
+    for args in [vec!["probe", "--build"], vec!["install", "ruff"]] {
+        let e = refused(dir.path(), &args);
+        assert_eq!(e["code"], "consent-required", "{args:?}");
+        assert_eq!(e["fix"], "dla consent --tiers 1-4");
+    }
+    // --data is a global flag and must name an existing directory.
+    let e = refused(
+        dir.path(),
+        &["--data", "/nonexistent", "sweep", "--lang", "go"],
+    );
+    assert_eq!(e["code"], "no-data-dir");
 }
 
 #[test]
 fn stage_commands_validate_arguments() {
     let (dir, _) = fresh_run();
     for lang in ["jvm", "go", "rust", "node", "python", "native"] {
-        let e = refused(dir.path(), &["sweep", "--lang", lang]);
-        assert_eq!(e["code"], "not-implemented");
+        let o = ok(dir.path(), &["sweep", "--lang", lang]);
+        assert_eq!(o["lang"], lang);
     }
     for args in [
         vec!["sweep"],

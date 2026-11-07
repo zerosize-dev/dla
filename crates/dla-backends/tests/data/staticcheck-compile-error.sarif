@@ -1,0 +1,55 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "driver": {
+     "name": "Staticcheck",
+     "version": "2025.1.1",
+     "informationUri": "https://staticcheck.dev",
+     "rules": []
+    }
+   },
+   "results": [
+    {
+     "ruleId": "compile",
+     "kind": "fail",
+     "message": {
+      "text": "no required module provides package nonexistent.example/foo; to add it:\n\tgo get nonexistent.example/foo"
+     },
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "a.go",
+         "uriBaseId": "%SRCROOT%"
+        },
+        "region": {
+         "startLine": 2,
+         "startColumn": 8
+        }
+       }
+      }
+     ],
+     "suppressions": []
+    }
+   ],
+   "invocations": [
+    {
+     "arguments": [
+      "-checks",
+      "SA5003",
+      "-f",
+      "sarif",
+      "./..."
+     ],
+     "workingDirectory": {
+      "uri": "file:///tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/wt/bad"
+     },
+     "executionSuccessful": true
+    }
+   ]
+  }
+ ]
+}

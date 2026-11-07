@@ -1,0 +1,203 @@
+# External analyzer rows for go. DLA-owned rows (backend dla) live in go.dla-fragment.toml and are merged into this file by the orchestrator.
+# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+
+[[detector]]
+id = "staticcheck/SA1015"
+backend = "staticcheck"
+rule = "SA1015"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.55
+default_enabled = true
+note = "time.Tick leaks its ticker when the function is not endless. Did not fire on the verification probe."
+
+[[detector]]
+id = "staticcheck/SA2001"
+backend = "staticcheck"
+rule = "SA2001"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.05
+default_enabled = true
+note = "Empty critical section. Not a leak rule; kept as a signal for lock misuse."
+
+[[detector]]
+id = "staticcheck/SA2003"
+backend = "staticcheck"
+rule = "SA2003"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.05
+default_enabled = true
+note = "Deferred Lock right after Lock. Not a leak rule."
+
+[[detector]]
+id = "staticcheck/SA5003"
+backend = "staticcheck"
+rule = "SA5003"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.6
+default_enabled = true
+note = "Defers in an infinite loop never run."
+
+[[detector]]
+id = "staticcheck/SA5005"
+backend = "staticcheck"
+rule = "SA5005"
+suggested_archetype = "L-CYCLE"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "Finalizer references the finalized object, so it never runs. Did not fire on the verification probe."
+
+[[detector]]
+id = "staticcheck/SA6002"
+backend = "staticcheck"
+rule = "SA6002"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.1
+default_enabled = true
+note = "sync.Pool with a non-pointer value allocates on every Put."
+
+[[detector]]
+id = "staticcheck/SA9001"
+backend = "staticcheck"
+rule = "SA9001"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "Defers in a range loop over a channel do not run unless the channel closes."
+
+[[detector]]
+id = "golangci-lint/bodyclose"
+backend = "golangci-lint"
+rule = "bodyclose"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.65
+default_enabled = false
+note = "HTTP response body not closed."
+
+[[detector]]
+id = "golangci-lint/sqlclosecheck"
+backend = "golangci-lint"
+rule = "sqlclosecheck"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.65
+default_enabled = false
+note = "sql.Rows or Stmt not closed. Did not fire on the verification probe."
+
+[[detector]]
+id = "golangci-lint/rowserrcheck"
+backend = "golangci-lint"
+rule = "rowserrcheck"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.4
+default_enabled = false
+note = "sql.Rows.Err not checked."
+
+[[detector]]
+id = "golangci-lint/noctx"
+backend = "golangci-lint"
+rule = "noctx"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.15
+default_enabled = false
+note = "Request or query without a context cannot be cancelled."
+
+[[detector]]
+id = "golangci-lint/contextcheck"
+backend = "golangci-lint"
+rule = "contextcheck"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.15
+default_enabled = false
+note = "Function does not pass the caller's context. Did not fire on the verification probe."
+
+[[detector]]
+id = "golangci-lint/containedctx"
+backend = "golangci-lint"
+rule = "containedctx"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.1
+default_enabled = false
+note = "Struct holds a context.Context field."
+
+[[detector]]
+id = "golangci-lint/fatcontext"
+backend = "golangci-lint"
+rule = "fatcontext"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.5
+default_enabled = false
+note = "Context nested inside a loop grows a chain."
+
+[[detector]]
+id = "golangci-lint/spancheck"
+backend = "golangci-lint"
+rule = "spancheck"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.5
+default_enabled = false
+note = "Tracing span not ended. Needs OpenTelemetry in the module; did not fire offline."
+
+[[detector]]
+id = "golangci-lint/gocritic/deferInLoop"
+backend = "golangci-lint"
+rule = "gocritic/deferInLoop"
+suggested_archetype = "L-HANDLE"
+verified = true
+precision_prior = 0.55
+default_enabled = false
+note = "defer inside a loop holds every resource until the function returns. Opt-in gocritic checker."
+
+[[detector]]
+id = "govet/lostcancel"
+backend = "govet"
+rule = "lostcancel"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.7
+default_enabled = true
+note = "The cancel function of context.WithCancel and friends is discarded."
+
+# DLA-owned rules (backend "dla"), implemented in crates/dla-backends/src/dla_rules.
+[[detector]]
+id = "dla/go-goroutine-no-stop-path"
+backend = "dla"
+rule = "go-goroutine-no-stop-path"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.45
+default_enabled = true
+note = "go statement whose function loops forever (or ranges over a channel nobody closes) with no done, context or stop path."
+
+[[detector]]
+id = "dla/go-time-tick"
+backend = "dla"
+rule = "go-time-tick"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.6
+default_enabled = true
+note = "time.Tick leaks its ticker; use time.NewTicker and Stop."
+
+[[detector]]
+id = "dla/go-ticker-no-stop"
+backend = "dla"
+rule = "go-ticker-no-stop"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "time.NewTicker result never has Stop called in the file."

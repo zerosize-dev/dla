@@ -1,0 +1,11 @@
+# example.com/p
+{
+	"example.com/p": {
+		"lostcancel": [
+			{
+				"posn": "/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-go/p.go:41:8",
+				"message": "the cancel function returned by context.WithCancel should be called, not discarded, to avoid a context leak"
+			}
+		]
+	}
+}

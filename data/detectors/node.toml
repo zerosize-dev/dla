@@ -1,0 +1,93 @@
+# External analyzer rows for node. DLA-owned rows (backend dla) live in node.dla-fragment.toml and are merged into this file by the orchestrator.
+# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+
+[[detector]]
+id = "eslint/rxjs-x/no-ignored-subscription"
+backend = "eslint"
+rule = "rxjs-x/no-ignored-subscription"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.45
+default_enabled = false
+note = "Subscription result discarded, so it can never be unsubscribed. Type-aware: rxjs must resolve from the project's node_modules."
+
+[[detector]]
+id = "eslint/rxjs-x/no-floating-observables"
+backend = "eslint"
+rule = "rxjs-x/no-floating-observables"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.45
+default_enabled = false
+note = "Observable created and never subscribed or returned. Type-aware: rxjs must resolve from the project's node_modules."
+
+[[detector]]
+id = "eslint/rxjs-x/no-nested-subscribe"
+backend = "eslint"
+rule = "rxjs-x/no-nested-subscribe"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.45
+default_enabled = false
+note = "subscribe inside subscribe; the inner subscription is not managed. Type-aware: rxjs must resolve from the project's node_modules."
+
+[[detector]]
+id = "eslint/rxjs-x/no-unsafe-takeuntil"
+backend = "eslint"
+rule = "rxjs-x/no-unsafe-takeuntil"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.45
+default_enabled = false
+note = "takeUntil in a position that leaves the subscription open. Type-aware: rxjs must resolve from the project's node_modules."
+
+[[detector]]
+id = "eslint/@typescript-eslint/no-floating-promises"
+backend = "eslint"
+rule = "@typescript-eslint/no-floating-promises"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.12
+default_enabled = false
+note = "Promise neither awaited nor handled. Adjacent to leaks only; type-aware."
+
+# DLA-owned rules (backend "dla"), implemented in crates/dla-backends/src/dla_rules.
+[[detector]]
+id = "dla/node-timer-no-cleanup"
+backend = "dla"
+rule = "node-timer-no-cleanup"
+suggested_archetype = "L-WORKER"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "setInterval or re-arming setTimeout whose handle is discarded or never passed to clearInterval/clearTimeout."
+
+[[detector]]
+id = "dla/node-listener-no-removal"
+backend = "dla"
+rule = "node-listener-no-removal"
+suggested_archetype = "L-REGISTER"
+verified = true
+precision_prior = 0.4
+default_enabled = true
+note = "on/addListener/addEventListener inside a function on a long-lived emitter (module-level, this member, process, window) with no matching off/removeListener."
+
+[[detector]]
+id = "dla/node-module-cache-unbounded"
+backend = "dla"
+rule = "node-module-cache-unbounded"
+suggested_archetype = "L-COLLECT"
+verified = true
+precision_prior = 0.5
+default_enabled = true
+note = "Module-level Map, Set, object or array mutated inside functions with no delete, clear, eviction or size check."
+
+[[detector]]
+id = "dla/node-chain-head-growth"
+backend = "dla"
+rule = "node-chain-head-growth"
+suggested_archetype = "L-CAPTURE"
+verified = true
+precision_prior = 0.3
+default_enabled = true
+note = "A static, global or long-lived member head is advanced to a new object that keeps the previous head, and nothing unlinks older entries (retention chain)."

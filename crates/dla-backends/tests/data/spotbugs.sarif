@@ -1,0 +1,309 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "extensions": [
+     {
+      "version": "4.10.5",
+      "name": "edu.umd.cs.findbugs.plugins.core",
+      "shortDescription": {
+       "text": "Core SpotBugs plugin"
+      },
+      "informationUri": "https://github.com/spotbugs",
+      "organization": "SpotBugs project"
+     }
+    ],
+    "driver": {
+     "name": "SpotBugs",
+     "version": "4.10.5",
+     "language": "en",
+     "informationUri": "https://spotbugs.github.io/",
+     "rules": [],
+     "supportedTaxonomies": [
+      {
+       "name": "CWE",
+       "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+      }
+     ]
+    }
+   },
+   "invocations": [
+    {
+     "exitCode": 1,
+     "exitCodeDescription": "BUGS FOUND",
+     "executionSuccessful": true
+    }
+   ],
+   "results": [
+    {
+     "ruleId": "OBL_UNSATISFIED_OBLIGATION",
+     "ruleIndex": 0,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to clean up stream or resource",
+      "arguments": [
+       "P.f()",
+       "java.io.InputStream"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "P.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 6
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "P.f()",
+         "kind": "function",
+         "fullyQualifiedName": "P.f()"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "OS_OPEN_STREAM",
+     "ruleIndex": 1,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to close stream",
+      "arguments": [
+       "P.f()"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "P.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 6
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "f()",
+         "kind": "function",
+         "fullyQualifiedName": "P.f()"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "OBL_UNSATISFIED_OBLIGATION",
+     "ruleIndex": 0,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to clean up stream or resource",
+      "arguments": [
+       "Q.a()",
+       "java.io.InputStream"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Q.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 3
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "Q.a()",
+         "kind": "function",
+         "fullyQualifiedName": "Q.a()"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "OBL_UNSATISFIED_OBLIGATION",
+     "ruleIndex": 0,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to clean up stream or resource",
+      "arguments": [
+       "Q.b(Connection)",
+       "java.sql.ResultSet"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Q.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 4
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "Q.b(Connection)",
+         "kind": "function",
+         "fullyQualifiedName": "Q.b(Connection)"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "OBL_UNSATISFIED_OBLIGATION",
+     "ruleIndex": 0,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to clean up stream or resource",
+      "arguments": [
+       "Q.b(Connection)",
+       "java.sql.Statement"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Q.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 4
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "Q.b(Connection)",
+         "kind": "function",
+         "fullyQualifiedName": "Q.b(Connection)"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE",
+     "ruleIndex": 2,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to clean up stream or resource on checked exception",
+      "arguments": [
+       "Q.c()",
+       "java.io.OutputStream"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Q.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 5
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "Q.c()",
+         "kind": "function",
+         "fullyQualifiedName": "Q.c()"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "OS_OPEN_STREAM",
+     "ruleIndex": 1,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to close stream",
+      "arguments": [
+       "Q.a()"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Q.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 3
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "a()",
+         "kind": "function",
+         "fullyQualifiedName": "Q.a()"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "OS_OPEN_STREAM_EXCEPTION_PATH",
+     "ruleIndex": 3,
+     "message": {
+      "id": "default",
+      "text": "Method may fail to close stream on exception",
+      "arguments": [
+       "Q.c()"
+      ]
+     },
+     "level": "note",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "Q.java",
+         "uriBaseId": "575173912"
+        },
+        "region": {
+         "startLine": 5
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "c()",
+         "kind": "function",
+         "fullyQualifiedName": "Q.c()"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "originalUriBaseIds": {
+    "575173912": {
+     "uri": "file:/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/w/probe-java/"
+    }
+   }
+  }
+ ]
+}
