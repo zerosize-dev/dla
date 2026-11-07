@@ -31,7 +31,13 @@ use crate::{
 
 /// DLA: leak investigation ledger and report tooling.
 #[derive(Parser, Debug)]
-#[command(name = "dla", version, about, propagate_version = true)]
+#[command(
+    name = "dla",
+    bin_name = "dla",
+    version,
+    about,
+    propagate_version = true
+)]
 struct Cli {
     /// Project directory (default: the git toplevel above the cwd, else the cwd).
     #[arg(long, global = true, value_name = "DIR")]
