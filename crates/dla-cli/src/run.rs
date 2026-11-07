@@ -115,7 +115,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         _ => None,
     };
     let headless = headless_consent()?;
-    let root_text = project.to_string_lossy().into_owned();
+    let root_text = dla_core::paths::to_slash(&project);
     let session_text = session
         .as_deref()
         .filter(|s| !s.is_empty())

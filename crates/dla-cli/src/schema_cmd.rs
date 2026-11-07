@@ -28,7 +28,7 @@ pub fn run(a: SchemaArgs) -> Res<Value> {
         .into_iter()
         .map(|(name, s)| (format!("{name}.schema.json"), schema::render(&s)))
         .collect();
-    let out = a.out.to_string_lossy().replace('\\', "/");
+    let out = dla_core::paths::to_slash(&a.out);
     if a.check {
         return check(&a.out, &out, &files);
     }

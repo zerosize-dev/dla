@@ -11,7 +11,7 @@ use crate::{ctx::Ctx, fail::Res, git};
 /// The context handed to a stage crate.
 pub fn tool_ctx(project: &Path, ctx: &Ctx, data: Option<&PathBuf>) -> ToolCtx {
     let source_commit =
-        git::head_commit(project).unwrap_or_else(|| project.to_string_lossy().into_owned());
+        git::head_commit(project).unwrap_or_else(|| dla_core::paths::to_slash(project));
     ToolCtx {
         project: project.to_path_buf(),
         run_dir: ctx.run_dir.clone(),

@@ -35,7 +35,10 @@ pub fn project_root(arg: Option<&Path>) -> Res<PathBuf> {
     if !root.is_dir() {
         return Err(Failure::refuse(
             dla_core::error::codes::INVALID_VALUE,
-            format!("project directory {} does not exist", root.display()),
+            format!(
+                "project directory {} does not exist",
+                dla_core::paths::to_slash(&root)
+            ),
             "an existing project directory",
             "dla --project <dir> run status",
         ));

@@ -65,7 +65,7 @@ pub fn resolve_data_files_dir(
         } else {
             Err(Refusal::new(
                 codes::NO_DATA_DIR,
-                format!("--data {} is not a directory", f.display()),
+                format!("--data {} is not a directory", crate::paths::to_slash(f)),
                 "an existing plugin data directory",
                 "dla --data <dir> ...",
             ))
@@ -99,6 +99,23 @@ pub fn resolve_tools_dir(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf
 /// The analyzer tools directory for this process: `$DLA_DATA_DIR/tools`.
 pub fn tools_dir() -> Option<PathBuf> {
     resolve_tools_dir(&real_env)
+}
+
+/// Renders `s` with `/` separators (the form every recorded path takes, whatever the OS).
+pub fn slash(s: &str) -> String {
+    s.replace('\\', "/")
+}
+
+/// Renders `path` as a `/`-separated string. Use for every path written to the ledger,
+/// evidence, coverage, census, workload or probe output; keep [`Path`] for arguments
+/// passed to child processes.
+pub fn to_slash(path: &Path) -> String {
+    slash(&path.to_string_lossy())
+}
+
+/// `path` relative to `root`, `/`-separated, or `None` when `path` is not under `root`.
+pub fn rel_slash(root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(root).ok().map(to_slash)
 }
 
 #[cfg(test)]
@@ -170,9 +187,24 @@ mod tests {
         let env = env_of(&[(ENV_DATA_DIR, "/x/data")]);
         assert_eq!(
             resolve_tools_dir(&env),
-            Some(PathBuf::from("/x/data/tools"))
+            Some(Path::new("/x/data").join("tools"))
         );
         assert_eq!(resolve_tools_dir(&env_of(&[])), None);
         assert_eq!(resolve_tools_dir(&env_of(&[(ENV_DATA_DIR, " ")])), None);
+    }
+
+    #[test]
+    fn slash_rewrites_backslashes() {
+        assert_eq!(slash(r"src\main\A.java"), "src/main/A.java");
+        assert_eq!(slash("already/fine"), "already/fine");
+        assert_eq!(to_slash(Path::new(r"a\b/c")), "a/b/c");
+    }
+
+    #[test]
+    fn rel_slash_is_relative_and_uses_forward_slashes() {
+        let root = Path::new("proj");
+        let file = root.join("src").join("lib").join("a.rs");
+        assert_eq!(rel_slash(root, &file).as_deref(), Some("src/lib/a.rs"));
+        assert_eq!(rel_slash(root, Path::new("other/a.rs")), None);
     }
 }

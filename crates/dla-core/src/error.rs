@@ -142,7 +142,7 @@ pub struct ReplayError {
 
 fn path_prefix(p: &Option<PathBuf>) -> String {
     p.as_ref()
-        .map(|p| format!("{}: ", p.display()))
+        .map(|p| format!("{}: ", crate::paths::to_slash(p)))
         .unwrap_or_default()
 }
 
@@ -162,7 +162,7 @@ pub struct ParseEnumError {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Filesystem failure.
-    #[error("{}: {source}", path.display())]
+    #[error("{}: {source}", crate::paths::to_slash(path))]
     Io {
         /// Path involved.
         path: PathBuf,
@@ -170,7 +170,7 @@ pub enum Error {
         source: std::io::Error,
     },
     /// A run-directory file is not valid JSON for its type.
-    #[error("{}: {message}", path.display())]
+    #[error("{}: {message}", crate::paths::to_slash(path))]
     Malformed {
         /// Path involved.
         path: PathBuf,
@@ -225,13 +225,13 @@ impl Error {
             Error::Io { path, .. } => Refusal::new(
                 "io-error",
                 self.to_string(),
-                path.display().to_string(),
+                crate::paths::to_slash(path),
                 "check that the path exists and is readable and writable",
             ),
             Error::Malformed { path, .. } => Refusal::new(
                 "malformed-file",
                 self.to_string(),
-                path.display().to_string(),
+                crate::paths::to_slash(path),
                 "restore the file or start a new run with `dla run init`",
             ),
         }

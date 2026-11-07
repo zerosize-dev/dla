@@ -33,7 +33,7 @@ pub fn load_table(data: &Path, lang: Runtime) -> Result<DetectorFile, Refusal> {
     if !dir.is_dir() {
         return Err(Refusal::new(
             codes::INVALID_DATA_FILE,
-            format!("{} does not exist", dir.display()),
+            format!("{} does not exist", dla_core::paths::to_slash(&dir)),
             "the plugin's data/detectors directory",
             "dla --data <dir> sweep ... where <dir> holds detectors/<lang>.toml",
         ));

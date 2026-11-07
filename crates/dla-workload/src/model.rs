@@ -123,9 +123,9 @@ impl Scan {
                     }
                 } else if ft.is_file()
                     && all.len() < MAX_FILES
-                    && let Ok(r) = e.path().strip_prefix(project)
+                    && let Some(r) = dla_core::paths::rel_slash(project, &e.path())
                 {
-                    all.insert(r.to_string_lossy().replace('\\', "/"));
+                    all.insert(r);
                 }
             }
         }

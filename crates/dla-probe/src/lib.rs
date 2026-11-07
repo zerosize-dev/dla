@@ -130,7 +130,7 @@ pub fn run_with(
 
     let report = ProbeReport {
         schema_version: PROBE_SCHEMA_VERSION,
-        project: ctx.project.to_string_lossy().into_owned(),
+        project: dla_core::paths::to_slash(&ctx.project),
         runtimes: detected.iter().map(|d| d.probe.clone()).collect(),
         tools,
         privilege,
@@ -422,5 +422,7 @@ pub fn build_failed(report: &ProbeReport, rt: Runtime) -> bool {
         .any(|b| b.runtime == rt && matches!(b.status, BuildStatus::Failed | BuildStatus::Timeout))
 }
 
+// Unix only: the tests stand in for tools with `#!/bin/sh` scripts made executable by
+// mode bits, which Windows has no equivalent for.
 #[cfg(all(test, unix))]
 mod tests;

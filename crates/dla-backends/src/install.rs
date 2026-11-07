@@ -722,7 +722,7 @@ pub fn install(ctx: &ToolCtx, backend: &str) -> Result<StageOutcome, Refusal> {
             summary: json!({
                 "backend": backend,
                 "version": version,
-                "tools_dir": tools.display().to_string(),
+                "tools_dir": dla_core::paths::to_slash(&tools),
             }),
         }),
         Err(e) => {
@@ -753,6 +753,15 @@ mod tests {
         PathBuf::from("/data/tools")
     }
 
+    /// `/data/tools/<rel>` built with the platform's separators, as the recipes build it.
+    fn under_tools(rel: &str) -> String {
+        let mut p = tools();
+        for part in rel.split('/') {
+            p.push(part);
+        }
+        p.to_string_lossy().into_owned()
+    }
+
     fn runs(r: &Recipe) -> Vec<&Run> {
         r.steps
             .iter()
@@ -769,13 +778,13 @@ mod tests {
             run.args,
             ["install", "honnef.co/go/tools/cmd/staticcheck@2025.1.1"]
         );
-        assert_eq!(
-            run.env,
-            [("GOBIN".to_owned(), "/data/tools/bin".to_owned())]
-        );
+        assert_eq!(run.env, [("GOBIN".to_owned(), under_tools("bin"))]);
+        let bin = quote(&under_tools("bin"));
         assert_eq!(
             r.user_command(),
-            "mkdir -p /data/tools/bin && GOBIN=/data/tools/bin go install honnef.co/go/tools/cmd/staticcheck@2025.1.1"
+            format!(
+                "mkdir -p {bin} && GOBIN={bin} go install honnef.co/go/tools/cmd/staticcheck@2025.1.1"
+            )
         );
         let g = recipe("golangci-lint", &tools(), LINUX).unwrap();
         assert!(
@@ -788,8 +797,8 @@ mod tests {
     fn python_tools_share_a_pinned_venv() {
         let r = recipe("ruff", &tools(), LINUX).unwrap();
         let rs = runs(&r);
-        assert_eq!(rs[0].args, ["-m", "venv", "/data/tools/venv"]);
-        assert_eq!(rs[1].program, "/data/tools/venv/bin/python");
+        assert_eq!(rs[0].args, ["-m", "venv", &under_tools("venv")]);
+        assert_eq!(rs[1].program, under_tools("venv/bin/python"));
         assert!(rs[1].args.contains(&"ruff==0.17.4".to_owned()));
         let p = recipe("pylint", &tools(), LINUX).unwrap();
         assert!(runs(&p)[1].args.contains(&"pylint==4.1.3".to_owned()));
@@ -803,7 +812,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(runs(&w)[0].program, "python");
-        assert!(runs(&w)[1].program.ends_with("Scripts/python.exe"));
+        assert!(Path::new(&runs(&w)[1].program).ends_with("Scripts/python.exe"));
     }
 
     #[test]
@@ -811,7 +820,10 @@ mod tests {
         let r = recipe("eslint", &tools(), LINUX).unwrap();
         let run = runs(&r)[0];
         assert_eq!(run.program, "npm");
-        assert_eq!(&run.args[..3], ["install", "--prefix", "/data/tools/node"]);
+        assert_eq!(
+            &run.args[..3],
+            ["install", "--prefix", under_tools("node").as_str()]
+        );
         for pkg in [
             "eslint@10.14.0",
             "typescript-eslint@8.72.1",
@@ -829,16 +841,16 @@ mod tests {
         };
         assert_eq!(
             path,
-            &PathBuf::from("/data/tools/jars/.build/errorprone/pom.xml")
+            &PathBuf::from(under_tools("jars/.build/errorprone/pom.xml"))
         );
         assert!(content.contains("<artifactId>error_prone_core</artifactId>"));
         assert!(content.contains("<version>2.52.0</version>"));
         let run = runs(&r)[0];
         assert_eq!(run.program, "mvn");
-        assert!(
-            run.args
-                .contains(&"-DoutputDirectory=/data/tools/jars/errorprone".to_owned())
-        );
+        assert!(run.args.contains(&format!(
+            "-DoutputDirectory={}",
+            under_tools("jars/errorprone")
+        )));
         let d = recipe("detekt", &tools(), LINUX).unwrap();
         let cmds = runs(&d);
         assert_eq!(cmds.len(), 3);
@@ -860,7 +872,11 @@ mod tests {
                 .any(|a| a.contains("kotlinx-coroutines-core-jvm:1.10.2"))
         );
         let s = recipe("spotbugs", &tools(), LINUX).unwrap();
-        assert!(s.user_command().contains("jars/spotbugs"));
+        assert!(
+            dla_core::paths::slash(&s.user_command()).contains("jars/spotbugs"),
+            "{}",
+            s.user_command()
+        );
     }
 
     #[test]
@@ -875,7 +891,7 @@ mod tests {
         );
         assert_eq!(rs[1].args[..3], ["+nightly", "install", "rapx"]);
         assert!(rs[1].args.contains(&"385907a5".to_owned()));
-        assert_eq!(rs[1].args.last().unwrap(), "/data/tools/rapx");
+        assert_eq!(rs[1].args.last().unwrap(), &under_tools("rapx"));
         assert!(r.advice.contains("libz3-dev"));
     }
 

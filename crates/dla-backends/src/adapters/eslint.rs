@@ -17,7 +17,7 @@ const SOURCE_EXTS: [&str; 8] = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "
 
 /// The `file://` URL of `p` (forward slashes, drive letters kept).
 pub fn file_url(p: &Path) -> String {
-    let s = p.to_string_lossy().replace('\\', "/");
+    let s = dla_core::paths::to_slash(p);
     if s.starts_with('/') {
         format!("file://{s}")
     } else {
@@ -74,8 +74,8 @@ pub fn config(
         )
     };
     let rule_lines: Vec<String> = rules.iter().map(|r| format!("'{r}': 'error'")).collect();
-    let root_json = serde_json::to_string(&root.to_string_lossy().replace('\\', "/"))
-        .map_err(|e| e.to_string())?;
+    let root_json =
+        serde_json::to_string(&dla_core::paths::to_slash(root)).map_err(|e| e.to_string())?;
     Ok(format!(
         "{imports}export default [\n  {{ ignores: ['**/node_modules/**', '**/.dla/**', '**/.git/**', '**/dist/**', '**/build/**', '**/out/**', '**/coverage/**'] }},\n  {{\n    files: ['**/*.{{{exts}}}'],\n    languageOptions: {{ parser: tseslint.parser, parserOptions: {{ projectService: {project_service}, tsconfigRootDir: {root_json} }} }},\n    plugins: {{ {plugins} }},\n    linterOptions: {{ reportUnusedDisableDirectives: 'off' }},\n    rules: {{ {rules} }},\n  }},\n];\n",
         exts = SOURCE_EXTS.join(","),

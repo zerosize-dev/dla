@@ -288,6 +288,7 @@ fn millis(t: Instant) -> u64 {
     u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+// Unix only: the tests spawn `sh -c ...` and check process-group kill behaviour.
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

@@ -44,7 +44,7 @@ pub fn append_evidence(
     project: &Path,
     consent: &Consent,
 ) -> Result<u64, dla_core::Error> {
-    let root_text = project.to_string_lossy().into_owned();
+    let root_text = dla_core::paths::to_slash(project);
     let commit = git::head_commit(project).unwrap_or(root_text);
     let line = ledger.add_evidence(NewEvidence {
         source: Source::Repo { commit, path: None },

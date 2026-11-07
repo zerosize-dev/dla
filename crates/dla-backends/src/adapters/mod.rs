@@ -156,7 +156,7 @@ fn cap(s: &str) -> Value {
 pub fn run_record(cmd: &Cmd, out: &Output) -> Value {
     let mut v = json!({
         "command": cmd.display(),
-        "cwd": cmd.cwd.as_ref().map(|p| p.display().to_string()),
+        "cwd": cmd.cwd.as_deref().map(dla_core::paths::to_slash),
         "exit_code": out.exit,
         "timed_out": out.timed_out,
         "truncated": out.truncated,

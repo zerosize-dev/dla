@@ -364,10 +364,7 @@ pub fn probe_tools(
                 runtime: *rt,
                 available: r.found.is_some(),
                 source: r.found.as_ref().map(|f| f.source.to_owned()),
-                path: r
-                    .found
-                    .as_ref()
-                    .map(|f| f.path.to_string_lossy().into_owned()),
+                path: r.found.as_ref().map(|f| dla_core::paths::to_slash(&f.path)),
                 version: r.version.clone(),
                 install_hint: r.found.is_none().then(|| b.install_hint()),
             });
@@ -376,6 +373,7 @@ pub fn probe_tools(
     out
 }
 
+// Unix only: fake tools are `#!/bin/sh` scripts made executable with mode bits.
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
