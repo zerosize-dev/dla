@@ -2,7 +2,8 @@
 
 use clap::{Args, Subcommand};
 use dla_core::{
-    Ledger, RunState, RunView,
+    FindingState, Ledger, MAX_OUTPUT_BYTES, MAX_RESULT_BYTES, Record, RunState, RunView,
+    error::codes as core_codes,
     evidence::{
         Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, NewEvidence, Source, Tool,
     },
@@ -14,7 +15,7 @@ use serde_json::{Value, json};
 use crate::{
     budget,
     ctx::{Ctx, project_root},
-    fail::Res,
+    fail::{Failure, Res},
     git, gitignore,
     parse::parse_enum,
 };
@@ -52,7 +53,49 @@ fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// Runs `dla run init`.
+/// Longest accepted session ID, in characters.
+const MAX_SESSION_ID_CHARS: usize = 256;
+
+/// Everything `run init` can refuse is checked here, before anything is written.
+fn run_config_result(
+    root_text: &str,
+    session: &str,
+    seconds: u64,
+    scope: &Option<Scope>,
+) -> Res<Value> {
+    if session.chars().count() > MAX_SESSION_ID_CHARS {
+        return Err(Failure::refuse(
+            core_codes::INVALID_VALUE,
+            format!(
+                "the session id is {} characters; the limit is {MAX_SESSION_ID_CHARS}",
+                session.chars().count()
+            ),
+            format!("a session id of at most {MAX_SESSION_ID_CHARS} characters"),
+            "dla run init --session-id <short id>   (or unset CLAUDE_SESSION_ID / CLAUDE_CODE_SESSION_ID)",
+        ));
+    }
+    let result = json!({
+        "project_root": root_text,
+        "session_id": session,
+        "budget_seconds": seconds,
+        "scope": scope,
+    });
+    let size = serde_json::to_string(&result).map_or(usize::MAX, |t| t.len());
+    if size > MAX_RESULT_BYTES {
+        return Err(Failure::refuse(
+            core_codes::RESULT_TOO_LARGE,
+            format!(
+                "the run configuration is {size} bytes, over the {MAX_RESULT_BYTES}-byte bound for an evidence record"
+            ),
+            "a shorter --scope-path, fewer or shorter --exclude entries, or a shorter project path",
+            "dla run init --scope module --scope-path <short path> --exclude <short path>",
+        ));
+    }
+    Ok(result)
+}
+
+/// Runs `dla run init`. Nothing is created unless every input is valid, and a run
+/// directory created by a failing init is removed again.
 pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
     let project = project_root(project_arg)?;
     let seconds = match a.budget.or_else(|| env_nonempty("DLA_DEFAULT_BUDGET")) {
@@ -72,6 +115,12 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         _ => None,
     };
     let root_text = project.to_string_lossy().into_owned();
+    let session_text = session
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("unknown")
+        .to_owned();
+    let result = run_config_result(&root_text, &session_text, seconds, &scope)?;
     let st = RunState::init(
         &root_text,
         session.as_deref(),
@@ -83,35 +132,49 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         run_dir: state::run_dir(&project, &st.run_id),
         run_id: st.run_id.clone(),
     };
-    std::fs::create_dir_all(&ctx.run_dir).map_err(|e| dla_core::Error::io(&ctx.run_dir, e))?;
-    st.save(&ctx.run_dir)?;
-    let mut ledger = Ledger::create(&ctx.run_dir)?;
-    let commit = git::head_commit(&project).unwrap_or_else(|| root_text.clone());
-    let line = ledger.add_evidence(NewEvidence {
-        source: Source::Repo { commit, path: None },
-        tool: Tool {
-            name: "dla".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-        },
-        authority: Authority::Static,
-        kind: EvidenceKind::RunConfig,
-        result: json!({
-            "project_root": root_text,
-            "session_id": st.session_id,
-            "budget_seconds": seconds,
-            "scope": scope,
-        }),
-        raw: None,
-        coverage: EvidenceCoverage {
-            status: CoverageStatus::Complete,
-            examined: None,
-            total: None,
-        },
-        limitations: Vec::new(),
-        unknowns: Vec::new(),
-    })?;
-    state::write_current(&project, &st.run_id)?;
+    // The ignore entry goes in first so a run's salt can never be staged by accident.
     let ignored = gitignore::ensure_dla_ignored(&project)?;
+    let dla_dir = project.join(state::DLA_DIR);
+    let dla_dir_existed = dla_dir.exists();
+    std::fs::create_dir_all(&dla_dir).map_err(|e| dla_core::Error::io(&dla_dir, e))?;
+    // `create_dir`, not `create_dir_all`: an existing directory is never adopted, so
+    // the cleanup below can only ever remove a directory this call created.
+    std::fs::create_dir(&ctx.run_dir).map_err(|e| dla_core::Error::io(&ctx.run_dir, e))?;
+    let built = (|| -> Res<u64> {
+        st.save(&ctx.run_dir)?;
+        let mut ledger = Ledger::create(&ctx.run_dir)?;
+        let commit = git::head_commit(&project).unwrap_or_else(|| root_text.clone());
+        let line = ledger.add_evidence(NewEvidence {
+            source: Source::Repo { commit, path: None },
+            tool: Tool {
+                name: "dla".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+            },
+            authority: Authority::Static,
+            kind: EvidenceKind::RunConfig,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage {
+                status: CoverageStatus::Complete,
+                examined: None,
+                total: None,
+            },
+            limitations: Vec::new(),
+            unknowns: Vec::new(),
+        })?;
+        state::write_current(&project, &st.run_id)?;
+        Ok(line.seq)
+    })();
+    let seq = match built {
+        Ok(seq) => seq,
+        Err(f) => {
+            let _ = std::fs::remove_dir_all(&ctx.run_dir);
+            if !dla_dir_existed {
+                let _ = std::fs::remove_dir(&dla_dir);
+            }
+            return Err(f);
+        }
+    };
     Ok(json!({
         "ok": true,
         "run_id": st.run_id,
@@ -122,7 +185,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         "evidence": "E1",
         "gitignore": ignored.as_str(),
         "record": ctx.pointer(STATE_FILE),
-        "ledger": ctx.ledger_line(line.seq),
+        "ledger": ctx.ledger_line(seq),
     }))
 }
 
@@ -132,6 +195,8 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     let rs = status(&view);
     let total = rs.blocking.len();
     let shown: Vec<_> = rs.blocking.iter().take(3).collect();
+    let revisit = revisit_entries(&view);
+    let revisit_total = revisit.len();
     let mut out = json!({
         "ok": true,
         "run_id": view.state.run_id,
@@ -145,8 +210,66 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         "ledger": ctx.pointer(dla_core::state::LEDGER_FILE),
         "report": view.state.report.as_ref().map(|r| r.path.clone()),
     });
-    if total > shown.len() {
+    out["revisit"] = Value::Array(Vec::new());
+    out["revisit_total"] = json!(revisit_total);
+    let mut truncated = total > shown.len();
+    // Add revisit entries one by one while the whole object stays inside the output bound.
+    let room = MAX_OUTPUT_BYTES - 1 - 40;
+    for (n, entry) in revisit.into_iter().enumerate() {
+        let mut trial = out.clone();
+        if let Some(Value::Array(a)) = trial.get_mut("revisit") {
+            a.push(entry);
+        }
+        if n >= MAX_REVISIT || serde_json::to_string(&trial).map_or(usize::MAX, |t| t.len()) > room
+        {
+            truncated = true;
+            break;
+        }
+        out = trial;
+    }
+    if truncated {
         out["truncated"] = Value::Bool(true);
     }
     Ok(out)
+}
+
+/// At most this many `revisit` entries are listed; `revisit_total` has the real count.
+const MAX_REVISIT: usize = 10;
+
+/// Longest remedy text kept in a `revisit` entry, in characters.
+const MAX_REMEDY_CHARS: usize = 120;
+
+/// Findings that need another look (`unresolved`, `suspected_static_only`), in ledger
+/// order: `{id, state, reason, remedy}`. They do not block the report, so `blocking`
+/// never lists them.
+fn revisit_entries(view: &RunView) -> Vec<Value> {
+    view.ledger
+        .lines()
+        .iter()
+        .filter_map(|l| match &l.record {
+            Record::FindingAdded { finding } => view.ledger.finding(&finding.id),
+            _ => None,
+        })
+        .filter(|f| {
+            matches!(
+                f.state,
+                FindingState::Unresolved | FindingState::SuspectedStaticOnly
+            )
+        })
+        .map(|f| {
+            let remedy = f.remedy.clone().unwrap_or_default();
+            let remedy = if remedy.chars().count() > MAX_REMEDY_CHARS {
+                let cut: String = remedy.chars().take(MAX_REMEDY_CHARS).collect();
+                format!("{cut}...")
+            } else {
+                remedy
+            };
+            json!({
+                "id": f.id.to_string(),
+                "state": f.state.as_str(),
+                "reason": f.reason.map(|r| r.as_str()),
+                "remedy": remedy,
+            })
+        })
+        .collect()
 }

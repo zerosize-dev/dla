@@ -52,7 +52,14 @@ pub fn run(a: SchemaArgs) -> Res<Value> {
 fn check(dir: &Path, out: &str, files: &[(String, String)]) -> Res<Value> {
     let bad: Vec<&str> = files
         .iter()
-        .filter(|(n, text)| fs::read_to_string(dir.join(n)).ok().as_deref() != Some(text.as_str()))
+        .filter(|(n, text)| {
+            // A Windows checkout may have turned LF into CRLF: line endings do not count.
+            fs::read_to_string(dir.join(n))
+                .ok()
+                .map(|t| t.replace("\r\n", "\n"))
+                .as_deref()
+                != Some(text.as_str())
+        })
         .map(|(n, _)| n.as_str())
         .collect();
     if bad.is_empty() {

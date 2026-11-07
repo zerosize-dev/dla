@@ -549,3 +549,85 @@ fn written_lines_have_the_documented_shape() {
     assert_eq!(v["source"], json!({"repo": {"commit": "abc123"}}));
     assert!(v["ts"].as_str().unwrap().ends_with('Z'));
 }
+
+#[test]
+fn replay_refuses_unknown_and_misspelled_fields() {
+    // Top level of a line.
+    let e = replay_err(&line(1, &format!(r#""extra":"x",{}"#, EVIDENCE_BODY)));
+    assert!(e.malformed && e.line == 1);
+    assert!(
+        e.refusal.message.contains("`extra`"),
+        "{}",
+        e.refusal.message
+    );
+    assert!(e.refusal.fix.contains("line 1"));
+
+    // Nested finding object: a misspelled optional field is not silently dropped.
+    let text = ev_line(1) + &line(2, &finding_body("F1", r#","holdr":"static/global""#));
+    let e = replay_err(&text);
+    assert_eq!(e.line, 2);
+    assert!(
+        e.refusal.message.contains("`finding.holdr`"),
+        "{}",
+        e.refusal.message
+    );
+
+    // Nested evidence object (source.repo).
+    let body = EVIDENCE_BODY.replace(r#"{"commit":"abc"}"#, r#"{"commit":"abc","comit":"x"}"#);
+    let e = replay_err(&line(1, &body));
+    assert!(
+        e.refusal.message.contains("`source.repo.comit`"),
+        "{}",
+        e.refusal.message
+    );
+
+    // Misspelled transition field.
+    let text = ev_line(1)
+        + &line(2, &finding_body("F1", ""))
+        + &line(
+            3,
+            r#""type":"transition","finding":"F1","from":"candidate","to":"unresolved","reason":"time_budget","remedy":"r","remdy":"typo","evidence":[],"by":"t""#,
+        );
+    let e = replay_err(&text);
+    assert_eq!(e.line, 3);
+    assert!(e.refusal.message.contains("`remdy`"));
+
+    // Explicit nulls and empty arrays for optional fields are fine.
+    let text = ev_line(1) + &line(2, &finding_body("F1", r#","holder":null,"amplifiers":[]"#));
+    Ledger::from_text(&text).unwrap();
+}
+
+#[test]
+fn replay_refuses_duplicate_keys() {
+    let e = replay_err(&line(1, &format!(r#""seq":1,{EVIDENCE_BODY}"#)));
+    assert!(e.malformed && e.line == 1);
+    assert!(
+        e.refusal.message.contains("duplicate field `seq`"),
+        "{}",
+        e.refusal.message
+    );
+    let text = ev_line(1) + &line(2, &finding_body("F1", r#","site":"a:1","site":"b:2""#));
+    let e = replay_err(&text);
+    assert_eq!(e.line, 2);
+    assert!(e.refusal.message.contains("duplicate field `site`"));
+}
+
+#[test]
+fn add_finding_returns_the_finding_it_appended() {
+    let mut l = ledger();
+    add_f1(&mut l);
+    l.add_finding(NewFinding::new(origin("census"), vec![eid(1)]))
+        .unwrap();
+    let mut sib = NewFinding::new(origin("hypothesis"), vec![eid(1)]);
+    sib.sibling_of = Some(fid(1));
+    sib.hypothesis = Some("N-WARM".into());
+    sib.refute_if = Some("flat".into());
+    let line = l.add_finding(sib).unwrap();
+    match line.record {
+        dla_core::Record::FindingAdded { finding } => {
+            assert_eq!(finding.id.to_string(), "F1.n1");
+            assert_eq!(finding.parent, Some(fid(1)));
+        }
+        other => panic!("{other:?}"),
+    }
+}

@@ -25,6 +25,7 @@ pub mod record;
 pub mod redact;
 pub mod schema;
 pub mod state;
+mod strict;
 pub mod version;
 pub mod view;
 

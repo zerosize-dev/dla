@@ -26,9 +26,37 @@ impl Outcome {
     }
 }
 
-/// True if the line already ignores the `.dla` directory.
-pub fn ignores_dla(line: &str) -> bool {
-    matches!(line.trim(), ".dla" | ".dla/" | "/.dla" | "/.dla/")
+/// What one `.gitignore` line does to the `.dla` directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Effect {
+    Ignores,
+    Reincludes,
+    None,
+}
+
+/// Git strips trailing whitespace (and a CR from CRLF files) but never leading spaces,
+/// so `  .dla/` is a different pattern that matches nothing.
+fn effect(line: &str) -> Effect {
+    let t = line.trim_end_matches([' ', '\r']);
+    match t {
+        ".dla" | ".dla/" | "/.dla" | "/.dla/" => Effect::Ignores,
+        "!.dla" | "!.dla/" | "!/.dla" | "!/.dla/" => Effect::Reincludes,
+        _ => Effect::None,
+    }
+}
+
+/// True if, reading the lines in order, the last entry about `.dla` ignores it. A later
+/// negation cancels an earlier ignore, as git does.
+pub fn ignores_dla(text: &str) -> bool {
+    let mut ignored = false;
+    for line in text.lines() {
+        match effect(line) {
+            Effect::Ignores => ignored = true,
+            Effect::Reincludes => ignored = false,
+            Effect::None => {}
+        }
+    }
+    ignored
 }
 
 /// Makes sure `<project>/.gitignore` ignores `.dla/`. Idempotent.
@@ -44,7 +72,7 @@ pub fn ensure_dla_ignored(project: &Path) -> Result<Outcome, Error> {
         return Ok(Outcome::Created);
     };
     let text = String::from_utf8_lossy(&bytes);
-    if text.lines().any(ignores_dla) {
+    if ignores_dla(&text) {
         return Ok(Outcome::AlreadyIgnored);
     }
     let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
@@ -101,7 +129,7 @@ mod tests {
 
     #[test]
     fn recognises_existing_variants() {
-        for v in [".dla", ".dla/", "/.dla", "/.dla/", "  .dla/  "] {
+        for v in [".dla", ".dla/", "/.dla", "/.dla/", ".dla/  "] {
             let text = format!("target/\n{v}\nother\n");
             assert_eq!(
                 run(Some(&text)),
@@ -128,5 +156,69 @@ mod tests {
             Outcome::AlreadyIgnored
         );
         assert_eq!(fs::read(dir.path().join(".gitignore")).unwrap(), before);
+    }
+
+    #[test]
+    fn leading_whitespace_is_not_trimmed() {
+        let (o, t) = run(Some("  .dla/\n"));
+        assert_eq!(o, Outcome::Appended);
+        assert_eq!(t, "  .dla/\n.dla/\n");
+    }
+
+    #[test]
+    fn later_negation_cancels_an_earlier_ignore() {
+        for neg in ["!.dla", "!.dla/", "!/.dla", "!/.dla/"] {
+            let (o, t) = run(Some(&format!(".dla/\n{neg}\n")));
+            assert_eq!(o, Outcome::Appended, "{neg}");
+            assert_eq!(t, format!(".dla/\n{neg}\n.dla/\n"));
+        }
+        // An ignore after the negation wins again.
+        let (o, _) = run(Some(".dla/\n!.dla/\n.dla\n"));
+        assert_eq!(o, Outcome::AlreadyIgnored);
+    }
+
+    fn git_available() -> bool {
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    /// The decision matches `git check-ignore` for a file inside a run directory.
+    #[test]
+    fn agrees_with_git_check_ignore() {
+        if !git_available() {
+            eprintln!("git not available; skipping");
+            return;
+        }
+        let cases = [
+            ".dla/\n!.dla/\n",
+            "  .dla/\n",
+            ".dla/\n",
+            ".dla\r\n",
+            "/.dla/\n!/.dla\n",
+            ".dla/\n!.dla/\n.dla\n",
+            "target/\n",
+            "",
+            ".dla/  \n",
+            ".dla/\t\n",
+        ];
+        for initial in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let git = |args: &[&str]| {
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+            };
+            assert!(git(&["init", "-q"]).status.success());
+            fs::write(dir.path().join(".gitignore"), initial).unwrap();
+            ensure_dla_ignored(dir.path()).unwrap();
+            fs::create_dir_all(dir.path().join(".dla/zz")).unwrap();
+            fs::write(dir.path().join(".dla/zz/f"), "x").unwrap();
+            let ignored = git(&["check-ignore", "-q", ".dla/zz/f"]).status.success();
+            assert!(ignored, "not ignored after init for {initial:?}");
+        }
     }
 }

@@ -16,6 +16,7 @@ use dla_core::{
 };
 
 /// Label shown for a finding that no archetype describes.
+/// Label of a confirmed or strong finding that matches no archetype.
 const NOVEL_LABEL: &str = "Novel mechanism (UNCLASSIFIED)";
 /// Placeholder for an absent value in a table.
 const DASH: &str = "\u{2014}";
@@ -86,9 +87,15 @@ fn ids(list: &[EvidenceId]) -> String {
         .join(", ")
 }
 
+/// The archetype label. "Novel mechanism" is a claim, so it is reserved for confirmed
+/// and strong findings; any other state without an archetype is plainly UNCLASSIFIED.
 fn label(f: &Finding) -> String {
     if f.archetype == UNCLASSIFIED {
-        NOVEL_LABEL.to_owned()
+        if matches!(f.state, FindingState::Confirmed | FindingState::Strong) {
+            NOVEL_LABEL.to_owned()
+        } else {
+            UNCLASSIFIED.to_owned()
+        }
     } else {
         inline(&f.archetype)
     }
@@ -153,11 +160,17 @@ fn residual_row(r: &ResidualRow) -> String {
 fn open_items(out: &mut String, st: &dla_core::ReportStatus) {
     out.push_str("## Open items\n\n");
     for b in &st.blocking {
+        // Descriptions may already end in punctuation (a checklist question ends in "?").
+        let d = inline(b.description.trim_end());
+        let stop = if d.ends_with(['.', '?', '!']) {
+            ""
+        } else {
+            "."
+        };
         let _ = writeln!(
             out,
-            "- **{}**: {}. Fix: {}",
+            "- **{}**: {d}{stop} Fix: {}",
             inline(&b.id),
-            inline(b.description.trim_end_matches('.')),
             code(&b.fix)
         );
     }
@@ -205,7 +218,20 @@ fn findings(out: &mut String, view: &RunView) {
 }
 
 fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
-    let _ = writeln!(out, "### {}: **{}**\n", f.id, label(f));
+    match (&f.parent, &f.hypothesis) {
+        (Some(_), Some(h)) => {
+            let _ = writeln!(
+                out,
+                "### {}: Hypothesis {} ({})\n",
+                f.id,
+                inline(h),
+                label(f)
+            );
+        }
+        _ => {
+            let _ = writeln!(out, "### {}: **{}**\n", f.id, label(f));
+        }
+    }
     let _ = writeln!(out, "- State: {}", f.state_label());
     let cl = classes(view, f);
     if !cl.is_empty() {
@@ -502,7 +528,65 @@ mod tests {
         let mut b = String::new();
         finding_section(&mut b, &view, &mk(UNCLASSIFIED));
         assert!(a.starts_with("### F1: **A-REGISTRY**\n"));
-        assert!(b.starts_with("### F1: **Novel mechanism (UNCLASSIFIED)**\n"));
-        assert_eq!(a.replace("A-REGISTRY", NOVEL_LABEL), b);
+        assert!(b.starts_with("### F1: **UNCLASSIFIED**\n"));
+        assert_eq!(a.replace("A-REGISTRY", "UNCLASSIFIED"), b);
+        let mut c = mk(UNCLASSIFIED);
+        c.state = FindingState::Confirmed;
+        let mut t = String::new();
+        finding_section(&mut t, &view, &c);
+        assert!(t.starts_with("### F1: **Novel mechanism (UNCLASSIFIED)**\n"));
+        c.state = FindingState::Strong;
+        assert_eq!(label(&c), NOVEL_LABEL);
+        for st in [
+            FindingState::Candidate,
+            FindingState::UnderTest,
+            FindingState::Refuted,
+            FindingState::Unresolved,
+            FindingState::SuspectedStaticOnly,
+        ] {
+            c.state = st;
+            assert_eq!(label(&c), "UNCLASSIFIED", "{st}");
+        }
+    }
+
+    #[test]
+    fn sibling_heading_shows_its_hypothesis() {
+        let view = RunView::new(
+            RunState::init("/p", None, 60, None, now_utc()).unwrap(),
+            Ledger::from_text("").unwrap(),
+            None,
+        );
+        let mut f = Finding::candidate(
+            "F1.n1".parse().unwrap(),
+            Origin::parse("hypothesis").unwrap(),
+            vec!["E1".parse().unwrap()],
+        );
+        f.parent = Some("F1".parse().unwrap());
+        f.hypothesis = Some("N-WARM".to_owned());
+        f.refute_if = Some("flat after warm-up".to_owned());
+        let mut out = String::new();
+        finding_section(&mut out, &view, &f);
+        assert!(
+            out.starts_with("### F1.n1: Hypothesis N-WARM (UNCLASSIFIED)\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn open_item_descriptions_have_no_doubled_punctuation() {
+        let st = dla_core::ReportStatus {
+            complete: false,
+            blocking: vec![dla_core::view::BlockingItem {
+                kind: dla_core::view::BlockingKind::ChecklistItem,
+                id: "intake.budget".into(),
+                description: "checklist item intake.budget is unanswered: How much time?".into(),
+                fix: "dla ledger resolve intake.budget --status answered --evidence E1".into(),
+            }],
+            counts: Default::default(),
+        };
+        let mut out = String::new();
+        open_items(&mut out, &st);
+        assert!(!out.contains("?."), "{out}");
+        assert!(out.contains("time? Fix:"), "{out}");
     }
 }

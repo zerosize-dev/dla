@@ -13,18 +13,18 @@ Residual: heap 0.5 MB/h unattributed of 10 total (threshold 1); off-heap 6 MB/h 
 - **F1**: finding F1 is candidate and has no disposition. Fix: `dla ledger resolve F1 --as unresolved --reason time_budget --remedy "<text>"`
 - **F2**: finding F2 is under_test and has no disposition. Fix: `dla ledger resolve F2 --as unresolved --reason time_budget --remedy "<text>"`
 - **O1**: open item O1: Residual heap growth unexplained | pipe. Fix: `dla ledger resolve O1 --as unresolved --reason time_budget --remedy "<text>"`
-- **intake.budget**: checklist item intake.budget is unanswered: How much wall-clock time may the investigation use?. Fix: `dla ledger resolve intake.budget --status answered --evidence E1`
+- **intake.budget**: checklist item intake.budget is unanswered: How much wall-clock time may the investigation use? Fix: `dla ledger resolve intake.budget --status answered --evidence E1`
 
 ## Findings
 
-### F1: **Novel mechanism (UNCLASSIFIED)**
+### F1: **UNCLASSIFIED**
 
 - State: candidate
 - Evidence classes: static
 - Site: `src/a.py:1`
 - Supporting evidence: E2
 
-### F2: **Novel mechanism (UNCLASSIFIED)**
+### F2: **UNCLASSIFIED**
 
 - State: under_test
 - Evidence classes: static

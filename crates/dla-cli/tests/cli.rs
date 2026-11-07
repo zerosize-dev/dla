@@ -219,7 +219,7 @@ fn handwritten_ledger_renders_a_complete_report_and_stores_its_hash() {
     assert!(md.starts_with("# DLA report\n"), "{md}");
     assert!(md.contains(&format!("Run: `{FIXTURE_RUN}`")));
     assert!(md.contains("Status: COMPLETE"), "{md}");
-    assert!(md.contains("### F1: **Novel mechanism (UNCLASSIFIED)**"));
+    assert!(md.contains("### F1: **UNCLASSIFIED**"));
     assert!(md.contains("suspected_static_only(no_harness)"));
     assert!(md.contains("src/cache.py:42"));
     assert!(md.contains("## Evidence index"));
@@ -897,4 +897,437 @@ fn committed_schemas_are_up_to_date() {
         "run `cargo run -p dla-cli -- schema --out schemas`: {}",
         String::from_utf8_lossy(&c.stdout)
     );
+}
+
+fn add_census(dir: &Path) -> Value {
+    ok(
+        dir,
+        &["ledger", "add", "--origin", "census", "--evidence", "E1"],
+    )
+}
+
+#[test]
+fn add_reports_the_new_finding_for_a_sibling_of_a_non_last_finding() {
+    let (dir, _) = fresh_run();
+    assert_eq!(add_census(dir.path())["id"], "F1");
+    assert_eq!(add_census(dir.path())["id"], "F2");
+    let s = ok(
+        dir.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--evidence",
+            "E1",
+            "--sibling-of",
+            "F1",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "flat after warmup",
+        ],
+    );
+    assert_eq!(s["id"], "F1.n1");
+    assert_eq!(s["parent"], "F1");
+    assert_eq!(s["state"], "candidate");
+    // The pointer is the line that actually holds F1.n1.
+    let ledger = fs::read_to_string(
+        dir.path()
+            .join(".dla")
+            .join(fresh_run_id(dir.path()))
+            .join("ledger.jsonl"),
+    )
+    .unwrap();
+    let n = s["seq"].as_u64().unwrap() as usize;
+    assert!(
+        ledger
+            .lines()
+            .nth(n - 1)
+            .unwrap()
+            .contains("\"id\":\"F1.n1\"")
+    );
+    // A second sibling of F1 continues the numbering.
+    let s2 = ok(
+        dir.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--evidence",
+            "E1",
+            "--sibling-of",
+            "F1",
+            "--hypothesis",
+            "N-POOL",
+            "--refute-if",
+            "x",
+        ],
+    );
+    assert_eq!(s2["id"], "F1.n2");
+}
+
+fn fresh_run_id(dir: &Path) -> String {
+    fs::read_to_string(dir.join(".dla/current"))
+        .unwrap()
+        .trim()
+        .to_owned()
+}
+
+fn resolve_unresolved(dir: &Path, id: &str) -> Outcome {
+    run(
+        dir,
+        &[
+            "ledger",
+            "resolve",
+            id,
+            "--as",
+            "unresolved",
+            "--reason",
+            "time_budget",
+            "--remedy",
+            "rerun with 2h",
+        ],
+    )
+}
+
+#[test]
+fn illegal_transition_refusals_never_repeat_the_refused_command() {
+    let (dir, _) = fresh_run();
+    add_census(dir.path());
+    assert_eq!(resolve_unresolved(dir.path(), "F1").code, 0);
+    let o = resolve_unresolved(dir.path(), "F1");
+    assert_eq!(o.code, 2, "{}", o.stdout);
+    let e = &o.json["error"];
+    assert_eq!(e["code"], "illegal-transition");
+    let fix = e["fix"].as_str().unwrap();
+    assert!(!fix.contains("--as unresolved"), "{fix}");
+    assert!(fix.contains("available from M3"), "{fix}");
+}
+
+#[test]
+fn unknown_evidence_on_resolve_lists_existing_evidence() {
+    let (dir, _) = fresh_run();
+    add_census(dir.path());
+    let e = refused(
+        dir.path(),
+        &[
+            "ledger",
+            "resolve",
+            "F1",
+            "--as",
+            "unresolved",
+            "--reason",
+            "time_budget",
+            "--remedy",
+            "x",
+            "--evidence",
+            "E9",
+        ],
+    );
+    assert_eq!(e["code"], "unknown-evidence");
+    let fix = e["fix"].as_str().unwrap();
+    assert!(fix.contains("E1"), "{fix}");
+    assert!(!fix.contains("run status"), "{fix}");
+}
+
+/// A project whose ledger also holds E2 (static-hit), appended by hand.
+fn project_with_static_hit() -> tempfile::TempDir {
+    let (dir, id) = fresh_run();
+    let ledger = dir.path().join(".dla").join(&id).join("ledger.jsonl");
+    append_line(
+        &ledger,
+        r#"{"schema_version":1,"seq":2,"ts":"2026-01-02T03:05:00Z","type":"evidence","evidence_id":"E2","source":{"repo":{"commit":"abc"}},"tool":{"name":"scan","version":"1"},"authority":"static","kind":"static-hit","result":{},"coverage":{"status":"complete"}}"#,
+    );
+    dir
+}
+
+#[test]
+fn suspected_static_only_needs_static_class_evidence_not_run_config() {
+    let dir = project_with_static_hit();
+    // F1 cites only E1, the run-config record (authority static, class context).
+    add_census(dir.path());
+    let args = |extra: &'static [&'static str]| {
+        let mut v = vec![
+            "ledger",
+            "resolve",
+            "F1",
+            "--as",
+            "suspected_static_only",
+            "--reason",
+            "not_exercised",
+            "--remedy",
+            "write a harness",
+        ];
+        v.extend_from_slice(extra);
+        v
+    };
+    let e = refused(dir.path(), &args(&[]));
+    assert_eq!(e["code"], "static-evidence-required");
+    assert!(e["missing"].as_str().unwrap().contains("static-hit"));
+    assert!(e["missing"].as_str().unwrap().contains("census-holder"));
+    // Citing the static-hit E2 is accepted.
+    let r = ok(dir.path(), &args(&["--evidence", "E2"]));
+    assert_eq!(r["state"], "suspected_static_only(not_exercised)");
+}
+
+#[test]
+fn replay_refuses_unknown_fields_naming_line_and_field() {
+    let (dir, id) = fresh_run();
+    add_census(dir.path());
+    let ledger = dir.path().join(".dla").join(&id).join("ledger.jsonl");
+    let text = fs::read_to_string(&ledger).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    lines[1] = lines[1].replacen("\"supports\"", "\"bogus\":1,\"supports\"", 1);
+    fs::write(&ledger, lines.join("\n") + "\n").unwrap();
+    let o = run(dir.path(), &["run", "status"]);
+    assert_eq!(o.code, 1, "{}", o.stdout);
+    let msg = o.json["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("line 2") && msg.contains("finding.bogus"),
+        "{msg}"
+    );
+    // A duplicated key is refused as well.
+    lines[1] = lines[1].replacen("\"bogus\":1,", "", 1);
+    lines[1] = lines[1].replacen("\"seq\":2", "\"seq\":2,\"seq\":2", 1);
+    fs::write(&ledger, lines.join("\n") + "\n").unwrap();
+    let o = run(dir.path(), &["run", "status"]);
+    assert_eq!(o.code, 1, "{}", o.stdout);
+    assert!(
+        o.json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate field `seq`")
+    );
+}
+
+fn dir_names(p: &Path) -> Vec<String> {
+    let mut v: Vec<String> = fs::read_dir(p)
+        .map(|rd| {
+            rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+#[test]
+fn failed_init_leaves_nothing_behind() {
+    // Fresh project: nothing at all is created.
+    let dir = tempfile::tempdir().unwrap();
+    let long = "é".repeat(5000);
+    let e = refused(dir.path(), &["run", "init", "--session-id", &long]);
+    assert_eq!(e["code"], "invalid-value");
+    assert!(e["message"].as_str().unwrap().contains("256"));
+    assert!(
+        dir_names(dir.path()).is_empty(),
+        "{:?}",
+        dir_names(dir.path())
+    );
+
+    // Project with an earlier run: no new directory, `current` unchanged, .gitignore kept.
+    let first = ok(dir.path(), &["run", "init", "--session-id", "s"]);
+    let before_dirs = dir_names(&dir.path().join(".dla"));
+    let before_gi = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    let e = refused(dir.path(), &["run", "init", "--session-id", &long]);
+    assert_eq!(e["code"], "invalid-value");
+    // A scope path that makes the run-config record too large is refused up front too.
+    let big = "p".repeat(3000);
+    let e = refused(
+        dir.path(),
+        &["run", "init", "--scope", "module", "--scope-path", &big],
+    );
+    assert_eq!(e["code"], "result-too-large");
+    assert!(e["fix"].as_str().unwrap().contains("--scope-path"));
+    assert_eq!(dir_names(&dir.path().join(".dla")), before_dirs);
+    assert_eq!(fresh_run_id(dir.path()), first["run_id"].as_str().unwrap());
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
+        before_gi
+    );
+}
+
+#[test]
+fn init_accepts_a_session_id_of_exactly_256_characters() {
+    let dir = tempfile::tempdir().unwrap();
+    let sid = "s".repeat(256);
+    ok(dir.path(), &["run", "init", "--session-id", &sid]);
+    let sid = "s".repeat(257);
+    refused(dir.path(), &["run", "init", "--session-id", &sid]);
+}
+
+#[test]
+fn init_appends_when_a_negation_cancels_the_ignore() {
+    for (initial, expected) in [
+        (".dla/\n!.dla/\n", ".dla/\n!.dla/\n.dla/\n"),
+        ("  .dla/\n", "  .dla/\n.dla/\n"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), initial).unwrap();
+        let o = ok(dir.path(), &["run", "init"]);
+        assert_eq!(o["gitignore"], "appended", "{initial:?}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn usage_errors_name_the_argument_and_the_subcommand_help() {
+    let (dir, _) = fresh_run();
+    let o = run(dir.path(), &["ledger", "add"]);
+    assert_eq!(o.code, 1);
+    let e = &o.json["error"];
+    assert_eq!(e["code"], "usage");
+    assert!(e["message"].as_str().unwrap().contains("--origin"), "{e}");
+    assert!(e["missing"].as_str().unwrap().contains("--origin"), "{e}");
+    assert_eq!(e["fix"], "dla ledger add --help");
+
+    let o = run(dir.path(), &["ledger", "resolve"]);
+    let e = &o.json["error"];
+    assert!(e["missing"].as_str().unwrap().contains("TARGET"), "{e}");
+    assert_eq!(e["fix"], "dla ledger resolve --help");
+
+    let o = run(dir.path(), &["run", "init", "--scope", "module"]);
+    let e = &o.json["error"];
+    assert!(
+        e["missing"].as_str().unwrap().contains("--scope-path"),
+        "{e}"
+    );
+    assert_eq!(e["fix"], "dla run init --help");
+
+    let o = run(
+        dir.path(),
+        &["ledger", "add", "--origin", "census", "--evidence", "zz"],
+    );
+    let e = &o.json["error"];
+    assert!(e["message"].as_str().unwrap().contains("--evidence"), "{e}");
+    assert_eq!(e["fix"], "dla ledger add --help");
+
+    for (args, fix, subs) in [
+        (
+            vec![],
+            "dla --help",
+            vec!["run", "ledger", "report", "schema"],
+        ),
+        (vec!["run"], "dla run --help", vec!["init", "status"]),
+        (vec!["ledger"], "dla ledger --help", vec!["add", "resolve"]),
+    ] {
+        let o = run(dir.path(), &args);
+        assert_eq!(o.code, 1);
+        let e = &o.json["error"];
+        assert_eq!(e["fix"], fix);
+        for s in subs {
+            assert!(e["message"].as_str().unwrap().contains(s), "{args:?}: {e}");
+            assert!(e["missing"].as_str().unwrap().contains(s), "{args:?}: {e}");
+        }
+    }
+}
+
+#[test]
+fn status_lists_findings_to_revisit_in_ledger_order() {
+    let (dir, _) = fresh_run();
+    let st = ok(dir.path(), &["run", "status"]);
+    assert_eq!(st["revisit"], serde_json::json!([]));
+    assert_eq!(st["revisit_total"], 0);
+
+    add_census(dir.path());
+    add_census(dir.path());
+    ok(
+        dir.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--evidence",
+            "E1",
+            "--sibling-of",
+            "F1",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "x",
+        ],
+    );
+    // Resolve the sibling first, then F2: ledger order follows the finding_added lines,
+    // so F2 comes before F1.n1 even though the sibling was resolved earlier.
+    assert_eq!(resolve_unresolved(dir.path(), "F1.n1").code, 0);
+    assert_eq!(resolve_unresolved(dir.path(), "F2").code, 0);
+    let st = ok(dir.path(), &["run", "status"]);
+    assert_eq!(st["revisit_total"], 2);
+    let r = st["revisit"].as_array().unwrap();
+    assert_eq!(r[0]["id"], "F2");
+    assert_eq!(r[1]["id"], "F1.n1");
+    for e in r {
+        assert_eq!(e["state"], "unresolved");
+        assert_eq!(e["reason"], "time_budget");
+        assert_eq!(e["remedy"], "rerun with 2h");
+    }
+}
+
+#[test]
+fn status_revisit_is_bounded() {
+    let (dir, _) = fresh_run();
+    let remedy = "r".repeat(400);
+    for i in 1..=12 {
+        add_census(dir.path());
+        ok(
+            dir.path(),
+            &[
+                "ledger",
+                "resolve",
+                &format!("F{i}"),
+                "--as",
+                "unresolved",
+                "--reason",
+                "time_budget",
+                "--remedy",
+                &remedy,
+            ],
+        );
+    }
+    // `run` asserts stdout stays within the 2048-byte bound.
+    let st = ok(dir.path(), &["run", "status"]);
+    assert_eq!(st["revisit_total"], 12);
+    let n = st["revisit"].as_array().unwrap().len();
+    assert!((1..=10).contains(&n), "{n}");
+    assert_eq!(st["truncated"], true);
+    assert_eq!(st["revisit"][0]["id"], "F1");
+}
+
+#[test]
+fn schema_check_treats_crlf_and_lf_as_equal() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("schemas");
+    let out_s = out.to_str().unwrap();
+    let w = Command::cargo_bin("dla")
+        .unwrap()
+        .args(["schema", "--out", out_s])
+        .output()
+        .unwrap();
+    assert!(w.status.success());
+    for entry in fs::read_dir(&out).unwrap() {
+        let p = entry.unwrap().path();
+        let text = fs::read_to_string(&p).unwrap();
+        assert!(!text.contains('\r'), "writing stays LF");
+        fs::write(&p, text.replace('\n', "\r\n")).unwrap();
+    }
+    let c = Command::cargo_bin("dla")
+        .unwrap()
+        .args(["schema", "--check", "--out", out_s])
+        .output()
+        .unwrap();
+    assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stdout));
+    // Real drift is still caught.
+    fs::write(out.join("finding.schema.json"), "{}\r\n").unwrap();
+    let c = Command::cargo_bin("dla")
+        .unwrap()
+        .args(["schema", "--check", "--out", out_s])
+        .output()
+        .unwrap();
+    assert_eq!(c.status.code(), Some(1));
 }

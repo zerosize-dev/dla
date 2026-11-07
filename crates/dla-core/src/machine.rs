@@ -6,7 +6,7 @@
 
 use crate::{
     error::{Refusal, codes},
-    evidence::{Authority, EvidenceKind, EvidenceRecord},
+    evidence::{EvidenceClass, EvidenceKind, EvidenceRecord},
     finding::{Finding, FindingState, UnresolvedReason},
     ids::EvidenceId,
 };
@@ -33,6 +33,8 @@ pub fn is_allowed(from: FindingState, to: FindingState) -> bool {
 pub trait EvidenceLookup {
     /// The record with this ID, if it exists.
     fn evidence(&self, id: &EvidenceId) -> Option<&EvidenceRecord>;
+    /// Every existing evidence ID, in order (used to make refusals actionable).
+    fn evidence_ids(&self) -> Vec<EvidenceId>;
 }
 
 /// Everything a rule needs to judge a move.
@@ -73,27 +75,96 @@ pub fn check_transition(
     rules.check(ctx)
 }
 
+/// The command that performs the edge `finding -> to`, and whether it exists in this
+/// build. Commands that arrive in a later milestone are labelled with that milestone.
+fn edge_command(id: &crate::ids::FindingId, to: FindingState) -> (String, bool) {
+    match to {
+        FindingState::Unresolved => (
+            format!(
+                "dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+            ),
+            true,
+        ),
+        FindingState::SuspectedStaticOnly => (
+            format!(
+                "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static-hit or census-holder id>"
+            ),
+            true,
+        ),
+        FindingState::UnderTest => (
+            format!("dla ledger test {id} --evidence <id> (available from M3)"),
+            false,
+        ),
+        FindingState::Confirmed => (
+            format!("dla ledger confirm {id} --evidence <id> (available from M3)"),
+            false,
+        ),
+        FindingState::Strong => (
+            format!("dla ledger strong {id} --evidence <id> (available from M6)"),
+            false,
+        ),
+        FindingState::Refuted => (
+            format!("dla ledger refute {id} --evidence <discriminator id> (available from M3)"),
+            false,
+        ),
+        FindingState::Candidate => (
+            format!("dla ledger revisit {id} (available in a later milestone)"),
+            false,
+        ),
+    }
+}
+
 fn illegal(finding: &Finding, to: FindingState) -> Refusal {
     let from = finding.state;
     let targets = allowed_targets(from);
     let id = &finding.id;
     if targets.is_empty() {
+        let root = id.parent().unwrap_or_else(|| id.clone());
         return Refusal::new(
             codes::ILLEGAL_TRANSITION,
-            format!("{id} is {from}, which is terminal; it cannot move to {to}"),
-            format!("a non-terminal state for {id}"),
-            "dla ledger add --origin hypothesis --evidence E1 --sibling-of <finding> --hypothesis <cause> --refute-if <result>",
+            format!(
+                "{id} is {from}, which is final: it never changes state again, so it cannot move to {to}"
+            ),
+            format!("a new hypothesis instead of changing {id}"),
+            format!(
+                "dla ledger add --origin hypothesis --evidence <evidence id> --sibling-of {root} --hypothesis <cause> --refute-if <result>"
+            ),
         );
     }
     let list: Vec<&str> = targets.iter().map(|s| s.as_str()).collect();
-    Refusal::new(
-        codes::ILLEGAL_TRANSITION,
+    let message = if from == to {
+        format!(
+            "{id} is already {from}; it can only move to: {}",
+            list.join(", ")
+        )
+    } else {
         format!(
             "{id} cannot move from {from} to {to}; allowed: {}",
             list.join(", ")
-        ),
+        )
+    };
+    // Build the fix from the source state: commands that exist now first.
+    let cmds: Vec<(String, bool)> = targets.iter().map(|t| edge_command(id, *t)).collect();
+    let now: Vec<&str> = cmds
+        .iter()
+        .filter(|(_, ok)| *ok)
+        .map(|(c, _)| c.as_str())
+        .collect();
+    let later: Vec<&str> = cmds
+        .iter()
+        .filter(|(_, ok)| !*ok)
+        .map(|(c, _)| c.as_str())
+        .collect();
+    let fix = match (now.is_empty(), later.is_empty()) {
+        (false, true) => now.join("   or   "),
+        (false, false) => format!("{}   (later: {})", now.join("   or   "), later.join("; ")),
+        (true, _) => later.join("   or   "),
+    };
+    Refusal::new(
+        codes::ILLEGAL_TRANSITION,
+        message,
         format!("a move from {from} to one of: {}", list.join(", ")),
-        format!("dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""),
+        fix,
     )
 }
 
@@ -115,11 +186,24 @@ impl TransitionRules for M0Rules {
         let id = &ctx.finding.id;
         for e in ctx.evidence {
             if ctx.lookup.evidence(e).is_none() {
+                let known: Vec<String> = ctx
+                    .lookup
+                    .evidence_ids()
+                    .iter()
+                    .map(|k| k.to_string())
+                    .collect();
                 return Err(Refusal::new(
                     codes::UNKNOWN_EVIDENCE,
                     format!("transition of {id} cites {e}, which is not in the ledger"),
                     format!("evidence {e}"),
-                    "cite an existing evidence ID; `dla run status` lists the ledger",
+                    format!(
+                        "cite an existing evidence ID (existing evidence: {})",
+                        if known.is_empty() {
+                            "none".to_owned()
+                        } else {
+                            known.join(", ")
+                        }
+                    ),
                 ));
             }
         }
@@ -166,16 +250,16 @@ impl TransitionRules for M0Rules {
                     .iter()
                     .chain(ctx.evidence)
                     .filter_map(|e| ctx.lookup.evidence(e))
-                    .any(|e| e.authority == Authority::Static);
+                    .any(|e| e.kind.class() == EvidenceClass::Static);
                 if !has_static {
                     return Err(Refusal::new(
                         codes::STATIC_EVIDENCE_REQUIRED,
                         format!(
-                            "{id} cites no static evidence, so it cannot be suspected_static_only"
+                            "{id} cites no static-class evidence (kind static-hit or census-holder), so it cannot be suspected_static_only; run-config and other context records do not count"
                         ),
-                        "an evidence record with authority static",
+                        "an evidence record of kind static-hit or census-holder",
                         format!(
-                            "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static evidence id>"
+                            "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static-hit or census-holder id>"
                         ),
                     ));
                 }
@@ -195,7 +279,9 @@ impl TransitionRules for M0Rules {
                             "{id} cannot be refuted without discriminator evidence in contradicts"
                         ),
                         "an evidence record of kind discriminator",
-                        format!("dla ledger refute {id} --evidence <discriminator evidence id>"),
+                        format!(
+                            "dla ledger refute {id} --evidence <discriminator evidence id> (available from M3)"
+                        ),
                     ));
                 }
             }

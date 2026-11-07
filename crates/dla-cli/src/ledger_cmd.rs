@@ -207,11 +207,16 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
         _ => None,
     };
     let line = ledger.add_finding(nf)?;
-    let finding = ledger
-        .findings()
-        .last()
-        .map(|f| (f.id.to_string(), f.state.to_string(), f.parent.clone()));
-    let (id, state, parent) = finding.unwrap_or_default();
+    // Read the new finding from the line just appended, never from the ledger's
+    // ID-ordered map: a sibling or any non-maximal ID is not the last entry there.
+    let dla_core::Record::FindingAdded { finding } = &line.record else {
+        unreachable!("add_finding appends a finding_added record");
+    };
+    let (id, state, parent) = (
+        finding.id.to_string(),
+        finding.state.to_string(),
+        finding.parent.clone(),
+    );
     let mut out = json!({
         "ok": true,
         "id": id,

@@ -252,3 +252,116 @@ fn rejected_moves_leave_the_ledger_unchanged() {
     assert_eq!(l.lines().len(), before);
     assert_eq!(l.finding(&f).unwrap().state, S::Candidate);
 }
+
+#[test]
+fn run_config_alone_is_not_static_class_evidence() {
+    use dla_core::{Authority, EvidenceKind};
+    let mut l = ledger();
+    // E4: authority static, but kind run-config (class Context).
+    l.add_evidence(evidence(EvidenceKind::RunConfig, Authority::Static))
+        .unwrap();
+    l.add_finding(dla_core::NewFinding::new(origin("census"), vec![eid(4)]))
+        .unwrap();
+    let f = fid(1);
+    let r = refusal(l.transition(
+        &f,
+        S::SuspectedStaticOnly,
+        Some(UnresolvedReason::NotExercised),
+        Some("exercise it".into()),
+        vec![eid(4)],
+        "t",
+    ));
+    assert_eq!(r.code, codes::STATIC_EVIDENCE_REQUIRED);
+    assert!(r.missing.contains("static-hit") && r.missing.contains("census-holder"));
+    assert!(r.message.contains("run-config"));
+    assert!(r.fix.contains("static-hit or census-holder"));
+    // A census-holder record qualifies.
+    l.add_evidence(evidence(EvidenceKind::CensusHolder, Authority::Static))
+        .unwrap();
+    l.transition(
+        &f,
+        S::SuspectedStaticOnly,
+        Some(UnresolvedReason::NotExercised),
+        Some("exercise it".into()),
+        vec![eid(5)],
+        "t",
+    )
+    .unwrap();
+}
+
+#[test]
+fn illegal_transition_fix_comes_from_the_source_state() {
+    // unresolved -> unresolved: never suggests the refused command again.
+    let (mut l, f) = finding_in(S::Unresolved);
+    let r = refusal(l.transition(
+        &f,
+        S::Unresolved,
+        Some(UnresolvedReason::TimeBudget),
+        Some("x".into()),
+        vec![],
+        "t",
+    ));
+    assert_eq!(r.code, codes::ILLEGAL_TRANSITION);
+    assert!(r.message.contains("already unresolved"), "{}", r.message);
+    assert!(!r.fix.contains("--as unresolved"), "{}", r.fix);
+    assert!(r.fix.contains("available from M3"), "{}", r.fix);
+
+    // confirmed -> unresolved: only `strong` is allowed, and it arrives later.
+    let (mut l, f) = finding_in(S::Confirmed);
+    let r = refusal(l.transition(
+        &f,
+        S::Unresolved,
+        Some(UnresolvedReason::TimeBudget),
+        Some("x".into()),
+        vec![],
+        "t",
+    ));
+    assert!(!r.fix.contains("--as unresolved"), "{}", r.fix);
+    assert!(
+        r.fix.contains("strong") && r.fix.contains("M6"),
+        "{}",
+        r.fix
+    );
+
+    // suspected_static_only -> suspected_static_only: unresolved exists now.
+    let (mut l, f) = finding_in(S::SuspectedStaticOnly);
+    let r = refusal(l.transition(
+        &f,
+        S::SuspectedStaticOnly,
+        Some(UnresolvedReason::NotExercised),
+        Some("x".into()),
+        vec![eid(1)],
+        "t",
+    ));
+    assert!(r.fix.contains("--as unresolved"), "{}", r.fix);
+    assert!(!r.fix.contains("--as suspected_static_only"), "{}", r.fix);
+    assert!(r.fix.contains("available from M3"), "{}", r.fix);
+}
+
+#[test]
+fn terminal_states_are_final_and_point_at_a_new_hypothesis() {
+    for terminal in [S::Refuted, S::Strong] {
+        let (mut l, f) = finding_in(terminal);
+        let r = refusal(l.transition(&f, S::UnderTest, None, None, vec![], "t"));
+        assert_eq!(r.code, codes::ILLEGAL_TRANSITION);
+        assert!(r.message.contains("final"), "{}", r.message);
+        assert!(r.fix.starts_with("dla ledger add --origin hypothesis"));
+        assert!(r.fix.contains("--sibling-of F1"), "{}", r.fix);
+    }
+}
+
+#[test]
+fn refute_fix_names_the_milestone_it_arrives_in() {
+    let (mut l, f) = finding_in(S::Candidate);
+    let r = refusal(l.transition(&f, S::Refuted, None, None, vec![], "t"));
+    assert!(r.fix.contains("available from M3"), "{}", r.fix);
+}
+
+#[test]
+fn unknown_evidence_on_a_transition_lists_the_existing_ids() {
+    let (mut l, f) = finding_in(S::Candidate);
+    let r = refusal(l.transition(&f, S::Refuted, None, None, vec![eid(99)], "t"));
+    assert_eq!(r.code, codes::UNKNOWN_EVIDENCE);
+    assert!(r.fix.contains("E1, E2, E3"), "{}", r.fix);
+    assert!(!r.fix.contains("run status"), "{}", r.fix);
+}

@@ -101,10 +101,16 @@ fn complete_header_and_sections_in_order() {
 }
 
 #[test]
-fn unclassified_is_rendered_as_novel_mechanism_heading() {
+fn novel_mechanism_label_is_only_for_confirmed_and_strong() {
     let md = render_markdown(&view("complete", None));
-    assert!(md.contains("### F3: **Novel mechanism (UNCLASSIFIED)**\n"));
+    // F1 is confirmed; F3 is unresolved; F2 is refuted.
     assert!(md.contains("### F1: **Novel mechanism (UNCLASSIFIED)**\n"));
+    assert!(md.contains("### F3: **UNCLASSIFIED**\n"));
+    assert!(md.contains("- **F2** (UNCLASSIFIED):"));
+    assert_eq!(md.matches("Novel mechanism").count(), 1);
+    let md = render_markdown(&view("incomplete", None));
+    assert!(!md.contains("Novel mechanism"));
+    assert!(!md.contains("?."), "no doubled punctuation");
 }
 
 #[test]

@@ -18,7 +18,10 @@ mod schema_cmd;
 
 use std::{io::Write, path::PathBuf, process::ExitCode};
 
-use clap::{Parser, Subcommand, error::ErrorKind};
+use clap::{
+    CommandFactory, Parser, Subcommand,
+    error::{ContextKind, ContextValue, ErrorKind},
+};
 use serde_json::{Value, json};
 
 use crate::{
@@ -87,15 +90,117 @@ fn print_json(v: Value) {
     let _ = writeln!(stdout, "{}", out::bound(v));
 }
 
-fn usage_failure(e: &clap::Error) -> Failure {
-    let text = e.to_string();
-    let message = text
+/// The subcommand path in clap's `Usage:` line, e.g. `dla ledger add`.
+fn usage_path(rendered: &str) -> Vec<String> {
+    let Some(usage) = rendered
         .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("invalid command line")
-        .trim_start_matches("error: ")
-        .to_owned();
-    Failure::usage(message, "valid arguments", "dla --help")
+        .find_map(|l| l.trim_start().strip_prefix("Usage:"))
+    else {
+        return vec!["dla".to_owned()];
+    };
+    let mut path: Vec<String> = Vec::new();
+    for w in usage.split_whitespace() {
+        if w.starts_with(['-', '<', '[']) {
+            break;
+        }
+        path.push(w.to_owned());
+    }
+    if path.is_empty() {
+        path.push("dla".to_owned());
+    }
+    path
+}
+
+/// The subcommand path named on the command line, e.g. `dla ledger add`. Flags and
+/// their values are skipped; matching stops at the first word that is not a subcommand
+/// of the current command.
+fn args_path() -> Vec<String> {
+    let mut cmd = Cli::command();
+    let mut path = vec!["dla".to_owned()];
+    for a in std::env::args().skip(1) {
+        if a.starts_with('-') {
+            continue;
+        }
+        if let Some(sub) = cmd.find_subcommand(&a).cloned() {
+            path.push(a);
+            cmd = sub;
+        }
+    }
+    path
+}
+
+/// Names of the subcommands under `path` (`["dla", "run"]` gives `init`, `status`).
+fn subcommand_names(path: &[String]) -> Vec<String> {
+    let mut cmd = Cli::command();
+    for name in path.iter().skip(1) {
+        let Some(sub) = cmd.find_subcommand(name).cloned() else {
+            return Vec::new();
+        };
+        cmd = sub;
+    }
+    cmd.get_subcommands()
+        .filter(|c| !c.is_hide_set() && c.get_name() != "help")
+        .map(|c| c.get_name().to_owned())
+        .collect()
+}
+
+fn usage_failure(e: &clap::Error) -> Failure {
+    let rendered = e.to_string();
+    let from_usage = usage_path(&rendered);
+    let from_args = args_path();
+    let path = if from_args.len() > from_usage.len() {
+        from_args
+    } else {
+        from_usage
+    };
+    let path_text = path.join(" ");
+    let fix = format!("{path_text} --help");
+    if matches!(
+        e.kind(),
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            | ErrorKind::MissingSubcommand
+            | ErrorKind::InvalidSubcommand
+    ) {
+        let subs = subcommand_names(&path);
+        let list = subs.join(", ");
+        let what = if e.kind() == ErrorKind::InvalidSubcommand {
+            let bad = match e.get(ContextKind::InvalidSubcommand) {
+                Some(ContextValue::String(s)) => format!(" (unknown: {s})"),
+                _ => String::new(),
+            };
+            format!("`{path_text}` has no such subcommand{bad}; available: {list}")
+        } else {
+            format!("`{path_text}` needs a subcommand; available: {list}")
+        };
+        return Failure::usage(what, format!("a subcommand: {list}"), fix);
+    }
+    // The whole message, up to the usage block: it names the offending argument.
+    let message = rendered
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with("Usage:"))
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("For more information"))
+        .map(|l| l.trim_start_matches("error: "))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let message = if message.is_empty() {
+        "invalid command line".to_owned()
+    } else {
+        message
+    };
+    let names = match e.get(ContextKind::InvalidArg) {
+        Some(ContextValue::Strings(v)) => v.join(", "),
+        Some(ContextValue::String(s)) => s.clone(),
+        _ => String::new(),
+    };
+    let missing = if names.is_empty() {
+        format!("valid arguments for `{path_text}`")
+    } else if e.kind() == ErrorKind::MissingRequiredArgument {
+        format!("required argument(s): {names}")
+    } else {
+        format!("a valid use of: {names}")
+    };
+    Failure::usage(message, missing, fix)
 }
 
 fn main() -> ExitCode {

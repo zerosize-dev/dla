@@ -24,6 +24,7 @@ use crate::{
     machine::{self, EvidenceLookup, M0Rules, TransitionContext},
     record::{LedgerLine, OpenItem, OpenItemResolved, Record, Resolution, Transition},
     state::{LEDGER_FILE, now_utc},
+    strict,
     version::{Artifact, UpgradeError, upgrade},
 };
 
@@ -109,6 +110,9 @@ struct Index {
 impl EvidenceLookup for Index {
     fn evidence(&self, id: &EvidenceId) -> Option<&EvidenceRecord> {
         self.evidence.get(id)
+    }
+    fn evidence_ids(&self) -> Vec<EvidenceId> {
+        self.evidence.keys().cloned().collect()
     }
 }
 
@@ -585,15 +589,28 @@ impl Ledger {
                 )
             };
             let doc: serde_json::Value =
-                serde_json::from_str(raw).map_err(|e| malformed(format!("invalid JSON: {e}")))?;
+                strict::parse(raw).map_err(|e| malformed(format!("invalid JSON: {e}")))?;
             let doc = upgrade(doc, Artifact::LedgerLine, &format!("ledger line {n}")).map_err(
                 |e| match e {
                     UpgradeError::Malformed(m) => malformed(m),
                     UpgradeError::Schema(s) => Error::Schema(s),
                 },
             )?;
-            let line: LedgerLine = serde_json::from_value(doc)
+            let line: LedgerLine = serde_json::from_value(doc.clone())
                 .map_err(|e| malformed(format!("not a valid ledger record: {e}")))?;
+            if let Ok(back) = serde_json::to_value(&line) {
+                let unknown = strict::unknown_fields(&doc, &back);
+                if !unknown.is_empty() {
+                    return Err(malformed(format!(
+                        "unknown field(s) {}: not part of this record type (misspelled?)",
+                        unknown
+                            .iter()
+                            .map(|u| format!("`{u}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
             let expected = ledger.next_seq();
             if line.seq != expected {
                 return Err(replay_err(

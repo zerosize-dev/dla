@@ -24,7 +24,7 @@ Residual: not measured
 - Supporting evidence: E2
 - Explanation (observed): Entries are never evicted.
 
-### F3: **Novel mechanism (UNCLASSIFIED)**
+### F3: **UNCLASSIFIED**
 
 - State: unresolved(no_harness)
 - Evidence classes: static
@@ -35,7 +35,7 @@ Residual: not measured
 
 ## Ruled out
 
-- **F2** (Novel mechanism (UNCLASSIFIED)): discriminator E3
+- **F2** (UNCLASSIFIED): discriminator E3
   - Hypothesis: N-WARM
   - Refuted if: growth is flat after warmup
   - Contradicting evidence: E3
