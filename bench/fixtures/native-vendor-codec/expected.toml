@@ -1,0 +1,23 @@
+schema_version = 1
+id = "native-vendor-codec"
+runtime = "native"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = """
+The capture tool's memory grows in proportion to the number of packets it
+decodes; during a long recording session it reaches several gigabytes. The
+on-call engineer wants to know what accumulates and where.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/session.c:20"
+lines = [20, 20]
+alt_sites = ["src/session.c:27"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-HANDLE"
+share = 1.0
+confirmable = false

@@ -1,0 +1,17 @@
+schema_version = 1
+id = "go-subscription-workers-closed"
+runtime = "go"
+category = "decoy-control"
+pair = "go-subscription-workers"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The notification service's memory and thread count climb steadily during long replay runs: after every batch of traffic both are higher than they were after the previous one, and the pod is OOM-killed about once a day. Find out what is holding them.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "internal/notify/subscription.go:33"
+cause = "N-WARM"
+discriminator = "goroutine count returns to 1 after every request and heap in use stays near 90 KB from 2000 to 32000 requests; the only rise is runtime start-up, so the slope of the second half is zero"

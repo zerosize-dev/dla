@@ -1,0 +1,25 @@
+schema_version = 1
+id = "jvm-order-cache"
+runtime = "jvm"
+category = "archetype-leak"
+pair = "jvm-order-cache-bounded"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The order service's heap usage keeps climbing during long replay runs: after
+every batch of traffic the live set is larger than it was after the previous
+one, and the pod is restarted by the orchestrator about once a day. Find out
+what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/shop/OrderCache.java:17"
+lines = [17, 17]
+alt_sites = ["src/shop/OrderCache.java:8"]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = true

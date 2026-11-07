@@ -1,0 +1,35 @@
+schema_version = 1
+id = "python-ingest-two-leaks"
+runtime = "python"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The sensor ingest worker's resident memory grows in step with the number of
+batches it has processed. It is restarted every night to keep it from being
+killed by the container limit, and the growth comes back within hours. Find
+out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "ingest/registry.py:7"
+lines = [7, 7]
+alt_sites = ["ingest/registry.py:3", "ingest/pipeline.py:28"]
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 0.7
+confirmable = true
+
+[[leak]]
+id = "L2"
+site = "ingest/parser.py:27"
+lines = [27, 27]
+alt_sites = ["ingest/parser.py:29", "ingest/parser.py:3"]
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 0.3
+confirmable = true

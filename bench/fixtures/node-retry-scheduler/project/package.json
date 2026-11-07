@@ -1,0 +1,14 @@
+{
+  "name": "webhook-dispatch",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Outbound webhook delivery with retry scheduling on a manual clock.",
+  "main": "src/scheduler.js",
+  "scripts": {
+    "test": "node --test",
+    "load": "node load.js --iterations 2000"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

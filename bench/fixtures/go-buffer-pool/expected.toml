@@ -1,0 +1,22 @@
+schema_version = 1
+id = "go-buffer-pool"
+runtime = "go"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the invoice renderer's memory rose sharply in the first minutes after start-up, and they fear it will keep rising until the pod is OOM-killed. Find out whether memory keeps growing, and why it is as large as it is.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "internal/render/pool.go:37"
+cause = "N-HWM"
+discriminator = "pool size stops at 400 buffers (the largest batch) by batch 10; heap in use is flat from batch 100 to batch 8000, so the second-half slope is zero"
+
+[[non_leak]]
+id = "N2"
+site = "internal/render/batch.go:40"
+cause = "N-HWM"
+discriminator = "the index map is emptied after each batch; its table keeps the size of the largest batch and does not grow past it"

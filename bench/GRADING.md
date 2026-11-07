@@ -21,10 +21,26 @@ starting at 1. Fixtures are read from `bench/fixtures/<fixture>/expected.toml`
 (override with `--fixtures <dir>`). A run directory whose fixture has no
 `expected.toml` is an error.
 
+Directory rules: under `runs/`, a second-level directory not named exactly
+`archetypes-on` or `archetypes-off` is ignored, and so is a run directory whose
+name is not a positive decimal integer without leading zeros. A run directory
+without `run.json` is an unfinished run: it is skipped and counted in
+`usage.incomplete`. A `run.json` that exists but is not a JSON object is an
+error.
+
 `run.json` fields used here: `exit_code` (integer), `timed_out` (bool),
 `wall_seconds` (number), `cost_usd` (number or null) and `usage` with
 `input_tokens`, `output_tokens`, `cache_read_input_tokens`,
-`cache_creation_input_tokens` (integers; a missing key counts as 0).
+`cache_creation_input_tokens` (integers). A missing or non-integer token
+field counts as 0, a missing or non-numeric `wall_seconds` counts as 0, and
+a non-numeric `cost_usd` is treated as absent.
+
+Fixture fields: a leak without `confirmable` is confirmable (default `true`).
+The expected `site` path and `alt_sites` paths are used exactly as written.
+An `alt_sites` entry that is not `path:line` or `path:start-end` is ignored.
+
+Every float sum in this document is taken in ascending order of fixture id,
+then run index.
 
 ## Normalised findings
 
@@ -45,7 +61,10 @@ a JSON object or has no string `type`. Apply records in file order:
   state `open`, `site`, `holder` and `label` taken from its `site`, `holder`
   and `archetype` members (null when absent or not a string), and
   `hypothesis` true when its `parent` member is a non-empty string. Key it by
-  its `id`; a repeated `id` replaces the earlier finding.
+  its `id`. A repeated `id` removes the earlier finding and adds the new one at
+  the position of the later line. A record whose `finding` is not an object or
+  whose `id` is not a string creates no finding but still counts as a
+  `finding_added` record for source selection.
 - `transition`: if a finding with the record's `finding` id exists, set its
   state from the record's `to`: `confirmed` → `confirmed`, `strong` →
   `strong`, `refuted` → `refuted`, `suspected_static_only` → `suspected`,
@@ -71,8 +90,9 @@ A finding is a **claim** when it is not a hypothesis and its state is
 
 ## Matching a finding to an expected leak
 
-Parse the finding's `site` with `^(.*?):([0-9]+)(?::[0-9]+)?$` into a path
-and a line; a site that does not match has no location. Normalise the path by
+Parse the finding's `site` with `^(.*?):([0-9]+)(?::[0-9]+)?$`, matched
+against the whole string (a trailing newline does not match), into a path and
+a line; a site that does not match has no location. Normalise the path by
 replacing every `\` with `/` and removing every leading `./`. It matches the
 leak when the path equals the leak's path or ends with `/` followed by the
 leak's path, and the line lies inside the leak's `lines` (default
@@ -84,8 +104,8 @@ A leak is **found** in a run when some non-hypothesis finding in state
 `confirmed` or `strong` matches it, and **flagged** when some non-hypothesis
 finding in state `confirmed`, `strong`, `suspected`, `unresolved` or `open`
 matches it. The **chosen finding** of a found leak is the first matching
-finding in state `strong`, or else the first matching finding in state
-`confirmed`.
+non-hypothesis finding in state `strong`, or else the first matching
+non-hypothesis finding in state `confirmed`.
 
 ## Metrics
 
@@ -99,7 +119,7 @@ fixture whose category is `archetype-leak`, `archetype-free` or `multi-leak`.
 | `leak_recall` | leaks in the leak set | found |
 | `archetype_free_recall` | leaks in the leak set with `cause = "UNCLASSIFIED"` | found |
 | `flagged_recall` | leaks in the leak set | flagged |
-| `second_leak_recall` | for `multi-leak` runs with at least one leak found: leaks − 1 | found − 1 |
+| `second_leak_recall` | for `multi-leak` runs with at least one leak of the leak set found: (leaks in the leak set) − 1 | (found in the leak set) − 1 |
 | `grounded_attribution` | found leaks in the leak set | chosen finding's `holder` equals the leak's `holder` |
 | `label_accuracy` | found leaks with `cause` other than `UNCLASSIFIED` whose chosen finding has a non-null label | label equals `cause` |
 | `forced_fit_rate` | found leaks with `cause = "UNCLASSIFIED"` whose chosen finding has a non-null label | label is not `UNCLASSIFIED` |
@@ -121,23 +141,27 @@ Each ratio metric is written as:
 - `per_run` has one entry for every run index from 1 to the largest index in
   the group, in ascending order, computed over that run index of every
   fixture.
-- `mean` and `stdev` use the per-run values that are not null, in ascending
-  run order: `mean = round6(s / k)` where `s` is their sum and `k` their
-  count; `stdev = round6(sqrt(q / k))` where `q` is the sum of the squared
-  differences from the unrounded `s / k`. Both are null when `k` is 0.
+- `mean` and `stdev` use the unrounded per-run ratios `num / den` of the
+  entries whose `den` is not 0, in ascending run order: `mean = round6(s / k)`
+  where `s` is their sum and `k` their count; `stdev = round6(sqrt(q / k))`
+  where `q` is the sum of the squared differences from the unrounded `s / k`.
+  Both are null when `k` is 0.
 - `round6(x)` rounds to six decimal places, half to even, on the exact binary
   value: Python `float(f"{x:.6f}")`, Rust `format!("{x:.6}").parse::<f64>()`.
 
 `unexplained_growth_share` is written as
 `{"value": round6(R / T) or null, "runs": k}`, where `R` and `T` sum, over the
-runs whose `coverage.json` has a non-empty `residual` array, every row's
-`residual` and `total_slope`, and `k` counts those runs. `value` is null when
-`k` is 0 or `T` is 0.
+runs whose `coverage.json` is a JSON object with a non-empty `residual`
+array, every row's `residual` and `total_slope` (a missing or non-numeric
+value counts as 0; a row that is not an object is skipped), and `k` counts
+those runs. A `coverage.json` that is not valid JSON is treated as absent.
+`value` is null when `k` is 0 or `T` is 0.
 
 ## Usage
 
-Per group: `runs` (count), `errored` (runs with `exit_code` not 0 or
-`timed_out` true), `sources` (`{"ledger": n, "findings": n, "none": n}`),
+Per group: `runs` (count of graded runs), `incomplete` (run directories
+skipped for lack of `run.json`), `errored` (runs whose `exit_code` is missing,
+not an integer or not 0, or whose `timed_out` is true), `sources` (`{"ledger": n, "findings": n, "none": n}`),
 for each of the four token fields `{"sum": n, "mean": round6(sum / runs)}`,
 `wall_seconds` as `{"sum": round6, "mean": round6, "max": round6}` and
 `cost_usd` as `{"sum": round6, "mean": round6}` over the runs with a numeric
@@ -147,8 +171,9 @@ for each of the four token fields `{"sum": n, "mean": round6(sum / runs)}`,
 
 Per group and fixture: `category`, `runs`, `claim_runs` (runs with at least
 one claim), `rule_out_runs` (runs with at least one rule-out), and `leaks`
-mapping each expected leak `id` to `{"found": n, "flagged": n, "grounded": n}`
-counted over runs (`grounded`: found and the chosen finding's holder matches).
+mapping every expected leak `id` (confirmable or not) to
+`{"found": n, "flagged": n, "grounded": n}` counted over runs (`grounded`:
+found and the chosen finding's holder matches).
 
 ## `metrics.json`
 

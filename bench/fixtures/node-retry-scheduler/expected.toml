@@ -1,0 +1,21 @@
+schema_version = 1
+id = "node-retry-scheduler"
+runtime = "node"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The webhook dispatcher's heap keeps climbing over long replays. After every batch the schedule is empty, every job has been delivered or given up on, and the in-flight table is back to zero, yet each batch leaves the process larger than the one before. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/scheduler.js:58"
+lines = [58, 58]
+alt_sites = ["src/scheduler.js:15", "src/scheduler.js:57"]
+holder = "closure/continuation"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

@@ -1,0 +1,14 @@
+{
+  "name": "edge-gateway",
+  "version": "1.4.2",
+  "private": true,
+  "description": "Connection gateway for the telemetry edge: framing, routing and presence.",
+  "main": "src/gateway.js",
+  "scripts": {
+    "test": "node --test",
+    "load": "node load.js --iterations 2000"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

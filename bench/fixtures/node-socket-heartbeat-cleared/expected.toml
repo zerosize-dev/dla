@@ -1,0 +1,17 @@
+schema_version = 1
+id = "node-socket-heartbeat-cleared"
+runtime = "node"
+category = "decoy-control"
+pair = "node-socket-heartbeat"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The edge gateway process grows steadily under sustained client traffic: after each wave of devices connects, exchanges messages and disconnects, resident memory is higher than after the previous wave, even though no sessions remain open. The process has to be restarted about every two days. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/heartbeat.js:15"
+cause = "N-WARM"
+discriminator = "live heartbeat intervals return to 0 after every run and heap after GC stays near 0.3 MB from 2000 to 16000 connections; sessions in flight are capped by the replay window, so the slope of the second half is zero"

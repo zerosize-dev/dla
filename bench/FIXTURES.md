@@ -60,7 +60,7 @@ holder = "blocked-stack"
 region = "non-heap"
 cause = "L-WORKER"                          # archetype ID, or "UNCLASSIFIED"
 share = 1.0                                 # share of total growth (multi-leak)
-confirmable = true                          # false: only static evidence is obtainable
+confirmable = true                          # default true; false: only static evidence is obtainable
 
 [[non_leak]]
 id = "N1"

@@ -1,0 +1,22 @@
+schema_version = 1
+id = "go-subscription-workers"
+runtime = "go"
+category = "archetype-leak"
+pair = "go-subscription-workers-closed"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The notification service's memory and thread count climb steadily during long replay runs: after every batch of traffic both are higher than they were after the previous one, and the pod is OOM-killed about once a day. Find out what is holding them.
+"""
+
+[[leak]]
+id = "L1"
+site = "internal/notify/subscription.go:33"
+lines = [33, 33]
+alt_sites = ["internal/notify/subscription.go:39-47", "internal/notify/handler.go:18"]
+holder = "blocked-stack"
+region = "non-heap"
+cause = "L-WORKER"
+share = 1.0
+confirmable = true

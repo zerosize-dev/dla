@@ -1,0 +1,20 @@
+schema_version = 1
+id = "jvm-order-cache-bounded"
+runtime = "jvm"
+category = "decoy-control"
+pair = "jvm-order-cache"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The order service's heap usage keeps climbing during long replay runs: after
+every batch of traffic the live set is larger than it was after the previous
+one, and the pod is restarted by the orchestrator about once a day. Find out
+what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/shop/OrderCache.java:10"
+cause = "N-WARM"
+discriminator = "the cache holds at most 1000 orders: the access-ordered map evicts its eldest entry past that size, the entry count and the post-GC heap are flat from 2000 requests onward, and the slope of the second half is zero"

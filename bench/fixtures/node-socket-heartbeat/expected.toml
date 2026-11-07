@@ -1,0 +1,22 @@
+schema_version = 1
+id = "node-socket-heartbeat"
+runtime = "node"
+category = "archetype-leak"
+pair = "node-socket-heartbeat-cleared"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The edge gateway process grows steadily under sustained client traffic: after each wave of devices connects, exchanges messages and disconnects, resident memory is higher than after the previous wave, even though no sessions remain open. The process has to be restarted about every two days. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/heartbeat.js:15"
+lines = [15, 15]
+alt_sites = ["src/gateway.js:23", "src/session.js:62-69"]
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 1.0
+confirmable = true

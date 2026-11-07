@@ -1,0 +1,27 @@
+schema_version = 1
+id = "jvm-audit-chain"
+runtime = "jvm"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The API gateway's memory use grows in step with the number of requests it has
+served, even though no request is meant to outlive its response, and only a
+restart brings it back down. Find out why.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/gateway/RequestContext.java:22"
+lines = [22, 22]
+alt_sites = [
+  "src/gateway/RequestContext.java:5",
+  "src/gateway/RequestContext.java:13",
+  "src/gateway/RequestContext.java:27-28",
+]
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

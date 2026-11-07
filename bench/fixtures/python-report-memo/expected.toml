@@ -1,0 +1,26 @@
+schema_version = 1
+id = "python-report-memo"
+runtime = "python"
+category = "archetype-leak"
+pair = "python-report-memo-bounded"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The report service's resident memory climbs steadily while it renders
+account statements for the front end: after every few thousand requests the
+process holds more than it did after the previous few thousand, and the
+container is restarted by the scheduler about once a day. Find out what is
+holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "reports/builder.py:14"
+lines = [14, 14]
+alt_sites = ["reports/builder.py:15", "reports/service.py:15"]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = true

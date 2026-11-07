@@ -1,0 +1,23 @@
+schema_version = 1
+id = "native-frame-decoder"
+runtime = "native"
+category = "archetype-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The frame decoding worker's resident memory grows steadily while it processes
+a camera feed, in proportion to the number of frames, and the process has to be
+restarted every few days. Find out why.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/decoder.c:29"
+lines = [29, 29]
+alt_sites = ["src/decoder.c:40"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-HANDLE"
+share = 1.0
+confirmable = true

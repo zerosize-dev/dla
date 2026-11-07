@@ -1,0 +1,22 @@
+schema_version = 1
+id = "rust-batch-buffers"
+runtime = "rust"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the metrics rollup agent's resident memory jumped from a few megabytes to over ten shortly after start-up and has not gone back down, even when traffic is quiet. They fear it will keep climbing until the pod is killed. Find out whether memory keeps growing, and why it is as large as it is.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/rollup.rs:57"
+cause = "N-HWM"
+discriminator = "the sample buffer is emptied after every batch but keeps the capacity of the largest batch (60000 samples, reached at batch 11); live bytes step once and stay at 6.36 MB from batch 12 to batch 8000, so the second-half slope is zero"
+
+[[non_leak]]
+id = "N2"
+site = "src/rollup.rs:58"
+cause = "N-HWM"
+discriminator = "the per-series map is emptied after every batch but keeps the table size of the largest batch; it holds zero entries between batches and does not grow past that table size"

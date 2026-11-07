@@ -1,0 +1,19 @@
+schema_version = 1
+id = "native-glyph-cache"
+runtime = "native"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The text rendering service's resident memory rises as soon as it starts taking
+traffic, and an alert fires because it keeps going up for the first minutes.
+Someone suspects a native memory problem. Find out whether that is right and,
+if so, where.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/cache.c:127"
+cause = "N-WARM"
+discriminator = "the entry count stops at the configured capacity (2048 of 2048) within about 100 runs, evictions then track misses one for one, and peak RSS stays within 100 kB between 2000 and 32000 runs; valgrind reports every block freed at exit"

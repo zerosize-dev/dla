@@ -1,0 +1,26 @@
+schema_version = 1
+id = "jvm-billing-private-repo"
+runtime = "jvm"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = """
+The charge gateway's heap occupancy rises through the working day and drops
+back only when the service is restarted. The on-call engineer wants to know
+what accumulates and where.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/main/java/billing/InFlightCharges.java:13"
+lines = [13, 13]
+alt_sites = [
+  "src/main/java/billing/InFlightCharges.java:8",
+  "src/main/java/billing/ChargeService.java:26",
+]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = false

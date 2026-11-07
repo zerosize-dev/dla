@@ -1,0 +1,22 @@
+schema_version = 1
+id = "rust-tree-parent-links"
+runtime = "rust"
+category = "archetype-leak"
+pair = "rust-tree-parent-links-weak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the outline service's resident memory grows in step with the number of documents it has processed, and the pod is restarted by the orchestrator every few days. Nothing is cached on purpose and each request's data should be gone when the response is sent. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/section.rs:27"
+lines = [27, 27]
+alt_sites = ["src/section.rs:10", "src/section.rs:16-22"]
+holder = "cycle-only"
+region = "heap"
+cause = "L-CYCLE"
+share = 1.0
+confirmable = true

@@ -1,0 +1,21 @@
+schema_version = 1
+id = "python-report-memo-bounded"
+runtime = "python"
+category = "decoy-control"
+pair = "python-report-memo"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The report service's resident memory climbs steadily while it renders
+account statements for the front end: after every few thousand requests the
+process holds more than it did after the previous few thousand, and the
+container is restarted by the scheduler about once a day. Find out what is
+holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "reports/builder.py:14"
+cause = "N-WARM"
+discriminator = "the memoised method holds at most 128 entries on one long-lived builder; the entry count and traced memory stop rising after the first few hundred requests and the slope of the second half is zero"

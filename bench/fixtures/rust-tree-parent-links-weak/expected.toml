@@ -1,0 +1,17 @@
+schema_version = 1
+id = "rust-tree-parent-links-weak"
+runtime = "rust"
+category = "decoy-control"
+pair = "rust-tree-parent-links"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the outline service's resident memory grows in step with the number of documents it has processed, and the pod is restarted by the orchestrator every few days. Nothing is cached on purpose and each request's data should be gone when the response is sent. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/section.rs:27"
+cause = "N-ALLOC"
+discriminator = "every section tree is freed when its request ends: the back-link is a Weak reference, live allocations return to 3 blocks (about 560 bytes) after each document at 2000 and at 8000 documents, and resident memory is flat at about 2.3 MB from the first 500 documents on; the slope of the second half is zero"

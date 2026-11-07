@@ -1,0 +1,18 @@
+schema_version = 1
+id = "python-graph-churn"
+runtime = "python"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The outline converter's memory graph trends upward while it works through a
+queue of documents, and the process-memory alert has paged the on-call
+engineer several times this week. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "outlines/tuning.py:11"
+cause = "N-HEADROOM"
+discriminator = "traced memory and the count of Node objects fall back to the baseline (about 3 KB, 0 nodes) after a forced gc.collect(); the post-collection series is flat across 2k and 8k iterations, so the rise between collections is garbage waiting for a deferred collector run"
