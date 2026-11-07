@@ -303,6 +303,9 @@ mod tests {
     #[test]
     fn plans_follow_the_build_files() {
         let scratch = Path::new("/tmp/s");
+        // Environment values are native paths handed to the build tool, so the
+        // expected values use the platform separator.
+        let under = |sub: &str| scratch.join(sub).display().to_string();
         let (_d, t, det) = proj(&[("pom.xml", ""), ("A.java", "")]);
         assert_eq!(
             plan(&t, &det[0], scratch).unwrap().line(),
@@ -313,10 +316,7 @@ mod tests {
         let (_d, t, det) = proj(&[("go.mod", "go 1.22\n")]);
         let p = plan(&t, &det[0], scratch).unwrap();
         assert_eq!(p.line(), "go build ./...");
-        assert!(
-            p.env
-                .contains(&("GOCACHE".to_owned(), "/tmp/s/gocache".to_owned()))
-        );
+        assert!(p.env.contains(&("GOCACHE".to_owned(), under("gocache"))));
         assert!(
             p.env
                 .iter()
@@ -325,10 +325,10 @@ mod tests {
         let (_d, t, det) = proj(&[("Cargo.toml", "")]);
         let p = plan(&t, &det[0], scratch).unwrap();
         assert_eq!(p.line(), "cargo build");
-        assert!(p.env.contains(&(
-            "CARGO_TARGET_DIR".to_owned(),
-            "/tmp/s/cargo-target".to_owned()
-        )));
+        assert!(
+            p.env
+                .contains(&("CARGO_TARGET_DIR".to_owned(), under("cargo-target")))
+        );
         let (_d, t, det) = proj(&[("Makefile", "all:\n"), ("a.c", "")]);
         assert_eq!(plan(&t, &det[0], scratch).unwrap().line(), "make");
         let (_d, t, det) = proj(&[("package.json", r#"{"scripts":{"build":"tsc"}}"#)]);
