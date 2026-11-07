@@ -266,7 +266,16 @@ rm -rf "$WORK/host-release" "$WORK/host-payload"
 
 # 15c. a data directory with a colon in its name (GNU tar reads "C:/x" as host:file)
 if [ "$ON_WINDOWS" = 1 ]; then
-  echo "skip colon-in-path data dir (Windows cannot create a directory named like C:; absolute C:/ paths are exercised by every other case)"
+  # Claude Code hands hooks a native drive-letter path, not the POSIX /tmp path
+  # mktemp gives in Git Bash. Exercise both native spellings: C:/x and C:\x.
+  for form in -m -w; do
+    mkdir -p "$WORK/native$form"
+    NATIVE=$(cygpath "$form" "$WORK/native$form")
+    OUT=$(CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$NATIVE" DLA_RELEASE_BASE_URL="$REL" bash "$FETCH" 2>"$WORK/stderr"); RC=$?
+    [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$WORK/native$form/bin/dla-$VERSION-$TARGET$EXT" ] && ok "native data dir '$NATIVE' installs" || bad "native data dir '$NATIVE': rc=$RC out=$OUT err=$(cat "$WORK/stderr")"
+    OUT=$(CLAUDE_PLUGIN_DATA="$NATIVE" "$SHIM" --version 2>&1); RC=$?
+    [ "$RC" -eq 0 ] && ok "shim runs the binary from native data dir '$NATIVE'" || bad "shim with native data dir '$NATIVE': rc=$RC out=$OUT"
+  done
 else
   # GNU tar only reads "name:file" as host:file when no "/" precedes the colon,
   # so the data dir must be a relative path that starts with "C:", as in Git Bash.
