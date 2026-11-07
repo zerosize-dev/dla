@@ -58,7 +58,10 @@ EXT=""
 case "$TARGET" in *windows*) EXT=".exe" ;; esac
 if [ "$TARGET_FROM_ENV" = 1 ]; then echo "target: $TARGET (DLA_TARGET set)"; else echo "target: $TARGET (DLA_TARGET unset)"; fi
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/dla-shim-test.XXXXXX") || exit 1
+# macOS sets TMPDIR with a trailing slash; drop it so expected paths have no "//".
+TMP_BASE=${TMPDIR:-/tmp}
+TMP_BASE=${TMP_BASE%/}
+WORK=$(mktemp -d "${TMP_BASE:-/tmp}/dla-shim-test.XXXXXX") || exit 1
 trap 'rm -rf "$WORK"' EXIT
 
 PASS=0
