@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::Error,
     finding::Region,
-    fsutil::load_versioned,
+    fsutil::{load_versioned, to_pretty_json, write_atomic},
     ids::OpenItemId,
-    state::{COVERAGE_FILE, Scope},
+    state::{COVERAGE_FILE, RunState, Scope},
     version::Artifact,
 };
 
@@ -45,6 +45,45 @@ pub struct BackendCoverage {
     pub enumerated: u64,
     /// Items that were dispositioned.
     pub dispositioned: u64,
+}
+
+impl BackendCoverage {
+    fn base(status: BackendStatus) -> Self {
+        Self {
+            status,
+            reason: None,
+            install_hint: None,
+            version: None,
+            enumerated: 0,
+            dispositioned: 0,
+        }
+    }
+
+    /// A backend that ran and enumerated `enumerated` items.
+    pub fn ran(version: Option<String>, enumerated: u64) -> Self {
+        Self {
+            version,
+            enumerated,
+            ..Self::base(BackendStatus::Ran)
+        }
+    }
+
+    /// A backend that is not installed, with the hint that installs it.
+    pub fn missing(reason: impl Into<String>, install_hint: impl Into<String>) -> Self {
+        Self {
+            reason: Some(reason.into()),
+            install_hint: Some(install_hint.into()),
+            ..Self::base(BackendStatus::Missing)
+        }
+    }
+
+    /// A backend that exists but could not run, and why.
+    pub fn blocked(reason: impl Into<String>) -> Self {
+        Self {
+            reason: Some(reason.into()),
+            ..Self::base(BackendStatus::Blocked)
+        }
+    }
 }
 
 /// An entry point that could not be exercised.
@@ -134,7 +173,30 @@ pub struct CoverageManifest {
     pub blind_spots: Vec<BlindSpot>,
 }
 
+impl WorkerCoverage {
+    /// An empty worker for `runtime`.
+    pub fn new(runtime: &str) -> Self {
+        Self {
+            runtime: runtime.to_owned(),
+            backends: BTreeMap::new(),
+            entry_points: EntryPoints::default(),
+            iterations: None,
+        }
+    }
+}
+
 impl CoverageManifest {
+    /// An empty manifest.
+    pub fn new(scope: Option<Scope>) -> Self {
+        Self {
+            schema_version: crate::SCHEMA_VERSION,
+            scope,
+            workers: BTreeMap::new(),
+            residual: Vec::new(),
+            blind_spots: Vec::new(),
+        }
+    }
+
     /// Loads `<run_dir>/coverage.json`; `None` if the file does not exist.
     pub fn load(run_dir: &Path) -> Result<Option<Self>, Error> {
         let p = run_dir.join(COVERAGE_FILE);
@@ -142,5 +204,138 @@ impl CoverageManifest {
             return Ok(None);
         }
         load_versioned(&p, Artifact::Coverage).map(Some)
+    }
+
+    /// Loads `<run_dir>/coverage.json`, or starts an empty manifest (with the scope
+    /// from `state.json` when that can be read) if the file does not exist.
+    pub fn load_or_create(run_dir: &Path) -> Result<Self, Error> {
+        if let Some(m) = Self::load(run_dir)? {
+            return Ok(m);
+        }
+        let scope = RunState::load(run_dir).ok().and_then(|s| s.scope);
+        Ok(Self::new(scope))
+    }
+
+    /// The worker keyed `key`, created (with `runtime = key`) when absent.
+    pub fn worker_mut(&mut self, key: &str) -> &mut WorkerCoverage {
+        self.workers
+            .entry(key.to_owned())
+            .or_insert_with(|| WorkerCoverage::new(key))
+    }
+
+    /// Sets (replacing) one backend entry of a worker.
+    pub fn set_backend(&mut self, worker: &str, backend: &str, cov: BackendCoverage) {
+        self.worker_mut(worker)
+            .backends
+            .insert(backend.to_owned(), cov);
+    }
+
+    /// Replaces the entry-point lists of a worker.
+    pub fn set_entry_points(&mut self, worker: &str, entry_points: EntryPoints) {
+        self.worker_mut(worker).entry_points = entry_points;
+    }
+
+    /// Writes the manifest to `<run_dir>/coverage.json` atomically.
+    pub fn save(&self, run_dir: &Path) -> Result<(), Error> {
+        write_atomic(
+            &run_dir.join(COVERAGE_FILE),
+            to_pretty_json(self).as_bytes(),
+        )
+    }
+
+    /// Load-or-create, apply `f`, save: the one way commands update coverage. Other
+    /// workers' entries are preserved.
+    pub fn update(
+        run_dir: &Path,
+        f: impl FnOnce(&mut CoverageManifest),
+    ) -> Result<CoverageManifest, Error> {
+        let mut m = Self::load_or_create(run_dir)?;
+        f(&mut m);
+        m.save(run_dir)?;
+        Ok(m)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_creates_then_merges_workers_and_backends() {
+        let t = tempfile::tempdir().unwrap();
+        assert!(CoverageManifest::load(t.path()).unwrap().is_none());
+        CoverageManifest::update(t.path(), |m| {
+            m.set_backend(
+                "go",
+                "staticcheck",
+                BackendCoverage::missing("not on PATH", "dla install staticcheck"),
+            );
+            m.set_backend("go", "govet", BackendCoverage::ran(Some("1.24".into()), 3));
+        })
+        .unwrap();
+        CoverageManifest::update(t.path(), |m| {
+            m.set_backend("jvm", "spotbugs", BackendCoverage::blocked("no JDK"));
+            m.set_backend("go", "staticcheck", BackendCoverage::ran(None, 7));
+            m.set_entry_points(
+                "go",
+                EntryPoints {
+                    discovered: vec!["main".into()],
+                    ..EntryPoints::default()
+                },
+            );
+        })
+        .unwrap();
+        let m = CoverageManifest::load(t.path()).unwrap().unwrap();
+        assert_eq!(m.schema_version, crate::SCHEMA_VERSION);
+        let go = &m.workers["go"];
+        assert_eq!(go.runtime, "go");
+        assert_eq!(go.backends["staticcheck"].status, BackendStatus::Ran);
+        assert_eq!(go.backends["staticcheck"].enumerated, 7);
+        assert!(go.backends["staticcheck"].install_hint.is_none());
+        assert_eq!(go.backends["govet"].enumerated, 3);
+        assert_eq!(go.entry_points.discovered, ["main"]);
+        assert_eq!(
+            m.workers["jvm"].backends["spotbugs"].status,
+            BackendStatus::Blocked
+        );
+    }
+
+    #[test]
+    fn missing_backend_keeps_its_hint_on_disk() {
+        let t = tempfile::tempdir().unwrap();
+        CoverageManifest::update(t.path(), |m| {
+            m.set_backend(
+                "python",
+                "ruff",
+                BackendCoverage::missing("ruff not found", "dla install ruff"),
+            );
+        })
+        .unwrap();
+        let text = std::fs::read_to_string(t.path().join(COVERAGE_FILE)).unwrap();
+        assert!(text.contains("\"install_hint\": \"dla install ruff\""));
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn write_leaves_no_temporary_file() {
+        let t = tempfile::tempdir().unwrap();
+        CoverageManifest::update(t.path(), |m| {
+            m.worker_mut("rust");
+        })
+        .unwrap();
+        let names: Vec<_> = std::fs::read_dir(t.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, [COVERAGE_FILE]);
+    }
+
+    #[test]
+    fn a_corrupt_file_is_an_error_not_overwritten() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join(COVERAGE_FILE), "{not json").unwrap();
+        assert!(CoverageManifest::update(t.path(), |_| {}).is_err());
+        let text = std::fs::read_to_string(t.path().join(COVERAGE_FILE)).unwrap();
+        assert_eq!(text, "{not json");
     }
 }

@@ -17,3 +17,4 @@
 {"schema_version":1,"seq":17,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.workload","status":"answered","evidence":["E1"]}
 {"schema_version":1,"seq":18,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.consent","status":"answered","evidence":["E1"]}
 {"schema_version":1,"seq":19,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.budget","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":20,"ts":"2026-01-01T00:00:00Z","type":"finding_annotated","finding":"F1","writers":["src/cache.py:42","src/loader.py:17"],"removers":["src/cache.py:90"],"note":"nothing evicts on the request path"}

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DetectorFile",
+  "description": "A detector table.",
+  "type": "object",
+  "properties": {
+    "detector": {
+      "description": "The `[[detector]]` entries, in file order.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Detector"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Detector": {
+      "description": "One rule of one backend.",
+      "type": "object",
+      "properties": {
+        "backend": {
+          "description": "Backend name, one of [`KNOWN_BACKENDS`].",
+          "type": "string"
+        },
+        "default_enabled": {
+          "description": "Whether the rule is enabled in the tool by default. DLA enables every listed\nrule regardless; this records what the tool does on its own.",
+          "type": "boolean",
+          "default": true
+        },
+        "id": {
+          "description": "`<backend>/<rule>`.",
+          "type": "string"
+        },
+        "note": {
+          "description": "Free-text note.",
+          "type": "string",
+          "default": ""
+        },
+        "precision_prior": {
+          "description": "Prior probability that a hit is a real leak, 0 to 1.",
+          "type": "number",
+          "format": "double",
+          "default": 0.5
+        },
+        "rule": {
+          "description": "The backend's own rule identifier.",
+          "type": "string"
+        },
+        "suggested_archetype": {
+          "description": "Archetype tag to suggest, or the empty string.",
+          "type": "string",
+          "default": ""
+        },
+        "verified": {
+          "description": "True when the rule id was checked against the installed tool or its documentation.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "backend",
+        "rule"
+      ]
+    }
+  }
+}

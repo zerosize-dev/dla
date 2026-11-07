@@ -296,6 +296,39 @@ else
   [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$BS_DATA/bin/dla-$VERSION-$TARGET$EXT" ] && ok "data dir with a backslash installs (checksum not escaped)" || bad "data dir with a backslash: rc=$RC out=$OUT err=$(cat "$WORK/stderr")"
 fi
 
+# 15d. the shim exports DLA_PLUGIN_ROOT and DLA_DATA_DIR on every resolution branch
+ENVBIN="$WORK/env-printer"
+printf '#!/bin/sh\necho "root=$DLA_PLUGIN_ROOT"\necho "data=$DLA_DATA_DIR"\n' > "$ENVBIN"; chmod +x "$ENVBIN"
+NAME="dla-$VERSION-$TARGET$EXT"
+want() { printf 'root=%s\ndata=%s' "$1" "$2"; }
+
+# installed binary under CLAUDE_PLUGIN_DATA
+DATA9="$WORK/data9"; mkdir -p "$DATA9/bin"; cp "$ENVBIN" "$DATA9/bin/$NAME"
+OUT=$(CLAUDE_PLUGIN_DATA="$DATA9" "$PSHIM" 2>&1)
+[ "$OUT" = "$(want "$PR" "$DATA9")" ] && ok "installed binary: exports plugin root and CLAUDE_PLUGIN_DATA as data dir" || bad "export (CLAUDE_PLUGIN_DATA): $OUT"
+
+# installed binary found under the config dir: data dir is the directory holding bin/
+CFG9="$WORK/cfg9"; mkdir -p "$CFG9/plugins/data/dla-zerosize/bin"; cp "$ENVBIN" "$CFG9/plugins/data/dla-zerosize/bin/$NAME"
+OUT=$(env -u CLAUDE_PLUGIN_DATA CLAUDE_CONFIG_DIR="$CFG9" "$PSHIM" 2>&1)
+[ "$OUT" = "$(want "$PR" "$CFG9/plugins/data/dla-zerosize")" ] && ok "config-dir lookup: data dir is the directory that holds bin/" || bad "export (config dir): $OUT"
+
+# DLA_BIN: CLAUDE_PLUGIN_DATA when set, otherwise the best guess
+OUT=$(DLA_BIN="$ENVBIN" CLAUDE_PLUGIN_DATA="$DATA9" "$PSHIM" 2>&1)
+[ "$OUT" = "$(want "$PR" "$DATA9")" ] && ok "DLA_BIN: exports CLAUDE_PLUGIN_DATA as data dir" || bad "export (DLA_BIN + data): $OUT"
+EMPTY_CFG="$WORK/empty-cfg"; mkdir -p "$EMPTY_CFG"
+OUT=$(env -u CLAUDE_PLUGIN_DATA CLAUDE_CONFIG_DIR="$EMPTY_CFG" DLA_BIN="$ENVBIN" "$PSHIM" 2>&1)
+[ "$OUT" = "$(want "$PR" "$EMPTY_CFG/plugins/data/dla")" ] && ok "DLA_BIN without a data dir: exports a best-guess data dir" || bad "export (DLA_BIN guess): $OUT"
+
+# development build: data dir guessed under target/
+mkdir -p "$PR/target/debug"; cp "$ENVBIN" "$PR/target/debug/dla$EXT"
+OUT=$(env -u CLAUDE_PLUGIN_DATA CLAUDE_CONFIG_DIR="$EMPTY_CFG" "$PSHIM" 2>&1)
+[ "$OUT" = "$(want "$PR" "$PR/target/dla-data")" ] && ok "dev build: exports plugin root and target/dla-data" || bad "export (dev build): $OUT"
+rm -rf "$PR/target"
+
+# values already in the environment are replaced by what the shim resolved
+OUT=$(DLA_PLUGIN_ROOT=/stale DLA_DATA_DIR=/stale CLAUDE_PLUGIN_DATA="$DATA9" "$PSHIM" 2>&1)
+[ "$OUT" = "$(want "$PR" "$DATA9")" ] && ok "stale DLA_PLUGIN_ROOT / DLA_DATA_DIR are overwritten" || bad "export (stale env): $OUT"
+
 # 16. the repository's own shim and hook files are executable and well formed
 check "bin/dla is executable" test -x "$SHIM"
 check "hooks/fetch-dla.sh passes bash -n" bash -n "$FETCH"

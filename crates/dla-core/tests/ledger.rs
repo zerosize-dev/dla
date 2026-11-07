@@ -631,3 +631,101 @@ fn add_finding_returns_the_finding_it_appended() {
         other => panic!("{other:?}"),
     }
 }
+
+// ---- finding_annotated
+
+#[test]
+fn annotate_records_sites_without_changing_state() {
+    let mut l = ledger();
+    let f = add_f1(&mut l);
+    let before = l.finding(&f).unwrap().clone();
+    l.annotate(
+        &f,
+        vec!["src/A.java:10".into(), "src/B.java:3".into()],
+        vec!["src/A.java:99".into()],
+        Some("registry is cleared on shutdown only".into()),
+    )
+    .unwrap();
+    l.annotate(
+        &f,
+        vec!["src/A.java:10".into(), "src/C.java:7".into()],
+        vec![],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        l.finding(&f).unwrap(),
+        &before,
+        "state and fields unchanged"
+    );
+    let a = l.annotation(&f).unwrap();
+    assert_eq!(a.writers, ["src/A.java:10", "src/B.java:3", "src/C.java:7"]);
+    assert_eq!(a.removers, ["src/A.java:99"]);
+    assert_eq!(a.notes, ["registry is cleared on shutdown only"]);
+}
+
+#[test]
+fn annotate_refuses_unknown_findings_bad_sites_and_empty_annotations() {
+    let mut l = ledger();
+    let f = add_f1(&mut l);
+    let e = l
+        .annotate(&fid(9), vec!["a.go:1".into()], vec![], None)
+        .unwrap_err();
+    assert_eq!(e.to_refusal().code, codes::UNKNOWN_FINDING);
+    for bad in [
+        "a.go",
+        "a.go:0",
+        "a.go:x",
+        ":3",
+        "a.go:-1",
+        "a.go:007",
+        "a.go:99999999999",
+    ] {
+        let e = l.annotate(&f, vec![bad.into()], vec![], None).unwrap_err();
+        assert_eq!(e.to_refusal().code, codes::INVALID_SITE, "{bad}");
+    }
+    let e = l
+        .annotate(&f, vec![], vec!["nocolon".into()], None)
+        .unwrap_err();
+    assert_eq!(e.to_refusal().code, codes::INVALID_SITE);
+    let e = l.annotate(&f, vec![], vec![], None).unwrap_err();
+    assert_eq!(e.to_refusal().code, codes::EMPTY_ANNOTATION);
+    let e = l
+        .annotate(&f, vec![], vec![], Some("  ".into()))
+        .unwrap_err();
+    assert_eq!(e.to_refusal().code, codes::EMPTY_FIELD);
+    assert!(l.annotation(&f).is_none());
+}
+
+#[test]
+fn annotation_lines_replay_and_graders_can_skip_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut l = Ledger::create(dir.path()).unwrap();
+    l.add_evidence(evidence(
+        dla_core::EvidenceKind::StaticHit,
+        dla_core::Authority::Static,
+    ))
+    .unwrap();
+    let f = add_f1(&mut l);
+    l.annotate(&f, vec!["x/y.rs:5".into()], vec![], None)
+        .unwrap();
+    let text = std::fs::read_to_string(Ledger::path_in(dir.path())).unwrap();
+    assert!(
+        text.lines()
+            .last()
+            .unwrap()
+            .contains(r#""type":"finding_annotated""#)
+    );
+    let again = Ledger::load(dir.path()).unwrap();
+    assert_eq!(again.annotation(&f).unwrap().writers, ["x/y.rs:5"]);
+    // An annotation of a finding that was never added is a replay error.
+    let bad = format!(
+        "{}{}",
+        ev_line(1),
+        line(
+            2,
+            r#""type":"finding_annotated","finding":"F1","writers":["a.go:1"]"#
+        )
+    );
+    assert_eq!(replay_err(&bad).refusal.code, codes::UNKNOWN_FINDING);
+}

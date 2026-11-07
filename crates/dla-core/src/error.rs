@@ -77,6 +77,22 @@ pub mod codes {
     pub const MALFORMED: &str = "malformed-line";
     /// The run was aborted or is incomplete.
     pub const RUN_NOT_ACTIVE: &str = "run-not-active";
+    /// A `file:line` site is malformed.
+    pub const INVALID_SITE: &str = "invalid-site";
+    /// An annotation carries no writer, remover or note.
+    pub const EMPTY_ANNOTATION: &str = "empty-annotation";
+    /// The plugin data files directory cannot be found.
+    pub const NO_DATA_DIR: &str = "no-data-dir";
+    /// A data file (detector table) is invalid.
+    pub const INVALID_DATA_FILE: &str = "invalid-data-file";
+    /// The step needs a consent tier the run has not been given.
+    pub const CONSENT_REQUIRED: &str = "consent-required";
+    /// The command exists but this build has no implementation yet.
+    pub const NOT_IMPLEMENTED: &str = "not-implemented";
+    /// A backend name is not in the registry.
+    pub const UNKNOWN_BACKEND: &str = "unknown-backend";
+    /// A tool could not be installed or run.
+    pub const TOOL_FAILED: &str = "tool-failed";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

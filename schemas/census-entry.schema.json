@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CensusEntry",
+  "description": "A process-lifetime holder: something that can keep objects, threads or handles\nalive for as long as the process runs.",
+  "type": "object",
+  "properties": {
+    "holder": {
+      "description": "Holder class in the ledger vocabulary.",
+      "$ref": "#/$defs/Holder"
+    },
+    "kind": {
+      "description": "What kind of declaration it is (for example `static-field`, `module-global`,\n`singleton-field`, `registry`, `spawn`, `handle`).",
+      "type": "string"
+    },
+    "owner": {
+      "description": "Qualified name of the owning field or container.",
+      "type": "string"
+    },
+    "region": {
+      "description": "Memory region.",
+      "$ref": "#/$defs/Region"
+    },
+    "removers": {
+      "description": "Heuristic `file:line` sites that remove from it.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "site": {
+      "description": "Declaration, spawn or acquire site, `file:line` (project-relative).",
+      "type": "string"
+    },
+    "writers": {
+      "description": "Heuristic `file:line` sites that add to it.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "kind",
+    "holder",
+    "region",
+    "site",
+    "owner"
+  ],
+  "$defs": {
+    "Holder": {
+      "description": "What holds the leaked memory.",
+      "oneOf": [
+        {
+          "description": "A static or global variable.",
+          "type": "string",
+          "const": "static/global"
+        },
+        {
+          "description": "A registration table (listeners, callbacks).",
+          "type": "string",
+          "const": "registration-table"
+        },
+        {
+          "description": "A field of a container object.",
+          "type": "string",
+          "const": "container-field"
+        },
+        {
+          "description": "Thread-local storage.",
+          "type": "string",
+          "const": "thread-local"
+        },
+        {
+          "description": "A blocked stack.",
+          "type": "string",
+          "const": "blocked-stack"
+        },
+        {
+          "description": "A closure or continuation.",
+          "type": "string",
+          "const": "closure/continuation"
+        },
+        {
+          "description": "A native handle or global reference.",
+          "type": "string",
+          "const": "native-handle/global-ref"
+        },
+        {
+          "description": "A reference cycle only.",
+          "type": "string",
+          "const": "cycle-only"
+        }
+      ]
+    },
+    "Region": {
+      "description": "Which memory region grows.",
+      "oneOf": [
+        {
+          "description": "The managed heap.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native memory outside the managed heap.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Runtime-internal non-heap memory.",
+          "type": "string",
+          "const": "non-heap"
+        }
+      ]
+    }
+  }
+}

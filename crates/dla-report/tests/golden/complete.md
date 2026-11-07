@@ -20,6 +20,9 @@ Residual: not measured
 - Shape: steady
 - Locus: app
 - Site: `src/cache.py:42`
+- Writers: `src/cache.py:42`, `src/loader.py:17`
+- Removers: `src/cache.py:90`
+- Annotation: nothing evicts on the request path
 - Repair class: bound/evict
 - Supporting evidence: E2
 - Explanation (observed): Entries are never evicted.

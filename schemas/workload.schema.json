@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workload",
+  "description": "One runnable workload.",
+  "type": "object",
+  "properties": {
+    "command": {
+      "description": "Exact command line.",
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Working directory, project-relative (`.` for the root).",
+      "type": "string"
+    },
+    "entry_points": {
+      "description": "Project entry points it references (public functions, handlers, methods).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "file": {
+      "description": "Project-relative file that defines it.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Stable identifier, for example `go:test:./...`.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "What it is.",
+      "$ref": "#/$defs/WorkloadKind"
+    },
+    "rank": {
+      "description": "Rank: the number of entry points it exercises. Higher runs first.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "runtime": {
+      "description": "Runtime.",
+      "$ref": "#/$defs/Runtime"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "runtime",
+    "command",
+    "cwd",
+    "file",
+    "rank"
+  ],
+  "$defs": {
+    "Runtime": {
+      "description": "A language runtime DLA investigates. The wire spelling is also the default\nworker key in `coverage.json` and the value of `--lang`.",
+      "oneOf": [
+        {
+          "description": "Java, Kotlin and other JVM languages.",
+          "type": "string",
+          "const": "jvm"
+        },
+        {
+          "description": "Go.",
+          "type": "string",
+          "const": "go"
+        },
+        {
+          "description": "Rust.",
+          "type": "string",
+          "const": "rust"
+        },
+        {
+          "description": "Node.js (JavaScript and TypeScript).",
+          "type": "string",
+          "const": "node"
+        },
+        {
+          "description": "Python.",
+          "type": "string",
+          "const": "python"
+        },
+        {
+          "description": "C and C++.",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    },
+    "WorkloadKind": {
+      "description": "What a workload is.",
+      "oneOf": [
+        {
+          "description": "A unit or integration test run.",
+          "type": "string",
+          "const": "test"
+        },
+        {
+          "description": "A program entry point (`main`).",
+          "type": "string",
+          "const": "main"
+        },
+        {
+          "description": "A development server.",
+          "type": "string",
+          "const": "dev-server"
+        },
+        {
+          "description": "A script or console entry.",
+          "type": "string",
+          "const": "script"
+        }
+      ]
+    }
+  }
+}

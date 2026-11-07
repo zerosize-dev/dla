@@ -1,11 +1,22 @@
 [package]
 name = "dla-probe"
-description = "DLA runtime probe (future)"
+description = "DLA runtime probe"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
+
+[dependencies]
+dla-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+toml.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

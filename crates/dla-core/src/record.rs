@@ -72,6 +72,23 @@ pub struct OpenItemResolved {
     pub resolution: Resolution,
 }
 
+/// Writers and removers found for a finding's holder. It does not change the finding's
+/// state; the report lists the sites under the finding.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct FindingAnnotation {
+    /// The finding.
+    pub finding: FindingId,
+    /// `file:line` sites that add to the holder.
+    #[serde(default)]
+    pub writers: Vec<String>,
+    /// `file:line` sites that remove from the holder.
+    #[serde(default)]
+    pub removers: Vec<String>,
+    /// Free-text note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 /// The body of a ledger line, tagged by `type`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -91,6 +108,8 @@ pub enum Record {
     OpenItemResolved(OpenItemResolved),
     /// A checklist item was answered.
     ChecklistAnswer(ChecklistAnswer),
+    /// Writers and removers were recorded for a finding (no state change).
+    FindingAnnotated(FindingAnnotation),
 }
 
 /// One line of `ledger.jsonl`.

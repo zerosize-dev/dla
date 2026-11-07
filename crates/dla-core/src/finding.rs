@@ -168,6 +168,25 @@ pub struct Explanation {
     pub tag: ExplanationTag,
 }
 
+/// Checks a `file:line` site: a non-empty path without control characters, a colon and
+/// a positive decimal line number (no sign, no leading zeros).
+pub fn check_site(site: &str) -> Result<(), String> {
+    let bad = |why: &str| Err(format!("site {site:?} is not file:line ({why})"));
+    let Some((file, line)) = site.rsplit_once(':') else {
+        return bad("no colon");
+    };
+    if file.trim().is_empty() || file.chars().any(char::is_control) {
+        return bad("empty or unprintable file");
+    }
+    if line.is_empty() || line.starts_with('0') || !line.bytes().all(|b| b.is_ascii_digit()) {
+        return bad("the line must be a positive number");
+    }
+    if line.parse::<u32>().is_err() {
+        return bad("line number too large");
+    }
+    Ok(())
+}
+
 /// Where a finding came from. Validated: `detector:<backend>/<rule>`, `census`,
 /// `growth-series`, `archetype-row`, `known-leak:<id>`, `residual`, `verifier`,
 /// `hypothesis`.

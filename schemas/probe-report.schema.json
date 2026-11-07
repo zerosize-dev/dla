@@ -1,0 +1,400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProbeReport",
+  "description": "The full probe report.",
+  "type": "object",
+  "properties": {
+    "builds": {
+      "description": "Build attempts (empty without `--build`).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/BuildProbe"
+      }
+    },
+    "libraries": {
+      "description": "Libraries and the harness flags they imply.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/LibraryProbe"
+      }
+    },
+    "privilege": {
+      "description": "Privilege facts.",
+      "$ref": "#/$defs/PrivilegeFacts"
+    },
+    "project": {
+      "description": "Absolute project root that was probed.",
+      "type": "string"
+    },
+    "runtimes": {
+      "description": "Runtimes detected.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuntimeProbe"
+      }
+    },
+    "schema_version": {
+      "description": "Schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "test_runners": {
+      "description": "Test runners.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TestRunnerProbe"
+      }
+    },
+    "tools": {
+      "description": "Backend and analysis tools, found or missing, for each detected runtime.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ToolProbe"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "project",
+    "privilege"
+  ],
+  "$defs": {
+    "BuildProbe": {
+      "description": "One build attempt (`dla probe --build`).",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "The command line that was (or would be) run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "description": "Wall time in milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "exit_code": {
+          "description": "Exit code, when the command ended.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "log_tail": {
+          "description": "Last lines of the combined output, or the reason for `skipped`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime": {
+          "description": "Runtime built.",
+          "$ref": "#/$defs/Runtime"
+        },
+        "status": {
+          "description": "Outcome.",
+          "$ref": "#/$defs/BuildStatus"
+        }
+      },
+      "required": [
+        "runtime",
+        "status"
+      ]
+    },
+    "BuildStatus": {
+      "description": "Result of one build attempt.",
+      "oneOf": [
+        {
+          "description": "The build command succeeded.",
+          "type": "string",
+          "const": "ok"
+        },
+        {
+          "description": "The build command failed.",
+          "type": "string",
+          "const": "failed"
+        },
+        {
+          "description": "The build command ran out of time.",
+          "type": "string",
+          "const": "timeout"
+        },
+        {
+          "description": "No build was attempted (not requested, no consent, or no command found).",
+          "type": "string",
+          "const": "skipped"
+        }
+      ]
+    },
+    "LibraryProbe": {
+      "description": "A library whose presence changes how the harness is configured.",
+      "type": "object",
+      "properties": {
+        "evidence": {
+          "description": "Project-relative file that shows it.",
+          "type": "string"
+        },
+        "harness_flags": {
+          "description": "Flags or settings the M3 harness switches on for it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "library": {
+          "description": "Library (`netty`, `hikaricp`, `micrometer`, `tomcat`, `asyncio`, `goleak`, ...).",
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime.",
+          "$ref": "#/$defs/Runtime"
+        }
+      },
+      "required": [
+        "runtime",
+        "library",
+        "evidence",
+        "harness_flags"
+      ]
+    },
+    "PrivilegeFacts": {
+      "description": "Facts that decide which intrusive steps are possible.",
+      "type": "object",
+      "properties": {
+        "container": {
+          "description": "Hints that the process runs inside a container.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "macos_sip": {
+          "description": "Output of `csrutil status` on macOS.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "os": {
+          "description": "Operating system (`linux`, `macos`, `windows`).",
+          "type": "string"
+        },
+        "ptrace_scope": {
+          "description": "Linux `kernel.yama.ptrace_scope`, when readable.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "root": {
+          "description": "True when running as root (uid 0) or an elevated administrator.",
+          "type": "boolean"
+        },
+        "uid": {
+          "description": "Numeric user id on Unix.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "os",
+        "root"
+      ]
+    },
+    "Runtime": {
+      "description": "A language runtime DLA investigates. The wire spelling is also the default\nworker key in `coverage.json` and the value of `--lang`.",
+      "oneOf": [
+        {
+          "description": "Java, Kotlin and other JVM languages.",
+          "type": "string",
+          "const": "jvm"
+        },
+        {
+          "description": "Go.",
+          "type": "string",
+          "const": "go"
+        },
+        {
+          "description": "Rust.",
+          "type": "string",
+          "const": "rust"
+        },
+        {
+          "description": "Node.js (JavaScript and TypeScript).",
+          "type": "string",
+          "const": "node"
+        },
+        {
+          "description": "Python.",
+          "type": "string",
+          "const": "python"
+        },
+        {
+          "description": "C and C++.",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    },
+    "RuntimeProbe": {
+      "description": "One runtime found in the project.",
+      "type": "object",
+      "properties": {
+        "declared_version": {
+          "description": "Version the project declares (the `go` line of go.mod, `<release>` in a pom, ...).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detected_by": {
+          "description": "Project-relative files that identified it (build files first), at most a few.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runtime": {
+          "description": "The runtime.",
+          "$ref": "#/$defs/Runtime"
+        },
+        "source_files": {
+          "description": "Number of source files seen for the runtime.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "toolchain": {
+          "description": "Toolchain versions (`java -version`, `go version`, ...).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolVersion"
+          }
+        }
+      },
+      "required": [
+        "runtime",
+        "detected_by",
+        "source_files"
+      ]
+    },
+    "TestRunnerProbe": {
+      "description": "A test runner found from build files or sources.",
+      "type": "object",
+      "properties": {
+        "evidence": {
+          "description": "Project-relative file that shows it.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Runner name (`junit`, `testng`, `pytest`, `unittest`, `node --test`, `jest`,\n`vitest`, `go test`, `cargo test`, `make test`).",
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime.",
+          "$ref": "#/$defs/Runtime"
+        }
+      },
+      "required": [
+        "runtime",
+        "name",
+        "evidence"
+      ]
+    },
+    "ToolProbe": {
+      "description": "A backend binary or other analysis tool.",
+      "type": "object",
+      "properties": {
+        "available": {
+          "description": "True when found.",
+          "type": "boolean"
+        },
+        "install_hint": {
+          "description": "How to install it when missing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Tool or backend name from the registry.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Full path of the binary.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime": {
+          "description": "Runtime it serves.",
+          "$ref": "#/$defs/Runtime"
+        },
+        "source": {
+          "description": "Where it was found: `path` or `tools-dir`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "Version it reported.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "runtime",
+        "available"
+      ]
+    },
+    "ToolVersion": {
+      "description": "A tool name with the version it reported.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "Why no version is known (not found, timed out, failed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Tool name, for example `java`, `go`, `rustc`.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The version it reported, when it ran.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  }
+}

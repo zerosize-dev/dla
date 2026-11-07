@@ -1,4 +1,4 @@
-//! `dla ledger add` and `dla ledger resolve`.
+//! `dla ledger add`, `dla ledger resolve` and `dla ledger annotate`.
 
 use clap::{Args, Subcommand, ValueEnum};
 use dla_core::{
@@ -23,6 +23,25 @@ pub enum LedgerCmd {
     Add(AddArgs),
     /// Disposition a finding or open item, or answer a checklist item.
     Resolve(ResolveArgs),
+    /// Record writers and removers found for a finding's holder (no state change).
+    Annotate(AnnotateArgs),
+}
+
+/// Flags of `dla ledger annotate`.
+#[derive(Args, Debug)]
+pub struct AnnotateArgs {
+    /// The finding (F3, F3.n1).
+    #[arg(value_parser = parse_enum::<FindingId>)]
+    finding: FindingId,
+    /// `file:line` of a site that adds to the holder (repeatable).
+    #[arg(long = "writer", value_name = "FILE:LINE")]
+    writers: Vec<String>,
+    /// `file:line` of a site that removes from the holder (repeatable).
+    #[arg(long = "remover", value_name = "FILE:LINE")]
+    removers: Vec<String>,
+    /// Free-text note.
+    #[arg(long)]
+    note: Option<String>,
 }
 
 /// Flags of `dla ledger add`.
@@ -228,6 +247,24 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
         out["parent"] = Value::String(p.to_string());
     }
     Ok(out)
+}
+
+/// Runs `dla ledger annotate`.
+pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
+    RunState::load(&ctx.run_dir)?;
+    let mut ledger = Ledger::load(&ctx.run_dir)?;
+    let line = ledger.annotate(&a.finding, a.writers, a.removers, a.note)?;
+    let dla_core::Record::FindingAnnotated(rec) = &line.record else {
+        unreachable!("annotate appends a finding_annotated record");
+    };
+    Ok(json!({
+        "ok": true,
+        "id": a.finding.to_string(),
+        "writers": rec.writers.len(),
+        "removers": rec.removers.len(),
+        "seq": line.seq,
+        "record": ctx.ledger_line(line.seq),
+    }))
 }
 
 /// Runs `dla ledger resolve`.

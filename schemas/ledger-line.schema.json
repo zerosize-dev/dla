@@ -110,6 +110,20 @@
       "required": [
         "type"
       ]
+    },
+    {
+      "description": "Writers and removers were recorded for a finding (no state change).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "finding_annotated"
+        }
+      },
+      "$ref": "#/$defs/FindingAnnotation",
+      "required": [
+        "type"
+      ]
     }
   ],
   "required": [
@@ -642,6 +656,42 @@
         "id",
         "state",
         "origin"
+      ]
+    },
+    "FindingAnnotation": {
+      "description": "Writers and removers found for a finding's holder. It does not change the finding's\nstate; the report lists the sites under the finding.",
+      "type": "object",
+      "properties": {
+        "finding": {
+          "description": "The finding.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "note": {
+          "description": "Free-text note.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "removers": {
+          "description": "`file:line` sites that remove from the holder.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "writers": {
+          "description": "`file:line` sites that add to the holder.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "finding"
       ]
     },
     "FindingId": {

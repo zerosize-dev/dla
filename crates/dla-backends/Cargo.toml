@@ -1,11 +1,23 @@
 [package]
 name = "dla-backends"
-description = "DLA backends (future)"
+description = "DLA static analysis backends and installer"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
+
+[dependencies]
+dla-core.workspace = true
+dla-census.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+toml.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

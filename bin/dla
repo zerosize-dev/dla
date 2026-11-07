@@ -10,6 +10,10 @@
 #   3. development builds  <plugin root>/target/release/dla[.exe], then target/debug/dla[.exe]
 #   4. otherwise print where to place the binary by hand and exit 127
 #
+# Before every exec the shim exports DLA_PLUGIN_ROOT (the plugin root it resolved) and
+# DLA_DATA_DIR (the plugin data directory it resolved, or its best guess). The binary reads
+# plugin data files from $DLA_PLUGIN_ROOT/data and installs analyzers into $DLA_DATA_DIR/tools.
+#
 # Environment: DLA_BIN, DLA_TARGET (override of target detection),
 # CLAUDE_PLUGIN_DATA, CLAUDE_CONFIG_DIR, CLAUDE_CODE_PLUGIN_CACHE_DIR.
 
@@ -23,6 +27,38 @@ while [ -h "$self" ]; do
   esac
 done
 root=$(cd "$(dirname "$self")/.." 2>/dev/null && pwd)
+
+plugins_root=${CLAUDE_CODE_PLUGIN_CACHE_DIR:-"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"}
+
+# Best guess of the plugin data directory when no installed binary points at it:
+# $CLAUDE_PLUGIN_DATA, else the first <plugins root>/data/dla-* directory, else a
+# directory under the plugin root's target/ (development) or the plugins root.
+guess_data_dir() {
+  if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+    printf '%s' "$CLAUDE_PLUGIN_DATA"
+    return 0
+  fi
+  for d in "$plugins_root"/data/dla-*; do
+    if [ -d "$d" ]; then
+      printf '%s' "$d"
+      return 0
+    fi
+  done
+  if [ -d "$root/target" ]; then
+    printf '%s' "$root/target/dla-data"
+  else
+    printf '%s' "$plugins_root/data/dla"
+  fi
+}
+
+# export_and_exec <data dir> <binary> [args...]
+export_and_exec() {
+  data_dir=$1
+  shift
+  export DLA_PLUGIN_ROOT="$root"
+  export DLA_DATA_DIR="$data_dir"
+  exec "$@"
+}
 
 detect_target() {
   if [ -n "${DLA_TARGET:-}" ]; then
@@ -55,7 +91,7 @@ detect_target() {
 
 if [ -n "${DLA_BIN:-}" ]; then
   if [ -f "$DLA_BIN" ] && [ -x "$DLA_BIN" ]; then
-    exec "$DLA_BIN" "$@"
+    export_and_exec "$(guess_data_dir)" "$DLA_BIN" "$@"
   fi
   echo "dla: DLA_BIN is set to '$DLA_BIN' but that is not an executable file" >&2
   exit 127
@@ -73,13 +109,12 @@ if [ -n "$version" ] && [ -n "$target" ]; then
     candidate="$CLAUDE_PLUGIN_DATA/bin/$name"
     installed_hint=$candidate
     if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-      exec "$candidate" "$@"
+      export_and_exec "$CLAUDE_PLUGIN_DATA" "$candidate" "$@"
     fi
   else
-    plugins_root=${CLAUDE_CODE_PLUGIN_CACHE_DIR:-"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"}
     for candidate in "$plugins_root"/data/dla-*/bin/"$name"; do
       if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-        exec "$candidate" "$@"
+        export_and_exec "$(dirname "$(dirname "$candidate")")" "$candidate" "$@"
       fi
     done
     installed_hint="$plugins_root/data/<plugin id>/bin/$name"
@@ -88,7 +123,7 @@ fi
 
 for candidate in "$root/target/release/dla$ext" "$root/target/debug/dla$ext"; do
   if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-    exec "$candidate" "$@"
+    export_and_exec "$(guess_data_dir)" "$candidate" "$@"
   fi
 done
 

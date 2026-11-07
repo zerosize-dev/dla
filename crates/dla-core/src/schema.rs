@@ -3,8 +3,17 @@
 use schemars::{Schema, schema_for};
 
 use crate::{
-    checklist::Checklist, coverage::CoverageManifest, evidence::EvidenceRecord, finding::Finding,
-    record::LedgerLine, state::RunState,
+    census::CensusEntry,
+    checklist::Checklist,
+    coverage::CoverageManifest,
+    detectors::DetectorFile,
+    evidence::EvidenceRecord,
+    finding::Finding,
+    probe::ProbeReport,
+    record::LedgerLine,
+    state::RunState,
+    static_hit::StaticHit,
+    workload::{Workload, WorkloadReport},
 };
 
 /// Every exported schema as `(name, schema)`; `dla schema` writes
@@ -17,6 +26,12 @@ pub fn all() -> Vec<(&'static str, Schema)> {
         ("run-state", schema_for!(RunState)),
         ("coverage-manifest", schema_for!(CoverageManifest)),
         ("checklist", schema_for!(Checklist)),
+        ("detectors", schema_for!(DetectorFile)),
+        ("probe-report", schema_for!(ProbeReport)),
+        ("static-hit", schema_for!(StaticHit)),
+        ("census-entry", schema_for!(CensusEntry)),
+        ("workload", schema_for!(Workload)),
+        ("workload-report", schema_for!(WorkloadReport)),
     ]
 }
 

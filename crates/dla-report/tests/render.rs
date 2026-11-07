@@ -242,3 +242,16 @@ fn output_is_deterministic() {
     let b = render_markdown(&view("incomplete", Some(coverage())));
     assert_eq!(a, b);
 }
+
+#[test]
+fn annotations_list_writers_and_removers_under_the_finding() {
+    let md = render_markdown(&view("complete", None));
+    let f1 = md.split("### F1:").nth(1).unwrap();
+    let f1 = f1.split("\n### ").next().unwrap();
+    assert!(f1.contains("- Writers: `src/cache.py:42`, `src/loader.py:17`\n"));
+    assert!(f1.contains("- Removers: `src/cache.py:90`\n"));
+    assert!(f1.contains("- Annotation: nothing evicts on the request path\n"));
+    let f3 = md.split("### F3:").nth(1).unwrap();
+    let f3 = f3.split("\n## ").next().unwrap();
+    assert!(!f3.contains("Writers:") && !f3.contains("Removers:"));
+}

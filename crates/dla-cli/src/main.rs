@@ -5,17 +5,23 @@
 //! (I/O, parse, usage), 2 refused by a rule, 3 schema version mismatch.
 
 mod budget;
+mod census_cmd;
 mod consent_cmd;
 mod ctx;
 mod fail;
 mod git;
 mod gitignore;
+mod install_cmd;
 mod ledger_cmd;
 mod out;
 mod parse;
+mod probe_cmd;
 mod report;
 mod run;
 mod schema_cmd;
+mod stage;
+mod sweep_cmd;
+mod workload_cmd;
 
 use std::{io::Write, path::PathBuf, process::ExitCode};
 
@@ -46,6 +52,10 @@ struct Cli {
     /// Run ID (default: $DLA_RUN, else .dla/current).
     #[arg(long, global = true, value_name = "ID")]
     run: Option<String>,
+    /// Plugin data files directory (default: $DLA_PLUGIN_ROOT/data, else the data/
+    /// directory of the checkout the executable lives in).
+    #[arg(long, global = true, value_name = "DIR")]
+    data: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -64,6 +74,17 @@ enum Command {
     Consent(consent_cmd::ConsentArgs),
     /// Write or check the JSON Schema files.
     Schema(schema_cmd::SchemaArgs),
+    /// Probe the project: runtimes, versions, tools, privileges, test runners, libraries.
+    Probe(probe_cmd::ProbeArgs),
+    /// Run the static backends of one runtime and add their hits as candidates.
+    Sweep(sweep_cmd::SweepArgs),
+    /// Enumerate process-lifetime holders of one runtime as candidates.
+    Census(census_cmd::CensusArgs),
+    /// Discover what a loop can run.
+    #[command(subcommand)]
+    Workload(workload_cmd::WorkloadCmd),
+    /// Install a static analysis backend into the plugin data directory.
+    Install(install_cmd::InstallArgs),
 }
 
 /// What a command prints on success.
@@ -75,6 +96,7 @@ enum Output {
 fn dispatch(cli: Cli) -> Res<Output> {
     let project = cli.project.as_deref();
     let run_arg = cli.run.as_deref();
+    let data = cli.data.as_ref();
     let ctx = || Ctx::resolve(project_root(project)?, run_arg);
     match cli.command {
         Command::Run(run::RunCmd::Init(a)) => run::init(project, a).map(Output::Json),
@@ -84,6 +106,9 @@ fn dispatch(cli: Cli) -> Res<Output> {
         }
         Command::Ledger(ledger_cmd::LedgerCmd::Resolve(a)) => {
             ledger_cmd::resolve(&ctx()?, a).map(Output::Json)
+        }
+        Command::Ledger(ledger_cmd::LedgerCmd::Annotate(a)) => {
+            ledger_cmd::annotate(&ctx()?, a).map(Output::Json)
         }
         Command::Report => {
             let r = report::run(&ctx()?)?;
@@ -95,6 +120,21 @@ fn dispatch(cli: Cli) -> Res<Output> {
             consent_cmd::run(&ctx, &project_root(project)?, a).map(Output::Json)
         }
         Command::Schema(a) => schema_cmd::run(a).map(Output::Json),
+        Command::Probe(a) => {
+            probe_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Sweep(a) => {
+            sweep_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Census(a) => {
+            census_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Workload(workload_cmd::WorkloadCmd::Discover(a)) => {
+            workload_cmd::discover(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Install(a) => {
+            install_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
     }
 }
 

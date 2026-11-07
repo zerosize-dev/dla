@@ -162,7 +162,13 @@ fn schema_export_is_complete_and_deterministic() {
             "ledger-line",
             "run-state",
             "coverage-manifest",
-            "checklist"
+            "checklist",
+            "detectors",
+            "probe-report",
+            "static-hit",
+            "census-entry",
+            "workload",
+            "workload-report"
         ]
     );
     let first: Vec<String> = all.iter().map(|(_, s)| schema::render(s)).collect();

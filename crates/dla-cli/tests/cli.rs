@@ -1518,3 +1518,143 @@ fn init_without_consent_variables_records_none() {
     assert!(state_of(dir.path(), &run_id).get("consent").is_none());
     assert_eq!(ledger_text(dir.path(), &run_id).lines().count(), 1);
 }
+
+// ---- ledger annotate
+
+#[test]
+fn annotate_records_sites_and_the_report_lists_them() {
+    let (dir, run_id) = fresh_run();
+    add_census(dir.path());
+    let a = ok(
+        dir.path(),
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "src/A.java:10",
+            "--writer",
+            "src/B.java:4",
+            "--remover",
+            "src/A.java:90",
+            "--note",
+            "cleared only on shutdown",
+        ],
+    );
+    assert_eq!(
+        (
+            a["id"].as_str(),
+            a["writers"].as_u64(),
+            a["removers"].as_u64()
+        ),
+        (Some("F1"), Some(2), Some(1))
+    );
+    let ledger =
+        fs::read_to_string(dir.path().join(".dla").join(&run_id).join("ledger.jsonl")).unwrap();
+    assert!(
+        ledger
+            .lines()
+            .last()
+            .unwrap()
+            .contains("\"type\":\"finding_annotated\"")
+    );
+    // The finding is still a candidate.
+    let status = ok(dir.path(), &["run", "status"]);
+    assert!(status.to_string().contains("candidate"));
+    let md = Command::cargo_bin("dla")
+        .unwrap()
+        .arg("--project")
+        .arg(dir.path())
+        .arg("report")
+        .output()
+        .unwrap();
+    let md = String::from_utf8(md.stdout).unwrap();
+    assert!(
+        md.contains("- Writers: `src/A.java:10`, `src/B.java:4`"),
+        "{md}"
+    );
+    assert!(md.contains("- Removers: `src/A.java:90`"));
+    assert!(md.contains("- Annotation: cleared only on shutdown"));
+}
+
+#[test]
+fn annotate_refuses_unknown_findings_bad_sites_and_empty_annotations() {
+    let (dir, _) = fresh_run();
+    add_census(dir.path());
+    let e = refused(
+        dir.path(),
+        &["ledger", "annotate", "F9", "--writer", "a.go:1"],
+    );
+    assert_eq!(e["code"], "unknown-finding");
+    let e = refused(
+        dir.path(),
+        &["ledger", "annotate", "F1", "--writer", "a.go"],
+    );
+    assert_eq!(e["code"], "invalid-site");
+    let e = refused(
+        dir.path(),
+        &["ledger", "annotate", "F1", "--remover", "a.go:0"],
+    );
+    assert_eq!(e["code"], "invalid-site");
+    let e = refused(dir.path(), &["ledger", "annotate", "F1"]);
+    assert_eq!(e["code"], "empty-annotation");
+    let o = run(
+        dir.path(),
+        &["ledger", "annotate", "nonsense", "--writer", "a.go:1"],
+    );
+    assert_eq!(o.code, 1);
+}
+
+// ---- stage commands (stubs until their crates are implemented)
+
+#[test]
+fn stage_commands_parse_their_arguments_and_refuse_as_not_implemented() {
+    let (dir, _) = fresh_run();
+    for args in [
+        vec!["probe"],
+        vec!["probe", "--build"],
+        vec!["sweep", "--lang", "go"],
+        vec!["census", "--lang", "jvm"],
+        vec!["workload", "discover"],
+        vec!["workload", "discover", "--lang", "python"],
+        vec!["install", "ruff"],
+    ] {
+        let e = refused(dir.path(), &args);
+        assert_eq!(e["code"], "not-implemented", "{args:?}");
+    }
+    // --data is a global flag.
+    let e = refused(dir.path(), &["--data", "/nonexistent", "probe"]);
+    assert_eq!(e["code"], "not-implemented");
+}
+
+#[test]
+fn stage_commands_validate_arguments() {
+    let (dir, _) = fresh_run();
+    for lang in ["jvm", "go", "rust", "node", "python", "native"] {
+        let e = refused(dir.path(), &["sweep", "--lang", lang]);
+        assert_eq!(e["code"], "not-implemented");
+    }
+    for args in [
+        vec!["sweep"],
+        vec!["sweep", "--lang", "cobol"],
+        vec!["census"],
+        vec!["census", "--lang", "java"],
+        vec!["install"],
+        vec!["workload"],
+        vec!["workload", "discover", "--lang", "x"],
+    ] {
+        let o = run(dir.path(), &args);
+        assert_eq!(o.code, 1, "{args:?}: {}", o.stdout);
+        assert_eq!(o.json["error"]["code"], "usage");
+    }
+    let e = refused(dir.path(), &["install", "nosuch"]);
+    assert_eq!(e["code"], "unknown-backend");
+    assert!(e["missing"].as_str().unwrap().contains("staticcheck"));
+}
+
+#[test]
+fn stage_commands_need_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = refused(dir.path(), &["sweep", "--lang", "go"]);
+    assert_eq!(e["code"], "no-run");
+}

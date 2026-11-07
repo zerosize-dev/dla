@@ -87,6 +87,10 @@ fn ids(list: &[EvidenceId]) -> String {
         .join(", ")
 }
 
+fn sites(list: &[String]) -> String {
+    list.iter().map(|s| code(s)).collect::<Vec<_>>().join(", ")
+}
+
 /// The archetype label. "Novel mechanism" is a claim, so it is reserved for confirmed
 /// and strong findings; any other state without an archetype is plainly UNCLASSIFIED.
 fn label(f: &Finding) -> String {
@@ -254,6 +258,17 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(s) = &f.site {
         let _ = writeln!(out, "- Site: {}", code(s));
+    }
+    if let Some(a) = view.ledger.annotation(&f.id) {
+        if !a.writers.is_empty() {
+            let _ = writeln!(out, "- Writers: {}", sites(&a.writers));
+        }
+        if !a.removers.is_empty() {
+            let _ = writeln!(out, "- Removers: {}", sites(&a.removers));
+        }
+        for n in &a.notes {
+            let _ = writeln!(out, "- Annotation: {}", inline(n));
+        }
     }
     if let Some(r) = f.repair_class {
         let _ = writeln!(out, "- Repair class: {r}");

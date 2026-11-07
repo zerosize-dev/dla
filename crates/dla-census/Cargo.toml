@@ -1,11 +1,31 @@
 [package]
 name = "dla-census"
-description = "DLA census (future)"
+description = "DLA process-lifetime holder census and tree-sitter parsing"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
+
+[dependencies]
+dla-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+tree-sitter.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-kotlin-ng.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-cpp.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

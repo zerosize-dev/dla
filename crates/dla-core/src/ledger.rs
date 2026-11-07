@@ -18,11 +18,13 @@ use crate::{
     evidence::{EvidenceRecord, NewEvidence},
     finding::{
         Explanation, Finding, FindingState, Holder, Locus, Origin, Region, RepairClass, Shape,
-        UNCLASSIFIED,
+        UNCLASSIFIED, check_site,
     },
     ids::{EvidenceId, FindingId, OpenItemId},
     machine::{self, EvidenceLookup, M0Rules, TransitionContext},
-    record::{LedgerLine, OpenItem, OpenItemResolved, Record, Resolution, Transition},
+    record::{
+        FindingAnnotation, LedgerLine, OpenItem, OpenItemResolved, Record, Resolution, Transition,
+    },
     state::{LEDGER_FILE, now_utc},
     strict,
     version::{Artifact, UpgradeError, upgrade},
@@ -105,6 +107,19 @@ struct Index {
     findings: BTreeMap<FindingId, Finding>,
     open_items: BTreeMap<OpenItemId, OpenItemState>,
     answers: BTreeMap<String, ChecklistAnswer>,
+    annotations: BTreeMap<FindingId, Annotation>,
+}
+
+/// Everything recorded about a finding's writers and removers, merged over all
+/// `finding_annotated` lines in ledger order without duplicates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Annotation {
+    /// Sites that add to the holder.
+    pub writers: Vec<String>,
+    /// Sites that remove from the holder.
+    pub removers: Vec<String>,
+    /// Notes, oldest first.
+    pub notes: Vec<String>,
 }
 
 impl EvidenceLookup for Index {
@@ -201,7 +216,46 @@ impl Index {
             }
             Record::OpenItemResolved(r) => self.check_open_item_resolved(r),
             Record::ChecklistAnswer(a) => self.check_answer(a),
+            Record::FindingAnnotated(a) => self.check_annotation(a),
         }
+    }
+
+    fn check_annotation(&self, a: &FindingAnnotation) -> Result<(), Refusal> {
+        self.require_finding(&a.finding, "annotation")?;
+        for site in a.writers.iter().chain(&a.removers) {
+            check_site(site).map_err(|m| {
+                Refusal::new(
+                    codes::INVALID_SITE,
+                    m,
+                    "a site written file:line",
+                    format!(
+                        "dla ledger annotate {} --writer src/Main.java:42",
+                        a.finding
+                    ),
+                )
+            })?;
+        }
+        let note_blank = a.note.as_deref().is_some_and(|n| n.trim().is_empty());
+        if note_blank {
+            return Err(Refusal::new(
+                codes::EMPTY_FIELD,
+                "the annotation note is blank",
+                "note text, or omit --note",
+                format!("dla ledger annotate {} --note \"<text>\"", a.finding),
+            ));
+        }
+        if a.writers.is_empty() && a.removers.is_empty() && a.note.is_none() {
+            return Err(Refusal::new(
+                codes::EMPTY_ANNOTATION,
+                format!("annotation of {} has no writer, remover or note", a.finding),
+                "at least one --writer, --remover or --note",
+                format!(
+                    "dla ledger annotate {} --writer src/Main.java:42",
+                    a.finding
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn check_finding(&self, f: &Finding) -> Result<(), Refusal> {
@@ -493,6 +547,24 @@ impl Index {
             Record::ChecklistAnswer(a) => {
                 self.answers.insert(a.item.clone(), a.clone());
             }
+            Record::FindingAnnotated(a) => {
+                let slot = self.annotations.entry(a.finding.clone()).or_default();
+                for (list, new) in [
+                    (&mut slot.writers, &a.writers),
+                    (&mut slot.removers, &a.removers),
+                ] {
+                    for s in new {
+                        if !list.contains(s) {
+                            list.push(s.clone());
+                        }
+                    }
+                }
+                if let Some(n) = &a.note
+                    && !slot.notes.contains(n)
+                {
+                    slot.notes.push(n.clone());
+                }
+            }
         }
     }
 }
@@ -675,6 +747,10 @@ impl Ledger {
     /// One open item.
     pub fn open_item(&self, id: &OpenItemId) -> Option<&OpenItemState> {
         self.index.open_items.get(id)
+    }
+    /// The merged writers, removers and notes recorded for a finding, if any.
+    pub fn annotation(&self, id: &FindingId) -> Option<&Annotation> {
+        self.index.annotations.get(id)
     }
     /// The latest answer per checklist item ID.
     pub fn answers(&self) -> &BTreeMap<String, ChecklistAnswer> {
@@ -894,5 +970,23 @@ impl Ledger {
     /// Records the answer to a checklist item (the latest answer wins).
     pub fn answer_checklist(&mut self, answer: ChecklistAnswer) -> Result<LedgerLine, Error> {
         self.append(Record::ChecklistAnswer(answer))
+    }
+
+    /// Records writers and removers for a finding. Refuses an unknown finding, a
+    /// malformed `file:line` site and an annotation with nothing in it. The
+    /// finding's state does not change.
+    pub fn annotate(
+        &mut self,
+        finding: &FindingId,
+        writers: Vec<String>,
+        removers: Vec<String>,
+        note: Option<String>,
+    ) -> Result<LedgerLine, Error> {
+        self.append(Record::FindingAnnotated(FindingAnnotation {
+            finding: finding.clone(),
+            writers,
+            removers,
+            note,
+        }))
     }
 }
