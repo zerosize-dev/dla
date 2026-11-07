@@ -250,7 +250,13 @@ sample runs and is compared by the Rust tests.
   The denied paths are the repository root (answer keys), the fixtures
   directory, the results directory, `~/.claude`, the parent's
   `CLAUDE_CONFIG_DIR` and every `--deny-read` path. Pass the scratch
-  directories of your own session with `--deny-read`.
+  directories of your own session with `--deny-read`, but never Claude
+  Code's shared temporary directory (`claude-<uid>` under the system temp
+  directory) or anything above it: child sessions keep their shell state
+  and `TMPDIR` there, and denying it makes every Bash call fail to record
+  its state and breaks tools such as valgrind while the run still looks
+  healthy. `dla-bench run` refuses such a path; deny the session's own
+  subdirectory of it instead.
 - Toolchain caches live in `<run dir>/cache`: `GOCACHE`, `GOPATH`,
   `GOMODCACHE`, `GOTMPDIR`, the Maven local repository
   (`MAVEN_OPTS=-Dmaven.repo.local=...`), the npm and pip caches, `CARGO_HOME`

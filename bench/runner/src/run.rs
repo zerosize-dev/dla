@@ -353,6 +353,23 @@ pub fn keep_env_var(name: &str) -> bool {
 /// The default parent of the working copies.
 pub const DEFAULT_WORK_ROOT: &str = "/tmp/dla-bench";
 
+/// True when denying `p` would also deny Claude Code's shared per-user
+/// temporary directory (`claude-<uid>` under the system temp directory):
+/// `p` is that directory, the temp directory itself, or an ancestor of
+/// either. Child sessions write their shell state and `TMPDIR` files there,
+/// so denying it breaks every Bash call while leaving the run apparently
+/// healthy.
+pub fn covers_shared_tmp(p: &Path) -> bool {
+    let bases = [std::env::temp_dir(), PathBuf::from("/tmp")];
+    bases.iter().any(|base| {
+        base.starts_with(p)
+            || (p.parent() == Some(base.as_path())
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("claude-")))
+    })
+}
+
 /// A path in the permission-rule syntax: an absolute path starts with `//`.
 fn rule_path(p: &Path) -> String {
     let text = p.display().to_string();
@@ -1235,6 +1252,14 @@ pub fn run(args: &RunArgs) -> Res<String> {
             bad.display()
         ));
     }
+    if let Some(bad) = deny_read.iter().find(|d| covers_shared_tmp(d)) {
+        return Err(format!(
+            "--deny-read {} covers Claude Code's shared temporary directory, which every child \
+             session writes to (its Bash tool and TMPDIR live there); deny a narrower path such as \
+             the parent session's own subdirectory",
+            bad.display()
+        ));
+    }
     let probe_prompt = match &args.probe_prompt {
         Some(p) => Some(fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?),
         None => None,
@@ -1313,6 +1338,19 @@ fn absolute(p: &Path) -> Res<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denying_the_shared_claude_temp_dir_is_refused() {
+        assert!(covers_shared_tmp(Path::new("/tmp")));
+        assert!(covers_shared_tmp(Path::new("/tmp/claude-0")));
+        assert!(covers_shared_tmp(Path::new("/tmp/claude-1000")));
+        assert!(covers_shared_tmp(Path::new("/")));
+        assert!(!covers_shared_tmp(Path::new(
+            "/tmp/claude-0/-home-user-dla"
+        )));
+        assert!(!covers_shared_tmp(Path::new("/tmp/dla-bench")));
+        assert!(!covers_shared_tmp(Path::new("/home/user/dla")));
+    }
 
     #[test]
     fn strips_only_the_hooks_block_of_the_frontmatter() {
