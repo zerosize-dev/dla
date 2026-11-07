@@ -1,7 +1,6 @@
 #include <stdio.h>
-#include <string.h>
 
-#include "sink.h"
+#include "ring.h"
 
 static int failures;
 
@@ -16,47 +15,33 @@ static int failures;
 
 static void test_ring_order(void)
 {
-    ring *r = ring_create(3, 8);
-    uint8_t out[8];
-    for (uint8_t i = 1; i <= 5; i++) {
-        uint8_t rec[2] = { i, (uint8_t)(i * 2) };
-        ring_put(r, rec, sizeof rec);
-    }
+    int values[5] = { 1, 2, 3, 4, 5 };
+    ring *r = ring_create(3);
+    for (int i = 0; i < 5; i++)
+        ring_put(r, &values[i]);
     CHECK(ring_count(r) == 3);
-    CHECK(ring_get(r, 0, out, sizeof out) == 2 && out[0] == 3);
-    CHECK(ring_get(r, 2, out, sizeof out) == 2 && out[0] == 5 && out[1] == 10);
-    CHECK(ring_get(r, 3, out, sizeof out) == 0);
+    CHECK(*(const int *)ring_get(r, 0) == 3);
+    CHECK(*(const int *)ring_get(r, 2) == 5);
+    CHECK(ring_get(r, 3) == NULL);
     ring_destroy(r);
 }
 
-static void test_ring_truncates(void)
+static void test_ring_partial(void)
 {
-    ring *r = ring_create(2, 4);
-    uint8_t big[10], out[10];
-    memset(big, 7, sizeof big);
-    ring_put(r, big, sizeof big);
-    CHECK(ring_get(r, 0, out, sizeof out) == 4);
+    int a = 7;
+    ring *r = ring_create(4);
+    CHECK(ring_count(r) == 0);
+    CHECK(ring_get(r, 0) == NULL);
+    ring_put(r, &a);
+    CHECK(ring_count(r) == 1);
+    CHECK(ring_get(r, 0) == &a);
     ring_destroy(r);
-}
-
-static void test_sink_totals(void)
-{
-    sink s;
-    uint8_t frame[100];
-    memset(frame, 9, sizeof frame);
-    CHECK(sink_init(&s, 4, 64) == 0);
-    for (int i = 0; i < 10; i++)
-        sink_push(&s, frame, sizeof frame);
-    CHECK(s.frames == 10 && s.bytes == 1000);
-    CHECK(ring_count(s.recent) == 4);
-    sink_close(&s);
 }
 
 int main(void)
 {
     test_ring_order();
-    test_ring_truncates();
-    test_sink_totals();
+    test_ring_partial();
     if (failures == 0)
         puts("all tests passed");
     return failures == 0 ? 0 : 1;

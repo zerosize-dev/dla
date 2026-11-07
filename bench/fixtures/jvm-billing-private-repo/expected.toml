@@ -6,9 +6,9 @@ dynamic_confirmation = false
 
 [task]
 prompt = """
-The charge gateway's heap occupancy rises through the working day and drops
-back only when the service is restarted. The on-call engineer wants to know
-what accumulates and where.
+The charge gateway's heap occupancy climbs through the working day and comes
+back down only when the service is restarted. Find out what is holding the
+memory.
 """
 
 [[leak]]

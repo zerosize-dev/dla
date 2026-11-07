@@ -14,4 +14,4 @@ Operators report that the outline service's resident memory grows in step with t
 id = "N1"
 site = "src/section.rs:27"
 cause = "N-ALLOC"
-discriminator = "every section tree is freed when its request ends: the back-link is a Weak reference, live allocations return to 3 blocks (about 560 bytes) after each document at 2000 and at 8000 documents, and resident memory is flat at about 2.3 MB from the first 500 documents on; the slope of the second half is zero"
+discriminator = "every section tree is freed when its request ends: the back-link is a Weak reference, and live allocations are 2 to 3 blocks, under 600 bytes, after every document at 2000 and at 8000 documents; resident memory (figures exclude launcher overhead) is flat at about 2.3 to 2.5 MB from the first 500 documents on, so the slope of the second half is zero"

@@ -12,7 +12,7 @@ class RetryScheduler {
     this.endpoint = endpoint;
     this.maxAttempts = maxAttempts;
     this.pending = new PendingList();
-    this.issued = [];
+    this.latest = null;
     this.deadLetters = [];
     this.inflight = new Map();
     this.counts = { delivered: 0, retried: 0, dead: 0 };
@@ -20,7 +20,26 @@ class RetryScheduler {
 
   submit(job) {
     this.inflight.set(job.id, job);
-    this.pending.append({ due: this.clock.now(), attempt: 1, run: () => this.attempt(job, 1), next: null });
+    this.enqueue(job, 1, this.clock.now());
+  }
+
+  // Create the record for one delivery attempt and put it on the pending list.
+  // Each record points at the attempt scheduled before it, so a trail of recent
+  // attempts can be read back from the newest one.
+  enqueue(job, attempt, due) {
+    const record = { job, attempt, due, previous: null, next: null };
+    record.previous = this.latest;
+    this.latest = record;
+    return this.pending.append(record);
+  }
+
+  // The most recent attempts, newest first.
+  recent(count = 10) {
+    const trail = [];
+    for (let record = this.latest; record && trail.length < count; record = record.previous) {
+      trail.push({ id: record.job.id, attempt: record.attempt, due: record.due });
+    }
+    return trail;
   }
 
   // Walk the pending list once and run everything that is due.
@@ -32,7 +51,7 @@ class RetryScheduler {
       const next = node.next;
       if (node.due <= now) {
         this.pending.unlink(prev, node);
-        node.run();
+        this.attempt(node.job, node.attempt);
       } else {
         prev = node;
       }
@@ -54,21 +73,25 @@ class RetryScheduler {
       if (this.deadLetters.length > DEAD_LETTER_LIMIT) this.deadLetters.shift();
       return;
     }
-    const retry = () => this.attempt(job, attempt + 1);
-    this.issued.push(retry);
     this.counts.retried += 1;
-    const due = this.clock.now() + delayFor(attempt, job.id);
-    this.pending.append({ due, attempt: attempt + 1, run: retry, next: null });
+    this.enqueue(job, attempt + 1, this.clock.now() + delayFor(attempt, job.id));
   }
 
   stats() {
     return {
       pending: this.pending.length,
       inflight: this.inflight.size,
-      issued: this.issued.length,
       ...this.counts,
     };
   }
 }
 
-module.exports = { RetryScheduler, DEAD_LETTER_LIMIT };
+// The dispatcher process uses one scheduler for its whole lifetime.
+let shared = null;
+
+function sharedScheduler(options) {
+  if (!shared) shared = new RetryScheduler(options);
+  return shared;
+}
+
+module.exports = { RetryScheduler, sharedScheduler, DEAD_LETTER_LIMIT };

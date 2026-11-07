@@ -6,10 +6,7 @@ dynamic_confirmation = true
 
 [task]
 prompt = """
-The text rendering service's resident memory rises as soon as it starts taking
-traffic, and an alert fires because it keeps going up for the first minutes.
-Someone suspects a native memory problem. Find out whether that is right and,
-if so, where.
+The text rendering service's resident memory rose as soon as it started taking traffic and is much higher than expected after the first few minutes, which is why an alert fires. Find out what is holding the memory.
 """
 
 [[non_leak]]

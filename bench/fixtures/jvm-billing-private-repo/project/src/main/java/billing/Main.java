@@ -13,8 +13,8 @@ public final class Main {
         try (LedgerClient ledger = LedgerClient.connect(Endpoint.of(host, 7443))) {
             ChargeService service = new ChargeService(ledger, notifier);
             for (int i = 1; i <= total; i++) {
-                // Every ninth invoice is large enough to hit the account limit check.
-                long cents = (i % 9 == 0) ? 900_000 : 2_000 + (i % 40) * 150;
+                // Amounts vary from invoice to invoice.
+                long cents = 2_000 + (i * 37L % 211) * 120;
                 service.charge(new ChargeRequest(
                         "ACC-" + (i % 300),
                         String.format("INV-%07d", i),

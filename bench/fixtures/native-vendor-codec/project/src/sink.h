@@ -4,21 +4,26 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <acme/codec.h>
+
 #include "ring.h"
 
-/* Collects decoded frames: keeps the most recent ones in a ring and tracks
+/* Collects decoded frames: keeps the most recent ones for replay and tracks
  * running totals. */
 typedef struct {
-    ring *recent;
+    ring *replay;
     unsigned long frames;
     unsigned long long bytes;
     uint32_t checksum;
 } sink;
 
-int sink_init(sink *s, size_t keep, size_t frame_cap);
+int sink_init(sink *s, size_t keep);
 void sink_close(sink *s);
 
-/* Records one frame. The payload is copied into the ring. */
-void sink_push(sink *s, const uint8_t *data, size_t len);
+/* Records one decoded frame and keeps it for replay. */
+void sink_push(sink *s, const acme_frame *f);
+
+/* The i-th oldest frame kept for replay, or NULL. */
+const acme_frame *sink_replay(const sink *s, size_t i);
 
 #endif

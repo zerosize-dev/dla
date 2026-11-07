@@ -6,7 +6,7 @@
 
 const { ManualClock } = require('./src/clock');
 const { Endpoint } = require('./src/endpoint');
-const { RetryScheduler } = require('./src/scheduler');
+const { sharedScheduler } = require('./src/scheduler');
 const { makeJob } = require('./src/jobs');
 
 function parseArgs(argv) {
@@ -30,8 +30,8 @@ function makeRandom(seed) {
 function runWorkload(iterations, options = {}) {
   const wave = options.wave || 50;
   const step = options.step || 100;
-  const clock = new ManualClock();
-  const scheduler = new RetryScheduler({ clock, endpoint: new Endpoint() });
+  const scheduler = sharedScheduler({ clock: new ManualClock(), endpoint: new Endpoint() });
+  const clock = scheduler.clock;
   const random = makeRandom(11);
   let submitted = 0;
   while (submitted < iterations || scheduler.pending.length > 0) {

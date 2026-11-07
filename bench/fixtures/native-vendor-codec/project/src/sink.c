@@ -1,25 +1,30 @@
 #include "sink.h"
 
-int sink_init(sink *s, size_t keep, size_t frame_cap)
+int sink_init(sink *s, size_t keep)
 {
-    s->recent = ring_create(keep, frame_cap);
+    s->replay = ring_create(keep);
     s->frames = 0;
     s->bytes = 0;
     s->checksum = 2166136261u;
-    return s->recent == NULL ? -1 : 0;
+    return s->replay == NULL ? -1 : 0;
 }
 
 void sink_close(sink *s)
 {
-    ring_destroy(s->recent);
-    s->recent = NULL;
+    ring_destroy(s->replay);
+    s->replay = NULL;
 }
 
-void sink_push(sink *s, const uint8_t *data, size_t len)
+void sink_push(sink *s, const acme_frame *f)
 {
-    ring_put(s->recent, data, len);
     s->frames++;
-    s->bytes += len;
-    for (size_t i = 0; i < len; i += 61)
-        s->checksum = (s->checksum ^ data[i]) * 16777619u;
+    s->bytes += f->size;
+    for (size_t i = 0; i < f->size; i += 61)
+        s->checksum = (s->checksum ^ f->data[i]) * 16777619u;
+    ring_put(s->replay, f);
+}
+
+const acme_frame *sink_replay(const sink *s, size_t i)
+{
+    return ring_get(s->replay, i);
 }

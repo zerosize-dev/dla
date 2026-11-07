@@ -38,8 +38,9 @@ The unit tests need the same library and cannot run here either.)
 
 To make sure the Java is well-formed, it was compiled once against a throw-away
 stand-in for the library kept outside the repository (about 10 one-line classes
-and a loop that calls `onRejected` for every ninth ticket). It compiled, and
-`billing.Main 4000` then showed 111, 222, 333, 444 entries waiting at the four
-checkpoints. That number comes from the stand-in's invented rejection pattern
-and is not evidence about the real library; it only shows the code path that
-adds without removing.
+and a loop that invents its own rejection pattern). It compiled. Whatever count
+of waiting entries such a stand-in produces comes from the pattern the
+stand-in's author chose and is not evidence about the real library; it only
+shows the code path that adds without removing. Nothing in `project/` says which
+callbacks the real library fires or how often (the amounts in `Main.java` are
+an ordinary spread with no special value).

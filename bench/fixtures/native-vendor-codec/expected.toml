@@ -6,18 +6,18 @@ dynamic_confirmation = false
 
 [task]
 prompt = """
-The capture tool's memory grows in proportion to the number of packets it
-decodes; during a long recording session it reaches several gigabytes. The
-on-call engineer wants to know what accumulates and where.
+The capture tool's resident memory grows in step with the number of packets it
+decodes; a long recording session reaches several gigabytes before the host
+kills it. Find out what is holding the memory.
 """
 
 [[leak]]
 id = "L1"
-site = "src/session.c:20"
-lines = [20, 20]
-alt_sites = ["src/session.c:27"]
+site = "src/sink.c:24"
+lines = [24, 24]
+alt_sites = ["src/session.c:14", "src/ring.c:34"]
 holder = "native-handle/global-ref"
 region = "off-heap"
-cause = "L-HANDLE"
+cause = "L-OWNERSHIP"
 share = 1.0
 confirmable = false

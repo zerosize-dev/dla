@@ -36,6 +36,9 @@ int main(int argc, char **argv)
             s.errors++;
     }
 
+    const acme_frame *last = sink_replay(&s.out, ring_count(s.out.replay) - 1);
+    if (last != NULL)
+        printf("last kept frame: %lu bytes\n", (unsigned long)last->size);
     printf("packets=%lu frames=%lu bytes=%llu errors=%lu checksum=%08x\n",
            iterations, s.out.frames, s.out.bytes, s.errors,
            (unsigned)s.out.checksum);

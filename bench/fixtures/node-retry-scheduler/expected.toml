@@ -11,10 +11,10 @@ The webhook dispatcher's heap keeps climbing over long replays. After every batc
 
 [[leak]]
 id = "L1"
-site = "src/scheduler.js:58"
-lines = [58, 58]
-alt_sites = ["src/scheduler.js:15", "src/scheduler.js:57"]
-holder = "closure/continuation"
+site = "src/scheduler.js:31"
+lines = [31, 31]
+alt_sites = ["src/scheduler.js:15", "src/scheduler.js:32"]
+holder = "static/global"
 region = "heap"
 cause = "UNCLASSIFIED"
 share = 1.0

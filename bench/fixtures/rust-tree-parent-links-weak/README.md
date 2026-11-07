@@ -84,3 +84,9 @@ workload is `cargo run --release -- --iterations N` (0.07 s at 2000, 0.21 s at
 The live heap returns to its baseline after every document. RSS moves by about
 0.02 MB between 2000 and 8000 documents: a plateau that is reached within the
 first 500 documents (the allocator keeps its first arena pages).
+
+RSS figures exclude launcher overhead (they are the process's own `VmHWM`, sampled
+while it runs). Re-measured: 2.34 MB at 500 documents, 2.40 MB at 2000, 2.42 to
+2.49 MB at 8000. Live allocations are 2 to 3 blocks and under 600 bytes after every
+document (548 bytes and 2 blocks once the request text is released; 558 bytes and 3
+blocks while it is still held).

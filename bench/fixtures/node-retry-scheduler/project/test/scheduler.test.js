@@ -58,3 +58,12 @@ test('jobs that exhaust their attempts land in the dead letters', () => {
   assert.strictEqual(scheduler.deadLetters.length, DEAD_LETTER_LIMIT);
   assert.strictEqual(scheduler.stats().pending, 0);
 });
+
+test('recent lists the newest attempts first', () => {
+  const clock = new ManualClock();
+  const scheduler = new RetryScheduler({ clock, endpoint: scriptedEndpoint([false, true]) });
+  scheduler.submit(job(7));
+  scheduler.submit(job(8));
+  scheduler.tick();
+  assert.deepStrictEqual(scheduler.recent(3).map((r) => [r.id, r.attempt]), [[8, 2], [7, 2], [8, 1]]);
+});

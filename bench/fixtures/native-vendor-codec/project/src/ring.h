@@ -2,20 +2,18 @@
 #define RING_H
 
 #include <stddef.h>
-#include <stdint.h>
 
-/* Fixed-size ring of byte records; the oldest record is overwritten when the
- * ring is full. */
+/* Fixed-capacity ring of item pointers; once full, each new item takes the
+ * place of the oldest one. The ring never looks inside the items. */
 typedef struct ring ring;
 
-ring *ring_create(size_t slots, size_t slot_size);
+ring *ring_create(size_t slots);
 void ring_destroy(ring *r);
 
-/* Copies up to slot_size bytes of `data` into the next slot. */
-void ring_put(ring *r, const uint8_t *data, size_t len);
+void ring_put(ring *r, const void *item);
 
-/* Number of records currently held, and the copy of the i-th oldest. */
+/* Number of items currently held, and the i-th oldest (NULL when out of range). */
 size_t ring_count(const ring *r);
-size_t ring_get(const ring *r, size_t i, uint8_t *out, size_t cap);
+const void *ring_get(const ring *r, size_t i);
 
 #endif
