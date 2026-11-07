@@ -21,12 +21,25 @@ starting at 1. Fixtures are read from `bench/fixtures/<fixture>/expected.toml`
 (override with `--fixtures <dir>`). A run directory whose fixture has no
 `expected.toml` is an error.
 
-Directory rules: under `runs/`, a second-level directory not named exactly
-`archetypes-on` or `archetypes-off` is ignored, and so is a run directory whose
-name is not a positive decimal integer without leading zeros. A run directory
-without `run.json` is an unfinished run: it is skipped and counted in
+Directory rules: a missing `runs/` directory is an error. Under `runs/`, a
+first-level directory that is not one of the four ablation names is ignored,
+a second-level directory not named exactly `archetypes-on` or
+`archetypes-off` is ignored, and so is a run directory whose name is not a
+positive decimal integer without leading zeros. A run directory without
+`run.json` is an unfinished run: it is skipped and counted in
 `usage.incomplete`. A `run.json` that exists but is not a JSON object is an
-error.
+error. A group exists when it has at least one run directory, finished or
+not; a group whose runs are all unfinished is written with `runs` 0. Only
+fixtures with at least one finished run need an `expected.toml` and appear
+under `fixtures`.
+
+Encoding: every input file is UTF-8. A `run.json` or `expected.toml` that is
+not valid UTF-8 is an error; a `findings.json` or `coverage.json` that is not
+valid UTF-8 is treated as absent. `ledger.jsonl` is split into lines on the
+byte `\n` and each line is decoded on its own; a line that is not valid UTF-8
+is skipped like any other line that is not a JSON object. "Trimming
+whitespace" means removing leading and trailing ASCII space, tab, carriage
+return and line feed only.
 
 `run.json` fields used here: `exit_code` (integer), `timed_out` (bool),
 `wall_seconds` (number), `cost_usd` (number or null) and `usage` with
@@ -163,7 +176,8 @@ Per group: `runs` (count of graded runs), `incomplete` (run directories
 skipped for lack of `run.json`), `errored` (runs whose `exit_code` is missing,
 not an integer or not 0, or whose `timed_out` is true), `sources` (`{"ledger": n, "findings": n, "none": n}`),
 for each of the four token fields `{"sum": n, "mean": round6(sum / runs)}`,
-`wall_seconds` as `{"sum": round6, "mean": round6, "max": round6}` and
+`wall_seconds` as `{"sum": round6, "mean": round6, "max": round6}` (every
+`mean` and `max` is null when `runs` is 0) and
 `cost_usd` as `{"sum": round6, "mean": round6}` over the runs with a numeric
 `cost_usd` (`{"sum": 0.0, "mean": null}` when there are none).
 
