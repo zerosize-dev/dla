@@ -1,0 +1,5 @@
+{"findings":[{"site":"src/section.rs:27","holder":"cycle-only","region":"heap","verdict":"not-a-leak",
+"mechanism":"Section tree has parent<->child links, which is the classic Rc cycle shape for a leak.",
+"cause":"Parent link is RefCell<Weak<Section>> (set via Rc::downgrade in Section::append); only parent->children edges are strong, so the tree is acyclic in strong refs. The parser's `open` stack and Parsed.root are dropped at the end of Service::handle, freeing the whole tree. Error paths (EmptyTitle/Empty) also drop root. Service holds only two u64 counters; no statics, caches, threads or thread-locals exist.",
+"evidence":"Built release and ran with --iterations 1000, 10000, 40000 (40x more documents, ~1.58M headings). Peak RSS (ru_maxrss) stayed at a constant 13504 KB for all three runs, so there is no growth with documents processed.",
+"discriminator":"Back-reference is Weak, not Rc, so strong counts reach zero when the root is dropped; peak RSS is flat across 1k/10k/40k documents."}]}

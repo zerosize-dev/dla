@@ -1,0 +1,12 @@
+{"findings": [
+{"site": "ingest/pipeline.py:28", "holder": "registration-table", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "Every batch creates a CheckpointWatcher and subscribes it to the module-global registry._LISTENERS['checkpoint'] list (registry.py:3,7); nothing ever unsubscribes (fire() does not remove, only reset() clears, and that is test-only). Each watcher holds a dict 'marks' with one entry per known sensor (up to 64) plus a sensors tuple and label, so retained memory grows linearly with batches and each checkpoint fire calls an ever longer list.",
+ "cause": "per-batch listener subscribed but never unsubscribed",
+ "evidence": "tracemalloc after gc: listener_count == batches (1000 listeners -> 2.6MB traced, 7000 -> 18.7MB). registry.reset() freed ~13.8MB of ~18.7MB at 7000 batches.",
+ "discriminator": ""},
+{"site": "ingest/parser.py:29", "holder": "static/global", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "Module global _newest keeps the last Record, and parse_line sets record.previous = _newest (line 27), so each Record points at its predecessor. The whole history of every Record ever parsed is a single reachable linked chain from the global (not a cycle, so gc cannot free it), even though only the previous value is needed to compute delta.",
+ "cause": "unbounded previous-record chain anchored by a module global",
+ "evidence": "Walking parser._newest.previous after 7000 batches gave a chain of 14000 records (2 per batch). Setting parser._newest.previous=None and gc freed ~4.9MB traced memory.",
+ "discriminator": ""}
+]}

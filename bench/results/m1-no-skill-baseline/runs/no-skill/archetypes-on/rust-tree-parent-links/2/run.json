@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "rust-tree-parent-links",
+  "ablation": "no-skill",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 35.086,
+  "usage": {
+    "input_tokens": 14,
+    "output_tokens": 2041,
+    "cache_read_input_tokens": 168007,
+    "cache_creation_input_tokens": 14294
+  },
+  "cost_usd": 0.0944147,
+  "num_turns": 7,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-07T16:55:48Z",
+  "error": null
+}

@@ -1,0 +1,19 @@
+{"findings": [
+{"site": "src/scheduler.js:208", "holder": "static/global", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "enqueue() sets record.previous = this.latest and this.latest = record. Every attempt record links back to the one before it, and nothing ever trims the chain. The scheduler is a process-wide singleton (sharedScheduler, line 269-272), so `latest` keeps the whole history of attempt records reachable. Each record holds its job, and the job holds its payload rows. PendingList.unlink only nulls `next`, not `previous`.",
+ "cause": "Unbounded backward 'recent attempts' trail (used only by recent(), which reads at most 10 entries) that retains every attempt record and its job payload forever.",
+ "evidence": "Ran runWorkload(2000) six times in one process with --expose-gc and a forced gc after each batch. pending=0, inflight=0 and dead letters=0 after every batch, yet heapUsed grew from 11.7 to 52.6 MB (about 8 MB per batch) and the previous-chain length grew from 2902 to 17412 (+2902 per batch). Control: setting scheduler.latest=null after each batch held the heap flat at 3.5-3.7 MB.",
+ "discriminator": ""},
+{"site": "src/scheduler.js:249", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "deadLetters array is capped at DEAD_LETTER_LIMIT=100 by shift().",
+ "cause": "", "evidence": "It holds only {id,status}, not jobs. Length stayed <=100 (0 in the measured runs).",
+ "discriminator": "Bounded to 100 small entries by the shift() cap; it does not grow with batches."},
+{"site": "src/scheduler.js:199", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "inflight Map is set on submit and deleted on both the delivered and dead paths.",
+ "cause": "", "evidence": "inflight.size was 0 after every batch.",
+ "discriminator": "Every job reaches either delivery or dead-letter, and both delete its entry, so size returns to 0 after each batch."},
+{"site": "src/pending.js:164", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "PendingList unlink correctly fixes head, tail, and next pointers and decrements length.",
+ "cause": "", "evidence": "pending.length was 0 after every batch, and head/tail are cleared.",
+ "discriminator": "The list is empty after each batch; the retention comes only from the separate `previous` chain."}
+]}

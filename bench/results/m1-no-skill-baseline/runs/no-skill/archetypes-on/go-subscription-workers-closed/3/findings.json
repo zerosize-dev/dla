@@ -1,0 +1,17 @@
+{"findings": [
+{"site": "internal/notify/subscription.go:30", "holder": "blocked-stack", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "Each Hub.Open starts a worker goroutine (go s.run()) with a 4KB scratch buffer, which would accumulate if it never exited.",
+ "cause": "Suspected per-request worker goroutine leak",
+ "evidence": "Drove Handler.Serve for 5 batches x 20000 requests with a temporary test (since removed), forcing GC after each batch. runtime.NumGoroutine was 2 after every batch. Heap after GC was 142KB, 158KB, 163KB, 166KB, 170KB, so growth was tiny and tapering.",
+ "discriminator": "Handler.Serve defers sub.Close() on every path, including early error returns. Close closes done and waits on exited, and run() returns on done. Goroutine count stays flat across batches, so no worker outlives its request."},
+{"site": "internal/notify/hub.go:50", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "MemorySink is long-lived and mutated on every delivery.",
+ "cause": "Suspected unbounded sink growth",
+ "evidence": "Read the code. The sink keeps only three scalars (messages, bytes, sum) and no slice or map. The post-GC heap measurements above are flat to within a few KB.",
+ "discriminator": "The sink stores counters and a checksum, not messages, so its size is constant."},
+{"site": "internal/notify/render.go:13", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "Renderer holds a layouts map and is shared by all subscriptions.",
+ "cause": "Suspected map growth",
+ "evidence": "Read the code. The map is copied once in NewRenderer and only read afterwards. Render appends into the per-subscription scratch buffer.",
+ "discriminator": "The map is never written after construction, so it cannot grow."}
+]}

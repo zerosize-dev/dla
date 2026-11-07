@@ -1,0 +1,18 @@
+{"findings": [
+{"site": "src/scheduler.js:34", "holder": "container-field", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "enqueue() sets record.previous = this.latest and this.latest = record. The scheduler is a process-lifetime singleton, so `latest` always references the newest attempt record. Each record references the one before it, so the chain is never cut and stays reachable. pending.unlink() only nulls `next`, not `previous`. Every attempt record ever created stays alive, and each one holds its whole job (payload with ~18-25 rows).",
+ "cause": "unbounded backward-linked trail of attempt records (the `previous` pointer) kept for recent(), which reads at most 10 entries",
+ "evidence": "Ran runWorkload(2000) five times in one process with --expose-gc and forced gc after each batch. After every batch pending=0, inflight=0 and deadLetters=0. The chain length reachable from scheduler.latest grew 2902, 5804, 8706, 11608, 14510. Heap after gc grew about 8 MB per batch, 11.7 to 44.4 MB.",
+ "discriminator": ""},
+{"site": "src/scheduler.js:87", "holder": "static/global", "region": "heap", "verdict": "leak-suspected",
+ "mechanism": "sharedScheduler() keeps a module-level singleton that is never reset. It is the root that keeps `latest` and the record chain alive across batches. It also ignores the options of later calls, so every batch reuses the first clock and endpoint. This is the root of the leak above, not a separate source of growth.",
+ "cause": "process-lifetime singleton", "evidence": "Code reading. The chain length in the run above carried over between batches, which confirms the scheduler instance is shared.", "discriminator": ""},
+{"site": "src/scheduler.js:72", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "deadLetters array", "cause": "",
+ "evidence": "Capped at DEAD_LETTER_LIMIT=100 by shift(). It held 0 entries in the measured run, so it is not contributing to the growth.",
+ "discriminator": "length is bounded by shift() once it exceeds 100"},
+{"site": "src/scheduler.js:28", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "inflight Map and pending list", "cause": "",
+ "evidence": "inflight.size and pending.length were 0 after each batch. Delivered and dead jobs are deleted from inflight. unlink() maintains head, tail and length.",
+ "discriminator": "stats show inflight=0 and pending=0 after each batch, and no job is stranded in either"}
+]}

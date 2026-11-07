@@ -1,0 +1,5 @@
+{"findings":[{"site":"src/section.rs:158","holder":"cycle-only","region":"heap","verdict":"leak-confirmed",
+"mechanism":"Section::append stores a strong Rc to the parent in child.parent while the parent's children Vec holds a strong Rc to the child. Every section tree is therefore a reference cycle (parent<->child, including the root). Rc has no cycle collector, so when parse()/Service::handle drop the root, the strong counts never reach zero and the whole tree (titles, Vecs, Rc boxes) is never freed. The error path in parser.rs (EmptyTitle after partial tree build) leaks the partial tree the same way.",
+"cause":"Rc back-link to parent should be std::rc::Weak (parent: RefCell<Option<Weak<Section>>>, upgrade() in parent())",
+"evidence":"Built release and ran outline-service --iterations 2000/20000/80000: peak RSS 15 MB / 130 MB / 515 MB, linear in documents (~6.4 KB per document) although nothing is retained by Service (only two counters). Static reading of section.rs:157-160 and parser.rs:99-101 confirms the cycle.",
+"discriminator":""}]}

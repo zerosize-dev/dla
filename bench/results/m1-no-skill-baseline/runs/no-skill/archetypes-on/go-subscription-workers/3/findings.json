@@ -1,0 +1,15 @@
+{"findings": [
+{"site": "internal/notify/handler.go:88", "holder": "blocked-stack", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "Handler.Serve opens a Subscription via Hub.Open, which starts a worker goroutine (subscription.go:143, run loop at :147) that blocks forever in select on events/flushes/done. Serve never calls sub.Close() (neither via defer nor on the error paths at lines 102 and 107), so done is never closed and the goroutine never exits. Each leaked goroutine also pins its Subscription, including the 4096-byte scratch buffer and four channels, plus the goroutine stack.",
+ "cause": "missing sub.Close() (defer sub.Close()) in Handler.Serve; one leaked goroutine per request",
+ "evidence": "Scratch test (not committed, removed after) calling Serve 1000 times per batch with runtime.GC() between batches: goroutines 1002, 2002, 3002, 4002; HeapInuse 6.0, 11.4, 16.8, 22.0 MB; StackInuse 2.5, 4.6, 6.7, 8.7 MB. Growth is linear, about 1 goroutine, 5 KB heap and 2 KB stack per request.",
+ "discriminator": ""},
+{"site": "internal/notify/hub.go:46", "holder": "static/global", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "MemorySink keeps only an int message count, an int byte count and a uint32 checksum, so it is constant size.",
+ "cause": "", "evidence": "Code inspection; it stores no per-message data. The heap growth measured above is accounted for by the leaked subscriptions.",
+ "discriminator": "The sink holds three scalar fields and no slices or maps, so its size does not depend on traffic."},
+{"site": "internal/notify/render.go:215", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "Renderer.layouts is a map copied once at construction and only read afterwards. Hub.opened is an atomic counter.",
+ "cause": "", "evidence": "Code inspection; there are no writes to the map after NewRenderer.",
+ "discriminator": "The map has a fixed 4 topic keys and is never written after construction. Unknown topics are rejected in Open, so keys are never added."}
+]}

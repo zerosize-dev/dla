@@ -1,0 +1,5 @@
+{"findings": [{"site": "src/shop/OrderCache.java:10", "holder": "static/global", "region": "heap", "verdict": "not-a-leak",
+"mechanism": "Static LinkedHashMap ORDERS_BY_ID keyed by order id looks like an unbounded cache, but it is an access-ordered LRU whose removeEldestEntry evicts once size() > 1000.",
+"cause": "bounded LRU cache (CAPACITY=1000); each Order holds only small strings and an immutable List.copyOf of lines",
+"evidence": "Ran ./build.sh run 200000: cache size stays at 1000 orders; heap in use after forced System.gc() was 2827 KB at 50k requests, then 2023 KB at 100k, 150k and 200k. No growth between batches. Unit tests pass. No other static collections, listeners, thread-locals or threads exist in the 8 source files (OrderService counters are ints, Catalog list is fixed).",
+"discriminator": "Entry count plateaus at 1000 and post-GC heap is flat (2023 KB) across 100k-200k requests, so the live set does not grow with traffic."}]}

@@ -1,0 +1,5 @@
+{"findings":[{"site":"src/shop/OrderCache.java:15","holder":"static/global","region":"heap","verdict":"not-a-leak",
+"mechanism":"Static access-ordered LinkedHashMap of orders keyed by order id; it is the only long-lived store and the obvious suspect.",
+"cause":"Bounded LRU: removeEldestEntry evicts once size() > CAPACITY (1000), so retained Orders (and their notes strings) are capped.",
+"evidence":"Ran shop.Main with 400000 requests under -Xmx256m, with System.gc() at each checkpoint: cache size stayed at 1000 and heap in use was 2323, 2035, 2034, 2034 KB. It did not grow between batches. Code review found no other static or long-lived collections: OrderService keeps two int counters, Catalog is an immutable List.of, PricingService is stateless, and there are no threads, listeners or thread-locals.",
+"discriminator":"Cached order count plateaus at 1000 and post-GC heap is flat (~2034 KB) from 200k to 400k requests, so the eviction works. If the pod's heap really climbs, the cause is not in this code (e.g. a different build or config, or off-heap/container memory)."}]}

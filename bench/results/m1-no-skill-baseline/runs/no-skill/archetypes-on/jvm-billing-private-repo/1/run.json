@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "jvm-billing-private-repo",
+  "ablation": "no-skill",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 34.37,
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 1708,
+    "cache_read_input_tokens": 111181,
+    "cache_creation_input_tokens": 13660
+  },
+  "cost_usd": 0.0828581,
+  "num_turns": 5,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-07T16:50:49Z",
+  "error": null
+}

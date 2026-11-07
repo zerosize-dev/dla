@@ -1,0 +1,17 @@
+{"findings": [
+{"site": "src/gateway/RequestContext.java:260", "holder": "static/global", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "The static field `latest` points to the newest RequestContext, and each context keeps a `previous` reference to the one before it. Nothing ever clears the link, so every context ever created stays reachable from a GC root. Each one retains its 384-byte padded body array, caller and path strings, and the object itself.",
+ "cause": "`previous` is only used to read the prior request's path and arrival time for the audit line, but it holds the whole prior context, and that holds the one before it, back to request #1. The static `latest` is the root of this unbounded singly-linked list.",
+ "evidence": "Ran Main with 20000 requests, calling System.gc() at each checkpoint. Heap in use after GC was 4431 KB at 5000 requests, 6556 KB at 10000, 9042 KB at 15000 and 11507 KB at 20000. That is roughly 0.45 KB per request, linear in requests served, even though the audit sink keeps only counters. The growth comes from the context chain and its bodies.",
+ "discriminator": ""},
+{"site": "src/gateway/Ledger.java:157", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "Per-account history deques and the balances map are collections that take writes on every transfer.",
+ "cause": "",
+ "evidence": "Read the code. note() trims each deque to HISTORY_PER_ACCOUNT (20) entries, and the maps are keyed by a fixed set of 64 accounts created in the constructor. Transfers never add keys.",
+ "discriminator": "History is capped at 20 entries per account and the key set is fixed at 64 accounts, so the ledger's size is bounded regardless of request count."},
+{"site": "src/gateway/Main.java:176", "holder": "closure/continuation", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "The audit sink lambda captures the auditLines and auditChars arrays and could have been accumulating audit lines.",
+ "cause": "",
+ "evidence": "Read the code. The sink only increments two long counters and does not store the lines. Gateway.auditSink is the only holder of the lambda and it does not grow.",
+ "discriminator": "The sink keeps two long counters and never stores the audit lines, so it retains a constant amount of memory."}
+]}

@@ -1,0 +1,23 @@
+{"findings":[
+{"site":"src/session.js:279","holder":"container-field","region":"heap","verdict":"leak-confirmed",
+"mechanism":"Session.receive iterates all decoded messages without re-checking this.closed. If a 'bye' frame is followed in the same chunk by 'subscribe', close() has already run and unsubscribed everything, but dispatch re-adds the session to router.topics (src/router.js:189). The later socket 'close' -> Gateway.release -> session.close() returns early because closed is true, so the session is never removed from the topic Set. The Session (with its socket, decoder and recent[] buffer) and the topic entry stay reachable from Router.topics forever.",
+"cause":"missing closed-check inside the message loop / subscribe on a closed session",
+"evidence":"Scratch script: 1000 sessions each sent bye+subscribe(t<i>) in one chunk then hung up; gateway.sessions=0 but router.topics.size=1000 and the sessions stay retained. Not triggered by load.js's normal workload.",
+"discriminator":""},
+{"site":"src/gateway.js:65","holder":"registration-table","region":"heap","verdict":"not-a-leak",
+"mechanism":"Per-session heartbeat setInterval timers","cause":"",
+"evidence":"Ran load.js runWorkload 5 waves x 20000 sessions with --expose-gc: heapUsed flat at 3.3-3.5MB, 0 sessions, 0 topics, 0 active Timeout resources after each wave.",
+"discriminator":"Session.close() calls clearInterval(this.heartbeat) and every close path (socket close, bye, idle, protocol) goes through it; timers also unref'd. Active Timeout count is 0 after waves."},
+{"site":"src/metrics.js:152","holder":"container-field","region":"heap","verdict":"not-a-leak",
+"mechanism":"Metrics counters Map","cause":"",
+"evidence":"Flat heap across waves.",
+"discriminator":"Counter keys are a fixed set (closed_<reason> with 4 reasons, fixed names); no per-session or per-user keys."},
+{"site":"src/session.js:286","holder":"container-field","region":"heap","verdict":"not-a-leak",
+"mechanism":"Session.recent message history","cause":"",
+"evidence":"Flat heap across waves.",
+"discriminator":"Capped at RECENT_LIMIT=64 via shift(), and freed with the session once it is removed from gateway.sessions and router.topics."},
+{"site":"src/router.js:197","holder":"container-field","region":"heap","verdict":"not-a-leak",
+"mechanism":"Router.topics map","cause":"",
+"evidence":"topics=0 after each normal workload wave.",
+"discriminator":"Empty topic Sets are deleted on unsubscribe, and close() unsubscribes all topics (apart from the bye+subscribe case reported above)."}
+]}

@@ -1,0 +1,17 @@
+{"findings": [
+{"site": "reports/builder.py:21", "holder": "static/global", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "functools.lru_cache(maxsize=None) on the instance method category_totals. The cache is a single module-level (class-level function) dict keyed by (self, account, month). ReportService.handle creates a new ReportBuilder per request, so every key is new: 0 hits, and each entry strongly references its builder (which references the store, the three column lists and their padded strings) plus the result tuple. Nothing is ever evicted.",
+ "cause": "lru_cache on a method with unbounded size; self is part of the key and builders are per-request",
+ "evidence": "Ran load.run in 2000-request steps under tracemalloc with gc.collect between: traced heap 4606, 9222, 13766, 18454 KiB (~2.3 KiB/request, linear); cache_info hits=0, misses=currsize=1600/3200/4800/6400 (only summary requests reach it). cache_clear() drops the entries.",
+ "discriminator": "Fix: cache per-builder or on a module-level function keyed by (store, account, month) with a bounded maxsize, or drop the cache since builders are not reused."},
+{"site": "reports/builder.py:19", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "ReportBuilder._columns lists are appended to on each render.",
+ "cause": "looks like an accumulating buffer",
+ "evidence": "render() clears every column at the start, and the builder is created per request. Rows per render are bounded at 28. Only retained at all via the lru_cache entry above.",
+ "discriminator": "Lists are cleared on every render and are bounded by rows_per_month; growth tracks cache entries, not the columns."},
+{"site": "reports/service.py:160", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "ReportService.served counter and the store",
+ "cause": "long-lived service state",
+ "evidence": "served is a single int. LedgerStore holds only rows_per_month and regenerates rows on each fetch with no cache. Responses are not stored.",
+ "discriminator": "No collection grows in the service or store; the tracemalloc growth is fully explained by the lru_cache."}
+]}

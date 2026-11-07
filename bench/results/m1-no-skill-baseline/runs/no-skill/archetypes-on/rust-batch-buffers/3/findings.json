@@ -1,0 +1,17 @@
+{"findings": [
+{"site": "src/rollup.rs:159", "holder": "container-field", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "Rollup.samples is a Vec<Sample> that is cleared with Vec::clear() after each flush. clear() drops the elements but keeps the allocation, so capacity stays at the high-water mark of the largest batch. Batch 11 (the 60,000-sample catch-up burst in src/feed.rs:21) grows it to 65,536 slots of 40 bytes, about 2.6 MB, and it is never shrunk.",
+ "cause": "clear() used instead of releasing the buffer (std::mem::take or shrink_to_fit). Retention is bounded by the largest batch ever seen, not unbounded growth.",
+ "evidence": "Release build, runs with --iterations N. Peak RSS was about 4 MB for 10 batches. After the batch-11 burst it rose to about 13 MB and stayed flat to 500 batches (12 batches: 13.6 MB, 500 batches: 13.6 MB), although later batches carry only 300-6000 samples. Read from getrusage ru_maxrss and /proc VmRSS polling, which was noisy; a plateau at roughly 13 MB with later batches that small was the consistent result.",
+ "discriminator": ""},
+{"site": "src/rollup.rs:160", "holder": "container-field", "region": "heap", "verdict": "leak-confirmed",
+ "mechanism": "Rollup.stats is a HashMap<String, SeriesStats> that is cleared with HashMap::clear() after each flush. clear() keeps the bucket table. The burst has about 50k distinct series, so the table is sized for 65k-131k buckets of about 56 bytes each (several MB) and is never shrunk. The per-key String allocations are freed on clear; only the table stays.",
+ "cause": "clear() keeps the table's capacity; there is no shrink_to_fit or replacement with a fresh map. Bounded by the peak distinct-series count of one batch.",
+ "evidence": "Same runs as above. The combined step up from about 4 MB to about 13 MB happens at the batch-11 burst (the --iterations 12 vs 10 comparison), then stays flat. The series count per batch is printed by the agent; batch 11 has far more series than any other. I did not measure the Vec and the map separately.",
+ "discriminator": ""},
+{"site": "src/main.rs:85", "holder": "static/global", "region": "heap", "verdict": "not-a-leak",
+ "mechanism": "feed::batch(seq) builds a Vec<String> of lines per batch (about 3 MB for the 60k burst). It is consumed by the for loop and dropped at the end of each iteration.",
+ "cause": "Transient per-batch allocation, not retained.",
+ "evidence": "RSS stays flat at about 13 MB from 12 to 500 batches rather than growing with iteration count. Summary counters in main are scalars. rollup.batches is a u64.",
+ "discriminator": "Memory is flat across 12 to 500 iterations and the Vec is dropped each loop; no growth with batch count."}
+]}

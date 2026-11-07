@@ -1,0 +1,14 @@
+{"findings": [
+{"site": "src/session.c:14", "holder": "native-handle/global-ref", "region": "off-heap",
+ "verdict": "leak-suspected",
+ "mechanism": "on_frame() receives one acme_frame per decoded frame from the vendor codec and hands it to sink_push() (src/sink.c:23), which only stores the pointer in the ring. Nothing ever releases the frame: not on_frame, not the ring when ring_put() overwrites the oldest slot (src/ring.c:38), and not ring_destroy(). The early-return path for NULL or empty frames (src/session.c:9) doesn't release anything either. Each frame is a native allocation made inside libacmecodec, so resident memory grows with the packet count even though the 32-slot ring itself is bounded.",
+ "cause": "Frame ownership is never released. The sink keeps raw pointers to vendor-allocated frames and has no matching release call such as acme_frame_release/free. The other possibility is that the codec owns and recycles the frames. In that case the retained pointers dangle, which is a different bug and not unbounded growth.",
+ "evidence": "Code reading only. libacmecodec and <acme/codec.h> are not installed on this machine, so the capture binary can't be built or run, and I couldn't measure growth or check the frame ownership contract. I did build and run the ring unit test (make test passes) and confirmed the ring is fixed-capacity. It never grows after ring_create, so it holds at most 32 pointers.",
+ "discriminator": "Check the vendor header for who owns an acme_frame after on_frame returns. If the callback owns it, run capture --iterations N under valgrind --leak-check=full or watch RSS and see whether frame allocations scale with N."},
+{"site": "src/ring.c:38", "holder": "container-field", "region": "heap",
+ "verdict": "not-a-leak",
+ "mechanism": "The ring is a calloc'd array of 32 pointer slots, and ring_put overwrites slots modulo slots, so it can never hold more than 32 entries.",
+ "cause": "Bounded replay buffer. It does retain the pointed-to frames, but at most 32 at a time.",
+ "evidence": "Read src/ring.c and ran the test_ring unit test, which passes, including the wraparound test (ring_count capped at the slot count).",
+ "discriminator": "ring_count never exceeds slots, and the ring memory itself is a single fixed allocation made in ring_create and freed in ring_destroy."}
+]}

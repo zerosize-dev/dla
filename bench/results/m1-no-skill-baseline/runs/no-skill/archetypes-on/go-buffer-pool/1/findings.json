@@ -1,0 +1,12 @@
+{"findings":[
+{"site":"internal/render/pool.go:198","holder":"container-field","region":"heap","verdict":"not-a-leak",
+"mechanism":"BufferPool.free retains every returned buffer; the free list grows to the largest batch size (400 buffers) and is then reused",
+"cause":"pool high-water mark, bounded by maxBatch=400 in workload.go",
+"evidence":"Ran 6000 batches via a scratch test (removed afterwards), forcing GC every 1000: pool created=400/idle=400 from batch 1000 onward, HeapInuse 1960KB at 1000 batches and 2024KB at 6000 batches. Growth stops, and total retained is about 2MB.",
+"discriminator":"The pool's created count stays flat at 400 and HeapInuse plateaus around 2MB across 6000 batches. The free list is bounded by the maximum batch size, and each Get pops a buffer that is later Put back, so there is no double-Put and no unbounded retention."},
+{"site":"internal/render/batch.go:51","holder":"container-field","region":"heap","verdict":"not-a-leak",
+"mechanism":"Renderer.index map holds rendered docs during a batch",
+"cause":"index is emptied at the end of every RenderBatch (delete in the final loop)",
+"evidence":"Code reading, plus the flat heap measurement above after 6000 batches.",
+"discriminator":"Every entry is deleted at the end of RenderBatch, and invoice IDs are unique per batch, so the map is empty between batches."}
+]}

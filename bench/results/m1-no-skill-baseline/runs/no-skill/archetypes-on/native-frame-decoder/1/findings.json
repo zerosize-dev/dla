@@ -1,0 +1,15 @@
+{"findings":[
+{"site":"src/decoder.c:42","holder":"native-handle/global-ref","region":"off-heap","verdict":"leak-confirmed",
+"mechanism":"decode_frame mallocs the output buffer (decoder.c:29). On the checksum-mismatch return (line 42) it returns FRAME_ERR_CHECKSUM without free(buf), and out->pixels is never set, so the caller has no pointer to it. The RLE-failure path frees buf; this path does not.",
+"cause":"Missing free(buf) on the CRC-mismatch early return. Every frame with a damaged trailer leaks its whole decoded payload (4-32 KiB), so RSS grows in proportion to the number of corrupt frames.",
+"evidence":"Ran valgrind --leak-check=full ./framedec --iterations 2000: 125 rejected frames, 124 blocks (2,240,512 B) definitely lost plus 1 block (25,600 B) indirectly lost, all allocated at decoder.c:29 via main.c:47. With --damage-every 0 valgrind reports 0 errors and no leaks. Leak count matches the number of rejected (checksum) frames.",
+"discriminator":""},
+{"site":"src/checksum.c:4","holder":"static/global","region":"non-heap","verdict":"not-a-leak",
+"mechanism":"Static 256-entry CRC table, built once lazily.","cause":"",
+"evidence":"Fixed-size static array guarded by table_ready; valgrind shows no growth.",
+"discriminator":"Fixed 1 KiB static storage, initialised once; size is independent of frame count."},
+{"site":"src/synth.c:31","holder":"static/global","region":"non-heap","verdict":"not-a-leak",
+"mechanism":"static raw[64KiB] scratch buffer in the synthetic frame source, reused every call.","cause":"",
+"evidence":"Fixed-size static buffer; the no-damage run has 0 leaks.",
+"discriminator":"Fixed size, reused on each call, never grows."}
+]}

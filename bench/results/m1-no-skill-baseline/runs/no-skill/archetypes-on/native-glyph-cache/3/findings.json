@@ -1,0 +1,5 @@
+{"findings": [{"site": "src/cache.c:130", "holder": "container-field", "region": "heap", "verdict": "not-a-leak",
+"mechanism": "Glyph cache (hash buckets + LRU list) fills to its capacity of 2048 entries and then evicts the oldest entry on every miss; each eviction frees the bitmap (raster_release) and the entry.",
+"cause": "Expected warm-up: RSS rises while the LRU cache fills to capacity, then plateaus. Cached bitmap payload is only about 0.8 MB.",
+"evidence": "Built ./textrun and ran 2k, 20k, 100k and 200k iterations. Cache stayed at entries=2048/2048, bytes about 775-810 KB, evictions growing with misses. Peak RSS (ru_maxrss) was 12956, 12944 and 12960 KB for 2k, 20k and 200k iterations, so it is flat. valgrind --leak-check=full reported no leaks or errors. make test passes.",
+"discriminator": "Peak RSS and cache bytes stay constant as iterations grow 100x, and evictions free memory (entries pinned at capacity, valgrind clean). Growth stops once the cache is full."}]}

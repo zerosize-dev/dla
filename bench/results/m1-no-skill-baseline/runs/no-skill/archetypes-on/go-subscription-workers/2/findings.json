@@ -1,0 +1,11 @@
+{"findings":[
+{"site":"internal/notify/handler.go:178","holder":"blocked-stack","region":"heap","verdict":"leak-confirmed",
+"mechanism":"Handler.Serve opens a Subscription via Hub.Open, which starts a worker goroutine (subscription.go:103, run loop at :107) that only exits when Close() closes s.done. Serve never calls sub.Close() (no defer), on success or on early error return. Each request leaves one goroutine parked in select forever, which pins its Subscription: 4096-byte scratch buffer (subscription.go:101), four channels, and the goroutine stack.",
+"cause":"missing defer sub.Close() in Handler.Serve",
+"evidence":"Ran a probe in a scratch copy (outside the source tree) calling Serve 2000 times per batch with forced GC after each: goroutines 2001/4001/6001/8001, HeapInuse 11.5MB/22.4MB/33.5MB/44.4MB, StackInuse 4.6MB/8.9MB/13.1MB/17.3MB. That is one goroutine and about 5.5KB heap plus about 2KB stack per request, with no plateau.",
+"discriminator":""},
+{"site":"internal/notify/hub.go:46","holder":"container-field","region":"heap","verdict":"not-a-leak",
+"mechanism":"MemorySink keeps only int counters and a checksum, with no per-message storage. Hub keeps only an atomic counter and does not register subscriptions. Renderer layouts are a fixed map. The render scratch buffer is reused per subscription.",
+"cause":"","evidence":"Code read. The probe's per-request growth is fully explained by the unclosed subscriptions.",
+"discriminator":"MemorySink and Hub hold no collections that grow with traffic. Only the fixed-size counters change."}
+]}

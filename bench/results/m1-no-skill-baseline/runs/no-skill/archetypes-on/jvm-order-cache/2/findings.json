@@ -1,0 +1,5 @@
+{"findings": [{"site": "src/shop/OrderCache.java:8", "holder": "static/global", "region": "heap", "verdict": "leak-confirmed",
+"mechanism": "Static HashMap ORDERS_BY_ID is populated by OrderCache.store (line 17) from OrderService.place and has no eviction, TTL, size bound or removal; only test-only invalidateAll() clears it. Every distinct order (each with its Order, line list and notes string) stays strongly reachable for the life of the JVM.",
+"cause": "Unbounded idempotency/replay cache keyed by customer+requestId; only ~1/8 of requests are replays, so entries grow with distinct requests. Fix: bounded LRU / expiring cache (e.g. LinkedHashMap removeEldestEntry or Caffeine) or TTL matched to the client retry window.",
+"evidence": "Ran shop.Main 400000 (javac to scratch dir). After System.gc() at each checkpoint: cached orders 87500/175000/262500/350000, heap in use 51123/100555/151069/199532 KB, i.e. linear growth of ~0.57 KB per cached order, never reclaimed.",
+"discriminator": "Cached order count and post-GC live heap rise in lockstep; entry count equals placed requests (350000 placed = 350000 cached)."}]}

@@ -1,0 +1,17 @@
+{"findings":[
+{"site":"ingest/pipeline.py:28","holder":"registration-table","region":"heap","verdict":"leak-confirmed",
+"mechanism":"Every process_batch creates a CheckpointWatcher and subscribes it to registry._LISTENERS['checkpoint'] (ingest/registry.py:7); nothing ever unsubscribes, and fire() does not remove listeners. Each watcher holds a 'marks' dict with one entry per known sensor (up to 64), so each batch retains several KB.",
+"cause":"watcher subscribed per batch, never unregistered",
+"evidence":"tracemalloc with load.run: 4000 batches -> listener_count=4000, ~10.7MB retained; another 4000 -> +10.7MB more. registry.reset() then freed ~15MB of the ~21MB.",
+"discriminator":""},
+{"site":"ingest/parser.py:29","holder":"static/global","region":"heap","verdict":"leak-confirmed",
+"mechanism":"Module global _newest holds the last Record, and each Record.previous (parser.py:27) points to the prior record, so the whole history of every record ever parsed is a reachable linked list that never gets freed.",
+"cause":"unbounded previous-chain via global _newest; only delta (a float) is needed, not the reference",
+"evidence":"After the run above, setting parser._newest = None freed a further ~6.4MB after gc.collect(); growth is linear in rows.",
+"discriminator":""},
+{"site":"ingest/pipeline.py:19","holder":"container-field","region":"heap","verdict":"not-a-leak",
+"mechanism":"Pipeline.per_sensor dict is keyed by sensor id and overwritten per record.",
+"cause":"",
+"evidence":"Keys are bounded by the sensor set (64 in the load generator); values are floats replaced in place.",
+"discriminator":"Size is bounded by number of distinct sensors, not number of batches."}
+]}
