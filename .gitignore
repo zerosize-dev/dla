@@ -1,2 +1,5 @@
 target/
 .dla/
+bench/results/**/transcript.jsonl
+bench/results/**/stderr.log
+__pycache__/

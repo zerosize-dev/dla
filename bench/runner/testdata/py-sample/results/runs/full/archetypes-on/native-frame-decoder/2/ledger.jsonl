@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "src/decode.c:88", "holder": "static/global", "archetype": "L-HANDLE"}}
+{"type": "transition", "finding": "f1", "to": "confirmed"}

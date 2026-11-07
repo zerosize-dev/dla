@@ -1,0 +1,22 @@
+schema_version = 1
+id = "fx-trap"
+runtime = "python"
+category = "archetype-leak"
+pair = "fx-decoy"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Memory climbs under load. Find out why.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/cache.py:10"
+lines = [8, 12]
+alt_sites = ["src/hub.py:20-22", "src/hub.py:40"]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = true

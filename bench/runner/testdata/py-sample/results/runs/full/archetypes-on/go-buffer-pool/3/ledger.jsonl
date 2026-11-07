@@ -1,0 +1,3 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "pool.go:30", "holder": "container-field"}}
+{"type": "transition", "finding": "f1", "to": "bogus"}
+{"type": "transition", "finding": "zz", "to": "confirmed"}

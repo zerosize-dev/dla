@@ -1,0 +1,15 @@
+schema_version = 1
+id = "fx-free"
+runtime = "go"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = "Heap grows with every request."
+
+[[leak]]
+id = "L1"
+site = "lib/chain.go:30"
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"

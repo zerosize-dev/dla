@@ -1,0 +1,20 @@
+{
+ "schema_version": 1,
+ "fixture": "jvm-billing-private-repo",
+ "ablation": "no-skill",
+ "archetypes": "on",
+ "run": 3,
+ "exit_code": 1,
+ "timed_out": true,
+ "wall_seconds": 195.75,
+ "usage": {
+  "input_tokens": 3200,
+  "output_tokens": 232,
+  "cache_read_input_tokens": 15000
+ },
+ "cost_usd": 0.77,
+ "num_turns": 13,
+ "model": "m",
+ "started_at": "2026-01-01T00:00:00Z",
+ "error": null
+}

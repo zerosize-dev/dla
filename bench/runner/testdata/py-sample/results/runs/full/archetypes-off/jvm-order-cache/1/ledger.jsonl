@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "src/main/OrderCache.java:7", "holder": "static/global", "archetype": "L-COLLECT"}}
+{"type": "transition", "finding": "f1", "to": "confirmed"}

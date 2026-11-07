@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "ingest/parser.py:41", "holder": "static/global", "archetype": "UNCLASSIFIED"}}
+{"type": "transition", "finding": "f1", "to": "strong"}

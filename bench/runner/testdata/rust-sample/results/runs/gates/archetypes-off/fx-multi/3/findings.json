@@ -1,0 +1,13 @@
+{
+  "findings": [
+    {
+      "site": "a/reg.js:5",
+      "region": "heap",
+      "verdict": "leak-confirmed",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "registration-table",
+      "cause": "N-WARM"
+    }
+  ]
+}

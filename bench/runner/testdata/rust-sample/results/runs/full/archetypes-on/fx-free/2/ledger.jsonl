@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "lib/chain.go:30", "holder": "blocked-stack", "archetype": "L-WORKER"}}
+{"type": "transition", "finding": "F1", "from": "x", "to": "confirmed"}

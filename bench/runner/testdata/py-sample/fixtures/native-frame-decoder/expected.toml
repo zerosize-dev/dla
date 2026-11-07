@@ -1,0 +1,19 @@
+schema_version = 1
+id = "native-frame-decoder"
+runtime = "native"
+category = "archetype-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The decoder's RSS grows with input volume.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/decode.c:88"
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-HANDLE"
+share = 1.0
+confirmable = true

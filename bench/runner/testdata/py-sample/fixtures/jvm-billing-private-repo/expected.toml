@@ -1,0 +1,19 @@
+schema_version = 1
+id = "jvm-billing-private-repo"
+runtime = "jvm"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = """
+The billing service grows.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/Billing.java:30"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = false

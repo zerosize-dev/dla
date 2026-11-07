@@ -1,0 +1,13 @@
+{
+ "findings": [
+  {
+   "site": "src/decode.c:88",
+   "holder": "native-handle/global-ref",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e",
+   "cause": "L-HANDLE"
+  }
+ ]
+}

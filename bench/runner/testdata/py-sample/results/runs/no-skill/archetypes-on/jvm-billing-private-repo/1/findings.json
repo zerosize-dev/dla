@@ -1,0 +1,12 @@
+{
+ "findings": [
+  {
+   "site": "src/Billing.java:30",
+   "holder": "static/global",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e"
+  }
+ ]
+}

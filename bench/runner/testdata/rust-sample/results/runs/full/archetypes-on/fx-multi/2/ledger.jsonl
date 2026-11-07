@@ -1,0 +1,5 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "a/reg.js:5", "holder": "registration-table", "archetype": "L-REGISTER"}}
+{"type": "transition", "finding": "F1", "from": "x", "to": "confirmed"}
+{"type": "finding_added", "finding": {"id": "F2", "site": "b/parse.js:40", "holder": "static/global", "archetype": "UNCLASSIFIED"}}
+{"type": "transition", "finding": "F2", "from": "x", "to": "confirmed"}
+{"type": "transition", "finding": "F2", "from": "x", "to": "refuted"}

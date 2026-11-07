@@ -1,0 +1,12 @@
+{
+ "findings": [
+  {
+   "site": "pool.go:30",
+   "holder": "container-field",
+   "region": "heap",
+   "verdict": "leak-suspected",
+   "mechanism": "m",
+   "evidence": "e"
+  }
+ ]
+}

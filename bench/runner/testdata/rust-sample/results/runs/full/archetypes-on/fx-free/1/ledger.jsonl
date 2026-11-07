@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "lib/chain.go:30", "holder": "static/global"}}
+{"type": "transition", "finding": "F1", "from": "x", "to": "confirmed"}

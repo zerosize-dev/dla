@@ -1,0 +1,24 @@
+schema_version = 1
+id = "fx-multi"
+runtime = "node"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "Two things seem to grow."
+
+[[leak]]
+id = "L1"
+site = "a/reg.js:5"
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 0.7
+
+[[leak]]
+id = "L2"
+site = "b/parse.js:40"
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 0.3

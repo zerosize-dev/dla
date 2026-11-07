@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "src/Billing.java:30", "holder": "static/global"}}
+{"type": "transition", "finding": "f1", "to": "suspected_static_only"}

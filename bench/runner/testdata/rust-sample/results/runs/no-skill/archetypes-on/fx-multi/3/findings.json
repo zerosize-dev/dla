@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "site": "a/reg.js:5",
+      "region": "heap",
+      "verdict": "leak-confirmed",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "registration-table",
+      "cause": "L-REGISTER"
+    },
+    {
+      "site": "b/parse.js:40",
+      "region": "heap",
+      "verdict": "leak-confirmed",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "static/global",
+      "cause": "UNCLASSIFIED"
+    }
+  ]
+}

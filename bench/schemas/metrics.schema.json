@@ -1,0 +1,487 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MetricsFile",
+  "description": "`metrics.json`.",
+  "type": "object",
+  "properties": {
+    "groups": {
+      "description": "Groups sorted by ablation, then archetypes.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Group"
+      }
+    },
+    "schema_version": {
+      "description": "Schema version; 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "groups"
+  ],
+  "$defs": {
+    "Cost": {
+      "description": "Cost.",
+      "type": "object",
+      "properties": {
+        "mean": {
+          "description": "Mean over those runs.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "sum": {
+          "description": "Sum over runs with a numeric cost.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "sum"
+      ]
+    },
+    "FixtureStats": {
+      "description": "Per fixture statistics of a group.",
+      "type": "object",
+      "properties": {
+        "category": {
+          "description": "Fixture category.",
+          "type": "string"
+        },
+        "claim_runs": {
+          "description": "Runs with at least one claim.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "leaks": {
+          "description": "Counts per expected leak.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/LeakCounts"
+          }
+        },
+        "rule_out_runs": {
+          "description": "Runs with at least one rule-out.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runs": {
+          "description": "Runs.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "category",
+        "runs",
+        "claim_runs",
+        "rule_out_runs",
+        "leaks"
+      ]
+    },
+    "Group": {
+      "description": "One ablation with one archetypes setting.",
+      "type": "object",
+      "properties": {
+        "ablation": {
+          "description": "Ablation.",
+          "type": "string"
+        },
+        "archetypes": {
+          "description": "`on` or `off`.",
+          "type": "string"
+        },
+        "fixtures": {
+          "description": "Per fixture statistics.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/FixtureStats"
+          }
+        },
+        "metrics": {
+          "description": "The twelve ratio metrics.",
+          "$ref": "#/$defs/Metrics"
+        },
+        "unexplained_growth_share": {
+          "description": "Unexplained growth share.",
+          "$ref": "#/$defs/Unexplained"
+        },
+        "usage": {
+          "description": "Usage.",
+          "$ref": "#/$defs/UsageStats"
+        }
+      },
+      "required": [
+        "ablation",
+        "archetypes",
+        "metrics",
+        "unexplained_growth_share",
+        "usage",
+        "fixtures"
+      ]
+    },
+    "LeakCounts": {
+      "description": "Counts for one expected leak over the runs of a fixture.",
+      "type": "object",
+      "properties": {
+        "flagged": {
+          "description": "Runs in which the leak was flagged.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "found": {
+          "description": "Runs in which the leak was found.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "grounded": {
+          "description": "Runs in which it was found with the right holder.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "found",
+        "flagged",
+        "grounded"
+      ]
+    },
+    "Metrics": {
+      "description": "The twelve ratio metrics.",
+      "type": "object",
+      "properties": {
+        "archetype_free_recall": {
+          "description": "Found leaks over leaks with cause UNCLASSIFIED.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "false_confirmation_rate": {
+          "description": "Decoy and non-leak runs that claim.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "flagged_recall": {
+          "description": "Flagged leaks over the leak set.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "forced_fit_rate": {
+          "description": "Found UNCLASSIFIED leaks given an archetype label.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "grounded_attribution": {
+          "description": "Found leaks whose holder is right.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "label_accuracy": {
+          "description": "Found leaks with an archetype whose label is right.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "leak_recall": {
+          "description": "Found leaks over the leak set.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "non_leak_precision": {
+          "description": "Non-leak runs with no claim and a rule-out.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "overclaim_rate": {
+          "description": "Impossible runs that claim.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "second_leak_recall": {
+          "description": "Other leaks found in multi-leak runs.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "trap_false_alarm_rate": {
+          "description": "Decoy runs that claim.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "trap_miss_rate": {
+          "description": "Trap runs that miss a leak.",
+          "$ref": "#/$defs/Ratio"
+        }
+      },
+      "required": [
+        "leak_recall",
+        "archetype_free_recall",
+        "flagged_recall",
+        "second_leak_recall",
+        "grounded_attribution",
+        "label_accuracy",
+        "forced_fit_rate",
+        "overclaim_rate",
+        "false_confirmation_rate",
+        "non_leak_precision",
+        "trap_miss_rate",
+        "trap_false_alarm_rate"
+      ]
+    },
+    "PerRun": {
+      "description": "One run index of a ratio metric.",
+      "type": "object",
+      "properties": {
+        "den": {
+          "description": "Denominator.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "num": {
+          "description": "Numerator.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "run": {
+          "description": "Run index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "value": {
+          "description": "`round6(num / den)`, null when `den` is 0.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "run",
+        "num",
+        "den"
+      ]
+    },
+    "Ratio": {
+      "description": "A ratio metric.",
+      "type": "object",
+      "properties": {
+        "den": {
+          "description": "Denominator.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mean": {
+          "description": "Mean of the non-null per-run values.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "num": {
+          "description": "Numerator.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "per_run": {
+          "description": "One entry per run index.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PerRun"
+          }
+        },
+        "stdev": {
+          "description": "Population standard deviation of the non-null per-run values.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "value": {
+          "description": "`round6(num / den)`, null when `den` is 0.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "num",
+        "den",
+        "per_run"
+      ]
+    },
+    "Sources": {
+      "description": "Where findings came from.",
+      "type": "object",
+      "properties": {
+        "findings": {
+          "description": "Runs graded from findings.json.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ledger": {
+          "description": "Runs graded from the ledger.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "none": {
+          "description": "Runs with neither.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ledger",
+        "findings",
+        "none"
+      ]
+    },
+    "SumMean": {
+      "description": "Sum and mean of an integer field.",
+      "type": "object",
+      "properties": {
+        "mean": {
+          "description": "Mean per run.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "sum": {
+          "description": "Sum.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sum"
+      ]
+    },
+    "Unexplained": {
+      "description": "Unexplained growth share.",
+      "type": "object",
+      "properties": {
+        "runs": {
+          "description": "Runs with a non-empty residual.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "value": {
+          "description": "Residual over total slope.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "runs"
+      ]
+    },
+    "UsageStats": {
+      "description": "Usage of a group.",
+      "type": "object",
+      "properties": {
+        "cache_creation_input_tokens": {
+          "description": "Cache creation tokens.",
+          "$ref": "#/$defs/SumMean"
+        },
+        "cache_read_input_tokens": {
+          "description": "Cache read tokens.",
+          "$ref": "#/$defs/SumMean"
+        },
+        "cost_usd": {
+          "description": "Cost.",
+          "$ref": "#/$defs/Cost"
+        },
+        "errored": {
+          "description": "Runs whose exit code is missing, not an integer or not 0, or that timed out.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "incomplete": {
+          "description": "Run directories skipped for lack of `run.json`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "description": "Input tokens.",
+          "$ref": "#/$defs/SumMean"
+        },
+        "output_tokens": {
+          "description": "Output tokens.",
+          "$ref": "#/$defs/SumMean"
+        },
+        "runs": {
+          "description": "Graded runs in the group.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sources": {
+          "description": "Source of the findings per run.",
+          "$ref": "#/$defs/Sources"
+        },
+        "wall_seconds": {
+          "description": "Wall clock.",
+          "$ref": "#/$defs/WallSeconds"
+        }
+      },
+      "required": [
+        "runs",
+        "incomplete",
+        "errored",
+        "sources",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "wall_seconds",
+        "cost_usd"
+      ]
+    },
+    "WallSeconds": {
+      "description": "Sum, mean and max.",
+      "type": "object",
+      "properties": {
+        "max": {
+          "description": "Largest.",
+          "type": "number",
+          "format": "double"
+        },
+        "mean": {
+          "description": "Mean per run.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "sum": {
+          "description": "Sum.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "sum",
+        "max"
+      ]
+    }
+  }
+}

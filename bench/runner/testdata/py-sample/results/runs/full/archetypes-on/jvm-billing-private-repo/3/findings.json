@@ -1,0 +1,1 @@
+{"findings": [{"site": "src/Billing.java:30", "holder": "static/global", "region": "heap", "verdict": "not-a-leak", "mechanism": "m", "evidence": "e", "discriminator": "build fails before any run"}]}

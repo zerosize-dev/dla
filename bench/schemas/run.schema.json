@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunJson",
+  "description": "`run.json`, written by the runner.",
+  "type": "object",
+  "properties": {
+    "ablation": {
+      "description": "`no-skill`, `prose`, `gates` or `full`.",
+      "type": "string"
+    },
+    "archetypes": {
+      "description": "`on` or `off`.",
+      "type": "string"
+    },
+    "cost_usd": {
+      "description": "Cost from the final result event.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    },
+    "error": {
+      "description": "Runner-side error, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exit_code": {
+      "description": "Exit code of the `claude` process; -1 when it was killed.",
+      "type": "integer",
+      "format": "int32"
+    },
+    "fixture": {
+      "description": "Fixture ID.",
+      "type": "string"
+    },
+    "model": {
+      "description": "Model from the init event.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "num_turns": {
+      "description": "Turns from the final result event.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "run": {
+      "description": "Run index, starting at 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "schema_version": {
+      "description": "Schema version; 1.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "started_at": {
+      "description": "Start time, RFC 3339.",
+      "type": "string"
+    },
+    "timed_out": {
+      "description": "True when the timeout fired.",
+      "type": "boolean"
+    },
+    "usage": {
+      "description": "Token usage from the final result event.",
+      "$ref": "#/$defs/Usage"
+    },
+    "wall_seconds": {
+      "description": "Wall-clock seconds.",
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "required": [
+    "schema_version",
+    "fixture",
+    "ablation",
+    "archetypes",
+    "run",
+    "exit_code",
+    "timed_out",
+    "wall_seconds",
+    "usage",
+    "started_at"
+  ],
+  "$defs": {
+    "Usage": {
+      "description": "Token usage of one run.",
+      "type": "object",
+      "properties": {
+        "cache_creation_input_tokens": {
+          "description": "Cache creation input tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "cache_read_input_tokens": {
+          "description": "Cache read input tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "input_tokens": {
+          "description": "Input tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "output_tokens": {
+          "description": "Output tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

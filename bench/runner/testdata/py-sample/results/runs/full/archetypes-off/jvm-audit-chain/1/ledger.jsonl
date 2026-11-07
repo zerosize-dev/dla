@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "src/Audit.java:15", "holder": "container-field", "archetype": "UNCLASSIFIED"}}
+{"type": "transition", "finding": "f1", "to": "confirmed"}

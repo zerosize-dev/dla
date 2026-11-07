@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "fixture": "fx-decoy",
+  "ablation": "gates",
+  "archetypes": "off",
+  "run": 1,
+  "timed_out": false,
+  "wall_seconds": 2.5,
+  "usage": {},
+  "cost_usd": null,
+  "num_turns": 7,
+  "model": "sample-model",
+  "started_at": "2000-01-01T00:00:00Z",
+  "error": null
+}

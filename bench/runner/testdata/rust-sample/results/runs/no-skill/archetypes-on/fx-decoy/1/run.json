@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "fixture": "fx-decoy",
+  "ablation": "no-skill",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 10.0,
+  "usage": {
+    "input_tokens": 4
+  },
+  "cost_usd": 0.25,
+  "num_turns": 7,
+  "model": "sample-model",
+  "started_at": "2000-01-01T00:00:00Z",
+  "error": null
+}

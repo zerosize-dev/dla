@@ -1,0 +1,21 @@
+{
+ "schema_version": 1,
+ "fixture": "jvm-order-cache-bounded",
+ "ablation": "no-skill",
+ "archetypes": "on",
+ "run": 2,
+ "exit_code": 0,
+ "timed_out": false,
+ "wall_seconds": 149.25,
+ "usage": {
+  "input_tokens": 2400,
+  "output_tokens": 224,
+  "cache_read_input_tokens": 10000,
+  "cache_creation_input_tokens": 304
+ },
+ "cost_usd": 0.54,
+ "num_turns": 12,
+ "model": "m",
+ "started_at": "2026-01-01T00:00:00Z",
+ "error": null
+}

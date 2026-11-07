@@ -1,0 +1,21 @@
+{
+ "schema_version": 1,
+ "fixture": "go-buffer-pool",
+ "ablation": "no-skill",
+ "archetypes": "on",
+ "run": 2,
+ "exit_code": 0,
+ "timed_out": false,
+ "wall_seconds": 121.25,
+ "usage": {
+  "input_tokens": 2000,
+  "output_tokens": 220,
+  "cache_read_input_tokens": 10000,
+  "cache_creation_input_tokens": 300
+ },
+ "cost_usd": 0.5,
+ "num_turns": 12,
+ "model": "m",
+ "started_at": "2026-01-01T00:00:00Z",
+ "error": null
+}

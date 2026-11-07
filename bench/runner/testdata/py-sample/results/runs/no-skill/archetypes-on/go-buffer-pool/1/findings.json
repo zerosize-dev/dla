@@ -1,0 +1,13 @@
+{
+ "findings": [
+  {
+   "site": "pool.go:30",
+   "holder": "container-field",
+   "region": "heap",
+   "verdict": "not-a-leak",
+   "mechanism": "m",
+   "evidence": "e",
+   "discriminator": "pool size plateaus"
+  }
+ ]
+}

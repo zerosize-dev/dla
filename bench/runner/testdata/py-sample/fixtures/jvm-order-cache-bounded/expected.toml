@@ -1,0 +1,17 @@
+schema_version = 1
+id = "jvm-order-cache-bounded"
+runtime = "jvm"
+category = "decoy-control"
+pair = "jvm-order-cache"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Memory climbs under sustained traffic. Find out why.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/main/OrderCache.java:20"
+cause = "N-WARM"
+discriminator = "entry count stops at the cap after warm-up"

@@ -1,0 +1,16 @@
+schema_version = 1
+id = "fx-impossible"
+runtime = "jvm"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = "The service is OOM-killed."
+
+[[leak]]
+id = "L1"
+site = "pom/Cache.java:9"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+confirmable = false

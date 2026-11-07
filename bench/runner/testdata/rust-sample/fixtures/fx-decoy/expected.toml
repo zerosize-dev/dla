@@ -1,0 +1,17 @@
+schema_version = 1
+id = "fx-decoy"
+runtime = "python"
+category = "decoy-control"
+pair = "fx-trap"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Memory climbs under load. Find out why.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/q.py:5"
+cause = "N-WARM"
+discriminator = "entry count stops at 128 after warm-up"

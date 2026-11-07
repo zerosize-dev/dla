@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "site": "src/q.py:5",
+      "region": "heap",
+      "verdict": "not-a-leak",
+      "mechanism": "m",
+      "evidence": "e",
+      "discriminator": "count plateaus at 128"
+    }
+  ]
+}

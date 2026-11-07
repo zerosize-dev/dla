@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "site": "src/cache.py:10",
+      "region": "heap",
+      "verdict": "leak-confirmed",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "static/global",
+      "cause": "L-COLLECT"
+    },
+    {
+      "site": "src/other.py:3",
+      "region": "heap",
+      "verdict": "not-a-leak",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "container-field",
+      "discriminator": "flat after warm-up"
+    }
+  ]
+}

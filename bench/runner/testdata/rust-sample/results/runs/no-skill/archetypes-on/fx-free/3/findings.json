@@ -1,0 +1,20 @@
+{
+  "findings": [
+    {
+      "site": "lib/chain.go:31",
+      "region": "heap",
+      "verdict": "leak-confirmed",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "static/global"
+    },
+    {
+      "site": "lib/chain.go:30",
+      "region": "heap",
+      "verdict": "leak-suspected",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "static/global"
+    }
+  ]
+}

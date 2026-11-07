@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "site": "pom/Cache.java:9",
+      "region": "heap",
+      "verdict": "leak-confirmed",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "static/global"
+    }
+  ]
+}

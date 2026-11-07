@@ -1,0 +1,12 @@
+{
+ "findings": [
+  {
+   "site": "/work/tmp/proj/src/main/OrderCache.java:19:5",
+   "holder": "static/global",
+   "region": "heap",
+   "verdict": "leak-suspected",
+   "mechanism": "m",
+   "evidence": "e"
+  }
+ ]
+}

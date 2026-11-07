@@ -1,0 +1,21 @@
+{
+ "schema_version": 1,
+ "fixture": "python-ingest-two-leaks",
+ "ablation": "no-skill",
+ "archetypes": "on",
+ "run": 2,
+ "exit_code": 0,
+ "timed_out": false,
+ "wall_seconds": 163.25,
+ "usage": {
+  "input_tokens": 2600,
+  "output_tokens": 226,
+  "cache_read_input_tokens": 10000,
+  "cache_creation_input_tokens": 306
+ },
+ "cost_usd": null,
+ "num_turns": 12,
+ "model": "m",
+ "started_at": "2026-01-01T00:00:00Z",
+ "error": null
+}

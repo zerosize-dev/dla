@@ -1,0 +1,29 @@
+schema_version = 1
+id = "python-ingest-two-leaks"
+runtime = "python"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The ingest worker's memory climbs all day.
+"""
+
+[[leak]]
+id = "L1"
+site = "ingest/registry.py:12"
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 0.7
+confirmable = true
+
+[[leak]]
+id = "L2"
+site = "ingest/parser.py:40"
+lines = [38, 41]
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 0.3
+confirmable = true

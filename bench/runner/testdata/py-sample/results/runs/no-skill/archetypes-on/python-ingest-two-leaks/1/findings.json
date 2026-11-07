@@ -1,0 +1,22 @@
+{
+ "findings": [
+  {
+   "site": "ingest/registry.py:12",
+   "holder": "registration-table",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e",
+   "cause": "L-REGISTER"
+  },
+  {
+   "site": "ingest/parser.py:39",
+   "holder": "static/global",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e",
+   "cause": "UNCLASSIFIED"
+  }
+ ]
+}

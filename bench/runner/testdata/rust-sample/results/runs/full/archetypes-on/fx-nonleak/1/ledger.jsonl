@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "x.py:1", "archetype": "N-HWM"}}
+{"type": "transition", "finding": "F1", "from": "x", "to": "refuted"}

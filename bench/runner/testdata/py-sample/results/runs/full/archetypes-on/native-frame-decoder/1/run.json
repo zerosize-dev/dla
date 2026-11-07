@@ -1,0 +1,21 @@
+{
+ "schema_version": 1,
+ "fixture": "native-frame-decoder",
+ "ablation": "full",
+ "archetypes": "on",
+ "run": 1,
+ "exit_code": 0,
+ "timed_out": false,
+ "wall_seconds": 95.75,
+ "usage": {
+  "input_tokens": 1500,
+  "output_tokens": 215,
+  "cache_read_input_tokens": 5000,
+  "cache_creation_input_tokens": 305
+ },
+ "cost_usd": 0.3,
+ "num_turns": 11,
+ "model": "m",
+ "started_at": "2026-01-01T00:00:00Z",
+ "error": null
+}

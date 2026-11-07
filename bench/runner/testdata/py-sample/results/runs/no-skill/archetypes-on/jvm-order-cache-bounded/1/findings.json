@@ -1,0 +1,13 @@
+{
+ "findings": [
+  {
+   "site": "src/main/OrderCache.java:20",
+   "holder": "container-field",
+   "region": "heap",
+   "verdict": "not-a-leak",
+   "mechanism": "m",
+   "evidence": "e",
+   "discriminator": "entry count stops at 1000"
+  }
+ ]
+}

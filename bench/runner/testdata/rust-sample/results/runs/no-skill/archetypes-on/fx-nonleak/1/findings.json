@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "site": "x.py:1",
+      "region": "heap",
+      "verdict": "not-a-leak",
+      "mechanism": "m",
+      "evidence": "e",
+      "discriminator": "   "
+    }
+  ]
+}

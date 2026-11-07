@@ -9,3 +9,5 @@ bin/dla text eol=lf
 *.jsonl text eol=lf
 *.tar.gz binary
 *.png binary
+# Grader test inputs are byte-exact on purpose (e.g. a CRLF ledger).
+bench/runner/testdata/** -text

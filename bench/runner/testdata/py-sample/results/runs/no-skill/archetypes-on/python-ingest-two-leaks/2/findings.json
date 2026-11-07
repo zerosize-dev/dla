@@ -1,0 +1,13 @@
+{
+ "findings": [
+  {
+   "site": "ingest/registry.py:12",
+   "holder": "registration-table",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e",
+   "cause": "L-REGISTER"
+  }
+ ]
+}

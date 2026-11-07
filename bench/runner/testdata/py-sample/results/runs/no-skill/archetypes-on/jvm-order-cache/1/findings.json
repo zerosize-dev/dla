@@ -1,0 +1,13 @@
+{
+ "findings": [
+  {
+   "site": "src/main/OrderCache.java:20",
+   "holder": "static/global",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e",
+   "cause": "L-COLLECT"
+  }
+ ]
+}

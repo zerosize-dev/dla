@@ -1,0 +1,1 @@
+{"findings": ["junk", 5, {"site": "src/q.py:5", "verdict": "not-a-leak", "discriminator": "x"}]}

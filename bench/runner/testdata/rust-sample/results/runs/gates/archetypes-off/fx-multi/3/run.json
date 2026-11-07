@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "fixture": "fx-multi",
+  "ablation": "gates",
+  "archetypes": "off",
+  "run": 3,
+  "exit_code": 0,
+  "timed_out": true,
+  "wall_seconds": 3.5,
+  "usage": {},
+  "cost_usd": null,
+  "num_turns": 7,
+  "model": "sample-model",
+  "started_at": "2000-01-01T00:00:00Z",
+  "error": null
+}

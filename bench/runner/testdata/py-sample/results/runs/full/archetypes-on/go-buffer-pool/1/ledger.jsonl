@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "pool.go:30", "holder": "container-field", "archetype": "N-HWM"}}
+{"type": "transition", "finding": "f1", "to": "refuted"}

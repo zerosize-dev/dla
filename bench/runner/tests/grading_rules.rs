@@ -1,0 +1,755 @@
+//! One test per rule of bench/GRADING.md.
+
+use dla_bench::{
+    grade::{
+        Finding, Source, State, findings_from_json, findings_from_ledger, grade_findings,
+        leak_outcomes, normalise_path, parse_site, round6, select_source, site_matches,
+    },
+    model::Expected,
+};
+use serde_json::json;
+
+fn exp(toml_text: &str) -> Expected {
+    toml::from_str(toml_text).expect("expected.toml parses")
+}
+
+const TRAP: &str = r#"
+schema_version = 1
+id = "t"
+runtime = "python"
+category = "archetype-leak"
+pair = "t-ctl"
+dynamic_confirmation = true
+[task]
+prompt = "p"
+[[leak]]
+id = "L1"
+site = "src/cache.py:10"
+lines = [8, 12]
+alt_sites = ["src/hub.py:20-22", "src/hub.py:40"]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+"#;
+
+fn finding(state: State, site: Option<&str>) -> Finding {
+    Finding {
+        state,
+        site: site.map(str::to_owned),
+        holder: Some("static/global".into()),
+        label: Some("L-COLLECT".into()),
+        hypothesis: false,
+        discriminator: false,
+    }
+}
+
+// ---- source selection
+
+#[test]
+fn ledger_wins_when_it_has_a_finding_added() {
+    let ledger = "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"site\":\"a:1\"}}\n";
+    let fj = "{\"findings\":[{\"site\":\"b:2\",\"verdict\":\"leak-confirmed\"}]}";
+    let (src, f) = select_source(Some(ledger), Some(fj));
+    assert_eq!(src, Source::Ledger);
+    assert_eq!(f.len(), 1);
+    assert_eq!(f[0].site.as_deref(), Some("a:1"));
+}
+
+#[test]
+fn ledger_without_finding_added_falls_back_to_findings_json() {
+    let ledger = "{\"type\":\"evidence\"}\nnot json\n";
+    let fj = "{\"findings\":[{\"site\":\"b:2\",\"verdict\":\"leak-confirmed\"}]}";
+    let (src, f) = select_source(Some(ledger), Some(fj));
+    assert_eq!(src, Source::Findings);
+    assert_eq!(f[0].state, State::Confirmed);
+}
+
+#[test]
+fn source_none_when_nothing_usable() {
+    assert_eq!(select_source(None, None).0, Source::None);
+    assert_eq!(select_source(Some(""), Some("[]")).0, Source::None);
+    assert_eq!(
+        select_source(None, Some("{\"findings\": {}}")).0,
+        Source::None
+    );
+    assert_eq!(select_source(None, Some("not json")).0, Source::None);
+    let (src, f) = select_source(None, Some("{\"findings\": []}"));
+    assert_eq!(src, Source::Findings);
+    assert!(f.is_empty());
+}
+
+// ---- lenient ledger replay
+
+#[test]
+fn ledger_replay_skips_bad_lines_and_ignores_other_records() {
+    let text = [
+        "",
+        "garbage",
+        "[1]",
+        "{\"a\":1}",
+        "{\"type\":3}",
+        "{\"type\":\"evidence\",\"id\":\"E1\"}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"site\":\"a.py:3\",\"holder\":\"static/global\",\"archetype\":\"L-WORKER\"}}",
+        "{\"type\":\"transition\",\"finding\":\"F1\",\"to\":\"confirmed\"}",
+        "{\"type\":\"transition\",\"finding\":\"nope\",\"to\":\"strong\"}",
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).expect("has finding_added");
+    assert_eq!(f.len(), 1);
+    assert_eq!(f[0].state, State::Confirmed);
+    assert_eq!(f[0].site.as_deref(), Some("a.py:3"));
+    assert_eq!(f[0].holder.as_deref(), Some("static/global"));
+    assert_eq!(f[0].label.as_deref(), Some("L-WORKER"));
+    assert!(!f[0].hypothesis);
+    assert!(!f[0].discriminator);
+}
+
+#[test]
+fn ledger_state_mapping() {
+    let mut lines = String::new();
+    for (i, to) in [
+        "confirmed",
+        "strong",
+        "refuted",
+        "suspected_static_only",
+        "unresolved",
+        "under_test",
+        "whatever",
+    ]
+    .iter()
+    .enumerate()
+    {
+        lines.push_str(&format!(
+            "{{\"type\":\"finding_added\",\"finding\":{{\"id\":\"F{i}\"}}}}\n{{\"type\":\"transition\",\"finding\":\"F{i}\",\"to\":\"{to}\"}}\n"
+        ));
+    }
+    lines.push_str("{\"type\":\"finding_added\",\"finding\":{\"id\":\"G\"}}\n");
+    lines.push_str("{\"type\":\"transition\",\"finding\":\"G\"}\n");
+    let f = findings_from_ledger(&lines).unwrap();
+    let states: Vec<State> = f.iter().map(|x| x.state).collect();
+    assert_eq!(
+        states,
+        [
+            State::Confirmed,
+            State::Strong,
+            State::Refuted,
+            State::Suspected,
+            State::Unresolved,
+            State::Open,
+            State::Open,
+            State::Open
+        ]
+    );
+    // discriminator is true exactly for refuted
+    let disc: Vec<bool> = f.iter().map(|x| x.discriminator).collect();
+    assert_eq!(
+        disc,
+        [false, false, true, false, false, false, false, false]
+    );
+}
+
+#[test]
+fn ledger_hypothesis_needs_a_non_empty_string_parent() {
+    let text = [
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"A\",\"parent\":\"F1\"}}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"B\",\"parent\":\"\"}}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"C\",\"parent\":7}}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"D\"}}",
+    ]
+    .join("\n");
+    let h: Vec<bool> = findings_from_ledger(&text)
+        .unwrap()
+        .iter()
+        .map(|f| f.hypothesis)
+        .collect();
+    assert_eq!(h, [true, false, false, false]);
+}
+
+#[test]
+fn ledger_fields_must_be_strings_else_null() {
+    let text = "{\"type\":\"finding_added\",\"finding\":{\"id\":\"A\",\"site\":5,\"holder\":null,\"archetype\":[1]}}";
+    let f = findings_from_ledger(text).unwrap();
+    assert_eq!(
+        (f[0].site.clone(), f[0].holder.clone(), f[0].label.clone()),
+        (None, None, None)
+    );
+}
+
+#[test]
+fn repeated_id_moves_the_finding_to_the_later_line() {
+    let text = [
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"A\",\"site\":\"one:1\"}}",
+        "{\"type\":\"transition\",\"finding\":\"A\",\"to\":\"confirmed\"}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"B\",\"site\":\"two:2\"}}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"A\",\"site\":\"three:3\"}}",
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).unwrap();
+    assert_eq!(f.len(), 2);
+    assert_eq!(f[0].site.as_deref(), Some("two:2"));
+    assert_eq!(f[1].site.as_deref(), Some("three:3"));
+    assert_eq!(f[1].state, State::Open, "the replacement starts open");
+}
+
+#[test]
+fn malformed_finding_added_creates_nothing_but_selects_the_ledger() {
+    for line in [
+        "{\"type\":\"finding_added\",\"finding\":5}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":7,\"site\":\"a:1\"}}",
+        "{\"type\":\"finding_added\",\"finding\":{\"site\":\"a:1\"}}",
+    ] {
+        let (src, f) = select_source(
+            Some(line),
+            Some("{\"findings\":[{\"site\":\"b:2\",\"verdict\":\"leak-confirmed\"}]}"),
+        );
+        assert_eq!(src, Source::Ledger, "{line}");
+        assert!(f.is_empty(), "{line}");
+    }
+}
+
+#[test]
+fn ledger_with_a_finding_added_but_no_usable_finding_is_still_the_source() {
+    let (src, f) = select_source(
+        Some("{\"type\":\"finding_added\"}\n"),
+        Some("{\"findings\":[{\"site\":\"b:2\",\"verdict\":\"leak-confirmed\"}]}"),
+    );
+    assert_eq!(src, Source::Ledger);
+    assert!(f.is_empty());
+}
+
+// ---- findings.json mapping
+
+#[test]
+fn findings_json_mapping() {
+    let v = json!({"findings": [
+        {"site": "a:1", "holder": "h", "verdict": "leak-confirmed", "cause": "L-COLLECT"},
+        {"site": "a:2", "verdict": "leak-suspected", "cause": "l-collect"},
+        {"site": "a:3", "verdict": "not-a-leak", "discriminator": "  flat "},
+        {"site": "a:4", "verdict": "not-a-leak", "discriminator": " \t"},
+        {"site": "a:5", "verdict": "leak-confirmed", "discriminator": "ignored"},
+        {"site": 5, "holder": 6, "verdict": "other", "cause": "UNCLASSIFIED"},
+        "skipped", 3, null,
+        {"verdict": "not-a-leak", "discriminator": 4}
+    ]});
+    let f = findings_from_json(&v).unwrap();
+    assert_eq!(f.len(), 7);
+    assert_eq!(f[0].state, State::Confirmed);
+    assert_eq!(f[0].label.as_deref(), Some("L-COLLECT"));
+    assert_eq!(f[0].holder.as_deref(), Some("h"));
+    assert_eq!(f[1].state, State::Suspected);
+    assert_eq!(
+        f[1].label, None,
+        "lower case does not match the label pattern"
+    );
+    assert_eq!(f[2].state, State::Refuted);
+    assert!(f[2].discriminator);
+    assert!(!f[3].discriminator, "blank after trimming");
+    assert!(!f[4].discriminator, "only not-a-leak counts");
+    assert_eq!(
+        (f[5].state, f[5].site.clone(), f[5].holder.clone()),
+        (State::Open, None, None)
+    );
+    assert_eq!(f[5].label.as_deref(), Some("UNCLASSIFIED"));
+    assert!(!f[6].discriminator, "non-string discriminator");
+    assert!(f.iter().all(|x| !x.hypothesis));
+    for label in ["N-WARM", "L-X", "UNCLASSIFIED"] {
+        let v = json!({"findings": [{"cause": label}]});
+        assert_eq!(
+            findings_from_json(&v).unwrap()[0].label.as_deref(),
+            Some(label)
+        );
+    }
+    for bad in ["L-", "L-A1", "X-ABC", "L-ABC ", "free text"] {
+        let v = json!({"findings": [{"cause": bad}]});
+        assert_eq!(findings_from_json(&v).unwrap()[0].label, None, "{bad}");
+    }
+    assert!(findings_from_json(&json!([])).is_none());
+    assert!(findings_from_json(&json!({"findings": null})).is_none());
+}
+
+// ---- site parsing and matching
+
+#[test]
+fn site_parsing_and_path_normalisation() {
+    assert_eq!(parse_site("a/b.py:12"), Some(("a/b.py".into(), 12)));
+    assert_eq!(parse_site("a/b.py:12:7"), Some(("a/b.py".into(), 12)));
+    assert_eq!(parse_site(".\\.\\a\\b.py:3"), Some(("a/b.py".into(), 3)));
+    assert_eq!(parse_site("./././a.py:3"), Some(("a.py".into(), 3)));
+    assert_eq!(parse_site("C:\\w\\a.py:3"), Some(("C:/w/a.py".into(), 3)));
+    assert_eq!(parse_site("a.py"), None);
+    assert_eq!(parse_site("a.py:x"), None);
+    assert_eq!(parse_site("a.py:3-5"), None);
+    assert_eq!(normalise_path("x/./y"), "x/./y", "only leading ./ goes");
+}
+
+#[test]
+fn site_matching_rules() {
+    let e = exp(TRAP);
+    let leak = &e.leak[0];
+    let m = |s: &str| site_matches(&finding(State::Confirmed, Some(s)), leak);
+    assert!(m("src/cache.py:10"));
+    assert!(m("src/cache.py:8"), "range start is inside");
+    assert!(m("src/cache.py:12"), "range end is inside");
+    assert!(!m("src/cache.py:7"));
+    assert!(!m("src/cache.py:13"));
+    assert!(m("./src/cache.py:9"));
+    assert!(m("src\\cache.py:9"));
+    assert!(m("/work/proj/src/cache.py:9:4"), "suffix path with column");
+    assert!(m("proj\\src\\cache.py:11"));
+    assert!(!m("xsrc/cache.py:10"), "suffix must start at a slash");
+    assert!(!m("cache.py:10"), "shorter than the leak path");
+    assert!(!m("src/cache.py"));
+    assert!(m("src/hub.py:20"), "alt range start");
+    assert!(m("src/hub.py:22"), "alt range end");
+    assert!(m("lib/src/hub.py:21"));
+    assert!(!m("src/hub.py:23"));
+    assert!(m("src/hub.py:40"), "alt single line");
+    assert!(!m("src/hub.py:41"));
+    assert!(!site_matches(&finding(State::Confirmed, None), leak));
+}
+
+#[test]
+fn lines_default_to_the_site_line() {
+    let e = exp(&TRAP.replace("lines = [8, 12]\n", ""));
+    let leak = &e.leak[0];
+    assert!(site_matches(
+        &finding(State::Open, Some("src/cache.py:10")),
+        leak
+    ));
+    assert!(!site_matches(
+        &finding(State::Open, Some("src/cache.py:11")),
+        leak
+    ));
+}
+
+// ---- found, flagged, chosen
+
+#[test]
+fn found_flagged_and_chosen_finding() {
+    let e = exp(TRAP);
+    let mut hyp = finding(State::Confirmed, Some("src/cache.py:10"));
+    hyp.hypothesis = true;
+    let mut confirmed = finding(State::Confirmed, Some("src/cache.py:10"));
+    confirmed.holder = Some("container-field".into());
+    let mut strong = finding(State::Strong, Some("src/hub.py:21"));
+    strong.label = Some("L-REGISTER".into());
+    let o = &leak_outcomes(&e, &[hyp.clone(), confirmed.clone(), strong])[0];
+    assert!(o.found && o.flagged);
+    assert_eq!(
+        o.chosen_holder.as_deref(),
+        Some("static/global"),
+        "strong beats an earlier confirmed"
+    );
+    assert_eq!(o.chosen_label.as_deref(), Some("L-REGISTER"));
+    let o = &leak_outcomes(&e, &[confirmed.clone()])[0];
+    assert_eq!(o.chosen_holder.as_deref(), Some("container-field"));
+    // hypotheses never find or flag
+    let o = &leak_outcomes(&e, &[hyp])[0];
+    assert!(!o.found && !o.flagged);
+    // flagged states
+    for (state, flagged) in [
+        (State::Suspected, true),
+        (State::Unresolved, true),
+        (State::Open, true),
+        (State::Refuted, false),
+    ] {
+        let o = &leak_outcomes(&e, &[finding(state, Some("src/cache.py:10"))])[0];
+        assert!(!o.found);
+        assert_eq!(o.flagged, flagged, "{state:?}");
+    }
+}
+
+// ---- metrics
+
+const MULTI: &str = r#"
+schema_version = 1
+id = "m"
+runtime = "node"
+category = "multi-leak"
+dynamic_confirmation = true
+[task]
+prompt = "p"
+[[leak]]
+id = "L1"
+site = "a.js:5"
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 0.7
+[[leak]]
+id = "L2"
+site = "b.js:9"
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 0.3
+[[leak]]
+id = "L3"
+site = "c.js:1"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+confirmable = false
+"#;
+
+fn at(state: State, site: &str, holder: &str, label: Option<&str>) -> Finding {
+    Finding {
+        state,
+        site: Some(site.into()),
+        holder: Some(holder.into()),
+        label: label.map(str::to_owned),
+        hypothesis: false,
+        discriminator: state == State::Refuted,
+    }
+}
+
+#[test]
+fn leak_set_excludes_unconfirmable_leaks() {
+    let e = exp(MULTI);
+    let g = grade_findings(
+        &e,
+        Source::Findings,
+        &[at(State::Confirmed, "c.js:1", "static/global", None)],
+    );
+    assert_eq!(g.parts[0], (0, 2), "L3 is not in the leak set");
+    assert_eq!(g.parts[2], (0, 2));
+}
+
+#[test]
+fn recall_attribution_label_and_forced_fit_metrics() {
+    let e = exp(MULTI);
+    let g = grade_findings(
+        &e,
+        Source::Findings,
+        &[
+            at(State::Strong, "a.js:5", "static/global", Some("L-REGISTER")),
+            at(
+                State::Confirmed,
+                "b.js:9",
+                "static/global",
+                Some("L-WORKER"),
+            ),
+        ],
+    );
+    assert_eq!(g.parts[0], (2, 2), "leak_recall");
+    assert_eq!(g.parts[1], (1, 1), "archetype_free_recall");
+    assert_eq!(g.parts[2], (2, 2), "flagged_recall");
+    assert_eq!(g.parts[3], (1, 1), "second_leak_recall");
+    assert_eq!(
+        g.parts[4],
+        (1, 2),
+        "grounded_attribution: L1 holder is wrong"
+    );
+    assert_eq!(g.parts[5], (1, 1), "label_accuracy: L1 label is right");
+    assert_eq!(g.parts[6], (1, 1), "forced_fit_rate: L2 got a label");
+    // no label at all: excluded from both label metrics
+    let g = grade_findings(
+        &e,
+        Source::Findings,
+        &[
+            at(State::Confirmed, "a.js:5", "registration-table", None),
+            at(State::Confirmed, "b.js:9", "static/global", None),
+        ],
+    );
+    assert_eq!(g.parts[5], (0, 0));
+    assert_eq!(g.parts[6], (0, 0));
+    // UNCLASSIFIED label on an UNCLASSIFIED leak is not forced
+    let g = grade_findings(
+        &e,
+        Source::Findings,
+        &[at(
+            State::Confirmed,
+            "b.js:9",
+            "static/global",
+            Some("UNCLASSIFIED"),
+        )],
+    );
+    assert_eq!(g.parts[6], (0, 1));
+}
+
+#[test]
+fn second_leak_recall_needs_a_found_leak() {
+    let e = exp(MULTI);
+    let none = grade_findings(&e, Source::None, &[]);
+    assert_eq!(none.parts[3], (0, 0));
+    let one = grade_findings(
+        &e,
+        Source::Findings,
+        &[at(State::Confirmed, "b.js:9", "static/global", None)],
+    );
+    assert_eq!(one.parts[3], (0, 1));
+    let both = grade_findings(
+        &e,
+        Source::Findings,
+        &[
+            at(State::Confirmed, "a.js:5", "registration-table", None),
+            at(State::Confirmed, "b.js:9", "static/global", None),
+        ],
+    );
+    assert_eq!(both.parts[3], (1, 1));
+}
+
+#[test]
+fn claim_and_rule_out_definitions() {
+    let c = finding(State::Confirmed, None);
+    let s = finding(State::Strong, None);
+    let mut h = finding(State::Confirmed, None);
+    h.hypothesis = true;
+    let susp = finding(State::Suspected, None);
+    assert!(c.is_claim() && s.is_claim());
+    assert!(!h.is_claim() && !susp.is_claim());
+    let mut r = finding(State::Refuted, None);
+    assert!(!r.is_rule_out());
+    r.discriminator = true;
+    assert!(r.is_rule_out());
+    r.hypothesis = true;
+    assert!(r.is_rule_out(), "hypotheses count as rule-outs");
+    let mut not_refuted = finding(State::Confirmed, None);
+    not_refuted.discriminator = true;
+    assert!(!not_refuted.is_rule_out());
+}
+
+fn plain(cat: &str, extra: &str) -> Expected {
+    exp(&format!(
+        "schema_version = 1\nid = \"x\"\nruntime = \"go\"\ncategory = \"{cat}\"\ndynamic_confirmation = {}\n[task]\nprompt = \"p\"\n{extra}",
+        cat != "impossible"
+    ))
+}
+
+const NONLEAK: &str = "[[non_leak]]\nid = \"N1\"\ncause = \"N-WARM\"\ndiscriminator = \"d\"\n";
+
+#[test]
+fn run_level_rates() {
+    let claim = [finding(State::Confirmed, Some("z:1"))];
+    let ruled = [at(State::Refuted, "z:1", "x", None)];
+    let mut blank = at(State::Refuted, "z:1", "x", None);
+    blank.discriminator = false;
+    let imp = plain(
+        "impossible",
+        "[[leak]]\nid=\"L1\"\nsite=\"a:1\"\nholder=\"static/global\"\nregion=\"heap\"\ncause=\"L-COLLECT\"\nconfirmable=false\n",
+    );
+    assert_eq!(
+        grade_findings(&imp, Source::Findings, &claim).parts[7],
+        (1, 1)
+    );
+    assert_eq!(
+        grade_findings(&imp, Source::Findings, &ruled).parts[7],
+        (0, 1)
+    );
+    let decoy = plain("decoy-control", NONLEAK);
+    let g = grade_findings(&decoy, Source::Findings, &claim);
+    assert_eq!(
+        (g.parts[8], g.parts[11], g.parts[9]),
+        ((1, 1), (1, 1), (0, 0))
+    );
+    let g = grade_findings(&decoy, Source::Findings, &ruled);
+    assert_eq!((g.parts[8], g.parts[11]), ((0, 1), (0, 1)));
+    let nl = plain("non-leak", NONLEAK);
+    let g = grade_findings(&nl, Source::Findings, &claim);
+    assert_eq!(
+        (g.parts[8], g.parts[9], g.parts[11]),
+        ((1, 1), (0, 1), (0, 0))
+    );
+    assert_eq!(
+        grade_findings(&nl, Source::Findings, &ruled).parts[9],
+        (1, 1)
+    );
+    assert_eq!(
+        grade_findings(&nl, Source::Findings, &[blank]).parts[9],
+        (0, 1)
+    );
+    assert_eq!(grade_findings(&nl, Source::None, &[]).parts[9], (0, 1));
+}
+
+#[test]
+fn trap_miss_requires_a_pair_and_counts_missed_confirmable_leaks() {
+    let with_pair = exp(TRAP);
+    let hit = [at(
+        State::Confirmed,
+        "src/cache.py:10",
+        "static/global",
+        None,
+    )];
+    assert_eq!(
+        grade_findings(&with_pair, Source::Findings, &hit).parts[10],
+        (0, 1)
+    );
+    assert_eq!(
+        grade_findings(&with_pair, Source::None, &[]).parts[10],
+        (1, 1)
+    );
+    let sus = [at(
+        State::Suspected,
+        "src/cache.py:10",
+        "static/global",
+        None,
+    )];
+    assert_eq!(
+        grade_findings(&with_pair, Source::Findings, &sus).parts[10],
+        (1, 1)
+    );
+    let no_pair = exp(&TRAP.replace("pair = \"t-ctl\"\n", ""));
+    assert_eq!(
+        grade_findings(&no_pair, Source::None, &[]).parts[10],
+        (0, 0)
+    );
+}
+
+#[test]
+fn metrics_of_other_categories_stay_zero() {
+    let nl = plain("non-leak", NONLEAK);
+    let g = grade_findings(&nl, Source::None, &[]);
+    for i in [0, 1, 2, 3, 4, 5, 6, 7, 10] {
+        assert_eq!(g.parts[i], (0, 0), "metric {i}");
+    }
+}
+
+#[test]
+fn round6_is_half_to_even_on_the_binary_value() {
+    assert_eq!(
+        round6(1.0 / 128.0),
+        0.007812,
+        "the 1/128 tie goes to the even digit"
+    );
+    assert_eq!(
+        round6(3.0 / 128.0),
+        0.023438,
+        "0.0234375 ties up to the even digit"
+    );
+    assert_eq!(round6(7.0 / 3.0), 2.333333);
+    assert_eq!(round6(2.0 / 3.0), 0.666667);
+    assert_eq!(
+        round6(0.0000005),
+        0.0,
+        "the binary value of 5e-7 lies just below the tie"
+    );
+    assert_eq!(
+        round6(0.0000015),
+        0.000002,
+        "the binary value of 1.5e-6 lies just above the tie"
+    );
+    assert_eq!(round6(0.5), 0.5);
+    assert_eq!(round6(1.0), 1.0);
+}
+
+// ---- clarified rules
+
+#[test]
+fn site_is_matched_against_the_whole_string() {
+    assert_eq!(
+        parse_site("a.py:3\n"),
+        None,
+        "a trailing newline does not match"
+    );
+    assert_eq!(parse_site("a.py:3:4\n"), None);
+    assert_eq!(
+        parse_site("a\nb.py:3"),
+        None,
+        "dot does not cross a newline"
+    );
+    assert_eq!(parse_site("a.py:3"), Some(("a.py".into(), 3)));
+}
+
+#[test]
+fn expected_paths_are_used_exactly_as_written() {
+    let e = exp(&TRAP
+        .replace("src/cache.py:10", "./src/cache.py:10")
+        .replace("src/hub.py:20-22", ".\\\\src/hub.py:20-22"));
+    let leak = &e.leak[0];
+    let m = |s: &str| site_matches(&finding(State::Confirmed, Some(s)), leak);
+    assert!(
+        !m("src/cache.py:10"),
+        "the leading ./ of the expected path stays"
+    );
+    assert!(m("x/./src/cache.py:10"), "suffix rule on the literal path");
+    assert!(!m("src/hub.py:21"), "backslash of the alt path stays");
+    assert!(m("src/hub.py:40"), "other alt entries still work");
+}
+
+#[test]
+fn malformed_alt_sites_are_ignored() {
+    let e = exp(&TRAP.replace(
+        r#"["src/hub.py:20-22", "src/hub.py:40"]"#,
+        r#"["src/hub.py", "src/hub.py:x", "src/hub.py:5-", "src/hub.py:1-2-3", "src/hub.py:5:6", "src/hub.py:40"]"#,
+    ));
+    let leak = &e.leak[0];
+    let m = |s: &str| site_matches(&finding(State::Confirmed, Some(s)), leak);
+    assert!(m("src/hub.py:40"));
+    assert!(!m("src/hub.py:5"));
+    assert!(!m("src/hub.py:1"));
+    assert!(!m("src/hub.py:2"));
+    assert!(!m("src/hub.py:6"));
+}
+
+#[test]
+fn chosen_finding_is_never_a_hypothesis() {
+    let e = exp(TRAP);
+    let mut hyp = finding(State::Strong, Some("src/cache.py:10"));
+    hyp.hypothesis = true;
+    hyp.holder = Some("thread-local".into());
+    let mut plain = finding(State::Confirmed, Some("src/cache.py:10"));
+    plain.holder = Some("container-field".into());
+    let o = &leak_outcomes(&e, &[hyp.clone(), plain.clone()])[0];
+    assert!(o.found);
+    assert_eq!(o.chosen_holder.as_deref(), Some("container-field"));
+    let mut plain_strong = plain.clone();
+    plain_strong.state = State::Strong;
+    plain_strong.holder = Some("static/global".into());
+    let o = &leak_outcomes(&e, &[plain, hyp, plain_strong])[0];
+    assert_eq!(o.chosen_holder.as_deref(), Some("static/global"));
+}
+
+#[test]
+fn confirmable_defaults_to_true() {
+    let e = exp(TRAP);
+    assert!(e.leak[0].confirmable);
+    let e = exp(&TRAP.replace(
+        "cause = \"L-COLLECT\"",
+        "cause = \"L-COLLECT\"\nconfirmable = false",
+    ));
+    assert!(!e.leak[0].confirmable);
+}
+
+#[test]
+fn second_leak_recall_counts_only_the_leak_set() {
+    let e = exp(r#"
+schema_version = 1
+id = "m"
+runtime = "node"
+category = "multi-leak"
+dynamic_confirmation = true
+[task]
+prompt = "p"
+[[leak]]
+id = "L1"
+site = "a.js:1"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+[[leak]]
+id = "L2"
+site = "b.js:1"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+[[leak]]
+id = "L3"
+site = "c.js:1"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+confirmable = false
+"#);
+    // leak set = L1, L2; finding L1 and the unconfirmable L3: found in set = 1
+    let fs = [
+        at(State::Confirmed, "a.js:1", "static/global", None),
+        at(State::Confirmed, "c.js:1", "static/global", None),
+    ];
+    let g = grade_findings(&e, Source::Findings, &fs);
+    assert_eq!(g.parts[3], (0, 1));
+    assert_eq!(g.parts[0], (1, 2));
+    // only the unconfirmable leak found: no leak of the set found, metric stays empty
+    let fs = [at(State::Confirmed, "c.js:1", "static/global", None)];
+    let g = grade_findings(&e, Source::Findings, &fs);
+    assert_eq!(g.parts[3], (0, 0));
+}

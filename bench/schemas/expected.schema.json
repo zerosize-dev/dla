@@ -1,0 +1,315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Expected",
+  "description": "`expected.toml`.",
+  "type": "object",
+  "properties": {
+    "category": {
+      "description": "Category.",
+      "$ref": "#/$defs/Category"
+    },
+    "dynamic_confirmation": {
+      "description": "False when no harness can run here.",
+      "type": "boolean"
+    },
+    "id": {
+      "description": "Same as the directory name.",
+      "type": "string"
+    },
+    "leak": {
+      "description": "Expected leaks.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Leak"
+      }
+    },
+    "non_leak": {
+      "description": "Expected non-leaks.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NonLeak"
+      }
+    },
+    "pair": {
+      "description": "Trap/control partner, reciprocal.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "runtime": {
+      "description": "Runtime.",
+      "$ref": "#/$defs/Runtime"
+    },
+    "schema_version": {
+      "description": "Schema version; 1.",
+      "type": "integer",
+      "format": "uint32",
+      "maximum": 1,
+      "minimum": 1
+    },
+    "task": {
+      "description": "The task.",
+      "$ref": "#/$defs/Task"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "runtime",
+    "category",
+    "dynamic_confirmation",
+    "task"
+  ],
+  "$defs": {
+    "Category": {
+      "description": "Category of a fixture.",
+      "oneOf": [
+        {
+          "description": "A leak matching one taxonomy row.",
+          "type": "string",
+          "const": "archetype-leak"
+        },
+        {
+          "description": "The bounded twin of a trap.",
+          "type": "string",
+          "const": "decoy-control"
+        },
+        {
+          "description": "A real leak that fits no taxonomy row.",
+          "type": "string",
+          "const": "archetype-free"
+        },
+        {
+          "description": "Growth that is not a leak.",
+          "type": "string",
+          "const": "non-leak"
+        },
+        {
+          "description": "The pattern is in the code but nothing can run.",
+          "type": "string",
+          "const": "impossible"
+        },
+        {
+          "description": "Two independent leaks.",
+          "type": "string",
+          "const": "multi-leak"
+        }
+      ]
+    },
+    "Holder": {
+      "description": "What holds the retained memory.",
+      "oneOf": [
+        {
+          "description": "A static field, singleton or module global.",
+          "type": "string",
+          "const": "static/global"
+        },
+        {
+          "description": "A listener, timer, callback or subscription list.",
+          "type": "string",
+          "const": "registration-table"
+        },
+        {
+          "description": "A collection field of a long-lived object.",
+          "type": "string",
+          "const": "container-field"
+        },
+        {
+          "description": "Thread-local or async-context storage.",
+          "type": "string",
+          "const": "thread-local"
+        },
+        {
+          "description": "A thread, goroutine, task or coroutine that never finishes.",
+          "type": "string",
+          "const": "blocked-stack"
+        },
+        {
+          "description": "A captured scope.",
+          "type": "string",
+          "const": "closure/continuation"
+        },
+        {
+          "description": "Native memory, a handle or a global reference outside the managed heap.",
+          "type": "string",
+          "const": "native-handle/global-ref"
+        },
+        {
+          "description": "Objects reachable only from each other.",
+          "type": "string",
+          "const": "cycle-only"
+        }
+      ]
+    },
+    "Leak": {
+      "description": "One expected leak.",
+      "type": "object",
+      "properties": {
+        "alt_sites": {
+          "description": "Other places a correct answer may name, as `path:line` or `path:start-end`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cause": {
+          "description": "Archetype ID (`L-*`, `N-*`) or `UNCLASSIFIED`.",
+          "type": "string",
+          "pattern": "^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$"
+        },
+        "confirmable": {
+          "description": "False when only static evidence is obtainable.",
+          "type": "boolean",
+          "default": true
+        },
+        "holder": {
+          "description": "What holds the memory.",
+          "$ref": "#/$defs/Holder"
+        },
+        "id": {
+          "description": "Identifier within the fixture, such as `L1`.",
+          "type": "string"
+        },
+        "lines": {
+          "description": "Inclusive line range that counts as the site; defaults to `[line, line]`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "region": {
+          "description": "Where the memory lives.",
+          "$ref": "#/$defs/Region"
+        },
+        "share": {
+          "description": "Share of the total growth (relevant with more than one leak).",
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "site": {
+          "description": "Project-relative `path:line` of the retaining or allocating line.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "site",
+        "holder",
+        "region",
+        "cause"
+      ]
+    },
+    "NonLeak": {
+      "description": "One expected non-leak.",
+      "type": "object",
+      "properties": {
+        "cause": {
+          "description": "Non-leak ID (`N-*`) or `UNCLASSIFIED`.",
+          "type": "string",
+          "pattern": "^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$"
+        },
+        "discriminator": {
+          "description": "The observation that rules the leak out.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Identifier within the fixture, such as `N1`.",
+          "type": "string"
+        },
+        "site": {
+          "description": "Optional project-relative `path:line`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "cause",
+        "discriminator"
+      ]
+    },
+    "Region": {
+      "description": "Memory region.",
+      "oneOf": [
+        {
+          "description": "Managed heap.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native memory.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Runtime-internal memory outside the managed heap.",
+          "type": "string",
+          "const": "non-heap"
+        }
+      ]
+    },
+    "Runtime": {
+      "description": "Runtime of a fixture.",
+      "oneOf": [
+        {
+          "description": "JVM languages.",
+          "type": "string",
+          "const": "jvm"
+        },
+        {
+          "description": "Go.",
+          "type": "string",
+          "const": "go"
+        },
+        {
+          "description": "Rust.",
+          "type": "string",
+          "const": "rust"
+        },
+        {
+          "description": "Node.js and TypeScript.",
+          "type": "string",
+          "const": "node"
+        },
+        {
+          "description": "Python.",
+          "type": "string",
+          "const": "python"
+        },
+        {
+          "description": "C and other native code.",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    },
+    "Task": {
+      "description": "The task given to the model.",
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "description": "The prompt, symptom first; it never names the cause.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "prompt"
+      ]
+    }
+  }
+}

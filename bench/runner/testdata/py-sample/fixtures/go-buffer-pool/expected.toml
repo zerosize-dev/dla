@@ -1,0 +1,16 @@
+schema_version = 1
+id = "go-buffer-pool"
+runtime = "go"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+RSS rises during the first minutes of load.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "pool.go:30"
+cause = "N-HWM"
+discriminator = "pool size reaches the peak working set and stays flat"

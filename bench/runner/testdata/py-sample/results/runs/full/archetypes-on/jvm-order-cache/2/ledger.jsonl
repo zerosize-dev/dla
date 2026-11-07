@@ -1,0 +1,8 @@
+not json
+
+[1]
+{"no": "type"}
+{"type": 7}
+{"type": "note"}
+{"type": "finding_added", "finding": {"id": "f1", "site": "src/main/OrderCache.java:20", "holder": "static/global", "archetype": "L-COLLECT"}}
+{"type": "transition", "finding": "f1", "to": "confirmed"}

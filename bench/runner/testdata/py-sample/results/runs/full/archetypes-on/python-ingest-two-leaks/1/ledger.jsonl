@@ -1,0 +1,4 @@
+{"type": "finding_added", "finding": {"id": "f1", "site": "ingest/registry.py:12", "holder": "registration-table", "archetype": "L-REGISTER"}}
+{"type": "transition", "finding": "f1", "to": "strong"}
+{"type": "finding_added", "finding": {"id": "f2", "site": "ingest/parser.py:40", "holder": "static/global", "archetype": "UNCLASSIFIED"}}
+{"type": "transition", "finding": "f2", "to": "confirmed"}

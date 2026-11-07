@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "pom/Cache.java:9", "holder": "static/global", "archetype": "L-COLLECT"}}
+{"type": "transition", "finding": "F1", "from": "x", "to": "suspected_static_only"}

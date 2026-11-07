@@ -1,0 +1,13 @@
+schema_version = 1
+id = "fx-nonleak"
+runtime = "rust"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "RSS rises after startup."
+
+[[non_leak]]
+id = "N1"
+cause = "N-HWM"
+discriminator = "capacity stops growing at the largest batch"

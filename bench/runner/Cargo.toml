@@ -1,0 +1,35 @@
+[package]
+name = "dla-bench"
+description = "DLA benchmark runner and grader"
+edition.workspace = true
+version.workspace = true
+rust-version = "1.88"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "dla_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dla-bench"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+chrono.workspace = true
+regex.workspace = true
+toml.workspace = true
+jsonschema.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd.workspace = true
+predicates.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "residual": [
+    {
+      "region": "heap",
+      "total_slope": 10.0,
+      "attributed_slope": 4.0,
+      "residual": 6.0,
+      "unit": "MB/h",
+      "threshold": 1.0
+    },
+    {
+      "region": "non-heap",
+      "total_slope": 0.5,
+      "attributed_slope": 0.0,
+      "residual": 0.5,
+      "unit": "MB/h",
+      "threshold": 1.0
+    }
+  ]
+}

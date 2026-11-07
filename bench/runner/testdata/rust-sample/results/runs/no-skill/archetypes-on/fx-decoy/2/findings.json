@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "site": "src/q.py:5",
+      "region": "heap",
+      "verdict": "leak-confirmed",
+      "mechanism": "m",
+      "evidence": "e",
+      "holder": "static/global"
+    }
+  ]
+}

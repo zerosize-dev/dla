@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "site": "y:3",
+      "region": "heap",
+      "verdict": "not-a-leak",
+      "mechanism": "m",
+      "evidence": "e",
+      "discriminator": "flat after warm-up"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+schema_version = 1
+id = "jvm-order-cache"
+runtime = "jvm"
+category = "archetype-leak"
+pair = "jvm-order-cache-bounded"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Memory climbs under sustained traffic. Find out why.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/main/OrderCache.java:20"
+lines = [18, 22]
+alt_sites = ["src/main/OrderCache.java:7-8"]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = true

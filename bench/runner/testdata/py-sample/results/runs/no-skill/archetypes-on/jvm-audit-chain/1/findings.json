@@ -1,0 +1,13 @@
+{
+ "findings": [
+  {
+   "site": "src/Audit.java:15",
+   "holder": "static/global",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e",
+   "cause": "UNCLASSIFIED"
+  }
+ ]
+}

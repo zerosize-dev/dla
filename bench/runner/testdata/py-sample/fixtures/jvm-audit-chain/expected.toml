@@ -1,0 +1,19 @@
+schema_version = 1
+id = "jvm-audit-chain"
+runtime = "jvm"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Heap usage grows with every request.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/Audit.java:15"
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

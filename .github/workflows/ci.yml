@@ -55,6 +55,44 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo run -p dla-cli -- schema --check
 
+  bench:
+    name: benchmark tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build dla-bench
+        run: cargo build -p dla-bench
+      - name: Fixtures validate against the schema and the fixture rules
+        run: ./target/debug/dla-bench validate
+      - name: Benchmark schemas are up to date
+        run: ./target/debug/dla-bench schema --check
+      - name: The Rust and Python graders agree on every sample
+        shell: bash
+        run: |
+          set -eu
+          found=0
+          for s in bench/runner/testdata/*/; do
+            s=${s%/}
+            name=$(basename "$s")
+            found=1
+            ./target/debug/dla-bench grade "$s/results" --fixtures "$s/fixtures" --out "$RUNNER_TEMP/$name.rust.json"
+            python3 bench/runner/grade.py "$s/results" --fixtures "$s/fixtures" --out "$RUNNER_TEMP/$name.py.json"
+            ./target/debug/dla-bench compare "$RUNNER_TEMP/$name.rust.json" "$RUNNER_TEMP/$name.py.json"
+            for golden in "$s/expected-metrics.json" "$s/metrics.json"; do
+              if [ -f "$golden" ]; then
+                ./target/debug/dla-bench compare "$RUNNER_TEMP/$name.rust.json" "$golden"
+              fi
+            done
+          done
+          [ "$found" = 1 ] || { echo "::error::no grader samples under bench/runner/testdata"; exit 1; }
+      - name: Python grader unit tests
+        run: python3 -m unittest discover -s bench/runner -p 'test_*.py'
+
   plugin:
     name: plugin validation
     runs-on: ubuntu-latest

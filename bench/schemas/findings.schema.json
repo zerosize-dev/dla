@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FindingsFile",
+  "description": "`findings.json`.",
+  "type": "object",
+  "properties": {
+    "findings": {
+      "description": "The conclusions.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FindingEntry"
+      }
+    }
+  },
+  "required": [
+    "findings"
+  ],
+  "$defs": {
+    "FindingEntry": {
+      "description": "One entry of the `findings.json` that runs without dla write.",
+      "type": "object",
+      "properties": {
+        "cause": {
+          "description": "Optional label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "discriminator": {
+          "description": "For `not-a-leak`: the observation that rules the leak out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "description": "What was run or measured.",
+          "type": "string"
+        },
+        "holder": {
+          "description": "One of the holder vocabulary.",
+          "type": "string"
+        },
+        "mechanism": {
+          "description": "What keeps the memory alive and why it is never released.",
+          "type": "string"
+        },
+        "region": {
+          "description": "`heap`, `off-heap` or `non-heap`.",
+          "type": "string"
+        },
+        "site": {
+          "description": "Project-relative `path:line`.",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "`leak-confirmed`, `leak-suspected` or `not-a-leak`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "site",
+        "holder",
+        "region",
+        "verdict",
+        "mechanism",
+        "evidence"
+      ]
+    }
+  }
+}
