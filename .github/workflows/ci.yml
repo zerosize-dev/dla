@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Claude Code CLI used for plugin validation. 2.1.289 or later validates the
+  # marketplace manifest and plugin.json together.
+  CLAUDE_CODE_VERSION: "2.1.319"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  test:
+    name: clippy and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+
+  schema:
+    name: schemas are up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run -p dla-cli -- schema --check
+
+  plugin:
+    name: plugin validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Claude Code CLI
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+      - run: claude --version
+      - name: Validate marketplace, plugin manifest, skills, agents and hooks
+        run: claude plugin validate . --strict
+      - name: Entry points keep their executable bit
+        run: |
+          for f in bin/dla hooks/fetch-dla.sh tests/shim/run.sh; do
+            mode=$(git ls-files -s "$f" | cut -d' ' -f1)
+            if [ "$mode" != "100755" ]; then
+              echo "::error file=$f::$f must be committed with mode 100755 (found '$mode')"
+              exit 1
+            fi
+          done
+
+  shim:
+    name: shim and downloader (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the binary
+        run: cargo build -p dla-cli
+      - name: Run the shim tests
+        shell: bash
+        run: tests/shim/run.sh

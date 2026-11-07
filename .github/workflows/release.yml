@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: verify versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag, plugin.json, marketplace.json and workspace version must agree
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          workspace=$(awk '/^\[workspace\.package\]/{p=1;next} /^\[/{p=0} p && /^version[[:space:]]*=/{gsub(/[" ]/,"",$3); print $3; exit}' Cargo.toml)
+          plugin=$(jq -r '.version' .claude-plugin/plugin.json)
+          market=$(jq -r '.plugins[0].version // empty' .claude-plugin/marketplace.json)
+          echo "tag=$tag workspace=$workspace plugin=$plugin marketplace=${market:-<unset>}"
+          test -n "$workspace" || { echo "::error::cannot read the workspace version from Cargo.toml"; exit 1; }
+          test "$tag" = "v$workspace" || { echo "::error::tag $tag does not match workspace version $workspace"; exit 1; }
+          test "$plugin" = "$workspace" || { echo "::error::plugin.json version $plugin does not match workspace version $workspace"; exit 1; }
+          if [ -n "$market" ] && [ "$market" != "$workspace" ]; then
+            echo "::error::marketplace.json version $market does not match workspace version $workspace"
+            exit 1
+          fi
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            musl: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked -p dla-cli --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          exe=dla
+          case "$TARGET" in *windows*) exe=dla.exe ;; esac
+          mkdir -p dist
+          archive="dla-${TARGET}.tar.gz"
+          tar -czf "dist/${archive}" -C "target/${TARGET}/release" "$exe"
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sum=$(sha256sum "$archive" | cut -d' ' -f1)
+          else
+            sum=$(shasum -a 256 "$archive" | cut -d' ' -f1)
+          fi
+          printf '%s  %s\n' "$sum" "$archive" > "${archive}.sha256"
+          cat "${archive}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dla-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dla-*
+          merge-multiple: true
+      - name: Check the five targets are present and combine checksums
+        working-directory: dist
+        run: |
+          set -eu
+          for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-msvc; do
+            test -f "dla-${t}.tar.gz" || { echo "::error::missing dla-${t}.tar.gz"; exit 1; }
+            test -f "dla-${t}.tar.gz.sha256" || { echo "::error::missing dla-${t}.tar.gz.sha256"; exit 1; }
+          done
+          cat dla-*.tar.gz.sha256 | sort -k2 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          ls -l
+      - name: Create the GitHub release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dla-*.tar.gz dla-*.tar.gz.sha256 SHA256SUMS
