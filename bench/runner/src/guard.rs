@@ -9,13 +9,18 @@ use std::{
     fs,
     io::{ErrorKind, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
+};
+
+#[cfg(unix)]
+use std::{
+    process::{Command, Stdio},
+    time::Instant,
 };
 
 use crate::Res;
@@ -47,6 +52,7 @@ pub fn stop_signal() -> Option<i32> {
     }
 }
 
+#[cfg(unix)]
 fn groups() -> Vec<u32> {
     GROUPS.lock().expect("lock").clone()
 }
@@ -83,6 +89,7 @@ impl Drop for GroupGuard {
 }
 
 /// Stops every live group: SIGTERM, a grace period, SIGKILL.
+#[cfg(unix)]
 fn terminate_groups() {
     let snapshot = groups();
     for g in &snapshot {
@@ -148,6 +155,7 @@ pub fn wait_for_exit() {
 }
 
 /// Whether a process with this pid exists.
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     if Path::new(&format!("/proc/{pid}")).exists() {
         return true;
@@ -158,6 +166,13 @@ fn pid_alive(pid: u32) -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// Without a process-liveness check every lock counts as held, so a stale
+/// lock file must be removed by hand. `dla-bench run` is unix-only anyway.
+#[cfg(not(unix))]
+fn pid_alive(_pid: u32) -> bool {
+    true
 }
 
 /// The exclusive lock on a results directory; released on drop.

@@ -47,6 +47,9 @@ Regenerate and check the schemas with `dla-bench schema` and
 
 ## Run a baseline
 
+`run` needs Linux or macOS (the child sessions run in the Claude Code sandbox);
+on Windows it exits with an error. All other commands work on Windows.
+
 ```
 cargo run -q --release -p dla-bench -- run --ablation no-skill --runs 3 \
     --out bench/results/baseline-no-skill

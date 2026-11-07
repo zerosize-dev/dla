@@ -82,7 +82,13 @@ fn main() -> ExitCode {
                     Err(problems.join("\n"))
                 }
             }),
+        #[cfg(unix)]
         Cmd::Run(a) => run::run(&a),
+        #[cfg(not(unix))]
+        Cmd::Run(_) => Err(
+            "dla-bench run needs Linux or macOS: the child sessions run in the Claude Code sandbox"
+                .to_owned(),
+        ),
         Cmd::Grade {
             results,
             fixtures,

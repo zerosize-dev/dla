@@ -121,7 +121,11 @@ fn unrelated_directories_are_ignored() {
         // would be an unknown fixture if looked at
         write(&r.join("archetypes-other/ghost/1/run.json"), RUN_JSON);
         write(&r.join("archetypes-on-2/ghost/1/run.json"), RUN_JSON);
-        write(&r.join("Archetypes-On/ghost/1/run.json"), RUN_JSON);
+        // Names must differ from real ones by more than letter case: macOS
+        // filesystems are case-insensitive, so `Archetypes-On` would be the
+        // real `archetypes-on` directory there.
+        write(&r.join("archetypes-on-x/ghost/1/run.json"), RUN_JSON);
+        write(&r.join("xarchetypes-on/ghost/1/run.json"), RUN_JSON);
     }
     let m = grade::grade_dir(&t.path().join("res"), &s.join("fixtures")).unwrap();
     assert_eq!(m.groups.len(), 1);
