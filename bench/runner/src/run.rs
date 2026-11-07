@@ -1547,6 +1547,9 @@ mod tests {
         assert_eq!(get(&full, "DLA_BIN").as_deref(), Some("/x/dla"));
     }
 
+    // `run` is unix-only (the sandbox exists only on Linux and macOS), and the
+    // expected values use unix path separators.
+    #[cfg(unix)]
     #[test]
     fn toolchain_caches_live_under_the_run_cache() {
         let parent = vec![("HOME".to_owned(), "/home/u".to_owned())];
