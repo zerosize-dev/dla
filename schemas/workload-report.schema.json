@@ -21,7 +21,7 @@
       }
     },
     "not_exercisable": {
-      "description": "Entry points no workload exercises, with the reason (`no_harness`,\n`build_fails`).",
+      "description": "Entry points (never workloads) that cannot be exercised, with the reason\n(`no_harness`, `build_fails`). Workloads carry their own `not_exercisable`.",
       "type": "array",
       "default": [],
       "items": {
@@ -131,6 +131,13 @@
         "kind": {
           "description": "What it is.",
           "$ref": "#/$defs/WorkloadKind"
+        },
+        "not_exercisable": {
+          "description": "Why this workload cannot run (`build_fails` when its runtime's probe build\nfailed); absent when it can.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "rank": {
           "description": "Rank: the number of entry points it exercises. Higher runs first.",

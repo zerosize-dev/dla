@@ -1,5 +1,5 @@
-# External analyzer rows for native. DLA-owned rows (backend dla) live in native.dla-fragment.toml and are merged into this file by the orchestrator.
-# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+# External analyzer rows for native. The rows with backend dla are the DLA-owned rules implemented in crates/dla-backends/src/dla_rules.
+# verified = true means the rule id was seen to exist in the installed tool version; verified = false rows are listed as unverified in docs/VERIFY.md.
 
 # No off-the-shelf analyzer is wired for native code; the dla rules cover it.
 

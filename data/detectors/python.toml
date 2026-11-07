@@ -1,5 +1,5 @@
-# External analyzer rows for python. DLA-owned rows (backend dla) live in python.dla-fragment.toml and are merged into this file by the orchestrator.
-# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+# External analyzer rows for python. The rows with backend dla are the DLA-owned rules implemented in crates/dla-backends/src/dla_rules.
+# verified = true means the rule id was seen to exist in the installed tool version; verified = false rows are listed as unverified in docs/VERIFY.md.
 
 [[detector]]
 id = "ruff/B019"
@@ -26,7 +26,7 @@ id = "ruff/SIM115"
 backend = "ruff"
 rule = "SIM115"
 suggested_archetype = "L-HANDLE"
-verified = true
+verified = false
 precision_prior = 0.5
 default_enabled = true
 note = "open() without a context manager."
@@ -46,7 +46,7 @@ id = "codeql/py/file-not-closed"
 backend = "codeql"
 rule = "py/file-not-closed"
 suggested_archetype = "L-HANDLE"
-verified = true
+verified = false
 precision_prior = 0.6
 default_enabled = false
 note = "File opened and not always closed. Query id read from the CodeQL bundle (python-queries 1.9.0)."
@@ -56,7 +56,7 @@ id = "codeql/py/should-use-with"
 backend = "codeql"
 rule = "py/should-use-with"
 suggested_archetype = "L-HANDLE"
-verified = true
+verified = false
 precision_prior = 0.4
 default_enabled = false
 note = "Resource should be managed with a with statement. Query id read from the CodeQL bundle."

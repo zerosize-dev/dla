@@ -85,17 +85,18 @@ The remaining research facts were checked by running the Claude Code CLI.
 |---|---|---|---|
 | The plan's RAPx command `cargo rapx -mleak` | corrected | The installed RAPx accepts `cargo +nightly rapx check -m` for the leak checker; the `-mleak` form is rejected | The rapx adapter and install hint use `cargo +nightly rapx check -m` |
 | RAPx from crates.io | corrected | Installing the crates.io release fails to build on the current nightly; installing from the git repository works | `dla install rapx` uses the git install; a failure leaves the backend `missing` with the exact command |
-| detekt `SuspendFunInFinallySection` | corrected | The rule is present only in detekt 2.x (alpha); the 1.x release has no such rule | Detector row kept with `verified = false`; it runs only if a 2.x detekt is installed |
+| detekt `SuspendFunInFinallySection` | corrected | The rule is present only in detekt 2.x (alpha); the 1.x release has no such rule | Detector row carries `verified = false`; it runs only if a 2.x detekt is installed |
 | SpotBugs `OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE` | corrected | `OBL_*` detectors are experimental and fire only when SpotBugs runs with `-experimental` | The adapter passes `-experimental` |
 | ruff `B019` precision | verified | `B019` is on by default and also fires on an instance-method cache that is bounded (`lru_cache(maxsize=N)`), so a hit is not proof of an unbounded cache | Detector `precision_prior` is low; the census and writers/removers review decide |
 | typescript-eslint version bound | corrected | The installed typescript-eslint needs typescript below 6.1 | `dla install eslint` pins typescript 6.0.3 with typescript-eslint 8.72.1 |
-| CodeQL | unverified | The CodeQL bundle downloaded, but extracting it in this sandbox was refused by the session's safety check, so no CodeQL query ran here | CodeQL is a recorded gap (`missing`) in this sandbox; the detector rows stay `verified = false`. Retry where extraction is allowed |
+| CodeQL | unverified | The CodeQL bundle downloaded, but extracting it in this sandbox was refused by the session's safety check, so no CodeQL query ran here | CodeQL is a recorded gap (`missing`) in this sandbox; every `codeql/*` detector row (Java and Python) carries `verified = false`. Retry where extraction is allowed |
 | Sonar `S5164` and `S2095` | unverified | Sonar needs a server; none is available here, so neither rule was seen | Both rows stay `verified = false`; the backend is `missing` |
-| Rules verified to exist but never seen firing: golangci-lint `contextcheck` and `sqlclosecheck`, `spancheck`, staticcheck `SA1015` and `SA5005`, SpotBugs `ODR_*` and `SIC_*` | unverified | Each ID is in the installed tool's rule list or documentation; no M1 fixture triggers it | Rows exist with `verified = false` (or a low prior); close each once it fires on a real sample |
+| Rules verified to exist but never seen firing: golangci-lint `contextcheck` and `sqlclosecheck`, `spancheck`, staticcheck `SA1015` and `SA5005`, SpotBugs `ODR_*` and `SIC_*` | unverified | Each ID is in the installed tool's rule list or documentation; no M1 fixture triggers it | Every row carries `verified = false` (the ID exists, but a rule never seen firing is not counted as verified); flip each flag once it fires on a real sample |
 | DLA-owned rules are Rust over tree-sitter syntax trees, not Semgrep rules | corrected | The plan assumed Semgrep for rules no tool covers; `crates/dla-backends/src/dla_rules` implements them with tree-sitter and unit tests with positive and negative snippets | Backend `dla` is always available and needs no install |
 | `dla ledger annotate` | corrected | The plan names no command for recording a holder's writers and removers; the model needs one | `dla ledger annotate F<n> --writer file:line --remover file:line --note` was added; it appends a `finding_annotated` record and changes no state |
 | JVM class-file census reader | corrected | `crates/dla-census` contains a new class-file reader written for this project; no external code was ported | Used when class files exist; tree-sitter otherwise |
 | Chain-head-growth rules suggest no archetype | corrected | An object chain linked through ordinary fields from a global head is not a captured scope, so `L-CAPTURE` does not describe it | `suggested_archetype` is empty for `dla/jvm-chain-head-growth`, `dla/node-chain-head-growth` and `dla/python-chain-head-growth`, in the detector rows and the rule table |
+| Detector `verified` flags | corrected | The flags in `data/detectors/*.toml` had been `true` for rules this file lists as unverified | `verified = true` now means the rule ID was seen in the installed tool version; every rule this file lists as unverified (CodeQL, `SuspendFunInFinallySection`, `contextcheck`, `sqlclosecheck`, `spancheck`, `SA1015`, `SA5005`, `deferInLoop`, `ODR_*`, `SIC_*`, `OS_OPEN_STREAM*`, `ThreadLocalUsage`, `ClassCanBeStatic`, `SIM115`) and both Sonar rows are `false`. `crates/dla-workload/tests/detector_flags.rs` checks this |
 | Recall of the DLA-owned rules and the census | unverified | They were developed and tested with the 20 M1 fixtures available, so the static recall measured on those fixtures is optimistic | M7's new fixtures, written after the rules, are the real test of generality; do not quote M1 recall as a general figure |
 
 ## Verification backlog
@@ -107,11 +108,11 @@ None of these may appear in a runtime reference as established fact until its ro
 
 | Item | Status | Evidence | Resolution |
 |---|---|---|---|
-| SpotBugs `OS_OPEN_STREAM*` rule IDs | unverified | Not checked against the SpotBugs bug descriptions | Read the bug-descriptions page for the pinned version |
-| SpotBugs `ODR_OPEN_DATABASE_RESOURCE*` rule IDs | unverified | The rule exists in the installed SpotBugs, but no sweep has seen it fire | Keep `verified = false` in the detector row until it fires on a real sample |
-| SpotBugs `SIC_*` (inner class that could be static) rule IDs | unverified | The rule exists in the installed SpotBugs, but no sweep has seen it fire | As above |
-| Error Prone `ClassCanBeStatic` | unverified | Not checked for current name and default severity | Read the Error Prone bug-pattern page |
-| Error Prone `ThreadLocalUsage` | unverified | As above | As above |
+| SpotBugs `OS_OPEN_STREAM*` rule IDs | unverified | Not checked against the SpotBugs bug descriptions | Rows `OS_OPEN_STREAM` and `OS_OPEN_STREAM_EXCEPTION_PATH` carry `verified = false`. Read the bug-descriptions page for the pinned version |
+| SpotBugs `ODR_OPEN_DATABASE_RESOURCE*` rule IDs | unverified | The rule exists in the installed SpotBugs, but no sweep has seen it fire | Both `ODR_*` rows carry `verified = false` until one fires on a real sample |
+| SpotBugs `SIC_*` (inner class that could be static) rule IDs | unverified | The rule exists in the installed SpotBugs, but no sweep has seen it fire | As above; the four `SIC_*` rows carry `verified = false` |
+| Error Prone `ClassCanBeStatic` | unverified | Not checked for current name and default severity | Row carries `verified = false`. Read the Error Prone bug-pattern page |
+| Error Prone `ThreadLocalUsage` | unverified | As above | As above; row carries `verified = false` |
 | PMD `CloseResource` | unverified | Not checked for current rule name and category | Read the PMD rule page |
 | Sonar `S2694` | unverified | Not checked | Read the Sonar rule page |
 | Sonar Kotlin rule for `GlobalScope` use | unverified | The rule ID is not known | Search the Sonar Kotlin rule list |
@@ -125,7 +126,7 @@ None of these may appear in a runtime reference as established fact until its ro
 |---|---|---|---|
 | pylint `W1516` | corrected | Former name of `W1518` (`method-cache-max-size-none`) in the installed pylint's message list | Detector rows use `W1518` only |
 | pylint `W1517` | corrected | Former name of `W1518`, as above | As above |
-| ruff `SIM115` | unverified | Not checked for current behaviour | Read the ruff rule page |
+| ruff `SIM115` | unverified | Not checked for current behaviour | Row carries `verified = false`. Read the ruff rule page |
 
 ### Rust
 
@@ -139,7 +140,7 @@ None of these may appear in a runtime reference as established fact until its ro
 
 | Item | Status | Evidence | Resolution |
 |---|---|---|---|
-| gocritic `deferInLoop` | unverified | Not checked for name and availability | Read the gocritic checker list |
+| gocritic `deferInLoop` | unverified | Not checked for name and availability | Row carries `verified = false`. Read the gocritic checker list |
 | `goref` against Go 1.27 binaries | unverified | Documented support ends at 1.26 | Run it on a binary built with 1.27 |
 | Retention-path fingerprints marked uncertain in the Go reference | unverified | Marked with a question mark in the source notes | Capture real output from a leaking sample |
 

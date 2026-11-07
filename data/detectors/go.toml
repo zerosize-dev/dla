@@ -1,12 +1,12 @@
-# External analyzer rows for go. DLA-owned rows (backend dla) live in go.dla-fragment.toml and are merged into this file by the orchestrator.
-# verified = true means the rule id was checked against the installed tool (see docs/VERIFY.md).
+# External analyzer rows for go. The rows with backend dla are the DLA-owned rules implemented in crates/dla-backends/src/dla_rules.
+# verified = true means the rule id was seen to exist in the installed tool version; verified = false rows are listed as unverified in docs/VERIFY.md.
 
 [[detector]]
 id = "staticcheck/SA1015"
 backend = "staticcheck"
 rule = "SA1015"
 suggested_archetype = "L-WORKER"
-verified = true
+verified = false
 precision_prior = 0.55
 default_enabled = true
 note = "time.Tick leaks its ticker when the function is not endless. Did not fire on the verification probe."
@@ -46,7 +46,7 @@ id = "staticcheck/SA5005"
 backend = "staticcheck"
 rule = "SA5005"
 suggested_archetype = "L-CYCLE"
-verified = true
+verified = false
 precision_prior = 0.4
 default_enabled = true
 note = "Finalizer references the finalized object, so it never runs. Did not fire on the verification probe."
@@ -86,7 +86,7 @@ id = "golangci-lint/sqlclosecheck"
 backend = "golangci-lint"
 rule = "sqlclosecheck"
 suggested_archetype = "L-HANDLE"
-verified = true
+verified = false
 precision_prior = 0.65
 default_enabled = false
 note = "sql.Rows or Stmt not closed. Did not fire on the verification probe."
@@ -116,7 +116,7 @@ id = "golangci-lint/contextcheck"
 backend = "golangci-lint"
 rule = "contextcheck"
 suggested_archetype = ""
-verified = true
+verified = false
 precision_prior = 0.15
 default_enabled = false
 note = "Function does not pass the caller's context. Did not fire on the verification probe."
@@ -146,7 +146,7 @@ id = "golangci-lint/spancheck"
 backend = "golangci-lint"
 rule = "spancheck"
 suggested_archetype = "L-HANDLE"
-verified = true
+verified = false
 precision_prior = 0.5
 default_enabled = false
 note = "Tracing span not ended. Needs OpenTelemetry in the module; did not fire offline."
@@ -156,7 +156,7 @@ id = "golangci-lint/gocritic/deferInLoop"
 backend = "golangci-lint"
 rule = "gocritic/deferInLoop"
 suggested_archetype = "L-HANDLE"
-verified = true
+verified = false
 precision_prior = 0.55
 default_enabled = false
 note = "defer inside a loop holds every resource until the function returns. Opt-in gocritic checker."

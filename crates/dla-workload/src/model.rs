@@ -32,6 +32,9 @@ pub struct Entry {
     pub id: String,
     /// Bare name matched against identifiers.
     pub name: String,
+    /// Identifiers referenced inside the definition (its own name excluded); the
+    /// edges followed when a workload reaches this entry point.
+    pub refs: BTreeSet<String>,
 }
 
 /// Facts about one source file.
@@ -317,7 +320,7 @@ struct Extract<'a> {
 }
 
 impl Extract<'_> {
-    fn push(&mut self, owner: Option<&str>, name: &str) {
+    fn push(&mut self, node: Node, owner: Option<&str>, name: &str) {
         if name.is_empty() || name == "main" {
             return;
         }
@@ -328,6 +331,7 @@ impl Extract<'_> {
         self.entries.push(Entry {
             id,
             name: name.to_owned(),
+            refs: idents(node, self.src),
         });
     }
 
@@ -401,7 +405,7 @@ impl Extract<'_> {
             "method_declaration" | "function_declaration" => {
                 if !self.has_modifier(n, "private") {
                     let name = self.name_of(n);
-                    self.push(owner, &name);
+                    self.push(n, owner, &name);
                 }
             }
             _ => {
@@ -417,7 +421,7 @@ impl Extract<'_> {
             "function_declaration" => {
                 let name = self.field_text(n, "name");
                 if name.chars().next().is_some_and(char::is_uppercase) {
-                    self.push(None, &name);
+                    self.push(n, None, &name);
                 }
             }
             "method_declaration" => {
@@ -433,7 +437,7 @@ impl Extract<'_> {
                                 .to_owned()
                         })
                         .unwrap_or_default();
-                    self.push(Some(&owner), &name);
+                    self.push(n, Some(&owner), &name);
                 }
             }
             "source_file" => {
@@ -478,7 +482,7 @@ impl Extract<'_> {
                         for m in self.children(c) {
                             if m.kind() == "function_item" && !in_test {
                                 let name = self.field_text(m, "name");
-                                self.push(Some(&ty), &name);
+                                self.push(m, Some(&ty), &name);
                             }
                         }
                     } else {
@@ -499,7 +503,7 @@ impl Extract<'_> {
                     .any(|c| c.kind() == "visibility_modifier");
                 if public && !in_test {
                     let name = self.field_text(n, "name");
-                    self.push(owner, &name);
+                    self.push(n, owner, &name);
                 }
             }
             _ => {
@@ -521,7 +525,7 @@ impl Extract<'_> {
             "function_definition" => {
                 let name = self.field_text(n, "name");
                 if !name.starts_with('_') {
-                    self.push(owner, &name);
+                    self.push(n, owner, &name);
                 }
             }
             _ => {
@@ -537,7 +541,7 @@ impl Extract<'_> {
             "function_declaration" | "generator_function_declaration" => {
                 let name = self.field_text(n, "name");
                 if !name.starts_with('_') {
-                    self.push(owner, &name);
+                    self.push(n, owner, &name);
                 }
             }
             "class_declaration" | "abstract_class_declaration" => {
@@ -549,7 +553,7 @@ impl Extract<'_> {
             "method_definition" => {
                 let name = self.field_text(n, "name");
                 if name != "constructor" && !name.starts_with('_') && !name.starts_with('#') {
-                    self.push(owner, &name);
+                    self.push(n, owner, &name);
                 }
             }
             "variable_declarator" | "public_field_definition" | "field_definition" => {
@@ -567,7 +571,7 @@ impl Extract<'_> {
                             .if_empty(|| self.field_text(n, "property"))
                     };
                     if !name.starts_with('_') && !name.starts_with('#') {
-                        self.push(owner, &name);
+                        self.push(n, owner, &name);
                     }
                 }
             }
@@ -613,7 +617,7 @@ impl Extract<'_> {
                         Some((o, nm)) => (Some(o.to_owned()), nm.to_owned()),
                         None => (None, full),
                     };
-                    self.push(o.as_deref(), &name);
+                    self.push(n, o.as_deref(), &name);
                 }
             }
             "compound_statement" => {}

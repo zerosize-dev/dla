@@ -37,6 +37,10 @@ pub struct Workload {
     /// Project entry points it references (public functions, handlers, methods).
     #[serde(default)]
     pub entry_points: Vec<String>,
+    /// Why this workload cannot run (`build_fails` when its runtime's probe build
+    /// failed); absent when it can.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_exercisable: Option<String>,
     /// Rank: the number of entry points it exercises. Higher runs first.
     pub rank: u32,
 }
@@ -52,8 +56,8 @@ pub struct WorkloadReport {
     /// Every entry point found in the project.
     #[serde(default)]
     pub entry_points: Vec<String>,
-    /// Entry points no workload exercises, with the reason (`no_harness`,
-    /// `build_fails`).
+    /// Entry points (never workloads) that cannot be exercised, with the reason
+    /// (`no_harness`, `build_fails`). Workloads carry their own `not_exercisable`.
     #[serde(default)]
     pub not_exercisable: Vec<NotExercisable>,
     /// Runtimes whose build failed in `dla probe --build`.

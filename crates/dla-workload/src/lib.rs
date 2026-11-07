@@ -11,9 +11,10 @@
 //! `coverage.json` for each runtime `entry_points.discovered` and
 //! `entry_points.not_exercisable` (`exercised` stays empty until the M3 harness runs).
 //! It adds no candidates and runs nothing: it reads files only. A runtime whose
-//! `dla probe --build` failed gets, for every entry point, the reason `build_fails`
-//! and, for every workload, an entry `workload:<id>` with the same reason; entry points
-//! no workload references get `no_harness`.
+//! `dla probe --build` failed gets, for every entry point, the reason `build_fails`,
+//! and each of its workloads carries `not_exercisable = "build_fails"`; the
+//! entry-point lists never hold workload ids. Entry points no workload references get
+//! `no_harness`.
 //!
 //! # How it works
 //!
@@ -27,8 +28,10 @@
 //!   trait impl; Python and JavaScript: not `_`-prefixed; C: not `static`), named
 //!   `file::Owner.name`. `main` functions are workloads, not entry points.
 //! * A workload *exercises* an entry point when an identifier of the workload's source
-//!   files (definition names excluded) equals the entry point's bare name. This is an
-//!   over-approximation by name: it does not follow calls into other files.
+//!   files (definition names excluded) equals the entry point's bare name, or when such
+//!   an identifier names an entry point of another project file whose own identifiers
+//!   (followed [`REF_HOPS`] hops through the bodies of reached entry points) name it. This is an over-approximation
+//!   by name, not a call graph.
 //! * Rank = number of entry points exercised; workloads are sorted by rank, then kind
 //!   (test, main, dev-server, script), then id.
 
@@ -61,6 +64,10 @@ use model::{Raw, Scan};
 
 /// Reason for an entry point that no workload references.
 pub const NO_HARNESS: &str = "no_harness";
+/// How many file-to-file hops of identifier references are followed from a workload's
+/// own sources when computing the entry points it exercises.
+pub const REF_HOPS: usize = 2;
+static NO_REFS: BTreeSet<String> = BTreeSet::new();
 /// Reason when the runtime's probe build failed.
 pub const BUILD_FAILS: &str = "build_fails";
 
@@ -124,6 +131,16 @@ pub fn build_report(
     }
     entries.sort();
     entries.dedup();
+    let refs: Vec<&BTreeSet<String>> = entries
+        .iter()
+        .map(|(_, id, _)| {
+            let file = id.split("::").next().unwrap_or("");
+            scan.infos
+                .get(file)
+                .and_then(|f| f.entries.iter().find(|e| &e.id == id))
+                .map_or(&NO_REFS, |e| &e.refs)
+        })
+        .collect();
     for (i, (_, _, name)) in entries.iter().enumerate() {
         by_name.entry(name.as_str()).or_default().push(i);
     }
@@ -138,10 +155,28 @@ pub fn build_report(
                 }
             }
             let mut hit: BTreeSet<usize> = BTreeSet::new();
-            for id in idents {
+            let mut frontier: Vec<usize> = Vec::new();
+            for id in &idents {
                 if let Some(v) = by_name.get(id) {
-                    hit.extend(v.iter().copied().filter(|&i| entries[i].0 == r.runtime));
+                    frontier.extend(v.iter().copied().filter(|&i| entries[i].0 == r.runtime));
                 }
+            }
+            // Follow identifier references out of what was reached, a bounded number
+            // of hops, so entry points used through other files count as exercised.
+            for _ in 0..=REF_HOPS {
+                frontier.retain(|i| hit.insert(*i));
+                let mut next: Vec<usize> = Vec::new();
+                for &i in &frontier {
+                    for id in refs[i] {
+                        if let Some(v) = by_name.get(id.as_str()) {
+                            next.extend(v.iter().copied().filter(|&j| entries[j].0 == r.runtime));
+                        }
+                    }
+                }
+                if next.is_empty() {
+                    break;
+                }
+                frontier = next;
             }
             exercised.extend(&hit);
             let entry_points: Vec<String> = hit.iter().map(|&i| entries[i].1.clone()).collect();
@@ -152,6 +187,9 @@ pub fn build_report(
                 command: r.command,
                 cwd: r.cwd,
                 file: r.file,
+                not_exercisable: build_failed
+                    .contains(&r.runtime)
+                    .then(|| BUILD_FAILS.to_owned()),
                 rank: u32::try_from(entry_points.len()).unwrap_or(u32::MAX),
                 entry_points,
             }
@@ -176,14 +214,6 @@ pub fn build_report(
             not_exercisable.push(NotExercisable {
                 entry: id.clone(),
                 reason: NO_HARNESS.into(),
-            });
-        }
-    }
-    for w in &workloads {
-        if build_failed.contains(&w.runtime) {
-            not_exercisable.push(NotExercisable {
-                entry: format!("workload:{}", w.id),
-                reason: BUILD_FAILS.into(),
             });
         }
     }
@@ -266,24 +296,14 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
     );
     spec.raw = Some("workload/workloads.json".into());
     spec.limitations = vec![
-        "entry points are matched to workloads by identifier name in the workload's own source files; calls into other files are not followed".into(),
+        "entry points are matched to workloads by identifier name in the workload's own source files and, for up to two hops, in the bodies of the entry points reached; this is a name match, not a call graph".into(),
         "workloads were discovered by reading files; none was run".into(),
     ];
     let ev = ctx.add_evidence(&mut ledger, spec)?;
 
     CoverageManifest::update(&ctx.run_dir, |m| {
         for rt in &runtimes {
-            let mine = |id: &str| {
-                id.strip_prefix("workload:").map_or_else(
-                    || runtime_of_entry(&scan, id) == Some(*rt),
-                    |w| {
-                        report
-                            .workloads
-                            .iter()
-                            .any(|x| x.id == w && x.runtime == *rt)
-                    },
-                )
-            };
+            let mine = |id: &str| runtime_of_entry(&scan, id) == Some(*rt);
             let prev = m.worker_mut(rt.as_str()).entry_points.exercised.clone();
             m.set_entry_points(
                 rt.as_str(),
@@ -404,12 +424,67 @@ mod tests {
         let go: Vec<_> = r
             .not_exercisable
             .iter()
-            .filter(|n| n.entry.starts_with("pkg/") || n.entry.starts_with("workload:go"))
+            .filter(|n| n.entry.starts_with("pkg/"))
             .collect();
-        assert_eq!(go.len(), 3 + 2);
+        assert_eq!(go.len(), 3);
         assert!(go.iter().all(|n| n.reason == BUILD_FAILS));
+        // Workloads are never listed as entry points; they carry their own reason.
+        assert!(
+            r.not_exercisable
+                .iter()
+                .all(|n| !n.entry.starts_with("workload:"))
+        );
+        let go_w: Vec<_> = r
+            .workloads
+            .iter()
+            .filter(|w| w.runtime == Runtime::Go)
+            .collect();
+        assert_eq!(go_w.len(), 2);
+        assert!(
+            go_w.iter()
+                .all(|w| w.not_exercisable.as_deref() == Some(BUILD_FAILS))
+        );
+        assert!(
+            r.workloads
+                .iter()
+                .filter(|w| w.runtime == Runtime::Python)
+                .all(|w| w.not_exercisable.is_none())
+        );
         assert!(r.not_exercisable.iter().all(|n| !n.entry.contains("x.py")));
         assert_eq!(r.build_failed, [Runtime::Go]);
+    }
+
+    #[test]
+    fn entry_points_reached_through_other_files_are_exercised() {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "pom.xml", "<project/>");
+        put(
+            d.path(),
+            "src/main/java/p/Cache.java",
+            "package p;\npublic class Cache { public void store(int k) {} public int find(int k) { return k; } public void orphan() {} }\n",
+        );
+        put(
+            d.path(),
+            "src/main/java/p/Service.java",
+            "package p;\npublic class Service { Cache c = new Cache(); public void place(int k) { c.store(k); c.find(k); } }\n",
+        );
+        put(
+            d.path(),
+            "src/test/java/p/ServiceTest.java",
+            "package p;\nimport org.junit.jupiter.api.Test;\nclass ServiceTest { @Test void t() { new Service().place(1); } }\n",
+        );
+        let r = report(d.path(), None, &[]);
+        let t = find(&r, "jvm:test:src/test/java/p/ServiceTest.java");
+        assert!(
+            t.entry_points.iter().any(|e| e.ends_with("Cache.store")),
+            "{t:?}"
+        );
+        assert!(
+            t.entry_points.iter().any(|e| e.ends_with("Cache.find")),
+            "{t:?}"
+        );
+        let nx: Vec<_> = r.not_exercisable.iter().map(|n| &n.entry[..]).collect();
+        assert_eq!(nx, ["src/main/java/p/Cache.java::Cache.orphan"]);
     }
 
     #[test]
