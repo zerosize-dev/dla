@@ -210,7 +210,20 @@ fn git(dir: &Path, args: &[&str]) -> Res<()> {
     }
 }
 
+/// The dla binary as an absolute path: the harness runs it from inside each
+/// fixture copy, where a relative path such as `./target/debug/dla` would no
+/// longer resolve.
 fn find_dla(arg: Option<&Path>) -> PathBuf {
+    let found = find_dla_relative(arg);
+    if found.components().count() > 1 {
+        std::path::absolute(&found).unwrap_or(found)
+    } else {
+        // A bare name is looked up on PATH.
+        found
+    }
+}
+
+fn find_dla_relative(arg: Option<&Path>) -> PathBuf {
     if let Some(p) = arg {
         return p.to_path_buf();
     }
