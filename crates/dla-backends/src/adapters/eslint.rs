@@ -36,7 +36,7 @@ pub fn config(
     modules: &Path,
     root: &Path,
     rules: &[&str],
-    project_has_tsconfig: bool,
+    project_tsconfig: Option<&Path>,
 ) -> Result<String, String> {
     let url = file_url(modules);
     let mut imports = format!("import tseslint from '{url}/typescript-eslint/dist/index.js';\n");
@@ -59,8 +59,12 @@ pub fn config(
             _ => return Err(format!("unsupported eslint rule {r:?}")),
         }
     }
-    let project_service = if project_has_tsconfig {
-        "true".to_owned()
+    let project_option = if let Some(tsconfig) = project_tsconfig {
+        // A scratch program that includes every source file, so files outside the
+        // project's own `include` are still typed.
+        let p = serde_json::to_string(&dla_core::paths::to_slash(tsconfig))
+            .map_err(|e| e.to_string())?;
+        return config_with(&imports, &plugins, rules, &format!("project: [{p}]"), root);
     } else {
         let mut globs = Vec::new();
         for ext in ["js", "mjs", "cjs", "jsx", "ts", "tsx"] {
@@ -69,15 +73,56 @@ pub fn config(
             }
         }
         format!(
-            "{{ allowDefaultProject: [{}], maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 5000 }}",
+            "projectService: {{ allowDefaultProject: [{}], maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 5000 }}",
             globs.join(", ")
         )
     };
+    config_with(&imports, &plugins, rules, &project_option, root)
+}
+
+/// Writes a scratch tsconfig that extends the project's and includes every source
+/// file under `root`.
+pub fn scratch_tsconfig(project_tsconfig: &Path, root: &Path) -> Result<String, String> {
+    let r = dla_core::paths::to_slash(root);
+    let r = r.trim_end_matches('/');
+    let mut opts = json!({ "allowJs": true, "noEmit": true, "skipLibCheck": true });
+    let types = root.join("node_modules/@types");
+    if types.is_dir() {
+        opts["typeRoots"] = json!([dla_core::paths::to_slash(&types)]);
+    }
+    let exclude: Vec<String> = [
+        "node_modules",
+        ".dla",
+        ".git",
+        "dist",
+        "build",
+        "out",
+        "coverage",
+    ]
+    .iter()
+    .map(|d| format!("{r}/**/{d}"))
+    .collect();
+    serde_json::to_string_pretty(&json!({
+        "extends": dla_core::paths::to_slash(project_tsconfig),
+        "compilerOptions": opts,
+        "include": [format!("{r}/**/*")],
+        "exclude": exclude,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+fn config_with(
+    imports: &str,
+    plugins: &[&str],
+    rules: &[&str],
+    project_option: &str,
+    root: &Path,
+) -> Result<String, String> {
     let rule_lines: Vec<String> = rules.iter().map(|r| format!("'{r}': 'error'")).collect();
     let root_json =
         serde_json::to_string(&dla_core::paths::to_slash(root)).map_err(|e| e.to_string())?;
     Ok(format!(
-        "{imports}export default [\n  {{ ignores: ['**/node_modules/**', '**/.dla/**', '**/.git/**', '**/dist/**', '**/build/**', '**/out/**', '**/coverage/**'] }},\n  {{\n    files: ['**/*.{{{exts}}}'],\n    languageOptions: {{ parser: tseslint.parser, parserOptions: {{ projectService: {project_service}, tsconfigRootDir: {root_json} }} }},\n    plugins: {{ {plugins} }},\n    linterOptions: {{ reportUnusedDisableDirectives: 'off' }},\n    rules: {{ {rules} }},\n  }},\n];\n",
+        "{imports}export default [\n  {{ ignores: ['**/node_modules/**', '**/.dla/**', '**/.git/**', '**/dist/**', '**/build/**', '**/out/**', '**/coverage/**'] }},\n  {{\n    files: ['**/*.{{{exts}}}'],\n    languageOptions: {{ parser: tseslint.parser, parserOptions: {{ {project_option}, tsconfigRootDir: {root_json} }} }},\n    plugins: {{ {plugins} }},\n    linterOptions: {{ reportUnusedDisableDirectives: 'off' }},\n    rules: {{ {rules} }},\n  }},\n];\n",
         exts = SOURCE_EXTS.join(","),
         plugins = plugins.join(", "),
         rules = rule_lines.join(", "),
@@ -170,8 +215,20 @@ pub fn run(job: &Job) -> Outcome {
             vec![],
         );
     }
-    let has_tsconfig = job.project().join("tsconfig.json").is_file();
-    let cfg_text = match config(&modules, job.project(), &ids, has_tsconfig) {
+    let project_ts = job.project().join("tsconfig.json");
+    let scratch_ts = job.scratch.join("tsconfig.dla.json");
+    let ts = if project_ts.is_file() {
+        match scratch_tsconfig(&project_ts, job.project())
+            .map_err(|e| e.to_string())
+            .and_then(|t| fsx::write(&scratch_ts, &t).map_err(|e| e.to_string()))
+        {
+            Ok(()) => Some(scratch_ts.as_path()),
+            Err(e) => return Outcome::blocked(format!("cannot write the tsconfig: {e}"), vec![]),
+        }
+    } else {
+        None
+    };
+    let cfg_text = match config(&modules, job.project(), &ids, ts) {
         Ok(t) => t,
         Err(e) => return Outcome::blocked(e, vec![]),
     };
@@ -242,7 +299,7 @@ mod tests {
                 "rxjs-x/no-ignored-subscription",
                 "@typescript-eslint/no-floating-promises",
             ],
-            false,
+            None,
         )
         .unwrap();
         assert!(c.contains("import rxjs from 'file:///opt/nm/eslint-plugin-rxjs-x/dist/index.js'"));
@@ -254,12 +311,24 @@ mod tests {
             Path::new("/opt/nm"),
             Path::new("/proj"),
             &["@typescript-eslint/no-floating-promises"],
-            true,
+            Some(Path::new("/scratch/tsconfig.dla.json")),
         )
         .unwrap();
         assert!(!c.contains("rxjs"));
-        assert!(c.contains("projectService: true"));
-        assert!(config(Path::new("/x"), Path::new("/p"), &["unknown/rule"], false).is_err());
+        assert!(c.contains("project: [\"/scratch/tsconfig.dla.json\"]"));
+        assert!(!c.contains("projectService"));
+        assert!(config(Path::new("/x"), Path::new("/p"), &["unknown/rule"], None).is_err());
+    }
+
+    #[test]
+    fn scratch_tsconfig_covers_every_source_file() {
+        let d = tempfile::tempdir().unwrap();
+        let t = scratch_tsconfig(&d.path().join("tsconfig.json"), d.path()).unwrap();
+        let v: Value = serde_json::from_str(&t).unwrap();
+        let root = dla_core::paths::to_slash(d.path());
+        assert_eq!(v["include"][0], format!("{root}/**/*"));
+        assert_eq!(v["compilerOptions"]["allowJs"], true);
+        assert!(v["extends"].as_str().unwrap().ends_with("tsconfig.json"));
     }
 
     #[test]

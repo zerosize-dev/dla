@@ -197,52 +197,80 @@ pub fn errorprone(job: &Job) -> Outcome {
     if sources.is_empty() {
         return not_applicable(version, "no Java sources");
     }
-    let classes = job.scratch.join("classes");
-    let argfile = job.scratch.join("sources.args");
-    let mut af = String::new();
-    for s in &sources {
-        let abs = job.project().join(s);
-        af.push('"');
-        af.push_str(
-            &abs.to_string_lossy()
-                .replace('\\', "\\\\")
-                .replace('"', "\\\""),
-        );
-        af.push_str("\"\n");
-    }
-    if let Err(e) = fs::create_dir_all(&classes).and_then(|()| fs::write(&argfile, af)) {
-        return Outcome::blocked(format!("cannot prepare the scratch directory: {e}"), vec![]);
-    }
+    let batches = source_batches(job.project(), &sources);
     let ids = job.rule_ids();
     let cp = project_jars(job.project(), 500);
-    let cmd = isolate(Cmd::new(&javac), job)
-        .cwd(job.project())
-        .env_remove("JAVA_TOOL_OPTIONS")
-        .args(errorprone_args(&classes, &jars, &ids, &cp, &argfile))
-        .timeout(job.timeout);
-    let out = exec::run(&cmd);
-    let rec = run_record(&cmd, &out);
-    if let Some(r) = out.failure_reason() {
-        return Outcome::blocked(format!("javac {r}"), vec![rec]);
-    }
-    let text = format!("{}\n{}", out.stdout, out.stderr);
-    let parsed = parse_errorprone(&text, &ids, &job.paths());
-    if parsed.hits.is_empty() && parsed.errors > 0 {
-        return Outcome::blocked(
-            format!(
+    let mut hits = Vec::new();
+    let mut recs = Vec::new();
+    let mut errors = 0;
+    let mut first_error: Option<String> = None;
+    let mut failures = Vec::new();
+    let mut first: Option<(Cmd, Option<i32>)> = None;
+    for (i, batch) in batches.iter().enumerate() {
+        let classes = job.scratch.join(format!("classes-{i}"));
+        let argfile = job.scratch.join(format!("sources-{i}.args"));
+        let mut af = String::new();
+        for s in batch {
+            let abs = job.project().join(s);
+            af.push('"');
+            af.push_str(
+                &abs.to_string_lossy()
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\""),
+            );
+            af.push_str("\"\n");
+        }
+        if let Err(e) = fs::create_dir_all(&classes).and_then(|()| fs::write(&argfile, af)) {
+            return Outcome::blocked(format!("cannot prepare the scratch directory: {e}"), vec![]);
+        }
+        let cmd = isolate(Cmd::new(&javac), job)
+            .cwd(job.project())
+            .env_remove("JAVA_TOOL_OPTIONS")
+            .args(errorprone_args(&classes, &jars, &ids, &cp, &argfile))
+            .timeout(job.timeout);
+        let out = exec::run(&cmd);
+        let rec = run_record(&cmd, &out);
+        recs.push(rec);
+        if let Some(r) = out.failure_reason() {
+            failures.push(format!("javac {r}"));
+            continue;
+        }
+        let text = format!("{}\n{}", out.stdout, out.stderr);
+        let parsed = parse_errorprone(&text, &ids, &job.paths());
+        if parsed.hits.is_empty() && parsed.errors > 0 {
+            failures.push(format!(
                 "javac failed with {} error(s), Error Prone did not run to completion; first: {}",
                 parsed.errors,
                 parsed.first_error.as_deref().unwrap_or("")
-            ),
-            vec![rec],
-        );
+            ));
+            continue;
+        }
+        errors += parsed.errors;
+        if first_error.is_none() {
+            first_error = parsed.first_error;
+        }
+        hits.extend(parsed.hits);
+        first.get_or_insert((cmd, out.exit));
     }
+    let Some((cmd, exit)) = first else {
+        return Outcome::blocked(failures.join("; "), recs);
+    };
     let mut limitations = Vec::new();
-    if parsed.errors > 0 {
+    if errors > 0 {
         limitations.push(format!(
-            "{} compile error(s) (classpath incomplete?); first: {}",
-            parsed.errors,
-            parsed.first_error.as_deref().unwrap_or("")
+            "{errors} compile error(s) (classpath incomplete?); first: {}",
+            first_error.as_deref().unwrap_or("")
+        ));
+    }
+    limitations.extend(
+        failures
+            .into_iter()
+            .map(|f| format!("a source group failed: {f}")),
+    );
+    if batches.len() > 1 {
+        limitations.push(format!(
+            "duplicate class names across source roots: compiled in {} separate groups",
+            batches.len()
         ));
     }
     if cp.is_empty() {
@@ -254,13 +282,42 @@ pub fn errorprone(job: &Job) -> Outcome {
     Outcome::Ran(Box::new(Ran {
         version,
         command: cmd.display(),
-        exit: out.exit,
-        hits: dedupe(parsed.hits),
-        load_errors: parsed.errors,
+        exit,
+        hits: dedupe(hits),
+        load_errors: errors,
         limitations,
         note: None,
-        raw: json!({ "runs": [rec], "sources": sources.len() }),
+        raw: json!({ "runs": recs, "sources": sources.len() }),
     }))
+}
+
+/// Groups `sources` by source root and merges the groups into the fewest batches in
+/// which no class (path relative to its root) appears twice, so javac never sees a
+/// duplicate class. Without duplicates this is one batch.
+pub fn source_batches(project: &Path, sources: &[String]) -> Vec<Vec<String>> {
+    let mut roots: Vec<String> = Vec::new();
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut files: Vec<Vec<String>> = Vec::new();
+    for s in sources {
+        let root = fsx::source_root_of(project, s).unwrap_or_default();
+        let i = roots.iter().position(|r| *r == root).unwrap_or_else(|| {
+            roots.push(root.clone());
+            groups.push(Vec::new());
+            files.push(Vec::new());
+            roots.len() - 1
+        });
+        let rel = if root.is_empty() {
+            s.as_str()
+        } else {
+            s.strip_prefix(&format!("{root}/")).unwrap_or(s)
+        };
+        groups[i].push(rel.to_owned());
+        files[i].push(s.clone());
+    }
+    fsx::conflict_free_batches(&groups)
+        .into_iter()
+        .map(|b| b.into_iter().flat_map(|i| files[i].clone()).collect())
+        .collect()
 }
 
 // ------------------------------------------------------------------- SpotBugs
@@ -294,16 +351,22 @@ pub fn class_roots(class_files: &[String]) -> Vec<String> {
 }
 
 /// Parses SpotBugs SARIF; `uri` is relative to a source root, so it is matched
-/// against the project's source files by suffix. Returns hits and the number of hits
+/// against the project's source files by suffix, preferring files under the module
+/// directories (`prefixes`) of the analysed class roots. Returns hits and the number of hits
 /// whose file could not be found.
-pub fn parse_spotbugs(log: &Value, wanted: &[&str], sources: &[String]) -> (Vec<StaticHit>, u64) {
+pub fn parse_spotbugs(
+    log: &Value,
+    wanted: &[&str],
+    sources: &[String],
+    prefixes: &[String],
+) -> (Vec<StaticHit>, u64) {
     let mut hits = Vec::new();
     let mut unresolved = 0;
     for r in sarif::results(log) {
         if !wanted.contains(&r.rule.as_str()) {
             continue;
         }
-        match fsx::resolve_suffix(sources, &r.uri) {
+        match fsx::resolve_suffix_in(sources, &r.uri, prefixes) {
             Some(f) => hits.push(hit("spotbugs", &r.rule, &f, r.line, &r.message)),
             None => unresolved += 1,
         }
@@ -348,58 +411,107 @@ pub fn spotbugs(job: &Job) -> Outcome {
     let roots = class_roots(&class_files);
     let ids = job.rule_ids();
     let filter = job.scratch.join("include.xml");
-    let out_path = job.scratch.join("spotbugs.sarif");
     if let Err(e) = fsx::write(&filter, &spotbugs_filter(&ids)) {
         return Outcome::blocked(format!("cannot write the filter: {e}"), vec![]);
     }
-    let _ = fs::remove_file(&out_path);
-    let mut cmd =
-        isolate(base, job)
-            .cwd(job.project())
-            .args(["-experimental", "-effort:max", "-low"]);
-    cmd = cmd
-        .arg("-include")
-        .arg(&filter)
-        .arg("-sarif")
-        .arg("-output")
-        .arg(&out_path);
+    // SpotBugs analyses only the first of two classes with the same name, so class
+    // roots that share a class name are analysed in separate runs.
+    let groups: Vec<Vec<String>> = roots
+        .iter()
+        .map(|r| {
+            let pre = if r.is_empty() {
+                String::new()
+            } else {
+                format!("{r}/")
+            };
+            class_files
+                .iter()
+                .filter(|f| f.starts_with(&pre))
+                .map(|f| fsx::class_key(f).to_owned())
+                .collect()
+        })
+        .collect();
+    let batches = fsx::conflict_free_batches(&groups);
     let jars = project_jars(job.project(), 500);
-    if !jars.is_empty() {
-        cmd = cmd.arg("-auxclasspath").arg(join_paths(&jars));
-    }
-    for r in &roots {
-        cmd = cmd.arg(if r.is_empty() {
-            ".".to_owned()
-        } else {
-            r.clone()
-        });
-    }
-    let cmd = cmd.timeout(job.timeout);
-    let out = exec::run(&cmd);
-    let mut rec = run_record(&cmd, &out);
-    if let Some(r) = out.failure_reason() {
-        return Outcome::blocked(format!("spotbugs {r}"), vec![rec]);
-    }
-    let Ok(text) = fs::read_to_string(&out_path) else {
-        return Outcome::blocked(
-            format!(
+    let sources = fsx::files_with_ext(job.project(), &["java", "kt", "scala", "groovy"]);
+    let mut hits = Vec::new();
+    let mut unresolved = 0;
+    let mut recs = Vec::new();
+    let mut failures = Vec::new();
+    let mut first: Option<(Cmd, Option<i32>)> = None;
+    for (bi, batch) in batches.iter().enumerate() {
+        let out_path = job.scratch.join(format!("spotbugs-{bi}.sarif"));
+        let _ = fs::remove_file(&out_path);
+        let mut cmd = isolate(base.clone(), job).cwd(job.project()).args([
+            "-experimental",
+            "-effort:max",
+            "-low",
+        ]);
+        cmd = cmd
+            .arg("-include")
+            .arg(&filter)
+            .arg("-sarif")
+            .arg("-output")
+            .arg(&out_path);
+        if !jars.is_empty() {
+            cmd = cmd.arg("-auxclasspath").arg(join_paths(&jars));
+        }
+        let mut prefixes = Vec::new();
+        for &ri in batch {
+            let r = &roots[ri];
+            cmd = cmd.arg(if r.is_empty() {
+                ".".to_owned()
+            } else {
+                r.clone()
+            });
+            prefixes.push(fsx::module_prefix(r));
+        }
+        let cmd = cmd.timeout(job.timeout);
+        let out = exec::run(&cmd);
+        let mut rec = run_record(&cmd, &out);
+        if let Some(r) = out.failure_reason() {
+            failures.push(format!("spotbugs {r}"));
+            recs.push(rec);
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&out_path) else {
+            failures.push(format!(
                 "spotbugs wrote no SARIF (exit {:?}): {}",
                 out.exit,
                 out.tail(3)
-            ),
-            vec![rec],
-        );
+            ));
+            recs.push(rec);
+            continue;
+        };
+        attach_file(&mut rec, "output_file_json", &text);
+        recs.push(rec);
+        let Ok(log) = serde_json::from_str::<Value>(&text) else {
+            failures.push("spotbugs wrote malformed SARIF".to_owned());
+            continue;
+        };
+        let (h, u) = parse_spotbugs(&log, &ids, &sources, &prefixes);
+        hits.extend(h);
+        unresolved += u;
+        first.get_or_insert((cmd, out.exit));
+    }
+    let Some((cmd, exit)) = first else {
+        return Outcome::blocked(failures.join("; "), recs);
     };
-    attach_file(&mut rec, "output_file_json", &text);
-    let Ok(log) = serde_json::from_str::<Value>(&text) else {
-        return Outcome::blocked("spotbugs wrote malformed SARIF", vec![rec]);
-    };
-    let sources = fsx::files_with_ext(job.project(), &["java", "kt", "scala", "groovy"]);
-    let (hits, unresolved) = parse_spotbugs(&log, &ids, &sources);
     let mut limitations = Vec::new();
+    limitations.extend(
+        failures
+            .into_iter()
+            .map(|f| format!("a class group failed: {f}")),
+    );
     if unresolved > 0 {
         limitations.push(format!(
             "{unresolved} hit(s) in files not found among the project sources"
+        ));
+    }
+    if batches.len() > 1 {
+        limitations.push(format!(
+            "duplicate class names across class roots: analysed in {} separate runs",
+            batches.len()
         ));
     }
     if jars.is_empty() {
@@ -408,12 +520,12 @@ pub fn spotbugs(job: &Job) -> Outcome {
     Outcome::Ran(Box::new(Ran {
         version,
         command: cmd.display(),
-        exit: out.exit,
+        exit,
         hits: dedupe(hits),
         load_errors: 0,
         limitations,
         note: None,
-        raw: json!({ "runs": [rec], "class_roots": roots }),
+        raw: json!({ "runs": recs, "class_roots": roots }),
     }))
 }
 
@@ -648,6 +760,7 @@ pub fn detekt(job: &Job) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn data(name: &str) -> String {
         fs::read_to_string(
@@ -763,6 +876,44 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_classes_split_into_batches() {
+        let d = tempfile::tempdir().unwrap();
+        let mut srcs = Vec::new();
+        for (m, f) in [("a", "Util"), ("b", "Util"), ("b", "Only"), ("c", "Other")] {
+            let p = format!("{m}/src/main/java/com/x/{f}.java");
+            let full = d.path().join(&p);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(&full, format!("package com.x;\nclass {f} {{}}\n")).unwrap();
+            srcs.push(p);
+        }
+        let batches = source_batches(d.path(), &srcs);
+        assert_eq!(batches.len(), 2, "{batches:?}");
+        for b in &batches {
+            let util = b.iter().filter(|f| f.ends_with("/Util.java")).count();
+            assert_eq!(util, 1, "no duplicate class in a batch: {b:?}");
+        }
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), 4);
+        // Without duplicates there is a single batch.
+        let one = source_batches(d.path(), &srcs[1..]);
+        assert_eq!(one.len(), 1);
+    }
+
+    #[test]
+    fn spotbugs_sites_prefer_the_analysed_module() {
+        let sources = vec![
+            "a/src/main/java/com/x/Util.java".to_owned(),
+            "b/src/main/java/com/x/Util.java".to_owned(),
+        ];
+        let log = json!({"runs":[{"results":[{"ruleId":"OS_OPEN_STREAM","message":{"text":"m"},
+            "locations":[{"physicalLocation":{"artifactLocation":{"uri":"com/x/Util.java"},
+            "region":{"startLine":7}}}]}]}]});
+        let (h, _) = parse_spotbugs(&log, &["OS_OPEN_STREAM"], &sources, &["b".to_owned()]);
+        assert_eq!(h[0].site(), "b/src/main/java/com/x/Util.java:7");
+        let (h, _) = parse_spotbugs(&log, &["OS_OPEN_STREAM"], &sources, &["a".to_owned()]);
+        assert_eq!(h[0].site(), "a/src/main/java/com/x/Util.java:7");
+    }
+
+    #[test]
     fn spotbugs_filter_lists_patterns() {
         let f = spotbugs_filter(&["OS_OPEN_STREAM", "OBL_UNSATISFIED_OBLIGATION"]);
         assert!(f.contains("pattern=\"OS_OPEN_STREAM,OBL_UNSATISFIED_OBLIGATION\""));
@@ -778,7 +929,7 @@ mod tests {
             "OS_OPEN_STREAM",
             "OS_OPEN_STREAM_EXCEPTION_PATH",
         ];
-        let (hits, unresolved) = parse_spotbugs(&log, &wanted, &sources);
+        let (hits, unresolved) = parse_spotbugs(&log, &wanted, &sources, &[]);
         assert_eq!(unresolved, 0);
         let got: Vec<_> = dedupe(hits)
             .iter()
@@ -789,7 +940,7 @@ mod tests {
             "{got:?}"
         );
         assert!(got.contains(&"OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE@Q.java:5".to_owned()));
-        let (hits, unresolved) = parse_spotbugs(&log, &wanted, &[]);
+        let (hits, unresolved) = parse_spotbugs(&log, &wanted, &[], &[]);
         assert!(hits.is_empty());
         assert!(unresolved > 0);
     }

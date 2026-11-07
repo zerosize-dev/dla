@@ -133,6 +133,31 @@ pub fn parse(log: &Value, wanted: &[&str], paths: &crate::fsx::PathMap) -> Vec<S
         .collect()
 }
 
+/// Why a CodeQL step failed, or `None` when it succeeded. A timeout, a capture
+/// overflow or a spawn failure is named as such; otherwise the exit code and the first
+/// line of the output tail (at most 200 characters).
+pub fn failure_text(step: &str, out: &exec::Output) -> Option<String> {
+    if let Some(r) = out.failure_reason() {
+        return Some(if r == "timed out" {
+            format!("{step} timed out")
+        } else {
+            format!("{step} {r}")
+        });
+    }
+    if out.exit == Some(0) {
+        return None;
+    }
+    let tail = out.tail(3);
+    let line: String = tail
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect();
+    Some(format!("{step} failed (exit {:?}): {line}", out.exit))
+}
+
 /// Runs CodeQL for the runtime's language.
 pub fn run(job: &Job) -> Outcome {
     let Some(prog) = job.env.find_program("codeql") else {
@@ -168,30 +193,16 @@ pub fn run(job: &Job) -> Outcome {
         .timeout(job.timeout);
     let c_out = exec::run(&create);
     let c_rec = run_record(&create, &c_out);
-    if c_out.exit != Some(0) || c_out.failure_reason().is_some() {
-        return Outcome::blocked(
-            format!(
-                "codeql database create failed (exit {:?}): {}",
-                c_out.exit,
-                c_out.tail(3)
-            ),
-            vec![c_rec],
-        );
+    if let Some(r) = failure_text("codeql database create", &c_out) {
+        return Outcome::blocked(r, vec![c_rec]);
     }
     let analyze = isolate(Cmd::new(&prog), job)
         .args(analyze_args(&db, &queries, &sarif_path, &caches))
         .timeout(job.timeout);
     let a_out = exec::run(&analyze);
     let mut a_rec = run_record(&analyze, &a_out);
-    if a_out.exit != Some(0) || a_out.failure_reason().is_some() {
-        return Outcome::blocked(
-            format!(
-                "codeql database analyze failed (exit {:?}): {}",
-                a_out.exit,
-                a_out.tail(3)
-            ),
-            vec![c_rec, a_rec],
-        );
+    if let Some(r) = failure_text("codeql database analyze", &a_out) {
+        return Outcome::blocked(r, vec![c_rec, a_rec]);
     }
     let Ok(text) = fs::read_to_string(&sarif_path) else {
         return Outcome::blocked("codeql wrote no SARIF", vec![c_rec, a_rec]);
@@ -219,6 +230,32 @@ pub fn run(job: &Job) -> Outcome {
 mod tests {
     use super::*;
     use crate::fsx::PathMap;
+
+    #[test]
+    fn a_timeout_is_named_and_long_tails_are_shortened() {
+        let o = exec::Output {
+            timed_out: true,
+            stderr: "Initializing database\nmore".into(),
+            ..exec::Output::default()
+        };
+        assert_eq!(
+            failure_text("codeql database create", &o).as_deref(),
+            Some("codeql database create timed out")
+        );
+        let o = exec::Output {
+            exit: Some(2),
+            stderr: format!("{}\nsecond", "x".repeat(500)),
+            ..exec::Output::default()
+        };
+        let r = failure_text("codeql database analyze", &o).unwrap();
+        assert!(r.starts_with("codeql database analyze failed (exit Some(2)): xxx"));
+        assert!(r.len() < 260 && !r.contains("second"), "{r}");
+        let ok = exec::Output {
+            exit: Some(0),
+            ..exec::Output::default()
+        };
+        assert!(failure_text("s", &ok).is_none());
+    }
 
     #[test]
     fn queries_resolve_inside_the_bundle() {

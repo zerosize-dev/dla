@@ -374,28 +374,23 @@ fn rapx_needs_build_consent_because_cargo_runs_build_scripts() {
     );
 }
 
-/// The shipped tables parse, merged with the DLA-owned fragments, and carry the rule
-/// ids the spec lists.
+/// The shipped tables parse and carry the rule ids the spec lists. Which rows
+/// are `verified` is checked against docs/VERIFY.md in `detector_flags.rs`.
 #[test]
 fn shipped_detector_tables_are_valid_and_complete() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/detectors");
     let mut ids: BTreeSet<String> = BTreeSet::new();
     for lang in ["go", "jvm", "rust", "node", "python", "native"] {
-        let mut text = fs::read_to_string(root.join(format!("{lang}.toml"))).unwrap();
-        let frag = root.join(format!("{lang}.dla-fragment.toml"));
-        if frag.is_file() {
-            text.push('\n');
-            text.push_str(&fs::read_to_string(frag).unwrap());
-        }
+        let text = fs::read_to_string(root.join(format!("{lang}.toml"))).unwrap();
         let t =
             dla_core::detectors::DetectorFile::parse(&text, &format!("data/detectors/{lang}.toml"))
                 .unwrap_or_else(|e| panic!("{lang}: {}", e.message));
         for d in &t.detector {
             ids.insert(d.id.clone());
-            if d.backend != "dla" {
+            if d.backend == "dla" {
                 assert!(
-                    d.verified || d.backend == "sonar",
-                    "{} is unverified but not a server-only rule",
+                    d.verified,
+                    "{} is a DLA-owned rule and must be verified",
                     d.id
                 );
             }

@@ -215,18 +215,42 @@ pub fn files_with_ext(root: &Path, exts: &[&str]) -> Vec<String> {
     })
 }
 
-/// Copies `src` to `dst`, leaving out [`SKIP_DIRS`] (a project copy for tools that
-/// write next to their input).
+/// Build-output directory names: skipped only where they really are outputs.
+const OUTPUT_DIRS: [&str; 4] = ["target", "build", "out", "dist"];
+
+/// Copies `src` to `dst` (a project copy for tools that write next to their input).
+/// VCS and run state (`.git`, `.dla`), dependency and environment directories are
+/// never copied. Build-output directories (`target`, `build`, `out`, `dist`) are
+/// left out only at the project root and next to a `Cargo.toml` (a crate root),
+/// so a source module such as `src/build/` survives.
 pub fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
+    copy_dir(src, dst, true)
+}
+
+fn copy_dir(src: &Path, dst: &Path, top: bool) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
+    let crate_root = top || src.join("Cargo.toml").is_file();
     for e in fs::read_dir(src)? {
         let e = e?;
         let name = e.file_name();
+        let n = name.to_string_lossy();
         let ft = e.file_type()?;
         if ft.is_dir() {
-            if !skipped(&name.to_string_lossy()) {
-                copy_tree(&e.path(), &dst.join(&name))?;
+            let always = matches!(
+                n.as_ref(),
+                ".git"
+                    | ".dla"
+                    | "node_modules"
+                    | "venv"
+                    | ".venv"
+                    | "__pycache__"
+                    | ".idea"
+                    | ".gradle"
+            );
+            if always || (crate_root && OUTPUT_DIRS.contains(&n.as_ref())) {
+                continue;
             }
+            copy_dir(&e.path(), &dst.join(&name), false)?;
         } else if ft.is_file() {
             fs::copy(e.path(), dst.join(&name))?;
         }
@@ -375,28 +399,102 @@ pub fn resolve_suffix(files: &[String], partial: &str) -> Option<String> {
         .cloned()
 }
 
+/// Like [`resolve_suffix`], but when several files match prefers one under any of the
+/// `prefixes` (module directories paired with the analysed class roots). `""` is
+/// ignored: it would match everything.
+pub fn resolve_suffix_in(files: &[String], partial: &str, prefixes: &[String]) -> Option<String> {
+    let p = partial.trim_start_matches("./").replace('\\', "/");
+    let tail = format!("/{p}");
+    let mut first: Option<&String> = None;
+    for f in files.iter().filter(|f| **f == p || f.ends_with(&tail)) {
+        if prefixes
+            .iter()
+            .any(|x| !x.is_empty() && f.starts_with(&format!("{}/", x.trim_end_matches('/'))))
+        {
+            return Some(f.clone());
+        }
+        first.get_or_insert(f);
+    }
+    first.cloned()
+}
+
+/// The module directory a build-output path belongs to: everything before the first
+/// `target`, `build`, `out` or `bin` component (`a/target/classes/x` -> `a`).
+pub fn module_prefix(class_dir: &str) -> String {
+    let comps: Vec<&str> = class_dir.split('/').collect();
+    let i = comps
+        .iter()
+        .position(|c| matches!(*c, "target" | "build" | "out" | "bin"))
+        .unwrap_or(comps.len());
+    comps[..i].join("/")
+}
+
+/// The class-root-relative part of a class file path: what follows the `classes`
+/// directory (and a Gradle `java|kotlin|scala/<set>` pair), or the whole path.
+pub fn class_key(class_file: &str) -> &str {
+    let comps: Vec<&str> = class_file.split('/').collect();
+    let Some(i) = comps.iter().position(|c| *c == "classes") else {
+        return class_file;
+    };
+    let mut skip = i + 1;
+    if comps
+        .get(skip)
+        .is_some_and(|c| matches!(*c, "java" | "kotlin" | "scala"))
+        && comps.get(skip + 1).is_some()
+        && comps.len() > skip + 2
+    {
+        skip += 2;
+    }
+    let off: usize = comps[..skip].iter().map(|c| c.len() + 1).sum();
+    class_file.get(off..).unwrap_or(class_file)
+}
+
+/// Splits `groups` (each a set of keys) into batches in which no key repeats, keeping
+/// as many groups together as possible. Returns, per batch, the group indexes.
+pub fn conflict_free_batches(groups: &[Vec<String>]) -> Vec<Vec<usize>> {
+    let mut batches: Vec<(Vec<usize>, std::collections::HashSet<&str>)> = Vec::new();
+    for (i, g) in groups.iter().enumerate() {
+        let slot = batches
+            .iter()
+            .position(|(_, keys)| g.iter().all(|k| !keys.contains(k.as_str())));
+        let idx = slot.unwrap_or_else(|| {
+            batches.push((Vec::new(), std::collections::HashSet::new()));
+            batches.len() - 1
+        });
+        batches[idx].0.push(i);
+        batches[idx].1.extend(g.iter().map(String::as_str));
+    }
+    batches.into_iter().map(|b| b.0).collect()
+}
+
+/// The source root (project-relative) implied by the `package` line of a Java or
+/// Kotlin file.
+pub fn source_root_of(project: &Path, f: &str) -> Option<String> {
+    let text = fs::read_to_string(project.join(f)).ok()?;
+    let pkg = text.lines().take(60).find_map(|l| {
+        let t = l.trim();
+        let rest = t.strip_prefix("package ")?;
+        Some(rest.trim_end_matches(';').trim().replace('`', ""))
+    });
+    let dir = f.rsplit_once('/').map_or("", |(d, _)| d);
+    Some(match pkg {
+        Some(p) if !p.is_empty() => {
+            let want = p.replace('.', "/");
+            match dir.strip_suffix(&want) {
+                Some(r) => r.trim_end_matches('/').to_owned(),
+                None => dir.to_owned(),
+            }
+        }
+        _ => dir.to_owned(),
+    })
+}
+
 /// Project-relative source roots implied by `package` lines of Java/Kotlin files.
 pub fn source_roots(project: &Path, files: &[String]) -> Vec<String> {
     let mut roots: Vec<String> = Vec::new();
     for f in files {
-        let Ok(text) = fs::read_to_string(project.join(f)) else {
+        let Some(root) = source_root_of(project, f) else {
             continue;
-        };
-        let pkg = text.lines().take(60).find_map(|l| {
-            let t = l.trim();
-            let rest = t.strip_prefix("package ")?;
-            Some(rest.trim_end_matches(';').trim().replace('`', ""))
-        });
-        let dir = f.rsplit_once('/').map_or("", |(d, _)| d);
-        let root = match pkg {
-            Some(p) if !p.is_empty() => {
-                let want = p.replace('.', "/");
-                match dir.strip_suffix(&want) {
-                    Some(r) => r.trim_end_matches('/').to_owned(),
-                    None => dir.to_owned(),
-                }
-            }
-            _ => dir.to_owned(),
         };
         if !roots.contains(&root) {
             roots.push(root);
@@ -417,6 +515,62 @@ pub fn write(path: &Path, text: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_tree_keeps_source_modules_named_like_outputs() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("p");
+        for f in [
+            "Cargo.toml",
+            "src/main.rs",
+            "src/build/mod.rs",
+            "src/target/mod.rs",
+            "src/out/x.rs",
+            "src/dist/y.rs",
+            "target/debug/junk",
+            "build/junk",
+            ".git/HEAD",
+            "sub/Cargo.toml",
+            "sub/target/junk",
+            "sub/src/build/z.rs",
+        ] {
+            let p = src.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, "x").unwrap();
+        }
+        let dst = d.path().join("copy");
+        copy_tree(&src, &dst).unwrap();
+        for kept in [
+            "src/build/mod.rs",
+            "src/target/mod.rs",
+            "src/out/x.rs",
+            "src/dist/y.rs",
+            "sub/src/build/z.rs",
+        ] {
+            assert!(dst.join(kept).is_file(), "{kept} must be copied");
+        }
+        for gone in ["target", "build", ".git", "sub/target"] {
+            assert!(!dst.join(gone).exists(), "{gone} must be left out");
+        }
+    }
+
+    #[test]
+    fn class_keys_and_module_prefixes() {
+        assert_eq!(class_key("a/target/classes/com/x/U.class"), "com/x/U.class");
+        assert_eq!(
+            class_key("a/build/classes/java/main/com/x/U.class"),
+            "com/x/U.class"
+        );
+        assert_eq!(class_key("Loose.class"), "Loose.class");
+        assert_eq!(module_prefix("a/b/target/classes/com"), "a/b");
+        assert_eq!(module_prefix("target/classes"), "");
+        let g = vec![
+            vec!["x".to_owned(), "y".to_owned()],
+            vec!["x".to_owned()],
+            vec!["z".to_owned()],
+        ];
+        assert_eq!(conflict_free_batches(&g), vec![vec![0, 2], vec![1]]);
+    }
 
     #[test]
     fn rel_maps_absolute_relative_and_uris() {

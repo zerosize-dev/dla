@@ -35,10 +35,18 @@ struct Probe {
 }
 
 fn probe(name: &str) -> Probe {
+    probe_at(name, "")
+}
+
+/// Like [`probe`], with the fixture copied into `sub` of the project.
+fn probe_at(name: &str, sub: &str) -> Probe {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("proj");
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    copy(&manifest.join("tests/data/probes").join(name), &project);
+    copy(
+        &manifest.join("tests/data/probes").join(name),
+        &project.join(sub),
+    );
     let run_dir = project.join(".dla/r1");
     fs::create_dir_all(&run_dir).unwrap();
     let mut st =
@@ -140,6 +148,28 @@ fn go_probe_with_the_go_analyzers() {
 }
 
 #[test]
+fn go_modules_below_the_root_are_analysed_with_project_relative_sites() {
+    if !have(&["go"]) {
+        return;
+    }
+    let p = probe_at("go", "svc");
+    sweep_with(&p.ctx, Runtime::Go, &env()).unwrap();
+    assert_eq!(status(&p, "go", "govet"), BackendStatus::Ran);
+    assert_eq!(sites(&p, "govet"), set(&["lostcancel@svc/p.go:41"]));
+    if have(&["golangci-lint"]) {
+        let got = sites(&p, "golangci-lint");
+        // Linters that flag the same line are all reported.
+        for want in [
+            "noctx@svc/p.go:23",
+            "rowserrcheck@svc/p.go:23",
+            "sqlclosecheck@svc/p.go:23",
+        ] {
+            assert!(got.contains(want), "{want} in {got:?}");
+        }
+    }
+}
+
+#[test]
 fn python_probe_with_ruff_and_pylint() {
     if !have(&["ruff"]) {
         return;
@@ -188,6 +218,56 @@ fn node_probe_with_eslint_when_the_plugins_are_installed() {
         got.contains("@typescript-eslint/no-floating-promises@a.ts:8"),
         "{got:?}"
     );
+}
+
+#[test]
+fn eslint_reads_files_outside_the_project_tsconfig_include() {
+    let Some(eslint) = env().find_program("eslint") else {
+        eprintln!("skipped: needs eslint");
+        return;
+    };
+    let installed = eslint.canonicalize().ok().is_some_and(|r| {
+        r.ancestors().any(|a| {
+            a.join("typescript-eslint").is_dir() && a.join("eslint-plugin-rxjs-x").is_dir()
+        })
+    });
+    if !installed {
+        eprintln!("skipped: typescript-eslint and eslint-plugin-rxjs-x are not next to eslint");
+        return;
+    }
+    let p = probe("node");
+    let body = "async function z(){}\nfunction y(){ z(); }\n";
+    for f in ["lib/x.js", "scripts/t.ts"] {
+        let path = p.ctx.project.join(f);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+    sweep_with(&p.ctx, Runtime::Node, &env()).unwrap();
+    assert_eq!(status(&p, "node", "eslint"), BackendStatus::Ran);
+    let got = sites(&p, "eslint");
+    for want in [
+        "@typescript-eslint/no-floating-promises@a.ts:8",
+        "@typescript-eslint/no-floating-promises@lib/x.js:2",
+        "@typescript-eslint/no-floating-promises@scripts/t.ts:2",
+    ] {
+        assert!(got.contains(want), "{want} in {got:?}");
+    }
+}
+
+#[test]
+fn rapx_copy_keeps_modules_named_build() {
+    if !have(&["cargo-rapx", "cargo"]) {
+        return;
+    }
+    let p = probe("rust");
+    let src = p.ctx.project.join("src");
+    fs::create_dir_all(src.join("build")).unwrap();
+    fs::write(src.join("build/mod.rs"), "pub fn b() -> u8 { 1 }\n").unwrap();
+    let lib = src.join("lib.rs");
+    let text = fs::read_to_string(&lib).unwrap();
+    fs::write(&lib, format!("pub mod build;\n{text}")).unwrap();
+    sweep_with(&p.ctx, Runtime::Rust, &env()).unwrap();
+    assert_eq!(status(&p, "rust", "rapx"), BackendStatus::Ran);
 }
 
 #[test]

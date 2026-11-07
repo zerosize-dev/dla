@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::{Job, Outcome, Ran, attach_file, csv, dedupe, hit, isolate, run_record, version_of};
 use crate::{
     exec::{self, Cmd},
-    fsx::PathMap,
+    fsx::{self, PathMap},
     sarif,
 };
 
@@ -26,27 +26,110 @@ pub struct Parsed {
     pub first_error: Option<String>,
 }
 
-fn go_cmd(program: &std::path::Path, job: &Job) -> Result<Cmd, Box<Outcome>> {
-    if !job.project().join("go.mod").is_file() {
-        return Err(Box::new(Outcome::blocked(
-            "no go.mod at the project root: go tools cannot load packages",
-            vec![],
-        )));
-    }
-    let tmp = job.ctx.tmp_dir().map_err(|e| {
-        Box::new(Outcome::blocked(
-            format!("cannot create the scratch directory: {}", e.message),
-            vec![],
-        ))
-    })?;
+/// Directories (absolute) of every Go module under the project: each `go.mod` that
+/// is not under a skipped directory (or `vendor`/`testdata`). `./...` stops at nested
+/// modules, so each one is run from its own directory.
+pub fn module_dirs(project: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mods = fsx::walk_with(
+        project,
+        10_000,
+        &|n| fsx::skipped(n) || n == "vendor" || n == "testdata",
+        &|r| r == "go.mod" || r.ends_with("/go.mod"),
+    );
+    let mut dirs: Vec<_> = mods
+        .iter()
+        .map(|m| match m.rsplit_once('/') {
+            Some((d, _)) => project.join(d),
+            None => project.to_path_buf(),
+        })
+        .collect();
+    dirs.truncate(MAX_MODULES);
+    dirs
+}
+
+/// The most modules a run covers.
+const MAX_MODULES: usize = 16;
+
+fn go_cmd(program: &std::path::Path, job: &Job, dir: &std::path::Path) -> Result<Cmd, String> {
+    let tmp = job
+        .ctx
+        .tmp_dir()
+        .map_err(|e| format!("cannot create the scratch directory: {}", e.message))?;
     let cmd = Cmd::new(program)
-        .cwd(job.project())
+        .cwd(dir)
         .env("GOCACHE", tmp.join("gocache").into_os_string())
         .env("GOPROXY", "off")
         .env("GOTOOLCHAIN", "local")
-        .env("GOFLAGS", "-buildvcs=false")
+        .env("GOFLAGS", "-buildvcs=false -modcacherw")
         .timeout(job.timeout);
     Ok(isolate(cmd, job))
+}
+
+/// The result of one tool run in one module.
+struct Single {
+    parsed: Parsed,
+    cmd: Cmd,
+    exit: Option<i32>,
+    rec: Value,
+}
+
+/// A tool run in one module: the result, or the failure reason and run records.
+type ModuleRun = Result<Single, (String, Vec<Value>)>;
+
+/// Runs `one` in every module and merges the results: blocked only when it fails in
+/// every module, otherwise the failures become limitations.
+fn per_module(
+    backend: &str,
+    version: String,
+    job: &Job,
+    one: &dyn Fn(&std::path::Path) -> ModuleRun,
+) -> Outcome {
+    let dirs = module_dirs(job.project());
+    if dirs.is_empty() {
+        return Outcome::blocked(
+            "no go.mod under the project: go tools cannot load packages",
+            vec![],
+        );
+    }
+    let mut parsed = Parsed::default();
+    let mut recs = Vec::new();
+    let mut failures = Vec::new();
+    let mut first: Option<(Cmd, Option<i32>)> = None;
+    for d in &dirs {
+        let shown = d
+            .strip_prefix(job.project())
+            .ok()
+            .map(dla_core::paths::to_slash)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| ".".to_owned());
+        match one(d) {
+            Ok(s) => {
+                recs.push(s.rec);
+                parsed.hits.extend(s.parsed.hits);
+                parsed.load_errors += s.parsed.load_errors;
+                if parsed.first_error.is_none() {
+                    parsed.first_error = s.parsed.first_error;
+                }
+                first.get_or_insert((s.cmd, s.exit));
+            }
+            Err((why, r)) => {
+                recs.extend(r);
+                failures.push(format!("{shown}: {why}"));
+            }
+        }
+    }
+    let Some((cmd, exit)) = first else {
+        return Outcome::blocked(failures.join("; "), recs);
+    };
+    let mut out = finish(backend, version, &cmd, exit, parsed, recs);
+    if let Outcome::Ran(r) = &mut out {
+        r.limitations.extend(
+            failures
+                .into_iter()
+                .map(|f| format!("{backend} failed in module {f}")),
+        );
+    }
+    out
 }
 
 /// Parses staticcheck's SARIF.
@@ -69,35 +152,39 @@ pub fn parse_staticcheck(log: &Value, wanted: &[&str], paths: &PathMap) -> Parse
     p
 }
 
-/// Runs staticcheck.
+/// Runs staticcheck in every module.
 pub fn staticcheck(job: &Job) -> Outcome {
     let Some(prog) = job.env.find_program("staticcheck") else {
         return Outcome::missing("staticcheck is not on PATH or in the tools directory");
     };
     let version = version_of(Cmd::new(&prog).arg("-version"));
-    let cmd = match go_cmd(&prog, job) {
-        Ok(c) => c,
-        Err(o) => return *o,
-    };
     let ids = job.rule_ids();
-    let cmd = cmd.args(["-checks", &csv(&ids), "-f", "sarif", "./..."]);
-    let out = exec::run(&cmd);
-    let rec = run_record(&cmd, &out);
-    if let Some(r) = out.failure_reason() {
-        return Outcome::blocked(format!("staticcheck {r}"), vec![rec]);
-    }
-    let Some(log) = sarif::first_json(&out.stdout) else {
-        return Outcome::blocked(
-            format!(
-                "staticcheck printed no SARIF (exit {:?}): {}",
-                out.exit,
-                out.tail(3)
-            ),
-            vec![rec],
-        );
-    };
-    let parsed = parse_staticcheck(&log, &ids, &job.paths());
-    finish("staticcheck", version, &cmd, out.exit, parsed, rec)
+    per_module("staticcheck", version, job, &|dir| {
+        let cmd = go_cmd(&prog, job, dir).map_err(|e| (e, vec![]))?;
+        let cmd = cmd.args(["-checks", &csv(&ids), "-f", "sarif", "./..."]);
+        let out = exec::run(&cmd);
+        let rec = run_record(&cmd, &out);
+        if let Some(r) = out.failure_reason() {
+            return Err((format!("staticcheck {r}"), vec![rec]));
+        }
+        let Some(log) = sarif::first_json(&out.stdout) else {
+            return Err((
+                format!(
+                    "staticcheck printed no SARIF (exit {:?}): {}",
+                    out.exit,
+                    out.tail(3)
+                ),
+                vec![rec],
+            ));
+        };
+        let parsed = parse_staticcheck(&log, &ids, &job.paths().with_base(dir));
+        Ok(Single {
+            parsed,
+            cmd,
+            exit: out.exit,
+            rec,
+        })
+    })
 }
 
 fn finish(
@@ -106,16 +193,13 @@ fn finish(
     cmd: &Cmd,
     exit: Option<i32>,
     parsed: Parsed,
-    rec: Value,
+    recs: Vec<Value>,
 ) -> Outcome {
     if parsed.hits.is_empty()
         && parsed.load_errors > 0
         && let Some(e) = &parsed.first_error
     {
-        return Outcome::blocked(
-            format!("{backend} could not load the packages: {e}"),
-            vec![rec],
-        );
+        return Outcome::blocked(format!("{backend} could not load the packages: {e}"), recs);
     }
     let mut limitations = Vec::new();
     if parsed.load_errors > 0 {
@@ -133,7 +217,7 @@ fn finish(
         load_errors: parsed.load_errors,
         limitations,
         note: None,
-        raw: serde_json::json!({ "runs": [rec] }),
+        raw: serde_json::json!({ "runs": recs }),
     }))
 }
 
@@ -151,6 +235,8 @@ pub fn golangci_config(rules: &[&str]) -> String {
             linters.push(r);
         }
     }
+    // golangci-lint defaults to one issue per line, 50 per linter and 3 identical
+    // messages; every finding of the enabled linters must be reported.
     let mut y = format!(
         "version: \"2\"\nlinters:\n  default: none\n  enable: [{}]\n",
         linters.join(", ")
@@ -161,6 +247,9 @@ pub fn golangci_config(rules: &[&str]) -> String {
             gocritic.join(", ")
         ));
     }
+    y.push_str(
+        "issues:\n  uniq-by-line: false\n  max-issues-per-linter: 0\n  max-same-issues: 0\n",
+    );
     y
 }
 
@@ -195,58 +284,65 @@ pub fn parse_golangci(log: &Value, wanted: &[&str], paths: &PathMap) -> Parsed {
     p
 }
 
-/// Runs golangci-lint with an explicit linter list.
+/// Runs golangci-lint with an explicit linter list in every module.
 pub fn golangci(job: &Job) -> Outcome {
     let Some(prog) = job.env.find_program("golangci-lint") else {
         return Outcome::missing("golangci-lint is not on PATH or in the tools directory");
     };
     let version = version_of(Cmd::new(&prog).arg("--version"));
-    let cmd = match go_cmd(&prog, job) {
-        Ok(c) => c,
-        Err(o) => return *o,
-    };
     let ids = job.rule_ids();
     let cfg = job.scratch.join("golangci.yml");
-    let sarif_path = job.scratch.join("golangci.sarif");
-    let text_path = job.scratch.join("golangci.txt");
     if let Err(e) = crate::fsx::write(&cfg, &golangci_config(&ids)) {
         return Outcome::blocked(format!("cannot write the config: {e}"), vec![]);
     }
-    let _ = fs::remove_file(&sarif_path);
-    let cmd = cmd
-        .env(
-            "GOLANGCI_LINT_CACHE",
-            job.scratch.join("cache/golangci").into_os_string(),
-        )
-        .arg("run")
-        .arg("--config")
-        .arg(&cfg)
-        .arg("--path-mode=abs")
-        .arg("--show-stats=false")
-        .arg(format!("--output.sarif.path={}", sarif_path.display()))
-        .arg(format!("--output.text.path={}", text_path.display()))
-        .arg("./...");
-    let out = exec::run(&cmd);
-    let mut rec = run_record(&cmd, &out);
-    if let Some(r) = out.failure_reason() {
-        return Outcome::blocked(format!("golangci-lint {r}"), vec![rec]);
-    }
-    let Ok(text) = fs::read_to_string(&sarif_path) else {
-        return Outcome::blocked(
-            format!(
-                "golangci-lint wrote no SARIF (exit {:?}): {}",
-                out.exit,
-                out.tail(3)
-            ),
-            vec![rec],
-        );
-    };
-    attach_file(&mut rec, "output_file_json", &text);
-    let Ok(log) = serde_json::from_str::<Value>(&text) else {
-        return Outcome::blocked("golangci-lint wrote malformed SARIF", vec![rec]);
-    };
-    let parsed = parse_golangci(&log, &ids, &job.paths());
-    finish("golangci-lint", version, &cmd, out.exit, parsed, rec)
+    let n = std::cell::Cell::new(0_usize);
+    per_module("golangci-lint", version, job, &|dir| {
+        let i = n.get();
+        n.set(i + 1);
+        let sarif_path = job.scratch.join(format!("golangci-{i}.sarif"));
+        let text_path = job.scratch.join(format!("golangci-{i}.txt"));
+        let _ = fs::remove_file(&sarif_path);
+        let cmd = go_cmd(&prog, job, dir).map_err(|e| (e, vec![]))?;
+        let cmd = cmd
+            .env(
+                "GOLANGCI_LINT_CACHE",
+                job.scratch.join("cache/golangci").into_os_string(),
+            )
+            .arg("run")
+            .arg("--config")
+            .arg(&cfg)
+            .arg("--path-mode=abs")
+            .arg("--show-stats=false")
+            .arg(format!("--output.sarif.path={}", sarif_path.display()))
+            .arg(format!("--output.text.path={}", text_path.display()))
+            .arg("./...");
+        let out = exec::run(&cmd);
+        let mut rec = run_record(&cmd, &out);
+        if let Some(r) = out.failure_reason() {
+            return Err((format!("golangci-lint {r}"), vec![rec]));
+        }
+        let Ok(text) = fs::read_to_string(&sarif_path) else {
+            return Err((
+                format!(
+                    "golangci-lint wrote no SARIF (exit {:?}): {}",
+                    out.exit,
+                    out.tail(3)
+                ),
+                vec![rec],
+            ));
+        };
+        attach_file(&mut rec, "output_file_json", &text);
+        let Ok(log) = serde_json::from_str::<Value>(&text) else {
+            return Err(("golangci-lint wrote malformed SARIF".to_owned(), vec![rec]));
+        };
+        let parsed = parse_golangci(&log, &ids, &job.paths().with_base(dir));
+        Ok(Single {
+            parsed,
+            cmd,
+            exit: out.exit,
+            rec,
+        })
+    })
 }
 
 /// Parses `go vet -json` output (a `# package` header, then one indented JSON object
@@ -312,30 +408,34 @@ fn split_posn(posn: &str) -> Option<(&str, u32)> {
     Some((file, line.parse().ok()?))
 }
 
-/// Runs `go vet -json` with only the listed analyzers.
+/// Runs `go vet -json` with only the listed analyzers in every module.
 pub fn govet(job: &Job) -> Outcome {
     let Some(prog) = job.env.find_program("go") else {
         return Outcome::missing("the go toolchain is not on PATH");
     };
     let version = version_of(Cmd::new(&prog).arg("version"));
-    let cmd = match go_cmd(&prog, job) {
-        Ok(c) => c,
-        Err(o) => return *o,
-    };
     let ids = job.rule_ids();
-    let mut cmd = cmd.args(["vet", "-json"]);
-    for id in &ids {
-        cmd = cmd.arg(format!("-{id}"));
-    }
-    let cmd = cmd.arg("./...");
-    let out = exec::run(&cmd);
-    let rec = run_record(&cmd, &out);
-    if let Some(r) = out.failure_reason() {
-        return Outcome::blocked(format!("go vet {r}"), vec![rec]);
-    }
-    let combined = format!("{}\n{}", out.stdout, out.stderr);
-    let parsed = parse_govet(&combined, &ids, &job.paths());
-    finish("govet", version, &cmd, out.exit, parsed, rec)
+    per_module("govet", version, job, &|dir| {
+        let cmd = go_cmd(&prog, job, dir).map_err(|e| (e, vec![]))?;
+        let mut cmd = cmd.args(["vet", "-json"]);
+        for id in &ids {
+            cmd = cmd.arg(format!("-{id}"));
+        }
+        let cmd = cmd.arg("./...");
+        let out = exec::run(&cmd);
+        let rec = run_record(&cmd, &out);
+        if let Some(r) = out.failure_reason() {
+            return Err((format!("go vet {r}"), vec![rec]));
+        }
+        let combined = format!("{}\n{}", out.stdout, out.stderr);
+        let parsed = parse_govet(&combined, &ids, &job.paths().with_base(dir));
+        Ok(Single {
+            parsed,
+            cmd,
+            exit: out.exit,
+            rec,
+        })
+    })
 }
 
 #[cfg(test)]
@@ -445,6 +545,50 @@ mod tests {
         assert!(y.contains("enabled-checks: [deferInLoop]"));
         assert!(y.contains("default: none"));
         assert!(!golangci_config(&["noctx"]).contains("gocritic"));
+    }
+
+    #[test]
+    fn golangci_config_disables_dedupe_and_caps() {
+        let y = golangci_config(&["noctx", "sqlclosecheck", "rowserrcheck"]);
+        assert!(y.contains("\nissues:\n  uniq-by-line: false\n"));
+        let g = golangci_config(&["gocritic/deferInLoop"]);
+        let (lint, issues) = g.split_once("\nissues:").unwrap();
+        assert!(lint.contains("settings:"), "settings stay under linters");
+        assert!(!issues.contains("settings:"));
+        assert!(y.contains("max-issues-per-linter: 0"));
+        assert!(y.contains("max-same-issues: 0"));
+    }
+
+    #[test]
+    fn module_dirs_finds_nested_modules_and_skips_vendor() {
+        let d = tempfile::tempdir().unwrap();
+        for p in [
+            "svc/go.mod",
+            "tools/x/go.mod",
+            "svc/vendor/dep/go.mod",
+            "node_modules/n/go.mod",
+        ] {
+            let f = d.path().join(p);
+            fs::create_dir_all(f.parent().unwrap()).unwrap();
+            fs::write(f, "module m\n").unwrap();
+        }
+        let got: Vec<_> = module_dirs(d.path())
+            .iter()
+            .map(|p| p.strip_prefix(d.path()).unwrap().to_owned())
+            .collect();
+        assert_eq!(got, [Path::new("svc"), Path::new("tools/x")]);
+        fs::write(d.path().join("go.mod"), "module r\n").unwrap();
+        assert_eq!(module_dirs(d.path()).len(), 3);
+        let empty = tempfile::tempdir().unwrap();
+        assert!(module_dirs(empty.path()).is_empty());
+    }
+
+    #[test]
+    fn nested_module_paths_are_project_relative() {
+        let pm = PathMap::new(Path::new("/proj")).with_base(Path::new("/proj/svc"));
+        assert_eq!(pm.rel("a.go").as_deref(), Some("svc/a.go"));
+        assert_eq!(pm.rel("./pkg/b.go").as_deref(), Some("svc/pkg/b.go"));
+        assert_eq!(pm.rel("/proj/svc/c.go").as_deref(), Some("svc/c.go"));
     }
 
     #[test]
