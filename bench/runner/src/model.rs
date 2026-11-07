@@ -128,6 +128,33 @@ pub struct Task {
     pub prompt: String,
 }
 
+/// Causes a `[[leak]]` may carry: the ten leak archetypes or `UNCLASSIFIED`.
+pub const LEAK_CAUSES: [&str; 11] = [
+    "L-HANDLE",
+    "L-COLLECT",
+    "L-REGISTER",
+    "L-WORKER",
+    "L-TLS",
+    "L-STALE",
+    "L-CAPTURE",
+    "L-CYCLE",
+    "L-OWNERSHIP",
+    "L-UNLOAD",
+    "UNCLASSIFIED",
+];
+
+/// Causes a `[[non_leak]]` may carry: the seven non-leak archetypes or `UNCLASSIFIED`.
+pub const NON_LEAK_CAUSES: [&str; 8] = [
+    "N-ALLOC",
+    "N-HEADROOM",
+    "N-WARM",
+    "N-HWM",
+    "N-SCALE",
+    "N-INTENT",
+    "N-OBSERVER",
+    "UNCLASSIFIED",
+];
+
 /// One expected leak.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -146,8 +173,11 @@ pub struct Leak {
     pub holder: Holder,
     /// Where the memory lives.
     pub region: Region,
-    /// Archetype ID (`L-*`, `N-*`) or `UNCLASSIFIED`.
-    #[schemars(regex(pattern = r"^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$"))]
+    /// Leak archetype ID (`L-*`) or `UNCLASSIFIED`.
+    #[schemars(extend("enum" = [
+        "L-HANDLE", "L-COLLECT", "L-REGISTER", "L-WORKER", "L-TLS", "L-STALE", "L-CAPTURE",
+        "L-CYCLE", "L-OWNERSHIP", "L-UNLOAD", "UNCLASSIFIED"
+    ]))]
     pub cause: String,
     /// Share of the total growth (relevant with more than one leak).
     #[serde(default = "full_share")]
@@ -167,7 +197,10 @@ pub struct NonLeak {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
     /// Non-leak ID (`N-*`) or `UNCLASSIFIED`.
-    #[schemars(regex(pattern = r"^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$"))]
+    #[schemars(extend("enum" = [
+        "N-ALLOC", "N-HEADROOM", "N-WARM", "N-HWM", "N-SCALE", "N-INTENT", "N-OBSERVER",
+        "UNCLASSIFIED"
+    ]))]
     pub cause: String,
     /// The observation that rules the leak out.
     pub discriminator: String,
@@ -365,8 +398,8 @@ pub struct WallSeconds {
     pub sum: f64,
     /// Mean per run.
     pub mean: Option<f64>,
-    /// Largest.
-    pub max: f64,
+    /// Largest; null when the group has no graded run.
+    pub max: Option<f64>,
 }
 
 /// Cost.

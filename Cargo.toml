@@ -29,6 +29,7 @@ predicates = "3"
 regex = "1"
 toml = "0.9"
 jsonschema = { version = "0.33", default-features = false }
+signal-hook = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

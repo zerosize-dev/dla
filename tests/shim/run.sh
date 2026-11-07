@@ -214,6 +214,13 @@ OUT=$(DLA_BIN="$FAKE" CLAUDE_PLUGIN_DATA="$DATA1" "$PSHIM" 2>&1); RC=$?
 [ "$RC" -eq 0 ] && [ "$OUT" = "override" ] && ok "DLA_BIN takes precedence" || bad "DLA_BIN precedence: rc=$RC out=$OUT"
 OUT=$(DLA_BIN="$WORK/missing" "$PSHIM" 2>&1); RC=$?
 [ "$RC" -eq 127 ] && ok "bad DLA_BIN exits 127" || bad "bad DLA_BIN exited $RC"
+# the downloader stands down when DLA_BIN names an executable file
+DATA12="$WORK/data12"
+OUT=$(DLA_BIN="$FAKE" CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$DATA12" DLA_RELEASE_BASE_URL="$WORK/no-such-release" bash "$FETCH" 2>"$WORK/stderr12"); RC=$?
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ ! -s "$WORK/stderr12" ] && [ ! -e "$DATA12" ] \
+  && ok "fetch hook does nothing when DLA_BIN is an executable file" || bad "fetch hook with DLA_BIN: rc=$RC out=$OUT"
+OUT=$(DLA_BIN="$WORK/missing" CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$DATA12" DLA_RELEASE_BASE_URL="$WORK/no-such-release" bash "$FETCH" 2>/dev/null); RC=$?
+[ "$RC" -eq 0 ] && [ -n "$OUT" ] && ok "fetch hook still reports when DLA_BIN is not executable" || bad "fetch hook with bad DLA_BIN: rc=$RC out=$OUT"
 
 # 13. dev fallback: target/release then target/debug
 mkdir -p "$PR/target/debug" "$PR/target/release"

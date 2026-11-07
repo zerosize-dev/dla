@@ -1073,6 +1073,144 @@ class ClarifiedRulesTest(EnvCase):
         self.assertEqual(s, {"value": 0.2, "runs": 2})
 
 
+class ClarifiedRules2Test(EnvCase):
+    """Encoding, whitespace, ablation, runs/ and unfinished-group rules."""
+
+    def fx(self):
+        self.env.fixture("t", "archetype-leak", leak_toml("L1", "a.py:5"))
+
+    # encoding
+    def test_run_json_invalid_utf8_is_an_error(self):
+        self.fx()
+        d = self.env.run("t")
+        (d / "run.json").write_bytes(b'{"exit_code": 0, "x": "\xff"}')
+        with self.assertRaises(grade.GradeError):
+            self.env.grade()
+
+    def test_expected_toml_invalid_utf8_is_an_error(self):
+        self.fx()
+        self.env.run("t")
+        (self.env.fixtures / "t" / "expected.toml").write_bytes(
+            fixture_toml("t", "archetype-leak").encode() + b'\n# \xff\n')
+        with self.assertRaises(grade.GradeError):
+            self.env.grade()
+
+    def test_findings_json_invalid_utf8_treated_as_absent(self):
+        self.fx()
+        d = self.env.run("t", findings=[jf("a.py:5")])
+        (d / "findings.json").write_bytes(b'{"findings": [{"site": "a.py:5", "verdict": "\xff"}]}')
+        g = self.env.group()
+        self.assertEqual(g["usage"]["sources"], {"ledger": 0, "findings": 0, "none": 1})
+
+    def test_coverage_json_invalid_utf8_treated_as_absent(self):
+        self.fx()
+        d = self.env.run("t")
+        (d / "coverage.json").write_bytes(b'{"residual": [{"residual": 1, "total_slope": 2, "x": "\xff"}]}')
+        self.assertEqual(self.env.group()["unexplained_growth_share"], {"value": None, "runs": 0})
+
+    def test_ledger_bad_line_does_not_poison_other_lines(self):
+        p = self.env.root / "l.jsonl"
+        p.write_bytes(added("f", "a:1").encode() + b"\n\xff\xfe{\n" + trans("f", "strong").encode() + b"\n")
+        saw, fs = grade.parse_ledger(p)
+        self.assertEqual([(f["site"], f["state"]) for f in fs], [("a:1", "strong")])
+
+    # whitespace
+    def test_ledger_trims_only_ascii_whitespace(self):
+        p = self.env.root / "l.jsonl"
+        ok = added("f", "a:1")
+        lines = [" \t" + ok + "\r", "\u00a0" + added("g", "b:1"), added("h", "c:1") + "\u2003",
+                 "\x0b" + added("i", "d:1"), "\x0c" + added("j", "e:1")]
+        p.write_bytes("\n".join(lines).encode("utf-8"))
+        saw, fs = grade.parse_ledger(p)
+        self.assertEqual([f["site"] for f in fs], ["a:1"])
+
+    def test_discriminator_blank_check_is_ascii_only(self):
+        for disc, want in ((" \t\r\n", False), ("\u00a0", True), ("\u2003", True), ("\x0b", True), (" x ", True)):
+            fs = grade.parse_findings_json(self._write({"findings": [jf("a:1", verdict="not-a-leak", disc=disc)]}))
+            self.assertEqual(fs[0]["discriminator"], want, repr(disc))
+
+    def _write(self, doc):
+        p = self.env.root / "f.json"
+        p.write_text(json.dumps(doc), encoding="utf-8")
+        return p
+
+    # directories
+    def test_unknown_ablation_dirs_ignored(self):
+        self.fx()
+        self.env.run("t")
+        for name in ("scratch", "No-Skill", "full "):
+            d = self.env.results / "runs" / name / "archetypes-on" / "ghost" / "1"
+            d.mkdir(parents=True)
+            (d / "run.json").write_text("{}")
+        self.assertEqual([(g["ablation"], g["archetypes"]) for g in self.env.grade()["groups"]],
+                         [("no-skill", "on")])
+
+    def test_all_four_ablations_accepted(self):
+        self.fx()
+        for abl in ("no-skill", "prose", "gates", "full"):
+            self.env.run("t", abl=abl)
+        self.assertEqual([g["ablation"] for g in self.env.grade()["groups"]],
+                         ["full", "gates", "no-skill", "prose"])
+
+    def test_missing_runs_dir_is_an_error(self):
+        with self.assertRaises(grade.GradeError):
+            self.env.grade()
+
+    def test_runs_that_is_a_file_is_an_error(self):
+        (self.env.results / "runs").write_text("x")
+        with self.assertRaises(grade.GradeError):
+            self.env.grade()
+
+    def test_cli_missing_runs_dir_exits_1(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = grade.main([str(self.env.results), "--fixtures", str(self.env.fixtures),
+                             "--out", str(self.env.root / "m.json")])
+        self.assertEqual(rc, 1)
+        self.assertFalse((self.env.root / "m.json").exists())
+
+    # unfinished-only groups
+    def test_group_with_only_unfinished_runs_is_written_with_zero_runs(self):
+        self.env.run("ghost", n=1, write_run_json=False)
+        self.env.run("ghost", n=2, write_run_json=False)
+        g = self.env.group()
+        u = g["usage"]
+        self.assertEqual((u["runs"], u["incomplete"], u["errored"]), (0, 2, 0))
+        self.assertEqual(u["sources"], {"ledger": 0, "findings": 0, "none": 0})
+        for k in grade.TOKEN_FIELDS:
+            self.assertEqual(u[k], {"sum": 0, "mean": None})
+        self.assertEqual(u["wall_seconds"], {"sum": 0.0, "mean": None, "max": None})
+        self.assertEqual(u["cost_usd"], {"sum": 0.0, "mean": None})
+        self.assertEqual(g["fixtures"], {})
+        self.assertEqual(g["unexplained_growth_share"], {"value": None, "runs": 0})
+        for name in grade.METRIC_NAMES:
+            m = g["metrics"][name]
+            self.assertEqual((m["num"], m["den"], m["value"], m["mean"], m["stdev"], m["per_run"]),
+                             (0, 0, None, None, None, []))
+
+    def test_unfinished_only_group_next_to_finished_group(self):
+        self.fx()
+        self.env.run("t", abl="prose")
+        self.env.run("t", abl="full", write_run_json=False)
+        got = {(g["ablation"], g["usage"]["runs"], g["usage"]["incomplete"]) for g in self.env.grade()["groups"]}
+        self.assertEqual(got, {("prose", 1, 0), ("full", 0, 1)})
+
+    def test_expected_toml_needed_only_for_fixtures_with_a_finished_run(self):
+        self.fx()
+        self.env.run("t", n=1)
+        self.env.run("ghost", n=1, write_run_json=False)
+        g = self.env.group()
+        self.assertEqual(list(g["fixtures"]), ["t"])
+        self.assertEqual(g["usage"]["incomplete"], 1)
+        self.env.run("ghost", n=2)
+        with self.assertRaises(grade.GradeError):
+            self.env.grade()
+
+    def test_empty_group_json_serialises(self):
+        self.env.run("ghost", write_run_json=False)
+        json.dumps(self.env.grade(), allow_nan=False)
+
+
 class CliTest(EnvCase):
     def setUp(self):
         super().setUp()

@@ -10,7 +10,8 @@ use crate::{Res, model::Expected};
 /// Loads and parses `<dir>/<id>/expected.toml`.
 pub fn load_expected(fixtures: &Path, id: &str) -> Res<Expected> {
     let p = fixtures.join(id).join("expected.toml");
-    let text = fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let bytes = fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let text = String::from_utf8(bytes).map_err(|_| format!("{}: not valid UTF-8", p.display()))?;
     toml::from_str::<Expected>(&text).map_err(|e| format!("{}: {e}", p.display()))
 }
 

@@ -6,6 +6,7 @@
 pub mod compare;
 pub mod fixture;
 pub mod grade;
+pub mod guard;
 pub mod model;
 pub mod run;
 pub mod schema_cmd;

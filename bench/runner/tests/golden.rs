@@ -153,7 +153,7 @@ fn run_json_field_leniency_and_errored() {
     assert_eq!((u.input_tokens.sum, u.output_tokens.sum), (15, 3));
     assert_eq!(u.cache_read_input_tokens.sum, 2);
     assert_eq!(u.wall_seconds.sum, 7.5);
-    assert_eq!(u.wall_seconds.max, 4.0);
+    assert_eq!(u.wall_seconds.max, Some(4.0));
     assert_eq!((u.cost_usd.sum, u.cost_usd.mean), (0.5, Some(0.5)));
 }
 
@@ -313,4 +313,172 @@ fn metrics_file_ends_with_a_newline_and_round_trips() {
     assert!(text.ends_with("}\n"));
     let back: dla_bench::model::MetricsFile = serde_json::from_str(&text).unwrap();
     assert_eq!(back.groups.len(), 3);
+}
+
+// ---- the clarified rules of GRADING.md: encoding, directories, empty groups
+
+#[test]
+fn run_json_that_is_not_utf8_is_an_error() {
+    let s = sample();
+    let t = tempfile::tempdir().unwrap();
+    let p = t
+        .path()
+        .join("res/runs/no-skill/archetypes-on/fx-trap/1/run.json");
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(&p, b"{\"exit_code\":0,\"note\":\"caf\xe9\"}").unwrap();
+    let e = grade::grade_dir(&t.path().join("res"), &s.join("fixtures")).unwrap_err();
+    assert!(e.contains("UTF-8") && e.contains("run.json"), "{e}");
+}
+
+#[test]
+fn expected_toml_that_is_not_utf8_is_an_error() {
+    let t = tempfile::tempdir().unwrap();
+    write(
+        &t.path()
+            .join("res/runs/no-skill/archetypes-on/bad/1/run.json"),
+        RUN_JSON,
+    );
+    let fx = t.path().join("fx/bad");
+    fs::create_dir_all(&fx).unwrap();
+    fs::write(fx.join("expected.toml"), b"id = \"caf\xe9\"\n").unwrap();
+    let e = grade::grade_dir(&t.path().join("res"), &t.path().join("fx")).unwrap_err();
+    assert!(e.contains("UTF-8") && e.contains("expected.toml"), "{e}");
+}
+
+#[test]
+fn findings_and_coverage_that_are_not_utf8_count_as_absent() {
+    let s = sample();
+    let t = tempfile::tempdir().unwrap();
+    let base = t.path().join("res/runs/no-skill/archetypes-on/fx-multi");
+    write(&base.join("1/run.json"), RUN_JSON);
+    fs::write(
+        base.join("1/findings.json"),
+        b"{\"findings\":[{\"site\":\"a/reg.js:5\",\"verdict\":\"leak-confirmed\",\"evidence\":\"caf\xe9\"}]}",
+    )
+    .unwrap();
+    fs::write(
+        base.join("1/coverage.json"),
+        b"{\"residual\":[{\"residual\":1,\"total_slope\":2,\"note\":\"\xe9\"}]}",
+    )
+    .unwrap();
+    // the same files in valid UTF-8 are used
+    write(&base.join("2/run.json"), RUN_JSON);
+    write(
+        &base.join("2/findings.json"),
+        r#"{"findings":[{"site":"a/reg.js:5","verdict":"leak-confirmed"}]}"#,
+    );
+    write(
+        &base.join("2/coverage.json"),
+        r#"{"residual":[{"residual":1,"total_slope":2}]}"#,
+    );
+    let m = grade::grade_dir(&t.path().join("res"), &s.join("fixtures")).unwrap();
+    let g = &m.groups[0];
+    assert_eq!(
+        (g.usage.sources.none, g.usage.sources.findings),
+        (1, 1),
+        "run 1 has no source, run 2 has findings.json"
+    );
+    assert_eq!(g.unexplained_growth_share.runs, 1);
+    assert_eq!(g.metrics.leak_recall.per_run[0].num, 0);
+    assert_eq!(g.metrics.leak_recall.per_run[1].num, 1);
+}
+
+#[test]
+fn ledger_lines_are_decoded_one_by_one() {
+    let line = |id: &str, site: &str| {
+        format!(
+            "{{\"type\":\"finding_added\",\"finding\":{{\"id\":\"{id}\",\"site\":\"{site}\"}}}}\n"
+        )
+    };
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(line("F1", "a.js:1").as_bytes());
+    // one bad byte inside a string: only this line is lost
+    bytes.extend_from_slice(
+        b"{\"type\":\"finding_added\",\"finding\":{\"id\":\"F2\",\"site\":\"b.js:\xe9\"}}\n",
+    );
+    bytes.extend_from_slice(line("F3", "c.js:3").as_bytes());
+    let f = grade::findings_from_ledger_bytes(&bytes).expect("has finding_added");
+    let sites: Vec<_> = f.iter().map(|f| f.site.as_deref().unwrap()).collect();
+    assert_eq!(sites, ["a.js:1", "c.js:3"]);
+    // a ledger whose only record is bad has no finding_added: findings.json is used
+    let only_bad = b"{\"type\":\"finding_added\",\"finding\":{\"id\":\"F\",\"site\":\"\xff\"}}\n";
+    let fj = br#"{"findings":[{"site":"x.js:1","verdict":"leak-confirmed"}]}"#;
+    let (src, f) = grade::select_source_bytes(Some(only_bad), Some(fj));
+    assert_eq!(src, grade::Source::Findings);
+    assert_eq!(f.len(), 1);
+}
+
+#[test]
+fn trimming_the_discriminator_removes_ascii_whitespace_only() {
+    let one = |d: &str| {
+        let v = serde_json::json!({"findings":[{"site":"a.js:1","verdict":"not-a-leak","discriminator":d}]});
+        grade::findings_from_json(&v).unwrap()[0].is_rule_out()
+    };
+    assert!(!one(""));
+    assert!(!one(" \t\r\n "));
+    // U+001C is whitespace for Python's strip() and Rust's trim() but not here
+    assert!(one("\u{1c}"));
+    assert!(one("\u{a0}"), "no-break space is not trimmed");
+    assert!(one("\u{2003}x"));
+    assert!(one(" flat "));
+}
+
+#[test]
+fn unknown_ablation_directories_are_ignored() {
+    let s = sample();
+    let t = tempfile::tempdir().unwrap();
+    // would be an unknown fixture and a bad run.json if looked at
+    write(
+        &t.path().join("res/runs/foo/archetypes-on/ghost/1/run.json"),
+        "not json",
+    );
+    write(
+        &t.path()
+            .join("res/runs/no-skill/archetypes-on/fx-trap/1/run.json"),
+        RUN_JSON,
+    );
+    let m = grade::grade_dir(&t.path().join("res"), &s.join("fixtures")).unwrap();
+    assert_eq!(m.groups.len(), 1);
+    assert_eq!(m.groups[0].ablation, "no-skill");
+}
+
+#[test]
+fn a_group_with_only_unfinished_runs_is_written_with_zero_runs() {
+    // no fixtures directory at all: expected.toml is not needed
+    let t = tempfile::tempdir().unwrap();
+    let base = t.path().join("res/runs/prose/archetypes-off/ghost");
+    write(&base.join("1/findings.json"), "{}");
+    fs::create_dir_all(base.join("2")).unwrap();
+    let m = grade::grade_dir(&t.path().join("res"), &t.path().join("none")).unwrap();
+    assert_eq!(m.groups.len(), 1);
+    let g = &m.groups[0];
+    assert_eq!(
+        (g.ablation.as_str(), g.archetypes.as_str()),
+        ("prose", "off")
+    );
+    let u = &g.usage;
+    assert_eq!((u.runs, u.incomplete, u.errored), (0, 2, 0));
+    assert_eq!(u.wall_seconds.sum, 0.0);
+    assert_eq!((u.wall_seconds.mean, u.wall_seconds.max), (None, None));
+    assert_eq!(u.input_tokens.mean, None);
+    assert_eq!((u.cost_usd.sum, u.cost_usd.mean), (0.0, None));
+    assert!(g.fixtures.is_empty());
+    assert_eq!(g.metrics.leak_recall.den, 0);
+    assert!(g.metrics.leak_recall.per_run.is_empty());
+    let text = grade::render(&m);
+    assert!(text.contains("\"max\": null"), "{text}");
+}
+
+#[test]
+fn only_fixtures_with_a_finished_run_need_an_expected_toml() {
+    let s = sample();
+    let t = tempfile::tempdir().unwrap();
+    let base = t.path().join("res/runs/no-skill/archetypes-on");
+    write(&base.join("fx-trap/1/run.json"), RUN_JSON);
+    // unfinished only: no expected.toml needed, not listed under fixtures
+    write(&base.join("ghost/1/findings.json"), "{}");
+    let m = grade::grade_dir(&t.path().join("res"), &s.join("fixtures")).unwrap();
+    let g = &m.groups[0];
+    assert_eq!((g.usage.runs, g.usage.incomplete), (1, 1));
+    assert_eq!(g.fixtures.keys().collect::<Vec<_>>(), ["fx-trap"]);
 }

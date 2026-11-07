@@ -312,3 +312,85 @@ fn project_shape_and_build_outputs() {
     fs::remove_file(t.path().join("s/README.md")).unwrap();
     assert!(has(&problems(t.path()), "README.md is missing"));
 }
+
+fn non_leak(id: &str, cause: &str) -> String {
+    format!(
+        r#"schema_version = 1
+id = "{id}"
+runtime = "python"
+category = "non-leak"
+dynamic_confirmation = true
+[task]
+prompt = "p"
+[[non_leak]]
+id = "N1"
+cause = "{cause}"
+discriminator = "d"
+"#
+    )
+}
+
+#[test]
+fn causes_come_from_the_archetype_vocabulary() {
+    for ok in [
+        "L-HANDLE",
+        "L-COLLECT",
+        "L-REGISTER",
+        "L-WORKER",
+        "L-TLS",
+        "L-STALE",
+        "L-CAPTURE",
+        "L-CYCLE",
+        "L-OWNERSHIP",
+        "L-UNLOAD",
+        "UNCLASSIFIED",
+    ] {
+        let t = tempfile::tempdir().unwrap();
+        make(t.path(), "x", &trap("x", "").replace("L-COLLECT", ok));
+        assert_eq!(problems(t.path()), Vec::<String>::new(), "{ok}");
+    }
+    for ok in [
+        "N-ALLOC",
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM",
+        "N-SCALE",
+        "N-INTENT",
+        "N-OBSERVER",
+        "UNCLASSIFIED",
+    ] {
+        let t = tempfile::tempdir().unwrap();
+        make(t.path(), "x", &non_leak("x", ok));
+        assert_eq!(problems(t.path()), Vec::<String>::new(), "{ok}");
+    }
+    // typos, invented ids and the wrong family are all schema errors
+    for bad in ["L-COLLCT", "L-FOO", "N-WARM", "N-FOO", "l-collect", ""] {
+        let t = tempfile::tempdir().unwrap();
+        make(t.path(), "x", &trap("x", "").replace("L-COLLECT", bad));
+        let p = problems(t.path());
+        assert!(
+            has(&p, "x: expected.toml schema") && has(&p, "cause"),
+            "leak {bad:?}: {p:?}"
+        );
+    }
+    for bad in ["N-WARMUP", "L-COLLECT", "N-", "n-warm"] {
+        let t = tempfile::tempdir().unwrap();
+        make(t.path(), "x", &non_leak("x", bad));
+        let p = problems(t.path());
+        assert!(
+            has(&p, "x: expected.toml schema") && has(&p, "cause"),
+            "non_leak {bad:?}: {p:?}"
+        );
+    }
+}
+
+#[test]
+fn schema_enums_match_the_cause_constants() {
+    use dla_bench::model::{LEAK_CAUSES, NON_LEAK_CAUSES};
+    let schema_text = dla_bench::schema_cmd::expected_schema();
+    let schema: serde_json::Value = serde_json::from_str(&schema_text).unwrap();
+    let leak_enum = &schema["$defs"]["Leak"]["properties"]["cause"]["enum"];
+    let non_enum = &schema["$defs"]["NonLeak"]["properties"]["cause"]["enum"];
+    assert_eq!(leak_enum, &serde_json::json!(LEAK_CAUSES));
+    assert_eq!(non_enum, &serde_json::json!(NON_LEAK_CAUSES));
+}

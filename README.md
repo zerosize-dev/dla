@@ -21,13 +21,31 @@ For the limits of what a run can establish, read [What DLA cannot see](docs/what
 
 ## Status
 
-Pre-release, milestone M0 (foundation and contracts). What exists today: the data contracts and
-JSON Schemas, the ledger and its state machine, `dla run init`, `dla run status`,
-`dla ledger add`, `dla ledger resolve`, `dla report`, `dla schema`, the plugin skeleton and the
-release pipeline. Measurement commands (probing, sweeps, sampling, trend analysis) arrive in later
-milestones, so the investigation stages in the skill are not yet backed by working commands.
-Expect breaking changes. Open questions and unverified details are tracked in
-[docs/VERIFY.md](docs/VERIFY.md).
+Pre-release, milestone M1 (benchmark harness on top of the M0 foundation). What exists today: the
+data contracts and JSON Schemas, the ledger and its state machine, `dla run init`, `dla run status`,
+`dla ledger add`, `dla ledger resolve`, `dla consent`, `dla report`, `dla schema`, the plugin
+skeleton, the release pipeline and the benchmark in [bench/](bench/README.md). Measurement commands
+(probing, sweeps, sampling, trend analysis) arrive in later milestones, so the investigation stages
+in the skill are not yet backed by working commands. Expect breaking changes. Open questions and
+unverified details are tracked in [docs/VERIFY.md](docs/VERIFY.md).
+
+Commands:
+
+| Command | What it does |
+|---|---|
+| `dla run init` | Creates a run under `.dla/` (flags include `--budget` and `--session-id`) |
+| `dla run status` | Shows run id, stage, status, counts and the first blocking items |
+| `dla ledger add` | Adds a finding, which always starts as `candidate` |
+| `dla ledger resolve` | Dispositions a finding or open item, or answers a checklist item |
+| `dla consent` | Records the run's one consent: `--tiers` (privilege tiers 1 to 4), `--raw-values`, `--ceiling`, `--given-by user\|runner`. A second consent in a run is refused |
+| `dla report` | Renders the report, writes `report.md` and stores its hash in `state.json` |
+| `dla schema` | Writes or checks the JSON Schema files |
+
+Headless consent: an unattended runner can give consent through the environment instead of a
+question to the user. If `DLA_CONSENT_TIERS` is set (`1-4`, or a list such as `1,2,3`) when
+`dla run init` runs, the run starts with that consent, recorded as given by the runner;
+`DLA_CONSENT_RAW_VALUES` set to a true value also allows raw values. An invalid
+`DLA_CONSENT_TIERS` makes `dla run init` fail.
 
 ## Install
 
@@ -128,7 +146,7 @@ cannot find it.
 
 Each diagnosis is a run. `dla run init` creates `.dla/<run-id>/` in the project, containing:
 
-- `state.json`: schema version, stage, status, budget, tracked processes and, once a report exists, its hash;
+- `state.json`: schema version, stage, status, budget, tracked processes, the consent once given and, once a report exists, its hash;
 - `ledger.jsonl`: the append-only evidence ledger, one JSON record per line;
 - `report.md`: written by `dla report`, which is the only report writer.
 
@@ -157,6 +175,9 @@ Tag `v<version>` where the version matches the workspace version in `Cargo.toml`
 and `marketplace.json`; the release workflow refuses to run if they disagree. It builds the five
 targets, packages them with checksums and publishes a GitHub release.
 
+The release workflow can also be started by hand (`workflow_dispatch`). That is a dry run: it
+builds and verifies the five targets but publishes nothing.
+
 ## Layout
 
 ```
@@ -168,6 +189,8 @@ bin/dla           shim that locates and runs the binary
 crates/           Rust workspace (dla-core, dla-report, dla-cli, ...)
 schemas/          generated JSON Schemas
 docs/             blind spots and verification backlog
+bench/            benchmark: fixtures with answer keys, the dla-bench runner and graders
+                  (see bench/README.md)
 tests/shim/       tests for the shim and downloader
 ```
 

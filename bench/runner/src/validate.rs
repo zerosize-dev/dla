@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::{
     Res,
     fixture::{fixture_dirs, load_expected},
-    model::{Category, Expected},
+    model::{Category, Expected, LEAK_CAUSES, NON_LEAK_CAUSES},
     schema_cmd,
 };
 
@@ -258,6 +258,26 @@ fn check_semantics(
     for n in &exp.non_leak {
         if !seen.insert(n.id.clone()) {
             out.push(format!("non_leak id {} is used twice", n.id));
+        }
+    }
+    for l in &exp.leak {
+        if !LEAK_CAUSES.contains(&l.cause.as_str()) {
+            out.push(format!(
+                "leak {}: cause {:?} must be one of {} (an L-* archetype or UNCLASSIFIED)",
+                l.id,
+                l.cause,
+                LEAK_CAUSES.join(", ")
+            ));
+        }
+    }
+    for n in &exp.non_leak {
+        if !NON_LEAK_CAUSES.contains(&n.cause.as_str()) {
+            out.push(format!(
+                "non_leak {}: cause {:?} must be one of {} (an N-* archetype or UNCLASSIFIED)",
+                n.id,
+                n.cause,
+                NON_LEAK_CAUSES.join(", ")
+            ));
         }
     }
     for l in &exp.leak {

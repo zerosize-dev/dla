@@ -15,6 +15,9 @@
 #   DLA_RELEASE_BASE_URL      override of the release download base: an https URL,
 #                             a file:// URL or a plain directory path
 #   DLA_TARGET                override of target detection (tests, cross installs)
+#   DLA_BIN                   when it names an executable file, the shim uses it
+#                             before anything else, so this hook downloads nothing
+#                             and prints nothing
 #
 # Portable to bash 3.2 (macOS), Linux and Git Bash on Windows: no arrays, no
 # associative arrays, no ${var,,}, no jq.
@@ -121,6 +124,11 @@ fetch() {
 }
 
 main() {
+  # Same precedence as bin/dla: an executable DLA_BIN wins, so there is nothing to fetch.
+  if [ -n "${DLA_BIN:-}" ] && [ -f "$DLA_BIN" ] && [ -x "$DLA_BIN" ]; then
+    exit 0
+  fi
+
   script_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
   root=${CLAUDE_PLUGIN_ROOT:-"$script_dir/.."}
   manifest="$root/.claude-plugin/plugin.json"

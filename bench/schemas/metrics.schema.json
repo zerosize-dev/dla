@@ -460,8 +460,11 @@
       "type": "object",
       "properties": {
         "max": {
-          "description": "Largest.",
-          "type": "number",
+          "description": "Largest; null when the group has no graded run.",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double"
         },
         "mean": {
@@ -479,8 +482,7 @@
         }
       },
       "required": [
-        "sum",
-        "max"
+        "sum"
       ]
     }
   }

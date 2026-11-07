@@ -98,10 +98,20 @@ fn state_of_to(to: Option<&str>) -> State {
 
 /// Replays a ledger leniently. `None` when it holds no `finding_added` record.
 pub fn findings_from_ledger(text: &str) -> Option<Vec<Finding>> {
+    findings_from_ledger_bytes(text.as_bytes())
+}
+
+/// Like [`findings_from_ledger`] on raw bytes: lines are split on the byte
+/// `\n` and decoded one by one; a line that is not valid UTF-8 is skipped
+/// like any other line that is not a JSON object.
+pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
     // Findings in the order of their (latest) `finding_added` lines.
     let mut list: Vec<(String, Finding)> = Vec::new();
     let mut saw_added = false;
-    for line in text.lines() {
+    for line in bytes.split(|b| *b == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
         let Ok(rec) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -163,6 +173,11 @@ fn label_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$").expect("valid regex"))
 }
 
+/// The whitespace of the grading contract: ASCII space, tab, CR and LF only.
+fn is_ascii_ws(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\r' | '\n')
+}
+
 /// Maps a parsed `findings.json`. `None` unless it is an object whose
 /// `findings` member is an array.
 pub fn findings_from_json(v: &Value) -> Option<Vec<Finding>> {
@@ -187,7 +202,7 @@ pub fn findings_from_json(v: &Value) -> Option<Vec<Finding>> {
         let discriminator = verdict == Some("not-a-leak")
             && e.get("discriminator")
                 .and_then(Value::as_str)
-                .is_some_and(|d| !d.trim().is_empty());
+                .is_some_and(|d| !d.trim_matches(is_ascii_ws).is_empty());
         out.push(Finding {
             state,
             site: str_of(e, "site"),
@@ -202,10 +217,21 @@ pub fn findings_from_json(v: &Value) -> Option<Vec<Finding>> {
 
 /// Applies the source selection rule to the optional file contents.
 pub fn select_source(ledger: Option<&str>, findings_json: Option<&str>) -> (Source, Vec<Finding>) {
-    if let Some(f) = ledger.and_then(findings_from_ledger) {
+    select_source_bytes(ledger.map(str::as_bytes), findings_json.map(str::as_bytes))
+}
+
+/// [`select_source`] on raw file contents: a `findings.json` that is not
+/// valid UTF-8 is treated as absent, and the ledger is read line by line.
+pub fn select_source_bytes(
+    ledger: Option<&[u8]>,
+    findings_json: Option<&[u8]>,
+) -> (Source, Vec<Finding>) {
+    if let Some(f) = ledger.and_then(findings_from_ledger_bytes) {
         return (Source::Ledger, f);
     }
-    if let Some(v) = findings_json.and_then(|t| serde_json::from_str::<Value>(t).ok())
+    if let Some(v) = findings_json
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .and_then(|t| serde_json::from_str::<Value>(t).ok())
         && let Some(f) = findings_from_json(&v)
     {
         return (Source::Findings, f);
@@ -488,10 +514,9 @@ fn read_dirs(p: &Path) -> Res<Vec<(String, PathBuf)>> {
     Ok(v)
 }
 
-fn read_opt(p: &Path) -> Option<String> {
-    fs::read(p)
-        .ok()
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
+/// A `coverage.json` text; absent when unreadable or not valid UTF-8.
+fn read_utf8_opt(p: &Path) -> Option<String> {
+    fs::read(p).ok().and_then(|b| String::from_utf8(b).ok())
 }
 
 fn residual_of(text: &str) -> Option<(f64, f64)> {
@@ -523,7 +548,6 @@ pub fn grade_dir(results: &Path, fixtures: &Path) -> Res<MetricsFile> {
     let mut groups: BTreeMap<(String, String), (Vec<RunData>, u64)> = BTreeMap::new();
     for (abl, abl_dir) in read_dirs(&runs_root)? {
         if !["no-skill", "prose", "gates", "full"].contains(&abl.as_str()) {
-            errors.push(format!("{}: unknown ablation {abl:?}", abl_dir.display()));
             continue;
         }
         for (arch_dir_name, arch_dir) in read_dirs(&abl_dir)? {
@@ -533,42 +557,52 @@ pub fn grade_dir(results: &Path, fixtures: &Path) -> Res<MetricsFile> {
                 _ => continue,
             };
             for (fx, fx_dir) in read_dirs(&arch_dir)? {
-                if !expected.contains_key(&fx) {
-                    match load_expected(fixtures, &fx) {
-                        Ok(e) => {
-                            expected.insert(fx.clone(), e);
-                        }
-                        Err(e) => {
-                            errors.push(format!("{}: fixture {fx}: {e}", fx_dir.display()));
-                            continue;
-                        }
-                    }
-                }
-                let exp = &expected[&fx];
                 for (idx, run_dir) in read_dirs(&fx_dir)? {
                     let Some(n) = run_index(&idx) else {
                         continue;
                     };
                     let key = (abl.clone(), arch.to_owned());
-                    let Some(text) = read_opt(&run_dir.join("run.json")) else {
+                    let Ok(bytes) = fs::read(run_dir.join("run.json")) else {
                         groups.entry(key).or_default().1 += 1;
                         continue;
                     };
-                    let rj = match serde_json::from_str::<Value>(&text) {
-                        Ok(v) if v.is_object() => v,
-                        _ => {
+                    let rj = match std::str::from_utf8(&bytes) {
+                        Err(_) => {
                             errors.push(format!(
-                                "{}: run.json is not a JSON object",
+                                "{}: run.json is not valid UTF-8",
                                 run_dir.display()
                             ));
                             continue;
                         }
+                        Ok(text) => match serde_json::from_str::<Value>(text) {
+                            Ok(v) if v.is_object() => v,
+                            _ => {
+                                errors.push(format!(
+                                    "{}: run.json is not a JSON object",
+                                    run_dir.display()
+                                ));
+                                continue;
+                            }
+                        },
                     };
-                    let ledger = read_opt(&run_dir.join("ledger.jsonl"));
-                    let fj = read_opt(&run_dir.join("findings.json"));
-                    let (source, findings) = select_source(ledger.as_deref(), fj.as_deref());
+                    // Only a fixture with a finished run needs its expected.toml.
+                    if !expected.contains_key(&fx) {
+                        match load_expected(fixtures, &fx) {
+                            Ok(e) => {
+                                expected.insert(fx.clone(), e);
+                            }
+                            Err(e) => {
+                                errors.push(format!("{}: fixture {fx}: {e}", fx_dir.display()));
+                                break;
+                            }
+                        }
+                    }
+                    let exp = &expected[&fx];
+                    let ledger = fs::read(run_dir.join("ledger.jsonl")).ok();
+                    let fj = fs::read(run_dir.join("findings.json")).ok();
+                    let (source, findings) = select_source_bytes(ledger.as_deref(), fj.as_deref());
                     let grade = grade_findings(exp, source, &findings);
-                    let residual = read_opt(&run_dir.join("coverage.json"))
+                    let residual = read_utf8_opt(&run_dir.join("coverage.json"))
                         .as_deref()
                         .and_then(residual_of);
                     groups.entry(key).or_default().0.push(RunData {
@@ -739,7 +773,7 @@ fn aggregate(
         wall_seconds: WallSeconds {
             sum: round6(wall_sum),
             mean: (count > 0).then(|| round6(wall_sum / count as f64)),
-            max: round6(wall_max),
+            max: (count > 0).then(|| round6(wall_max)),
         },
         cost_usd: Cost {
             sum: round6(cost_sum),

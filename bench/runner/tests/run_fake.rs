@@ -664,3 +664,393 @@ fn gates_run_passes_the_plugin_dir_binary_and_consent() {
     let rd = e.run_dir("gates", "off", "fx-a", 1);
     assert!(rd.join("ledger.jsonl").is_file());
 }
+
+// ---- interrupts, lock, retry, budget, systematic failure, artifacts, errors
+
+fn gone(pid: &str) -> bool {
+    !Path::new(&format!("/proc/{pid}")).exists()
+        || fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|s| s.contains(") Z"))
+            .unwrap_or(true)
+}
+
+fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !ok() {
+        assert!(
+            start.elapsed().as_secs() < 20,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+fn signal(pid: u32, sig: &str) {
+    let ok = Command::new("kill")
+        .args([sig, &pid.to_string()])
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+}
+
+const NO_FIXTURE_ARGS: [&str; 6] = [
+    "--ablation",
+    "no-skill",
+    "--runs",
+    "1",
+    "--fixtures",
+    "fx-a",
+];
+
+fn interrupted(sig: &str, expected_code: i32, fake: &str) -> (Env, std::time::Duration) {
+    let e = Env::new(fake);
+    let pidfile = e.root.join("child.pid");
+    let mut runner = e
+        .cmd(&NO_FIXTURE_ARGS)
+        .env("FAKE_PID", &pidfile)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for("the child to start", || {
+        fs::read_to_string(&pidfile).is_ok_and(|t| !t.trim().is_empty())
+    });
+    let pid = fs::read_to_string(&pidfile).unwrap().trim().to_owned();
+    assert!(e.root.join("out/res/runner.lock").is_file());
+    let sent = Instant::now();
+    signal(runner.id(), sig);
+    let status = loop {
+        if let Some(s) = runner.try_wait().unwrap() {
+            break s;
+        }
+        assert!(sent.elapsed().as_secs() < 30, "runner did not exit");
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    let took = sent.elapsed();
+    assert_eq!(status.code(), Some(expected_code));
+    wait_for("the background child to die", || gone(&pid));
+    assert!(
+        !e.run_dir("no-skill", "on", "fx-a", 1)
+            .join("run.json")
+            .exists(),
+        "an interrupted run has no run.json"
+    );
+    assert!(
+        !e.root.join("out/res/runner.lock").exists(),
+        "lock released"
+    );
+    (e, took)
+}
+
+#[test]
+fn sigterm_stops_every_child_group_and_exits_nonzero() {
+    let (_e, took) = interrupted("-TERM", 143, "sleep 60 &\necho $! > \"$FAKE_PID\"\nwait");
+    assert!(took.as_secs() < guard_grace_plus(), "{took:?}");
+}
+
+fn guard_grace_plus() -> u64 {
+    dla_bench::guard::GRACE.as_secs() + 3
+}
+
+#[test]
+fn sigint_escalates_to_sigkill_for_children_that_ignore_sigterm() {
+    let (_e, took) = interrupted(
+        "-INT",
+        130,
+        "trap '' TERM\nsleep 60 &\necho $! > \"$FAKE_PID\"\nwait",
+    );
+    assert!(
+        took >= dla_bench::guard::GRACE,
+        "SIGKILL only after the grace period: {took:?}"
+    );
+}
+
+#[test]
+fn a_second_runner_on_the_same_results_directory_is_refused() {
+    let e = Env::new("sleep 60 &\necho $! > \"$FAKE_PID\"\nwait");
+    let pidfile = e.root.join("child.pid");
+    let mut first = e
+        .cmd(&NO_FIXTURE_ARGS)
+        .env("FAKE_PID", &pidfile)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for("the first runner", || pidfile.is_file());
+    let out = e.cmd(&NO_FIXTURE_ARGS).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("another dla-bench run") && err.contains(&first.id().to_string()),
+        "{err}"
+    );
+    assert_eq!(e.calls(), 0, "the second runner started nothing");
+    // the refused runner must not have removed the first one's lock
+    assert!(e.root.join("out/res/runner.lock").is_file());
+    signal(first.id(), "-TERM");
+    first.wait().unwrap();
+}
+
+#[test]
+fn a_stale_lock_is_replaced_and_released_after_the_run() {
+    let e = Env::new(FAKE_OK);
+    let mut dead = Command::new("true").spawn().unwrap();
+    let dead_pid = dead.id();
+    dead.wait().unwrap();
+    write(
+        &e.root.join("out/res/runner.lock"),
+        &format!("{dead_pid}\n"),
+    );
+    let out = e.cmd(&NO_FIXTURE_ARGS).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(e.calls(), 1);
+    assert!(!e.root.join("out/res/runner.lock").exists());
+    // a lock without a readable pid is not guessed at
+    write(&e.root.join("out/res/runner.lock"), "garbage\n");
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--runs",
+            "2",
+            "--fixtures",
+            "fx-a",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("without a pid"));
+}
+
+const FAKE_MODE: &str = r#"
+echo called >> "$FAKE_LOG"
+echo '{"type":"system","subtype":"init","model":"fake-model"}'
+case "$FAKE_MODE" in
+  maxturns)
+    echo '{"findings":[]}' > findings.json
+    mkdir -p .dla/R1; echo R1 > .dla/current; echo stale > .dla/R1/report.md
+    echo '{"type":"result","subtype":"error_max_turns","is_error":true,"total_cost_usd":0.5,"num_turns":3,"usage":{"input_tokens":1}}'
+    exit 1 ;;
+  empty)
+    echo '{"type":"result","subtype":"success","is_error":true,"total_cost_usd":0,"num_turns":0,"usage":{}}'
+    exit 1 ;;
+  isError)
+    echo '{"type":"result","subtype":"success","is_error":true,"total_cost_usd":0.1,"num_turns":1,"usage":{"input_tokens":1}}'
+    exit 1 ;;
+  *)
+    echo '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.5,"num_turns":3,"usage":{"input_tokens":11}}' ;;
+esac
+"#;
+
+fn read_json(p: &Path) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap()
+}
+
+#[test]
+fn result_failures_are_recorded_and_retry_errored_runs_again_with_a_clean_slate() {
+    let e = Env::new(FAKE_MODE);
+    let args = [
+        "--ablation",
+        "no-skill",
+        "--runs",
+        "1",
+        "--fixtures",
+        "fx-a",
+    ];
+    let out = e.cmd(&args).env("FAKE_MODE", "maxturns").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rd = e.run_dir("no-skill", "on", "fx-a", 1);
+    let rj = read_json(&rd.join("run.json"));
+    assert_eq!(rj["exit_code"], 1);
+    assert_eq!(rj["error"], "result: error_max_turns");
+    assert!(rd.join("findings.json").is_file());
+    assert!(rd.join("report.md").is_file());
+
+    // without the flag the errored run is final
+    let out = e.cmd(&args).output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(e.calls(), 1);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("already done"));
+
+    // with it, the run is redone and nothing of the first attempt survives
+    let out = e.cmd(&args).arg("--retry-errored").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(e.calls(), 2);
+    let rj = read_json(&rd.join("run.json"));
+    assert_eq!(rj["exit_code"], 0);
+    assert!(rj["error"].is_null());
+    for stale in [
+        "findings.json",
+        "report.md",
+        "ledger.jsonl",
+        "state.json",
+        "coverage.json",
+    ] {
+        assert!(!rd.join(stale).exists(), "{stale} of the earlier attempt");
+    }
+
+    // a clean run is not redone
+    let out = e.cmd(&args).arg("--retry-errored").output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(e.calls(), 2);
+}
+
+#[test]
+fn is_error_without_a_failure_subtype_is_recorded_too() {
+    let e = Env::new(FAKE_MODE);
+    let out = e
+        .cmd(&NO_FIXTURE_ARGS)
+        .env("FAKE_MODE", "isError")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let rj = read_json(&e.run_dir("no-skill", "on", "fx-a", 1).join("run.json"));
+    assert_eq!(rj["error"], "result: is_error");
+}
+
+#[test]
+fn retry_errored_treats_timeouts_nonzero_exit_and_errors_as_unfinished() {
+    let e = Env::new(FAKE_MODE);
+    let base = [
+        "--ablation",
+        "no-skill",
+        "--runs",
+        "1",
+        "--fixtures",
+        "fx-a",
+    ];
+    let rd = e.run_dir("no-skill", "on", "fx-a", 1);
+    let cases = [
+        r#"{"exit_code":1,"timed_out":false,"error":null}"#,
+        r#"{"exit_code":0,"timed_out":true,"error":null}"#,
+        r#"{"exit_code":0,"timed_out":false,"error":"timed out"}"#,
+        r#"{"timed_out":false,"error":null}"#,
+        "not json",
+    ];
+    for (i, c) in cases.iter().enumerate() {
+        write(&rd.join("run.json"), c);
+        let out = e.cmd(&base).arg("--retry-errored").output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(e.calls(), i + 1, "case {c}");
+    }
+    // finished and clean stays
+    write(
+        &rd.join("run.json"),
+        r#"{"exit_code":0,"timed_out":false,"error":null,"cost_usd":0.5}"#,
+    );
+    let out = e.cmd(&base).arg("--retry-errored").output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(e.calls(), cases.len());
+}
+
+#[test]
+fn budget_counts_runs_finished_by_earlier_invocations() {
+    let e = Env::new(FAKE_MODE);
+    let common = [
+        "--ablation",
+        "no-skill",
+        "--fixtures",
+        "fx-a,fx-b",
+        "--parallel",
+        "1",
+    ];
+    let out = e.cmd(&common).args(["--runs", "1"]).output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(e.calls(), 2, "0.5 + 0.5 spent");
+    // 1.0 is already spent: with a limit of 1.2 only one more run fits
+    let out = e
+        .cmd(&common)
+        .args(["--runs", "3", "--budget-usd", "1.2"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(e.calls(), 3, "one run (0.5) takes the total over 1.2");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("total $1.5000"), "{stdout}");
+    assert!(
+        stdout.contains("cost $0.5000 ($1.5000 in the results directory)"),
+        "{stdout}"
+    );
+    // a limit that is already reached starts nothing
+    let out = e
+        .cmd(&common)
+        .args(["--runs", "3", "--budget-usd", "1.5"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(e.calls(), 3);
+}
+
+#[test]
+fn three_consecutive_empty_runs_abort_the_queue_and_retry_continues() {
+    let e = Env::new(FAKE_MODE);
+    let common = [
+        "--ablation",
+        "no-skill",
+        "--fixtures",
+        "fx-a,fx-b",
+        "--runs",
+        "4",
+        "--parallel",
+        "1",
+    ];
+    let out = e.cmd(&common).env("FAKE_MODE", "empty").output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("3 consecutive runs")
+            && err.contains("systematic failure")
+            && err.contains("--retry-errored"),
+        "{err}"
+    );
+    assert!(err.contains("5 of 8 run(s) were not started"), "{err}");
+    assert_eq!(e.calls(), 3);
+    assert!(!e.root.join("out/res/runner.lock").exists());
+    // the three failures are on disk; once the cause is fixed, retry redoes them and the rest
+    let out = e.cmd(&common).arg("--retry-errored").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(e.calls(), 3 + 8);
+}
+
+#[test]
+fn an_empty_run_between_productive_ones_does_not_abort() {
+    // the streak counts consecutive runs: errors that did burn tokens reset it
+    let e = Env::new(FAKE_MODE);
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--fixtures",
+            "fx-a,fx-b",
+            "--runs",
+            "3",
+            "--parallel",
+            "1",
+        ])
+        .env("FAKE_MODE", "isError")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(e.calls(), 6);
+}

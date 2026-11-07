@@ -155,9 +155,21 @@
           }
         },
         "cause": {
-          "description": "Archetype ID (`L-*`, `N-*`) or `UNCLASSIFIED`.",
+          "description": "Leak archetype ID (`L-*`) or `UNCLASSIFIED`.",
           "type": "string",
-          "pattern": "^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$"
+          "enum": [
+            "L-HANDLE",
+            "L-COLLECT",
+            "L-REGISTER",
+            "L-WORKER",
+            "L-TLS",
+            "L-STALE",
+            "L-CAPTURE",
+            "L-CYCLE",
+            "L-OWNERSHIP",
+            "L-UNLOAD",
+            "UNCLASSIFIED"
+          ]
         },
         "confirmable": {
           "description": "False when only static evidence is obtainable.",
@@ -217,7 +229,16 @@
         "cause": {
           "description": "Non-leak ID (`N-*`) or `UNCLASSIFIED`.",
           "type": "string",
-          "pattern": "^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$"
+          "enum": [
+            "N-ALLOC",
+            "N-HEADROOM",
+            "N-WARM",
+            "N-HWM",
+            "N-SCALE",
+            "N-INTENT",
+            "N-OBSERVER",
+            "UNCLASSIFIED"
+          ]
         },
         "discriminator": {
           "description": "The observation that rules the leak out.",

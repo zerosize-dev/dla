@@ -73,17 +73,47 @@ Per (fixture, run index) the runner:
    is the default one; there is no `bypassPermissions`;
 4. kills the whole process group after `--timeout` seconds and records
    `timed_out`;
-5. collects the results (below). A run directory that already holds
-   `run.json` is skipped, so an interrupted baseline continues where it
-   stopped; `--runs 5` after `--runs 3` adds runs 4 and 5.
+5. collects the results (below). Before an attempt the run directory is
+   cleaned of `findings.json`, `ledger.jsonl`, `state.json`, `report.md`,
+   `coverage.json`, `transcript.jsonl`, `stderr.log` and `run.json`, so
+   nothing of an earlier attempt can be graded as the new answer. A run
+   directory that already holds `run.json` is skipped, so an interrupted
+   baseline continues where it stopped; `--runs 5` after `--runs 3` adds runs
+   4 and 5.
 
 Scheduling is run-major (run 1 of every fixture, then run 2, ...) and
 interleaved across runtimes so heavy builds do not pile up. `--parallel P`
 (default 2) runs P sessions at a time. `--budget-usd X` stops starting new
-runs once the summed cost of finished runs reaches X; runs in flight finish.
-One progress line is printed per finished run: fixture, run index, exit code,
-minutes, cost and cumulative cost. The working copy of a run that ended
+runs once the summed `cost_usd` of the runs finished in the results directory
+reaches X; runs finished by an earlier invocation count, runs in flight
+finish. One progress line is printed per finished run: fixture, run index,
+exit code, minutes, cost and the cumulative cost of the results directory. The working copy of a run that ended
 cleanly is removed; keep it with `--keep-work`, failed runs are always kept.
+
+### Interrupts, lock and retry
+
+- **Interrupt.** On SIGINT or SIGTERM the runner sends SIGTERM to the process
+  group of every live session, waits 2 seconds, sends SIGKILL, releases the
+  lock and exits with 130 (SIGINT) or 143 (SIGTERM). An interrupted run gets
+  no `run.json`; start the same command again to redo it. Sessions run in
+  their own process groups, so a terminal Ctrl-C reaches them only through the
+  runner. If the runner itself is killed with SIGKILL it cannot clean up:
+  look for `claude` processes before starting again.
+- **Lock.** The runner takes `<out>/runner.lock` (containing its pid) before it
+  builds or starts anything. A second runner on the same results directory
+  refuses to start and names the pid. A lock whose pid is no longer alive is
+  stale and is replaced; a lock file that holds no pid is never guessed at:
+  remove it by hand once no runner is active.
+- **Retry.** `--retry-errored` treats a `run.json` with a nonzero or missing
+  `exit_code`, `timed_out` true or a non-null `error` as unfinished and runs
+  it again (after cleaning the directory, see above). Without the flag an
+  errored run is final. Errored runs that are retried do not count towards
+  `--budget-usd`, since their result is replaced.
+- **Systematic failure.** After 3 consecutive finished runs with zero turns and
+  zero tokens (a lapsed login, an exhausted quota, no network) the runner
+  stops starting runs, prints which cause that points to and exits non-zero.
+  The three failed runs are on disk as errored runs; fix the cause and run the
+  same command with `--retry-errored` to redo them and the rest of the queue.
 
 Other flags: `--fixtures a,b|all`, `--fixtures-dir`, `--model`, `--max-turns`
 (default 80), `--timeout` (default 1500), `--repo-root` (where the plugin
@@ -126,7 +156,9 @@ prefers `DLA_BIN`, so runs use the local build.
 
 ```
 <out>/runs/<ablation>/archetypes-<on|off>/<fixture>/<n>/
-  run.json          always (written last: its presence marks a finished run)
+  run.json          written last: its presence marks a finished run (also a
+                    failed one, see --retry-errored); absent after an interrupt
+  runner.lock       only while a runner is active
   transcript.jsonl  the stream-json output of claude (git-ignored)
   stderr.log        (git-ignored)
   findings.json     when the model wrote one in the project root
@@ -141,7 +173,10 @@ exit_code, timed_out, wall_seconds, usage{input_tokens, output_tokens,
 cache_read_input_tokens, cache_creation_input_tokens}, cost_usd, num_turns,
 model, started_at, error`. Usage, cost and turns come from the final `result`
 event of the stream, the model from the `init` event. `exit_code` is -1 when
-the process was killed or could not start; `error` says why. A run that hit
+the process was killed or could not start. `error` says why a run failed: a
+spawn failure, a timeout, a missing `result` event, or the `result` event's own
+failure, written `result: <subtype>` (for example `result: error_max_turns`)
+when `is_error` is true or `subtype` is not `success`. A run that hit
 `--max-turns` exits 1 and counts as errored in the usage block, its findings
 are still graded.
 
@@ -155,9 +190,13 @@ cargo run -q -p dla-bench -- table bench/results/baseline-no-skill
 ```
 
 `grade` reads `--fixtures` (default `bench/fixtures`) and writes
-`<results>/metrics.json` (or `--out`); a run directory whose fixture has no
-`expected.toml`, or without `run.json`, is an error that lists the
-directories. `compare` exits 0 when two JSON files are equal as parsed JSON
+`<results>/metrics.json` (or `--out`). A missing `runs/` directory is an
+error, and so is a run directory that has a `run.json` but whose fixture has
+no `expected.toml`, or a `run.json` that is not a JSON object or not UTF-8.
+A run directory without `run.json` is skipped and counted as incomplete in
+`usage.incomplete` (it is not an error and needs no `expected.toml`); a group
+with only such runs is written with `runs` 0 and null means. Directories that
+are not one of the four ablations are ignored. `compare` exits 0 when two JSON files are equal as parsed JSON
 (numbers compare by value, key order is ignored) and otherwise prints the
 differing paths. `table` renders `metrics.json` into `table.md`: one metric
 table per group (value, numerator/denominator, mean and standard deviation

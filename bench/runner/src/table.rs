@@ -74,12 +74,14 @@ pub fn render_group(g: &Group) -> String {
     }
     let _ = writeln!(
         s,
-        "| wall seconds | {:.1} | {} (max {:.1}) |",
+        "| wall seconds | {:.1} | {} (max {}) |",
         us.wall_seconds.sum,
         us.wall_seconds
             .mean
             .map_or_else(|| "n/a".to_owned(), |m| format!("{m:.1}")),
-        us.wall_seconds.max
+        us.wall_seconds
+            .max
+            .map_or_else(|| "n/a".to_owned(), |m| format!("{m:.1}"))
     );
     let _ = writeln!(
         s,

@@ -50,6 +50,9 @@ VERDICT_STATES = {
     "not-a-leak": "refuted",
 }
 
+ABLATIONS = ("no-skill", "prose", "gates", "full")
+ASCII_WS = " \t\r\n"
+
 SITE_RE = re.compile(r"^(.*?):([0-9]+)(?::[0-9]+)?\Z")
 ALT_RE = re.compile(r"^(.*):([0-9]+)(?:-([0-9]+))?\Z")
 LABEL_RE = re.compile(r"^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)\Z")
@@ -110,7 +113,7 @@ def parse_ledger(path):
             line = raw.decode("utf-8")
         except UnicodeDecodeError:
             continue
-        line = line.strip()
+        line = line.strip(ASCII_WS)
         if not line:
             continue
         try:
@@ -174,7 +177,7 @@ def parse_findings_json(path):
         label = cause if isinstance(cause, str) and LABEL_RE.match(cause) else None
         disc = el.get("discriminator")
         has_disc = (
-            verdict == "not-a-leak" and isinstance(disc, str) and disc.strip() != ""
+            verdict == "not-a-leak" and isinstance(disc, str) and disc.strip(ASCII_WS) != ""
         )
         out.append(
             new_finding(
@@ -481,7 +484,7 @@ def usage_block(runs, incomplete=0):
     out["sources"] = src
     for key in TOKEN_FIELDS:
         total = sum(token_value(r["run_json"].get("usage"), key) for r in runs)
-        out[key] = {"sum": total, "mean": round6(total / n)}
+        out[key] = {"sum": total, "mean": round6(total / n) if n else None}
     walls = [
         float(r["run_json"]["wall_seconds"])
         if is_number(r["run_json"].get("wall_seconds"))
@@ -490,8 +493,8 @@ def usage_block(runs, incomplete=0):
     ]
     out["wall_seconds"] = {
         "sum": round6(seq_sum(walls)),
-        "mean": round6(seq_sum(walls) / n),
-        "max": round6(max(walls)),
+        "mean": round6(seq_sum(walls) / n) if n else None,
+        "max": round6(max(walls)) if n else None,
     }
     costs = [
         r["run_json"]["cost_usd"] for r in runs if is_number(r["run_json"].get("cost_usd"))
@@ -506,7 +509,7 @@ def usage_block(runs, incomplete=0):
 
 def grade_group(ablation, archetypes, runs, fixtures, incomplete=0):
     """runs: list of dicts sorted by (fixture, index)."""
-    max_idx = max(r["index"] for r in runs)
+    max_idx = max((r["index"] for r in runs), default=0)
     # per run index contributions
     per_idx = {i: {m: [0, 0] for m in METRIC_NAMES} for i in range(1, max_idx + 1)}
     fixture_blocks = {}
@@ -578,7 +581,7 @@ def load_fixture(fixtures_dir, name, cache):
     try:
         with open(p, "rb") as fh:
             doc = tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError) as e:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         raise GradeError(f"fixture {name}: cannot parse {p}: {e}")
     cache[name] = doc
     return doc
@@ -599,7 +602,12 @@ def grade(results, fixtures_dir):
     cache = {}
     groups = {}
     incomplete = {}
-    for abl in subdirs(results / "runs"):
+    runs_dir = results / "runs"
+    if not runs_dir.is_dir():
+        raise GradeError(f"{runs_dir}: not a directory")
+    for abl in subdirs(runs_dir):
+        if abl.name not in ABLATIONS:
+            continue
         for arch in subdirs(abl):
             if arch.name not in ("archetypes-on", "archetypes-off"):
                 continue
@@ -616,6 +624,7 @@ def grade(results, fixtures_dir):
                         incomplete[(abl.name, arch_name)] = (
                             incomplete.get((abl.name, arch_name), 0) + 1
                         )
+                        groups.setdefault((abl.name, arch_name), [])
                         continue  # not a finished run
                     load_fixture(fixtures_dir, fx_dir.name, cache)
                     run_json = load_run_json(rj)

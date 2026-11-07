@@ -6,7 +6,10 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -18,6 +21,7 @@ use serde_json::Value;
 use crate::{
     Res,
     fixture::{FINDINGS_INSTRUCTIONS, UNATTENDED_NOTE, fixture_dirs, load_expected},
+    guard,
     model::{Expected, RunJson, Usage},
 };
 
@@ -120,9 +124,14 @@ pub struct RunArgs {
     /// Seconds before a run's process group is killed.
     #[arg(long, default_value_t = 1500)]
     pub timeout: u64,
-    /// Stop starting runs once finished runs cost this much.
+    /// Stop starting runs once the runs finished in the results directory
+    /// (earlier invocations included) cost this much.
     #[arg(long)]
     pub budget_usd: Option<f64>,
+    /// Treat a run.json with a nonzero exit_code, timed_out or an error as
+    /// unfinished and run it again.
+    #[arg(long)]
+    pub retry_errored: bool,
     /// Repository root holding the plugin sources.
     #[arg(long, default_value = ".")]
     pub repo_root: PathBuf,
@@ -474,7 +483,84 @@ pub fn interleave(mut items: Vec<(String, String)>) -> Vec<String> {
 
 struct Shared {
     queue: Mutex<VecDeque<Task>>,
+    /// Cost of the finished runs in the results directory, earlier
+    /// invocations included.
     spent: Mutex<f64>,
+    /// Consecutive finished runs with zero turns and zero tokens.
+    empty_streak: Mutex<u32>,
+    /// Set when the queue was abandoned because of a systematic failure.
+    aborted: AtomicBool,
+}
+
+/// Consecutive runs without a single turn or token after which the queue is
+/// abandoned: the cause (authentication, quota, network) is systematic.
+pub const MAX_EMPTY_STREAK: u32 = 3;
+
+/// The files a run collects; removed before an attempt so that nothing of an
+/// earlier attempt is graded as the answer of the new one.
+pub const RUN_ARTIFACTS: [&str; 8] = [
+    "findings.json",
+    "ledger.jsonl",
+    "state.json",
+    "report.md",
+    "coverage.json",
+    "transcript.jsonl",
+    "stderr.log",
+    "run.json",
+];
+
+/// Whether a parsed run.json describes a failed run: a missing or nonzero
+/// `exit_code`, `timed_out` true, or a non-null `error`.
+pub fn run_json_errored(v: &Value) -> bool {
+    v.get("exit_code").and_then(Value::as_i64) != Some(0)
+        || v.get("timed_out").and_then(Value::as_bool) == Some(true)
+        || v.get("error").is_some_and(|e| !e.is_null())
+}
+
+/// Whether the run directory holds a finished run. With `retry_errored` a
+/// run.json that is unreadable or describes a failed run is not finished.
+pub fn run_finished(run_dir: &Path, retry_errored: bool) -> bool {
+    let p = run_dir.join("run.json");
+    if !retry_errored {
+        return p.is_file();
+    }
+    fs::read(&p)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .is_some_and(|v| v.is_object() && !run_json_errored(&v))
+}
+
+fn subdirs(p: &Path) -> Vec<PathBuf> {
+    fs::read_dir(p)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The summed `cost_usd` of the finished runs under `<out_root>/runs`.
+pub fn finished_cost(out_root: &Path, retry_errored: bool) -> f64 {
+    let mut total = 0.0;
+    let mut level = vec![out_root.join("runs")];
+    for _ in 0..4 {
+        level = level.iter().flat_map(|d| subdirs(d)).collect();
+    }
+    for rd in level {
+        if !run_finished(&rd, retry_errored) {
+            continue;
+        }
+        if let Some(c) = fs::read(rd.join("run.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| v.get("cost_usd").and_then(Value::as_f64))
+        {
+            total += c;
+        }
+    }
+    total
 }
 
 fn git(dir: &Path, args: &[&str]) -> Res<String> {
@@ -673,9 +759,13 @@ fn spawn_and_wait(
         cmd.process_group(0);
     }
     let start = Instant::now();
+    if guard::stop_signal().is_some() {
+        return Err("interrupted".to_owned());
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("cannot start claude: {e}"))?;
+    let _group = guard::register_group(child.id());
     let mut timed_out = false;
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
@@ -686,13 +776,14 @@ fn spawn_and_wait(
                     kill_group(&mut child);
                     break child.wait().map_err(|e| e.to_string())?;
                 }
-                thread::sleep(Duration::from_millis(200));
+                thread::sleep(Duration::from_millis(50));
             }
         }
     };
-    // Sweep stragglers of the group that outlived the leader.
+    // Sweep stragglers of the group that outlived the leader (an interrupt
+    // does it itself, after its grace period).
     #[cfg(unix)]
-    {
+    if guard::stop_signal().is_none() {
         let _ = Command::new("kill")
             .args(["-KILL", "--", &format!("-{}", child.id())])
             .stderr(Stdio::null())
@@ -718,6 +809,9 @@ pub struct TranscriptInfo {
     pub num_turns: Option<u64>,
     /// Whether a result event was seen.
     pub has_result: bool,
+    /// Why the final result event reports a failure (`is_error` true or a
+    /// `subtype` other than `success`), such as `result: error_max_turns`.
+    pub result_error: Option<String>,
 }
 
 /// Reads the init and result events of a stream-json transcript.
@@ -735,6 +829,13 @@ pub fn parse_transcript(text: &str) -> TranscriptInfo {
             }
             Some("result") => {
                 info.has_result = true;
+                let subtype = v.get("subtype").and_then(Value::as_str);
+                let is_error = v.get("is_error").and_then(Value::as_bool) == Some(true);
+                info.result_error = match subtype {
+                    Some(st) if st != "success" => Some(format!("result: {st}")),
+                    _ if is_error => Some("result: is_error".to_owned()),
+                    _ => None,
+                };
                 let u = v.get("usage");
                 let get = |k: &str| {
                     u.and_then(|u| u.get(k))
@@ -803,6 +904,9 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     let args = ctx.args;
     let out_dir = run_dir_of(ctx, t);
     fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    for f in RUN_ARTIFACTS {
+        remove_file_if_exists(&out_dir.join(f));
+    }
     let work = ctx
         .work_root
         .join(args.ablation.as_str())
@@ -879,6 +983,10 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
             Some(e),
         ),
     };
+    if guard::stop_signal().is_some() {
+        // An interrupted attempt leaves no run.json: it is not a result.
+        return Err("interrupted".to_owned());
+    }
     collect_dla_files(&project, &out_dir);
     let mut text = String::new();
     if let Ok(mut f) = fs::File::open(&transcript_path) {
@@ -894,7 +1002,7 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     } else if !info.has_result {
         Some("no result event in the transcript".to_owned())
     } else {
-        None
+        info.result_error.clone()
     };
     let rj = RunJson {
         schema_version: 1,
@@ -923,6 +1031,9 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
 
 fn worker(ctx: &Ctx, shared: &Shared, log: &Mutex<()>) {
     loop {
+        if shared.aborted.load(Ordering::SeqCst) || guard::stop_signal().is_some() {
+            return;
+        }
         if let Some(limit) = ctx.args.budget_usd
             && *shared.spent.lock().expect("lock") >= limit
         {
@@ -932,7 +1043,7 @@ fn worker(ctx: &Ctx, shared: &Shared, log: &Mutex<()>) {
             return;
         };
         let rd = run_dir_of(ctx, &task);
-        if rd.join("run.json").is_file() {
+        if run_finished(&rd, ctx.args.retry_errored) {
             let _g = log.lock().expect("lock");
             println!("{} #{}: already done, skipped", task.fixture, task.n);
             continue;
@@ -941,6 +1052,20 @@ fn worker(ctx: &Ctx, shared: &Shared, log: &Mutex<()>) {
         let _g = log.lock().expect("lock");
         match res {
             Ok(rj) => {
+                let u = &rj.usage;
+                let empty = rj.num_turns.unwrap_or(0) == 0
+                    && u.input_tokens
+                        + u.output_tokens
+                        + u.cache_read_input_tokens
+                        + u.cache_creation_input_tokens
+                        == 0;
+                {
+                    let mut streak = shared.empty_streak.lock().expect("lock");
+                    *streak = if empty { *streak + 1 } else { 0 };
+                    if *streak >= MAX_EMPTY_STREAK {
+                        shared.aborted.store(true, Ordering::SeqCst);
+                    }
+                }
                 let mut spent = shared.spent.lock().expect("lock");
                 *spent += rj.cost_usd.unwrap_or(0.0);
                 println!(
@@ -1062,6 +1187,9 @@ pub fn run(args: &RunArgs) -> Res<String> {
         }
     }
     let total = queue.len();
+    fs::create_dir_all(&out_root).map_err(|e| format!("{}: {e}", out_root.display()))?;
+    let _lock = guard::Lock::acquire(&out_root)?;
+    guard::install()?;
     let dla_bin = if args.ablation.uses_binary() {
         let built = ensure_dla_bin(&args)?;
         // The repository is unreadable to the child: it gets its own copy.
@@ -1082,7 +1210,6 @@ pub fn run(args: &RunArgs) -> Res<String> {
         ablation: args.ablation,
         archetypes_off: args.archetypes == Archetypes::Off,
     });
-    fs::create_dir_all(&out_root).map_err(|e| format!("{}: {e}", out_root.display()))?;
     let mut denied: Vec<PathBuf> = vec![
         repo_abs.clone(),
         args.fixtures_dir.clone(),
@@ -1121,9 +1248,12 @@ pub fn run(args: &RunArgs) -> Res<String> {
         deny_read,
         probe_prompt,
     };
+    let earlier = finished_cost(&out_root, args.retry_errored);
     let shared = Shared {
         queue: Mutex::new(queue),
-        spent: Mutex::new(0.0),
+        spent: Mutex::new(earlier),
+        empty_streak: Mutex::new(0),
+        aborted: AtomicBool::new(false),
     };
     let log = Mutex::new(());
     let workers = args.parallel.max(1);
@@ -1132,11 +1262,25 @@ pub fn run(args: &RunArgs) -> Res<String> {
             s.spawn(|| worker(&ctx, &shared, &log));
         }
     });
+    guard::wait_for_exit();
+    if let Some(sig) = guard::stop_signal() {
+        return Err(format!("interrupted by signal {sig}"));
+    }
     let left = shared.queue.lock().expect("lock").len();
     let spent = *shared.spent.lock().expect("lock");
+    if shared.aborted.load(Ordering::SeqCst) {
+        return Err(format!(
+            "aborted: {MAX_EMPTY_STREAK} consecutive runs ended with zero turns and zero tokens, \
+             which points to a systematic failure (authentication, quota or network); \
+             {left} of {total} run(s) were not started. Check stderr.log of the last runs, fix \
+             the cause and start the same command again with --retry-errored. Results in {}",
+            out_root.display()
+        ));
+    }
     Ok(format!(
-        "done: {} of {total} run(s) attempted, {left} not started, cost ${spent:.4}, results in {}",
+        "done: {} of {total} run(s) attempted, {left} not started, cost ${:.4} (${spent:.4} in the results directory), results in {}",
         total - left,
+        spent - earlier,
         out_root.display()
     ))
 }
@@ -1232,6 +1376,49 @@ mod tests {
     }
 
     #[test]
+    fn result_event_failures_become_the_error_text() {
+        let err = |line: &str| parse_transcript(line).result_error;
+        assert_eq!(
+            err(r#"{"type":"result","subtype":"error_max_turns","is_error":true}"#).as_deref(),
+            Some("result: error_max_turns")
+        );
+        assert_eq!(
+            err(r#"{"type":"result","subtype":"error_during_execution"}"#).as_deref(),
+            Some("result: error_during_execution")
+        );
+        assert_eq!(
+            err(r#"{"type":"result","subtype":"success","is_error":true}"#).as_deref(),
+            Some("result: is_error")
+        );
+        assert_eq!(
+            err(r#"{"type":"result","is_error":true}"#).as_deref(),
+            Some("result: is_error")
+        );
+        assert_eq!(
+            err(r#"{"type":"result","subtype":"success","is_error":false}"#),
+            None
+        );
+        assert_eq!(err(r#"{"type":"result"}"#), None);
+        // the last result event decides
+        let two = "{\"type\":\"result\",\"subtype\":\"error_max_turns\"}\n{\"type\":\"result\",\"subtype\":\"success\"}\n";
+        assert_eq!(parse_transcript(two).result_error, None);
+    }
+
+    #[test]
+    fn errored_run_json_definition() {
+        let j = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        assert!(!run_json_errored(&j(
+            r#"{"exit_code":0,"timed_out":false,"error":null}"#
+        )));
+        assert!(!run_json_errored(&j(r#"{"exit_code":0}"#)));
+        assert!(run_json_errored(&j(r#"{"exit_code":2}"#)));
+        assert!(run_json_errored(&j(r#"{"exit_code":0.0}"#)));
+        assert!(run_json_errored(&j(r#"{}"#)));
+        assert!(run_json_errored(&j(r#"{"exit_code":0,"timed_out":true}"#)));
+        assert!(run_json_errored(&j(r#"{"exit_code":0,"error":"x"}"#)));
+    }
+
+    #[test]
     fn child_environment_drops_the_parent_session() {
         for k in [
             "CLAUDE_CODE_SESSION_ID",
@@ -1274,6 +1461,7 @@ mod tests {
             max_turns: 5,
             timeout: 5,
             budget_usd: None,
+            retry_errored: false,
             repo_root: PathBuf::from("."),
             ablations_dir: None,
             dla_bin: None,
