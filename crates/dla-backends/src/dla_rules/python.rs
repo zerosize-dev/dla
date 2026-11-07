@@ -24,7 +24,7 @@ const HANDLER: &str = "python-handler-registration-in-function";
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: CHAIN,
-        archetype: "L-CAPTURE",
+        archetype: "",
         prior: 0.3,
     },
     RuleInfo {

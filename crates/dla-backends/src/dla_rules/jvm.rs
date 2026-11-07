@@ -23,7 +23,7 @@ const MICROMETER: &str = "jvm-micrometer-request-tag";
 pub const RULES: &[RuleInfo] = &[
     RuleInfo {
         rule: CHAIN,
-        archetype: "L-CAPTURE",
+        archetype: "",
         prior: 0.3,
     },
     RuleInfo {

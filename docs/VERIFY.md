@@ -44,7 +44,7 @@ The remaining research facts were checked by running the Claude Code CLI.
 
 | Item | Status | Evidence | Resolution |
 |---|---|---|---|
-| Stage commands in the skill and agent bodies follow the planned command surface, but their flag shapes are provisional: `dla probe`, `sweep`, `sample`, `trend`, `gap --residual`, `workload`, `gate check --stage/--final`, `ledger confirm/strong/refute/label/explain`, `bundle`, `ledger verify`, `ledger --worker` | unverified | None of these commands exist in M0 | Reconcile each with the real CLI in the milestone that implements it (M3 to M6). The skill tells the model to record `unresolved(tool_missing)` when a command is absent |
+| Stage commands in the skill and agent bodies follow the planned command surface, but their flag shapes are provisional: `sample`, `trend`, `gap --residual`, `workload`, `gate check --stage/--final`, `ledger confirm/strong/refute/label/explain`, `bundle`, `ledger verify`, `ledger --worker` | unverified | `dla probe`, `sweep`, `census`, `workload discover`, `install` and `ledger annotate` now exist and match the skill (M2, checked against `dla <cmd> --help`); the others do not exist yet | Reconcile each with the real CLI in the milestone that implements it (M3 to M6). The skill tells the model to record `unresolved(tool_missing)` when a command is absent |
 | The name `dla ledger refute` is a placeholder; the plan only says the refute command arrives in M3 | unverified | Chosen by the plugin author | Confirm or rename in M3 and update the skill and agents |
 | Windows (Git Bash) and macOS behaviour of `bin/dla` and `hooks/fetch-dla.sh`, including bash 3.2 on macOS | verified | CI `shim and downloader` jobs pass on ubuntu, macos and windows runners (run 42384153793): on Windows the hook detected `x86_64-pc-windows-msvc` itself, installed the real `dla.exe` into both native `C:/...` and `C:\...` data directories and ran it through the shim. The symlinked-shim case is skipped on Windows (Git Bash `ln -s` copies files). PowerShell without Git Bash is untested | Closed for Git Bash and macOS; the README requires Git for Windows |
 | The real `dla` binary runs through the downloader and the shim | verified | `tests/shim/run.sh` uses `target/debug/dla` (`dla.exe` on Windows) as the release payload; CI runs it on all three systems and the Windows log shows `payload: real binary target/debug/dla.exe` | Closed |
@@ -79,6 +79,25 @@ The remaining research facts were checked by running the Claude Code CLI.
 | Fixture caveat: the sawtooth period of `python-graph-churn` and the 70/30 split of `python-ingest-two-leaks` depend on CPython object sizes | unverified | Object sizes differ between CPython versions and platforms | Re-measure on the Python version the benchmark runs under, and loosen the key if the numbers move |
 | Fixture caveat: the JVM fixture drivers print heap-after-GC checkpoints, which are the growth signal the driver gives a run | unverified | The checkpoints depend on the JVM's collector and flags | Check that the growth is still visible when the JDK or collector changes |
 
+## Static analysis (M2)
+
+| Item | Status | Evidence | Resolution |
+|---|---|---|---|
+| The plan's RAPx command `cargo rapx -mleak` | corrected | The installed RAPx accepts `cargo +nightly rapx check -m` for the leak checker; the `-mleak` form is rejected | The rapx adapter and install hint use `cargo +nightly rapx check -m` |
+| RAPx from crates.io | corrected | Installing the crates.io release fails to build on the current nightly; installing from the git repository works | `dla install rapx` uses the git install; a failure leaves the backend `missing` with the exact command |
+| detekt `SuspendFunInFinallySection` | corrected | The rule is present only in detekt 2.x (alpha); the 1.x release has no such rule | Detector row kept with `verified = false`; it runs only if a 2.x detekt is installed |
+| SpotBugs `OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE` | corrected | `OBL_*` detectors are experimental and fire only when SpotBugs runs with `-experimental` | The adapter passes `-experimental` |
+| ruff `B019` precision | verified | `B019` is on by default and also fires on an instance-method cache that is bounded (`lru_cache(maxsize=N)`), so a hit is not proof of an unbounded cache | Detector `precision_prior` is low; the census and writers/removers review decide |
+| typescript-eslint version bound | corrected | The installed typescript-eslint needs typescript below 6.1 | `dla install eslint` pins typescript 6.0.3 with typescript-eslint 8.72.1 |
+| CodeQL | unverified | The CodeQL bundle downloaded, but extracting it in this sandbox was refused by the session's safety check, so no CodeQL query ran here | CodeQL is a recorded gap (`missing`) in this sandbox; the detector rows stay `verified = false`. Retry where extraction is allowed |
+| Sonar `S5164` and `S2095` | unverified | Sonar needs a server; none is available here, so neither rule was seen | Both rows stay `verified = false`; the backend is `missing` |
+| Rules verified to exist but never seen firing: golangci-lint `contextcheck` and `sqlclosecheck`, `spancheck`, staticcheck `SA1015` and `SA5005`, SpotBugs `ODR_*` and `SIC_*` | unverified | Each ID is in the installed tool's rule list or documentation; no M1 fixture triggers it | Rows exist with `verified = false` (or a low prior); close each once it fires on a real sample |
+| DLA-owned rules are Rust over tree-sitter syntax trees, not Semgrep rules | corrected | The plan assumed Semgrep for rules no tool covers; `crates/dla-backends/src/dla_rules` implements them with tree-sitter and unit tests with positive and negative snippets | Backend `dla` is always available and needs no install |
+| `dla ledger annotate` | corrected | The plan names no command for recording a holder's writers and removers; the model needs one | `dla ledger annotate F<n> --writer file:line --remover file:line --note` was added; it appends a `finding_annotated` record and changes no state |
+| JVM class-file census reader | corrected | `crates/dla-census` contains a new class-file reader written for this project; no external code was ported | Used when class files exist; tree-sitter otherwise |
+| Chain-head-growth rules suggest no archetype | corrected | An object chain linked through ordinary fields from a global head is not a captured scope, so `L-CAPTURE` does not describe it | `suggested_archetype` is empty for `dla/jvm-chain-head-growth`, `dla/node-chain-head-growth` and `dla/python-chain-head-growth`, in the detector rows and the rule table |
+| Recall of the DLA-owned rules and the census | unverified | They were developed and tested with the 20 M1 fixtures available, so the static recall measured on those fixtures is optimistic | M7's new fixtures, written after the rules, are the real test of generality; do not quote M1 recall as a general figure |
+
 ## Verification backlog
 
 Detector rule IDs, tool flags and fingerprints that came from memory or secondary sources.
@@ -89,8 +108,8 @@ None of these may appear in a runtime reference as established fact until its ro
 | Item | Status | Evidence | Resolution |
 |---|---|---|---|
 | SpotBugs `OS_OPEN_STREAM*` rule IDs | unverified | Not checked against the SpotBugs bug descriptions | Read the bug-descriptions page for the pinned version |
-| SpotBugs `ODR_OPEN_DATABASE_RESOURCE*` rule IDs | unverified | As above | As above |
-| SpotBugs `SIC_*` (inner class that could be static) rule IDs | unverified | As above | As above |
+| SpotBugs `ODR_OPEN_DATABASE_RESOURCE*` rule IDs | unverified | The rule exists in the installed SpotBugs, but no sweep has seen it fire | Keep `verified = false` in the detector row until it fires on a real sample |
+| SpotBugs `SIC_*` (inner class that could be static) rule IDs | unverified | The rule exists in the installed SpotBugs, but no sweep has seen it fire | As above |
 | Error Prone `ClassCanBeStatic` | unverified | Not checked for current name and default severity | Read the Error Prone bug-pattern page |
 | Error Prone `ThreadLocalUsage` | unverified | As above | As above |
 | PMD `CloseResource` | unverified | Not checked for current rule name and category | Read the PMD rule page |
@@ -104,8 +123,8 @@ None of these may appear in a runtime reference as established fact until its ro
 
 | Item | Status | Evidence | Resolution |
 |---|---|---|---|
-| pylint `W1516` | unverified | Not checked for name and message | Read the pylint message reference |
-| pylint `W1517` | unverified | As above | As above |
+| pylint `W1516` | corrected | Former name of `W1518` (`method-cache-max-size-none`) in the installed pylint's message list | Detector rows use `W1518` only |
+| pylint `W1517` | corrected | Former name of `W1518`, as above | As above |
 | ruff `SIM115` | unverified | Not checked for current behaviour | Read the ruff rule page |
 
 ### Rust

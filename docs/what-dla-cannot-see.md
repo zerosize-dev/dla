@@ -45,6 +45,16 @@ documentation.
 - **Static analysis is thin where leaks are common.** Detectors find handle and registration
   mistakes well. They find few leaks that come from long-lived containers, stale references or
   captured scope in garbage-collected languages, which is where the dynamic half of DLA matters most.
+- **Writer and remover matching is by name.** The census lists the code that appears to add to or
+  remove from a holder by matching call and identifier names. It misses writers reached through
+  aliases, reflection, dependency injection or another module, and it pairs same-named but unrelated
+  calls. Its lists are leads for the model to check, not proof that a remover exists or is missing.
+- **Some static backends are absent here.** CodeQL's bundle could not be extracted in the build
+  sandbox and Sonar needs a server, so their rules did not run; coverage shows them as `missing`.
+  Hits from tools that did run depend on which rules were enabled and verified.
+- **Some analyzers need more than source.** SpotBugs and Error Prone work on compiled classes or a
+  working build, and others need module dependencies resolved. When the project does not build, those
+  backends are `blocked` and a build failure is a coverage gap.
 - **Unclassified is a valid result.** A confirmed leak whose mechanism fits no known pattern is
   reported as a novel mechanism with its holder and the model's description. Known patterns
   are hypotheses to test, never a list DLA must choose from.
@@ -64,6 +74,9 @@ documentation.
   is unverified (see the verification backlog).
 - **A heap dump is a stop-the-world snapshot of one moment.** It shows what is reachable then, not
   why it accumulated, and taking it can itself change the heap and the process.
+- **Kotlin source is read by a line scanner, not a parser.** The census and the DLA-owned rules cover
+  Kotlin with a line-based scan, so unusual formatting, multi-line declarations and generated code can
+  be missed. When class files exist, the class-file reader sees compiled Kotlin objects and companions.
 - **Static detectors miss helper-method and framework cases.** Resource-leak rules often lose track
   of a closeable once it is wrapped or handed to a helper, and leaks that go through framework
   lifecycle callbacks are rarely visible to them.

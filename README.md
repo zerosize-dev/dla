@@ -21,13 +21,13 @@ For the limits of what a run can establish, read [What DLA cannot see](docs/what
 
 ## Status
 
-Pre-release, milestone M1 (benchmark harness on top of the M0 foundation). What exists today: the
-data contracts and JSON Schemas, the ledger and its state machine, `dla run init`, `dla run status`,
-`dla ledger add`, `dla ledger resolve`, `dla consent`, `dla report`, `dla schema`, the plugin
-skeleton, the release pipeline and the benchmark in [bench/](bench/README.md). Measurement commands
-(probing, sweeps, sampling, trend analysis) arrive in later milestones, so the investigation stages
-in the skill are not yet backed by working commands. Expect breaking changes. Open questions and
-unverified details are tracked in [docs/VERIFY.md](docs/VERIFY.md).
+Pre-release, milestone M2 (probe and static sweep on top of the M0 foundation and the M1 benchmark).
+What exists today: the data contracts and JSON Schemas, the ledger and its state machine, the
+probe, the static sweep, the DLA-owned rules, the holder census, workload discovery, analyzer
+installation, the plugin skeleton, the release pipeline and the benchmark in [bench/](bench/README.md).
+Dynamic measurement (harness, sampling, trend analysis) arrives in later milestones, so stages 4 and
+later in the skill are not yet backed by working commands. Expect breaking changes. Open questions
+and unverified details are tracked in [docs/VERIFY.md](docs/VERIFY.md).
 
 Commands:
 
@@ -35,11 +35,43 @@ Commands:
 |---|---|
 | `dla run init` | Creates a run under `.dla/` (flags include `--budget` and `--session-id`) |
 | `dla run status` | Shows run id, stage, status, counts and the first blocking items |
+| `dla probe [--build]` | Records runtimes, versions, tools on the PATH, privilege facts, test runners and library flags; `--build` also runs each runtime's build and needs tier-1 consent |
+| `dla install <backend>` | Installs one static analyzer (see below); on failure prints the exact command and leaves the backend `missing` in coverage |
+| `dla sweep --lang <l>` | Runs the available static backends for one runtime and adds each rule hit as a candidate |
+| `dla census --lang <l>` | Adds every process-lifetime holder of one runtime as a candidate, with heuristic writers and removers |
+| `dla workload discover` | Lists the tests, entry points and dev servers a loop can run, ranked by entry points; unrunnable ones are recorded with a reason |
 | `dla ledger add` | Adds a finding, which always starts as `candidate` |
+| `dla ledger annotate` | Records the writers and removers the model found for a holder (`--writer file:line`, `--remover file:line`, `--note`); changes no state |
 | `dla ledger resolve` | Dispositions a finding or open item, or answers a checklist item |
 | `dla consent` | Records the run's one consent: `--tiers` (privilege tiers 1 to 4), `--raw-values`, `--ceiling`, `--given-by user\|runner`. A second consent in a run is refused |
 | `dla report` | Renders the report, writes `report.md` and stores its hash in `state.json` |
 | `dla schema` | Writes or checks the JSON Schema files |
+
+### Static analyzers
+
+`dla sweep` drives these backends, listed per runtime in `data/detectors/<lang>.toml`. Each rule is
+marked verified or not; unverified ones are tracked in [docs/VERIFY.md](docs/VERIFY.md). The `dla`
+backend is built into the binary: Rust rules over tree-sitter syntax trees, with no external tool.
+
+| Runtime | Backends |
+|---|---|
+| JVM | Error Prone, SpotBugs, detekt, CodeQL, Sonar |
+| Go | staticcheck, golangci-lint, go vet |
+| Rust | RAPx (`cargo +nightly rapx check -m`) |
+| Node.js/TypeScript | ESLint with rxjs-x and typescript-eslint |
+| Python | ruff, pylint, CodeQL |
+
+`dla install <backend>` has one recipe per backend. Self-contained analyzers go into the plugin data
+directory (`<data>/tools`), language tools go through the project's own package manager, and nothing
+is ever written into project source. Run it for the backends `dla probe` reports as missing, after
+tier-1 consent. GitHub release downloads and Docker are not assumed: a recipe that cannot run in
+your environment prints the exact manual command and the backend stays `missing` in
+`coverage.json`, with the install hint.
+
+CodeQL and Sonar notes: CodeQL needs its query bundle, a large download that must be extracted
+locally; when that is not possible the backend stays a recorded gap. Sonar needs a running server,
+so its rules (`S5164`, `S2095`) are listed but unverified, and the backend is `missing` unless you
+provide one.
 
 Headless consent: an unattended runner can give consent through the environment instead of a
 question to the user. If `DLA_CONSENT_TIERS` is set (`1-4`, or a list such as `1,2,3`) when
