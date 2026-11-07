@@ -113,7 +113,12 @@ fn unrelated_directories_are_ignored() {
     let t = tempfile::tempdir().unwrap();
     let r = t.path().join("res/runs/no-skill");
     write(&r.join("archetypes-on/fx-trap/1/run.json"), RUN_JSON);
-    for name in ["0", "01", "+1", "1.0", "-1", "a", " 1", "1 "] {
+    let mut names = vec!["0", "01", "+1", "1.0", "-1", "a"];
+    // Windows refuses directory names that end in a space.
+    if !cfg!(windows) {
+        names.extend([" 1", "1 "]);
+    }
+    for name in names {
         write(
             &r.join(format!("archetypes-on/fx-trap/{name}/run.json")),
             RUN_JSON,
