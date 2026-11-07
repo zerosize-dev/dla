@@ -1,0 +1,10 @@
+[package]
+name = "dla-census"
+description = "DLA census (future)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

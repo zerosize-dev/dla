@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CoverageManifest",
+  "description": "`coverage.json`.",
+  "type": "object",
+  "properties": {
+    "blind_spots": {
+      "description": "Declared blind spots.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/BlindSpot"
+      }
+    },
+    "residual": {
+      "description": "Residual rows.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ResidualRow"
+      }
+    },
+    "schema_version": {
+      "description": "Schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "scope": {
+      "description": "Scope covered.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Scope"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "workers": {
+      "description": "Coverage by worker.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/WorkerCoverage"
+      },
+      "default": {}
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "$defs": {
+    "BackendCoverage": {
+      "description": "One backend's coverage.",
+      "type": "object",
+      "properties": {
+        "dispositioned": {
+          "description": "Items that were dispositioned.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "enumerated": {
+          "description": "Items it enumerated.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "install_hint": {
+          "description": "How to install or enable it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why it was blocked or missing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Ran, blocked or missing.",
+          "$ref": "#/$defs/BackendStatus"
+        },
+        "version": {
+          "description": "Backend version.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "enumerated",
+        "dispositioned"
+      ]
+    },
+    "BackendStatus": {
+      "description": "Whether a backend ran.",
+      "oneOf": [
+        {
+          "description": "It ran.",
+          "type": "string",
+          "const": "ran"
+        },
+        {
+          "description": "It exists but could not run.",
+          "type": "string",
+          "const": "blocked"
+        },
+        {
+          "description": "It is not installed.",
+          "type": "string",
+          "const": "missing"
+        }
+      ]
+    },
+    "BlindSpot": {
+      "description": "A thing a runtime's tooling cannot observe.",
+      "type": "object",
+      "properties": {
+        "runtime": {
+          "description": "Runtime name.",
+          "type": "string"
+        },
+        "text": {
+          "description": "What cannot be seen.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtime",
+        "text"
+      ]
+    },
+    "EntryPoints": {
+      "description": "Entry points of a worker's runtime.",
+      "type": "object",
+      "properties": {
+        "discovered": {
+          "description": "Found by static reading.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "exercised": {
+          "description": "Actually run.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "not_exercisable": {
+          "description": "Found but not runnable.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NotExercisable"
+          }
+        }
+      }
+    },
+    "NotExercisable": {
+      "description": "An entry point that could not be exercised.",
+      "type": "object",
+      "properties": {
+        "entry": {
+          "description": "The entry point.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why not.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entry",
+        "reason"
+      ]
+    },
+    "OpenItemId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?O[1-9][0-9]*$"
+    },
+    "Region": {
+      "description": "Which memory region grows.",
+      "oneOf": [
+        {
+          "description": "The managed heap.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native memory outside the managed heap.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Runtime-internal non-heap memory.",
+          "type": "string",
+          "const": "non-heap"
+        }
+      ]
+    },
+    "ResidualRow": {
+      "description": "Growth left unattributed in one region.",
+      "type": "object",
+      "properties": {
+        "attributed_slope": {
+          "description": "Slope attributed to findings.",
+          "type": "number",
+          "format": "double"
+        },
+        "open_item": {
+          "description": "Open item covering an over-threshold residual.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OpenItemId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "region": {
+          "description": "Memory region.",
+          "$ref": "#/$defs/Region"
+        },
+        "residual": {
+          "description": "Total minus attributed.",
+          "type": "number",
+          "format": "double"
+        },
+        "threshold": {
+          "description": "Threshold above which the residual must be explained.",
+          "type": "number",
+          "format": "double"
+        },
+        "total_slope": {
+          "description": "Total growth slope.",
+          "type": "number",
+          "format": "double"
+        },
+        "unit": {
+          "description": "Unit of the slopes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "region",
+        "total_slope",
+        "attributed_slope",
+        "residual",
+        "unit",
+        "threshold"
+      ]
+    },
+    "Scope": {
+      "description": "What the investigation covers.",
+      "type": "object",
+      "properties": {
+        "excluded": {
+          "description": "Excluded paths.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "description": "Repository, module or service.",
+          "$ref": "#/$defs/ScopeKind"
+        },
+        "path": {
+          "description": "Path of the module or service (the repository root for `repository`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "path"
+      ]
+    },
+    "ScopeKind": {
+      "description": "What a scope covers.",
+      "oneOf": [
+        {
+          "description": "The whole repository.",
+          "type": "string",
+          "const": "repository"
+        },
+        {
+          "description": "One module.",
+          "type": "string",
+          "const": "module"
+        },
+        {
+          "description": "One service.",
+          "type": "string",
+          "const": "service"
+        }
+      ]
+    },
+    "WorkerCoverage": {
+      "description": "Coverage of one worker.",
+      "type": "object",
+      "properties": {
+        "backends": {
+          "description": "Backends by name.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/BackendCoverage"
+          },
+          "default": {}
+        },
+        "entry_points": {
+          "description": "Entry points.",
+          "$ref": "#/$defs/EntryPoints",
+          "default": {
+            "discovered": [],
+            "exercised": [],
+            "not_exercisable": []
+          }
+        },
+        "iterations": {
+          "description": "Workload iterations run.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runtime": {
+          "description": "Runtime name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "runtime"
+      ]
+    }
+  }
+}

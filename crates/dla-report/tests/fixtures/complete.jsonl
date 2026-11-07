@@ -1,0 +1,19 @@
+{"schema_version":1,"seq":1,"ts":"2026-01-01T00:00:00Z","type":"evidence","evidence_id":"E1","source":{"repo":{"commit":"abc123"}},"tool":{"name":"dla","version":"0.1.0"},"authority":"static","kind":"run-config","result":{}}
+{"schema_version":1,"seq":2,"ts":"2026-01-01T00:00:00Z","type":"evidence","evidence_id":"E2","source":{"process":{"pid":4242,"start_time":"2026-01-01T00:00:00Z"}},"tool":{"name":"pyprobe","version":"2.1"},"authority":"live","kind":"growth-series","result":{},"raw":"raw/growth.json","coverage":{"status":"partial","examined":40,"total":100},"limitations":["sampled every 5s | misses short bursts"],"unknowns":[{"question":"Is the cache bounded?","resolve_by":"read CacheConfig"}]}
+{"schema_version":1,"seq":3,"ts":"2026-01-01T00:00:00Z","type":"evidence","evidence_id":"E3","source":{"repo":{"commit":"abc123"}},"tool":{"name":"dla","version":"0.1.0"},"authority":"test","kind":"discriminator","result":{}}
+{"schema_version":1,"seq":4,"ts":"2026-01-01T00:00:00Z","type":"evidence","evidence_id":"E4","source":{"artifact":{"path":"src/a|b.py","sha256":"0123456789abcdef0123456789abcdef"}},"tool":{"name":"scan","version":"1.0"},"authority":"static","kind":"static-hit","result":{}}
+{"schema_version":1,"seq":5,"ts":"2026-01-01T00:00:00Z","type":"finding_added","finding":{"id":"F1","state":"candidate","origin":"growth-series","supports":["E2"],"holder":"container-field","owner":"Cache.entries","region":"heap","shape":"steady","locus":"app","site":"src/cache.py:42","repair_class":"bound/evict","explanation":{"text":"Entries are never evicted.","tag":"observed"}}}
+{"schema_version":1,"seq":6,"ts":"2026-01-01T00:00:00Z","type":"finding_added","finding":{"id":"F2","state":"candidate","origin":"census","supports":["E4"],"hypothesis":"N-WARM","refute_if":"growth is flat after warmup","suggested_archetype":"registration-leak"}}
+{"schema_version":1,"seq":7,"ts":"2026-01-01T00:00:00Z","type":"finding_added","finding":{"id":"F3","state":"candidate","origin":"detector:py/unclosed","supports":["E4"],"site":"src/net.py:7"}}
+{"schema_version":1,"seq":8,"ts":"2026-01-01T00:00:00Z","type":"transition","finding":"F1","from":"candidate","to":"under_test","evidence":[],"by":"dla ledger resolve"}
+{"schema_version":1,"seq":9,"ts":"2026-01-01T00:00:00Z","type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":[],"by":"dla ledger resolve"}
+{"schema_version":1,"seq":10,"ts":"2026-01-01T00:00:00Z","type":"transition","finding":"F2","from":"candidate","to":"refuted","evidence":["E3"],"by":"dla ledger resolve"}
+{"schema_version":1,"seq":11,"ts":"2026-01-01T00:00:00Z","type":"transition","finding":"F3","from":"candidate","to":"unresolved","evidence":[],"by":"dla ledger resolve","reason":"no_harness","remedy":"write a harness for net.py"}
+{"schema_version":1,"seq":12,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.target","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":13,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.scope","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":14,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.symptom","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":15,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.runtimes","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":16,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.build","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":17,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.workload","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":18,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.consent","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":19,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.budget","status":"answered","evidence":["E1"]}

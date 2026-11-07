@@ -1,0 +1,1177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LedgerLine",
+  "description": "One line of `ledger.jsonl`.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Schema version of this line.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "seq": {
+      "description": "1-based sequence number; consecutive.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "ts": {
+      "description": "When the line was appended (RFC 3339, UTC).",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "oneOf": [
+    {
+      "description": "A tool result.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "evidence"
+        }
+      },
+      "$ref": "#/$defs/EvidenceRecord",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A new finding, in state `candidate`.",
+      "type": "object",
+      "properties": {
+        "finding": {
+          "description": "The finding.",
+          "$ref": "#/$defs/Finding"
+        },
+        "type": {
+          "type": "string",
+          "const": "finding_added"
+        }
+      },
+      "required": [
+        "type",
+        "finding"
+      ]
+    },
+    {
+      "description": "A finding changed state.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "transition"
+        }
+      },
+      "$ref": "#/$defs/Transition",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "An open item was raised.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_item"
+        }
+      },
+      "$ref": "#/$defs/OpenItem",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "An open item was closed.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_item_resolved"
+        }
+      },
+      "$ref": "#/$defs/OpenItemResolved",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A checklist item was answered.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "checklist_answer"
+        }
+      },
+      "$ref": "#/$defs/ChecklistAnswer",
+      "required": [
+        "type"
+      ]
+    }
+  ],
+  "required": [
+    "schema_version",
+    "seq",
+    "ts"
+  ],
+  "$defs": {
+    "AnswerStatus": {
+      "description": "How completely a checklist item was answered.",
+      "oneOf": [
+        {
+          "description": "Fully answered.",
+          "type": "string",
+          "const": "answered"
+        },
+        {
+          "description": "Partly answered.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "Not answerable now; carries reason and remedy.",
+          "type": "string",
+          "const": "unresolved"
+        }
+      ]
+    },
+    "Authority": {
+      "description": "How strongly a piece of evidence was obtained.",
+      "oneOf": [
+        {
+          "description": "Read from source or configuration without running anything.",
+          "type": "string",
+          "const": "static"
+        },
+        {
+          "description": "Produced by a test or targeted experiment.",
+          "type": "string",
+          "const": "test"
+        },
+        {
+          "description": "Observed on a live process.",
+          "type": "string",
+          "const": "live"
+        },
+        {
+          "description": "Read from a captured dump.",
+          "type": "string",
+          "const": "dump"
+        }
+      ]
+    },
+    "ChecklistAnswer": {
+      "description": "A `checklist_answer` ledger record body.",
+      "type": "object",
+      "properties": {
+        "evidence": {
+          "description": "Supporting evidence; at least one unless `unresolved`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          }
+        },
+        "item": {
+          "description": "Checklist item ID.",
+          "type": "string"
+        },
+        "note": {
+          "description": "Free-text note.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Required with `unresolved`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UnresolvedReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remedy": {
+          "description": "Required with `unresolved`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Answer status.",
+          "$ref": "#/$defs/AnswerStatus"
+        }
+      },
+      "required": [
+        "item",
+        "status"
+      ]
+    },
+    "CoverageStatus": {
+      "description": "How much of the subject the evidence covers.",
+      "oneOf": [
+        {
+          "description": "The whole subject was examined.",
+          "type": "string",
+          "const": "complete"
+        },
+        {
+          "description": "Part of the subject was examined.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "It is not known how much was examined.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "EvidenceCoverage": {
+      "description": "Coverage of one evidence record.",
+      "type": "object",
+      "properties": {
+        "examined": {
+          "description": "How many units were examined.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "description": "Overall status.",
+          "$ref": "#/$defs/CoverageStatus"
+        },
+        "total": {
+          "description": "How many units exist.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "EvidenceId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?E[1-9][0-9]*$"
+    },
+    "EvidenceKind": {
+      "description": "The closed set of evidence kinds.",
+      "oneOf": [
+        {
+          "description": "Run configuration captured at init.",
+          "type": "string",
+          "const": "run-config"
+        },
+        {
+          "description": "Result of probing the environment.",
+          "type": "string",
+          "const": "probe"
+        },
+        {
+          "description": "A static detector hit.",
+          "type": "string",
+          "const": "static-hit"
+        },
+        {
+          "description": "A holder found by a census.",
+          "type": "string",
+          "const": "census-holder"
+        },
+        {
+          "description": "A workload execution record.",
+          "type": "string",
+          "const": "workload"
+        },
+        {
+          "description": "A growth measurement series.",
+          "type": "string",
+          "const": "growth-series"
+        },
+        {
+          "description": "A per-unit count series.",
+          "type": "string",
+          "const": "unit-count-series"
+        },
+        {
+          "description": "A retention path to a root.",
+          "type": "string",
+          "const": "retention-path"
+        },
+        {
+          "description": "An allocation stack.",
+          "type": "string",
+          "const": "alloc-stack"
+        },
+        {
+          "description": "A before/after histogram difference.",
+          "type": "string",
+          "const": "histogram-diff"
+        },
+        {
+          "description": "A profile of blocked stacks.",
+          "type": "string",
+          "const": "blocked-stack-profile"
+        },
+        {
+          "description": "Objects unreachable at exit.",
+          "type": "string",
+          "const": "unreachable-at-exit"
+        },
+        {
+          "description": "Objects that should be dead but are not.",
+          "type": "string",
+          "const": "should-be-dead"
+        },
+        {
+          "description": "An experiment that separates two hypotheses.",
+          "type": "string",
+          "const": "discriminator"
+        },
+        {
+          "description": "A change made to the target to test a cause.",
+          "type": "string",
+          "const": "intervention"
+        },
+        {
+          "description": "A measurement outside the heap.",
+          "type": "string",
+          "const": "non-heap"
+        },
+        {
+          "description": "Growth left unattributed.",
+          "type": "string",
+          "const": "residual"
+        }
+      ]
+    },
+    "EvidenceRecord": {
+      "description": "One tool result.",
+      "type": "object",
+      "properties": {
+        "authority": {
+          "description": "How it was obtained.",
+          "$ref": "#/$defs/Authority"
+        },
+        "coverage": {
+          "description": "How much of the subject it covers.",
+          "$ref": "#/$defs/EvidenceCoverage",
+          "default": {
+            "status": "unknown"
+          }
+        },
+        "evidence_id": {
+          "description": "Identifier, allocated by the ledger.",
+          "$ref": "#/$defs/EvidenceId"
+        },
+        "kind": {
+          "description": "What it is.",
+          "$ref": "#/$defs/EvidenceKind"
+        },
+        "limitations": {
+          "description": "Known limits of this evidence.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "raw": {
+          "description": "Path, relative to the run directory, of the full output.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "The bounded result (serialized size at most [`MAX_RESULT_BYTES`])."
+        },
+        "source": {
+          "description": "Where it came from.",
+          "$ref": "#/$defs/Source"
+        },
+        "tool": {
+          "description": "Which backend produced it.",
+          "$ref": "#/$defs/Tool"
+        },
+        "unknowns": {
+          "description": "Open questions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Unknown"
+          }
+        }
+      },
+      "required": [
+        "evidence_id",
+        "source",
+        "tool",
+        "authority",
+        "kind",
+        "result"
+      ]
+    },
+    "Explanation": {
+      "description": "Free-text explanation with its epistemic tag.",
+      "type": "object",
+      "properties": {
+        "tag": {
+          "description": "Observed or inferred.",
+          "$ref": "#/$defs/ExplanationTag"
+        },
+        "text": {
+          "description": "The explanation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "tag"
+      ]
+    },
+    "ExplanationTag": {
+      "description": "Whether an explanation was seen or reasoned.",
+      "oneOf": [
+        {
+          "description": "Directly observed.",
+          "type": "string",
+          "const": "observed"
+        },
+        {
+          "description": "Inferred from observations.",
+          "type": "string",
+          "const": "inferred"
+        }
+      ]
+    },
+    "Finding": {
+      "description": "One hypothesis about a leak and everything known about it.",
+      "type": "object",
+      "properties": {
+        "amplifiers": {
+          "description": "Factors that worsen the leak.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "archetype": {
+          "description": "Assigned archetype; only `dla ledger label` changes it.",
+          "type": "string",
+          "default": "UNCLASSIFIED"
+        },
+        "contradicts": {
+          "description": "Evidence contradicting the finding.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          }
+        },
+        "explanation": {
+          "description": "Explanation with its tag.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Explanation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "holder": {
+          "description": "What holds the memory.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Holder"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hypothesis": {
+          "description": "The cause this hypothesis proposes (on a sibling).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Identifier.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "locus": {
+          "description": "Where the leak lives.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Locus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "description": "How the finding was raised.",
+          "$ref": "#/$defs/Origin"
+        },
+        "owner": {
+          "description": "Owning field or container on the retention path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "description": "Parent finding of a sibling hypothesis.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "description": "Why unresolved or static-only; required exactly for those states.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UnresolvedReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refute_if": {
+          "description": "The result that would refute this hypothesis.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "description": "Memory region.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Region"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remedy": {
+          "description": "What would unblock it; non-empty whenever `reason` is set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repair_class": {
+          "description": "Class of repair.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepairClass"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "Growth shape.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shape"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "siblings": {
+          "description": "Sibling hypotheses; maintained by the ledger.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FindingId"
+          }
+        },
+        "site": {
+          "description": "`file:line`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "Lifecycle state.",
+          "$ref": "#/$defs/FindingState"
+        },
+        "suggested_archetype": {
+          "description": "A tag suggesting an archetype; never filters anything.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supports": {
+          "description": "Evidence supporting the finding.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "origin"
+      ]
+    },
+    "FindingId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$"
+    },
+    "FindingState": {
+      "description": "Lifecycle state of a finding.",
+      "oneOf": [
+        {
+          "description": "Raised, not yet tested.",
+          "type": "string",
+          "const": "candidate"
+        },
+        {
+          "description": "A test is in progress.",
+          "type": "string",
+          "const": "under_test"
+        },
+        {
+          "description": "Growth, site and holder established.",
+          "type": "string",
+          "const": "confirmed"
+        },
+        {
+          "description": "Independently corroborated.",
+          "type": "string",
+          "const": "strong"
+        },
+        {
+          "description": "Ruled out by a discriminator.",
+          "type": "string",
+          "const": "refuted"
+        },
+        {
+          "description": "Seen statically, never exercised.",
+          "type": "string",
+          "const": "suspected_static_only"
+        },
+        {
+          "description": "Left open, with a reason and a remedy.",
+          "type": "string",
+          "const": "unresolved"
+        }
+      ]
+    },
+    "Holder": {
+      "description": "What holds the leaked memory.",
+      "oneOf": [
+        {
+          "description": "A static or global variable.",
+          "type": "string",
+          "const": "static/global"
+        },
+        {
+          "description": "A registration table (listeners, callbacks).",
+          "type": "string",
+          "const": "registration-table"
+        },
+        {
+          "description": "A field of a container object.",
+          "type": "string",
+          "const": "container-field"
+        },
+        {
+          "description": "Thread-local storage.",
+          "type": "string",
+          "const": "thread-local"
+        },
+        {
+          "description": "A blocked stack.",
+          "type": "string",
+          "const": "blocked-stack"
+        },
+        {
+          "description": "A closure or continuation.",
+          "type": "string",
+          "const": "closure/continuation"
+        },
+        {
+          "description": "A native handle or global reference.",
+          "type": "string",
+          "const": "native-handle/global-ref"
+        },
+        {
+          "description": "A reference cycle only.",
+          "type": "string",
+          "const": "cycle-only"
+        }
+      ]
+    },
+    "Locus": {
+      "description": "Where the leak lives.",
+      "oneOf": [
+        {
+          "description": "Application code.",
+          "type": "string",
+          "const": "app"
+        },
+        {
+          "description": "A dependency.",
+          "type": "string",
+          "const": "dependency"
+        },
+        {
+          "description": "The language runtime.",
+          "type": "string",
+          "const": "runtime"
+        }
+      ]
+    },
+    "OpenItem": {
+      "description": "Something left to do.",
+      "type": "object",
+      "properties": {
+        "finding": {
+          "description": "Finding it relates to.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "description": "Identifier.",
+          "$ref": "#/$defs/OpenItemId"
+        },
+        "opened_by": {
+          "description": "Who opened it.",
+          "type": "string"
+        },
+        "text": {
+          "description": "What is open.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "opened_by"
+      ]
+    },
+    "OpenItemId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?O[1-9][0-9]*$"
+    },
+    "OpenItemResolved": {
+      "description": "Closes an open item.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The open item.",
+          "$ref": "#/$defs/OpenItemId"
+        },
+        "resolution": {
+          "description": "How it was closed.",
+          "$ref": "#/$defs/Resolution"
+        }
+      },
+      "required": [
+        "id",
+        "resolution"
+      ]
+    },
+    "Origin": {
+      "type": "string",
+      "pattern": "^(census|growth-series|archetype-row|residual|verifier|hypothesis|detector:[^\\s:/]+/\\S+|known-leak:\\S+)$"
+    },
+    "Region": {
+      "description": "Which memory region grows.",
+      "oneOf": [
+        {
+          "description": "The managed heap.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native memory outside the managed heap.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Runtime-internal non-heap memory.",
+          "type": "string",
+          "const": "non-heap"
+        }
+      ]
+    },
+    "RepairClass": {
+      "description": "Class of repair.",
+      "oneOf": [
+        {
+          "description": "Release on the regular path.",
+          "type": "string",
+          "const": "release-regular"
+        },
+        {
+          "description": "Release on the exceptional path.",
+          "type": "string",
+          "const": "release-exceptional"
+        },
+        {
+          "description": "Remove the entry.",
+          "type": "string",
+          "const": "remove-entry"
+        },
+        {
+          "description": "Bound or evict.",
+          "type": "string",
+          "const": "bound/evict"
+        },
+        {
+          "description": "Deregister.",
+          "type": "string",
+          "const": "deregister"
+        },
+        {
+          "description": "Stop or cancel.",
+          "type": "string",
+          "const": "stop/cancel"
+        },
+        {
+          "description": "Clear the reference.",
+          "type": "string",
+          "const": "clear-reference"
+        },
+        {
+          "description": "Restructure synchronisation.",
+          "type": "string",
+          "const": "restructure-sync"
+        },
+        {
+          "description": "Return ownership.",
+          "type": "string",
+          "const": "return-ownership"
+        }
+      ]
+    },
+    "Resolution": {
+      "description": "How an open item was closed.",
+      "oneOf": [
+        {
+          "description": "Left unresolved with a reason and a remedy.",
+          "type": "object",
+          "properties": {
+            "unresolved": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "description": "Why.",
+                  "$ref": "#/$defs/UnresolvedReason"
+                },
+                "remedy": {
+                  "description": "What would resolve it.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "remedy"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "unresolved"
+          ]
+        },
+        {
+          "description": "Covered by a new hypothesis.",
+          "type": "object",
+          "properties": {
+            "hypothesis": {
+              "$ref": "#/$defs/FindingId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "hypothesis"
+          ]
+        }
+      ]
+    },
+    "Shape": {
+      "description": "Shape of the growth curve.",
+      "oneOf": [
+        {
+          "description": "Steady growth.",
+          "type": "string",
+          "const": "steady"
+        },
+        {
+          "description": "Step-wise growth.",
+          "type": "string",
+          "const": "stair"
+        },
+        {
+          "description": "Transient spike.",
+          "type": "string",
+          "const": "spike"
+        },
+        {
+          "description": "Growth that levels off.",
+          "type": "string",
+          "const": "plateau"
+        }
+      ]
+    },
+    "Source": {
+      "description": "Where a piece of evidence came from.",
+      "oneOf": [
+        {
+          "description": "A file on disk.",
+          "type": "object",
+          "properties": {
+            "artifact": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "description": "Path of the artifact.",
+                  "type": "string"
+                },
+                "sha256": {
+                  "description": "SHA-256 of its contents, lowercase hex.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "artifact"
+          ]
+        },
+        {
+          "description": "A running process.",
+          "type": "object",
+          "properties": {
+            "process": {
+              "type": "object",
+              "properties": {
+                "pid": {
+                  "description": "Process ID.",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "start_time": {
+                  "description": "Process start time (platform string) to disambiguate PID reuse.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pid",
+                "start_time"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "process"
+          ]
+        },
+        {
+          "description": "A source repository.",
+          "type": "object",
+          "properties": {
+            "repo": {
+              "type": "object",
+              "properties": {
+                "commit": {
+                  "description": "Commit hash, or a project path when no commit is readable.",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "Path inside the repository.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "commit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "repo"
+          ]
+        }
+      ]
+    },
+    "Tool": {
+      "description": "The backend that produced the evidence.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Backend name.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Backend version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "Transition": {
+      "description": "A state change of a finding.",
+      "type": "object",
+      "properties": {
+        "by": {
+          "description": "The dla command that made the move.",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "Evidence cited by the move: added to `contradicts` for `refuted`, to\n`supports` otherwise.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          }
+        },
+        "finding": {
+          "description": "The finding.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "from": {
+          "description": "State before; must match the replayed state.",
+          "$ref": "#/$defs/FindingState"
+        },
+        "reason": {
+          "description": "Required with `unresolved` and `suspected_static_only`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UnresolvedReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remedy": {
+          "description": "Required with a reason.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "State after.",
+          "$ref": "#/$defs/FindingState"
+        }
+      },
+      "required": [
+        "finding",
+        "from",
+        "to",
+        "by"
+      ]
+    },
+    "Unknown": {
+      "description": "A question the evidence leaves open and how to answer it.",
+      "type": "object",
+      "properties": {
+        "question": {
+          "description": "What is not known.",
+          "type": "string"
+        },
+        "resolve_by": {
+          "description": "What would resolve it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "resolve_by"
+      ]
+    },
+    "UnresolvedReason": {
+      "description": "Why a finding could not be resolved.",
+      "oneOf": [
+        {
+          "description": "The suspected path was never exercised.",
+          "type": "string",
+          "const": "not_exercised"
+        },
+        {
+          "description": "No harness exists to exercise it.",
+          "type": "string",
+          "const": "no_harness"
+        },
+        {
+          "description": "The needed environment is unavailable.",
+          "type": "string",
+          "const": "env_unavailable"
+        },
+        {
+          "description": "The project does not build.",
+          "type": "string",
+          "const": "build_fails"
+        },
+        {
+          "description": "The user declined a privileged step.",
+          "type": "string",
+          "const": "privilege_declined"
+        },
+        {
+          "description": "A required tool is missing.",
+          "type": "string",
+          "const": "tool_missing"
+        },
+        {
+          "description": "The time budget ran out.",
+          "type": "string",
+          "const": "time_budget"
+        }
+      ]
+    }
+  }
+}

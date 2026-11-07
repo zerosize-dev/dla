@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Checklist",
+  "description": "The checklist as a versioned document.",
+  "type": "object",
+  "properties": {
+    "items": {
+      "description": "The questions, in order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ChecklistItem"
+      }
+    },
+    "schema_version": {
+      "description": "Schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "items"
+  ],
+  "$defs": {
+    "ChecklistItem": {
+      "description": "One question the run must answer.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable ID such as `intake.scope`.",
+          "type": "string"
+        },
+        "question": {
+          "description": "The question.",
+          "type": "string"
+        },
+        "stage": {
+          "description": "Stage the question belongs to.",
+          "$ref": "#/$defs/Stage"
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "question"
+      ]
+    },
+    "Stage": {
+      "description": "Stage of the investigation.",
+      "oneOf": [
+        {
+          "description": "Collecting the target, scope and symptom.",
+          "type": "string",
+          "const": "intake"
+        },
+        {
+          "description": "Probing the environment.",
+          "type": "string",
+          "const": "probe"
+        },
+        {
+          "description": "Sweeping for candidates.",
+          "type": "string",
+          "const": "sweep"
+        },
+        {
+          "description": "Classifying candidates.",
+          "type": "string",
+          "const": "classify"
+        },
+        {
+          "description": "Confirming growth.",
+          "type": "string",
+          "const": "confirm"
+        },
+        {
+          "description": "Attributing to a site and holder.",
+          "type": "string",
+          "const": "attribute"
+        },
+        {
+          "description": "Ruling out alternatives.",
+          "type": "string",
+          "const": "rule_out"
+        },
+        {
+          "description": "Applying the completeness gate.",
+          "type": "string",
+          "const": "gate"
+        },
+        {
+          "description": "Rendering the report.",
+          "type": "string",
+          "const": "report"
+        }
+      ]
+    }
+  }
+}

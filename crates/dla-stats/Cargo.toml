@@ -1,0 +1,10 @@
+[package]
+name = "dla-stats"
+description = "DLA statistics (future)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

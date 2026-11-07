@@ -1,0 +1,476 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Finding",
+  "description": "One hypothesis about a leak and everything known about it.",
+  "type": "object",
+  "properties": {
+    "amplifiers": {
+      "description": "Factors that worsen the leak.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "archetype": {
+      "description": "Assigned archetype; only `dla ledger label` changes it.",
+      "type": "string",
+      "default": "UNCLASSIFIED"
+    },
+    "contradicts": {
+      "description": "Evidence contradicting the finding.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      }
+    },
+    "explanation": {
+      "description": "Explanation with its tag.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Explanation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "holder": {
+      "description": "What holds the memory.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Holder"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hypothesis": {
+      "description": "The cause this hypothesis proposes (on a sibling).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Identifier.",
+      "$ref": "#/$defs/FindingId"
+    },
+    "locus": {
+      "description": "Where the leak lives.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Locus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "origin": {
+      "description": "How the finding was raised.",
+      "$ref": "#/$defs/Origin"
+    },
+    "owner": {
+      "description": "Owning field or container on the retention path.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "parent": {
+      "description": "Parent finding of a sibling hypothesis.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FindingId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "description": "Why unresolved or static-only; required exactly for those states.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UnresolvedReason"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "refute_if": {
+      "description": "The result that would refute this hypothesis.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "region": {
+      "description": "Memory region.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Region"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "remedy": {
+      "description": "What would unblock it; non-empty whenever `reason` is set.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repair_class": {
+      "description": "Class of repair.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RepairClass"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "shape": {
+      "description": "Growth shape.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Shape"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "siblings": {
+      "description": "Sibling hypotheses; maintained by the ledger.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FindingId"
+      }
+    },
+    "site": {
+      "description": "`file:line`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "description": "Lifecycle state.",
+      "$ref": "#/$defs/FindingState"
+    },
+    "suggested_archetype": {
+      "description": "A tag suggesting an archetype; never filters anything.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "supports": {
+      "description": "Evidence supporting the finding.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceId"
+      }
+    }
+  },
+  "required": [
+    "id",
+    "state",
+    "origin"
+  ],
+  "$defs": {
+    "EvidenceId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?E[1-9][0-9]*$"
+    },
+    "Explanation": {
+      "description": "Free-text explanation with its epistemic tag.",
+      "type": "object",
+      "properties": {
+        "tag": {
+          "description": "Observed or inferred.",
+          "$ref": "#/$defs/ExplanationTag"
+        },
+        "text": {
+          "description": "The explanation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "tag"
+      ]
+    },
+    "ExplanationTag": {
+      "description": "Whether an explanation was seen or reasoned.",
+      "oneOf": [
+        {
+          "description": "Directly observed.",
+          "type": "string",
+          "const": "observed"
+        },
+        {
+          "description": "Inferred from observations.",
+          "type": "string",
+          "const": "inferred"
+        }
+      ]
+    },
+    "FindingId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$"
+    },
+    "FindingState": {
+      "description": "Lifecycle state of a finding.",
+      "oneOf": [
+        {
+          "description": "Raised, not yet tested.",
+          "type": "string",
+          "const": "candidate"
+        },
+        {
+          "description": "A test is in progress.",
+          "type": "string",
+          "const": "under_test"
+        },
+        {
+          "description": "Growth, site and holder established.",
+          "type": "string",
+          "const": "confirmed"
+        },
+        {
+          "description": "Independently corroborated.",
+          "type": "string",
+          "const": "strong"
+        },
+        {
+          "description": "Ruled out by a discriminator.",
+          "type": "string",
+          "const": "refuted"
+        },
+        {
+          "description": "Seen statically, never exercised.",
+          "type": "string",
+          "const": "suspected_static_only"
+        },
+        {
+          "description": "Left open, with a reason and a remedy.",
+          "type": "string",
+          "const": "unresolved"
+        }
+      ]
+    },
+    "Holder": {
+      "description": "What holds the leaked memory.",
+      "oneOf": [
+        {
+          "description": "A static or global variable.",
+          "type": "string",
+          "const": "static/global"
+        },
+        {
+          "description": "A registration table (listeners, callbacks).",
+          "type": "string",
+          "const": "registration-table"
+        },
+        {
+          "description": "A field of a container object.",
+          "type": "string",
+          "const": "container-field"
+        },
+        {
+          "description": "Thread-local storage.",
+          "type": "string",
+          "const": "thread-local"
+        },
+        {
+          "description": "A blocked stack.",
+          "type": "string",
+          "const": "blocked-stack"
+        },
+        {
+          "description": "A closure or continuation.",
+          "type": "string",
+          "const": "closure/continuation"
+        },
+        {
+          "description": "A native handle or global reference.",
+          "type": "string",
+          "const": "native-handle/global-ref"
+        },
+        {
+          "description": "A reference cycle only.",
+          "type": "string",
+          "const": "cycle-only"
+        }
+      ]
+    },
+    "Locus": {
+      "description": "Where the leak lives.",
+      "oneOf": [
+        {
+          "description": "Application code.",
+          "type": "string",
+          "const": "app"
+        },
+        {
+          "description": "A dependency.",
+          "type": "string",
+          "const": "dependency"
+        },
+        {
+          "description": "The language runtime.",
+          "type": "string",
+          "const": "runtime"
+        }
+      ]
+    },
+    "Origin": {
+      "type": "string",
+      "pattern": "^(census|growth-series|archetype-row|residual|verifier|hypothesis|detector:[^\\s:/]+/\\S+|known-leak:\\S+)$"
+    },
+    "Region": {
+      "description": "Which memory region grows.",
+      "oneOf": [
+        {
+          "description": "The managed heap.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native memory outside the managed heap.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Runtime-internal non-heap memory.",
+          "type": "string",
+          "const": "non-heap"
+        }
+      ]
+    },
+    "RepairClass": {
+      "description": "Class of repair.",
+      "oneOf": [
+        {
+          "description": "Release on the regular path.",
+          "type": "string",
+          "const": "release-regular"
+        },
+        {
+          "description": "Release on the exceptional path.",
+          "type": "string",
+          "const": "release-exceptional"
+        },
+        {
+          "description": "Remove the entry.",
+          "type": "string",
+          "const": "remove-entry"
+        },
+        {
+          "description": "Bound or evict.",
+          "type": "string",
+          "const": "bound/evict"
+        },
+        {
+          "description": "Deregister.",
+          "type": "string",
+          "const": "deregister"
+        },
+        {
+          "description": "Stop or cancel.",
+          "type": "string",
+          "const": "stop/cancel"
+        },
+        {
+          "description": "Clear the reference.",
+          "type": "string",
+          "const": "clear-reference"
+        },
+        {
+          "description": "Restructure synchronisation.",
+          "type": "string",
+          "const": "restructure-sync"
+        },
+        {
+          "description": "Return ownership.",
+          "type": "string",
+          "const": "return-ownership"
+        }
+      ]
+    },
+    "Shape": {
+      "description": "Shape of the growth curve.",
+      "oneOf": [
+        {
+          "description": "Steady growth.",
+          "type": "string",
+          "const": "steady"
+        },
+        {
+          "description": "Step-wise growth.",
+          "type": "string",
+          "const": "stair"
+        },
+        {
+          "description": "Transient spike.",
+          "type": "string",
+          "const": "spike"
+        },
+        {
+          "description": "Growth that levels off.",
+          "type": "string",
+          "const": "plateau"
+        }
+      ]
+    },
+    "UnresolvedReason": {
+      "description": "Why a finding could not be resolved.",
+      "oneOf": [
+        {
+          "description": "The suspected path was never exercised.",
+          "type": "string",
+          "const": "not_exercised"
+        },
+        {
+          "description": "No harness exists to exercise it.",
+          "type": "string",
+          "const": "no_harness"
+        },
+        {
+          "description": "The needed environment is unavailable.",
+          "type": "string",
+          "const": "env_unavailable"
+        },
+        {
+          "description": "The project does not build.",
+          "type": "string",
+          "const": "build_fails"
+        },
+        {
+          "description": "The user declined a privileged step.",
+          "type": "string",
+          "const": "privilege_declined"
+        },
+        {
+          "description": "A required tool is missing.",
+          "type": "string",
+          "const": "tool_missing"
+        },
+        {
+          "description": "The time budget ran out.",
+          "type": "string",
+          "const": "time_budget"
+        }
+      ]
+    }
+  }
+}

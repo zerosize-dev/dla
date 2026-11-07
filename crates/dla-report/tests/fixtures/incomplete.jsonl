@@ -1,0 +1,15 @@
+{"schema_version":1,"seq":1,"ts":"2026-01-01T00:00:00Z","type":"evidence","evidence_id":"E1","source":{"repo":{"commit":"abc123"}},"tool":{"name":"dla","version":"0.1.0"},"authority":"static","kind":"run-config","result":{}}
+{"schema_version":1,"seq":2,"ts":"2026-01-01T00:00:00Z","type":"evidence","evidence_id":"E2","source":{"repo":{"commit":"abc123"}},"tool":{"name":"dla","version":"0.1.0"},"authority":"static","kind":"static-hit","result":{}}
+{"schema_version":1,"seq":3,"ts":"2026-01-01T00:00:00Z","type":"finding_added","finding":{"id":"F1","state":"candidate","origin":"census","supports":["E2"],"site":"src/a.py:1"}}
+{"schema_version":1,"seq":4,"ts":"2026-01-01T00:00:00Z","type":"finding_added","finding":{"id":"F2","state":"candidate","origin":"census","supports":["E2"]}}
+{"schema_version":1,"seq":5,"ts":"2026-01-01T00:00:00Z","type":"transition","finding":"F2","from":"candidate","to":"under_test","evidence":[],"by":"dla ledger resolve"}
+{"schema_version":1,"seq":6,"ts":"2026-01-01T00:00:00Z","type":"open_item","id":"O1","text":"Residual heap growth\nunexplained | pipe","finding":"F1","opened_by":"dla gap"}
+{"schema_version":1,"seq":7,"ts":"2026-01-01T00:00:00Z","type":"open_item","id":"O2","text":"No answer for\nmulti-line | text","opened_by":"dla gap"}
+{"schema_version":1,"seq":8,"ts":"2026-01-01T00:00:00Z","type":"open_item_resolved","id":"O2","resolution":{"unresolved":{"reason":"tool_missing","remedy":"install memlab"}}}
+{"schema_version":1,"seq":9,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.target","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":10,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.scope","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":11,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.symptom","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":12,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.runtimes","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":13,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.build","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":14,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.consent","status":"answered","evidence":["E1"]}
+{"schema_version":1,"seq":15,"ts":"2026-01-01T00:00:00Z","type":"checklist_answer","item":"intake.workload","status":"unresolved","reason":"no_harness","remedy":"ask the owner for a load script"}

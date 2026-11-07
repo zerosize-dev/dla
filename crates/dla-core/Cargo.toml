@@ -1,0 +1,24 @@
+[package]
+name = "dla-core"
+description = "DLA contracts: evidence, findings, ledger, state machine, run state"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+hex.workspace = true
+chrono.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

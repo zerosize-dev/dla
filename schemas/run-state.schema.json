@@ -1,0 +1,406 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RunState",
+  "description": "`state.json`.",
+  "type": "object",
+  "properties": {
+    "budget": {
+      "description": "Time budget.",
+      "$ref": "#/$defs/Budget"
+    },
+    "consent": {
+      "description": "Consent, once given.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Consent"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "description": "Creation time.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "dla_version": {
+      "description": "Version of dla that created the run.",
+      "type": "string"
+    },
+    "incomplete_reason": {
+      "description": "Why the run is incomplete or aborted.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "processes": {
+      "description": "Processes DLA started.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProcessRecord"
+      }
+    },
+    "project_root": {
+      "description": "Absolute project root.",
+      "type": "string"
+    },
+    "redaction_salt": {
+      "description": "Random per-run salt (hex) for value redaction.",
+      "type": "string"
+    },
+    "report": {
+      "description": "The rendered report, once rendered.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReportRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "run_id": {
+      "description": "`YYYYMMDD-HHMMSS-xxxx` (UTC plus 4 hex).",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Schema version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "scope": {
+      "description": "Investigation scope.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Scope"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "session_id": {
+      "description": "Host session ID, `unknown` if absent.",
+      "type": "string"
+    },
+    "stage": {
+      "description": "Current stage.",
+      "$ref": "#/$defs/Stage"
+    },
+    "status": {
+      "description": "Overall status.",
+      "$ref": "#/$defs/RunStatus"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "session_id",
+    "project_root",
+    "created_at",
+    "dla_version",
+    "stage",
+    "status",
+    "budget",
+    "redaction_salt"
+  ],
+  "$defs": {
+    "Budget": {
+      "description": "Time budget.",
+      "type": "object",
+      "properties": {
+        "deadline": {
+          "description": "Start plus budget.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "seconds": {
+          "description": "Budget in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "started_at": {
+          "description": "Start of the budget.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "seconds",
+        "started_at",
+        "deadline"
+      ]
+    },
+    "Consent": {
+      "description": "Consent given for intrusive steps.",
+      "type": "object",
+      "properties": {
+        "given_by": {
+          "description": "Who gave it.",
+          "$ref": "#/$defs/ConsentGiver"
+        },
+        "raw_values": {
+          "description": "Whether raw values may appear in evidence.",
+          "type": "boolean"
+        },
+        "recorded_at": {
+          "description": "When it was recorded.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "tiers": {
+          "description": "Allowed intrusiveness tiers.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          }
+        }
+      },
+      "required": [
+        "tiers",
+        "raw_values",
+        "given_by",
+        "recorded_at"
+      ]
+    },
+    "ConsentGiver": {
+      "description": "Who recorded the consent.",
+      "oneOf": [
+        {
+          "description": "The user, interactively.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "The runner, by policy.",
+          "type": "string",
+          "const": "runner"
+        }
+      ]
+    },
+    "ProcessKind": {
+      "description": "Kind of process DLA started.",
+      "oneOf": [
+        {
+          "description": "A test or workload harness.",
+          "type": "string",
+          "const": "harness"
+        },
+        {
+          "description": "A development server.",
+          "type": "string",
+          "const": "dev-server"
+        },
+        {
+          "description": "A container.",
+          "type": "string",
+          "const": "container"
+        },
+        {
+          "description": "A profiler.",
+          "type": "string",
+          "const": "profiler"
+        }
+      ]
+    },
+    "ProcessRecord": {
+      "description": "A process DLA started and must clean up.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Command line.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "What it is.",
+          "$ref": "#/$defs/ProcessKind"
+        },
+        "pid": {
+          "description": "Process ID.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "start_time": {
+          "description": "Platform start time, to disambiguate PID reuse.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "description": "When it started.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "stopped_at": {
+          "description": "When it stopped.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "pid",
+        "kind",
+        "command",
+        "started_at"
+      ]
+    },
+    "ReportRef": {
+      "description": "The rendered report, pinned by hash.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Path of the report relative to the run directory.",
+          "type": "string"
+        },
+        "rendered_at": {
+          "description": "When it was rendered.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "sha256": {
+          "description": "SHA-256 of the report bytes, lowercase hex.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "rendered_at"
+      ]
+    },
+    "RunStatus": {
+      "description": "Overall status of a run.",
+      "oneOf": [
+        {
+          "description": "In progress.",
+          "type": "string",
+          "const": "active"
+        },
+        {
+          "description": "Finished with nothing outstanding.",
+          "type": "string",
+          "const": "complete"
+        },
+        {
+          "description": "Stopped with outstanding items.",
+          "type": "string",
+          "const": "incomplete"
+        },
+        {
+          "description": "Abandoned.",
+          "type": "string",
+          "const": "aborted"
+        }
+      ]
+    },
+    "Scope": {
+      "description": "What the investigation covers.",
+      "type": "object",
+      "properties": {
+        "excluded": {
+          "description": "Excluded paths.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "description": "Repository, module or service.",
+          "$ref": "#/$defs/ScopeKind"
+        },
+        "path": {
+          "description": "Path of the module or service (the repository root for `repository`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "path"
+      ]
+    },
+    "ScopeKind": {
+      "description": "What a scope covers.",
+      "oneOf": [
+        {
+          "description": "The whole repository.",
+          "type": "string",
+          "const": "repository"
+        },
+        {
+          "description": "One module.",
+          "type": "string",
+          "const": "module"
+        },
+        {
+          "description": "One service.",
+          "type": "string",
+          "const": "service"
+        }
+      ]
+    },
+    "Stage": {
+      "description": "Stage of the investigation.",
+      "oneOf": [
+        {
+          "description": "Collecting the target, scope and symptom.",
+          "type": "string",
+          "const": "intake"
+        },
+        {
+          "description": "Probing the environment.",
+          "type": "string",
+          "const": "probe"
+        },
+        {
+          "description": "Sweeping for candidates.",
+          "type": "string",
+          "const": "sweep"
+        },
+        {
+          "description": "Classifying candidates.",
+          "type": "string",
+          "const": "classify"
+        },
+        {
+          "description": "Confirming growth.",
+          "type": "string",
+          "const": "confirm"
+        },
+        {
+          "description": "Attributing to a site and holder.",
+          "type": "string",
+          "const": "attribute"
+        },
+        {
+          "description": "Ruling out alternatives.",
+          "type": "string",
+          "const": "rule_out"
+        },
+        {
+          "description": "Applying the completeness gate.",
+          "type": "string",
+          "const": "gate"
+        },
+        {
+          "description": "Rendering the report.",
+          "type": "string",
+          "const": "report"
+        }
+      ]
+    }
+  }
+}

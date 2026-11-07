@@ -1,0 +1,508 @@
+//! Report rendering for DLA.
+//!
+//! [`render_markdown`] turns a [`RunView`] into the Markdown report. It is a pure
+//! function of the view: it reads no clock and no file, so the same input yields
+//! byte-identical output. The completeness gate itself lives in `dla-core`
+//! ([`dla_core::status`]); this crate only formats it.
+
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
+
+use dla_core::{
+    EvidenceId, EvidenceRecord, Finding, FindingState, RunView, UNCLASSIFIED,
+    coverage::{BackendStatus, CoverageManifest, ResidualRow},
+    evidence::CoverageStatus,
+    status,
+};
+
+/// Label shown for a finding that no archetype describes.
+const NOVEL_LABEL: &str = "Novel mechanism (UNCLASSIFIED)";
+/// Placeholder for an absent value in a table.
+const DASH: &str = "\u{2014}";
+
+/// Renders the run as a Markdown report. Deterministic: the same input yields
+/// byte-identical output.
+pub fn render_markdown(view: &RunView) -> String {
+    let st = status(view);
+    let mut out = String::new();
+
+    out.push_str("# DLA report\n\n");
+    let _ = writeln!(out, "Run: {}\n", code(&view.state.run_id));
+
+    header(&mut out, view, &st);
+    if !st.complete {
+        open_items(&mut out, &st);
+    }
+    findings(&mut out, view);
+    ruled_out(&mut out, view);
+    blind_spots(&mut out, view);
+    checklist(&mut out, view);
+    evidence_index(&mut out, view);
+    out
+}
+
+// ---------------------------------------------------------------- helpers
+
+/// Collapses whitespace runs (including newlines) so free text stays on one line.
+fn inline(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Escapes text for a table cell: one line, `|` escaped.
+fn cell(s: &str) -> String {
+    let one = inline(s);
+    if one.is_empty() {
+        return DASH.to_owned();
+    }
+    one.replace('\\', "\\\\").replace('|', "\\|")
+}
+
+/// An inline code span that survives backticks in the content.
+fn code(s: &str) -> String {
+    let s = inline(s);
+    let longest = s
+        .split(|c| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or_default();
+    let fence = "`".repeat(longest + 1);
+    let pad = if s.starts_with('`') || s.ends_with('`') {
+        " "
+    } else {
+        ""
+    };
+    format!("{fence}{pad}{s}{pad}{fence}")
+}
+
+/// A code span for use inside a table cell.
+fn code_cell(s: &str) -> String {
+    code(s).replace('|', "\\|")
+}
+
+fn ids(list: &[EvidenceId]) -> String {
+    list.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn label(f: &Finding) -> String {
+    if f.archetype == UNCLASSIFIED {
+        NOVEL_LABEL.to_owned()
+    } else {
+        inline(&f.archetype)
+    }
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+// ---------------------------------------------------------------- sections
+
+fn header(out: &mut String, view: &RunView, st: &dla_core::ReportStatus) {
+    let c = &st.counts;
+    if st.complete {
+        out.push_str("Status: COMPLETE\n\n");
+    } else {
+        let _ = writeln!(out, "Status: INCOMPLETE ({} open)\n", st.blocking.len());
+    }
+    let s = &c.by_state;
+    let _ = writeln!(
+        out,
+        "Findings: {} enumerated, {} dispositioned; confirmed {}, strong {}, refuted {}, suspected {}, unresolved {}\n",
+        c.enumerated,
+        c.dispositioned,
+        s.confirmed,
+        s.strong,
+        s.refuted,
+        s.suspected_static_only,
+        s.unresolved
+    );
+    let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
+}
+
+fn residual_line(coverage: Option<&CoverageManifest>) -> String {
+    let Some(cov) = coverage else {
+        return "not measured".to_owned();
+    };
+    if cov.residual.is_empty() {
+        return "not measured".to_owned();
+    }
+    cov.residual
+        .iter()
+        .map(residual_row)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn residual_row(r: &ResidualRow) -> String {
+    let mut s = format!(
+        "{} {} {} unattributed of {} total (threshold {})",
+        r.region, r.residual, r.unit, r.total_slope, r.threshold
+    );
+    if r.residual > r.threshold {
+        s.push_str(" ABOVE THRESHOLD");
+        if let Some(o) = &r.open_item {
+            let _ = write!(s, ", see {o}");
+        }
+    }
+    s
+}
+
+fn open_items(out: &mut String, st: &dla_core::ReportStatus) {
+    out.push_str("## Open items\n\n");
+    for b in &st.blocking {
+        let _ = writeln!(
+            out,
+            "- **{}**: {}. Fix: {}",
+            inline(&b.id),
+            inline(b.description.trim_end_matches('.')),
+            code(&b.fix)
+        );
+    }
+    out.push('\n');
+}
+
+fn rank(s: FindingState) -> u8 {
+    match s {
+        FindingState::Strong => 0,
+        FindingState::Confirmed => 1,
+        FindingState::SuspectedStaticOnly => 2,
+        FindingState::Unresolved => 3,
+        FindingState::Candidate => 4,
+        FindingState::UnderTest => 5,
+        FindingState::Refuted => 6,
+    }
+}
+
+fn classes(view: &RunView, f: &Finding) -> String {
+    let set: BTreeSet<&'static str> = f
+        .supports
+        .iter()
+        .chain(&f.contradicts)
+        .filter_map(|id| view.ledger.evidence_by_id(id))
+        .map(|e| e.kind.class().as_str())
+        .collect();
+    set.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+fn findings(out: &mut String, view: &RunView) {
+    out.push_str("## Findings\n\n");
+    let mut list: Vec<&Finding> = view
+        .ledger
+        .findings()
+        .filter(|f| f.state != FindingState::Refuted)
+        .collect();
+    list.sort_by_key(|f| rank(f.state));
+    if list.is_empty() {
+        out.push_str("No findings to report.\n\n");
+        return;
+    }
+    for f in list {
+        finding_section(out, view, f);
+    }
+}
+
+fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
+    let _ = writeln!(out, "### {}: **{}**\n", f.id, label(f));
+    let _ = writeln!(out, "- State: {}", f.state_label());
+    let cl = classes(view, f);
+    if !cl.is_empty() {
+        let _ = writeln!(out, "- Evidence classes: {cl}");
+    }
+    if let Some(h) = f.holder {
+        let _ = writeln!(out, "- Holder: {h}");
+    }
+    if let Some(o) = &f.owner {
+        let _ = writeln!(out, "- Owner: {}", code(o));
+    }
+    if let Some(r) = f.region {
+        let _ = writeln!(out, "- Region: {r}");
+    }
+    if let Some(s) = f.shape {
+        let _ = writeln!(out, "- Shape: {s}");
+    }
+    if let Some(l) = f.locus {
+        let _ = writeln!(out, "- Locus: {l}");
+    }
+    if let Some(s) = &f.site {
+        let _ = writeln!(out, "- Site: {}", code(s));
+    }
+    if let Some(r) = f.repair_class {
+        let _ = writeln!(out, "- Repair class: {r}");
+    }
+    if !f.amplifiers.is_empty() {
+        let a: Vec<String> = f.amplifiers.iter().map(|a| inline(a)).collect();
+        let _ = writeln!(out, "- Amplifiers: {}", a.join(", "));
+    }
+    if let Some(p) = &f.parent {
+        let _ = writeln!(out, "- Sibling hypothesis of: {p}");
+    }
+    if let Some(h) = &f.hypothesis {
+        let _ = writeln!(out, "- Hypothesis: {}", inline(h));
+    }
+    if let Some(r) = &f.refute_if {
+        let _ = writeln!(out, "- Refuted if: {}", inline(r));
+    }
+    if !f.siblings.is_empty() {
+        let s: Vec<String> = f.siblings.iter().map(ToString::to_string).collect();
+        let _ = writeln!(out, "- Sibling hypotheses: {}", s.join(", "));
+    }
+    if let Some(s) = &f.suggested_archetype {
+        let _ = writeln!(out, "- Suggested archetype (unconfirmed): {}", inline(s));
+    }
+    if let Some(r) = f.reason {
+        let _ = writeln!(out, "- Reason: {r}");
+    }
+    if let Some(r) = &f.remedy {
+        let _ = writeln!(out, "- Remedy: {}", inline(r));
+    }
+    let _ = writeln!(out, "- Supporting evidence: {}", ids(&f.supports));
+    if !f.contradicts.is_empty() {
+        let _ = writeln!(out, "- Contradicting evidence: {}", ids(&f.contradicts));
+    }
+    if let Some(e) = &f.explanation {
+        let _ = writeln!(out, "- Explanation ({}): {}", e.tag, inline(&e.text));
+    }
+    out.push('\n');
+}
+
+fn ruled_out(out: &mut String, view: &RunView) {
+    out.push_str("## Ruled out\n\n");
+    let mut any = false;
+    for f in view
+        .ledger
+        .findings()
+        .filter(|f| f.state == FindingState::Refuted)
+    {
+        any = true;
+        let disc: Vec<EvidenceId> = f
+            .contradicts
+            .iter()
+            .filter(|id| {
+                view.ledger
+                    .evidence_by_id(id)
+                    .is_some_and(|e| e.kind.class() == dla_core::EvidenceClass::Discriminator)
+            })
+            .cloned()
+            .collect();
+        let _ = writeln!(
+            out,
+            "- **{}** ({}): discriminator {}",
+            f.id,
+            label(f),
+            if disc.is_empty() {
+                DASH.to_owned()
+            } else {
+                ids(&disc)
+            }
+        );
+        if let Some(h) = &f.hypothesis {
+            let _ = writeln!(out, "  - Hypothesis: {}", inline(h));
+        }
+        if let Some(r) = &f.refute_if {
+            let _ = writeln!(out, "  - Refuted if: {}", inline(r));
+        }
+        if !f.contradicts.is_empty() {
+            let _ = writeln!(out, "  - Contradicting evidence: {}", ids(&f.contradicts));
+        }
+        if !f.supports.is_empty() {
+            let _ = writeln!(out, "  - Originally supported by: {}", ids(&f.supports));
+        }
+    }
+    if !any {
+        out.push_str("None.\n");
+    }
+    out.push('\n');
+}
+
+fn blind_spots(out: &mut String, view: &RunView) {
+    out.push_str("## Blind spots and unknowns\n\n");
+
+    out.push_str("### Coverage gaps\n\n");
+    let mut any = false;
+    if let Some(cov) = &view.coverage {
+        for (worker, w) in &cov.workers {
+            for (name, b) in &w.backends {
+                if b.status == BackendStatus::Ran {
+                    continue;
+                }
+                any = true;
+                let mut line = format!("- {worker}/{name}: {}", b.status);
+                if let Some(r) = &b.reason {
+                    let _ = write!(line, " ({})", inline(r));
+                }
+                if let Some(h) = &b.install_hint {
+                    let _ = write!(line, ". Install hint: {}", inline(h));
+                }
+                let _ = writeln!(out, "{line}");
+            }
+        }
+    }
+    none_if(out, any, view.coverage.is_none());
+
+    out.push_str("### Runtime blind spots\n\n");
+    let mut any = false;
+    if let Some(cov) = &view.coverage {
+        for b in &cov.blind_spots {
+            any = true;
+            let _ = writeln!(out, "- {}: {}", inline(&b.runtime), inline(&b.text));
+        }
+    }
+    none_if(out, any, view.coverage.is_none());
+
+    out.push_str("### Entry points not exercisable\n\n");
+    let mut any = false;
+    if let Some(cov) = &view.coverage {
+        for (worker, w) in &cov.workers {
+            for n in &w.entry_points.not_exercisable {
+                any = true;
+                let _ = writeln!(out, "- {worker}: {}: {}", code(&n.entry), inline(&n.reason));
+            }
+        }
+    }
+    none_if(out, any, view.coverage.is_none());
+
+    out.push_str("### Evidence limitations and unknowns\n\n");
+    let mut any = false;
+    for e in view.ledger.evidence() {
+        any |= evidence_gaps(out, e);
+    }
+    none_if(out, any, false);
+}
+
+/// Writes the limitations, unknowns and partial coverage of one record.
+fn evidence_gaps(out: &mut String, e: &EvidenceRecord) -> bool {
+    let mut any = false;
+    if e.coverage.status == CoverageStatus::Partial {
+        any = true;
+        let extent = match (e.coverage.examined, e.coverage.total) {
+            (Some(x), Some(t)) => format!(" ({x} of {t} examined)"),
+            _ => String::new(),
+        };
+        let _ = writeln!(out, "- {}: partial coverage{extent}", e.evidence_id);
+    }
+    for l in &e.limitations {
+        any = true;
+        let _ = writeln!(out, "- {}: limitation: {}", e.evidence_id, inline(l));
+    }
+    for u in &e.unknowns {
+        any = true;
+        let _ = writeln!(
+            out,
+            "- {}: unknown: {} Resolve by: {}",
+            e.evidence_id,
+            inline(&u.question),
+            inline(&u.resolve_by)
+        );
+    }
+    any
+}
+
+fn none_if(out: &mut String, any: bool, no_manifest: bool) {
+    if !any {
+        out.push_str(if no_manifest {
+            "No coverage manifest recorded.\n"
+        } else {
+            "None recorded.\n"
+        });
+    }
+    out.push('\n');
+}
+
+fn checklist(out: &mut String, view: &RunView) {
+    out.push_str("## Checklist\n\n");
+    let _ = writeln!(
+        out,
+        "{} answered of {}.\n",
+        view.checklist.iter().filter(|c| c.answer.is_some()).count(),
+        plural(view.checklist.len(), "item", "items")
+    );
+    out.push_str("| Item | Question | Status | Evidence | Note |\n|---|---|---|---|---|\n");
+    for c in &view.checklist {
+        let mut status = c.status_label().to_owned();
+        let mut evidence = DASH.to_owned();
+        let mut note = DASH.to_owned();
+        match &c.answer {
+            None => status = "**MISSING**".to_owned(),
+            Some(a) => {
+                if !a.evidence.is_empty() {
+                    evidence = ids(&a.evidence);
+                }
+                if let Some(n) = &a.note {
+                    note = n.clone();
+                }
+                if let (Some(r), Some(m)) = (a.reason, &a.remedy) {
+                    note = format!("{r}: {m}");
+                }
+            }
+        }
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            code_cell(&c.item.id),
+            cell(&c.item.question),
+            cell(&status),
+            cell(&evidence),
+            cell(&note)
+        );
+    }
+    out.push('\n');
+}
+
+fn evidence_index(out: &mut String, view: &RunView) {
+    out.push_str("## Evidence index\n\n");
+    let mut rows = view.ledger.evidence().peekable();
+    if rows.peek().is_none() {
+        out.push_str("No evidence recorded.\n");
+        return;
+    }
+    out.push_str("| ID | Kind | Authority | Tool | Source | Raw |\n|---|---|---|---|---|---|\n");
+    for e in rows {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} |",
+            e.evidence_id,
+            e.kind,
+            e.authority,
+            cell(&format!("{} {}", e.tool.name, e.tool.version)),
+            cell(&e.source.describe()),
+            e.raw.as_deref().map_or_else(|| DASH.to_owned(), cell)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dla_core::{
+        Ledger, Origin,
+        state::{RunState, now_utc},
+    };
+
+    #[test]
+    fn labelled_and_unclassified_findings_share_heading_shape() {
+        let view = RunView::new(
+            RunState::init("/p", None, 60, None, now_utc()).unwrap(),
+            Ledger::from_text("").unwrap(),
+            None,
+        );
+        let mk = |archetype: &str| {
+            let mut f = Finding::candidate(
+                "F1".parse().unwrap(),
+                Origin::parse("census").unwrap(),
+                vec!["E1".parse().unwrap()],
+            );
+            f.archetype = archetype.to_owned();
+            f
+        };
+        let mut a = String::new();
+        finding_section(&mut a, &view, &mk("A-REGISTRY"));
+        let mut b = String::new();
+        finding_section(&mut b, &view, &mk(UNCLASSIFIED));
+        assert!(a.starts_with("### F1: **A-REGISTRY**\n"));
+        assert!(b.starts_with("### F1: **Novel mechanism (UNCLASSIFIED)**\n"));
+        assert_eq!(a.replace("A-REGISTRY", NOVEL_LABEL), b);
+    }
+}

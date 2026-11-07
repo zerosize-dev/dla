@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EvidenceRecord",
+  "description": "One tool result.",
+  "type": "object",
+  "properties": {
+    "authority": {
+      "description": "How it was obtained.",
+      "$ref": "#/$defs/Authority"
+    },
+    "coverage": {
+      "description": "How much of the subject it covers.",
+      "$ref": "#/$defs/EvidenceCoverage",
+      "default": {
+        "status": "unknown"
+      }
+    },
+    "evidence_id": {
+      "description": "Identifier, allocated by the ledger.",
+      "$ref": "#/$defs/EvidenceId"
+    },
+    "kind": {
+      "description": "What it is.",
+      "$ref": "#/$defs/EvidenceKind"
+    },
+    "limitations": {
+      "description": "Known limits of this evidence.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "raw": {
+      "description": "Path, relative to the run directory, of the full output.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result": {
+      "description": "The bounded result (serialized size at most [`MAX_RESULT_BYTES`])."
+    },
+    "source": {
+      "description": "Where it came from.",
+      "$ref": "#/$defs/Source"
+    },
+    "tool": {
+      "description": "Which backend produced it.",
+      "$ref": "#/$defs/Tool"
+    },
+    "unknowns": {
+      "description": "Open questions.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Unknown"
+      }
+    }
+  },
+  "required": [
+    "evidence_id",
+    "source",
+    "tool",
+    "authority",
+    "kind",
+    "result"
+  ],
+  "$defs": {
+    "Authority": {
+      "description": "How strongly a piece of evidence was obtained.",
+      "oneOf": [
+        {
+          "description": "Read from source or configuration without running anything.",
+          "type": "string",
+          "const": "static"
+        },
+        {
+          "description": "Produced by a test or targeted experiment.",
+          "type": "string",
+          "const": "test"
+        },
+        {
+          "description": "Observed on a live process.",
+          "type": "string",
+          "const": "live"
+        },
+        {
+          "description": "Read from a captured dump.",
+          "type": "string",
+          "const": "dump"
+        }
+      ]
+    },
+    "CoverageStatus": {
+      "description": "How much of the subject the evidence covers.",
+      "oneOf": [
+        {
+          "description": "The whole subject was examined.",
+          "type": "string",
+          "const": "complete"
+        },
+        {
+          "description": "Part of the subject was examined.",
+          "type": "string",
+          "const": "partial"
+        },
+        {
+          "description": "It is not known how much was examined.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "EvidenceCoverage": {
+      "description": "Coverage of one evidence record.",
+      "type": "object",
+      "properties": {
+        "examined": {
+          "description": "How many units were examined.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "description": "Overall status.",
+          "$ref": "#/$defs/CoverageStatus"
+        },
+        "total": {
+          "description": "How many units exist.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "EvidenceId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?E[1-9][0-9]*$"
+    },
+    "EvidenceKind": {
+      "description": "The closed set of evidence kinds.",
+      "oneOf": [
+        {
+          "description": "Run configuration captured at init.",
+          "type": "string",
+          "const": "run-config"
+        },
+        {
+          "description": "Result of probing the environment.",
+          "type": "string",
+          "const": "probe"
+        },
+        {
+          "description": "A static detector hit.",
+          "type": "string",
+          "const": "static-hit"
+        },
+        {
+          "description": "A holder found by a census.",
+          "type": "string",
+          "const": "census-holder"
+        },
+        {
+          "description": "A workload execution record.",
+          "type": "string",
+          "const": "workload"
+        },
+        {
+          "description": "A growth measurement series.",
+          "type": "string",
+          "const": "growth-series"
+        },
+        {
+          "description": "A per-unit count series.",
+          "type": "string",
+          "const": "unit-count-series"
+        },
+        {
+          "description": "A retention path to a root.",
+          "type": "string",
+          "const": "retention-path"
+        },
+        {
+          "description": "An allocation stack.",
+          "type": "string",
+          "const": "alloc-stack"
+        },
+        {
+          "description": "A before/after histogram difference.",
+          "type": "string",
+          "const": "histogram-diff"
+        },
+        {
+          "description": "A profile of blocked stacks.",
+          "type": "string",
+          "const": "blocked-stack-profile"
+        },
+        {
+          "description": "Objects unreachable at exit.",
+          "type": "string",
+          "const": "unreachable-at-exit"
+        },
+        {
+          "description": "Objects that should be dead but are not.",
+          "type": "string",
+          "const": "should-be-dead"
+        },
+        {
+          "description": "An experiment that separates two hypotheses.",
+          "type": "string",
+          "const": "discriminator"
+        },
+        {
+          "description": "A change made to the target to test a cause.",
+          "type": "string",
+          "const": "intervention"
+        },
+        {
+          "description": "A measurement outside the heap.",
+          "type": "string",
+          "const": "non-heap"
+        },
+        {
+          "description": "Growth left unattributed.",
+          "type": "string",
+          "const": "residual"
+        }
+      ]
+    },
+    "Source": {
+      "description": "Where a piece of evidence came from.",
+      "oneOf": [
+        {
+          "description": "A file on disk.",
+          "type": "object",
+          "properties": {
+            "artifact": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "description": "Path of the artifact.",
+                  "type": "string"
+                },
+                "sha256": {
+                  "description": "SHA-256 of its contents, lowercase hex.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "artifact"
+          ]
+        },
+        {
+          "description": "A running process.",
+          "type": "object",
+          "properties": {
+            "process": {
+              "type": "object",
+              "properties": {
+                "pid": {
+                  "description": "Process ID.",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "start_time": {
+                  "description": "Process start time (platform string) to disambiguate PID reuse.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pid",
+                "start_time"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "process"
+          ]
+        },
+        {
+          "description": "A source repository.",
+          "type": "object",
+          "properties": {
+            "repo": {
+              "type": "object",
+              "properties": {
+                "commit": {
+                  "description": "Commit hash, or a project path when no commit is readable.",
+                  "type": "string"
+                },
+                "path": {
+                  "description": "Path inside the repository.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "commit"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "repo"
+          ]
+        }
+      ]
+    },
+    "Tool": {
+      "description": "The backend that produced the evidence.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Backend name.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Backend version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "Unknown": {
+      "description": "A question the evidence leaves open and how to answer it.",
+      "type": "object",
+      "properties": {
+        "question": {
+          "description": "What is not known.",
+          "type": "string"
+        },
+        "resolve_by": {
+          "description": "What would resolve it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "resolve_by"
+      ]
+    }
+  }
+}
