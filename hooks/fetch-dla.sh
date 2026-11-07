@@ -79,11 +79,15 @@ plugin_version() {
   sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n 1
 }
 
+# Hash from stdin: given a file name containing a backslash (a native Windows
+# path such as C:\Users\...), GNU sha256sum escapes the name and prefixes the
+# digest with "\", which would make every comparison fail.
 sha256_of() {
+  [ -r "$1" ] || return 1
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    sha256sum <"$1" 2>/dev/null | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    shasum -a 256 <"$1" 2>/dev/null | awk '{print $1}'
   else
     return 1
   fi

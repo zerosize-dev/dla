@@ -273,7 +273,8 @@ if [ "$ON_WINDOWS" = 1 ]; then
     NATIVE=$(cygpath "$form" "$WORK/native$form")
     OUT=$(CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$NATIVE" DLA_RELEASE_BASE_URL="$REL" bash "$FETCH" 2>"$WORK/stderr"); RC=$?
     [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$WORK/native$form/bin/dla-$VERSION-$TARGET$EXT" ] && ok "native data dir '$NATIVE' installs" || bad "native data dir '$NATIVE': rc=$RC out=$OUT err=$(cat "$WORK/stderr")"
-    OUT=$(CLAUDE_PLUGIN_DATA="$NATIVE" "$SHIM" --version 2>&1); RC=$?
+    # $PSHIM lives in a plugin root without target/, so only the installed binary can answer.
+    OUT=$(CLAUDE_PLUGIN_DATA="$NATIVE" "$PSHIM" --version 2>&1); RC=$?
     [ "$RC" -eq 0 ] && ok "shim runs the binary from native data dir '$NATIVE'" || bad "shim with native data dir '$NATIVE': rc=$RC out=$OUT"
   done
 else
@@ -282,6 +283,10 @@ else
   mkdir -p "$WORK/cwd7"
   OUT=$(cd "$WORK/cwd7" && CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="C:/data" DLA_RELEASE_BASE_URL="$REL" bash "$FETCH" 2>"$WORK/stderr"); RC=$?
   [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$WORK/cwd7/C:/data/bin/dla-$VERSION-$TARGET$EXT" ] && ok "data dir 'C:/data' installs (tar gets a relative archive name)" || bad "data dir 'C:/data': rc=$RC out=$OUT err=$(cat "$WORK/stderr")"
+  # A backslash in the path makes GNU sha256sum escape the name and prefix the digest with "\".
+  BS_DATA="$WORK/back\\slash"
+  OUT=$(CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$BS_DATA" DLA_RELEASE_BASE_URL="$REL" bash "$FETCH" 2>"$WORK/stderr"); RC=$?
+  [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$BS_DATA/bin/dla-$VERSION-$TARGET$EXT" ] && ok "data dir with a backslash installs (checksum not escaped)" || bad "data dir with a backslash: rc=$RC out=$OUT err=$(cat "$WORK/stderr")"
 fi
 
 # 16. the repository's own shim and hook files are executable and well formed
