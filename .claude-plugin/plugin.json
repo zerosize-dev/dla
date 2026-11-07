@@ -1,0 +1,32 @@
+{
+  "name": "dla",
+  "displayName": "DLA",
+  "version": "0.1.0",
+  "description": "Detect Leak Anywhere: evidence-gated memory leak diagnosis for JVM, Go, Rust, Node/TS, Python and native code. Diagnosis only; it never edits project source.",
+  "author": { "name": "Mykyta Hriaznov" },
+  "homepage": "https://github.com/zerosize-dev/dla",
+  "repository": "https://github.com/zerosize-dev/dla",
+  "keywords": ["memory-leak", "heap", "diagnosis", "profiling", "oom"],
+  "userConfig": {
+    "redaction": {
+      "type": "string",
+      "title": "Value redaction",
+      "description": "How values read from the target are shown to the model: 'shapes' (length, character pattern and a salted hash only, the default) or 'raw' (verbatim values, only if you accept that they enter the conversation).",
+      "default": "shapes"
+    },
+    "privilege_ceiling": {
+      "type": "number",
+      "title": "Privilege ceiling",
+      "description": "Highest privilege tier DLA may ask you to approve, from 1 (read-only) to 4 (may rebuild and run the target in a scratch copy). The default is 4; you are still asked before each tier is used.",
+      "default": 4,
+      "min": 1,
+      "max": 4
+    },
+    "time_budget": {
+      "type": "string",
+      "title": "Default time budget",
+      "description": "Wall-clock budget for one diagnosis run, such as 90s, 45m or 2h. The default is 60m.",
+      "default": "60m"
+    }
+  }
+}

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# dla shim: finds the dla binary and runs it with all arguments.
+#
+# Resolution order:
+#   1. $DLA_BIN
+#   2. the installed binary  <data dir>/bin/dla-<version>-<target>[.exe]
+#        - <data dir> is $CLAUDE_PLUGIN_DATA when set (hooks), otherwise
+#          <plugins root>/data/dla-*  (Claude Code does not export
+#          CLAUDE_PLUGIN_* into the Bash tool, so the shim finds the directory itself)
+#   3. development builds  <plugin root>/target/release/dla[.exe], then target/debug/dla[.exe]
+#   4. otherwise print where to place the binary by hand and exit 127
+#
+# Environment: DLA_BIN, DLA_TARGET (override of target detection),
+# CLAUDE_PLUGIN_DATA, CLAUDE_CONFIG_DIR, CLAUDE_CODE_PLUGIN_CACHE_DIR.
+
+# Resolve symlinks without readlink -f (not available on macOS bash 3.2 systems).
+self=$0
+while [ -h "$self" ]; do
+  link=$(readlink "$self") || break
+  case "$link" in
+    /*) self=$link ;;
+    *) self="$(dirname "$self")/$link" ;;
+  esac
+done
+root=$(cd "$(dirname "$self")/.." 2>/dev/null && pwd)
+
+detect_target() {
+  if [ -n "${DLA_TARGET:-}" ]; then
+    printf '%s' "$DLA_TARGET"
+    return 0
+  fi
+  os=$(uname -s 2>/dev/null)
+  arch=$(uname -m 2>/dev/null)
+  case "$os" in
+    Linux)
+      case "$arch" in
+        x86_64|amd64) printf 'x86_64-unknown-linux-musl' ;;
+        aarch64|arm64) printf 'aarch64-unknown-linux-musl' ;;
+        *) return 1 ;;
+      esac ;;
+    Darwin)
+      case "$arch" in
+        arm64|aarch64) printf 'aarch64-apple-darwin' ;;
+        x86_64|amd64) printf 'x86_64-apple-darwin' ;;
+        *) return 1 ;;
+      esac ;;
+    MINGW*|MSYS*|CYGWIN*)
+      case "$arch" in
+        x86_64|amd64) printf 'x86_64-pc-windows-msvc' ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ -n "${DLA_BIN:-}" ]; then
+  if [ -f "$DLA_BIN" ] && [ -x "$DLA_BIN" ]; then
+    exec "$DLA_BIN" "$@"
+  fi
+  echo "dla: DLA_BIN is set to '$DLA_BIN' but that is not an executable file" >&2
+  exit 127
+fi
+
+version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/.claude-plugin/plugin.json" 2>/dev/null | head -n 1)
+target=$(detect_target)
+ext=""
+case "$target" in *windows*) ext=".exe" ;; esac
+
+installed_hint=""
+if [ -n "$version" ] && [ -n "$target" ]; then
+  name="dla-$version-$target$ext"
+  if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+    candidate="$CLAUDE_PLUGIN_DATA/bin/$name"
+    installed_hint=$candidate
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+      exec "$candidate" "$@"
+    fi
+  else
+    plugins_root=${CLAUDE_CODE_PLUGIN_CACHE_DIR:-"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins"}
+    for candidate in "$plugins_root"/data/dla-*/bin/"$name"; do
+      if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+        exec "$candidate" "$@"
+      fi
+    done
+    installed_hint="$plugins_root/data/<plugin id>/bin/$name"
+  fi
+fi
+
+for candidate in "$root/target/release/dla$ext" "$root/target/debug/dla$ext"; do
+  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+{
+  echo "dla: no dla binary found."
+  if [ -n "$installed_hint" ]; then
+    echo "  Expected the downloaded binary at: $installed_hint"
+    echo "  The SessionStart hook downloads it when a Claude Code session starts; restart the session,"
+    echo "  or download dla-$target.tar.gz from https://github.com/zerosize-dev/dla/releases/tag/v$version,"
+    echo "  extract dla$ext and place it at that path (then chmod +x it)."
+  else
+    echo "  Could not work out this platform or the plugin version."
+  fi
+  echo "  Or set DLA_BIN to the path of a dla executable, or build one with 'cargo build --release'."
+} >&2
+exit 127

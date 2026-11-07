@@ -1,0 +1,13 @@
+{
+  "name": "zerosize",
+  "owner": { "name": "Mykyta Hriaznov" },
+  "description": "Plugins from zerosize-dev.",
+  "plugins": [
+    {
+      "name": "dla",
+      "source": "./",
+      "description": "Detect Leak Anywhere: evidence-gated memory leak diagnosis for JVM, Go, Rust, Node/TS, Python and native code.",
+      "version": "0.1.0"
+    }
+  ]
+}
