@@ -5,70 +5,96 @@ description: Diagnose memory leaks in any runtime. Use when someone reports grow
 
 # Detect Leak Anywhere (DLA)
 
-DLA diagnoses memory leaks. It measures, attributes and reports; it never edits project source. A run is a directory `.dla/<run-id>/` that only the `dla` binary writes. What counts as a finding is decided by the ledger rules in `dla`, not by how convincing a story sounds.
+DLA diagnoses memory leaks. It measures, attributes and reports, and it never edits project source. A run is a directory `.dla/<run-id>/` that only the `dla` binary writes. Whether something counts as a finding is settled by the ledger rules inside `dla`, never by how persuasive an explanation sounds.
 
-Run this skill at high effort (`/effort high` or above): the work is verification, and shortcuts show up as INCOMPLETE reports.
+Work at high effort (`/effort high` or above). The job is verification, and cutting corners shows up as an INCOMPLETE report.
 
 ## Invoking the binary
 
-The plugin's `bin/` directory is on the Bash tool's PATH while the plugin is enabled (Claude Code 2.1.91 or later), so call `dla` directly. Check with `command -v dla`. If that finds nothing, call it by its absolute path: `${CLAUDE_PLUGIN_ROOT}/bin/dla`. The binary is downloaded by a SessionStart hook; if it reports that no binary was found, restart the session or follow the path it prints. `dla --help` lists the commands the installed release has. If a command named below is missing, record that stage item as `unresolved` with reason `tool_missing` and a remedy naming the command; do not improvise a substitute.
+While the plugin is enabled, its `bin/` directory is on the Bash tool's PATH (Claude Code 2.1.91 or later), so call `dla` directly and confirm with `command -v dla`. The Bash tool receives no plugin environment variables, so this skill passes the values it needs as arguments. If `dla` is not found, use the absolute path `${CLAUDE_PLUGIN_ROOT}/bin/dla`. A SessionStart hook downloads the binary; when `dla` says none was found, restart the session or follow the path it prints. `dla --help` lists the commands the installed release has. When a command named below does not exist yet, record that stage item as `unresolved` with reason `tool_missing` and a remedy that names the command. Do not invent a stand-in.
 
-Every `dla` command prints one small JSON object and a pointer to the full record. A refusal names what is missing and the command that fixes it: run that command.
+Each `dla` command prints one small JSON object plus a pointer to the full record. A refusal names what is missing and the command that fixes it, so run that command.
+
+## Command surface
+
+```
+dla run init | run status | run abort
+dla consent --tiers <list of 1-4> [--raw-values]
+dla probe
+dla sweep --lang <l>
+dla census --lang <l>
+dla workload discover
+dla harness gen --lang <l> | harness run
+dla sample
+dla trend <series>
+dla gap [--residual]
+dla alloc-test
+dla summarize <heap-graph|type-histogram-diff|alloc-stack-diff|non-heap> [--backend auto|<name>] <artifact>
+dla install <backend>
+dla ledger add|test|confirm|strong|refute|label|explain|resolve|verify
+dla ledger merge
+dla bundle <finding>
+dla gate check --stage <s> | --final
+dla report
+```
 
 ## Non-negotiables (MUST)
 
-1. Run the stages in order. `dla gate check --stage <stage>` must pass before the next one.
-2. Change hypothesis state only with `dla ledger ...`. Files under the run directory are written by `dla` alone.
-3. An archetype match opens a hypothesis. Only `dla ledger confirm` can turn it into a finding.
-4. For every growth series, record at least two hypotheses, one of them a non-leak (`N-*`), each with the result that would refute it.
-5. Produce the report only with `dla report`, and show its output unchanged.
+1. Go through the stages in order. `dla gate check --stage <stage>` has to pass before the next stage starts.
+2. Hypothesis state moves only through `dla ledger ...`. Nothing under the run directory is edited by hand.
+3. Matching an archetype merely opens a hypothesis. Only `dla ledger confirm` produces a finding, and it requires the finding to be `under_test` first (`dla ledger test F3`).
+4. Each growth series gets at least two hypotheses, and one of them is a non-leak explanation (`N-*`). Every hypothesis states the outcome that would refute it.
+5. The report comes from `dla report` alone. Show its output exactly as printed.
 
 ## Stage checklist
 
-Copy this into your notes and tick it off as you go.
+Copy this into your notes and tick items off.
 
 ```
 - [ ] 1. Intake checklist
 - [ ] 2. Probe
-- [ ] 3. Static sweep
+- [ ] 3. Static sweep and holder census
 - [ ] 4. Classify growth
 - [ ] 5. Confirm
 - [ ] 6. Attribute and explain
 - [ ] 7. Rule out non-leaks
-- [ ] 8. Gate check
+- [ ] 8. Final gate
 - [ ] 9. Report and revisit
 ```
 
-1. **Intake checklist.** Ask the user what you cannot read from the repository, then record answers.
-   `dla run init --budget 60m` creates the run. Answer each item with evidence:
-   `dla ledger resolve intake.scope --status answered --evidence E1 --note "<text>"`.
-   Items: `intake.target`, `intake.scope`, `intake.symptom`, `intake.runtimes`, `intake.build`, `intake.workload`, `intake.consent`, `intake.budget`. Use `--status unresolved --reason <r> --remedy "<text>"` when the user cannot answer.
-2. **Probe.** `dla probe` records versions, tools and what each runtime can measure here. Missing tools become coverage gaps, not silent skips.
-3. **Static sweep.** `dla sweep` runs every available detector and counts what it found. Then do a holder census yourself, without any list of known patterns: enumerate every process-lifetime holder (statics, singletons, module globals, registries, spawned units, acquired handles) with its writers and removers. Record each candidate:
+Every stage ends with `dla gate check --stage <stage>`, using the stage name that `dla` prints.
+
+1. **Intake checklist.** Ask the user for what the repository cannot tell you.
+   Create the run with `dla run init --budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` (Claude Code fills in both values before you read this).
+   Ask the consent question once, as a single question for the whole run covering privilege tiers 1 to 4, offering only tiers up to the configured privilege ceiling. Record the answer with `dla consent --tiers <list>`, adding `--raw-values` only if the user explicitly agrees to see raw values. Never ask a second consent question during the run.
+   Answer each checklist item with evidence: `dla ledger resolve intake.scope --status answered --evidence E1 --note "<text>"`.
+   Items: `intake.target`, `intake.scope`, `intake.symptom`, `intake.runtimes`, `intake.build`, `intake.workload`, `intake.consent`, `intake.budget`. If the user cannot answer one, use `--status unresolved --reason <r> --remedy "<text>"`.
+2. **Probe.** `dla probe` records versions, tools and what each runtime can measure on this machine. A missing tool becomes a coverage gap, never a silent skip.
+3. **Static sweep and holder census.** `dla sweep --lang <l>` runs the detectors that are available and counts their hits.
+   `dla census --lang <l>` lists the holders that live as long as the process (statics, singletons, module globals, registries, spawned units, acquired handles) as candidates. Those are only the starting set: for each candidate you then add the code that writes to it and the code that removes from it, read directly from the source. Record every candidate:
    `dla ledger add --origin <detector:backend/rule|census> --evidence E4 --site file:line`.
-4. **Classify growth.** Measure before explaining. `dla sample`, then `dla trend` (region and shape per series) and `dla gap --residual` (growth nothing explains yet). Then `dla gate check --stage classify`. Pattern references for each runtime are read after this gate passes, and not before.
-5. **Confirm.** For each growth series, add a non-leak sibling:
+4. **Classify growth.** Measure first and explain afterwards. Find a workload with `dla workload discover`, build one with `dla harness gen --lang <l>` and run it with `dla harness run`. Then `dla sample`, `dla trend <series>` (region and shape for each series) and `dla gap --residual` (growth that nothing accounts for yet). Runtime pattern references are read only once this stage's gate has passed.
+5. **Confirm.** For each growth series add a non-leak sibling:
    `dla ledger add --sibling-of F3 --origin hypothesis --hypothesis N-WARM --refute-if "<result that would refute it>" --evidence E7`.
-   Run the harness (`dla workload`), then `dla ledger confirm F3 --evidence E9,E10`. Confirmed needs a growth series that passes the slope gate, `file:line`, a holder, and one refuted non-leak sibling.
-6. **Attribute and explain.** Collect a retention path or allocation stack, then `dla ledger label F3 --archetype <ID>` (the label is earned by evidence kinds; otherwise it stays UNCLASSIFIED) and `dla ledger explain F3 --text "<lifecycle story>" --tag inferred`. Name the missing pairing (what should have released, removed or stopped), not a weak-reference workaround. For `strong`, add an independent second evidence class (retention or intervention in a scratch copy), then `dla ledger strong F3`. For each confirmed finding run `dla bundle F3` and give the directory to the `dla:verifier` agent; it sees no label.
-7. **Rule out non-leaks.** Test the siblings: allocator retention (`N-ALLOC`), deferred collection (`N-HEADROOM`), warm-up caches (`N-WARM`), pool high-water marks (`N-HWM`), workload scaling (`N-SCALE`), intended retention (`N-INTENT`), and the instrument itself (`N-OBSERVER`). Record each result: `dla ledger refute F3.n1 --evidence E12` (needs a discriminator evidence record).
-8. **Gate check.** `dla gate check --final`. Work every open item it lists. If something cannot be done, record it:
-   `dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do next>"`.
+   Move the candidate into testing with `dla ledger test F3`, run the harness, then `dla ledger confirm F3 --evidence E9,E10`. Confirmation needs a growth series that passes the slope gate, a `file:line`, a holder, and one non-leak sibling that has been refuted.
+6. **Attribute and explain.** Gather a retention path or an allocation stack with `dla summarize <heap-graph|type-histogram-diff|alloc-stack-diff|non-heap> [--backend auto|<name>] <artifact>`; if the backend is missing, `dla install <backend>` fetches it. Then `dla ledger label F3 --archetype <ID>` (the label is earned from the kinds of evidence present; otherwise the finding stays UNCLASSIFIED) and `dla ledger explain F3 --text "<lifecycle story>" --tag inferred`. Name the missing pairing, meaning what should have released, removed or stopped, and not a weak-reference workaround. For `strong`, add a second, independent class of evidence (retention, or an intervention in a scratch copy), then `dla ledger strong F3`. For each confirmed finding run `dla bundle F3` and hand the directory to the `dla:verifier` agent, which never sees the label.
+7. **Rule out non-leaks.** Test the sibling explanations: allocator retention (`N-ALLOC`, checked with `dla alloc-test`, which trims or purges and looks for a plateau), deferred collection (`N-HEADROOM`), warm-up caches (`N-WARM`), pool high-water marks (`N-HWM`), workload scaling (`N-SCALE`), intended retention (`N-INTENT`) and the instrument itself (`N-OBSERVER`). Record each outcome with `dla ledger refute F3.n1 --evidence E12`, which needs an evidence record that discriminates between the two explanations.
+8. **Final gate.** `dla gate check --final`. Work through every open item it lists. When something cannot be done, record that: `dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do next>"`.
    Reasons: `not_exercised`, `no_harness`, `env_unavailable`, `build_fails`, `privilege_declined`, `tool_missing`, `time_budget`.
-9. **Report and revisit.** `dla report` renders `report.md` from the ledger and prints it; show it unchanged. Then revisit every `unresolved` and `suspected_static_only` finding while budget remains: `dla run status` lists them.
+9. **Report and revisit.** `dla report` writes `report.md` from the ledger and prints it; show it exactly as printed. While budget remains, return to the findings that are `unresolved` or `suspected_static_only`. `dla run status` lists them under `revisit` (at most 10 entries, with `revisit_total` giving the full count); each entry carries `id`, `state`, `reason` and `remedy`. If you decide to stop early, `dla run abort` closes the run.
 
 ## Splitting by runtime
 
-For a polyglot target, start one `dla:worker` per runtime. A worker works one runtime through stages 2 to 8 and writes only with `dla ledger --worker <name> ...`; you merge and report.
+A polyglot target gets one `dla:worker` per runtime. Each worker takes one runtime through stages 2 to 8 and writes only with `dla ledger --worker <name> ...`. You combine the slices with `dla ledger merge` and then produce the report.
 
 ## When nothing fits
 
-UNCLASSIFIED is a correct answer. State the holder and the mechanism in your own words. A forced archetype label counts as an error in DLA's evaluation; an evidenced UNCLASSIFIED counts as a success. Report it as a novel mechanism, with the same weight as any labelled finding.
+UNCLASSIFIED is a legitimate outcome. Describe the holder and the mechanism in plain words of your own. Forcing a pattern label onto a leak it does not fit is counted as a mistake in DLA's evaluation, whereas an UNCLASSIFIED result that is backed by evidence is counted as a success. Report such a leak as a novel mechanism, giving it the same prominence as any labelled finding.
 
 ## Before you stop
 
-Run `dla gate check --final`. Work every open item it lists, or record it as `unresolved` with a reason and a remedy. The gate output decides when the run is done. If `dla report` says INCOMPLETE, say so in your answer and list the open items; do not describe an INCOMPLETE run as finished.
+Run `dla gate check --final` and deal with each open item it lists, either by finishing it or by marking it `unresolved`, giving the reason and the next step. The gate result, not your own judgement, says when the run is done. If `dla report` shows INCOMPLETE, say so in your answer and list what is still open. Never present an INCOMPLETE run as finished.
 
 ## What DLA will not do
 
-Edit project source, write into the run directory by hand, or call a leak confirmed because a pattern looks familiar. Fix suggestions are limited to naming the repair class (for example: deregister the listener on dispose).
+DLA does not edit project source, does not write into the run directory by hand, and does not call a leak confirmed because a pattern looks familiar. When it suggests a repair it names only the class of repair, for example deregistering the listener on dispose.

@@ -13,9 +13,50 @@ set -u
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 FETCH="$REPO/hooks/fetch-dla.sh"
 SHIM="$REPO/bin/dla"
-TARGET=${DLA_TARGET:-x86_64-unknown-linux-musl}
+# Same mapping as detect_target in bin/dla and hooks/fetch-dla.sh.
+host_target() {
+  os=$(uname -s 2>/dev/null)
+  arch=$(uname -m 2>/dev/null)
+  case "$os" in
+    Linux)
+      case "$arch" in
+        x86_64|amd64) printf 'x86_64-unknown-linux-musl' ;;
+        aarch64|arm64) printf 'aarch64-unknown-linux-musl' ;;
+        *) return 1 ;;
+      esac ;;
+    Darwin)
+      case "$arch" in
+        arm64|aarch64) printf 'aarch64-apple-darwin' ;;
+        x86_64|amd64) printf 'x86_64-apple-darwin' ;;
+        *) return 1 ;;
+      esac ;;
+    MINGW*|MSYS*|CYGWIN*)
+      case "$arch" in
+        x86_64|amd64) printf 'x86_64-pc-windows-msvc' ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}
+
+ON_WINDOWS=0
+HOST_EXT=""
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) ON_WINDOWS=1; HOST_EXT=".exe" ;; esac
+HOST_TARGET=$(host_target) || { echo "unsupported host $(uname -s)/$(uname -m)"; exit 1; }
+
+# DLA_TARGET is honoured when the caller sets it (to exercise the override for
+# another target); otherwise it stays unset so the uname branch runs on this OS.
+TARGET_FROM_ENV=0
+if [ -n "${DLA_TARGET:-}" ]; then
+  TARGET=$DLA_TARGET
+  TARGET_FROM_ENV=1
+else
+  TARGET=$HOST_TARGET
+  unset DLA_TARGET
+fi
 EXT=""
 case "$TARGET" in *windows*) EXT=".exe" ;; esac
+if [ "$TARGET_FROM_ENV" = 1 ]; then echo "target: $TARGET (DLA_TARGET set)"; else echo "target: $TARGET (DLA_TARGET unset)"; fi
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/dla-shim-test.XXXXXX") || exit 1
 trap 'rm -rf "$WORK"' EXIT
@@ -40,9 +81,9 @@ VERSION=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*
 REL="$WORK/release"
 PAYLOAD="$WORK/payload"
 mkdir -p "$REL" "$PAYLOAD"
-if [ -x "$REPO/target/debug/dla" ] && [ -z "$EXT" ]; then
-  cp "$REPO/target/debug/dla" "$PAYLOAD/dla$EXT"
-  echo "payload: real binary target/debug/dla"
+if [ -f "$REPO/target/debug/dla$HOST_EXT" ] && [ "$EXT" = "$HOST_EXT" ] && [ "$TARGET" = "$HOST_TARGET" ]; then
+  cp "$REPO/target/debug/dla$HOST_EXT" "$PAYLOAD/dla$EXT"
+  echo "payload: real binary target/debug/dla$HOST_EXT"
 else
   cat > "$PAYLOAD/dla$EXT" <<EOF
 #!/bin/sh
@@ -62,7 +103,6 @@ cp "$REL/$ASSET.sha256" "$REL/SHA256SUMS"
 HOME_DIR="$WORK/home"
 mkdir -p "$HOME_DIR"
 export HOME="$HOME_DIR"
-export DLA_TARGET="$TARGET"
 unset DLA_BIN CLAUDE_CONFIG_DIR CLAUDE_CODE_PLUGIN_CACHE_DIR CLAUDE_PLUGIN_DATA DLA_RELEASE_BASE_URL
 
 run_fetch() { # run_fetch <data dir> <base url>; captures stdout in $OUT, status in $RC
@@ -196,11 +236,44 @@ if grep -q 'DLA_FAKE_EXIT' "$DEST1" 2>/dev/null; then
 fi
 
 # 15. the shim works through a symlink
-LN="$WORK/link-dla"
-ln -s "$PSHIM" "$LN" 2>/dev/null && {
-  OUT=$(CLAUDE_PLUGIN_DATA="$DATA1" "$LN" --version 2>&1); RC=$?
-  [ "$RC" -eq 0 ] && [ "$OUT" = "$EXPECT" ] && ok "shim resolves its plugin root through a symlink" || bad "symlinked shim: rc=$RC out=$OUT"
-}
+if [ "$ON_WINDOWS" = 1 ]; then
+  echo "skip shim through a symlink (Git Bash 'ln -s' copies the file, so there is no link to resolve)"
+else
+  LN="$WORK/link-dla"
+  if ln -s "$PSHIM" "$LN" 2>/dev/null; then
+    OUT=$(CLAUDE_PLUGIN_DATA="$DATA1" "$LN" --version 2>&1); RC=$?
+    [ "$RC" -eq 0 ] && [ "$OUT" = "$EXPECT" ] && ok "shim resolves its plugin root through a symlink" || bad "symlinked shim: rc=$RC out=$OUT"
+  else
+    bad "could not create a symlink"
+  fi
+fi
+
+# 15b. DLA_TARGET unset: the uname branch picks the target on this OS
+HREL="$REL"
+if [ "$TARGET" != "$HOST_TARGET" ]; then
+  HREL="$WORK/host-release"
+  mkdir -p "$HREL" "$WORK/host-payload"
+  printf '#!/bin/sh\necho host\n' > "$WORK/host-payload/dla$HOST_EXT"; chmod +x "$WORK/host-payload/dla$HOST_EXT"
+  tar -czf "$HREL/dla-$HOST_TARGET.tar.gz" -C "$WORK/host-payload" "dla$HOST_EXT"
+  printf '%s  %s\n' "$(sha256_of "$HREL/dla-$HOST_TARGET.tar.gz")" "dla-$HOST_TARGET.tar.gz" > "$HREL/dla-$HOST_TARGET.tar.gz.sha256"
+fi
+DATA6="$WORK/data6"
+OUT=$(env -u DLA_TARGET CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="$DATA6" DLA_RELEASE_BASE_URL="$HREL" bash "$FETCH" 2>"$WORK/stderr"); RC=$?
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$DATA6/bin/dla-$VERSION-$HOST_TARGET$HOST_EXT" ] && ok "DLA_TARGET unset: hook installs the uname-detected target ($HOST_TARGET)" || bad "DLA_TARGET unset: rc=$RC out=$OUT"
+OUT=$(env -u DLA_TARGET CLAUDE_PLUGIN_DATA="$DATA6" "$PSHIM" --version 2>&1); RC=$?
+[ "$RC" -eq 0 ] && ok "DLA_TARGET unset: shim finds the uname-detected binary" || bad "DLA_TARGET unset: shim rc=$RC out=$OUT"
+rm -rf "$WORK/host-release" "$WORK/host-payload"
+
+# 15c. a data directory with a colon in its name (GNU tar reads "C:/x" as host:file)
+if [ "$ON_WINDOWS" = 1 ]; then
+  echo "skip colon-in-path data dir (Windows cannot create a directory named like C:; absolute C:/ paths are exercised by every other case)"
+else
+  # GNU tar only reads "name:file" as host:file when no "/" precedes the colon,
+  # so the data dir must be a relative path that starts with "C:", as in Git Bash.
+  mkdir -p "$WORK/cwd7"
+  OUT=$(cd "$WORK/cwd7" && CLAUDE_PLUGIN_ROOT="$REPO" CLAUDE_PLUGIN_DATA="C:/data" DLA_RELEASE_BASE_URL="$REL" bash "$FETCH" 2>"$WORK/stderr"); RC=$?
+  [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ -f "$WORK/cwd7/C:/data/bin/dla-$VERSION-$TARGET$EXT" ] && ok "data dir 'C:/data' installs (tar gets a relative archive name)" || bad "data dir 'C:/data': rc=$RC out=$OUT err=$(cat "$WORK/stderr")"
+fi
 
 # 16. the repository's own shim and hook files are executable and well formed
 check "bin/dla is executable" test -x "$SHIM"

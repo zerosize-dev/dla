@@ -4,11 +4,13 @@ DLA reports what it measured and what it could not. This page lists the limits y
 before trusting a report, first the ones that apply to every run, then the blind spots of each
 runtime.
 
-**Keeping this page honest.** Each runtime reference shipped with the skill declares its own blind
-spots, and DLA copies them into the coverage manifest of every run so the report can show them.
-This page must list every one of them. When a runtime reference gains or changes a blind spot, this
-page changes in the same commit. A blind spot that appears in a reference but not here is a bug in
-the documentation.
+**Keeping this page honest.** Each runtime reference will declare its own blind spots, and DLA
+will copy them into the coverage manifest of every run so the report can show them. This page is
+meant to list every one of them. The runtime references have not shipped yet, so for now the page
+is kept in sync by convention only: when a reference gains or changes a blind spot, this page
+changes in the same commit. A CI check that compares the two is planned for when the references
+land. Until then, a blind spot that appears in a reference but not here is a bug in the
+documentation.
 
 ## Limits that apply to every run
 
@@ -31,9 +33,11 @@ the documentation.
   command run through the Bash tool, a different tool, or a session started without the plugin is
   not checked by them. The binary's gates protect the ledger and the report; they cannot stop a
   session from ignoring DLA altogether.
-- **Hooks fail open.** A Stop hook that crashes, times out, cannot find the binary or prints
-  something unparsable lets the turn end normally. A missing or failed check never blocks the
-  session, so an absent check is not evidence that the conclusion was verified.
+- **Hooks fail open.** This applies once the Stop hooks ship (milestone M6); today the plugin has
+  only a SessionStart hook that downloads the binary. A Stop hook that crashes, times out, cannot
+  find the binary or prints something unparsable lets the turn end normally. A missing or failed
+  check never blocks the session, so an absent check is not evidence that the conclusion was
+  verified.
 - **Measurement perturbs memory.** Heap snapshots, profilers, sanitizers and forced collections
   change what they measure: they allocate, slow the target down or alter timing. Growth that
   appears only while an instrument is on is reported as a possible artefact of the measurement

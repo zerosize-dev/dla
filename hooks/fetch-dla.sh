@@ -165,7 +165,11 @@ main() {
   fi
 
   mkdir "$TMP_DIR/x" 2>/dev/null || fail "cannot create a temporary directory in $BIN_DIR"
-  tar -xzf "$TMP_DIR/$asset" -C "$TMP_DIR/x" 2>/dev/null || fail "cannot extract $asset"
+  # GNU tar reads "name:file" as host:file, so an absolute archive path such as
+  # C:/... (Git Bash) or any path with a colon in it must not be passed. Extract
+  # by a relative name from inside the temp dir; tar's own messages go to stderr
+  # (stdout of this hook is reserved for the manual-install message).
+  (cd "$TMP_DIR" && tar -xzf "./$asset" -C x >&2) || fail "cannot extract $asset (see the tar message above)"
   if [ ! -f "$TMP_DIR/x/dla$EXT" ]; then
     fail "$asset does not contain dla$EXT at its root"
   fi

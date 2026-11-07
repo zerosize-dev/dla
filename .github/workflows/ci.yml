@@ -22,7 +22,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -36,7 +36,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -50,7 +50,7 @@ jobs:
     name: schemas are up to date
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo run -p dla-cli -- schema --check
@@ -59,8 +59,8 @@ jobs:
     name: plugin validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
       - name: Install Claude Code CLI
@@ -68,6 +68,11 @@ jobs:
       - run: claude --version
       - name: Validate marketplace, plugin manifest, skills, agents and hooks
         run: claude plugin validate . --strict
+      - name: The skill is exposed by the plugin (no model call)
+        run: |
+          details=$(claude --plugin-dir . plugin details dla)
+          printf '%s\n' "$details"
+          printf '%s\n' "$details" | grep -q 'detect-leak-anywhere' || { echo "::error::detect-leak-anywhere is not listed by 'claude plugin details dla'"; exit 1; }
       - name: Entry points keep their executable bit
         run: |
           for f in bin/dla hooks/fetch-dla.sh tests/shim/run.sh; do
@@ -86,7 +91,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the binary

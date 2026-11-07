@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Detect Leak Anywhere: evidence-gated memory leak diagnosis for JVM, Go, Rust, Node/TS, Python and native code. Diagnosis only; it never edits project source.",
   "author": { "name": "Mykyta Hriaznov" },
+  "license": "MIT OR Apache-2.0",
   "homepage": "https://github.com/zerosize-dev/dla",
   "repository": "https://github.com/zerosize-dev/dla",
   "keywords": ["memory-leak", "heap", "diagnosis", "profiling", "oom"],
@@ -11,13 +12,13 @@
     "redaction": {
       "type": "string",
       "title": "Value redaction",
-      "description": "How values read from the target are shown to the model: 'shapes' (length, character pattern and a salted hash only, the default) or 'raw' (verbatim values, only if you accept that they enter the conversation).",
+      "description": "How values read from the target are shown to the model: 'shapes' (the default) shows value shapes only, such as length, character pattern and a salted hash. 'raw' takes effect only together with a separate per-run raw-value consent that DLA asks for; without that consent summaries still show shapes.",
       "default": "shapes"
     },
     "privilege_ceiling": {
       "type": "number",
       "title": "Privilege ceiling",
-      "description": "Highest privilege tier DLA may ask you to approve, from 1 (read-only) to 4 (may rebuild and run the target in a scratch copy). The default is 4; you are still asked before each tier is used.",
+      "description": "Highest privilege tier (1 to 4) that DLA may offer. DLA asks one consent question per run covering tiers 1 to 4, and this ceiling caps which tiers that question can include. The tiers are defined in references/safety-and-effects.md. The default is 4.",
       "default": 4,
       "min": 1,
       "max": 4

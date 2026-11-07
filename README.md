@@ -50,8 +50,14 @@ the skill trigger.
 
 The plugin has three optional settings, asked for at install time or set later with
 `/plugin configure`: value redaction (`shapes` by default), the highest privilege tier DLA may
-request, and the default time budget for a run (60 minutes). Claude Code does not pass unset
-defaults to scripts, so the `dla` binary applies the same defaults itself.
+offer, and the default time budget for a run (60 minutes). Claude Code does not export these to the
+Bash tool, so the skill passes them to `dla` as arguments (for example `--budget`). The binary has
+a default only for the time budget: 60 minutes, overridable with `--budget` or the
+`DLA_DEFAULT_BUDGET` environment variable. The other two settings reach `dla` only through the
+skill.
+
+On Windows, install Git for Windows: the plugin's hooks run in Git Bash, and so does the `bin/dla`
+shim.
 
 ### Local development
 
@@ -122,7 +128,7 @@ cannot find it.
 
 Each diagnosis is a run. `dla run init` creates `.dla/<run-id>/` in the project, containing:
 
-- `state.json`: stage, status, budget, consent, tracked processes and the report hash;
+- `state.json`: schema version, stage, status, budget, tracked processes and, once a report exists, its hash;
 - `ledger.jsonl`: the append-only evidence ledger, one JSON record per line;
 - `report.md`: written by `dla report`, which is the only report writer.
 
@@ -164,3 +170,8 @@ schemas/          generated JSON Schemas
 docs/             blind spots and verification backlog
 tests/shim/       tests for the shim and downloader
 ```
+
+## License
+
+Dual-licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option
+(`MIT OR Apache-2.0`).
