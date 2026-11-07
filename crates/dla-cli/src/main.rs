@@ -5,6 +5,7 @@
 //! (I/O, parse, usage), 2 refused by a rule, 3 schema version mismatch.
 
 mod budget;
+mod consent_cmd;
 mod ctx;
 mod fail;
 mod git;
@@ -59,6 +60,8 @@ enum Command {
     Ledger(ledger_cmd::LedgerCmd),
     /// Render the report, write report.md and store its hash in state.json.
     Report,
+    /// Record the run's one consent: privilege tiers and whether raw values are allowed.
+    Consent(consent_cmd::ConsentArgs),
     /// Write or check the JSON Schema files.
     Schema(schema_cmd::SchemaArgs),
 }
@@ -86,6 +89,10 @@ fn dispatch(cli: Cli) -> Res<Output> {
             let r = report::run(&ctx()?)?;
             eprintln!("report: {} sha256={}", r.path, r.sha256);
             Ok(Output::Markdown(r.markdown))
+        }
+        Command::Consent(a) => {
+            let ctx = ctx()?;
+            consent_cmd::run(&ctx, &project_root(project)?, a).map(Output::Json)
         }
         Command::Schema(a) => schema_cmd::run(a).map(Output::Json),
     }

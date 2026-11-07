@@ -13,6 +13,7 @@
 mod macros;
 
 pub mod checklist;
+pub mod consent;
 pub mod coverage;
 pub mod error;
 pub mod evidence;

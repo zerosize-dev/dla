@@ -2,7 +2,7 @@
 
 use clap::{Args, Subcommand};
 use dla_core::{
-    FindingState, Ledger, MAX_OUTPUT_BYTES, MAX_RESULT_BYTES, Record, RunState, RunView,
+    FindingState, Ledger, MAX_OUTPUT_BYTES, MAX_RESULT_BYTES, Record, RunState, RunView, consent,
     error::codes as core_codes,
     evidence::{
         Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, NewEvidence, Source, Tool,
@@ -13,7 +13,7 @@ use dla_core::{
 use serde_json::{Value, json};
 
 use crate::{
-    budget,
+    budget, consent_cmd,
     ctx::{Ctx, project_root},
     fail::{Failure, Res},
     git, gitignore,
@@ -114,6 +114,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         }),
         _ => None,
     };
+    let headless = headless_consent()?;
     let root_text = project.to_string_lossy().into_owned();
     let session_text = session
         .as_deref()
@@ -121,13 +122,14 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         .unwrap_or("unknown")
         .to_owned();
     let result = run_config_result(&root_text, &session_text, seconds, &scope)?;
-    let st = RunState::init(
+    let mut st = RunState::init(
         &root_text,
         session.as_deref(),
         seconds,
         scope.clone(),
         state::now_utc(),
     )?;
+    st.consent = headless;
     let ctx = Ctx {
         run_dir: state::run_dir(&project, &st.run_id),
         run_id: st.run_id.clone(),
@@ -162,6 +164,9 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
             limitations: Vec::new(),
             unknowns: Vec::new(),
         })?;
+        if let Some(c) = &st.consent {
+            consent_cmd::append_evidence(&mut ledger, &project, c)?;
+        }
         state::write_current(&project, &st.run_id)?;
         Ok(line.seq)
     })();
@@ -175,7 +180,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
             return Err(f);
         }
     };
-    Ok(json!({
+    let mut out = json!({
         "ok": true,
         "run_id": st.run_id,
         "stage": st.stage.as_str(),
@@ -186,7 +191,39 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         "gitignore": ignored.as_str(),
         "record": ctx.pointer(STATE_FILE),
         "ledger": ctx.ledger_line(seq),
-    }))
+    });
+    if let Some(c) = &st.consent {
+        out["consent"] = json!({
+            "tiers": c.tiers,
+            "raw_values": c.raw_values,
+            "given_by": c.given_by.as_str(),
+            "evidence": "E2",
+        });
+    }
+    Ok(out)
+}
+
+/// Consent given by the runner through `DLA_CONSENT_TIERS` (and `DLA_CONSENT_RAW_VALUES`),
+/// so an unattended run needs no model action. `None` when the tiers are not set.
+fn headless_consent() -> Res<Option<state::Consent>> {
+    let Some(tiers) = env_nonempty("DLA_CONSENT_TIERS") else {
+        return Ok(None);
+    };
+    let tiers = consent::parse_tiers(&tiers).map_err(|mut r| {
+        r.message = format!("DLA_CONSENT_TIERS: {}", r.message);
+        r.fix = "set DLA_CONSENT_TIERS to 1-4 (or a list such as 1,2,3), or unset it".to_owned();
+        Failure::from(r)
+    })?;
+    let raw = env_nonempty("DLA_CONSENT_RAW_VALUES").is_some_and(|v| consent::flag_on(&v));
+    let c = consent::build(
+        tiers,
+        raw,
+        state::ConsentGiver::Runner,
+        None,
+        state::now_utc(),
+    )
+    .map_err(Failure::from)?;
+    Ok(Some(c))
 }
 
 /// Runs `dla run status`.

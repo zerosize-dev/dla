@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,6 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Tag, plugin.json, marketplace.json and workspace version must agree
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           set -eu
           tag="${GITHUB_REF_NAME}"
@@ -26,7 +29,11 @@ jobs:
           market=$(jq -r '.plugins[0].version // empty' .claude-plugin/marketplace.json)
           echo "tag=$tag workspace=$workspace plugin=$plugin marketplace=${market:-<unset>}"
           test -n "$workspace" || { echo "::error::cannot read the workspace version from Cargo.toml"; exit 1; }
-          test "$tag" = "v$workspace" || { echo "::error::tag $tag does not match workspace version $workspace"; exit 1; }
+          if [ "$EVENT" = "push" ]; then
+            test "$tag" = "v$workspace" || { echo "::error::tag $tag does not match workspace version $workspace"; exit 1; }
+          else
+            echo "dry run: the tag comparison is skipped"
+          fi
           test "$plugin" = "$workspace" || { echo "::error::plugin.json version $plugin does not match workspace version $workspace"; exit 1; }
           if [ -n "$market" ] && [ "$market" != "$workspace" ]; then
             echo "::error::marketplace.json version $market does not match workspace version $workspace"
@@ -91,12 +98,10 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  publish:
-    name: publish release
+  assemble:
+    name: assemble and verify checksums
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -114,6 +119,24 @@ jobs:
           cat dla-*.tar.gz.sha256 | sort -k2 > SHA256SUMS
           sha256sum --check SHA256SUMS
           ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: assemble
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: dist
       - name: Create the GitHub release
         working-directory: dist
         env:

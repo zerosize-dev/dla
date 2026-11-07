@@ -18,6 +18,8 @@ fn dla(project: &Path) -> Command {
     for var in [
         "DLA_RUN",
         "DLA_DEFAULT_BUDGET",
+        "DLA_CONSENT_TIERS",
+        "DLA_CONSENT_RAW_VALUES",
         "CLAUDE_SESSION_ID",
         "CLAUDE_CODE_SESSION_ID",
     ] {
@@ -1330,4 +1332,189 @@ fn schema_check_treats_crlf_and_lf_as_equal() {
         .output()
         .unwrap();
     assert_eq!(c.status.code(), Some(1));
+}
+
+// ---- consent ----
+
+fn state_of(project: &Path, run_id: &str) -> Value {
+    let p = project.join(".dla").join(run_id).join("state.json");
+    serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap()
+}
+
+fn ledger_text(project: &Path, run_id: &str) -> String {
+    fs::read_to_string(project.join(".dla").join(run_id).join("ledger.jsonl")).unwrap()
+}
+
+#[test]
+fn consent_records_state_and_evidence() {
+    let (dir, run_id) = fresh_run();
+    let o = ok(
+        dir.path(),
+        &[
+            "consent",
+            "--tiers",
+            "1-3",
+            "--raw-values",
+            "--ceiling",
+            "3",
+        ],
+    );
+    assert_eq!(o["tiers"], serde_json::json!([1, 2, 3]));
+    assert_eq!(o["raw_values"], true);
+    assert_eq!(o["given_by"], "user");
+    assert_eq!(o["evidence"], "E2");
+    let st = state_of(dir.path(), &run_id);
+    assert_eq!(st["consent"]["tiers"], serde_json::json!([1, 2, 3]));
+    assert_eq!(st["consent"]["given_by"], "user");
+    assert!(st["consent"]["recorded_at"].is_string());
+    let ledger = ledger_text(dir.path(), &run_id);
+    assert!(ledger.contains("\"kind\":\"run-config\"") && ledger.contains("\"given_by\":\"user\""));
+    // The record is usable as checklist evidence.
+    ok(
+        dir.path(),
+        &[
+            "ledger",
+            "resolve",
+            "intake.consent",
+            "--status",
+            "answered",
+            "--evidence",
+            "E2",
+        ],
+    );
+    let s = ok(dir.path(), &["run", "status"]);
+    assert_eq!(s["ok"], true);
+}
+
+#[test]
+fn consent_given_by_runner_and_default_off_raw() {
+    let (dir, run_id) = fresh_run();
+    let o = ok(
+        dir.path(),
+        &["consent", "--tiers", "1,2", "--given-by", "runner"],
+    );
+    assert_eq!(o["given_by"], "runner");
+    assert_eq!(o["raw_values"], false);
+    assert_eq!(
+        state_of(dir.path(), &run_id)["consent"]["given_by"],
+        "runner"
+    );
+}
+
+#[test]
+fn consent_refuses_bad_tiers_ceiling_and_second_consent() {
+    let (dir, run_id) = fresh_run();
+    for bad in ["0", "5", "1-5", "x", "", "4-1"] {
+        let e = refused_or_usage(dir.path(), &["consent", "--tiers", bad]);
+        assert_eq!(e["code"], "invalid-value", "{bad:?}");
+    }
+    let e = refused(dir.path(), &["consent", "--tiers", "1-4", "--ceiling", "2"]);
+    assert_eq!(e["code"], "invalid-value");
+    assert!(e["message"].as_str().unwrap().contains("ceiling"));
+    let e = refused(dir.path(), &["consent", "--tiers", "1", "--ceiling", "9"]);
+    assert_eq!(e["code"], "invalid-value");
+    // Nothing was recorded by the refusals.
+    assert!(state_of(dir.path(), &run_id).get("consent").is_none());
+    let before = ledger_text(dir.path(), &run_id);
+    ok(dir.path(), &["consent", "--tiers", "1-2"]);
+    let e = refused(dir.path(), &["consent", "--tiers", "1-4"]);
+    assert_eq!(e["code"], "already-resolved");
+    assert!(e["fix"].as_str().unwrap().contains("dla run init"));
+    assert_eq!(
+        state_of(dir.path(), &run_id)["consent"]["tiers"],
+        serde_json::json!([1, 2])
+    );
+    assert_eq!(
+        ledger_text(dir.path(), &run_id).lines().count(),
+        before.lines().count() + 1
+    );
+}
+
+fn refused_or_usage(project: &Path, args: &[&str]) -> Value {
+    let o = run(project, args);
+    assert!(o.code == 2, "{args:?}: {}", o.stdout);
+    o.json["error"].clone()
+}
+
+#[test]
+fn consent_without_a_run_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = refused(dir.path(), &["consent", "--tiers", "1"]);
+    assert_eq!(e["code"], "no-run");
+}
+
+#[test]
+fn consent_is_refused_on_a_finished_run() {
+    let (dir, run_id) = fresh_run();
+    let p = dir.path().join(".dla").join(&run_id).join("state.json");
+    let text = fs::read_to_string(&p)
+        .unwrap()
+        .replace("\"active\"", "\"aborted\"");
+    fs::write(&p, text).unwrap();
+    let e = refused(dir.path(), &["consent", "--tiers", "1"]);
+    assert_eq!(e["code"], "run-not-active");
+}
+
+#[test]
+fn init_records_headless_consent_from_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dla(dir.path())
+        .args(["run", "init", "--session-id", "t"])
+        .env("DLA_CONSENT_TIERS", "1-4")
+        .env("DLA_CONSENT_RAW_VALUES", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let j: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let run_id = j["run_id"].as_str().unwrap().to_owned();
+    assert_eq!(j["consent"]["given_by"], "runner");
+    assert_eq!(j["consent"]["raw_values"], true);
+    let st = state_of(dir.path(), &run_id);
+    assert_eq!(st["consent"]["tiers"], serde_json::json!([1, 2, 3, 4]));
+    assert_eq!(st["consent"]["given_by"], "runner");
+    assert_eq!(st["consent"]["raw_values"], true);
+    let ledger = ledger_text(dir.path(), &run_id);
+    assert_eq!(ledger.lines().count(), 2);
+    assert!(ledger.contains("\"given_by\":\"runner\""));
+    // A model-side consent afterwards is refused: one question per run.
+    let e = refused(dir.path(), &["consent", "--tiers", "1"]);
+    assert_eq!(e["code"], "already-resolved");
+}
+
+#[test]
+fn init_headless_consent_defaults_raw_off_and_validates() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dla(dir.path())
+        .args(["run", "init"])
+        .env("DLA_CONSENT_TIERS", "1,2")
+        .env("DLA_CONSENT_RAW_VALUES", "0")
+        .output()
+        .unwrap();
+    let j: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(j["consent"]["raw_values"], false);
+    let bad = tempfile::tempdir().unwrap();
+    let out = dla(bad.path())
+        .args(["run", "init"])
+        .env("DLA_CONSENT_TIERS", "7")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let j: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        j["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("DLA_CONSENT_TIERS")
+    );
+    assert!(
+        !bad.path().join(".dla").exists(),
+        "a refused init writes nothing"
+    );
+}
+
+#[test]
+fn init_without_consent_variables_records_none() {
+    let (dir, run_id) = fresh_run();
+    assert!(state_of(dir.path(), &run_id).get("consent").is_none());
+    assert_eq!(ledger_text(dir.path(), &run_id).lines().count(), 1);
 }

@@ -19,7 +19,7 @@ Each `dla` command prints one small JSON object plus a pointer to the full recor
 
 ```
 dla run init | run status | run abort
-dla consent --tiers <list of 1-4> [--raw-values]
+dla consent --tiers <list of 1-4> [--raw-values] [--ceiling N]
 dla probe
 dla sweep --lang <l>
 dla census --lang <l>
@@ -66,7 +66,7 @@ Every stage ends with `dla gate check --stage <stage>`, using the stage name tha
 
 1. **Intake checklist.** Ask the user for what the repository cannot tell you.
    Create the run with `dla run init --budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` (Claude Code fills in both values before you read this).
-   Ask the consent question once, as a single question for the whole run covering privilege tiers 1 to 4, offering only tiers up to the configured privilege ceiling. Record the answer with `dla consent --tiers <list>`, adding `--raw-values` only if the user explicitly agrees to see raw values. Never ask a second consent question during the run.
+   Ask the consent question once, as a single question for the whole run covering privilege tiers 1 to 4, offering only tiers up to the configured privilege ceiling. If `dla run init` reports a `consent` object, an unattended runner has already answered: ask nothing and cite its evidence for `intake.consent`. Otherwise record the answer with `dla consent --tiers <list> --ceiling ${user_config.privilege_ceiling}`, adding `--raw-values` only if the user explicitly agrees to see raw values. `dla consent` refuses a second consent in a run; never ask a second consent question.
    Answer each checklist item with evidence: `dla ledger resolve intake.scope --status answered --evidence E1 --note "<text>"`.
    Items: `intake.target`, `intake.scope`, `intake.symptom`, `intake.runtimes`, `intake.build`, `intake.workload`, `intake.consent`, `intake.budget`. If the user cannot answer one, use `--status unresolved --reason <r> --remedy "<text>"`.
 2. **Probe.** `dla probe` records versions, tools and what each runtime can measure on this machine. A missing tool becomes a coverage gap, never a silent skip.
