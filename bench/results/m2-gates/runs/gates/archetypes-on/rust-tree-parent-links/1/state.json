@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-194205-a751",
+  "session_id": "d9924942-4138-4524-8537-2d5c5839b1ad",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/rust-tree-parent-links/1/project",
+  "created_at": "2026-11-07T19:42:05Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:42:05Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:42:05Z",
+    "deadline": "2026-11-07T20:42:05Z"
+  },
+  "processes": [],
+  "redaction_salt": "d1c2527a7941a165c35f0ff0c044219f",
+  "report": {
+    "path": ".dla/20261107-194205-a751/report.md",
+    "sha256": "0231f811f6458d069fc4d356a4665cc6d765a75bca1e3e5f5628e1658cd3dd02",
+    "rendered_at": "2026-11-07T19:42:22Z"
+  }
+}

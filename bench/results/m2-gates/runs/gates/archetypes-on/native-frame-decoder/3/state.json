@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-195134-49c1",
+  "session_id": "a308222b-a4f3-405b-b087-ea678501d6ca",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/native-frame-decoder/3/project",
+  "created_at": "2026-11-07T19:51:34Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:51:34Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:51:34Z",
+    "deadline": "2026-11-07T20:51:34Z"
+  },
+  "processes": [],
+  "redaction_salt": "b37bd4dfed6d5b568d817db50d2b9d4e",
+  "report": {
+    "path": ".dla/20261107-195134-49c1/report.md",
+    "sha256": "000a3760daa78af0e10b5a74e62e803f1adcb9971d8488a543626da70a01991c",
+    "rendered_at": "2026-11-07T19:52:32Z"
+  }
+}

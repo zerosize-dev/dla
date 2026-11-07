@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-194042-de9c",
+  "session_id": "5ab42357-c75c-407f-beff-cb4df858b6f9",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/go-subscription-workers/1/project",
+  "created_at": "2026-11-07T19:40:42Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:40:42Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:40:42Z",
+    "deadline": "2026-11-07T20:40:42Z"
+  },
+  "processes": [],
+  "redaction_salt": "8dbc7da8446cf84caee975aad8e6b350",
+  "report": {
+    "path": ".dla/20261107-194042-de9c/report.md",
+    "sha256": "858139bed44b734b8ff103732a76764a858ac255a87026ba74bfbc8df45d6050",
+    "rendered_at": "2026-11-07T19:41:12Z"
+  }
+}

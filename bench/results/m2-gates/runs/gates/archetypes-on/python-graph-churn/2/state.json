@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-194608-9f73",
+  "session_id": "4dd3665b-4269-4915-8cf5-0a3336c00a67",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/python-graph-churn/2/project",
+  "created_at": "2026-11-07T19:46:08Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:46:08Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:46:08Z",
+    "deadline": "2026-11-07T20:46:08Z"
+  },
+  "processes": [],
+  "redaction_salt": "0fad5a49de22745fef37899fb5358670",
+  "report": {
+    "path": ".dla/20261107-194608-9f73/report.md",
+    "sha256": "f5276acd5fc5626ee5131bbe108c0ab70dd7ab8981e125cf88b411aa03155761",
+    "rendered_at": "2026-11-07T19:46:43Z"
+  }
+}

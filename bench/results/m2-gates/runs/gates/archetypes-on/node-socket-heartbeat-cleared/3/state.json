@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-195522-3885",
+  "session_id": "b5381e43-f864-4cb5-ab97-d44de6b000fc",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/node-socket-heartbeat-cleared/3/project",
+  "created_at": "2026-11-07T19:55:22Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:55:22Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:55:22Z",
+    "deadline": "2026-11-07T20:55:22Z"
+  },
+  "processes": [],
+  "redaction_salt": "597d061a56fe1001c3381d5fb011f40a",
+  "report": {
+    "path": ".dla/20261107-195522-3885/report.md",
+    "sha256": "617375f043feee0ff9758516a92e0ada2722220164f784d541d477bcc492fce2",
+    "rendered_at": "2026-11-07T19:56:18Z"
+  }
+}

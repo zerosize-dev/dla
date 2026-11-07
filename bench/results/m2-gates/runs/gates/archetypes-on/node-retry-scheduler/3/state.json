@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-195146-bc49",
+  "session_id": "3ab0ccb7-3b39-4eb8-9e48-84c17287f6b0",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/node-retry-scheduler/3/project",
+  "created_at": "2026-11-07T19:51:46Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:51:46Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:51:46Z",
+    "deadline": "2026-11-07T20:51:46Z"
+  },
+  "processes": [],
+  "redaction_salt": "fc0daf25d7df1d3d131c296a41e5dee0",
+  "report": {
+    "path": ".dla/20261107-195146-bc49/report.md",
+    "sha256": "9f5e7b02edcd91802b0d666b7031b981fb1e6207df174d18db4f68a5b6c2705b",
+    "rendered_at": "2026-11-07T19:52:05Z"
+  }
+}

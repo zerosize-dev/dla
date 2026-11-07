@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-195219-006c",
+  "session_id": "a35a3801-c25b-43de-b010-a9c29beb78e2",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/rust-batch-buffers/3/project",
+  "created_at": "2026-11-07T19:52:19Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:52:19Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:52:19Z",
+    "deadline": "2026-11-07T20:52:19Z"
+  },
+  "processes": [],
+  "redaction_salt": "a594c6e7b32ca1f036d4dffb6ebd7dfd",
+  "report": {
+    "path": ".dla/20261107-195219-006c/report.md",
+    "sha256": "0fb2162272faaaec224d6cb6f07487af7d3fd8e29e963417274cdadcb13c6d62",
+    "rendered_at": "2026-11-07T19:52:49Z"
+  }
+}

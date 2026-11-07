@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "python-ingest-two-leaks",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 37.902,
+  "usage": {
+    "input_tokens": 18,
+    "output_tokens": 3685,
+    "cache_read_input_tokens": 260083,
+    "cache_creation_input_tokens": 28790
+  },
+  "cost_usd": 0.17805430000000003,
+  "num_turns": 9,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-07T19:47:56Z",
+  "error": null
+}

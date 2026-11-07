@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "go-buffer-pool",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 215.205,
+  "usage": {
+    "input_tokens": 22,
+    "output_tokens": 4378,
+    "cache_read_input_tokens": 332334,
+    "cache_creation_input_tokens": 31296
+  },
+  "cost_usd": 0.2022414,
+  "num_turns": 13,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-07T19:44:20Z",
+  "error": null
+}

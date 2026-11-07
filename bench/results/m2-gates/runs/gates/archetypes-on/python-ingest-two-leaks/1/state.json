@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "run_id": "20261107-194138-dd92",
+  "session_id": "29f96070-8364-42da-9aa7-7a564c2717d4",
+  "project_root": "/tmp/dla-bench/m2-gates/gates/archetypes-on/python-ingest-two-leaks/1/project",
+  "created_at": "2026-11-07T19:41:38Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-07T19:41:38Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-07T19:41:38Z",
+    "deadline": "2026-11-07T20:41:38Z"
+  },
+  "processes": [],
+  "redaction_salt": "64057ab23399f7082ef4453f4ae8c23e",
+  "report": {
+    "path": ".dla/20261107-194138-dd92/report.md",
+    "sha256": "b8493190239df8310173ad48cd41c0b22b5ed36ab707d5dc8b5cd6536558e988",
+    "rendered_at": "2026-11-07T19:42:05Z"
+  }
+}
