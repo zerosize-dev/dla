@@ -98,9 +98,19 @@ pub struct RunArgs {
     /// Results directory (default: bench/results/<ablation>).
     #[arg(long)]
     pub out: Option<PathBuf>,
-    /// Where working copies live; must be outside the repository.
+    /// Where working copies live; must be outside the repository (default:
+    /// /tmp/dla-bench).
     #[arg(long)]
     pub work_root: Option<PathBuf>,
+    /// Extra path the child may not read (repeatable). The repository, the
+    /// fixtures, the results directory and the user's Claude Code directory
+    /// are always denied.
+    #[arg(long = "deny-read")]
+    pub deny_read: Vec<PathBuf>,
+    /// Text file used verbatim as the prompt instead of the fixture's task,
+    /// for checking the sandbox.
+    #[arg(long)]
+    pub probe_prompt: Option<PathBuf>,
     /// Model passed to claude.
     #[arg(long)]
     pub model: Option<String>,
@@ -331,14 +341,102 @@ pub fn keep_env_var(name: &str) -> bool {
     !denied_prefix.iter().any(|p| name.starts_with(p)) && !denied_name.contains(&name)
 }
 
-fn is_root() -> bool {
-    Command::new("id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .is_some_and(|s| s.trim() == "0")
+/// The default parent of the working copies.
+pub const DEFAULT_WORK_ROOT: &str = "/tmp/dla-bench";
+
+/// A path in the permission-rule syntax: an absolute path starts with `//`.
+fn rule_path(p: &Path) -> String {
+    let text = p.display().to_string();
+    format!("/{}", text.replace('\\', "/"))
 }
+
+/// The Claude Code settings that confine a child session: Bash runs in the
+/// operating system sandbox with no network, writes only in the working copy
+/// and in `allow_write` (the same places the Edit and Write tools may touch),
+/// and neither the sandbox nor the file tools can read `deny_read`. The default permission mode applies; a call that would need a
+/// prompt is refused in headless mode.
+pub fn sandbox_settings(deny_read: &[PathBuf], allow_write: &[PathBuf]) -> Value {
+    let tools = ["Read", "Edit", "Write", "Glob", "Grep"];
+    // Bash is allowed outright so that commands using shell variables are not
+    // refused for being uncheckable; every Bash command still runs inside the
+    // sandbox, because unsandboxed commands are disallowed and the session
+    // refuses to start without the sandbox. Edit and Write are not covered by
+    // the sandbox: they may only touch the places Bash may write to.
+    let mut allow: Vec<String> = ["Bash", "Read", "Glob", "Grep"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    for tool in ["Edit", "Write"] {
+        for p in allow_write {
+            allow.push(format!("{tool}({}/**)", rule_path(p)));
+        }
+    }
+    let mut deny: Vec<String> = Vec::new();
+    for tool in tools {
+        for p in deny_read {
+            deny.push(format!("{tool}({}/**)", rule_path(p)));
+        }
+    }
+    deny.push("WebFetch".to_owned());
+    deny.push("WebSearch".to_owned());
+    let paths =
+        |v: &[PathBuf]| -> Vec<String> { v.iter().map(|p| p.display().to_string()).collect() };
+    serde_json::json!({
+        "sandbox": {
+            "enabled": true,
+            "autoAllowBashIfSandboxed": true,
+            "allowUnsandboxedCommands": false,
+            "failIfUnavailable": true,
+            "filesystem": {
+                "denyRead": paths(deny_read),
+                "allowWrite": paths(allow_write),
+            },
+        },
+        "permissions": {
+            "allow": allow,
+            "deny": deny,
+        },
+    })
+}
+
+/// Directories the toolchains write to, moved under `cache` so the sandbox
+/// needs one write entry for all of them; package registries are switched off.
+pub fn cache_env(cache: &Path, rustup_home: &Path) -> Vec<(String, String)> {
+    let at = |sub: &str| cache.join(sub).display().to_string();
+    vec![
+        ("GOCACHE".to_owned(), at("go-build")),
+        ("GOPATH".to_owned(), at("gopath")),
+        ("GOMODCACHE".to_owned(), at("gopath/pkg/mod")),
+        ("GOTMPDIR".to_owned(), at("go-tmp")),
+        ("GOFLAGS".to_owned(), "-modcacherw".to_owned()),
+        ("GOPROXY".to_owned(), "off".to_owned()),
+        ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+        (
+            "MAVEN_OPTS".to_owned(),
+            format!("-Dmaven.repo.local={}", at("m2")),
+        ),
+        ("npm_config_cache".to_owned(), at("npm")),
+        ("npm_config_update_notifier".to_owned(), "false".to_owned()),
+        ("PIP_CACHE_DIR".to_owned(), at("pip")),
+        ("PIP_NO_INDEX".to_owned(), "1".to_owned()),
+        ("CARGO_HOME".to_owned(), at("cargo")),
+        ("CARGO_NET_OFFLINE".to_owned(), "true".to_owned()),
+        ("RUSTUP_HOME".to_owned(), rustup_home.display().to_string()),
+        ("XDG_CACHE_HOME".to_owned(), at("xdg")),
+    ]
+}
+
+/// The sub-directories of the cache that must exist before a run starts.
+const CACHE_DIRS: [&str; 8] = [
+    "go-build",
+    "gopath/pkg/mod",
+    "go-tmp",
+    "m2",
+    "npm",
+    "pip",
+    "cargo",
+    "xdg",
+];
 
 // ------------------------------------------------------------------- tasks
 
@@ -503,14 +601,22 @@ pub fn build_prompt(ablation: Ablation, task: &str) -> String {
 }
 
 /// The environment of the child: the sanitised parent environment plus the
-/// per-run settings.
+/// per-run settings. `cache` holds the toolchain caches of the run and `tmp`
+/// the temporary files of the child, so runs do not see each other's.
 pub fn child_env(
     parent: impl IntoIterator<Item = (String, String)>,
     config_dir: &Path,
+    cache: &Path,
+    tmp: &Path,
     dla_bin: Option<&Path>,
     args: &RunArgs,
-    root: bool,
 ) -> Vec<(String, String)> {
+    let parent: Vec<(String, String)> = parent.into_iter().collect();
+    let lookup = |k: &str| parent.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let rustup_home = lookup("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| lookup("HOME").map(|h| PathBuf::from(h).join(".rustup")))
+        .unwrap_or_else(|| PathBuf::from("/root/.rustup"));
     let mut env: Vec<(String, String)> = parent
         .into_iter()
         .filter(|(k, _)| keep_env_var(k))
@@ -521,8 +627,9 @@ pub fn child_env(
     };
     set("CLAUDE_CONFIG_DIR", config_dir.display().to_string());
     set("DISABLE_AUTOUPDATER", "1".to_owned());
-    if root {
-        set("IS_SANDBOX", "1".to_owned());
+    set("CLAUDE_CODE_TMPDIR", tmp.display().to_string());
+    for (k, v) in cache_env(cache, &rustup_home) {
+        set(&k, v);
     }
     if args.ablation.uses_plugin() {
         set("DLA_CONSENT_TIERS", "1-4".to_owned());
@@ -655,6 +762,8 @@ struct Ctx<'a> {
     work_root: PathBuf,
     variant_spec: Option<VariantSpec>,
     dla_bin: Option<PathBuf>,
+    deny_read: Vec<PathBuf>,
+    probe_prompt: Option<String>,
 }
 
 fn run_dir_of(ctx: &Ctx, t: &Task) -> PathBuf {
@@ -704,19 +813,35 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     let project = prepare_workdir(&src, &work)?;
     let config = work.join("config");
     fs::create_dir_all(&config).map_err(|e| e.to_string())?;
+    let cache = work.join("cache");
+    for sub in CACHE_DIRS {
+        fs::create_dir_all(cache.join(sub)).map_err(|e| format!("{}: {e}", cache.display()))?;
+    }
+    let tmp = work.join("tmp");
+    fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let settings_path = work.join("settings.json");
+    let writable = [project.clone(), cache.clone(), tmp.clone()];
+    let mut settings = serde_json::to_string_pretty(&sandbox_settings(&ctx.deny_read, &writable))
+        .map_err(|e| e.to_string())?;
+    settings.push('\n');
+    fs::write(&settings_path, settings).map_err(|e| format!("{}: {e}", settings_path.display()))?;
     let mut plugin_dir = None;
     if let Some(spec) = &ctx.variant_spec {
         let dest = work.join("plugin");
         build_variant(spec, &dest)?;
         plugin_dir = Some(dest);
     }
-    let prompt = build_prompt(args.ablation, &t.expected.task.prompt);
+    let prompt = match &ctx.probe_prompt {
+        Some(p) => p.clone(),
+        None => build_prompt(args.ablation, &t.expected.task.prompt),
+    };
     let mut cmd = Command::new(&args.claude_bin);
     cmd.arg("-p")
         .arg(&prompt)
         .args(["--output-format", "stream-json", "--verbose"])
         .args(["--max-turns", &args.max_turns.to_string()])
-        .args(["--permission-mode", "bypassPermissions"])
+        .arg("--settings")
+        .arg(&settings_path)
         .arg("--strict-mcp-config")
         .arg("--no-session-persistence");
     if let Some(m) = &args.model {
@@ -730,11 +855,12 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
         .envs(child_env(
             std::env::vars(),
             &config,
+            &cache,
+            &tmp,
             ctx.dla_bin
                 .as_deref()
                 .filter(|_| args.ablation.uses_binary()),
             args,
-            is_root(),
         ))
         .stdin(Stdio::null());
     let transcript_path = out_dir.join("transcript.jsonl");
@@ -867,7 +993,7 @@ pub fn run(args: &RunArgs) -> Res<String> {
         .unwrap_or_else(|| "results".to_owned());
     let work_root = match &args.work_root {
         Some(p) => absolute(p)?,
-        None => std::env::temp_dir().join("dla-bench"),
+        None => PathBuf::from(DEFAULT_WORK_ROOT),
     }
     .join(&results_name);
     let repo_abs = absolute(&args.repo_root)?;
@@ -937,7 +1063,13 @@ pub fn run(args: &RunArgs) -> Res<String> {
     }
     let total = queue.len();
     let dla_bin = if args.ablation.uses_binary() {
-        Some(ensure_dla_bin(&args)?)
+        let built = ensure_dla_bin(&args)?;
+        // The repository is unreadable to the child: it gets its own copy.
+        let dest_dir = work_root.join("bin");
+        fs::create_dir_all(&dest_dir).map_err(|e| format!("{}: {e}", dest_dir.display()))?;
+        let dest = dest_dir.join(if cfg!(windows) { "dla.exe" } else { "dla" });
+        fs::copy(&built, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        Some(dest)
     } else {
         None
     };
@@ -951,12 +1083,43 @@ pub fn run(args: &RunArgs) -> Res<String> {
         archetypes_off: args.archetypes == Archetypes::Off,
     });
     fs::create_dir_all(&out_root).map_err(|e| format!("{}: {e}", out_root.display()))?;
+    let mut denied: Vec<PathBuf> = vec![
+        repo_abs.clone(),
+        args.fixtures_dir.clone(),
+        out_root.clone(),
+    ];
+    if let Some(a) = &args.ablations_dir {
+        denied.push(absolute(a)?);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        denied.push(PathBuf::from(home).join(".claude"));
+    }
+    if let Ok(c) = std::env::var("CLAUDE_CONFIG_DIR") {
+        denied.push(PathBuf::from(c));
+    }
+    for p in &args.deny_read {
+        denied.push(absolute(p)?);
+    }
+    let deny_read = normalise_paths(denied);
+    if let Some(bad) = deny_read.iter().find(|d| work_root.starts_with(d)) {
+        return Err(format!(
+            "--work-root {} is inside the denied path {}",
+            work_root.display(),
+            bad.display()
+        ));
+    }
+    let probe_prompt = match &args.probe_prompt {
+        Some(p) => Some(fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?),
+        None => None,
+    };
     let ctx = Ctx {
         args: &args,
         out_root: out_root.clone(),
         work_root,
         variant_spec,
         dla_bin,
+        deny_read,
+        probe_prompt,
     };
     let shared = Shared {
         queue: Mutex::new(queue),
@@ -976,6 +1139,21 @@ pub fn run(args: &RunArgs) -> Res<String> {
         total - left,
         out_root.display()
     ))
+}
+
+/// Each path in absolute form and, when it exists, in canonical form too;
+/// sorted, without duplicates.
+fn normalise_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        if let Ok(c) = fs::canonicalize(&p) {
+            out.push(c);
+        }
+        out.push(p);
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn absolute(p: &Path) -> Res<PathBuf> {
@@ -1090,6 +1268,8 @@ mod tests {
             parallel: 1,
             out: None,
             work_root: None,
+            deny_read: Vec::new(),
+            probe_prompt: None,
             model: None,
             max_turns: 5,
             timeout: 5,
@@ -1106,43 +1286,113 @@ mod tests {
     fn child_environment_settings_per_ablation() {
         let parent = vec![
             ("PATH".to_owned(), "/bin".to_owned()),
+            ("HOME".to_owned(), "/home/u".to_owned()),
             ("CLAUDE_CODE_SESSION_ID".to_owned(), "parent".to_owned()),
             ("IS_SANDBOX".to_owned(), "0".to_owned()),
         ];
         let get = |env: &[(String, String)], k: &str| {
             env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
         };
+        let cache = Path::new("/w/cache");
         let plain = child_env(
             parent.clone(),
             Path::new("/cfg"),
+            cache,
+            Path::new("/w/tmp"),
             None,
             &args(Ablation::NoSkill, Archetypes::Off),
-            true,
         );
         assert_eq!(get(&plain, "CLAUDE_CONFIG_DIR").as_deref(), Some("/cfg"));
-        assert_eq!(get(&plain, "IS_SANDBOX").as_deref(), Some("1"));
+        assert_eq!(get(&plain, "IS_SANDBOX"), None);
         assert_eq!(get(&plain, "CLAUDE_CODE_SESSION_ID"), None);
         assert_eq!(get(&plain, "DLA_CONSENT_TIERS"), None);
         assert_eq!(get(&plain, "DLA_ARCHETYPES"), None);
-        let non_root = child_env(
-            parent.clone(),
-            Path::new("/cfg"),
-            None,
-            &args(Ablation::NoSkill, Archetypes::On),
-            false,
-        );
-        assert_eq!(get(&non_root, "IS_SANDBOX"), None);
         let full = child_env(
             parent,
             Path::new("/cfg"),
+            cache,
+            Path::new("/w/tmp"),
             Some(Path::new("/x/dla")),
             &args(Ablation::Full, Archetypes::Off),
-            false,
         );
         assert_eq!(get(&full, "DLA_CONSENT_TIERS").as_deref(), Some("1-4"));
         assert_eq!(get(&full, "DLA_CONSENT_RAW_VALUES").as_deref(), Some("1"));
         assert_eq!(get(&full, "DLA_ARCHETYPES").as_deref(), Some("off"));
         assert_eq!(get(&full, "DLA_BIN").as_deref(), Some("/x/dla"));
+    }
+
+    #[test]
+    fn toolchain_caches_live_under_the_run_cache() {
+        let parent = vec![("HOME".to_owned(), "/home/u".to_owned())];
+        let env = child_env(
+            parent,
+            Path::new("/cfg"),
+            Path::new("/w/cache"),
+            Path::new("/w/tmp"),
+            None,
+            &args(Ablation::NoSkill, Archetypes::On),
+        );
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("GOCACHE"), Some("/w/cache/go-build"));
+        assert_eq!(get("GOMODCACHE"), Some("/w/cache/gopath/pkg/mod"));
+        assert_eq!(get("GOTMPDIR"), Some("/w/cache/go-tmp"));
+        assert_eq!(get("GOPROXY"), Some("off"));
+        assert_eq!(get("MAVEN_OPTS"), Some("-Dmaven.repo.local=/w/cache/m2"));
+        assert_eq!(get("npm_config_cache"), Some("/w/cache/npm"));
+        assert_eq!(get("PIP_CACHE_DIR"), Some("/w/cache/pip"));
+        assert_eq!(get("CARGO_HOME"), Some("/w/cache/cargo"));
+        assert_eq!(get("RUSTUP_HOME"), Some("/home/u/.rustup"));
+        assert_eq!(get("CARGO_NET_OFFLINE"), Some("true"));
+    }
+
+    #[test]
+    fn settings_confine_bash_and_the_file_tools() {
+        let deny = [PathBuf::from("/repo"), PathBuf::from("/root/.claude")];
+        let allow = [PathBuf::from("/w/cache")];
+        let v = sandbox_settings(&deny, &allow);
+        let sb = &v["sandbox"];
+        assert_eq!(sb["enabled"], true);
+        assert_eq!(sb["autoAllowBashIfSandboxed"], true);
+        assert_eq!(sb["allowUnsandboxedCommands"], false);
+        assert_eq!(sb["failIfUnavailable"], true);
+        assert_eq!(
+            sb["filesystem"]["denyRead"],
+            serde_json::json!(["/repo", "/root/.claude"])
+        );
+        assert_eq!(
+            sb["filesystem"]["allowWrite"],
+            serde_json::json!(["/w/cache"])
+        );
+        assert!(sb.get("network").is_none(), "no network entries at all");
+        let perms = &v["permissions"];
+        assert_eq!(
+            perms["allow"],
+            serde_json::json!([
+                "Bash",
+                "Read",
+                "Glob",
+                "Grep",
+                "Edit(//w/cache/**)",
+                "Write(//w/cache/**)"
+            ]),
+            "Edit and Write are scoped to the writable places"
+        );
+        let denied: Vec<&str> = perms["deny"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect();
+        for tool in ["Read", "Edit", "Write", "Glob", "Grep"] {
+            assert!(
+                denied.contains(&format!("{tool}(//repo/**)").as_str()),
+                "{tool}"
+            );
+            assert!(denied.contains(&format!("{tool}(//root/.claude/**)").as_str()));
+        }
+        assert!(denied.contains(&"WebFetch") && denied.contains(&"WebSearch"));
+        assert!(v.get("permissionMode").is_none());
+        assert!(v["permissions"].get("defaultMode").is_none());
     }
 
     #[test]

@@ -30,8 +30,8 @@ pub fn fixture_dirs(fixtures: &Path) -> Res<Vec<PathBuf>> {
 }
 
 /// The prompt template appended to every task for runs without a ledger.
-pub const FINDINGS_INSTRUCTIONS: &str = r#"You are in a local checkout of the project. You may read, build, run and test it on this machine; nothing
-outside this machine is reachable except public package registries. Do not change the project's source files;
+pub const FINDINGS_INSTRUCTIONS: &str = r#"You are in a local checkout of the project. You may read, build, run and test it on this machine.
+This machine has no network access. Do not change the project's source files;
 scratch files outside the source tree are fine. There is nobody to answer questions: decide for yourself.
 
 When you are done, write ./findings.json with your conclusions:

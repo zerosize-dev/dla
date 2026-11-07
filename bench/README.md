@@ -60,13 +60,17 @@ Per (fixture, run index) the runner:
    `<work-root>/<results name>/<ablation>/archetypes-<x>/<fixture>/<n>/project`,
    runs `git init` and commits it as `bench <bench@example.invalid>`;
    `expected.toml` and `README.md` are never copied. `--work-root` defaults to
-   `$TMPDIR/dla-bench` and must be outside the repository;
-2. gives the run a fresh `CLAUDE_CONFIG_DIR` inside that directory;
+   `/tmp/dla-bench` and must be outside the repository (and outside every
+   path the child may not read, see below);
+2. gives the run a fresh `CLAUDE_CONFIG_DIR` inside that directory, writes the
+   sandbox settings (below) to `<run dir>/settings.json` and creates the
+   toolchain cache directories;
 3. builds the ablation (below), then runs
    `claude -p <prompt> --output-format stream-json --verbose --max-turns T
-   --permission-mode bypassPermissions --strict-mcp-config
+   --settings <run dir>/settings.json --strict-mcp-config
    --no-session-persistence [--model M] [--plugin-dir <variant>]` with the
-   copied project as working directory and stdin closed;
+   copied project as working directory and stdin closed. The permission mode
+   is the default one; there is no `bypassPermissions`;
 4. kills the whole process group after `--timeout` seconds and records
    `timed_out`;
 5. collects the results (below). A run directory that already holds
@@ -83,7 +87,9 @@ cleanly is removed; keep it with `--keep-work`, failed runs are always kept.
 
 Other flags: `--fixtures a,b|all`, `--fixtures-dir`, `--model`, `--max-turns`
 (default 80), `--timeout` (default 1500), `--repo-root` (where the plugin
-sources are), `--ablations-dir`, `--dla-bin`, `--claude-bin`.
+sources are), `--ablations-dir`, `--dla-bin`, `--claude-bin`, `--deny-read
+<path>` (repeatable, see below) and `--probe-prompt <file>` (use the file as
+the prompt instead of the fixture's task; for checking the sandbox).
 
 ### Ablations
 
@@ -95,7 +101,9 @@ sources are), `--ablations-dir`, `--dla-bin`, `--claude-bin`.
 | `full` | the plugin as it is | same as `gates` |
 
 `gates` and `full` build `dla` once with `cargo build --release -p dla-cli`
-(or use `--dla-bin`). `--archetypes off` removes
+(or use `--dla-bin`) and copy the binary to `<work-root>/<results name>/bin/dla`,
+because the repository is unreadable to the child; `DLA_BIN` points at the
+copy. The plugin variants are built under the work root as well. `--archetypes off` removes
 `skills/*/references/*-archetypes.md`, `skills/*/references/known-leaks.md`,
 `data/archetypes.toml` and `data/known-leaks.toml` from the plugin copy,
 blanks every `suggested_archetype = "..."` in `data/detectors/*.toml` and sets
@@ -178,13 +186,43 @@ sample runs and is compared by the Rust tests.
   `MAX_THINKING_TOKENS`, `GH_TOKEN`, `GITHUB_TOKEN` and similar tokens, and any
   `DLA_*` setting. `CLAUDE_CODE_SESSION_ID` and `CLAUDE_SESSION_ID` are
   therefore never inherited, so `dla` never mistakes the parent for the run's
-  session. The runner sets `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER=1`, the
-  `DLA_*` values of the ablation and, when it runs as root, `IS_SANDBOX=1`,
-  which is what lets `--permission-mode bypassPermissions` run as root.
-- The child is not sandboxed. It can read other paths on this machine and
-  reach whatever the network allows; the prompt only asks it to stay inside
-  the checkout. The protection of the answer key is that the working copy
-  lives outside the repository and never contains `expected.toml`.
+  session. The runner sets `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER=1`,
+  `CLAUDE_CODE_TMPDIR` (a `tmp` directory of the run, so that parallel runs do
+  not see each other's temporary files), the toolchain caches and the `DLA_*`
+  values of the ablation.
+- Every child runs under Claude Code's own Bash sandbox, written to the run's
+  `settings.json` (`sandbox_settings` in `bench/runner/src/run.rs`):
+  `sandbox.enabled`, `autoAllowBashIfSandboxed`, `allowUnsandboxedCommands:
+  false` and `failIfUnavailable: true` (a machine without bubblewrap and
+  socat fails the run instead of running unconfined). Bash commands can write
+  only in the working copy and the run's `cache` and `tmp` directories, and
+  have no network: no `allowedDomains` are configured, so every connection is
+  refused by the sandbox's proxy (this includes package registries; builds
+  must work offline, and `GOPROXY=off`, `PIP_NO_INDEX=1`,
+  `CARGO_NET_OFFLINE=true` say so to the tools). `WebFetch` and `WebSearch`
+  are denied.
+- The paths in `sandbox.filesystem.denyRead` are invisible to Bash. The Read,
+  Edit, Write, Glob and Grep tools are not covered by the sandbox, so the same
+  paths are also in `permissions.deny` (as `Tool(//absolute/path/**)`), and
+  Edit and Write are allowed only under the working copy, `cache` and `tmp`.
+  The denied paths are the repository root (answer keys), the fixtures
+  directory, the results directory, `~/.claude`, the parent's
+  `CLAUDE_CONFIG_DIR` and every `--deny-read` path. Pass the scratch
+  directories of your own session with `--deny-read`.
+- Toolchain caches live in `<run dir>/cache`: `GOCACHE`, `GOPATH`,
+  `GOMODCACHE`, `GOTMPDIR`, the Maven local repository
+  (`MAVEN_OPTS=-Dmaven.repo.local=...`), the npm and pip caches, `CARGO_HOME`
+  and `XDG_CACHE_HOME`. `RUSTUP_HOME` keeps pointing at the installed
+  toolchains (read only). Nothing else is writable.
+- The default permission mode applies. In `-p` mode a call that would need an
+  approval is refused, not asked. Notably a Bash command that expands `$?` or
+  another variable that cannot be checked before it runs, for example
+  `make; echo "exit=$?"`, is refused; the model usually retries the parts as
+  separate commands, which costs a turn.
+- Known gaps: parallel runs share the machine's other directories, so a
+  session could list `/tmp/dla-bench` and read another run's working copy
+  (never an answer key); and the sandbox only confines what the model does, not
+  what the plugin's hooks do.
 - The cost is real: every run is a full agent session with builds and
   measurements. A trivial two-turn call is about 0.02 USD; a diagnosis run is
   orders of magnitude more. Use `--runs 1 --fixtures <id>` first, set

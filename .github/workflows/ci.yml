@@ -137,3 +137,80 @@ jobs:
       - name: Run the shim tests
         shell: bash
         run: tests/shim/run.sh
+
+  plugin-eval:
+    name: plugin eval smoke subset
+    runs-on: ubuntu-latest
+    # Model calls cost money, so this job runs only on pushes and on pull
+    # requests from this repository, and only when the secret is available.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Check for the API key
+        id: key
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::ANTHROPIC_API_KEY is not set; skipping the plugin eval smoke subset"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v5
+        if: steps.key.outputs.available == 'true'
+      - uses: actions/setup-node@v5
+        if: steps.key.outputs.available == 'true'
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.key.outputs.available == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.key.outputs.available == 'true'
+      - name: Install Claude Code CLI
+        if: steps.key.outputs.available == 'true'
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+      - name: Install the sandbox prerequisites
+        if: steps.key.outputs.available == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat
+          # Ubuntu 24.04 restricts unprivileged user namespaces, which bubblewrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Build dla
+        if: steps.key.outputs.available == 'true'
+        run: |
+          # Build outside the checkout and place only the binary where the shim looks
+          # for a development build: the eval refuses a plugin directory that holds
+          # hard-linked files, and cargo's target directory is full of them.
+          CARGO_TARGET_DIR="$RUNNER_TEMP/dla-target" cargo build -p dla-cli
+          mkdir -p target/debug
+          cp "$RUNNER_TEMP/dla-target/debug/dla" target/debug/dla
+      - name: Run the smoke subset
+        if: steps.key.outputs.available == 'true'
+        # Informational until dla ledger confirm exists (M3): before then the
+        # leak case cannot reach a confirmed finding, so no score threshold.
+        env:
+          DLA_BENCH_MODEL: ${{ vars.DLA_BENCH_MODEL }}
+        run: |
+          model_args=()
+          if [ -n "${DLA_BENCH_MODEL:-}" ]; then model_args=(--model "$DLA_BENCH_MODEL"); fi
+          claude plugin eval . \
+            --eval-dir bench/evals \
+            --tag smoke \
+            --scaffold \
+            --allow-tools Bash \
+            --ablation none \
+            --trust-plugin \
+            --no-publish \
+            --max-cost-usd 15 \
+            "${model_args[@]}" \
+            --json "$RUNNER_TEMP/plugin-eval.json"
+      - name: Upload the eval result
+        if: always() && steps.key.outputs.available == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: plugin-eval-smoke
+          path: |
+            ${{ runner.temp }}/plugin-eval.json
+            bench/evals/results/
+          if-no-files-found: ignore

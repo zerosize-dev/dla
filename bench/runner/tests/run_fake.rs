@@ -67,6 +67,8 @@ impl Env {
             .status()
             .unwrap();
         script(&root.join("claude"), fake_body);
+        fs::create_dir_all(root.join("extra-secret")).unwrap();
+        fs::create_dir_all(root.join("repo")).unwrap();
         Env { _t: t, root }
     }
 
@@ -127,6 +129,8 @@ fn no_skill_run_collects_everything_and_resumes() {
             "--keep-work",
             "--max-turns",
             "9",
+            "--deny-read",
+            e.root.join("extra-secret").to_str().unwrap(),
         ])
         .output()
         .unwrap();
@@ -205,9 +209,77 @@ fn no_skill_run_collects_everything_and_resumes() {
     assert_eq!(args[0], "-p");
     assert!(args.contains(&"stream-json") && args.contains(&"--verbose"));
     assert!(args.windows(2).any(|w| w == ["--max-turns", "9"]));
+    assert!(!args.contains(&"--permission-mode") && !args.contains(&"bypassPermissions"));
+    let at = args
+        .iter()
+        .position(|a| *a == "--settings")
+        .expect("--settings");
+    assert_eq!(args[at + 1], work.join("settings.json").to_str().unwrap());
+    let settings: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(work.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["sandbox"]["enabled"], true);
+    assert_eq!(settings["sandbox"]["allowUnsandboxedCommands"], false);
+    assert_eq!(settings["sandbox"]["failIfUnavailable"], true);
+    assert_eq!(settings["sandbox"]["autoAllowBashIfSandboxed"], true);
+    let deny_read: Vec<&str> = settings["sandbox"]["filesystem"]["denyRead"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let canon = |p: PathBuf| p.canonicalize().unwrap().display().to_string();
+    for must in [
+        canon(e.root.join("repo")),
+        canon(e.root.join("fx")),
+        canon(e.root.join("out/res")),
+        canon(e.root.join("extra-secret")),
+    ] {
+        assert!(
+            deny_read.contains(&must.as_str()),
+            "{must} in {deny_read:?}"
+        );
+    }
+    let rules = settings["permissions"]["deny"].to_string();
     assert!(
-        args.windows(2)
-            .any(|w| w == ["--permission-mode", "bypassPermissions"])
+        rules.contains(&format!("Read(/{}/**)", canon(e.root.join("fx")))),
+        "{rules}"
+    );
+    assert!(rules.contains("WebFetch") && rules.contains("WebSearch"));
+    let w = |sub: &str| work.join(sub).display().to_string();
+    assert_eq!(
+        settings["sandbox"]["filesystem"]["allowWrite"],
+        serde_json::json!([w("project"), w("cache"), w("tmp")])
+    );
+    let allow = settings["permissions"]["allow"].to_string();
+    assert!(
+        allow.contains(&format!("\"Write(/{}/**)\"", w("project"))),
+        "{allow}"
+    );
+    assert!(
+        !allow.contains("\"Write\"") && !allow.contains("\"Edit\""),
+        "{allow}"
+    );
+    assert!(envtxt.contains(&format!("CLAUDE_CODE_TMPDIR={}", w("tmp"))));
+    for var in [
+        "GOCACHE",
+        "GOMODCACHE",
+        "GOTMPDIR",
+        "npm_config_cache",
+        "PIP_CACHE_DIR",
+        "CARGO_HOME",
+    ] {
+        assert!(
+            envtxt.lines().any(|l| l.starts_with(&format!("{var}="))
+                && l.contains(&format!("{}/cache/", work.display()))),
+            "{var} under the run cache: {envtxt}"
+        );
+    }
+    assert!(envtxt.contains(&format!("-Dmaven.repo.local={}/cache/m2", work.display())));
+    assert!(!envtxt.contains("IS_SANDBOX"));
+    assert!(work.join("cache/go-build").is_dir());
+    assert!(
+        args.iter()
+            .any(|l| l.contains("This machine has no network access."))
     );
     assert!(args.contains(&"--strict-mcp-config"));
     assert!(!args.contains(&"--plugin-dir"));
@@ -573,10 +645,10 @@ fn gates_run_passes_the_plugin_dir_binary_and_consent() {
     );
     let work = e.work_dir("gates", "off", "fx-a", 1);
     let envtxt = fs::read_to_string(work.join("config/env.txt")).unwrap();
-    assert!(envtxt.contains(&format!(
-        "DLA_BIN={}",
-        e.root.join("fake-dla").canonicalize().unwrap().display()
-    )));
+    // the binary is copied next to the working copies: the repository is unreadable to the child
+    let copy = e.root.join("work/res/bin/dla");
+    assert!(copy.is_file());
+    assert!(envtxt.contains(&format!("DLA_BIN={}", copy.display())));
     assert!(envtxt.contains("DLA_CONSENT_TIERS=1-4"));
     assert!(envtxt.contains("DLA_CONSENT_RAW_VALUES=1"));
     assert!(envtxt.contains("DLA_ARCHETYPES=off"));
