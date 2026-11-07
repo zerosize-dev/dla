@@ -10,6 +10,7 @@ pub mod guard;
 pub mod model;
 pub mod run;
 pub mod schema_cmd;
+pub mod static_cmd;
 pub mod table;
 pub mod validate;
 

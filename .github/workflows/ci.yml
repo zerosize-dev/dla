@@ -93,6 +93,32 @@ jobs:
       - name: Python grader unit tests
         run: python3 -m unittest discover -s bench/runner -p 'test_*.py'
 
+  static:
+    name: static acceptance on the fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build dla and dla-bench
+        run: cargo build -p dla-cli -p dla-bench
+      # Most external analyzers are absent on the runner: the built-in census and
+      # the DLA rules alone must still flag every confirmable leak, with the
+      # archetype data present and with it removed.
+      - name: dla-bench static (archetypes on)
+        run: ./target/debug/dla-bench static --dla-bin ./target/debug/dla --json "$RUNNER_TEMP/static-on.json"
+      - name: dla-bench static (archetypes off)
+        run: ./target/debug/dla-bench static --archetypes off --dla-bin ./target/debug/dla --json "$RUNNER_TEMP/static-off.json"
+      - name: Upload the static results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: static-acceptance
+          path: |
+            ${{ runner.temp }}/static-on.json
+            ${{ runner.temp }}/static-off.json
+          if-no-files-found: ignore
+
   plugin:
     name: plugin validation
     runs-on: ubuntu-latest

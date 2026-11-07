@@ -164,7 +164,7 @@ pub struct VariantSpec {
     pub archetypes_off: bool,
 }
 
-fn copy_tree(src: &Path, dst: &Path) -> Res<()> {
+pub fn copy_tree(src: &Path, dst: &Path) -> Res<()> {
     fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
     let rd = fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))?;
     for entry in rd {
@@ -221,7 +221,7 @@ fn remove_file_if_exists(p: &Path) {
     let _ = fs::remove_file(p);
 }
 
-fn apply_archetypes_off(dest: &Path) -> Res<()> {
+pub fn apply_archetypes_off(dest: &Path) -> Res<()> {
     let skills = dest.join("skills");
     if skills.is_dir() {
         for skill in fs::read_dir(&skills).map_err(|e| e.to_string())?.flatten() {

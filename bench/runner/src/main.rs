@@ -3,7 +3,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
-use dla_bench::{compare, grade, run, schema_cmd, table, validate};
+use dla_bench::{compare, grade, run, schema_cmd, static_cmd, table, validate};
 
 #[derive(Parser)]
 #[command(name = "dla-bench", version, about = "DLA benchmark runner and grader")]
@@ -61,6 +61,8 @@ enum Cmd {
         #[arg(long, default_value = "bench/ablations")]
         ablations_dir: PathBuf,
     },
+    /// Static acceptance: probe, sweep, census and workload discovery on every fixture.
+    Static(static_cmd::StaticArgs),
     /// Exit 0 when two JSON files are equal as parsed JSON.
     Compare {
         /// First file.
@@ -115,6 +117,7 @@ fn main() -> ExitCode {
             &out,
         )
         .map(|()| format!("wrote {}", out.display())),
+        Cmd::Static(a) => static_cmd::run(&a),
         Cmd::Compare { a, b } => compare::compare_files(&a, &b).and_then(|d| {
             if d.is_empty() {
                 Ok("equal".to_owned())
