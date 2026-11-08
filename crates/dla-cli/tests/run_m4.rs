@@ -3,10 +3,12 @@
 use std::{fs, path::Path};
 
 use assert_cmd::Command;
+#[cfg(unix)]
+use dla_core::state::{ProcessKind, ProcessRecord, ProcessRole, RunStatus};
 use dla_core::{
     Ledger, NewFinding, Origin, RunState,
     evidence::{Authority, EvidenceCoverage, EvidenceKind, NewEvidence, Source, Tool},
-    state::{ProcessKind, ProcessRecord, ProcessRole, RunStatus, now_utc, run_dir as run_dir_of},
+    state::{now_utc, run_dir as run_dir_of},
 };
 use serde_json::{Value, json};
 
@@ -147,9 +149,11 @@ fn dispatch_registers_workers_and_status_lists_them() {
             .ends_with("skills/detect-leak-anywhere/references/jvm.md")
     );
     assert!(ws[0]["reference_exists"].is_boolean());
-    // 6000 s * 0.85 / 2
-    assert_eq!(ws[0]["share_secs"], 2550);
-    assert_eq!(ws[1]["share_secs"], 2550);
+    // 6000 s * 0.85 / 2, less a second when the clock ticks between init and dispatch.
+    for w in ws {
+        let share = w["share_secs"].as_u64().unwrap();
+        assert!((2549..=2550).contains(&share), "{w}");
+    }
     let st = RunState::load(&dir).unwrap();
     assert_eq!(st.workers.len(), 2);
     assert_eq!(st.workers[0].slice, "ledger.jvm.jsonl");
