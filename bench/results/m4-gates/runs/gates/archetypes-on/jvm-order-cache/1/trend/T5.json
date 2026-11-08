@@ -1,0 +1,1761 @@
+{
+  "schema_version": 1,
+  "id": "T5",
+  "series": "S9",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "os.rss",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 97,
+        "var_s": 492.3333333333333,
+        "z": 4.326548861480545,
+        "p_increasing": 7.573186657022951e-6,
+        "tau": 0.8083333333333333
+      },
+      "sen": {
+        "slope": 765.9704504504505,
+        "intercept": 66440140.8,
+        "lo": 490.3207207207207,
+        "hi": 943.8723294723295
+      },
+      "halves": {
+        "first": 979.7189189189189,
+        "second": 766.4317117117116,
+        "ratio": 0.7822975517890771
+      },
+      "noise": 2536806.8812800064,
+      "rise": 12753408.0,
+      "shape": "plateau",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "os.rss_anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 98,
+        "var_s": 493.3333333333333,
+        "z": 4.367184138240257,
+        "p_increasing": 6.2929308056490485e-6,
+        "tau": 0.8166666666666667
+      },
+      "sen": {
+        "slope": 763.3873873873874,
+        "intercept": 41661184.0,
+        "lo": 492.31951951951953,
+        "hi": 921.2924924924924
+      },
+      "halves": {
+        "first": 970.4936936936937,
+        "second": 797.0594594594595,
+        "ratio": 0.8212927756653993
+      },
+      "noise": 2509175.9616,
+      "rise": 12710400.0,
+      "shape": "plateau",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "os.rss_file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 17,
+        "var_s": 483.0,
+        "z": 0.7280252083092641,
+        "p_increasing": 0.233299077625655,
+        "tau": 0.14166666666666666
+      },
+      "sen": {
+        "slope": 0.7643758043758044,
+        "intercept": 24819697.37142857,
+        "lo": -2.2708246708246707,
+        "hi": 5.367403767403768
+      },
+      "halves": {
+        "first": 2.8993564993564993,
+        "second": -0.615015015015015,
+        "ratio": -0.21212121212121213
+      },
+      "noise": 31187.80416000181,
+      "rise": 12726.857142857143,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.rss_shmem",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.swap",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.vm_data",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 46,
+        "var_s": 493.3333333333333,
+        "z": 2.0260132600083667,
+        "p_increasing": 0.021381712916596907,
+        "tau": 0.38333333333333336
+      },
+      "sen": {
+        "slope": 806.0008316008316,
+        "intercept": 125211963.07692307,
+        "lo": 101.47747747747748,
+        "hi": 1258.8478764478764
+      },
+      "halves": {
+        "first": 17847.735735735736,
+        "second": 829.6552552552553,
+        "ratio": 0.04648518263266713
+      },
+      "noise": 4685344.452923085,
+      "rise": 13419913.846153846,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.vm_hwm",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 97,
+        "var_s": 492.3333333333333,
+        "z": 4.326548861480545,
+        "p_increasing": 7.573186657022951e-6,
+        "tau": 0.8083333333333333
+      },
+      "sen": {
+        "slope": 765.9704504504505,
+        "intercept": 66440140.8,
+        "lo": 490.3207207207207,
+        "hi": 943.8723294723295
+      },
+      "halves": {
+        "first": 979.7189189189189,
+        "second": 766.4317117117116,
+        "ratio": 0.7822975517890771
+      },
+      "noise": 2536806.8812800064,
+      "rise": 12753408.0,
+      "shape": "plateau",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "os.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 24.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "cgroup.current",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 0,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "container scope"
+      ]
+    },
+    {
+      "name": "cgroup.anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 0,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "container scope"
+      ]
+    },
+    {
+      "name": "cgroup.file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 0,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "container scope"
+      ]
+    },
+    {
+      "name": "jvm.classes_loaded",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 28,
+        "var_s": 158.66666666666666,
+        "z": 2.143487302301101,
+        "p_increasing": 0.01603699480083881,
+        "tau": 0.23333333333333334
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1741.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 563.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.heap_committed",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 51,
+        "var_s": 447.6666666666667,
+        "z": 2.3631572706713846,
+        "p_increasing": 0.009059989085916487,
+        "tau": 0.425
+      },
+      "sen": {
+        "slope": 652.267353067353,
+        "intercept": 13406793.142857142,
+        "lo": 0.0,
+        "hi": 1133.5956756756757
+      },
+      "halves": {
+        "first": 2361.6576576576576,
+        "second": 692.752912912913,
+        "ratio": 0.29333333333333333
+      },
+      "noise": 3109237.5551999984,
+      "rise": 10860251.428571427,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "sen lower bound <= 0",
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "jvm.heap_used",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 511.2276276276276,
+        "intercept": 2328136.666666667,
+        "lo": 506.35195195195195,
+        "hi": 525.6468468468469
+      },
+      "halves": {
+        "first": 525.9207207207207,
+        "second": 510.55890175890175,
+        "ratio": 0.9707906185161004
+      },
+      "noise": 37740.077200000225,
+      "rise": 8511940.0,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.nmt_committed",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 42,
+        "var_s": 493.3333333333333,
+        "z": 1.8459231924520676,
+        "p_increasing": 0.03245167930472159,
+        "tau": 0.35
+      },
+      "sen": {
+        "slope": 652.1535353535353,
+        "intercept": 92967455.03030303,
+        "lo": -196.4972972972973,
+        "hi": 1076.5837837837837
+      },
+      "halves": {
+        "first": 16484.093693693692,
+        "second": 988.944144144144,
+        "ratio": 0.059993843915269886
+      },
+      "noise": 3202617.274181818,
+      "rise": 10858356.363636363,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "sen lower bound <= 0",
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "jvm.nonheap_committed",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 8,
+        "var_s": 398.6666666666667,
+        "z": 0.35058479572944334,
+        "p_increasing": 0.36294993234018097,
+        "tau": 0.06666666666666667
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 12615680.0,
+        "lo": 0.0,
+        "hi": 8.434491634491634
+      },
+      "halves": {
+        "first": 24.6006006006006,
+        "second": -4.217245817245817,
+        "ratio": -0.17142857142857143
+      },
+      "noise": 48581.8368,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "jvm.nonheap_used",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 493.3333333333333,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.009309309309309288,
+        "intercept": 7698664.166666666,
+        "lo": -22.653853853853853,
+        "hi": 42.2006006006006
+      },
+      "halves": {
+        "first": 72.48408408408409,
+        "second": -41.6066924066924,
+        "ratio": -0.5740114251623456
+      },
+      "noise": 182920.96409999998,
+      "rise": 154.99999999999966,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "jvm.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 8.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:shop.Catalog.PRODUCTS",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/shop/Catalog.java:9",
+      "finding": "F2",
+      "candidates": [
+        "F2"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 37.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:shop.Catalog.PRODUCTS.bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "site": "src/shop/Catalog.java:9",
+      "finding": "F2",
+      "candidates": [
+        "F2"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1688.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "probe:shop.Catalog.PRODUCTS.size",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/shop/Catalog.java:9",
+      "finding": "F2",
+      "candidates": [
+        "F2"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 12.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:shop.Main.CUSTOMERS",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/shop/Main.java:5",
+      "finding": "F3",
+      "candidates": [
+        "F3"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 7.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:shop.Main.CUSTOMERS.bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "site": "src/shop/Main.java:5",
+      "finding": "F3",
+      "candidates": [
+        "F3"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 344.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "probe:shop.Main.CUSTOMERS.size",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/shop/Main.java:5",
+      "finding": "F3",
+      "candidates": [
+        "F3"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 6.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:shop.OrderCache.ORDERS_BY_ID",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/shop/OrderCache.java:8",
+      "finding": "F5",
+      "candidates": [
+        "F5",
+        "F1"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 6.75,
+        "intercept": 33.25,
+        "lo": 6.749729729729729,
+        "hi": 6.75019305019305
+      },
+      "halves": {
+        "first": 6.75,
+        "second": 6.75,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 7491.0,
+        "max": 7497.0
+      },
+      "noise": 2.2239,
+      "rise": 112387.5,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "probe:shop.OrderCache.ORDERS_BY_ID.bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "site": "src/shop/OrderCache.java:8",
+      "finding": "F5",
+      "candidates": [
+        "F5",
+        "F1"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 490.22162162162164,
+        "intercept": 1709.0,
+        "lo": 490.20324324324326,
+        "hi": 490.2357786357786
+      },
+      "halves": {
+        "first": 490.2306306306306,
+        "second": 490.2315315315316,
+        "ratio": 1.0000018377083044
+      },
+      "noise": 198.6684,
+      "rise": 8162190.0,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "probe:shop.OrderCache.ORDERS_BY_ID.size",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/shop/OrderCache.java:8",
+      "finding": "F5",
+      "candidates": [
+        "F5",
+        "F1"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 0.875,
+        "intercept": 0.375,
+        "lo": 0.8749549549549549,
+        "hi": 0.875032175032175
+      },
+      "halves": {
+        "first": 0.875,
+        "second": 0.875,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 971.0,
+        "max": 972.0
+      },
+      "noise": 0.37065,
+      "rise": 14568.75,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.heap_committed.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 84,
+        "var_s": 420.6666666666667,
+        "z": 4.046774850148838,
+        "p_increasing": 0.00002596407214758662,
+        "tau": 0.7
+      },
+      "sen": {
+        "slope": 708.4972972972973,
+        "intercept": 11534336.0,
+        "lo": 435.9983367983368,
+        "hi": 944.6630630630631
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 1943273.4719999998,
+      "rise": 11796480.0,
+      "shape": "stair",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "jvm.heap_used.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 114,
+        "var_s": 493.3333333333333,
+        "z": 5.087544408465455,
+        "p_increasing": 1.8136473321196133e-7,
+        "tau": 0.95
+      },
+      "sen": {
+        "slope": 590.9730548730549,
+        "intercept": 1891003.3636363633,
+        "lo": 522.0727927927928,
+        "hi": 721.6960960960961
+      },
+      "halves": {
+        "first": 616.1153153153153,
+        "second": 643.6800000000001,
+        "ratio": 1.0447394895070539
+      },
+      "noise": 570798.1021909097,
+      "rise": 9839701.363636365,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:byte[].count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 1.75,
+        "intercept": 13238.5,
+        "lo": 1.7496621621621622,
+        "hi": 1.7504504504504506
+      },
+      "halves": {
+        "first": 1.7507593307593308,
+        "second": 1.7497147147147145,
+        "ratio": 0.9994033354406495
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 1933.0,
+        "max": 1949.0
+      },
+      "noise": 3.7064999999999997,
+      "rise": 29137.5,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:int[].count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": -28,
+        "var_s": 158.66666666666666,
+        "z": -2.143487302301101,
+        "p_increasing": 0.9839630051991612,
+        "tau": -0.23333333333333334
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 946.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": -2.0,
+        "max": 1.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.lang.Class.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 28,
+        "var_s": 158.66666666666666,
+        "z": 2.143487302301101,
+        "p_increasing": 0.01603699480083881,
+        "tau": 0.23333333333333334
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2228.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 2.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.lang.Class[].count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 566.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.lang.Object[].count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 0.75,
+        "intercept": 2585.0,
+        "lo": 0.75,
+        "hi": 0.7501501501501502
+      },
+      "halves": {
+        "first": 0.7504504504504504,
+        "second": 0.75,
+        "ratio": 0.9993997599039616
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 832.0,
+        "max": 836.0
+      },
+      "noise": 0.7413,
+      "rise": 12487.5,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:java.lang.String.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 1.75,
+        "intercept": 12763.75,
+        "lo": 1.7495495495495494,
+        "hi": 1.7504504504504506
+      },
+      "halves": {
+        "first": 1.7507593307593308,
+        "second": 1.7494744744744746,
+        "ratio": 0.9992661148438381
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 1933.0,
+        "max": 1948.0
+      },
+      "noise": 3.7064999999999997,
+      "rise": 29137.5,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:java.lang.String[].count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 478.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.lang.invoke.LambdaForm$Name.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 439.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.lang.invoke.MemberName.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 547.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.lang.module.ModuleDescriptor$Exports.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 742.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.lang.reflect.Method.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 645.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.util.HashMap$Node.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 0.875,
+        "intercept": 3227.375,
+        "lo": 0.8749549549549549,
+        "hi": 0.8750750750750751
+      },
+      "halves": {
+        "first": 0.875,
+        "second": 0.875,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 971.0,
+        "max": 973.0
+      },
+      "noise": 0.37065,
+      "rise": 14568.75,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:java.util.HashMap$Node[].count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 15,
+      "mk": {
+        "s": 14,
+        "var_s": 74.66666666666667,
+        "z": 1.504457662130396,
+        "p_increasing": 0.06623178340397573,
+        "tau": 0.13333333333333333
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 419.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 15,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 3.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.util.HashMap.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 428.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.util.ImmutableCollections$List12.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 15,
+      "mk": {
+        "s": 105,
+        "var_s": 408.3333333333333,
+        "z": 5.146665256776092,
+        "p_increasing": 1.325789376298911e-7,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 0.125,
+        "intercept": 133.0,
+        "lo": 0.12496782496782496,
+        "hi": 0.12504504504504504
+      },
+      "halves": {
+        "first": 0.12507507507507507,
+        "second": 0.125,
+        "ratio": 0.9993997599039617
+      },
+      "every_delta": {
+        "deltas": 14,
+        "all_at_least_one": true,
+        "min": 138.0,
+        "max": 139.0
+      },
+      "noise": 0.37065,
+      "rise": 1942.5,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:java.util.ImmutableCollections$ListN.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 0.75,
+        "intercept": 45.25,
+        "lo": 0.75,
+        "hi": 0.75
+      },
+      "halves": {
+        "first": 0.75,
+        "second": 0.75,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 832.0,
+        "max": 833.0
+      },
+      "noise": 0.37065,
+      "rise": 12487.5,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:java.util.ImmutableCollections$Set12.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 466.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:java.util.concurrent.ConcurrentHashMap$Node.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": -28,
+        "var_s": 158.66666666666666,
+        "z": -2.143487302301101,
+        "p_increasing": 0.9839630051991612,
+        "tau": -0.23333333333333334
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1761.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": -13.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "jvm.class:shop.Order$Line.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 3.25,
+        "intercept": 0.75,
+        "lo": 3.24990990990991,
+        "hi": 3.25006435006435
+      },
+      "halves": {
+        "first": 3.25,
+        "second": 3.25,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 3607.0,
+        "max": 3609.0
+      },
+      "noise": 0.7413,
+      "rise": 54112.5,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "jvm.class:shop.Order.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 0.875,
+        "intercept": 0.375,
+        "lo": 0.8749549549549549,
+        "hi": 0.875032175032175
+      },
+      "halves": {
+        "first": 0.875,
+        "second": 0.875,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 971.0,
+        "max": 972.0
+      },
+      "noise": 0.37065,
+      "rise": 14568.75,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    }
+  ]
+}

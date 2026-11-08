@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "native",
+  "mode": "command",
+  "workload": "native:main:Makefile",
+  "scratch": "harness/H1/work",
+  "build": {
+    "argv": [
+      "make"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "run": {
+    "argv": [
+      "./framedec",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "LD_PRELOAD",
+        "/root/.cache/dla-bench/m4-gates/gates/archetypes-on/native-frame-decoder/1/project/.dla/20261108-192926-2576/harness/H1/agent/libdlashim.so"
+      ],
+      [
+        "DLA_SHIM_ONLY",
+        "framedec"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [],
+  "agent": "alloc-shim",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300
+}

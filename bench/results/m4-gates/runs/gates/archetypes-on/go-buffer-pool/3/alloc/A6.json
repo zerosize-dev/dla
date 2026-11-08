@@ -1,0 +1,95 @@
+{
+  "basis": "its probe column of F4",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "probe:internal/workload.skus",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -1095000.0,
+        "extra_slope": -355.4,
+        "main_slope": -224.2,
+        "noise": 1313000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 7754000.0,
+        "before": 8880000.0,
+        "drop": 1126000.0,
+        "growth": -413700.0,
+        "kind": "free-os-memory",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 793500.0,
+        "extra_slope": 257.6,
+        "main_slope": 0.0,
+        "noise": 205400.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F4",
+  "harness": "H2",
+  "id": "A6",
+  "iterations": 8,
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "primary": "probe:internal/workload.skus",
+  "purge": "free-os-memory",
+  "series": "S11",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T8"
+}

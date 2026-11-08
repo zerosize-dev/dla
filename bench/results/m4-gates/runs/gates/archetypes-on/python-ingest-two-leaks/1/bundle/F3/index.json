@@ -1,0 +1,192 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E12-T1.json",
+      "id": "E12",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 21,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "F3"
+            ],
+            "column": "probe:ingest.parser._newest",
+            "finding": "F3",
+            "lo": 15.95,
+            "p": 0.0000248,
+            "ratio": 0.9951,
+            "region": "heap",
+            "shape": "steady",
+            "site": "ingest/parser.py:3",
+            "slope": 15.97,
+            "unit": "count"
+          },
+          {
+            "candidates": [
+              "F6",
+              "F2"
+            ],
+            "column": "probe:ingest.registry._LISTENERS",
+            "finding": "F6",
+            "lo": 7.892,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "site": "ingest/registry.py:3",
+            "slope": 7.974,
+            "unit": "count"
+          },
+          {
+            "column": "py.gc_objects",
+            "lo": 3.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 3.0,
+            "unit": "count"
+          },
+          {
+            "column": "py.gc_objects.pre_gc",
+            "lo": 2.593,
+            "p": 0.0000248,
+            "ratio": 0.7851,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.901,
+            "unit": "count"
+          },
+          {
+            "column": "py.type:ingest.models.Record.count",
+            "lo": 2.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.0,
+            "unit": "count"
+          },
+          {
+            "column": "py.type:ingest.watchers.CheckpointWatcher.count",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 20,
+          "insufficient": 1,
+          "steady": 6
+        },
+        "trend": "T1",
+        "workload": "python:main:ingest/load.py"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E13-A1.json",
+      "id": "E13",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:ingest.parser._newest",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:ingest.parser._newest",
+            "plateau": {
+              "extra_rise": 56280.0,
+              "extra_slope": 15.99,
+              "main_slope": 15.97,
+              "noise": 12.6,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:ingest.parser._newest.bytes",
+            "plateau": {
+              "extra_rise": 2022000.0,
+              "extra_slope": 656.5,
+              "main_slope": 655.5,
+              "noise": 1112.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 16640000.0,
+              "extra_slope": 5403.0,
+              "main_slope": 5308.0,
+              "noise": 639100.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 59590000.0,
+              "before": 58970000.0,
+              "drop": -622600.0,
+              "growth": 38400000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 16640000.0,
+              "extra_slope": 5403.0,
+              "main_slope": 5308.0,
+              "noise": 639100.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 59590000.0,
+              "before": 58970000.0,
+              "drop": -622600.0,
+              "growth": 21330000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "finding": "F3",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": "excerpt.txt",
+  "finding": "F3",
+  "site": "ingest/parser.py:3"
+}

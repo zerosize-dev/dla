@@ -1,0 +1,137 @@
+{
+  "basis": "every column that passed the gate in the latest trend of the harness, and os.rss",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "py.traced.pre_gc",
+      "plateau": {
+        "extra_rise": 2324.0,
+        "extra_slope": 0.7547,
+        "main_slope": 1.785,
+        "noise": 305.5,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "gc": {
+        "post_rise": 3176.0,
+        "pre_rise": 9125.0,
+        "verdict": "none"
+      },
+      "name": "py.traced",
+      "plateau": {
+        "extra_rise": 2187.0,
+        "extra_slope": 0.71,
+        "main_slope": 0.5361,
+        "noise": 221.8,
+        "verdict": "inconclusive"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "py.traced_peak",
+      "plateau": {
+        "extra_rise": 2388.0,
+        "extra_slope": 0.7754,
+        "main_slope": 1.981,
+        "noise": 236.4,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 9557.0,
+        "extra_slope": 3.103,
+        "main_slope": 2.482,
+        "noise": 35420.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 24850000.0,
+        "before": 24330000.0,
+        "drop": -528400.0,
+        "growth": 1724000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 9557.0,
+        "extra_slope": 3.103,
+        "main_slope": 2.482,
+        "noise": 35420.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 24850000.0,
+        "before": 24330000.0,
+        "drop": -528400.0,
+        "growth": 1724000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "inconclusive",
+  "finding": null,
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)",
+    "points 1 to 9 come from S1; the extra points from S4",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "trim",
+  "series": "S5",
+  "supports": [],
+  "trend": "T3"
+}

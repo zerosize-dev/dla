@@ -1,0 +1,119 @@
+{
+  "basis": "its probe column of jvm/F4",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "probe:shop.codec.OrderEncoder.Companion",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "probe:shop.codec.OrderEncoder.Companion.bytes",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 104400000.0,
+        "extra_slope": 6718.0,
+        "main_slope": 7190.0,
+        "noise": 16690000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 310400000.0,
+        "before": 316900000.0,
+        "drop": 6513000.0,
+        "growth": 223100000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 104100000.0,
+        "extra_slope": 6697.0,
+        "main_slope": 6592.0,
+        "noise": 7003000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 316600000.0,
+        "before": 316900000.0,
+        "drop": 348200.0,
+        "growth": -59370000.0,
+        "kind": "trim-native-heap",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "jvm/F4",
+  "harness": "H2",
+  "id": "A4",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "points 1 to 9 come from S1; the extra points from S8",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "probe:shop.codec.OrderEncoder.Companion",
+  "purge": "trim-native-heap",
+  "series": "S9",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T6"
+}

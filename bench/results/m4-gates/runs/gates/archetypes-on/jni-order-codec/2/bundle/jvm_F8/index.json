@@ -1,0 +1,121 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E13-T3.json",
+      "id": "jvm/E13",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 3,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "os.rss",
+            "lo": 6026.0,
+            "p": 0.0001984,
+            "ratio": 0.651,
+            "region": "process",
+            "shape": "steady",
+            "slope": 7190.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss_anon",
+            "lo": 6065.0,
+            "p": 0.0008681,
+            "ratio": 0.6534,
+            "region": "process",
+            "shape": "steady",
+            "slope": 7179.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.vm_hwm",
+            "lo": 5003.0,
+            "p": 0.0008681,
+            "ratio": 0.8975,
+            "region": "process",
+            "shape": "stair",
+            "slope": 6592.0,
+            "unit": "bytes"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "insufficient": 2,
+          "stair": 2,
+          "steady": 2
+        },
+        "trend": "T3",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E14-A2.json",
+      "id": "jvm/E14",
+      "kind": "discriminator",
+      "result": {
+        "column": "os.rss",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 71060000.0,
+              "extra_slope": 4573.0,
+              "main_slope": 7190.0,
+              "noise": 7545000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 364900000.0,
+              "before": 372200000.0,
+              "drop": 7279000.0,
+              "growth": 278400000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 72810000.0,
+              "extra_slope": 4685.0,
+              "main_slope": 6592.0,
+              "noise": 16310000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 371700000.0,
+              "before": 372200000.0,
+              "drop": 507900.0,
+              "growth": -4059000.0,
+              "kind": "trim-native-heap",
+              "verdict": "no-growth"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "finding": "jvm/F8",
+        "harness": "H2",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S5",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T4"
+      }
+    }
+  ],
+  "excerpt": "excerpt.txt",
+  "finding": "jvm/F8",
+  "site": "kotlin/shop/Native.kt:9"
+}

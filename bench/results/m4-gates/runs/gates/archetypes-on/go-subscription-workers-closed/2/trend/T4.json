@@ -1,0 +1,659 @@
+{
+  "schema_version": 1,
+  "id": "T4",
+  "series": "S7",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "os.rss",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": -4,
+        "var_s": 1625.3333333333333,
+        "z": -0.07441320902087377,
+        "p_increasing": 0.5296592006673995,
+        "tau": -0.014492753623188406
+      },
+      "sen": {
+        "slope": -23.272727272727273,
+        "intercept": 7616512.0,
+        "lo": -198.35524475524477,
+        "hi": 155.15151515151516
+      },
+      "halves": {
+        "first": -84.37421487603305,
+        "second": 173.76969696969695
+      },
+      "noise": 1126491.3408,
+      "rise": -235520.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.rss_anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": -4,
+        "var_s": 1625.3333333333333,
+        "z": -0.07441320902087377,
+        "p_increasing": 0.5296592006673995,
+        "tau": -0.014492753623188406
+      },
+      "sen": {
+        "slope": -19.393939393939394,
+        "intercept": 4209322.666666667,
+        "lo": -202.47272727272727,
+        "hi": 148.28051948051947
+      },
+      "halves": {
+        "first": -99.26876033057852,
+        "second": 173.76969696969695
+      },
+      "noise": 1131551.9488,
+      "rise": -196266.6666666667,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.rss_file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": -3,
+        "var_s": 791.6666666666666,
+        "z": -0.0710818653310911,
+        "p_increasing": 0.5283336994863099,
+        "tau": -0.010869565217391304
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 3383296.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.rss_shmem",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.swap",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.vm_data",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 22,
+        "var_s": 918.6666666666666,
+        "z": 0.6928517455879692,
+        "p_increasing": 0.24420129741860563,
+        "tau": 0.07971014492753623
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 47042560.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.vm_hwm",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 150,
+        "var_s": 1625.3333333333333,
+        "z": 3.6958560480367306,
+        "p_increasing": 0.00010957356142259201,
+        "tau": 0.5434782608695652
+      },
+      "sen": {
+        "slope": 137.05050505050505,
+        "intercept": 9244330.666666666,
+        "lo": 87.27272727272727,
+        "hi": 196.82077922077923
+      },
+      "halves": {
+        "first": 323.4909090909091,
+        "second": 44.21818181818182,
+        "ratio": 0.1366906474820144
+      },
+      "noise": 296045.56799999997,
+      "rise": 1386951.1111111112,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "os.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 81,
+        "var_s": 991.6666666666666,
+        "z": 2.540429395319823,
+        "p_increasing": 0.005535822276595936,
+        "tau": 0.29347826086956524
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 7.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.00021694214876033058,
+        "second": 0.0,
+        "ratio": 0.0
+      },
+      "every_delta": {
+        "deltas": 24,
+        "all_at_least_one": false,
+        "min": -1.0,
+        "max": 1.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "go.goroutines",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 24,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "go.heap_live",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 204,
+        "var_s": 1625.3333333333333,
+        "z": 5.035293810412458,
+        "p_increasing": 2.385582258134569e-7,
+        "tau": 0.7391304347826086
+      },
+      "sen": {
+        "slope": 1.11010101010101,
+        "intercept": 156765.77777777778,
+        "lo": 0.6522727272727272,
+        "hi": 1.481818181818182
+      },
+      "halves": {
+        "first": 1.9805194805194806,
+        "second": 0.4909090909090909,
+        "ratio": 0.24786885245901638
+      },
+      "noise": 2238.396533333338,
+      "rise": 11234.22222222222,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "go.heap_objects",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 204,
+        "var_s": 1625.3333333333333,
+        "z": 5.035293810412458,
+        "p_increasing": 2.385582258134569e-7,
+        "tau": 0.7391304347826086
+      },
+      "sen": {
+        "slope": 1.11010101010101,
+        "intercept": 156477.77777777778,
+        "lo": 0.6477272727272727,
+        "hi": 1.4545454545454546
+      },
+      "halves": {
+        "first": 1.9805194805194806,
+        "second": 0.4857142857142857,
+        "ratio": 0.24524590163934426
+      },
+      "noise": 2238.396533333338,
+      "rise": 11234.22222222222,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "go.released",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 27,
+        "var_s": 1624.3333333333333,
+        "z": 0.6451129643035377,
+        "p_increasing": 0.2594269915311387,
+        "tau": 0.09782608695652174
+      },
+      "sen": {
+        "slope": 67.02545454545455,
+        "intercept": 4891443.2,
+        "lo": -116.36363636363636,
+        "hi": 228.07272727272726
+      },
+      "halves": {
+        "first": 131.92311688311688,
+        "second": -155.81645021645022,
+        "ratio": -1.1811155913978495
+      },
+      "noise": 1187825.9097600006,
+      "rise": 678297.6000000001,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "go.stacks",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 75,
+        "var_s": 1103.6666666666667,
+        "z": 2.227474580809989,
+        "p_increasing": 0.01295778640504991,
+        "tau": 0.2717391304347826
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 491520.0,
+        "lo": 0.0,
+        "hi": 7.447272727272727
+      },
+      "halves": {
+        "first": 19.464462809917357,
+        "second": 0.0,
+        "ratio": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "go.total",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 22,
+        "var_s": 918.6666666666666,
+        "z": 0.6928517455879692,
+        "p_increasing": 0.24420129741860563,
+        "tau": 0.07971014492753623
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 13194504.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "go.goroutines.pre_gc",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 24,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "go.heap_objects.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 46,
+        "var_s": 1625.3333333333333,
+        "z": 1.1161981353131065,
+        "p_increasing": 0.13216866625424745,
+        "tau": 0.16666666666666666
+      },
+      "sen": {
+        "slope": 61.460227272727266,
+        "intercept": 1401524.75,
+        "lo": -46.56136363636364,
+        "hi": 193.2949494949495
+      },
+      "halves": {
+        "first": -26.127272727272725,
+        "second": 255.1431818181818
+      },
+      "noise": 539523.3291,
+      "rise": 621977.4999999999,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "go.total.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 24,
+      "mk": {
+        "s": 49,
+        "var_s": 923.6666666666666,
+        "z": 1.5793689725639333,
+        "p_increasing": 0.05712572493574969,
+        "tau": 0.17753623188405798
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 13194504.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "cgroup.current",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "container scope"
+      ]
+    },
+    {
+      "name": "cgroup.anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "container scope"
+      ]
+    },
+    {
+      "name": "cgroup.file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "container scope"
+      ]
+    }
+  ]
+}

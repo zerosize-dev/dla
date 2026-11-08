@@ -1,0 +1,139 @@
+{
+  "basis": "the columns at its site of jvm/F1",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "probe:shop.codec.Audit.trail",
+      "plateau": {
+        "extra_rise": 46620.0,
+        "extra_slope": 2.625,
+        "main_slope": 2.625,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "probe:shop.codec.Audit.trail.bytes",
+      "plateau": {
+        "extra_rise": 22350000.0,
+        "extra_slope": 1438.0,
+        "main_slope": 1437.0,
+        "noise": 609.3,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "probe:shop.codec.Audit.trail.size",
+      "plateau": {
+        "extra_rise": 15540.0,
+        "extra_slope": 0.875,
+        "main_slope": 0.875,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 88570000.0,
+        "extra_slope": 5699.0,
+        "main_slope": 7190.0,
+        "noise": 10260000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 307500000.0,
+        "before": 314200000.0,
+        "drop": 6709000.0,
+        "growth": 220500000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 84430000.0,
+        "extra_slope": 5433.0,
+        "main_slope": 6592.0,
+        "noise": 8928000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 313900000.0,
+        "before": 314200000.0,
+        "drop": 360400.0,
+        "growth": -62050000.0,
+        "kind": "trim-native-heap",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "jvm/F1",
+  "harness": "H2",
+  "id": "A10",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "points 1 to 9 come from S1; the extra points from S20",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "probe:shop.codec.Audit.trail",
+  "purge": "trim-native-heap",
+  "series": "S21",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T12"
+}

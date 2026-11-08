@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "native": {
+      "runtime": "native",
+      "backends": {
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 4,
+          "dispositioned": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 1,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/checksum.c::crc32_of",
+          "src/checksum.c::crc32_update",
+          "src/decoder.c::decode_frame",
+          "src/decoder.c::frame_release",
+          "src/decoder.c::frame_status_name",
+          "src/rle.c::rle_encode",
+          "src/rle.c::rle_expand",
+          "src/synth.c::synth_init",
+          "src/synth.c::synth_next",
+          "src/synth.c::synth_rand"
+        ],
+        "exercised": [],
+        "not_exercisable": [
+          {
+            "entry": "src/decoder.c::frame_status_name",
+            "reason": "no_harness"
+          }
+        ]
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "region": "heap",
+      "total_slope": 1103.2103896103895,
+      "attributed_slope": 0.0,
+      "residual": 1103.2103896103895,
+      "unit": "bytes/n",
+      "threshold": 275.80259740259737,
+      "open_item": "O1"
+    }
+  ],
+  "blind_spots": [
+    {
+      "runtime": "native",
+      "text": "the allocator shim does not record which entry points ran"
+    }
+  ]
+}

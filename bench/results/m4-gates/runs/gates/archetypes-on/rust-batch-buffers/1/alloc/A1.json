@@ -1,0 +1,117 @@
+{
+  "basis": "no column passed the gate in the latest trend of the harness: the runtime heap (native.live_bytes) decides, os.rss is reported",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "native.live_bytes",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -28670.0,
+        "extra_slope": -37.24,
+        "main_slope": 21.1,
+        "noise": 15180.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 7004000.0,
+        "before": 10840000.0,
+        "drop": 3834000.0,
+        "growth": -16380.0,
+        "kind": "trim",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -3584.0,
+        "extra_slope": -4.655,
+        "main_slope": 117.9,
+        "noise": 37200.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 18740000.0,
+        "before": 18740000.0,
+        "drop": 0.0,
+        "growth": 114700.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "native.peak_bytes",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "548 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "trim",
+  "series": "S3",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T2"
+}

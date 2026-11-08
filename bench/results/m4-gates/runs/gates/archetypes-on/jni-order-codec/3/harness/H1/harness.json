@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "jvm",
+  "mode": "command",
+  "workload": "jvm:main:build.sh:run",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "sh",
+      "./build.sh",
+      "run",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "JAVA_TOOL_OPTIONS",
+        "-javaagent:/root/.cache/dla-bench/m4-gates/gates/archetypes-on/jni-order-codec/3/project/.dla/20261108-202005-bcf9/harness/H1/agent/dla-agent.jar -XX:NativeMemoryTracking=summary"
+      ]
+    ]
+  },
+  "iter_arg": "{n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 2220,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "jvm/F3",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.codec.Audit",
+        "field": "trail"
+      },
+      "site": "kotlin/shop/Audit.kt:9"
+    },
+    {
+      "id": "P2",
+      "finding": "jvm/F5",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.codec.FramePacker",
+        "field": "MAGIC"
+      },
+      "site": "kotlin/shop/FramePacker.kt:9"
+    },
+    {
+      "id": "P3",
+      "finding": "jvm/F2",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.Entry"
+      },
+      "site": "kotlin/shop/Audit.kt:3"
+    },
+    {
+      "id": "P4",
+      "finding": "jvm/F3",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.Audit"
+      },
+      "site": "kotlin/shop/Audit.kt:9"
+    },
+    {
+      "id": "P5",
+      "finding": "jvm/F4",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.OrderEncoder"
+      },
+      "site": "kotlin/shop/Encoder.kt:6"
+    },
+    {
+      "id": "P6",
+      "finding": "jvm/F5",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.FramePacker"
+      },
+      "site": "kotlin/shop/FramePacker.kt:9"
+    },
+    {
+      "id": "P7",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.Native"
+      }
+    },
+    {
+      "id": "P8",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.OrderGenerator"
+      }
+    },
+    {
+      "id": "P9",
+      "finding": "jvm/F17",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.Order"
+      },
+      "site": "kotlin/shop/Order.kt:18"
+    },
+    {
+      "id": "P10",
+      "finding": "jvm/F18",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.codec.Stats"
+      },
+      "site": "kotlin/shop/Stats.kt:6"
+    }
+  ],
+  "agent": "jvm-agent",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "timeout_secs": 300
+}

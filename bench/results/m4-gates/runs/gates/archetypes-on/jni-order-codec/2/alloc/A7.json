@@ -1,0 +1,99 @@
+{
+  "basis": "the primary column of the region of jvm/F16",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 48060000.0,
+        "pre_rise": 56500000.0,
+        "verdict": "none"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 22440000.0,
+        "extra_slope": 1444.0,
+        "main_slope": 1443.0,
+        "noise": 41940.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 70820000.0,
+        "extra_slope": 4557.0,
+        "main_slope": 7190.0,
+        "noise": 5783000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 287600000.0,
+        "before": 295900000.0,
+        "drop": 8258000.0,
+        "growth": 202100000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 35080000.0,
+        "extra_slope": 2258.0,
+        "main_slope": 6592.0,
+        "noise": 14190000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 295600000.0,
+        "before": 295900000.0,
+        "drop": 274400.0,
+        "growth": -80370000.0,
+        "kind": "trim-native-heap",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "jvm/F16",
+  "harness": "H2",
+  "id": "A7",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "points 1 to 9 come from S1; the extra points from S14",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "jvm.heap_used",
+  "purge": "trim-native-heap",
+  "series": "S15",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T9"
+}

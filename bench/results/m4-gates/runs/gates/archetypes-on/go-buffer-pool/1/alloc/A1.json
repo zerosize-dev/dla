@@ -1,0 +1,98 @@
+{
+  "basis": "no column passed the gate in the latest trend of the harness: the runtime heap (go.heap_live) decides, os.rss is reported",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "go.heap_live",
+      "plateau": {
+        "extra_rise": -3311.0,
+        "extra_slope": -1.075,
+        "main_slope": 3.294,
+        "noise": 2900.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -1975000.0,
+        "extra_slope": -641.2,
+        "main_slope": -236.5,
+        "noise": 1299000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 8110000.0,
+        "before": 9896000.0,
+        "drop": 1786000.0,
+        "growth": 3482000.0,
+        "kind": "free-os-memory",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-ALLOC",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -7369000.0,
+        "extra_slope": -2392.0,
+        "main_slope": 1746.0,
+        "noise": 1032000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "go command mode has no package-variable probes: growth shows in the goroutine groups and runtime totals (use --driver for GoVar probes)"
+  ],
+  "primary": null,
+  "purge": "free-os-memory",
+  "series": "S3",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T2"
+}

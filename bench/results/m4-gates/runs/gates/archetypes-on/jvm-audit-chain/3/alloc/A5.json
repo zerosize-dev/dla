@@ -1,0 +1,101 @@
+{
+  "basis": "the primary column of the region of F5",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 8384000.0,
+        "pre_rise": 10900000.0,
+        "verdict": "none"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 3890000.0,
+        "extra_slope": 500.7,
+        "main_slope": 509.6,
+        "noise": 79490.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 30480000.0,
+        "extra_slope": 3923.0,
+        "main_slope": 4242.0,
+        "noise": 27430000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 116500000.0,
+        "before": 129900000.0,
+        "drop": 13430000.0,
+        "growth": 24380000.0,
+        "kind": "trim-native-heap",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-ALLOC",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 28860000.0,
+        "extra_slope": 3714.0,
+        "main_slope": 4930.0,
+        "noise": 26020000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 132400000.0,
+        "before": 132400000.0,
+        "drop": 0.0,
+        "growth": 26930000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F5",
+  "harness": "H1",
+  "id": "A5",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S10",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "jvm.heap_used",
+  "purge": "trim-native-heap",
+  "series": "S11",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T6"
+}

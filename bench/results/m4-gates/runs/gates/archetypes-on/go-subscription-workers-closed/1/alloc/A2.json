@@ -1,0 +1,91 @@
+{
+  "basis": "the primary column of the region of F1",
+  "columns": [
+    {
+      "favors": "inconclusive",
+      "name": "go.heap_live",
+      "plateau": {
+        "extra_rise": 3651.0,
+        "extra_slope": 1.185,
+        "main_slope": 2.382,
+        "noise": 301.3,
+        "verdict": "inconclusive"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -1008000.0,
+        "extra_slope": -327.1,
+        "main_slope": 280.8,
+        "noise": 1106000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 5337000.0,
+        "before": 7512000.0,
+        "drop": 2175000.0,
+        "growth": 311300.0,
+        "kind": "free-os-memory",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-ALLOC",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 297.4,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "inconclusive",
+  "finding": "F1",
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "primary": "go.heap_live",
+  "purge": "free-os-memory",
+  "series": "S4",
+  "supports": [],
+  "trend": "T4"
+}

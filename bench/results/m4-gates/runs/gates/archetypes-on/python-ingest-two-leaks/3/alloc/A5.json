@@ -1,0 +1,97 @@
+{
+  "basis": "the primary column of the region of F4",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 17690000.0,
+        "pre_rise": 17680000.0,
+        "verdict": "none"
+      },
+      "name": "py.traced",
+      "plateau": {
+        "extra_rise": 8254000.0,
+        "extra_slope": 2680.0,
+        "main_slope": 2678.0,
+        "noise": 3409.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 16570000.0,
+        "extra_slope": 5381.0,
+        "main_slope": 5267.0,
+        "noise": 594500.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59530000.0,
+        "before": 58900000.0,
+        "drop": -630800.0,
+        "growth": 38320000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 16570000.0,
+        "extra_slope": 5381.0,
+        "main_slope": 5267.0,
+        "noise": 594500.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59530000.0,
+        "before": 58900000.0,
+        "drop": -630800.0,
+        "growth": 21210000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F4",
+  "harness": "H1",
+  "id": "A5",
+  "iterations": 8,
+  "limitations": [
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)",
+    "points 1 to 9 come from S1; the extra points from S10",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "py.traced",
+  "purge": "trim",
+  "series": "S11",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T6"
+}

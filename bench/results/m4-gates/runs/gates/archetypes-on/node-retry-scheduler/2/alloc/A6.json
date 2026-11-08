@@ -1,0 +1,121 @@
+{
+  "basis": "its probe column of F6",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "probe:src/scheduler.js:shared.deadLetters",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "probe:src/scheduler.js:shared.deadLetters.size",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 31660000.0,
+        "extra_slope": 10280.0,
+        "main_slope": 7919.0,
+        "noise": 2346000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 114100000.0,
+        "before": 113900000.0,
+        "drop": -262100.0,
+        "growth": 55090000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 31680000.0,
+        "extra_slope": 10280.0,
+        "main_slope": 7863.0,
+        "noise": 2217000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F6",
+  "harness": "H1",
+  "id": "A6",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S12",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "probe:src/scheduler.js:shared.deadLetters",
+  "purge": "gc",
+  "series": "S13",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T7"
+}

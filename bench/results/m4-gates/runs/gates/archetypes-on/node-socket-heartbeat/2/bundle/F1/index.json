@@ -1,0 +1,152 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 6,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "F5",
+              "F6"
+            ],
+            "column": "node.listeners@src/gateway.js:24",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "site": "src/gateway.js:24",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "candidates": [
+              "F1",
+              "F7"
+            ],
+            "column": "node.timers@src/heartbeat.js:15",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "site": "src/heartbeat.js:15",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "node.listeners",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "node.timers",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 5,
+          "insufficient": 1,
+          "steady": 4
+        },
+        "trend": "T1",
+        "workload": "node:script:package.json:load"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E12-A1.json",
+      "id": "E12",
+      "kind": "discriminator",
+      "result": {
+        "column": "node.timers@src/heartbeat.js:15",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "node.timers@src/heartbeat.js:15",
+            "plateau": {
+              "extra_rise": 3520.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 33030000.0,
+              "extra_slope": 10720.0,
+              "main_slope": 19900.0,
+              "noise": 1955000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 175100000.0,
+              "before": 173300000.0,
+              "drop": -1823000.0,
+              "growth": 104500000.0,
+              "kind": "gc",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 32950000.0,
+              "extra_slope": 10700.0,
+              "main_slope": 20030.0,
+              "noise": 1607000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "finding": "F1",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "gc",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": "excerpt.txt",
+  "finding": "F1",
+  "site": "src/heartbeat.js:15"
+}

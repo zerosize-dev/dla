@@ -1,0 +1,95 @@
+{
+  "basis": "the primary column of the region of F3",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 20180000.0,
+        "pre_rise": 28390000.0,
+        "verdict": "none"
+      },
+      "name": "node.heap_used",
+      "plateau": {
+        "extra_rise": 9060000.0,
+        "extra_slope": 2941.0,
+        "main_slope": 3089.0,
+        "noise": 14510.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 36920000.0,
+        "before": 39270000.0,
+        "drop": 2347000.0,
+        "growth": 33330000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 13270000.0,
+        "extra_slope": 4308.0,
+        "main_slope": 9967.0,
+        "noise": 425300.0,
+        "verdict": "inconclusive"
+      },
+      "purge": {
+        "after": 117000000.0,
+        "before": 116800000.0,
+        "drop": -143400.0,
+        "growth": 57260000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 11960000.0,
+        "extra_slope": 3882.0,
+        "main_slope": 9815.0,
+        "noise": 513100.0,
+        "verdict": "inconclusive"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F3",
+  "harness": "H3",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "node.heap_used",
+  "purge": "gc",
+  "series": "S4",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T3"
+}

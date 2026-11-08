@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "native": {
+      "runtime": "native",
+      "backends": {
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 10,
+          "dispositioned": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [],
+        "exercised": [],
+        "not_exercisable": []
+      }
+    }
+  },
+  "residual": [],
+  "blind_spots": []
+}

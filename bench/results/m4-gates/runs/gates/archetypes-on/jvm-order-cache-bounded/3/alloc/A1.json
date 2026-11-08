@@ -1,0 +1,104 @@
+{
+  "basis": "no column passed the gate in the latest trend of the harness: the runtime heap (jvm.heap_used) decides, os.rss is reported",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 13970.0,
+        "pre_rise": 1035000.0,
+        "verdict": "headroom"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 6334.0,
+        "extra_slope": 0.8152,
+        "main_slope": 2.577,
+        "noise": 3112.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 2724000.0,
+        "extra_slope": 350.6,
+        "main_slope": 690.0,
+        "noise": 2690000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 69270000.0,
+        "before": 70980000.0,
+        "drop": 1712000.0,
+        "growth": 6263000.0,
+        "kind": "trim-native-heap",
+        "verdict": "partial"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 2760000.0,
+        "extra_slope": 355.2,
+        "main_slope": 690.0,
+        "noise": 2548000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 71830000.0,
+        "before": 71830000.0,
+        "drop": 0.0,
+        "growth": 7111000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": null,
+  "purge": "trim-native-heap",
+  "series": "S3",
+  "supports": [
+    "N-HEADROOM",
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T2"
+}

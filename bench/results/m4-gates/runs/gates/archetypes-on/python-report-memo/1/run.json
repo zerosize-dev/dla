@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "python-report-memo",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 401.822,
+  "usage": {
+    "input_tokens": 32,
+    "output_tokens": 3185,
+    "cache_read_input_tokens": 566095,
+    "cache_creation_input_tokens": 36776
+  },
+  "cost_usd": 0.2356275,
+  "num_turns": 16,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-08T19:44:53Z",
+  "error": null
+}

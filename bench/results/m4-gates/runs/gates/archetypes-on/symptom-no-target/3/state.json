@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "run_id": "20261108-204325-ac98",
+  "session_id": "64a71b9f-b99e-4acb-bdd1-e4be7c861b74",
+  "project_root": "/root/.cache/dla-bench/m4-gates/gates/archetypes-on/symptom-no-target/3/project",
+  "created_at": "2026-11-08T20:43:25Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-08T20:43:25Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-08T20:43:25Z",
+    "deadline": "2026-11-08T21:43:25Z"
+  },
+  "processes": [],
+  "redaction_salt": "a233dae1fffddf840ade047009450ae1",
+  "report": {
+    "path": ".dla/20261108-204325-ac98/report.md",
+    "sha256": "67ab28bb56b43cbd099bbc15993a4ef3abcbfa1a388e064541def6a8e5806388",
+    "rendered_at": "2026-11-08T20:43:25Z"
+  },
+  "entry": "symptom"
+}

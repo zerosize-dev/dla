@@ -1,0 +1,511 @@
+{
+  "schema_version": 1,
+  "id": "S3",
+  "source": {
+    "kind": "alloc-test",
+    "harness": "H1",
+    "workload": "native:main:Makefile",
+    "mode": "native",
+    "runtime": "native",
+    "command": "./framedec --iterations {n}"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "os.rss",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_shmem",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.swap",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.vm_data",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.vm_hwm",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.fds",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_blocks",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.peak_bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_blocks@src/decoder.c:29",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "site": "src/decoder.c:29",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_bytes@src/decoder.c:29",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "site": "src/decoder.c:29",
+      "source": "shim"
+    }
+  ],
+  "points": [
+    {
+      "x": 440.0,
+      "t_ms": 52,
+      "values": [
+        3002368.0,
+        802816.0,
+        2199552.0,
+        0.0,
+        0.0,
+        3264512.0,
+        3002368.0,
+        3.0,
+        1.0,
+        28.0,
+        468992.0,
+        626752.0,
+        27.0,
+        464896.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 103,
+      "values": [
+        3567616.0,
+        1409024.0,
+        2158592.0,
+        0.0,
+        0.0,
+        3997696.0,
+        3567616.0,
+        3.0,
+        1.0,
+        56.0,
+        967680.0,
+        1118272.0,
+        55.0,
+        963584.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 154,
+      "values": [
+        4218880.0,
+        2035712.0,
+        2183168.0,
+        0.0,
+        0.0,
+        4673536.0,
+        4218880.0,
+        3.0,
+        1.0,
+        83.0,
+        1506304.0,
+        1665088.0,
+        82.0,
+        1502208.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 262,
+      "values": [
+        4755456.0,
+        2596864.0,
+        2158592.0,
+        0.0,
+        0.0,
+        5242880.0,
+        4755456.0,
+        3.0,
+        1.0,
+        111.0,
+        2016256.0,
+        2170944.0,
+        110.0,
+        2012160.0
+      ]
+    },
+    {
+      "x": 2200.0,
+      "t_ms": 277,
+      "values": [
+        5373952.0,
+        3178496.0,
+        2195456.0,
+        0.0,
+        0.0,
+        5828608.0,
+        5373952.0,
+        3.0,
+        1.0,
+        138.0,
+        2505728.0,
+        2663488.0,
+        137.0,
+        2501632.0
+      ]
+    },
+    {
+      "x": 2640.0,
+      "t_ms": 321,
+      "values": [
+        5812224.0,
+        3653632.0,
+        2158592.0,
+        0.0,
+        0.0,
+        6287360.0,
+        5812224.0,
+        3.0,
+        1.0,
+        166.0,
+        2929664.0,
+        3062848.0,
+        165.0,
+        2925568.0
+      ]
+    },
+    {
+      "x": 3080.0,
+      "t_ms": 384,
+      "values": [
+        6389760.0,
+        4235264.0,
+        2154496.0,
+        0.0,
+        0.0,
+        6873088.0,
+        6389760.0,
+        3.0,
+        1.0,
+        193.0,
+        3445760.0,
+        3600448.0,
+        192.0,
+        3441664.0
+      ]
+    },
+    {
+      "x": 3520.0,
+      "t_ms": 430,
+      "values": [
+        6950912.0,
+        4755456.0,
+        2195456.0,
+        0.0,
+        0.0,
+        7319552.0,
+        6950912.0,
+        3.0,
+        1.0,
+        221.0,
+        3952640.0,
+        4095040.0,
+        220.0,
+        3948544.0
+      ]
+    },
+    {
+      "x": 3960.0,
+      "t_ms": 475,
+      "values": [
+        7389184.0,
+        5234688.0,
+        2154496.0,
+        0.0,
+        0.0,
+        7770112.0,
+        7389184.0,
+        3.0,
+        1.0,
+        248.0,
+        4369408.0,
+        4526144.0,
+        247.0,
+        4365312.0
+      ]
+    },
+    {
+      "x": 4400.0,
+      "t_ms": 503,
+      "values": [
+        7987200.0,
+        5804032.0,
+        2183168.0,
+        0.0,
+        0.0,
+        8323072.0,
+        7987200.0,
+        3.0,
+        1.0,
+        276.0,
+        4887552.0,
+        5024832.0,
+        275.0,
+        4883456.0
+      ]
+    },
+    {
+      "x": 4840.0,
+      "t_ms": 539,
+      "values": [
+        8499200.0,
+        6316032.0,
+        2183168.0,
+        0.0,
+        0.0,
+        8785920.0,
+        8499200.0,
+        3.0,
+        1.0,
+        303.0,
+        5331968.0,
+        5485632.0,
+        302.0,
+        5327872.0
+      ]
+    },
+    {
+      "x": 5280.0,
+      "t_ms": 632,
+      "values": [
+        8888320.0,
+        6705152.0,
+        2183168.0,
+        0.0,
+        0.0,
+        9113600.0,
+        8888320.0,
+        3.0,
+        1.0,
+        331.0,
+        5700608.0,
+        5840960.0,
+        330.0,
+        5696512.0
+      ]
+    },
+    {
+      "x": 5720.0,
+      "t_ms": 649,
+      "values": [
+        9355264.0,
+        7155712.0,
+        2199552.0,
+        0.0,
+        0.0,
+        9572352.0,
+        9355264.0,
+        3.0,
+        1.0,
+        358.0,
+        6144000.0,
+        6298688.0,
+        357.0,
+        6139904.0
+      ]
+    },
+    {
+      "x": 6160.0,
+      "t_ms": 704,
+      "values": [
+        9961472.0,
+        7794688.0,
+        2166784.0,
+        0.0,
+        0.0,
+        10141696.0,
+        9961472.0,
+        3.0,
+        1.0,
+        386.0,
+        6733824.0,
+        6879296.0,
+        385.0,
+        6729728.0
+      ]
+    },
+    {
+      "x": 6600.0,
+      "t_ms": 734,
+      "values": [
+        10432512.0,
+        8249344.0,
+        2183168.0,
+        0.0,
+        0.0,
+        10579968.0,
+        10432512.0,
+        3.0,
+        1.0,
+        413.0,
+        7179264.0,
+        7336000.0,
+        412.0,
+        7175168.0
+      ]
+    },
+    {
+      "x": 7040.0,
+      "t_ms": 815,
+      "values": [
+        11018240.0,
+        8818688.0,
+        2199552.0,
+        0.0,
+        0.0,
+        11137024.0,
+        11018240.0,
+        3.0,
+        1.0,
+        441.0,
+        7733248.0,
+        7870528.0,
+        440.0,
+        7729152.0
+      ]
+    },
+    {
+      "x": 7480.0,
+      "t_ms": 858,
+      "values": [
+        11485184.0,
+        9326592.0,
+        2158592.0,
+        0.0,
+        0.0,
+        11599872.0,
+        11485184.0,
+        3.0,
+        1.0,
+        468.0,
+        8183808.0,
+        8341568.0,
+        467.0,
+        8179712.0
+      ]
+    }
+  ],
+  "events": [
+    {
+      "after_point": 16,
+      "kind": "purge:trim",
+      "detail": "{\"after\":{\"os.rss\":11464704.0,\"os.rss_anon\":9306112.0,\"os.rss_file\":2158592.0,\"os.rss_shmem\":0.0,\"os.swap\":0.0,\"os.threads\":1.0,\"os.vm_data\":11534336.0,\"os.vm_hwm\":11464704.0},\"before\":{\"os.fds\":3.0,\"os.rss\":11485184.0,\"os.rss_anon\":9326592.0,\"os.rss_file\":2158592.0,\"os.rss_shmem\":0.0,\"os.swap\":0.0,\"os.threads\":1.0,\"os.vm_data\":11599872.0,\"os.vm_hwm\":11485184.0},\"kind\":\"trim\"}"
+    }
+  ],
+  "limitations": [
+    "4096 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "points 1 to 9 come from S1; the extra points from S2"
+  ]
+}

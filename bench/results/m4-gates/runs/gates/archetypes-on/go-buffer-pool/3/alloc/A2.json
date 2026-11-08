@@ -1,0 +1,96 @@
+{
+  "basis": "the primary column of the region of F3",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "go.heap_live",
+      "plateau": {
+        "extra_rise": 6533.0,
+        "extra_slope": 2.121,
+        "main_slope": 2.948,
+        "noise": 1981.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 455200.0,
+        "extra_slope": 147.8,
+        "main_slope": -382.2,
+        "noise": 572700.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 6758000.0,
+        "before": 10220000.0,
+        "drop": 3465000.0,
+        "growth": 1634000.0,
+        "kind": "free-os-memory",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-ALLOC",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -1757000.0,
+        "extra_slope": -570.6,
+        "main_slope": -1683.0,
+        "noise": 2646000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F3",
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S4",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "go command mode has no package-variable probes: growth shows in the goroutine groups and runtime totals (use --driver for GoVar probes)"
+  ],
+  "primary": "go.heap_live",
+  "purge": "free-os-memory",
+  "series": "S5",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T3"
+}

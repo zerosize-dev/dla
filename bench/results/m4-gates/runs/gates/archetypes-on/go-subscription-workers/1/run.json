@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "go-subscription-workers",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 89.155,
+  "usage": {
+    "input_tokens": 28,
+    "output_tokens": 3342,
+    "cache_read_input_tokens": 500155,
+    "cache_creation_input_tokens": 37988
+  },
+  "cost_usd": 0.23544350000000003,
+  "num_turns": 14,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-08T19:37:17Z",
+  "error": null
+}

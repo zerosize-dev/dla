@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "go",
+  "mode": "driver",
+  "workload": "go:main:.:./cmd/notifyd",
+  "scratch": "harness/H1/work",
+  "build": {
+    "argv": [
+      "sh",
+      "-c",
+      "cp -f /root/.cache/dla-bench/m4-gates/gates/archetypes-on/go-subscription-workers-closed/1/project/.dla/20261108-194322-4804/harness/H1/driver/zz_dla_driver_test.go /root/.cache/dla-bench/m4-gates/gates/archetypes-on/go-subscription-workers-closed/1/project/.dla/20261108-194322-4804/harness/H1/work/internal/workload/zz_dla_driver_test.go && go test -vet=off -count=1 -run '^$' ./internal/workload"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "run": {
+    "argv": [
+      "go",
+      "test",
+      "-vet=off",
+      "-count=1",
+      "-timeout",
+      "0",
+      "-run",
+      "^TestDLADriver$",
+      "./internal/workload"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "fresh",
+    "repeated"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F3",
+      "target": {
+        "kind": "go-var",
+        "package_dir": "internal/workload",
+        "name": "topics"
+      },
+      "site": "internal/workload/workload.go:19"
+    }
+  ],
+  "agent": "driver-go",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "timeout_secs": 300
+}

@@ -1,0 +1,41 @@
+{
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-fresh"
+    },
+    {
+      "code": 0,
+      "label": "p1-repeated"
+    }
+  ],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "harness": "H3",
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted"
+  ],
+  "logs": [
+    "harness/H3/logs/p1-fresh.log",
+    "harness/H3/logs/p1-repeated.log"
+  ],
+  "mode": "driver",
+  "modes": [
+    "fresh",
+    "repeated"
+  ],
+  "points": 9,
+  "processes": 2,
+  "series": [
+    "S2",
+    "S3"
+  ],
+  "units": 3520,
+  "x_range": [
+    440.0,
+    3960.0
+  ]
+}

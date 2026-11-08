@@ -1,0 +1,69 @@
+{
+  "basis": "the primary column of the region of F1",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 16720000.0,
+        "extra_slope": 5429.0,
+        "main_slope": 5267.0,
+        "noise": 662200.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59580000.0,
+        "before": 58950000.0,
+        "drop": -630800.0,
+        "growth": 38380000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 16720000.0,
+        "extra_slope": 5429.0,
+        "main_slope": 5267.0,
+        "noise": 662200.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59580000.0,
+        "before": 58950000.0,
+        "drop": -630800.0,
+        "growth": 21270000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F1",
+  "harness": "H1",
+  "id": "A3",
+  "iterations": 8,
+  "limitations": [
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)",
+    "points 1 to 9 come from S1; the extra points from S6",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "os.rss",
+  "purge": "trim",
+  "series": "S7",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T4"
+}

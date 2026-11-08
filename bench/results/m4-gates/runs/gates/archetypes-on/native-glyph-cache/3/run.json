@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "native-glyph-cache",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 3,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 36.275,
+  "usage": {
+    "input_tokens": 20,
+    "output_tokens": 2414,
+    "cache_read_input_tokens": 332974,
+    "cache_creation_input_tokens": 35430
+  },
+  "cost_usd": 0.1991974,
+  "num_turns": 11,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-08T20:32:18Z",
+  "error": null
+}

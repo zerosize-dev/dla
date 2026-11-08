@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "jvm-audit-chain",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 189.344,
+  "usage": {
+    "input_tokens": 34,
+    "output_tokens": 3827,
+    "cache_read_input_tokens": 648386,
+    "cache_creation_input_tokens": 44026
+  },
+  "cost_usd": 0.27928060000000005,
+  "num_turns": 17,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-08T20:06:04Z",
+  "error": null
+}

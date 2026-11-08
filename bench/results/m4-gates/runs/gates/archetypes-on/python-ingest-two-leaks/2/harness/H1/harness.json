@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "python",
+  "mode": "command",
+  "workload": "python:main:ingest/load.py",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "python3",
+      "-m",
+      "ingest.load",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "PYTHONPATH",
+        "/root/.cache/dla-bench/m4-gates/gates/archetypes-on/python-ingest-two-leaks/2/project/.dla/20261108-200919-8563/harness/H1/agent"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F3",
+      "target": {
+        "kind": "py-global",
+        "module": "ingest.parser",
+        "name": "_newest"
+      },
+      "site": "ingest/parser.py:3"
+    },
+    {
+      "id": "P2",
+      "finding": "F6",
+      "target": {
+        "kind": "py-global",
+        "module": "ingest.registry",
+        "name": "_LISTENERS"
+      },
+      "site": "ingest/registry.py:3"
+    },
+    {
+      "id": "P3",
+      "finding": "F3",
+      "target": {
+        "kind": "py-module",
+        "module": "ingest.parser"
+      },
+      "site": "ingest/parser.py:3"
+    },
+    {
+      "id": "P4",
+      "target": {
+        "kind": "py-module",
+        "module": "ingest.pipeline"
+      }
+    },
+    {
+      "id": "P5",
+      "finding": "F6",
+      "target": {
+        "kind": "py-module",
+        "module": "ingest.registry"
+      },
+      "site": "ingest/registry.py:3"
+    }
+  ],
+  "agent": "py-sitecustomize",
+  "detectors": [
+    "-W error::ResourceWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300
+}
