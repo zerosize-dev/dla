@@ -102,6 +102,7 @@ fn fixture(name: &str, lang_dirs: &[&str], tiers: &[u8]) -> Fx {
         run_id: "r1".into(),
         source_commit: "abc".into(),
         data_flag: None,
+        worker: None,
     };
     let hdir = run_dir.join("harness/H1");
     let work = hdir.join("work");
@@ -1208,6 +1209,7 @@ fn sigterm_child_runs_a_long_harness() {
         run_id: "r1".into(),
         source_commit: "abc".into(),
         data_flag: None,
+        worker: None,
     };
     let m = ctx.harness("H1").unwrap();
     let _ = run_points(&ctx, &m, &RunOptions::default());

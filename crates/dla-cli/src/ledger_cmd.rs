@@ -230,6 +230,18 @@ fn missing_arg(flag: &str, fix: String) -> Failure {
 }
 
 /// Runs `dla ledger add`.
+/// Runs one `dla ledger ...` subcommand.
+pub fn dispatch(ctx: &Ctx, cmd: LedgerCmd) -> Res<Value> {
+    match cmd {
+        LedgerCmd::Add(a) => add(ctx, a),
+        LedgerCmd::Resolve(a) => resolve(ctx, a),
+        LedgerCmd::Annotate(a) => annotate(ctx, a),
+        LedgerCmd::Test(a) => move_to(ctx, a, FindingState::UnderTest),
+        LedgerCmd::Confirm(a) => move_to(ctx, a, FindingState::Confirmed),
+        LedgerCmd::Refute(a) => move_to(ctx, a, FindingState::Refuted),
+    }
+}
+
 pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
     RunState::load(&ctx.run_dir)?;
     let mut ledger = Ledger::load(&ctx.run_dir)?;

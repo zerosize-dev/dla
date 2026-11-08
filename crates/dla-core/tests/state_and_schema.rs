@@ -219,6 +219,7 @@ fn evidence_kind_classes() {
         (K::ShouldBeDead, C::Context),
         (K::NonHeap, C::Context),
         (K::Residual, C::Context),
+        (K::Artifact, C::Context),
     ];
     assert_eq!(cases.len(), K::ALL.len());
     for (k, c) in cases {

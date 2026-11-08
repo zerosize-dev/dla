@@ -42,6 +42,7 @@ fn setup(tiers: Option<Vec<u8>>, files: &[(&str, &str)]) -> (tempfile::TempDir, 
         run_id: "r1".into(),
         source_commit: "c".into(),
         data_flag: None,
+        worker: None,
     };
     (dir, ctx)
 }

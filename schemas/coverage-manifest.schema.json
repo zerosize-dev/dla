@@ -337,6 +337,12 @@
           "format": "uint64",
           "minimum": 0
         },
+        "out_of_scope": {
+          "description": "Source files skipped because they lie outside the run's scope.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "runtime": {
           "description": "Runtime name.",
           "type": "string"

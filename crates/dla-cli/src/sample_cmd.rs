@@ -761,6 +761,9 @@ mod tests {
             command: "x".into(),
             started_at: chrono::Utc::now(),
             stopped_at: None,
+            role: dla_core::state::ProcessRole::Started,
+            worker: None,
+            cleanup: Vec::new(),
         };
         let mut state = RunState::init("/p", None, 60, None, chrono::Utc::now()).unwrap();
         state.processes.push(rec(Some("2026-01-01T00:00:10Z")));

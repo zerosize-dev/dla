@@ -232,6 +232,11 @@
           "description": "Growth left unattributed.",
           "type": "string",
           "const": "residual"
+        },
+        {
+          "description": "Files captured from a live process by an attached tool (heap dump, profile).",
+          "type": "string",
+          "const": "artifact"
         }
       ]
     },

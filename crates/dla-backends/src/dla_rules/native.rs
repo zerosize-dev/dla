@@ -290,15 +290,14 @@ fn null_branch(r: Node<'_>, src: &str, var: &str) -> bool {
             let cons = p.child_by_field_name("consequence");
             if cons
                 .is_some_and(|c| c.start_byte() <= r.start_byte() && r.end_byte() <= c.end_byte())
+                && let Some(cond) = p.child_by_field_name("condition")
             {
-                if let Some(cond) = p.child_by_field_name("condition") {
-                    let c: String = txt(cond, src)
-                        .chars()
-                        .filter(|c| !c.is_whitespace())
-                        .collect();
-                    if says_null(&c, var) {
-                        return true;
-                    }
+                let c: String = txt(cond, src)
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                if says_null(&c, var) {
+                    return true;
                 }
             }
         }

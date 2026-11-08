@@ -545,6 +545,7 @@ mod tests {
             run_id: "r".into(),
             source_commit: "c".into(),
             data_flag: None,
+            worker: None,
         }
     }
 

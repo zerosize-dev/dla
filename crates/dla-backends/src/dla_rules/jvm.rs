@@ -213,10 +213,10 @@ fn long_lived_classes(files: &[SrcFile]) -> HashSet<String> {
             if name.is_empty() {
                 continue;
             }
-            if let Some(sup) = class.child_by_field_name("superclass") {
-                if let Some(base) = tokens(txt(sup, src)).into_iter().find(|t| *t != "extends") {
-                    parent.insert(name.to_owned(), base.to_owned());
-                }
+            if let Some(sup) = class.child_by_field_name("superclass")
+                && let Some(base) = tokens(txt(sup, src)).into_iter().find(|t| *t != "extends")
+            {
+                parent.insert(name.to_owned(), base.to_owned());
             }
             if class_is_long_lived(class, src) {
                 roots.push(name.to_owned());
@@ -389,10 +389,11 @@ fn unbounded_collections(
         let src = f.text.as_str();
         for c in &calls_by_file[i] {
             let toks = recv_tokens(&c.recv);
-            if ADDS.contains(&c.name.as_str()) && in_runtime_code(c.node) {
-                if let Some(last) = toks.last().filter(|l| names.contains(l.as_str())) {
-                    *adds.entry(last.clone()).or_default() += 1;
-                }
+            if ADDS.contains(&c.name.as_str())
+                && in_runtime_code(c.node)
+                && let Some(last) = toks.last().filter(|l| names.contains(l.as_str()))
+            {
+                *adds.entry(last.clone()).or_default() += 1;
             }
             if REMOVES.contains(&c.name.as_str()) {
                 let live = removal_is_live(f, c.node, uses);
@@ -416,17 +417,17 @@ fn unbounded_collections(
             }
         }
         walk(f.tree.root_node(), &mut |n| {
-            if let Some((name, removal)) = kotlin_assignment(f, n) {
-                if names.contains(name.as_str()) {
-                    if removal {
-                        if removal_is_live(f, n, uses) {
-                            removed.insert(name);
-                        } else {
-                            dead_removal.insert(name);
-                        }
-                    } else if in_runtime_code(n) {
-                        *adds.entry(name).or_default() += 1;
+            if let Some((name, removal)) = kotlin_assignment(f, n)
+                && names.contains(name.as_str())
+            {
+                if removal {
+                    if removal_is_live(f, n, uses) {
+                        removed.insert(name);
+                    } else {
+                        dead_removal.insert(name);
                     }
+                } else if in_runtime_code(n) {
+                    *adds.entry(name).or_default() += 1;
                 }
             }
             if n.kind().contains("binary") || n.kind().contains("comparison") {

@@ -220,7 +220,7 @@ https URL, a `file://` URL or a plain directory path.
 | Claude Code | 2.1.94 | Plugin `bin/` on the `PATH` (2.1.91), plugin options (2.1.83), `CLAUDE_PLUGIN_DATA` (2.1.78), and skill hooks in plugins actually running (2.1.94). Use 2.1.143 or later for the documented Stop-hook continuation cap |
 | Node.js | 20 LTS (18 works) | Needed only for memlab-based Node heap analysis. memlab's browser driver requires Node 18; 20 or 22 is recommended |
 | JDK | 21 | Needed only for Eclipse MAT heap analysis on JVM targets (MAT 1.17 requires Java 21) |
-| Rust | 1.85 stable | Only for building from source (edition 2024) |
+| Rust | 1.89 stable | Only for building from source (edition 2024) |
 
 Node and a JDK are not needed to install or run the plugin. They are needed when a run uses the
 corresponding analysis tool, and DLA reports the tool as missing, with an install hint, when it

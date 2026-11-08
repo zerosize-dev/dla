@@ -181,10 +181,11 @@ fn local_use(func: Node<'_>, src: &str, name: &str) -> LocalUse {
         let left = a
             .child_by_field_name("left")
             .or_else(|| a.child_by_field_name("name"));
-        if let (Some(l), Some(r)) = (left, right) {
-            if txt(r, src) == name && txt(l, src) != name {
-                u.aliases.push(last_token(txt(l, src)));
-            }
+        if let (Some(l), Some(r)) = (left, right)
+            && txt(r, src) == name
+            && txt(l, src) != name
+        {
+            u.aliases.push(last_token(txt(l, src)));
         }
     }
     for c in find_all(func, &["call_expression"]) {
@@ -243,14 +244,13 @@ fn leak_reason(
                 let mut reason = None;
                 for (j, cs) in calls_by_file.iter().enumerate() {
                     for c in cs {
-                        if c.name == fname && c.node.id() != node.id() {
-                            if let Some(r) =
+                        if c.name == fname
+                            && c.node.id() != node.id()
+                            && let Some(r) =
                                 leak_reason(files, calls_by_file, cleared, j, c.node, depth + 1)
-                            {
-                                reason = Some(format!(
-                                    "it is returned from `{fname}`, whose caller {r}"
-                                ));
-                            }
+                        {
+                            reason =
+                                Some(format!("it is returned from `{fname}`, whose caller {r}"));
                         }
                     }
                 }
@@ -270,11 +270,10 @@ fn timers(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<StaticH
             if matches!(
                 c.name.as_str(),
                 "clearInterval" | "clearTimeout" | "clearImmediate"
-            ) {
-                if let Some(a) = c.args.first() {
-                    for t in tokens(txt(*a, &f.text)) {
-                        cleared.insert(t.to_owned());
-                    }
+            ) && let Some(a) = c.args.first()
+            {
+                for t in tokens(txt(*a, &f.text)) {
+                    cleared.insert(t.to_owned());
                 }
             }
         }
@@ -548,12 +547,13 @@ fn scan_usage(
                 _ => {}
             }
         }
-        if c.name == "assign" && c.recv == "Object" {
-            if let Some(a) = c.args.first() {
-                let n = last_token(txt(*a, src));
-                if names.contains(n.as_str()) && ancestor(c.node, &FN_KINDS).is_some() {
-                    usage.entry(n).or_default().adds += 1;
-                }
+        if c.name == "assign"
+            && c.recv == "Object"
+            && let Some(a) = c.args.first()
+        {
+            let n = last_token(txt(*a, src));
+            if names.contains(n.as_str()) && ancestor(c.node, &FN_KINDS).is_some() {
+                usage.entry(n).or_default().adds += 1;
             }
         }
         // Passing the container to a pruning helper.

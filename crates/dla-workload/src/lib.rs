@@ -725,6 +725,7 @@ mod tests {
             run_id: "r1".into(),
             source_commit: "abc".into(),
             data_flag: None,
+            worker: None,
         };
         let out = discover(&ctx, Some(Runtime::Go)).unwrap();
         assert_eq!(out.evidence.len(), 1);

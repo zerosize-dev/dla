@@ -66,6 +66,7 @@ fn probe_at(name: &str, sub: &str) -> Probe {
         run_id: "r1".into(),
         source_commit: "abc".into(),
         data_flag: Some(manifest.join("../../data")),
+        worker: None,
     };
     Probe { _dir: dir, ctx }
 }

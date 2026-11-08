@@ -743,6 +743,15 @@ impl Ledger {
         Self::replay(&text, Some(path))
     }
 
+    /// Opens the main ledger (`worker` is `None`) or, in worker mode, the worker's
+    /// slice `ledger.<worker>.jsonl` replayed on top of the main ledger; appends then go
+    /// to the slice and new IDs carry the `<worker>/` prefix.
+    // M4 skeleton: slice routing is implemented by the ledger work.
+    pub fn load_for(run_dir: &Path, worker: Option<&str>) -> Result<Self, Error> {
+        let _ = worker;
+        Self::load(run_dir)
+    }
+
     /// Replays ledger text that is not bound to a file (for tests and renderers).
     /// Mutating methods on the result only change memory.
     pub fn from_text(text: &str) -> Result<Self, Error> {

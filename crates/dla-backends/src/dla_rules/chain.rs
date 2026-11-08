@@ -259,12 +259,12 @@ fn top_names(f: &SrcFile) -> HashSet<String> {
         } else {
             Some(n)
         };
-        if let Some(d) = decl {
-            if matches!(d.kind(), "lexical_declaration" | "variable_declaration") {
-                for v in named_children(d) {
-                    if let Some(name) = v.child_by_field_name("name") {
-                        out.insert(txt(name, src).to_owned());
-                    }
+        if let Some(d) = decl
+            && matches!(d.kind(), "lexical_declaration" | "variable_declaration")
+        {
+            for v in named_children(d) {
+                if let Some(name) = v.child_by_field_name("name") {
+                    out.insert(txt(name, src).to_owned());
                 }
             }
         }

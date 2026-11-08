@@ -18,6 +18,7 @@ pub fn tool_ctx(project: &Path, ctx: &Ctx, data: Option<&PathBuf>) -> ToolCtx {
         run_id: ctx.run_id.clone(),
         source_commit,
         data_flag: data.cloned(),
+        worker: ctx.worker.clone(),
     }
 }
 

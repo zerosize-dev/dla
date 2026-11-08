@@ -167,10 +167,10 @@ fn shadowed(func: Node<'_>, src: &str, name: &str) -> bool {
     {
         return false;
     }
-    if let Some(p) = func.child_by_field_name("parameters") {
-        if tokens(txt(p, src)).contains(&name) {
-            return true;
-        }
+    if let Some(p) = func.child_by_field_name("parameters")
+        && tokens(txt(p, src)).contains(&name)
+    {
+        return true;
     }
     find_all(func, &["assignment"]).into_iter().any(|a| {
         a.child_by_field_name("left")
@@ -289,15 +289,14 @@ fn scan(
                 "identifier" => {
                     let name = txt(left, src);
                     // Rebinding a global inside a function resets it.
-                    if names.contains(name) {
-                        if let Some(fu) = func {
-                            if !shadowed(fu, src, name) {
-                                usage
-                                    .entry(name.to_owned())
-                                    .or_default()
-                                    .remove(removal_is_live(f, n, uses));
-                            }
-                        }
+                    if names.contains(name)
+                        && let Some(fu) = func
+                        && !shadowed(fu, src, name)
+                    {
+                        usage
+                            .entry(name.to_owned())
+                            .or_default()
+                            .remove(removal_is_live(f, n, uses));
                     }
                 }
                 _ => {}

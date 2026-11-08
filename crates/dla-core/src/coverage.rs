@@ -123,6 +123,13 @@ pub struct WorkerCoverage {
     /// Workload iterations run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iterations: Option<u64>,
+    /// Source files skipped because they lie outside the run's scope.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub out_of_scope: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Growth left unattributed in one region.
@@ -181,6 +188,7 @@ impl WorkerCoverage {
             backends: BTreeMap::new(),
             entry_points: EntryPoints::default(),
             iterations: None,
+            out_of_scope: 0,
         }
     }
 }

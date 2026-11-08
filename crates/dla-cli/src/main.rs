@@ -5,7 +5,9 @@
 //! (I/O, parse, usage), 2 refused by a rule, 3 schema version mismatch.
 
 mod alloc_cmd;
+mod attach_cmd;
 mod budget;
+mod bundle_cmd;
 mod census_cmd;
 mod consent_cmd;
 mod ctx;
@@ -24,6 +26,7 @@ mod run;
 mod sample_cmd;
 mod schema_cmd;
 mod stage;
+mod summarize_cmd;
 mod sweep_cmd;
 mod trend_cmd;
 mod workload_cmd;
@@ -34,7 +37,6 @@ use clap::{
     CommandFactory, Parser, Subcommand,
     error::{ContextKind, ContextValue, ErrorKind},
 };
-use dla_core::FindingState;
 use serde_json::{Value, json};
 
 use crate::{
@@ -62,6 +64,9 @@ struct Cli {
     /// directory of the checkout the executable lives in).
     #[arg(long, global = true, value_name = "DIR")]
     data: Option<PathBuf>,
+    /// Worker name (default: $DLA_WORKER): ledger writes go to the worker's slice.
+    #[arg(long, global = true, value_name = "NAME")]
+    worker: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -102,6 +107,13 @@ enum Command {
     Gap(gap_cmd::GapArgs),
     /// Re-run a harness with extra cycles and a trim or purge, and record which hypothesis the result favours.
     AllocTest(alloc_cmd::AllocTestArgs),
+    /// Write a finding's label-free evidence bundle for an independent verifier.
+    Bundle(bundle_cmd::BundleArgs),
+    /// Attach a tool to a process DLA did not start (histogram, heap dump, profile).
+    Attach(attach_cmd::AttachArgs),
+    /// Summarize captured artifacts (heap dumps) into evidence.
+    #[command(subcommand)]
+    Summarize(summarize_cmd::SummarizeCmd),
 }
 
 /// What a command prints on success.
@@ -114,28 +126,11 @@ fn dispatch(cli: Cli) -> Res<Output> {
     let project = cli.project.as_deref();
     let run_arg = cli.run.as_deref();
     let data = cli.data.as_ref();
-    let ctx = || Ctx::resolve(project_root(project)?, run_arg);
+    let worker_arg = cli.worker.as_deref();
+    let ctx = || Ctx::resolve(project_root(project)?, run_arg, worker_arg);
     match cli.command {
-        Command::Run(run::RunCmd::Init(a)) => run::init(project, a).map(Output::Json),
-        Command::Run(run::RunCmd::Status) => run::run_status(&ctx()?).map(Output::Json),
-        Command::Ledger(ledger_cmd::LedgerCmd::Add(a)) => {
-            ledger_cmd::add(&ctx()?, a).map(Output::Json)
-        }
-        Command::Ledger(ledger_cmd::LedgerCmd::Resolve(a)) => {
-            ledger_cmd::resolve(&ctx()?, a).map(Output::Json)
-        }
-        Command::Ledger(ledger_cmd::LedgerCmd::Annotate(a)) => {
-            ledger_cmd::annotate(&ctx()?, a).map(Output::Json)
-        }
-        Command::Ledger(ledger_cmd::LedgerCmd::Test(a)) => {
-            ledger_cmd::move_to(&ctx()?, a, FindingState::UnderTest).map(Output::Json)
-        }
-        Command::Ledger(ledger_cmd::LedgerCmd::Confirm(a)) => {
-            ledger_cmd::move_to(&ctx()?, a, FindingState::Confirmed).map(Output::Json)
-        }
-        Command::Ledger(ledger_cmd::LedgerCmd::Refute(a)) => {
-            ledger_cmd::move_to(&ctx()?, a, FindingState::Refuted).map(Output::Json)
-        }
+        Command::Run(c) => run::dispatch(project, ctx, c).map(Output::Json),
+        Command::Ledger(c) => ledger_cmd::dispatch(&ctx()?, c).map(Output::Json),
         Command::Report => {
             let r = report::run(&ctx()?)?;
             eprintln!("report: {} sha256={}", r.path, r.sha256);
@@ -175,6 +170,15 @@ fn dispatch(cli: Cli) -> Res<Output> {
         }
         Command::AllocTest(a) => {
             alloc_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Bundle(a) => {
+            bundle_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Attach(a) => {
+            attach_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Summarize(c) => {
+            summarize_cmd::run(&ctx()?, &project_root(project)?, data, c).map(Output::Json)
         }
     }
 }

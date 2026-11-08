@@ -219,11 +219,12 @@ fn build_index<'t>(files: &'t [SrcFile], calls_by_file: &[Vec<CallSite<'t>>]) ->
                         }
                     }
                 }
-                if n.kind() == "var_spec" && !find_all(n, &["channel_type"]).is_empty() {
-                    if let Some(l) = named_children(n).first() {
-                        for tok in tokens(txt(*l, src)) {
-                            chans.insert(tok.to_owned());
-                        }
+                if n.kind() == "var_spec"
+                    && !find_all(n, &["channel_type"]).is_empty()
+                    && let Some(l) = named_children(n).first()
+                {
+                    for tok in tokens(txt(*l, src)) {
+                        chans.insert(tok.to_owned());
                     }
                 }
             }
@@ -244,10 +245,11 @@ fn build_index<'t>(files: &'t [SrcFile], calls_by_file: &[Vec<CallSite<'t>>]) ->
                 c.args.iter().map(|a| last_token(txt(*a, src))).collect(),
                 enclosing_func_name(c.node, src),
             ));
-            if c.name == "close" && c.recv.is_empty() {
-                if let Some(a) = c.args.first() {
-                    closed.insert(last_token(txt(*a, src)));
-                }
+            if c.name == "close"
+                && c.recv.is_empty()
+                && let Some(a) = c.args.first()
+            {
+                closed.insert(last_token(txt(*a, src)));
             }
         }
     }

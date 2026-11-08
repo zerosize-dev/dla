@@ -111,6 +111,46 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// How DLA came to know a process.
+    pub enum ProcessRole {
+        /// DLA started it and may stop it.
+        Started = "started",
+        /// DLA attached a tool to a process it did not start; it never kills the target.
+        Attached = "attached",
+    }
+}
+
+string_enum! {
+    /// Which of the four entry paths a run takes.
+    pub enum EntryPath {
+        /// A source repository (the default).
+        Repository = "repository",
+        /// A running process DLA did not start.
+        Process = "process",
+        /// Captured artifacts only (heap dumps, profiles).
+        Artifact = "artifact",
+        /// A symptom description without a target.
+        Symptom = "symptom",
+    }
+}
+
+string_enum! {
+    /// Lifecycle of one worker.
+    pub enum WorkerStatus {
+        /// Registered by `dla run dispatch`, nothing written yet.
+        Registered = "registered",
+        /// Its slice has been started.
+        Running = "running",
+        /// It wrote `slice_done`.
+        Done = "done",
+        /// It stopped without `slice_done`.
+        Killed = "killed",
+        /// Its deadline passed before `slice_done`.
+        OverBudget = "over-budget",
+    }
+}
+
 /// Consent given for intrusive steps.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct Consent {
@@ -164,6 +204,40 @@ pub struct ProcessRecord {
     /// When it stopped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<DateTime<Utc>>,
+    /// Whether DLA started the process or attached to it (older records: started).
+    #[serde(default = "default_role")]
+    pub role: ProcessRole,
+    /// The worker that registered it, in worker mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+    /// Cleanup actions for an attached tool, in order (for example
+    /// `remove /tmp/.java_pid123`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cleanup: Vec<String>,
+}
+
+fn default_role() -> ProcessRole {
+    ProcessRole::Started
+}
+
+/// One worker registered by `dla run dispatch`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct WorkerEntry {
+    /// Worker name (the runtime name, for example `jvm`).
+    pub name: String,
+    /// Runtime the worker covers.
+    pub runtime: String,
+    /// Its share of the remaining budget, in seconds.
+    pub share_secs: u64,
+    /// Absolute deadline.
+    pub deadline: DateTime<Utc>,
+    /// When its slice started, once it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    /// Lifecycle status.
+    pub status: WorkerStatus,
+    /// Slice file name inside the run directory: `ledger.<name>.jsonl`.
+    pub slice: String,
 }
 
 /// The rendered report, pinned by hash.
@@ -215,6 +289,19 @@ pub struct RunState {
     /// The rendered report, once rendered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<ReportRef>,
+    /// Entry path (older state files: repository).
+    #[serde(default = "default_entry")]
+    pub entry: EntryPath,
+    /// Artifact paths relative to the project root (artifact runs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<String>,
+    /// Workers registered by `dla run dispatch`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<WorkerEntry>,
+}
+
+fn default_entry() -> EntryPath {
+    EntryPath::Repository
 }
 
 impl RunState {
@@ -261,6 +348,9 @@ impl RunState {
             processes: Vec::new(),
             redaction_salt: hex::encode(salt),
             report: None,
+            entry: EntryPath::Repository,
+            artifacts: Vec::new(),
+            workers: Vec::new(),
         })
     }
 
@@ -278,6 +368,32 @@ impl RunState {
     /// Writes `<run_dir>/state.json` atomically (temp file, then rename).
     pub fn save(&self, run_dir: &Path) -> Result<(), Error> {
         write_atomic(&run_dir.join(STATE_FILE), to_pretty_json(self).as_bytes())
+    }
+
+    /// Read-modify-write of `state.json`: loads the current state, applies `f` and
+    /// saves it, returning `f`'s value. Every writer goes through this.
+    // M4 skeleton: the run-dir lock (`run.lock`) is added by the run-state work.
+    pub fn update<T>(
+        run_dir: &Path,
+        f: impl FnOnce(&mut RunState) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let mut state = Self::load(run_dir)?;
+        let out = f(&mut state)?;
+        state.save(run_dir)?;
+        Ok(out)
+    }
+
+    /// The registered worker named `name`.
+    pub fn worker(&self, name: &str) -> Option<&WorkerEntry> {
+        self.workers.iter().find(|w| w.name == name)
+    }
+}
+
+impl Scope {
+    /// Whether a project-relative path (`/` separators) is inside the scope.
+    // M4 skeleton: real matching is added by the run-state work.
+    pub fn includes(&self, _rel_path: &str) -> bool {
+        true
     }
 }
 

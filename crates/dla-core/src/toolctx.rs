@@ -57,6 +57,9 @@ pub struct ToolCtx {
     pub source_commit: String,
     /// Value of the global `--data` flag, if given.
     pub data_flag: Option<PathBuf>,
+    /// Worker name in worker mode (global `--worker` / `DLA_WORKER`): ledger writes go
+    /// to `ledger.<worker>.jsonl` and IDs carry the `<worker>/` prefix.
+    pub worker: Option<String>,
 }
 
 impl ToolCtx {
@@ -212,7 +215,20 @@ impl ToolCtx {
 
     /// Replays the run's ledger.
     pub fn ledger(&self) -> Result<Ledger, Refusal> {
-        Ledger::load(&self.run_dir).map_err(|e| e.to_refusal())
+        Ledger::load_for(&self.run_dir, self.worker.as_deref()).map_err(|e| e.to_refusal())
+    }
+
+    /// Whether a project-relative path (`/` separators) is inside the run's scope.
+    // M4 skeleton: implemented by the run-state work (reads `state.json` scope).
+    pub fn in_scope(&self, _rel: &str) -> bool {
+        true
+    }
+
+    /// Refuses with code `time-budget` when the worker's deadline (worker mode) or the
+    /// run's deadline has passed. `what` names the step for the message.
+    // M4 skeleton: implemented by the run-state work.
+    pub fn require_time(&self, _what: &str) -> Result<(), Refusal> {
+        Ok(())
     }
 
     /// Appends one evidence record and returns its ID. `raw` is relative to the run
@@ -456,6 +472,7 @@ mod tests {
             run_id: "r1".into(),
             source_commit: "abc".into(),
             data_flag: None,
+            worker: None,
         };
         (dir, ctx)
     }
@@ -528,6 +545,9 @@ mod tests {
             command: "x".into(),
             started_at: now_utc(),
             stopped_at: None,
+            role: crate::state::ProcessRole::Started,
+            worker: None,
+            cleanup: Vec::new(),
         };
         ctx.register_process(rec(10, "a")).unwrap();
         ctx.register_process(rec(10, "b")).unwrap();

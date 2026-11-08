@@ -293,6 +293,9 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         command: spec.command.to_owned(),
         started_at: now_utc(),
         stopped_at: None,
+        role: dla_core::state::ProcessRole::Started,
+        worker: ctx.worker.clone(),
+        cleanup: Vec::new(),
     })?;
     guard.registered = true;
     let sampler = spec

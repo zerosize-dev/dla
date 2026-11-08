@@ -94,6 +94,18 @@ fn run_config_result(
     Ok(result)
 }
 
+/// Runs one `dla run ...` subcommand. `ctx` resolves the run (not needed by `init`).
+pub fn dispatch(
+    project_arg: Option<&std::path::Path>,
+    ctx: impl Fn() -> Res<Ctx>,
+    cmd: RunCmd,
+) -> Res<Value> {
+    match cmd {
+        RunCmd::Init(a) => init(project_arg, a),
+        RunCmd::Status => run_status(&ctx()?),
+    }
+}
+
 /// Runs `dla run init`. Nothing is created unless every input is valid, and a run
 /// directory created by a failing init is removed again.
 pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
@@ -133,6 +145,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
     let ctx = Ctx {
         run_dir: state::run_dir(&project, &st.run_id),
         run_id: st.run_id.clone(),
+        worker: None,
     };
     // The ignore entry goes in first so a run's salt can never be staged by accident.
     let ignored = gitignore::ensure_dla_ignored(&project)?;

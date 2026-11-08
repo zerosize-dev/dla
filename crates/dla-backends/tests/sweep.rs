@@ -57,6 +57,7 @@ fn fixture(table: &str, files: &[(&str, &str)]) -> Fixture {
         run_id: "r1".into(),
         source_commit: "abc".into(),
         data_flag: Some(data.clone()),
+        worker: None,
     };
     Fixture {
         _dir: dir,

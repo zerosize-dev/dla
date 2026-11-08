@@ -61,6 +61,8 @@ string_enum! {
         NonHeap = "non-heap",
         /// Growth left unattributed.
         Residual = "residual",
+        /// Files captured from a live process by an attached tool (heap dump, profile).
+        Artifact = "artifact",
     }
 }
 
@@ -102,7 +104,8 @@ impl EvidenceKind {
             | Self::UnreachableAtExit
             | Self::ShouldBeDead
             | Self::NonHeap
-            | Self::Residual => EvidenceClass::Context,
+            | Self::Residual
+            | Self::Artifact => EvidenceClass::Context,
         }
     }
 }

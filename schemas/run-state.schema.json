@@ -4,6 +4,13 @@
   "description": "`state.json`.",
   "type": "object",
   "properties": {
+    "artifacts": {
+      "description": "Artifact paths relative to the project root (artifact runs).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "budget": {
       "description": "Time budget.",
       "$ref": "#/$defs/Budget"
@@ -27,6 +34,11 @@
     "dla_version": {
       "description": "Version of dla that created the run.",
       "type": "string"
+    },
+    "entry": {
+      "description": "Entry path (older state files: repository).",
+      "$ref": "#/$defs/EntryPath",
+      "default": "repository"
     },
     "incomplete_reason": {
       "description": "Why the run is incomplete or aborted.",
@@ -94,6 +106,13 @@
     "status": {
       "description": "Overall status.",
       "$ref": "#/$defs/RunStatus"
+    },
+    "workers": {
+      "description": "Workers registered by `dla run dispatch`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/WorkerEntry"
+      }
     }
   },
   "required": [
@@ -186,6 +205,31 @@
         }
       ]
     },
+    "EntryPath": {
+      "description": "Which of the four entry paths a run takes.",
+      "oneOf": [
+        {
+          "description": "A source repository (the default).",
+          "type": "string",
+          "const": "repository"
+        },
+        {
+          "description": "A running process DLA did not start.",
+          "type": "string",
+          "const": "process"
+        },
+        {
+          "description": "Captured artifacts only (heap dumps, profiles).",
+          "type": "string",
+          "const": "artifact"
+        },
+        {
+          "description": "A symptom description without a target.",
+          "type": "string",
+          "const": "symptom"
+        }
+      ]
+    },
     "ProcessKind": {
       "description": "Kind of process DLA started.",
       "oneOf": [
@@ -215,6 +259,13 @@
       "description": "A process DLA started and must clean up.",
       "type": "object",
       "properties": {
+        "cleanup": {
+          "description": "Cleanup actions for an attached tool, in order (for example\n`remove /tmp/.java_pid123`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "command": {
           "description": "Command line.",
           "type": "string"
@@ -228,6 +279,11 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0
+        },
+        "role": {
+          "description": "Whether DLA started the process or attached to it (older records: started).",
+          "$ref": "#/$defs/ProcessRole",
+          "default": "started"
         },
         "start_time": {
           "description": "Platform start time, to disambiguate PID reuse.",
@@ -248,6 +304,13 @@
             "null"
           ],
           "format": "date-time"
+        },
+        "worker": {
+          "description": "The worker that registered it, in worker mode.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -255,6 +318,21 @@
         "kind",
         "command",
         "started_at"
+      ]
+    },
+    "ProcessRole": {
+      "description": "How DLA came to know a process.",
+      "oneOf": [
+        {
+          "description": "DLA started it and may stop it.",
+          "type": "string",
+          "const": "started"
+        },
+        {
+          "description": "DLA attached a tool to a process it did not start; it never kills the target.",
+          "type": "string",
+          "const": "attached"
+        }
       ]
     },
     "ReportRef": {
@@ -399,6 +477,85 @@
           "description": "Rendering the report.",
           "type": "string",
           "const": "report"
+        }
+      ]
+    },
+    "WorkerEntry": {
+      "description": "One worker registered by `dla run dispatch`.",
+      "type": "object",
+      "properties": {
+        "deadline": {
+          "description": "Absolute deadline.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "name": {
+          "description": "Worker name (the runtime name, for example `jvm`).",
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime the worker covers.",
+          "type": "string"
+        },
+        "share_secs": {
+          "description": "Its share of the remaining budget, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "slice": {
+          "description": "Slice file name inside the run directory: `ledger.<name>.jsonl`.",
+          "type": "string"
+        },
+        "started_at": {
+          "description": "When its slice started, once it has.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "status": {
+          "description": "Lifecycle status.",
+          "$ref": "#/$defs/WorkerStatus"
+        }
+      },
+      "required": [
+        "name",
+        "runtime",
+        "share_secs",
+        "deadline",
+        "status",
+        "slice"
+      ]
+    },
+    "WorkerStatus": {
+      "description": "Lifecycle of one worker.",
+      "oneOf": [
+        {
+          "description": "Registered by `dla run dispatch`, nothing written yet.",
+          "type": "string",
+          "const": "registered"
+        },
+        {
+          "description": "Its slice has been started.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "It wrote `slice_done`.",
+          "type": "string",
+          "const": "done"
+        },
+        {
+          "description": "It stopped without `slice_done`.",
+          "type": "string",
+          "const": "killed"
+        },
+        {
+          "description": "Its deadline passed before `slice_done`.",
+          "type": "string",
+          "const": "over-budget"
         }
       ]
     }

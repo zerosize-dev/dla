@@ -1275,6 +1275,7 @@ mod detector_tests {
             run_id: "r1".into(),
             source_commit: "abc".into(),
             data_flag: None,
+            worker: None,
         };
         (d, ctx)
     }

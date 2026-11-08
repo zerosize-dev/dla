@@ -32,6 +32,7 @@ fn project(files: &[(&str, &str)]) -> (tempfile::TempDir, ToolCtx) {
         run_id: "r1".into(),
         source_commit: "abc".into(),
         data_flag: None,
+        worker: None,
     };
     (dir, ctx)
 }

@@ -305,7 +305,7 @@ mod tests {
             }
             rec(k - 1, a, f);
             for i in 0..k - 1 {
-                if k % 2 == 0 {
+                if k.is_multiple_of(2) {
                     a.swap(i, k - 1);
                 } else {
                     a.swap(0, k - 1);

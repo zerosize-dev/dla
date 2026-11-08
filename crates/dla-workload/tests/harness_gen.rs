@@ -57,6 +57,7 @@ fn fixture(name: &str) -> (tempfile::TempDir, ToolCtx) {
         run_id: "r1".into(),
         source_commit: "abc".into(),
         data_flag: None,
+        worker: None,
     };
     (dir, ctx)
 }
@@ -634,6 +635,7 @@ fn a_workload_below_the_project_root_keeps_its_cwd() {
         run_id: "r1".into(),
         source_commit: "abc".into(),
         data_flag: None,
+        worker: None,
     };
     dla_workload::discover(&ctx, Some(Runtime::Node)).unwrap();
     generate(&ctx, &opts(Runtime::Node)).unwrap();

@@ -16,6 +16,18 @@ pub struct Ctx {
     pub run_id: String,
     /// `<project>/.dla/<run-id>`.
     pub run_dir: PathBuf,
+    /// Worker name in worker mode (`--worker`, else `DLA_WORKER`).
+    pub worker: Option<String>,
+}
+
+/// Whether `name` is a valid worker name: lowercase ASCII letters, digits and `-`,
+/// starting with a letter, at most 32 bytes (runtime names such as `jvm`, `rust`).
+pub fn valid_worker_name(name: &str) -> bool {
+    name.len() <= 32
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
@@ -55,8 +67,22 @@ fn valid_run_id(id: &str) -> bool {
 }
 
 impl Ctx {
-    /// Resolves the run: `--run`, else `DLA_RUN`, else `.dla/current`.
-    pub fn resolve(project: PathBuf, run_arg: Option<&str>) -> Res<Ctx> {
+    /// Resolves the run: `--run`, else `DLA_RUN`, else `.dla/current`; and the worker:
+    /// `--worker`, else `DLA_WORKER`.
+    pub fn resolve(project: PathBuf, run_arg: Option<&str>, worker_arg: Option<&str>) -> Res<Ctx> {
+        let worker = worker_arg
+            .map(str::to_owned)
+            .or_else(|| env_nonempty("DLA_WORKER"));
+        if let Some(w) = &worker
+            && !valid_worker_name(w)
+        {
+            return Err(Failure::refuse(
+                dla_core::error::codes::INVALID_VALUE,
+                format!("invalid worker name {w:?}"),
+                "a worker name such as jvm or rust (lowercase letters, digits, -)",
+                "dla run dispatch --workers <runtimes>",
+            ));
+        }
         let run_id = match run_arg
             .map(str::to_owned)
             .or_else(|| env_nonempty("DLA_RUN"))
@@ -88,7 +114,11 @@ impl Ctx {
                 "dla run init",
             ));
         }
-        Ok(Ctx { run_id, run_dir })
+        Ok(Ctx {
+            run_id,
+            run_dir,
+            worker,
+        })
     }
 
     /// Project-relative pointer to a file in the run directory, with `/` separators.
