@@ -162,9 +162,16 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 purge: r.purge,
                 ..RunOptions::default()
             };
+            let effects = json!({
+                "target": format!("the workload of harness {} in its scratch copy under the run directory", r.harness),
+                "expected_signal": "one series per key mode: memory, threads, handles and probe sizes per point",
+                "stopping": "after the last point, or a point's timeout (the process group is killed)",
+                "effects": "builds and runs project code in the scratch copy with DLA's agent loaded; the project source is not edited",
+                "cleanup": "every process is registered in state.json and stopped; the scratch copy stays for inspection",
+            });
             stage::finish(
                 "harness run",
-                json!({"harness": r.harness}),
+                json!({"harness": r.harness, "effects": effects}),
                 run_harness(&tc, &r.harness, &opts),
             )
         }

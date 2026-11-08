@@ -244,7 +244,8 @@ fn the_split_routes_unexplained_growth_to_native() {
     assert_eq!(g["unexplained_slope"].as_f64().unwrap().round(), 500.0);
     let next = g["next"].to_string();
     assert!(
-        next.contains("references/native.md") && next.contains("dla alloc-test H1 --purge trim"),
+        next.contains("outside the runtime's accounting")
+            && next.contains("dla alloc-test H1 --purge trim"),
         "{next}"
     );
 

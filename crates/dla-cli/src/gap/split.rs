@@ -268,7 +268,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile) -> Res<Value> {
     let h = src.source.harness.as_deref().unwrap_or("<H>");
     let next: Vec<String> = if route.is_some() {
         vec![
-            "read references/native.md (growth outside the runtime's accounting)".to_owned(),
+            "the growth is outside the runtime's accounting: native allocations, the allocator, or mappings".to_owned(),
             format!("dla alloc-test {h} --purge trim"),
             format!("dla gap {} --residual", src.id),
         ]

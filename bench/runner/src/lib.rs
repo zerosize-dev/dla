@@ -4,6 +4,7 @@
 //! contract in `bench/FIXTURES.md`; this crate implements both.
 
 pub mod compare;
+pub mod dynamic_cmd;
 pub mod fixture;
 pub mod grade;
 pub mod guard;

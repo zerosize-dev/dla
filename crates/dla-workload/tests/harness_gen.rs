@@ -495,7 +495,11 @@ fn site_resolution_uses_the_census_then_declarations() {
     let (_d, ctx) = prepare("node-retry-scheduler", Runtime::Node);
     generate(&ctx, &opts(Runtime::Node)).unwrap();
     let m = ctx.harness("H1").unwrap();
+    // The property breakdown resolves to the field that holds the growth.
     let (site, finding) = resolve_site(&ctx, &m, "src/scheduler.js:shared.latest");
+    assert_eq!(site.as_deref(), Some("src/scheduler.js:15"));
+    assert!(finding.is_some());
+    let (site, finding) = resolve_site(&ctx, &m, "src/scheduler.js:shared");
     assert_eq!(site.as_deref(), Some("src/scheduler.js:90"));
     assert!(finding.is_some());
     let (site, _) = resolve_site(&ctx, &m, "src/pending.js:PendingList");

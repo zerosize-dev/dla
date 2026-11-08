@@ -30,9 +30,9 @@ Rust allocator sees; C libraries linked into the process allocate outside it (vi
 
 ### dhat-rs variant
 
-Only when the `dhat` crate resolves offline (it does not in the benchmark sandbox, which is
-recorded as a coverage gap): add `dhat` as a dev-dependency, replace the `GLOBAL` allocator with
-`dhat::Alloc`, create `dhat::Profiler::builder().testing().build()` in `main`, and assert on
+`dla harness gen` does not generate this variant yet; it records a gap when `dhat` does not resolve
+offline (it does not in the benchmark sandbox) and uses the counting-allocator driver. By hand:
+add `dhat` as a dev-dependency, replace the `GLOBAL` allocator with `dhat::Alloc`, create `dhat::Profiler::builder().testing().build()` in `main`, and assert on
 `dhat::HeapStats::get()` after the last round. The notes are also in the file header. Untested here.
 
 ### Tokio

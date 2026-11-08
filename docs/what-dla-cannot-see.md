@@ -58,6 +58,22 @@ documentation.
 - **Unclassified is a valid result.** A confirmed leak whose mechanism fits no known pattern is
   reported as a novel mechanism with its holder and the model's description. Known patterns
   are hypotheses to test, never a list DLA must choose from.
+- **The growth gate and the plateau tests use provisional thresholds.** The point count, the
+  significance level, the share of growth a purge must return and the residual threshold have not
+  been calibrated on new fixtures, so a verdict near a threshold can flip with a different workload
+  size. Every trend, alloc-test and residual result says it is uncalibrated.
+- **A loop run only measures what the loop exercises.** The harness counts the iterations it ran
+  and the entry points it reached (not measured for Rust and native code). Growth behind an entry
+  point the loop never called is not seen, and the finding stays suspected from static evidence or
+  unresolved.
+- **Sampled heap columns are not after a collection.** `dla sample` reads a running process
+  without forcing a GC, so the runtime's own heap columns it records mix garbage with live
+  data. They are leads. Confirmation uses the harness, which forces a collection before each
+  reading where the runtime has one. Samples of a JVM are sparse (each `jcmd` call takes a second
+  or more), and `cgroup.current` includes page cache on cgroup v1.
+- **Tracing Windows and macOS is thinner.** Windows has no allocator shim, so native and Rust
+  runs there record operating-system columns only (a recorded gap). The macOS shim and the macOS
+  and Windows samplers are compiled and checked in CI but have had less use than the Linux paths.
 - **Heuristics and model judgement.** The explanation attached to a finding is tagged `observed`
   or `inferred`. Inferred statements come from the investigating model and carry its mistakes,
   including a tendency to prefer familiar-looking causes. The blind verifier reduces this; it does
@@ -109,6 +125,13 @@ documentation.
 - **No linter covers the commonest goroutine leaks.** A goroutine that waits for a stop that never
   comes is found only by running the code.
 - **Memory held by cgo or by the runtime outside the Go heap** is not in a heap profile.
+- **Probes of package variables work only in driver mode.** Command mode wraps the program's own
+  `main` in a test and sees goroutines by creation site and the runtime totals, but it cannot read a
+  package variable; a driver test placed in that package (`--driver --package <dir>`) can.
+- **A `main` that calls `os.Exit` leaves partial data.** `os.Exit(0)` inside `go test` is recovered
+  and counted as a normal end; a non-zero exit ends the process with no final dump, and only the
+  periodic ticks remain. A pool or map that is garbage once `main` returns shows no high-water
+  mark in the exit dump.
 
 ## Rust
 
@@ -128,6 +151,14 @@ documentation.
 - **Unbounded channels and caches** grow without any unsafe or leaking code, so lints for forgotten
   or leaked values do not flag them. Whether a mem-forget style lint exists for a given pattern is
   unverified.
+- **Exercised entry points are not measured.** The allocator shim and the Rust driver count
+  allocations, not which functions ran, so the report cannot say which entry points the loop
+  covered. Allocation counts are of the Rust allocator only; memory a linked C library allocates
+  outside it shows in the operating-system columns.
+- **Command mode reads live bytes at exit.** A program that frees or drops its buffers before it
+  exits shows little in `native.live_bytes` (a 9.5 MB peak read 544 bytes at exit in one fixture).
+  The high-water mark is visible in `native.peak_bytes` and the peak resident columns; per-round
+  live bytes need driver mode, which works only for crates with a library target.
 
 ## Node.js and TypeScript
 
@@ -186,3 +217,10 @@ documentation.
 - **Memory handed across a boundary is easy to lose track of.** References held by a foreign
   runtime (a JVM global reference, a Python object count, a Go cgo handle) are seen only from the
   side that holds them, so a leak that spans both needs both runtimes' tools in one run.
+- **The allocator shim does not see every allocator.** It interposes the C allocator of a
+  dynamically linked program. Statically linked executables, Go, and runtimes with a private
+  allocator (statically linked jemalloc or tcmalloc, JVM arenas, Python's small-object allocator)
+  bypass it, and musl is untested. On allocation-heavy programs it slows the run by tens of times.
+- **Command-mode exit dumps miss capacity dropped before exit.** A cache destroyed at exit reads
+  as a few kilobytes live; only the peak and resident columns, and the effect of a trim, show the
+  memory it held.

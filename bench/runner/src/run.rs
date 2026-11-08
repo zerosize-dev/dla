@@ -911,9 +911,44 @@ fn collect_dla_files(project: &Path, out_dir: &Path) {
     if id.is_empty() || id.contains(['/', '\\']) {
         return;
     }
-    let run = project.join(".dla").join(id);
+    collect_run_files(&project.join(".dla").join(id), out_dir);
+}
+
+/// Copies the files of a dla run directory that grading and inspection read:
+/// the ledger, state, report and coverage, the M3 series, trends and alloc-test
+/// results, and the harness manifests and run records of `harness/H*` (never
+/// `work/`, `agent/`, `out/` or `logs/`). Directories left by an earlier
+/// attempt are replaced.
+pub fn collect_run_files(run: &Path, out_dir: &Path) {
     for f in ["ledger.jsonl", "state.json", "report.md", "coverage.json"] {
         copy_if_exists(&run.join(f), &out_dir.join(f));
+    }
+    for d in ["series", "trend", "alloc"] {
+        let _ = fs::remove_dir_all(out_dir.join(d));
+        if run.join(d).is_dir() {
+            let _ = copy_tree(&run.join(d), &out_dir.join(d));
+        }
+    }
+    let _ = fs::remove_dir_all(out_dir.join("harness"));
+    let Ok(rd) = fs::read_dir(run.join("harness")) else {
+        return;
+    };
+    for h in rd.flatten() {
+        let name = h.file_name().to_string_lossy().into_owned();
+        if !name.starts_with('H') || !h.path().is_dir() {
+            continue;
+        }
+        let dest = out_dir.join("harness").join(&name);
+        let _ = fs::create_dir_all(&dest);
+        copy_if_exists(&h.path().join("harness.json"), &dest.join("harness.json"));
+        if let Ok(files) = fs::read_dir(h.path()) {
+            for f in files.flatten() {
+                let fname = f.file_name().to_string_lossy().into_owned();
+                if fname.starts_with("run-") && fname.ends_with(".json") {
+                    copy_if_exists(&f.path(), &dest.join(&fname));
+                }
+            }
+        }
     }
 }
 

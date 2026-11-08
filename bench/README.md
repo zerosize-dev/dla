@@ -211,6 +211,75 @@ compares. `bench/runner/testdata/rust-sample` also holds
 `expected-metrics.json`, the golden result that was derived by hand from the
 sample runs and is compared by the Rust tests.
 
+## Dynamic acceptance
+
+`dla-bench dynamic` is the deterministic acceptance driver of the dynamic
+core (M3). Like `dla-bench static` it runs outside the sandbox with no model:
+each fixture is copied to a scratch directory (with `git init`), a run is
+created with consent for tiers 1-4 (`DLA_CONSENT_TIERS=1-4`), and a fixed
+policy, identical for every fixture, drives `dla`. The policy reads only the
+outputs of `dla`; `expected.toml` is read after the run to grade the ledger
+with the grader of the benchmark.
+
+```sh
+cargo build -p dla-cli -p dla-bench
+./target/debug/dla-bench dynamic --dla-bin ./target/debug/dla --parallel 2 \
+    --json /tmp/dynamic.json            # logs go to /tmp/dynamic.logs
+./target/debug/dla-bench dynamic --only python-report-memo --keep-work
+```
+
+Options: `--only <text>` (fixtures whose id contains it), `--archetypes
+on|off`, `--parallel <N>` (fixtures at the same time, default 2; a harness run
+takes 10 to 90 s), `--json <file>`, `--log-dir <dir>` (default: `<json>.logs`),
+`--keep-work` (keep the scratch copies), `--dla-bin`, `--repo-root`.
+
+The policy, per fixture:
+
+1. `run init`, `probe --build`, `sweep` and `census` per detected runtime,
+   `workload discover`.
+2. `harness gen --lang L` (default workload; on `workload-required` or
+   `iteration-arg-unknown`, or when the harness does not run, the next main or
+   script workload with an iteration argument, at most two) and
+   `harness run H`. If no harness ran, every candidate becomes
+   `suspected_static_only` (`build_fails` or `no_harness`).
+3. `trend S`. For every passed column with candidates, the column's first
+   candidate (once per run): add an N-WARM sibling, `ledger test`, `alloc-test
+   H --finding F`. Favors leak: refute the sibling, annotate the holder if
+   missing (census entry at the site, else `blocked-stack` for a goroutine or
+   thread column, `registration-table` for a timer, listener or handle
+   column, else `static/global`) and `ledger confirm`. Favors non-leak: refute
+   the finding. Inconclusive: `unresolved` (`time_budget`).
+4. Candidates tied only to non-passing columns: sibling, test, alloc-test;
+   refuted when it favors non-leak, else unresolved.
+5. When no passed column had candidates but a non-container column passed: a
+   `growth-series` finding without a site, N-HEADROOM and N-ALLOC siblings, an
+   unbound alloc-test, refuted when it favors non-leak.
+6. `gap S --residual`; whatever is still a candidate or under test becomes
+   `suspected_static_only` (`not_exercised`) when it has static evidence, else
+   `unresolved`; then `report`.
+
+At most eight alloc-tests run per fixture. Checks: every confirmable leak of a
+leak fixture with `dynamic_confirmation = true` is confirmed; decoy controls,
+non-leak and impossible fixtures carry no claim; non-leak fixtures have at least
+one rule-out; every confirmed finding satisfies the M3 rules when the ledger is
+re-read (a test before the confirmation, a refuted N-* sibling, cited growth
+evidence with gate pass, site and holder set); the unexplained growth share is
+computable when a residual row exists. The command prints one row per fixture
+(runtime, harness ran, series, passed columns, confirmed, refuted, claim,
+rule-out, leaks, result) and totals, then `ok: N fixture(s) pass`; it exits 1
+on a failure. The log directory holds, per fixture, every `dla` command with
+its JSON output (`NNN-<command>.log`), `row.json` (the row with the policy's
+decisions) and the run files (`ledger.jsonl`, `report.md`, `series/`, `trend/`,
+`alloc/`, `harness/H*/harness.json`).
+
+`dla-bench run` also copies `series/`, `trend/`, `alloc/` and
+`harness/H*/harness.json` and `run-*.json` of the child's dla run next to its
+`ledger.jsonl` (never `work/`, `agent/`, `out/` or `logs/`).
+
+CI runs the command in the `dynamic` job with all four toolchains installed.
+The `static` job covers the `--archetypes off` path, so `dynamic` does not
+repeat it.
+
 ## Isolation and cost
 
 - The child gets a fresh `CLAUDE_CONFIG_DIR` per run: none of the user's

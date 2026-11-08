@@ -1,0 +1,1845 @@
+//! `dla-bench dynamic`: the M3 acceptance driver.
+//!
+//! Like `static` it runs outside the sandbox and without a model. Every
+//! fixture is copied to a scratch directory, a run is created with the
+//! runner's consent for tiers 1-4, the static stages run (`probe --build`,
+//! `sweep` and `census` per detected runtime, `workload discover`) and then a
+//! fixed policy drives the dynamic commands. The policy is identical for every
+//! fixture and reads only the outputs of `dla`; `expected.toml` is read after
+//! the run to grade the ledger with the grader of the benchmark
+//! ([`crate::grade`]).
+//!
+//! # The policy
+//!
+//! 1. For every detected runtime `dla harness gen --lang L` (default
+//!    workload; when gen refuses with `workload-required` or
+//!    `iteration-arg-unknown`, or the harness does not run, the next main or
+//!    script workload of the discovery that has an iteration argument, at most
+//!    two workloads) and `dla harness run H`. Without any harness that ran,
+//!    every leak-side candidate is resolved `suspected_static_only`
+//!    (`build_fails` when the probe's build of the runtime failed, else
+//!    `no_harness`) and the policy goes to the grading.
+//! 2. `dla trend S` per series. For every passed column with candidates, the
+//!    first candidate (the trend lists the column's own finding first; N-*
+//!    siblings are never listed) is chosen once per run. For each chosen
+//!    leak-side finding F: add an N-WARM sibling, `ledger test F`,
+//!    `dla alloc-test H --finding F`. A verdict that favors leak refutes the
+//!    sibling, annotates the holder of F when it has none (the holder of the
+//!    census entry at the same site, else `blocked-stack` for a goroutine or
+//!    thread column, `registration-table` for a timer, listener or handle
+//!    column, else `static/global`) and confirms F; a verdict that favors
+//!    non-leak refutes F; an inconclusive one resolves F `unresolved`.
+//! 3. The first candidate of every non-passing, non-container column that no
+//!    passed column tied to a chosen finding: N-WARM sibling, test,
+//!    alloc-test; refuted when the verdict favors non-leak, else unresolved.
+//!
+//!    Then, when no passed column had candidates: one unbound
+//!    `dla alloc-test H`; when it favors non-leak, every leak-side candidate
+//!    with a site that is still open is refuted with it (nothing the process
+//!    measures grows).
+//! 4. When no passed column had candidates but a non-container column
+//!    passed: a finding with origin `growth-series` (no site), N-HEADROOM and
+//!    N-ALLOC siblings, test, an unbound alloc-test; refuted when the verdict
+//!    favors non-leak, else unresolved.
+//! 5. `dla gap S --residual` (refusals ignored); every leak-side candidate or
+//!    finding under test left over is resolved `suspected_static_only`
+//!    (`not_exercised`) when it has static evidence, else `unresolved`
+//!    (`time_budget`). Finally `dla report`.
+//!
+//! At most [`MAX_ALLOC_TESTS`] alloc-tests run per fixture; the findings that
+//! do not get one are resolved `unresolved` (`time_budget`).
+//!
+//! # Checks per fixture
+//!
+//! Leak fixtures with `dynamic_confirmation = true`: every confirmable leak
+//! is found (the grader's `leak_outcomes`); decoy-control and non-leak
+//! fixtures: no claim; non-leak: at least one rule-out; impossible: no claim;
+//! every confirmed finding satisfies the M3 rules (re-read from the ledger: a
+//! test preceded the confirmation, a refuted N-* sibling exists, the cited
+//! growth evidence has gate pass, site and holder are set); the unexplained
+//! growth share is computable when a residual row exists.
+
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Mutex,
+};
+
+use clap::Args;
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::{
+    Res,
+    fixture::{fixture_dirs, load_expected},
+    grade::{Source, State, findings_from_ledger, grade_findings},
+    model::Category,
+    run::{Archetypes, apply_archetypes_off, collect_run_files, copy_tree},
+};
+
+/// Alloc-tests run per fixture at most (each re-runs the harness).
+pub const MAX_ALLOC_TESTS: usize = 8;
+
+/// Workloads tried per runtime at most.
+const MAX_WORKLOADS: usize = 2;
+
+/// Arguments of `dla-bench dynamic`.
+#[derive(Args, Debug, Clone)]
+pub struct DynamicArgs {
+    /// Directory with the fixtures.
+    #[arg(long, default_value = "bench/fixtures")]
+    pub fixtures: PathBuf,
+    /// Whether archetype data (archetype tables, known leaks, suggested archetypes) is present.
+    #[arg(long, value_enum, default_value = "on")]
+    pub archetypes: Archetypes,
+    /// The dla binary (default: next to dla-bench, else target/debug/dla, else dla on PATH).
+    #[arg(long)]
+    pub dla_bin: Option<PathBuf>,
+    /// Write the full result as JSON to this file.
+    #[arg(long)]
+    pub json: Option<PathBuf>,
+    /// Repository root holding data/ (the plugin data files).
+    #[arg(long, default_value = ".")]
+    pub repo_root: PathBuf,
+    /// Only fixtures whose id contains this text.
+    #[arg(long)]
+    pub only: Option<String>,
+    /// Fixtures run at the same time (harness runs take 10-90 s each).
+    #[arg(long, default_value_t = 2)]
+    pub parallel: usize,
+    /// Directory for the per-fixture logs (default: next to --json, else the temp dir).
+    #[arg(long)]
+    pub log_dir: Option<PathBuf>,
+    /// Keep the scratch copies of the fixtures.
+    #[arg(long)]
+    pub keep_work: bool,
+}
+
+/// The result for one fixture.
+#[derive(Serialize, Debug, Clone, Default)]
+pub struct FixtureRow {
+    /// Fixture id.
+    pub id: String,
+    /// Fixture category.
+    pub category: String,
+    /// Runtimes the probe detected.
+    pub runtimes: Vec<String>,
+    /// Harness ids that ran.
+    pub harnesses: Vec<String>,
+    /// Series written by the harness runs.
+    pub series: Vec<String>,
+    /// Passed columns over all trends.
+    pub passed_columns: usize,
+    /// Passed columns with candidates.
+    pub passed_with_candidates: usize,
+    /// Confirmed findings (without hypotheses).
+    pub confirmed: usize,
+    /// Refuted findings (without hypotheses).
+    pub refuted: usize,
+    /// The grader sees a claim.
+    pub claims: bool,
+    /// The grader sees a rule-out.
+    pub rule_outs: bool,
+    /// Expected confirmable leaks the ledger confirms.
+    pub leaks_found: usize,
+    /// Expected confirmable leaks.
+    pub leaks_expected: usize,
+    /// Residual over total of the residual rows, when present.
+    pub unexplained_growth_share: Option<f64>,
+    /// What the policy did (one line per decision), for the log and the JSON.
+    pub steps: Vec<String>,
+    /// Commands that failed or were refused.
+    pub errors: Vec<String>,
+    /// Reasons this fixture fails the acceptance.
+    pub failures: Vec<String>,
+}
+
+/// The whole result.
+#[derive(Serialize, Debug, Clone)]
+pub struct DynamicResult {
+    /// `on` or `off`.
+    pub archetypes: String,
+    /// Fixtures run at the same time.
+    pub parallel: usize,
+    /// Directory with the logs.
+    pub log_dir: String,
+    /// Per fixture.
+    pub fixtures: Vec<FixtureRow>,
+    /// Failures over all fixtures.
+    pub failures: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Running dla
+// ---------------------------------------------------------------------------
+
+/// The result of one dla command.
+struct Out {
+    /// Exit 0 (and `ok: true` for the commands that print JSON).
+    ok: bool,
+    /// Parsed stdout (null when it was not JSON).
+    json: Value,
+}
+
+impl Out {
+    /// The refusal code, when the command refused.
+    fn code(&self) -> &str {
+        self.json["error"]["code"].as_str().unwrap_or("")
+    }
+
+    fn evidence(&self) -> Vec<String> {
+        strings(&self.json["evidence"])
+    }
+
+    fn message(&self) -> String {
+        let e = &self.json["error"];
+        match (e["code"].as_str(), e["message"].as_str()) {
+            (Some(c), Some(m)) => format!("{c}: {m}"),
+            _ => self
+                .json
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("no JSON output")
+                .to_owned(),
+        }
+    }
+}
+
+/// A JSON array of strings (a lone string counts as one element).
+fn strings(v: &Value) -> Vec<String> {
+    if let Some(s) = v.as_str() {
+        return vec![s.to_owned()];
+    }
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One fixture's session: the scratch project, the logs and the notes.
+struct Fx<'a> {
+    bin: &'a Path,
+    project: PathBuf,
+    plugin_root: &'a Path,
+    data_dir: PathBuf,
+    log_dir: PathBuf,
+    seq: usize,
+    row: FixtureRow,
+}
+
+impl Fx<'_> {
+    /// Runs one dla command, logs it, and records a failure in `errors`.
+    fn call(&mut self, args: &[&str]) -> Out {
+        let out = self.call_quiet(args);
+        if !out.ok {
+            self.row
+                .errors
+                .push(format!("dla {}: {}", args.join(" "), out.message()));
+        }
+        out
+    }
+
+    /// Like [`Fx::call`] without recording a failure (the caller decides).
+    fn call_quiet(&mut self, args: &[&str]) -> Out {
+        self.seq += 1;
+        let result = Command::new(self.bin)
+            .arg("--project")
+            .arg(&self.project)
+            .args(args)
+            .env("DLA_PLUGIN_ROOT", self.plugin_root)
+            .env("DLA_DATA_DIR", &self.data_dir)
+            .env("DLA_CONSENT_TIERS", "1-4")
+            .env_remove("DLA_RUN")
+            .current_dir(&self.project)
+            .output();
+        let (code, stdout, stderr) = match result {
+            Ok(o) => (
+                o.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&o.stdout).into_owned(),
+                String::from_utf8_lossy(&o.stderr).into_owned(),
+            ),
+            Err(e) => (-1, String::new(), format!("spawn failed: {e}")),
+        };
+        let slug: String = args
+            .iter()
+            .take(2)
+            .map(|a| {
+                a.chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("-");
+        let log = format!(
+            "$ dla {}\nexit {code}\n{}\n{}",
+            args.join(" "),
+            stdout.trim_end(),
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!("--- stderr\n{}\n", stderr.trim_end())
+            }
+        );
+        let _ = fs::create_dir_all(&self.log_dir);
+        let _ = fs::write(
+            self.log_dir.join(format!("{:03}-{slug}.log", self.seq)),
+            log,
+        );
+        let json: Value = serde_json::from_str(stdout.trim()).unwrap_or(Value::Null);
+        // `dla report` prints text; every other command prints one JSON object.
+        let ok = if args.first() == Some(&"report") {
+            code == 0
+        } else {
+            code == 0 && json.get("ok") == Some(&Value::Bool(true))
+        };
+        Out { ok, json }
+    }
+
+    fn step(&mut self, line: String) {
+        self.row.steps.push(line);
+    }
+
+    fn run_dir(&self) -> Result<PathBuf, String> {
+        let id = fs::read_to_string(self.project.join(".dla/current"))
+            .map_err(|e| format!(".dla/current: {e}"))?;
+        Ok(self.project.join(".dla").join(id.trim()))
+    }
+
+    fn view(&self) -> View {
+        match self.run_dir() {
+            Ok(d) => View::read(&d.join("ledger.jsonl")),
+            Err(_) => View::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ledger view (re-read from the file; nothing is taken on trust)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default)]
+struct Fnd {
+    id: String,
+    state: String,
+    origin: String,
+    site: Option<String>,
+    holder: Option<String>,
+    parent: Option<String>,
+    hypothesis: Option<String>,
+    supports: Vec<String>,
+    /// `from` and cited evidence of the transition to `confirmed`.
+    confirmed: Option<(String, Vec<String>)>,
+}
+
+impl Fnd {
+    fn is_nonleak(&self) -> bool {
+        self.hypothesis
+            .as_deref()
+            .is_some_and(|h| h.starts_with("N-"))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Ev {
+    kind: String,
+    authority: String,
+    result: Value,
+}
+
+#[derive(Debug, Default)]
+struct View {
+    findings: Vec<Fnd>,
+    evidence: BTreeMap<String, Ev>,
+    /// Evidence ids in ledger order.
+    order: Vec<String>,
+}
+
+impl View {
+    fn read(path: &Path) -> View {
+        let mut v = View::default();
+        let Ok(text) = fs::read_to_string(path) else {
+            return v;
+        };
+        for line in text.lines() {
+            let Ok(rec) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let s = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).map(str::to_owned);
+            match rec["type"].as_str() {
+                Some("evidence") => {
+                    if let Some(id) = s(&rec, "evidence_id") {
+                        v.order.push(id.clone());
+                        v.evidence.insert(
+                            id,
+                            Ev {
+                                kind: s(&rec, "kind").unwrap_or_default(),
+                                authority: s(&rec, "authority").unwrap_or_default(),
+                                result: rec["result"].clone(),
+                            },
+                        );
+                    }
+                }
+                Some("finding_added") => {
+                    let f = &rec["finding"];
+                    let Some(id) = s(f, "id") else { continue };
+                    v.findings.retain(|x| x.id != id);
+                    v.findings.push(Fnd {
+                        id,
+                        state: "candidate".to_owned(),
+                        origin: s(f, "origin").unwrap_or_default(),
+                        site: s(f, "site"),
+                        holder: s(f, "holder"),
+                        parent: s(f, "parent"),
+                        hypothesis: s(f, "hypothesis"),
+                        supports: strings(&f["supports"]),
+                        confirmed: None,
+                    });
+                }
+                Some("finding_annotated") => {
+                    let Some(id) = s(&rec, "finding") else {
+                        continue;
+                    };
+                    if let Some(f) = v.findings.iter_mut().find(|f| f.id == id) {
+                        if f.holder.is_none() {
+                            f.holder = s(&rec, "holder");
+                        }
+                        if f.site.is_none() {
+                            f.site = s(&rec, "site");
+                        }
+                    }
+                }
+                Some("transition") => {
+                    let Some(id) = s(&rec, "finding") else {
+                        continue;
+                    };
+                    let Some(to) = s(&rec, "to") else { continue };
+                    if let Some(f) = v.findings.iter_mut().find(|f| f.id == id) {
+                        if to == "confirmed" {
+                            f.confirmed = Some((
+                                s(&rec, "from").unwrap_or_default(),
+                                strings(&rec["evidence"]),
+                            ));
+                        }
+                        f.state = to;
+                    }
+                }
+                _ => {}
+            }
+        }
+        v
+    }
+
+    fn finding(&self, id: &str) -> Option<&Fnd> {
+        self.findings.iter().find(|f| f.id == id)
+    }
+
+    /// Latest evidence of a kind (optionally with a `harness` field) in ledger order.
+    fn latest(&self, kind: &str, harness: Option<&str>) -> Option<String> {
+        self.order
+            .iter()
+            .rev()
+            .find(|id| {
+                let e = &self.evidence[*id];
+                e.kind == kind && harness.is_none_or(|h| e.result["harness"].as_str() == Some(h))
+            })
+            .cloned()
+    }
+
+    /// The first evidence among `ids` of a kind.
+    fn of_kind(&self, ids: &[String], kind: &str) -> Option<String> {
+        ids.iter()
+            .find(|id| self.evidence.get(*id).is_some_and(|e| e.kind == kind))
+            .cloned()
+    }
+
+    fn discriminators_after(&self, before: &BTreeSet<String>) -> Vec<String> {
+        self.order
+            .iter()
+            .filter(|id| !before.contains(*id) && self.evidence[*id].kind == "discriminator")
+            .cloned()
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trend columns
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct Col {
+    name: String,
+    kind: String,
+    region: String,
+    shape: String,
+    pass: bool,
+    candidates: Vec<String>,
+}
+
+impl Col {
+    fn container(&self) -> bool {
+        self.name.starts_with("cgroup.") || self.region == "container"
+    }
+}
+
+fn read_columns(path: &Path) -> Vec<Col> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    v["columns"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|c| Col {
+                    name: c["name"].as_str().unwrap_or("").to_owned(),
+                    kind: c["kind"].as_str().unwrap_or("gauge").to_owned(),
+                    region: c["region"].as_str().unwrap_or("").to_owned(),
+                    shape: c["shape"].as_str().unwrap_or("").to_owned(),
+                    pass: c["gate"].as_str() == Some("pass"),
+                    candidates: strings(&c["candidates"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The growth evidence of a trend that covers a column kind.
+fn trend_evidence(view: &View, ids: &[String], col: &Col) -> Option<String> {
+    let want = if col.kind == "counter" {
+        "unit-count-series"
+    } else {
+        "growth-series"
+    };
+    view.of_kind(ids, want)
+        .or_else(|| view.of_kind(ids, "growth-series"))
+        .or_else(|| view.of_kind(ids, "unit-count-series"))
+}
+
+// ---------------------------------------------------------------------------
+// The policy
+// ---------------------------------------------------------------------------
+
+/// A harness that ran.
+struct Ran {
+    harness: String,
+    runtime: String,
+    series: Vec<String>,
+}
+
+/// Main and script workloads with an iteration argument, best rank first.
+fn read_workloads(run_dir: &Path) -> Vec<(String, String)> {
+    let Ok(text) = fs::read_to_string(run_dir.join("workload/workloads.json")) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    let mut list: Vec<(i64, String, String)> = v["workloads"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|w| matches!(w["kind"].as_str(), Some("main" | "script")))
+                .filter(|w| w["iteration_arg"].as_str().is_some_and(|s| !s.is_empty()))
+                .map(|w| {
+                    (
+                        w["rank"].as_i64().unwrap_or(0),
+                        w["id"].as_str().unwrap_or("").to_owned(),
+                        w["runtime"].as_str().unwrap_or("").to_owned(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    list.sort_by_key(|(r, _, _)| std::cmp::Reverse(*r));
+    list.into_iter().map(|(_, id, rt)| (id, rt)).collect()
+}
+
+/// Step 1: harness gen and run per runtime. Returns the harnesses that ran and
+/// the reason (`build_fails` or `no_harness`) for the first runtime without one.
+fn make_harnesses(
+    fx: &mut Fx,
+    runtimes: &[String],
+    builds: &Value,
+) -> (Vec<Ran>, Option<&'static str>) {
+    let mut ran = Vec::new();
+    let mut missing = None;
+    let run_dir = fx.run_dir().unwrap_or_default();
+    for lang in runtimes {
+        let others: Vec<String> = read_workloads(&run_dir)
+            .into_iter()
+            .filter(|(_, rt)| rt == lang)
+            .map(|(id, _)| id)
+            .collect();
+        let mut tried: Vec<String> = Vec::new();
+        let mut next_other = 0usize;
+        for attempt in 0..MAX_WORKLOADS {
+            let workload = if attempt == 0 {
+                None
+            } else {
+                let mut pick = None;
+                while next_other < others.len() {
+                    let id = &others[next_other];
+                    next_other += 1;
+                    if !tried.contains(id) {
+                        pick = Some(id.clone());
+                        break;
+                    }
+                }
+                if pick.is_none() {
+                    break;
+                }
+                pick
+            };
+            let mut args = vec!["harness", "gen", "--lang", lang.as_str()];
+            if let Some(w) = &workload {
+                args.extend(["--workload", w.as_str()]);
+            }
+            let gen_out = fx.call_quiet(&args);
+            if let Some(w) = gen_out.json["summary"]["workload"].as_str() {
+                tried.push(w.to_owned());
+            } else if let Some(w) = &workload {
+                tried.push(w.clone());
+            }
+            if !gen_out.ok {
+                let msg = format!("harness gen {lang}: {}", gen_out.message());
+                fx.step(msg.clone());
+                if matches!(
+                    gen_out.code(),
+                    "workload-required" | "iteration-arg-unknown"
+                ) {
+                    continue;
+                }
+                fx.row.errors.push(msg);
+                break;
+            }
+            let Some(h) = gen_out.json["summary"]["harness"]
+                .as_str()
+                .map(str::to_owned)
+            else {
+                fx.row
+                    .errors
+                    .push("harness gen printed no harness id".to_owned());
+                break;
+            };
+            let run_out = fx.call_quiet(&["harness", "run", &h]);
+            if !run_out.ok {
+                let msg = format!("harness run {h}: {}", run_out.message());
+                fx.step(msg.clone());
+                fx.row.errors.push(msg);
+                continue;
+            }
+            let series = strings(&run_out.json["summary"]["series"]);
+            fx.step(format!(
+                "{h} ({lang}, {}) ran: series {}",
+                gen_out.json["summary"]["workload"].as_str().unwrap_or("?"),
+                series.join(",")
+            ));
+            ran.push(Ran {
+                harness: h,
+                runtime: lang.clone(),
+                series,
+            });
+            break;
+        }
+        if !ran.iter().any(|r| &r.runtime == lang) {
+            let reason = if builds[lang.as_str()].as_str().is_some_and(|s| s != "ok") {
+                "build_fails"
+            } else {
+                "no_harness"
+            };
+            fx.step(format!("no harness ran for {lang}: {reason}"));
+            missing.get_or_insert(reason);
+        }
+    }
+    (ran, missing)
+}
+
+/// What an alloc-test said.
+#[derive(Debug, Clone, PartialEq)]
+enum Verdict {
+    Leak,
+    NonLeak,
+    Inconclusive,
+    /// The command refused or failed.
+    Failed(String),
+}
+
+struct Alloc {
+    verdict: Verdict,
+    evidence: Option<String>,
+}
+
+/// Runs `dla alloc-test` and reads the verdict from the discriminator it wrote.
+fn alloc_test(fx: &mut Fx, harness: &str, finding: Option<&str>) -> Alloc {
+    let before: BTreeSet<String> = fx.view().order.into_iter().collect();
+    let mut args = vec!["alloc-test", harness];
+    if let Some(f) = finding {
+        args.extend(["--finding", f]);
+    }
+    let out = fx.call_quiet(&args);
+    if !out.ok {
+        let msg = out.message();
+        fx.row.errors.push(format!("dla {}: {msg}", args.join(" ")));
+        return Alloc {
+            verdict: Verdict::Failed(msg),
+            evidence: None,
+        };
+    }
+    let view = fx.view();
+    let mut cands = out.evidence();
+    cands.retain(|id| {
+        view.evidence
+            .get(id)
+            .is_some_and(|e| e.kind == "discriminator")
+    });
+    if cands.is_empty() {
+        cands = view.discriminators_after(&before);
+    }
+    let Some(id) = cands.last().cloned() else {
+        return Alloc {
+            verdict: Verdict::Failed("alloc-test wrote no discriminator".to_owned()),
+            evidence: None,
+        };
+    };
+    let verdict = match view.evidence[&id].result["favors"].as_str().unwrap_or("") {
+        "leak" => Verdict::Leak,
+        "non-leak" => Verdict::NonLeak,
+        _ => Verdict::Inconclusive,
+    };
+    Alloc {
+        verdict,
+        evidence: Some(id),
+    }
+}
+
+/// Adds a sibling hypothesis; returns its id.
+fn add_sibling(fx: &mut Fx, root: &str, hyp: &str, evidence: &str) -> Option<String> {
+    let refute_if = match hyp {
+        "N-WARM" => "growth continues over the extra cycles",
+        "N-HEADROOM" => "the growth does not drop after a garbage collection or a trim",
+        _ => "the growth does not drop after the allocator returns free memory",
+    };
+    let out = fx.call(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        root,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        hyp,
+        "--refute-if",
+        refute_if,
+        "--evidence",
+        evidence,
+    ]);
+    if out.ok {
+        out.json["id"].as_str().map(str::to_owned)
+    } else {
+        None
+    }
+}
+
+fn resolve(fx: &mut Fx, id: &str, disposition: &str, reason: &str, remedy: &str) -> bool {
+    fx.call(&[
+        "ledger",
+        "resolve",
+        id,
+        "--as",
+        disposition,
+        "--reason",
+        reason,
+        "--remedy",
+        remedy,
+    ])
+    .ok
+}
+
+/// The holder of a finding without one, with the rule that picked it.
+fn pick_holder(run_dir: &Path, f: &Fnd, col: &Col) -> (String, &'static str) {
+    if let Some(site) = &f.site
+        && let Ok(rd) = fs::read_dir(run_dir.join("census"))
+    {
+        for e in rd.flatten() {
+            let Ok(text) = fs::read_to_string(e.path()) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            for entry in v["entries"].as_array().into_iter().flatten() {
+                if entry["site"].as_str() == Some(site.as_str())
+                    && let Some(h) = entry["holder"].as_str()
+                {
+                    return (h.to_owned(), "census entry at the site");
+                }
+            }
+        }
+    }
+    let n = col.name.to_ascii_lowercase();
+    if n.contains("goroutine") || n.contains("thread") {
+        ("blocked-stack".to_owned(), "goroutine or thread column")
+    } else if n.contains("timer")
+        || n.contains("listener")
+        || n.contains("handle")
+        || n.contains("interval")
+    {
+        ("registration-table".to_owned(), "timer or listener column")
+    } else {
+        ("static/global".to_owned(), "default")
+    }
+}
+
+/// The trend of one series.
+struct TrendInfo {
+    harness: String,
+    cols: Vec<Col>,
+    evidence: Vec<String>,
+    series: String,
+}
+
+/// Steps 2 to 4.
+fn analyse(fx: &mut Fx, ran: &[Ran]) {
+    let mut trends: Vec<TrendInfo> = Vec::new();
+    for r in ran {
+        for s in &r.series {
+            let out = fx.call(&["trend", s]);
+            if !out.ok {
+                continue;
+            }
+            let trend_id = out.json["trend"].as_str().unwrap_or("");
+            let cols = fx
+                .run_dir()
+                .map(|d| read_columns(&d.join("trend").join(format!("{trend_id}.json"))))
+                .unwrap_or_default();
+            fx.row.passed_columns += cols.iter().filter(|c| c.pass && !c.container()).count();
+            trends.push(TrendInfo {
+                harness: r.harness.clone(),
+                cols,
+                evidence: out.evidence(),
+                series: s.clone(),
+            });
+        }
+    }
+    let mut chosen: BTreeSet<String> = BTreeSet::new();
+    let mut chosen_sites: BTreeSet<String> = BTreeSet::new();
+    let mut alloc_tests = 0usize;
+    let mut any_with_candidates = false;
+
+    // Step 2: passed columns with candidates.
+    for t in &trends {
+        for col in t.cols.iter().filter(|c| c.pass && !c.container()) {
+            if col.candidates.is_empty() {
+                continue;
+            }
+            any_with_candidates = true;
+            fx.row.passed_with_candidates += 1;
+            let view = fx.view();
+            let Some(f) = first_candidate(&view, col) else {
+                continue;
+            };
+            if !chosen.insert(f.id.clone()) {
+                continue;
+            }
+            if let Some(site) = &f.site {
+                chosen_sites.insert(site.clone());
+            }
+            let Some(ev) = trend_evidence(&view, &t.evidence, col) else {
+                fx.row
+                    .errors
+                    .push(format!("trend {} wrote no growth evidence", t.series));
+                continue;
+            };
+            let outcome = test_candidate(fx, t, &f, col, &ev, true, &mut alloc_tests);
+            fx.step(format!("{} via {}: {outcome}", f.id, col.name));
+        }
+    }
+
+    // Step 3: candidates tied to non-passing columns.
+    for t in &trends {
+        for col in t.cols.iter().filter(|c| !c.pass && !c.container()) {
+            let view = fx.view();
+            let Some(f) = first_candidate(&view, col) else {
+                continue;
+            };
+            if chosen.contains(&f.id) || f.site.as_ref().is_some_and(|s| chosen_sites.contains(s)) {
+                continue;
+            }
+            chosen.insert(f.id.clone());
+            if let Some(site) = &f.site {
+                chosen_sites.insert(site.clone());
+            }
+            let Some(ev) = trend_evidence(&view, &t.evidence, col) else {
+                continue;
+            };
+            let outcome = test_candidate(fx, t, &f, col, &ev, false, &mut alloc_tests);
+            fx.step(format!("{} via {} (not passed): {outcome}", f.id, col.name));
+        }
+    }
+
+    // Step 3b: nothing tied to a candidate grew. One unbound alloc-test judges the
+    // whole workload; when it favors non-leak it rules out every leak-side
+    // candidate still open, because no measured column of the process grows.
+    if !any_with_candidates && let Some(t) = trends.first() {
+        let view = fx.view();
+        let open: Vec<String> = view
+            .findings
+            .iter()
+            .filter(|f| f.state == "candidate" && !f.is_nonleak() && f.site.is_some())
+            .map(|f| f.id.clone())
+            .collect();
+        if !open.is_empty() && alloc_tests < MAX_ALLOC_TESTS {
+            alloc_tests += 1;
+            let a = alloc_test(fx, &t.harness, None);
+            if let (Verdict::NonLeak, Some(e)) = (&a.verdict, &a.evidence) {
+                let mut refuted = 0usize;
+                for f in &open {
+                    if fx.call(&["ledger", "refute", f, "--evidence", e]).ok {
+                        refuted += 1;
+                    }
+                }
+                fx.step(format!(
+                    "unbound alloc-test {e} favors non-leak: refuted {refuted} of {} open candidates",
+                    open.len()
+                ));
+            } else {
+                fx.step(format!(
+                    "unbound alloc-test: {:?}; open candidates left for step 5",
+                    a.verdict
+                ));
+            }
+        }
+    }
+
+    // Step 4: a passing region column without candidates.
+    if !any_with_candidates
+        && let Some((t, col)) = trends.iter().find_map(|t| {
+            t.cols
+                .iter()
+                .find(|c| c.pass && !c.container())
+                .map(|c| (t, c))
+        })
+    {
+        let view = fx.view();
+        if let Some(ev) = trend_evidence(&view, &t.evidence, col) {
+            let shape = col.shape.clone();
+            let mut args = vec![
+                "ledger",
+                "add",
+                "--origin",
+                "growth-series",
+                "--evidence",
+                &ev,
+            ];
+            if !shape.is_empty() {
+                args.extend(["--shape", &shape]);
+            }
+            let out = fx.call(&args);
+            let id = if out.ok {
+                out.json["id"].as_str().map(str::to_owned)
+            } else {
+                None
+            };
+            if let Some(g) = id {
+                let outcome = test_growth(fx, t, &g, &ev, &mut alloc_tests);
+                fx.step(format!("{g} (growth in {}): {outcome}", col.name));
+            }
+        }
+    }
+}
+
+/// The column's own candidate: the first leak-side finding it lists, which
+/// must still be a candidate (a finding another column already took is not
+/// replaced by the next one).
+fn first_candidate(view: &View, col: &Col) -> Option<Fnd> {
+    col.candidates
+        .iter()
+        .filter_map(|id| view.finding(id))
+        .find(|f| !f.is_nonleak())
+        .filter(|f| f.state == "candidate")
+        .cloned()
+}
+
+/// Tests a finding with the workload evidence of its harness.
+fn test_finding(fx: &mut Fx, harness: &str, f: &str) -> bool {
+    let view = fx.view();
+    let Some(w) = view.latest("workload", Some(harness)) else {
+        fx.row
+            .errors
+            .push(format!("no workload evidence for {harness}"));
+        return false;
+    };
+    fx.call(&["ledger", "test", f, "--evidence", &w]).ok
+}
+
+/// Steps 2 and 3 for one candidate; returns what happened, for the log.
+fn test_candidate(
+    fx: &mut Fx,
+    t: &TrendInfo,
+    f: &Fnd,
+    col: &Col,
+    ev: &str,
+    passed: bool,
+    alloc_tests: &mut usize,
+) -> String {
+    let Some(sib) = add_sibling(fx, &f.id, "N-WARM", ev) else {
+        return "could not add the N-WARM sibling".to_owned();
+    };
+    if !test_finding(fx, &t.harness, &f.id) {
+        return "ledger test refused".to_owned();
+    }
+    if *alloc_tests >= MAX_ALLOC_TESTS {
+        resolve(
+            fx,
+            &f.id,
+            "unresolved",
+            "time_budget",
+            "the alloc-test budget of this run is used up; run dla alloc-test for this finding",
+        );
+        return "alloc-test budget used up".to_owned();
+    }
+    *alloc_tests += 1;
+    let a = alloc_test(fx, &t.harness, Some(&f.id));
+    match (&a.verdict, &a.evidence) {
+        (Verdict::Leak, Some(e)) if passed => {
+            fx.call(&["ledger", "refute", &sib, "--evidence", e]);
+            let view = fx.view();
+            let mut note = String::from("favors leak");
+            if view.finding(&f.id).is_some_and(|x| x.holder.is_none())
+                && let Ok(run_dir) = fx.run_dir()
+            {
+                let (holder, rule) = pick_holder(&run_dir, f, col);
+                fx.call(&["ledger", "annotate", &f.id, "--holder", &holder]);
+                note.push_str(&format!(", holder {holder} ({rule})"));
+            }
+            let c = fx.call(&["ledger", "confirm", &f.id, "--evidence", ev]);
+            if c.ok {
+                note.push_str(", confirmed");
+            } else {
+                note.push_str(&format!(", confirm refused ({})", c.code()));
+            }
+            note
+        }
+        (Verdict::NonLeak, Some(e)) => {
+            let r = fx.call(&["ledger", "refute", &f.id, "--evidence", e]);
+            if r.ok {
+                "favors non-leak, refuted".to_owned()
+            } else {
+                format!("favors non-leak, refute refused ({})", r.code())
+            }
+        }
+        (v, _) => {
+            let why = match v {
+                Verdict::Failed(m) => format!("alloc-test failed: {m}"),
+                Verdict::Leak => "growth continues in a column that did not pass".to_owned(),
+                _ => "alloc-test is inconclusive".to_owned(),
+            };
+            let reason = if matches!(v, Verdict::Failed(_)) {
+                "env_unavailable"
+            } else {
+                "time_budget"
+            };
+            resolve(
+                fx,
+                &f.id,
+                "unresolved",
+                reason,
+                "re-run dla alloc-test with more extra cycles (--extra) or a longer workload",
+            );
+            why
+        }
+    }
+}
+
+/// Step 4 for a growth finding without a site.
+fn test_growth(fx: &mut Fx, t: &TrendInfo, g: &str, ev: &str, alloc_tests: &mut usize) -> String {
+    for hyp in ["N-HEADROOM", "N-ALLOC"] {
+        if add_sibling(fx, g, hyp, ev).is_none() {
+            return format!("could not add {hyp}");
+        }
+    }
+    if !test_finding(fx, &t.harness, g) {
+        return "ledger test refused".to_owned();
+    }
+    if *alloc_tests >= MAX_ALLOC_TESTS {
+        resolve(
+            fx,
+            g,
+            "unresolved",
+            "time_budget",
+            "run dla alloc-test for this growth",
+        );
+        return "alloc-test budget used up".to_owned();
+    }
+    *alloc_tests += 1;
+    let a = alloc_test(fx, &t.harness, None);
+    match (&a.verdict, &a.evidence) {
+        (Verdict::NonLeak, Some(e)) => {
+            let r = fx.call(&["ledger", "refute", g, "--evidence", e]);
+            if r.ok {
+                "favors non-leak, refuted".to_owned()
+            } else {
+                format!("favors non-leak, refute refused ({})", r.code())
+            }
+        }
+        (v, _) => {
+            let reason = if matches!(v, Verdict::Failed(_)) {
+                "env_unavailable"
+            } else {
+                "time_budget"
+            };
+            resolve(
+                fx,
+                g,
+                "unresolved",
+                reason,
+                "attribute the growth to a site: dla harness gen --probe <finding> on the suspected holder, then dla alloc-test --finding",
+            );
+            format!("{v:?}: left unresolved")
+        }
+    }
+}
+
+/// Step 5: gap, then resolve what is left, then the report.
+fn finish(fx: &mut Fx, ran: &[Ran], no_harness: Option<&str>) {
+    for r in ran {
+        for s in &r.series {
+            // Refusals are ignored: the gap needs series the runtime may not write.
+            fx.call_quiet(&["gap", s, "--residual"]);
+        }
+    }
+    let view = fx.view();
+    let todo: Vec<(String, bool)> = view
+        .findings
+        .iter()
+        .filter(|f| matches!(f.state.as_str(), "candidate" | "under_test") && !f.is_nonleak())
+        .map(|f| {
+            let has_static = f.origin.starts_with("detector:")
+                || f.origin == "census"
+                || f.supports.iter().any(|e| {
+                    view.evidence
+                        .get(e)
+                        .is_some_and(|e| e.authority == "static")
+                });
+            (f.id.clone(), has_static)
+        })
+        .collect();
+    for (id, has_static) in todo {
+        if !has_static {
+            resolve(
+                fx,
+                &id,
+                "unresolved",
+                "time_budget",
+                "no dynamic evidence reached this finding; re-run dla alloc-test with a probe",
+            );
+            continue;
+        }
+        let (reason, remedy) = match no_harness {
+            Some("build_fails") => (
+                "build_fails",
+                "fix the build (see probe/probe.json), then dla harness gen --lang <l>",
+            ),
+            Some(_) => (
+                "no_harness",
+                "write a loop harness: dla harness gen --lang <l> --driver",
+            ),
+            None => (
+                "not_exercised",
+                "no loop test reached this site; extend the harness (dla harness gen --probe <finding>), then dla ledger test",
+            ),
+        };
+        resolve(fx, &id, "suspected_static_only", reason, remedy);
+    }
+    fx.call(&["report"]);
+}
+
+// ---------------------------------------------------------------------------
+// Checks
+// ---------------------------------------------------------------------------
+
+/// The M3 rules, re-checked from the ledger for every confirmed leak-side finding.
+fn check_m3_rules(view: &View) -> Vec<String> {
+    let mut bad = Vec::new();
+    for f in view
+        .findings
+        .iter()
+        .filter(|f| f.state == "confirmed" && !f.is_nonleak())
+    {
+        let Some((from, cited)) = &f.confirmed else {
+            bad.push(format!("{} is confirmed without a transition record", f.id));
+            continue;
+        };
+        if from != "under_test" {
+            bad.push(format!(
+                "{} was confirmed from {from}, not under_test",
+                f.id
+            ));
+        }
+        let root = f.parent.as_deref().unwrap_or(&f.id);
+        let refuted_sibling = view
+            .findings
+            .iter()
+            .any(|g| g.is_nonleak() && g.state == "refuted" && g.parent.as_deref() == Some(root));
+        if !refuted_sibling {
+            bad.push(format!("{} has no refuted N-* sibling", f.id));
+        }
+        let growth = f.supports.iter().chain(cited).any(|id| {
+            view.evidence.get(id).is_some_and(|e| {
+                matches!(e.kind.as_str(), "growth-series" | "unit-count-series")
+                    && matches!(e.authority.as_str(), "test" | "live" | "dump")
+                    && e.result["gate"].as_str() == Some("pass")
+            })
+        });
+        if !growth {
+            bad.push(format!("{} cites no growth evidence with gate pass", f.id));
+        }
+        if f.site.is_none() {
+            bad.push(format!("{} has no site", f.id));
+        }
+        if f.holder.is_none() {
+            bad.push(format!("{} has no holder", f.id));
+        }
+    }
+    bad
+}
+
+/// Residual over total of the residual evidence; `Err` when a row cannot be computed.
+fn residual_share(view: &View) -> Result<Option<f64>, String> {
+    let mut residual = 0.0;
+    let mut total = 0.0;
+    let mut rows = 0;
+    for e in view.evidence.values().filter(|e| e.kind == "residual") {
+        for r in e.result["rows"].as_array().into_iter().flatten() {
+            rows += 1;
+            let (Some(a), Some(b)) = (r["residual"].as_f64(), r["total"].as_f64()) else {
+                return Err("a residual row has no numeric residual and total".to_owned());
+            };
+            residual += a;
+            total += b;
+        }
+    }
+    if rows == 0 {
+        return Ok(None);
+    }
+    Ok(Some(if total > 0.0 { residual / total } else { 0.0 }))
+}
+
+/// Grades the ledger against `expected.toml` (read only now) and fills the row.
+fn grade_row(row: &mut FixtureRow, fixtures: &Path, ledger: &Path) {
+    let expected = match load_expected(fixtures, &row.id) {
+        Ok(e) => e,
+        Err(e) => {
+            row.failures.push(e);
+            return;
+        }
+    };
+    row.category = expected.category.as_str().to_owned();
+    let text = fs::read_to_string(ledger).unwrap_or_default();
+    let Some(findings) = findings_from_ledger(&text) else {
+        row.failures.push("the ledger has no finding".to_owned());
+        return;
+    };
+    let grade = grade_findings(&expected, Source::Ledger, &findings);
+    row.claims = grade.claim;
+    row.rule_outs = grade.rule_out;
+    row.confirmed = findings
+        .iter()
+        .filter(|f| !f.hypothesis && f.state == State::Confirmed)
+        .count();
+    row.refuted = findings
+        .iter()
+        .filter(|f| !f.hypothesis && f.state == State::Refuted)
+        .count();
+    let confirmable: Vec<_> = expected
+        .leak
+        .iter()
+        .zip(&grade.leaks)
+        .filter(|(l, _)| l.confirmable)
+        .collect();
+    row.leaks_expected = confirmable.len();
+    row.leaks_found = confirmable.iter().filter(|(_, o)| o.found).count();
+    match expected.category {
+        Category::ArchetypeLeak | Category::ArchetypeFree | Category::MultiLeak => {
+            if expected.dynamic_confirmation {
+                for (l, o) in &confirmable {
+                    if !o.found {
+                        row.failures
+                            .push(format!("leak {} ({}) is not confirmed", l.id, l.site));
+                    }
+                }
+            }
+        }
+        Category::DecoyControl => {
+            if grade.claim {
+                row.failures.push("a claim on a decoy control".to_owned());
+            }
+        }
+        Category::NonLeak => {
+            if grade.claim {
+                row.failures
+                    .push("a claim on a non-leak fixture".to_owned());
+            }
+            if !grade.rule_out {
+                row.failures
+                    .push("no rule-out on a non-leak fixture".to_owned());
+            }
+        }
+        Category::Impossible => {
+            if grade.claim {
+                row.failures
+                    .push("a claim on an impossible fixture".to_owned());
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One fixture
+// ---------------------------------------------------------------------------
+
+fn skip_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git"
+            | ".dla"
+            | "target"
+            | "build"
+            | "node_modules"
+            | "venv"
+            | ".venv"
+            | "out"
+            | "dist"
+            | "__pycache__"
+    )
+}
+
+fn walk_files(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Res<()> {
+    let rd = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            if !skip_dir(&e.file_name().to_string_lossy()) {
+                walk_files(root, &p, out)?;
+            }
+        } else if let Ok(rel) = p.strip_prefix(root) {
+            out.push(rel.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+/// The tracked files of a fixture project (git index in a checkout, else a walk).
+fn project_files(project: &Path) -> Res<Vec<PathBuf>> {
+    let tracked = Command::new("git")
+        .arg("-C")
+        .arg(project)
+        .args(["ls-files", "-z", "--", "."])
+        .output();
+    if let Ok(o) = tracked
+        && o.status.success()
+        && !o.stdout.is_empty()
+    {
+        return Ok(o
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| PathBuf::from(String::from_utf8_lossy(s).into_owned()))
+            .collect());
+    }
+    let mut v = Vec::new();
+    walk_files(project, project, &mut v)?;
+    v.sort();
+    Ok(v)
+}
+
+fn copy_project(project: &Path, dest: &Path) -> Res<()> {
+    fs::create_dir_all(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    for rel in project_files(project)? {
+        let to = dest.join(&rel);
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        fs::copy(project.join(&rel), &to)
+            .map_err(|e| format!("{}: {e}", project.join(&rel).display()))?;
+    }
+    Ok(())
+}
+
+fn git(dir: &Path, args: &[&str]) -> Res<()> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.email=bench@example.invalid",
+            "-c",
+            "user.name=bench",
+        ])
+        .args(["-c", "commit.gpgsign=false"])
+        .args(args)
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// The dla binary as an absolute path: it is run from inside each fixture copy.
+fn find_dla(arg: Option<&Path>) -> PathBuf {
+    let found = if let Some(p) = arg {
+        p.to_path_buf()
+    } else {
+        let exe = if cfg!(windows) { "dla.exe" } else { "dla" };
+        let beside = env::current_exe()
+            .ok()
+            .and_then(|me| me.parent().map(|d| d.join(exe)))
+            .filter(|p| p.is_file());
+        beside.unwrap_or_else(|| {
+            let dev = Path::new("target/debug").join(exe);
+            if dev.is_file() {
+                dev
+            } else {
+                PathBuf::from("dla")
+            }
+        })
+    };
+    if found.components().count() > 1 {
+        std::path::absolute(&found).unwrap_or(found)
+    } else {
+        found
+    }
+}
+
+struct Shared<'a> {
+    args: &'a DynamicArgs,
+    bin: &'a Path,
+    plugin_root: &'a Path,
+    work: &'a Path,
+    log_root: &'a Path,
+}
+
+fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
+    let id = fixture_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut row = FixtureRow {
+        id: id.clone(),
+        ..FixtureRow::default()
+    };
+    let project = sh.work.join(&id);
+    let setup = copy_project(&fixture_dir.join("project"), &project)
+        .and_then(|()| git(&project, &["init", "-q"]))
+        .and_then(|()| git(&project, &["add", "-A"]))
+        .and_then(|()| git(&project, &["commit", "-q", "-m", "fixture"]));
+    if let Err(e) = setup {
+        row.failures.push(format!("scratch copy: {e}"));
+        return row;
+    }
+    let data_dir = sh.work.join("data").join(&id);
+    let _ = fs::create_dir_all(&data_dir);
+    let mut fx = Fx {
+        bin: sh.bin,
+        project: project.clone(),
+        plugin_root: sh.plugin_root,
+        data_dir,
+        log_dir: sh.log_root.join(&id),
+        seq: 0,
+        row,
+    };
+    let _ = fs::remove_dir_all(&fx.log_dir);
+    drive(&mut fx);
+    let mut row = std::mem::take(&mut fx.row);
+    if let Ok(run_dir) = fx.run_dir() {
+        let view = View::read(&run_dir.join("ledger.jsonl"));
+        grade_row(&mut row, &sh.args.fixtures, &run_dir.join("ledger.jsonl"));
+        for m in check_m3_rules(&view) {
+            row.failures.push(format!("M3 rule: {m}"));
+        }
+        match residual_share(&view) {
+            Ok(s) => row.unexplained_growth_share = s,
+            Err(e) => row.failures.push(e),
+        }
+        collect_run_files(&run_dir, &fx.log_dir);
+    } else {
+        row.failures.push("dla run init failed".to_owned());
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&row) {
+        let _ = fs::write(fx.log_dir.join("row.json"), text + "\n");
+    }
+    if !sh.args.keep_work {
+        let _ = fs::remove_dir_all(&project);
+        let _ = fs::remove_dir_all(sh.work.join("data").join(&id));
+    }
+    row
+}
+
+fn drive(fx: &mut Fx) {
+    if !fx.call(&["run", "init"]).ok {
+        return;
+    }
+    let mut runtimes: Vec<String> = Vec::new();
+    let mut builds = Value::Null;
+    let p = fx.call(&["probe", "--build"]);
+    if p.ok {
+        runtimes = strings(&p.json["summary"]["runtimes"]);
+        builds = p.json["summary"]["builds"].clone();
+    }
+    fx.row.runtimes = runtimes.clone();
+    for lang in &runtimes {
+        fx.call(&["sweep", "--lang", lang]);
+        fx.call(&["census", "--lang", lang]);
+    }
+    fx.call(&["workload", "discover"]);
+    let (ran, missing) = make_harnesses(fx, &runtimes, &builds);
+    fx.row.harnesses = ran.iter().map(|r| r.harness.clone()).collect();
+    fx.row.series = ran.iter().flat_map(|r| r.series.clone()).collect();
+    if !ran.is_empty() {
+        analyse(fx, &ran);
+    }
+    // Only when nothing ran at all is the missing harness the reason for the rest.
+    finish(fx, &ran, if ran.is_empty() { missing } else { None });
+}
+
+// ---------------------------------------------------------------------------
+// Output
+// ---------------------------------------------------------------------------
+
+/// The text table.
+pub fn render_table(res: &DynamicResult) -> String {
+    let mut s = format!("archetypes: {}\n\n", res.archetypes);
+    let w = res
+        .fixtures
+        .iter()
+        .map(|f| f.id.len())
+        .max()
+        .unwrap_or(7)
+        .max(7);
+    s.push_str(&format!(
+        "{:<w$}  {:<14}  {:<7}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  result\n",
+        "fixture",
+        "category",
+        "runtime",
+        "ran",
+        "series",
+        "passed",
+        "conf",
+        "refu",
+        "claim",
+        "rule-out",
+        "leaks",
+    ));
+    for f in &res.fixtures {
+        s.push_str(&format!(
+            "{:<w$}  {:<14}  {:<7}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  {}\n",
+            f.id,
+            f.category,
+            f.runtimes.join(","),
+            if f.harnesses.is_empty() { "no" } else { "yes" },
+            f.series.len(),
+            f.passed_columns,
+            f.confirmed,
+            f.refuted,
+            if f.claims { "yes" } else { "no" },
+            if f.rule_outs { "yes" } else { "no" },
+            format!("{}/{}", f.leaks_found, f.leaks_expected),
+            if f.failures.is_empty() {
+                "pass".to_owned()
+            } else {
+                format!("FAIL: {}", f.failures.join("; "))
+            },
+        ));
+    }
+    let pass = res
+        .fixtures
+        .iter()
+        .filter(|f| f.failures.is_empty())
+        .count();
+    s.push_str(&format!(
+        "\ntotals: {pass}/{} pass, {} confirmed, {} refuted, {} with a claim, {} with a rule-out\n",
+        res.fixtures.len(),
+        res.fixtures.iter().map(|f| f.confirmed).sum::<usize>(),
+        res.fixtures.iter().map(|f| f.refuted).sum::<usize>(),
+        res.fixtures.iter().filter(|f| f.claims).count(),
+        res.fixtures.iter().filter(|f| f.rule_outs).count(),
+    ));
+    s.push_str(&format!("logs: {}\n", res.log_dir));
+    s
+}
+
+/// Runs the driver.
+pub fn run(args: &DynamicArgs) -> Res<String> {
+    let bin = find_dla(args.dla_bin.as_deref());
+    let data_src = args.repo_root.join("data");
+    if !data_src.is_dir() {
+        return Err(format!("{}: no data directory", data_src.display()));
+    }
+    let work = env::temp_dir().join(format!("dla-bench-dynamic-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&work);
+    fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
+    let log_root = match (&args.log_dir, &args.json) {
+        (Some(d), _) => d.clone(),
+        (None, Some(j)) => j.with_extension("logs"),
+        (None, None) => {
+            env::temp_dir().join(format!("dla-bench-dynamic-logs-{}", std::process::id()))
+        }
+    };
+    let log_root = std::path::absolute(&log_root).unwrap_or(log_root);
+    let result = run_in(args, &bin, &data_src, &work, &log_root);
+    if args.keep_work {
+        eprintln!("scratch kept: {}", work.display());
+    } else {
+        let _ = fs::remove_dir_all(&work);
+    }
+    let res = result?;
+    print!("{}", render_table(&res));
+    if let Some(out) = &args.json {
+        let text = serde_json::to_string_pretty(&res).map_err(|e| e.to_string())?;
+        fs::write(out, text + "\n").map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    if res.failures.is_empty() {
+        Ok(format!("ok: {} fixture(s) pass", res.fixtures.len()))
+    } else {
+        Err(format!(
+            "{} failure(s):\n{}",
+            res.failures.len(),
+            res.failures.join("\n")
+        ))
+    }
+}
+
+fn run_in(
+    args: &DynamicArgs,
+    bin: &Path,
+    data_src: &Path,
+    work: &Path,
+    log_root: &Path,
+) -> Res<DynamicResult> {
+    let plugin_root = work.join("plugin");
+    copy_tree(data_src, &plugin_root.join("data"))?;
+    let off = args.archetypes == Archetypes::Off;
+    if off {
+        apply_archetypes_off(&plugin_root)?;
+    }
+    fs::create_dir_all(log_root).map_err(|e| format!("{}: {e}", log_root.display()))?;
+    let dirs: Vec<PathBuf> = fixture_dirs(&args.fixtures)?
+        .into_iter()
+        .filter(|d| {
+            let name = d.file_name().map(|n| n.to_string_lossy().into_owned());
+            name.as_ref()
+                .is_some_and(|n| args.only.as_ref().is_none_or(|o| n.contains(o.as_str())))
+                && d.join("expected.toml").is_file()
+        })
+        .collect();
+    if dirs.is_empty() {
+        return Err(format!("no fixtures under {}", args.fixtures.display()));
+    }
+    let sh = Shared {
+        args,
+        bin,
+        plugin_root: &plugin_root,
+        work,
+        log_root,
+    };
+    let queue: Mutex<VecDeque<PathBuf>> = Mutex::new(dirs.into());
+    let done: Mutex<Vec<FixtureRow>> = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..args.parallel.max(1) {
+            scope.spawn(|| {
+                loop {
+                    let next = queue.lock().ok().and_then(|mut q| q.pop_front());
+                    let Some(dir) = next else { return };
+                    let row = run_fixture(&sh, &dir);
+                    eprintln!(
+                        "{}: {}",
+                        row.id,
+                        if row.failures.is_empty() {
+                            "pass"
+                        } else {
+                            "FAIL"
+                        }
+                    );
+                    if let Ok(mut d) = done.lock() {
+                        d.push(row);
+                    }
+                }
+            });
+        }
+    });
+    let mut fixtures = done.into_inner().map_err(|e| e.to_string())?;
+    fixtures.sort_by(|a, b| a.id.cmp(&b.id));
+    let failures = fixtures
+        .iter()
+        .flat_map(|f| f.failures.iter().map(|m| format!("{}: {m}", f.id)))
+        .collect();
+    Ok(DynamicResult {
+        archetypes: if off { "off" } else { "on" }.to_owned(),
+        parallel: args.parallel.max(1),
+        log_dir: log_root.display().to_string(),
+        fixtures,
+        failures,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(tag: &str, lines: &[&str]) -> View {
+        let dir = std::env::temp_dir().join(format!("dla-dyn-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(format!("{tag}.jsonl"));
+        fs::write(&p, lines.join("\n")).unwrap();
+        View::read(&p)
+    }
+
+    const EV_PASS: &str = r#"{"type":"evidence","evidence_id":"E1","authority":"test","kind":"growth-series","result":{"gate":"pass"}}"#;
+    const ADD: &str = r#"{"type":"finding_added","finding":{"id":"F1","origin":"census","site":"a.py:1","holder":"static/global"}}"#;
+    const SIB: &str =
+        r#"{"type":"finding_added","finding":{"id":"F1.n1","parent":"F1","hypothesis":"N-WARM"}}"#;
+
+    #[test]
+    fn a_complete_confirmation_passes_the_m3_rules() {
+        let v = view(
+            "ok",
+            &[
+                EV_PASS,
+                ADD,
+                SIB,
+                r#"{"type":"transition","finding":"F1","from":"candidate","to":"under_test","evidence":[]}"#,
+                r#"{"type":"transition","finding":"F1.n1","from":"candidate","to":"refuted","evidence":[]}"#,
+                r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
+            ],
+        );
+        assert!(check_m3_rules(&v).is_empty());
+    }
+
+    #[test]
+    fn a_confirmation_without_sibling_refutation_is_reported() {
+        let v = view(
+            "nosib",
+            &[
+                EV_PASS,
+                ADD,
+                SIB,
+                r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
+            ],
+        );
+        let bad = check_m3_rules(&v);
+        assert!(
+            bad.iter().any(|b| b.contains("refuted N-* sibling")),
+            "{bad:?}"
+        );
+    }
+
+    #[test]
+    fn missing_holder_and_failed_gate_are_reported() {
+        let v = view(
+            "gate",
+            &[
+                r#"{"type":"evidence","evidence_id":"E1","authority":"test","kind":"growth-series","result":{"gate":"fail"}}"#,
+                r#"{"type":"finding_added","finding":{"id":"F1","site":"a.py:1"}}"#,
+                r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
+            ],
+        );
+        let bad = check_m3_rules(&v).join("|");
+        assert!(
+            bad.contains("gate pass") && bad.contains("no holder"),
+            "{bad}"
+        );
+    }
+
+    #[test]
+    fn annotations_fill_the_holder() {
+        let v = view(
+            "annot",
+            &[
+                r#"{"type":"finding_added","finding":{"id":"F1","site":"a.py:1"}}"#,
+                r#"{"type":"finding_annotated","finding":"F1","holder":"blocked-stack"}"#,
+            ],
+        );
+        assert_eq!(
+            v.finding("F1").unwrap().holder.as_deref(),
+            Some("blocked-stack")
+        );
+    }
+
+    #[test]
+    fn residual_share_is_computed_from_rows() {
+        let v = view(
+            "resid",
+            &[
+                r#"{"type":"evidence","evidence_id":"E1","authority":"test","kind":"residual","result":{"rows":[{"residual":25.0,"total":100.0},{"residual":0.0,"total":100.0}]}}"#,
+            ],
+        );
+        assert_eq!(residual_share(&v), Ok(Some(0.125)));
+        assert_eq!(residual_share(&View::default()), Ok(None));
+    }
+
+    fn col(name: &str, kind: &str) -> Col {
+        Col {
+            name: name.into(),
+            kind: kind.into(),
+            region: "heap".into(),
+            shape: String::new(),
+            pass: true,
+            candidates: vec![],
+        }
+    }
+
+    #[test]
+    fn holders_follow_the_column_without_a_census_entry() {
+        let f = Fnd {
+            id: "F1".into(),
+            site: Some("x.go:3".into()),
+            ..Fnd::default()
+        };
+        let none = Path::new("/nonexistent");
+        assert_eq!(
+            pick_holder(none, &f, &col("go.goroutines", "gauge")).0,
+            "blocked-stack"
+        );
+        assert_eq!(
+            pick_holder(none, &f, &col("node.timers", "gauge")).0,
+            "registration-table"
+        );
+        assert_eq!(
+            pick_holder(none, &f, &col("probe:a.b", "gauge")).0,
+            "static/global"
+        );
+    }
+
+    #[test]
+    fn trend_evidence_follows_the_column_kind() {
+        let v = view(
+            "kind",
+            &[
+                r#"{"type":"evidence","evidence_id":"E1","authority":"test","kind":"growth-series","result":{}}"#,
+                r#"{"type":"evidence","evidence_id":"E2","authority":"test","kind":"unit-count-series","result":{}}"#,
+            ],
+        );
+        let ids = vec!["E1".to_owned(), "E2".to_owned()];
+        assert_eq!(
+            trend_evidence(&v, &ids, &col("n", "counter")).as_deref(),
+            Some("E2")
+        );
+        assert_eq!(
+            trend_evidence(&v, &ids, &col("n", "gauge")).as_deref(),
+            Some("E1")
+        );
+    }
+}

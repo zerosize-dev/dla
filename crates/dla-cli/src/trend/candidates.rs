@@ -105,7 +105,8 @@ impl<'a> Matcher<'a> {
     }
 
     /// The candidates of `c`: the finding it names (when the ledger has it), then the
-    /// findings at exactly its site, then those in the same enclosing body. Leak-side
+    /// findings at exactly its site, then those in the same enclosing body, and when
+    /// none of these exists, the findings of the same file nearest first. Leak-side
     /// findings only (an `N-*` hypothesis is not a candidate). Empty for a column with
     /// neither a site nor a finding.
     pub fn candidates(&mut self, c: &ColumnTrend) -> Vec<FindingId> {
@@ -137,11 +138,20 @@ impl<'a> Matcher<'a> {
         if !same_file.is_empty()
             && let Some((lo, hi)) = self.tree(&file).and_then(|t| enclosing(t, line))
         {
-            for (id, _, fl) in same_file {
+            for (id, _, fl) in &same_file {
                 if (lo..=hi).contains(fl) && !out.contains(id) {
                     out.push(id.clone());
                 }
             }
+        }
+        if out.is_empty() {
+            // Nothing at the site or in its body: fall back to the findings of the same
+            // file, nearest line first. An allocation site (`native.live_bytes@f.rs:16`)
+            // often sits in a constructor while the holder candidate is the field it fills
+            // (`f.rs:10`), in a different body of the same file.
+            let mut near = same_file;
+            near.sort_by_key(|(id, _, fl)| (fl.abs_diff(line), id.to_string()));
+            out.extend(near.into_iter().map(|(id, _, _)| id.clone()));
         }
         out
     }
@@ -223,8 +233,12 @@ mod tests {
         // Column site is inside Put: F1 exact, F3 same function; F2 is another function.
         let t = trend_of("cache.go:6", None);
         assert_eq!(m.candidates(&t), [FindingId::new(1), FindingId::new(3)]);
-        // A column at the top-level var has no enclosing body: exact matches only.
-        assert!(m.candidates(&trend_of("cache.go:3", None)).is_empty());
+        // A column at the top-level var has no enclosing body and no exact match: the
+        // findings of the same file, nearest first (F3 at :5, F1 at :6, F2 at :10).
+        assert_eq!(
+            m.candidates(&trend_of("cache.go:3", None)),
+            [FindingId::new(3), FindingId::new(1), FindingId::new(2)]
+        );
         // The named finding comes first, even without a site match.
         let t = trend_of("cache.go:10", Some(FindingId::new(4)));
         assert_eq!(m.candidates(&t), [FindingId::new(4), FindingId::new(2)]);

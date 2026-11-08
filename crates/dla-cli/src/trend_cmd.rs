@@ -508,6 +508,9 @@ fn suggestions(
                 {
                     next.push(format!("dla ledger test {root} --evidence {harness}"));
                 }
+                if let Some(h) = series.source.harness.as_deref() {
+                    next.push(format!("dla alloc-test {h} --finding {root}"));
+                }
             }
             None if unbound < 3 => {
                 unbound += 1;

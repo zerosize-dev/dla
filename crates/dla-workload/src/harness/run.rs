@@ -82,6 +82,9 @@ pub struct RunOptions {
     pub purge: Option<String>,
     /// Source kind written into the series (`harness` or `alloc-test`).
     pub source_kind: SeriesSourceKind,
+    /// Command mode only: the first point `k` to run (1 = all). `dla alloc-test` runs
+    /// only the extra points after a complete harness series and joins the two.
+    pub first_point: u32,
     /// Per-process timeout in seconds, overriding the manifest.
     pub timeout_secs: Option<u64>,
 }
@@ -94,6 +97,7 @@ impl Default for RunOptions {
             extra: 0,
             purge: None,
             source_kind: SeriesSourceKind::Harness,
+            first_point: 1,
             timeout_secs: None,
         }
     }
@@ -610,7 +614,7 @@ fn run_command_mode(
     let total = manifest.warmup + iterations + opts.extra;
     let mut run = ModeRun::default();
     let mut kept_warm = 0;
-    for k in 1..=total {
+    for k in opts.first_point.max(1)..=total {
         let n = manifest.step.saturating_mul(u64::from(k));
         let label = format!("p{k}-{}", mode.as_str());
         let last = k == total;

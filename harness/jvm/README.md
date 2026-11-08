@@ -53,7 +53,8 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
 `java -cp <scratch classes>:<agent classes or jar> <package>.<class>`; compile it with the agent
 classes on the classpath (`javac -cp agent/classes ...`) into the scratch build output. The driver
 writes one `checkpoint` record per round via `DlaDump.checkpoint(unitsDone, lastRound)`.
-A JUnit 5 variant is generated only when `junit-platform-console-standalone` is on the classpath.
+`dla harness gen` writes no JUnit 5 variant yet: the plain driver `main` is used and the manifest
+records a gap noting that `junit-platform-console-standalone` was not used.
 
 ### Placeholders
 

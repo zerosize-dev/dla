@@ -437,6 +437,13 @@ def _purge(kind, before_gc_os, limitations):
         purge["before"] = before_gc_os
         purge["after"] = _os_values()
     elif kind in ("trim", "trim-native-heap"):
+        # Import ctypes before the first reading: loading it maps libraries and would
+        # otherwise show up as RSS the trim "failed" to return.
+        try:
+            import ctypes  # noqa: F401
+            import ctypes.util  # noqa: F401
+        except BaseException:
+            pass
         purge["before"] = _os_values()
         try:
             import platform

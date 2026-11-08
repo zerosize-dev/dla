@@ -8,7 +8,12 @@ lists its placeholders and hooks:
 |---|---|
 | `jvm/` | `DlaAgent.java` (premain agent), `DlaDump.java` (dump and probe code), `DlaHarness.java` (driver), `MANIFEST.MF` |
 | `python/` | `sitecustomize.py` (agent), `dla_harness.py` (driver), `test_dla_harness.py` (pytest-memray variant) |
-| `node/`, `go/`, `native/` | see the README in each directory |
+| `node/` | `dla-preload.js` (agent), `dla-harness.js` (driver) |
+| `go/` | `zz_dla_harness_test.go.tmpl` (command mode), `zz_dla_driver_test.go.tmpl` (driver), `zz_dla_goleak_test.go.tmpl` (optional goleak check) |
+| `native/` | `dla_alloc_shim.c` (allocator shim for Rust and native programs), `dla_harness.c` (C driver) |
+| `rust/` | `dla_harness.rs` (driver for crates with a library target) |
+
+Each directory has a README that lists the files, placeholders and hooks of its language.
 
 ## Environment contract (every agent, shim and driver)
 
@@ -36,7 +41,7 @@ or the last checkpoint. Absent optional sections are simply left out.
 |---|---|
 | `DLA_HARNESS_OUT` | file the records are appended to; when unset the agent does nothing |
 | `DLA_HARNESS_PROBES` | path of `probes.json`: a JSON array of `ProbeSpec` (`{"id","finding","target":{"kind",...},"site"}`); an object with a `probes` array is also accepted. A runtime reads only its own probe kinds. Kind spelling is compared ignoring case, `-` and `_` (`JvmClass`, `jvm-class`) |
-| `DLA_PURGE` | `none`, `trim`, `gc`, `free-os-memory`, `trim-native-heap`, `jemalloc`, `empty-cache`; the JVM agent handles `trim-native-heap` and `gc`, the Python agent `trim` and `gc`; an unsupported kind becomes a limitation |
+| `DLA_PURGE` | `none`, `trim`, `gc`, `free-os-memory`, `trim-native-heap`, `jemalloc`, `empty-cache`. Handled per runtime: JVM `trim-native-heap` and `gc`; Python `trim` and `gc`; Node `gc`; Go `free-os-memory` and `gc` (agent and driver); the allocator shim `trim` and `jemalloc` (the latter untested); the Rust and C drivers `trim`. An unsupported kind becomes a limitation. `empty-cache` has no handler yet |
 | `DLA_PROJECT` | scratch project root; used to select project classes/functions for coverage |
 | `DLA_TICK_MS` | optional period of light `tick` records (no forced collection, no probes) |
 | `DLA_ITER` | iteration count `n` of a command-mode run; copied into `x` of the exit record |
@@ -49,7 +54,7 @@ file at generation time, so the variables are optional overrides):
 | `DLA_KEY_MODE` | `fresh` (key = i) or `repeated` (key = i % repeat) |
 | `DLA_STEP` | units of work per round |
 | `DLA_WARMUP` | number of leading warm-up rounds (they also write checkpoints; the series marks them) |
-| `DLA_ROUNDS` | measured rounds after the warm-up (`--extra` adds to this) |
+| `DLA_ROUNDS` | measured rounds after the warm-up (`dla harness run` sets it to `--iterations` plus `--extra`); the driver runs `DLA_WARMUP + DLA_ROUNDS` rounds in total |
 | `DLA_REPEAT` | size of the repeated key space |
 
 `x` of a driver checkpoint is the number of units completed. When a driver wrote checkpoints, the

@@ -700,21 +700,24 @@ pub fn resolve_in(
         let exact = format!("{module}.{rest}");
         let binding = format!("{module}.{name}");
         let in_file = |e: &&CensusEntry| site_file(&e.site) == file;
+        // A property breakdown (`shared.latest`) names the field that holds the growth,
+        // so the field's own census entry (`Scheduler.latest`) beats the binding's.
+        let by_prop = || {
+            let prop = prop?;
+            let last = last_segment(prop);
+            let mut hits: Vec<&CensusEntry> = entries
+                .iter()
+                .filter(in_file)
+                .filter(|e| last_segment(&e.owner) == last)
+                .collect();
+            hits.sort_by_key(|e| e.site.clone());
+            hits.first().copied()
+        };
         if let Some(e) = entries
             .iter()
             .find(|e| e.owner == exact)
+            .or_else(by_prop)
             .or_else(|| entries.iter().find(|e| e.owner == binding))
-            .or_else(|| {
-                let prop = prop?;
-                let last = last_segment(prop);
-                let mut hits: Vec<&CensusEntry> = entries
-                    .iter()
-                    .filter(in_file)
-                    .filter(|e| last_segment(&e.owner) == last)
-                    .collect();
-                hits.sort_by_key(|e| e.site.clone());
-                hits.first().copied()
-            })
         {
             return Some(e.site.clone());
         }
@@ -850,10 +853,11 @@ mod tests {
             resolve_in(p, Runtime::Node, &entries, "src/scheduler.js:shared").as_deref(),
             Some("src/scheduler.js:90")
         );
-        // The binding's line (spec 4.6), not the property's.
+        // A property breakdown resolves to the field's census entry, not the binding's:
+        // the property is what holds the growth.
         assert_eq!(
             resolve_in(p, Runtime::Node, &entries, "src/scheduler.js:shared.latest").as_deref(),
-            Some("src/scheduler.js:90")
+            Some("src/scheduler.js:15")
         );
         // Without a census entry for the binding, the file's entry named like the property.
         assert_eq!(

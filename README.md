@@ -21,13 +21,18 @@ For the limits of what a run can establish, read [What DLA cannot see](docs/what
 
 ## Status
 
-Pre-release, milestone M2 (probe and static sweep on top of the M0 foundation and the M1 benchmark).
-What exists today: the data contracts and JSON Schemas, the ledger and its state machine, the
-probe, the static sweep, the DLA-owned rules, the holder census, workload discovery, analyzer
-installation, the plugin skeleton, the release pipeline and the benchmark in [bench/](bench/README.md).
-Dynamic measurement (harness, sampling, trend analysis) arrives in later milestones, so stages 4 and
-later in the skill are not yet backed by working commands. Expect breaking changes. Open questions
-and unverified details are tracked in [docs/VERIFY.md](docs/VERIFY.md).
+Pre-release, milestone M3 (the dynamic core, on top of the M2 static sweep, the M1 benchmark and
+the M0 foundation). What exists today: the data contracts and JSON Schemas, the ledger and its
+state machine with the M3 rules (a finding is confirmed only from a passing growth series and a
+refuted non-leak explanation, and refuted only by a discriminating test), the probe, the static
+sweep, the DLA-owned rules, the holder census, workload discovery, analyzer installation, the loop
+harness for JVM, Go, Rust, Node.js, Python and native code, process sampling, trend statistics,
+the memory-gap split, the allocator tests, the plugin skeleton, the release pipeline and the
+benchmark in [bench/](bench/README.md). The evidence-gate commands (`dla gate check`), attribution
+(`dla summarize`), `strong` findings, the verifier bundle and worker merging arrive in later
+milestones. Expect breaking changes. The statistical thresholds are provisional until they are
+calibrated on new fixtures (M7). Open questions and unverified details are tracked in
+[docs/VERIFY.md](docs/VERIFY.md).
 
 Commands:
 
@@ -40,12 +45,59 @@ Commands:
 | `dla sweep --lang <l>` | Runs the available static backends for one runtime and adds each rule hit as a candidate |
 | `dla census --lang <l>` | Adds every process-lifetime holder of one runtime as a candidate, with heuristic writers and removers |
 | `dla workload discover` | Lists the tests, entry points and dev servers a loop can run, ranked by entry points; unrunnable ones are recorded with a reason |
+| `dla harness gen --lang <l>` | Copies the project into a scratch worktree under the run directory and writes a loop harness for a workload (command mode: the workload's own command at growing iteration counts; `--driver`: a loop test with hooks to fill in). Runs nothing and needs no consent |
+| `dla harness run <H>` | Builds the harness once, measures every point with a per-runtime agent, shim or driver, and writes one series per key mode (`--mode fresh\|repeated\|both`). Tier 1 |
+| `dla trend <series>` | Mann-Kendall, Theil-Sen and half-split statistics, the slope gate (counters: every delta at least 1) and a shape for every column; `--against` compares fresh and repeated keys |
+| `dla sample --pid <P>` | Samples a running process (memory, threads, descriptors, cgroup figures and runtime counters) into a time series. Tier 1 for a process DLA started, tier 2 for any other |
+| `dla gap [<series>]` | Splits process memory into runtime-accounted and unexplained; with `--residual`, totals each region's growth, subtracts what confirmed findings explain and opens an item for the rest |
+| `dla alloc-test <H>` | Re-runs a harness with extra points and a purge (trim, free-os-memory, gc, ...) and records whether the result favors a leak or a non-leak explanation. Tier 1 |
 | `dla ledger add` | Adds a finding, which always starts as `candidate` |
-| `dla ledger annotate` | Records the writers and removers the model found for a holder (`--writer file:line`, `--remover file:line`, `--note`); changes no state |
+| `dla ledger annotate` | Records the writers and removers the model found for a holder (`--writer file:line`, `--remover file:line`, `--note`) and the holder, owner, region or site when the finding has none; changes no state |
+| `dla ledger test\|confirm\|refute` | Moves a finding under test, confirms it, or refutes it, each citing evidence (`--evidence E1,E2`); the ledger refuses the move unless its rules are met |
 | `dla ledger resolve` | Dispositions a finding or open item, or answers a checklist item |
 | `dla consent` | Records the run's one consent: `--tiers` (privilege tiers 1 to 4), `--raw-values`, `--ceiling`, `--given-by user\|runner`. A second consent in a run is refused |
 | `dla report` | Renders the report, writes `report.md` and stores its hash in `state.json` |
 | `dla schema` | Writes or checks the JSON Schema files |
+
+### Dynamic measurement
+
+The dynamic commands run project code, so they sit behind the privilege tiers. One consent per run
+covers a set of tiers, and tiers escalate by intrusiveness:
+
+| Tier | Covers | Used by |
+|---|---|---|
+| 1 | Build and run project code in a scratch copy under the run directory (builds, tests, harness loops, preload agents, allocator shims, in-process probes), and install analyzers | `dla probe --build`, `dla install`, `dla harness run`, `dla alloc-test`, `dla sample` of a process DLA started |
+| 2 | Observe a running local process DLA did not start (`/proc` sampling, jcmd attach, Node inspector, Python remote exec, a Go pprof endpoint) | `dla sample --pid` of another process |
+| 3 | Debugger or kernel level (ptrace attach, eBPF, perf, valgrind) | later adapters |
+| 4 | Capture memory contents (heap dumps, core dumps); outputs may hold secrets | later adapters |
+
+Seeing raw values in summaries is a separate consent (`--raw-values`). The details, including the
+effects statement `dla sample --pid` prints before it starts, are in
+[safety-and-effects.md](skills/detect-leak-anywhere/references/safety-and-effects.md).
+
+`dla harness gen` never edits project source: it writes a scratch copy of the project and the
+harness (manifest, probes, agent files, generated driver) under `.dla/<run>/harness/H<n>/`, and
+`dla harness run` writes the logs, raw agent output and series there and under
+`.dla/<run>/series/` and `trend/`. The scratch copy can be large; delete the run directory when you
+are done. The harness templates for each runtime are in [harness/](harness/README.md); the columns,
+the slope gate and the ledger rules are in
+[evidence-and-report.md](skills/detect-leak-anywhere/references/evidence-and-report.md). A worked
+example on a small Python project:
+
+```
+dla run init && dla probe && dla sweep --lang python && dla census --lang python
+dla workload discover
+dla harness gen --lang python            # H1, command mode
+dla harness run H1                       # S1
+dla trend S1                             # passed columns and their candidates
+dla ledger add --sibling-of F4 --origin hypothesis --hypothesis N-WARM \
+    --refute-if "growth continues over the extra cycles" --evidence E12
+dla ledger test F4 --evidence E10        # the harness run evidence
+dla alloc-test H1 --finding F4           # plateau and purge tests: favors leak
+dla ledger refute F4.n1 --evidence E13   # the non-leak sibling loses
+dla ledger annotate F4 --holder static/global
+dla ledger confirm F4 --evidence E12     # the trend evidence that passed the gate
+```
 
 ### Static analyzers
 
@@ -214,13 +266,14 @@ builds and verifies the five targets but publishes nothing.
 
 ```
 .claude-plugin/   plugin and marketplace manifests
-skills/           the detect-leak-anywhere skill
+skills/           the detect-leak-anywhere skill and its references
 agents/           worker and verifier subagents
 hooks/            SessionStart hook and downloader
 bin/dla           shim that locates and runs the binary
 crates/           Rust workspace (dla-core, dla-report, dla-cli, ...)
 schemas/          generated JSON Schemas
 docs/             blind spots and verification backlog
+harness/          templates for the per-runtime agents, shims and loop drivers
 bench/            benchmark: fixtures with answer keys, the dla-bench runner and graders
                   (see bench/README.md)
 tests/shim/       tests for the shim and downloader

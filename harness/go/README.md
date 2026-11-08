@@ -92,5 +92,6 @@ the package under test.
 ### goleak
 
 `zz_dla_goleak_test.go.tmpl` (`//go:build dlagoleak`) sets `dlaGoleakCheck` to `goleak.Find()`.
-Phase 2 writes it and passes `-tags dlagoleak` only when `go.uber.org/goleak` resolves offline;
-otherwise the driver skips the check and the harness records the gap.
+`dla harness gen --driver` writes it and `dla harness run` passes `-tags dlagoleak` only when
+`go.uber.org/goleak` resolves offline; otherwise the driver skips the check and the manifest
+records the gap.
