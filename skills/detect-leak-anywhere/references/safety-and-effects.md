@@ -46,8 +46,10 @@ Never work around a refusal by running the tool by hand.
 | `dla sample` with `node-inspect` on a process DLA did not start | 2 | If the process has no inspector DLA sends it `SIGUSR1`, which opens one on port 9229 and stays open until the process exits. DLA signals only an executable named `node` or `nodejs`, and only when `--counters node-inspect` was asked for |
 | `dla sample` with `python-remote` | 2 | The target runs a small generated script through `sys.remote_exec`; needs Python 3.14 or later in the target |
 | `dla sample` with `jcmd` or `go-pprof=<url>` | 2 | jcmd attaches to the JVM (it needs a writable `/tmp` for the attach socket); the Go backend sends HTTP GETs to the pprof endpoint |
-| Debugger and kernel tracing (ptrace attach, eBPF, perf, valgrind with vgdb) | 3 | Later adapters; nothing in `dla` uses tier 3 yet |
-| Heap dumps, heap snapshots, core dumps, memray attach | 4 | Later adapters; nothing in `dla` uses tier 4 yet. The captures stay in `.dla/` and may hold secrets |
+| `dla attach` with `memray`, `heaptrack` or `goref` | 3 | ptrace-level attach; allocation stacks, not contents. heaptrack `--pid` is refused while `kernel.yama.ptrace_scope` is above 0. Other debugger and kernel tracing (eBPF, perf, valgrind) is not in `dla` yet |
+| `dla attach jcmd` with `histogram`, `thread-dump`, `nmt` or `jfr`; `dla attach node-inspector --op memory` | 2 | JFR recordings may hold JVM arguments and environment variables |
+| `dla attach jcmd --op heap-dump`; `dla attach node-inspector --op heap-snapshot` | 4 | Memory contents; may hold secrets and stay in `.dla/`. A Node snapshot needs about 12x the heap in use and blocks the target for seconds |
+| `dla summarize heap-graph` | none | Reads dump files; HPROF only (other formats arrive in M5) |
 
 `dla consent --ceiling N` (the plugin's privilege ceiling setting) caps which tiers may be
 granted; offer only tiers up to the ceiling.
@@ -65,7 +67,7 @@ sample --pid` prints it to stderr and puts it in its JSON `effects` field:
 | `effects` | What DLA does to the target (read-only observation; a signal; a script the target runs; an attach) |
 | `cleanup` | What is left behind (nothing, or an inspector that stays open until exit) |
 
-Read it before relying on the sample. If `effects` names something the user did not consent to,
+`dla attach` prints the same statement as a preflight, plus free disk, available memory and the expected dump size and peak extra memory; it refuses with `insufficient-resources` (exit 2) when the dump times 1.2 exceeds free disk or the peak exceeds 0.8 of available memory. Read it before relying on the sample. If `effects` names something the user did not consent to,
 stop and record the item `unresolved` with reason `privilege_declined`.
 
 `dla harness run` and `dla alloc-test` start only processes DLA builds in the scratch copy. Their
@@ -94,4 +96,4 @@ the timeout is not a `harness gen` option.
   opened by `SIGUSR1`, which closes when that process exits.
 - Scratch copies and logs stay under `.dla/<run>/harness/` until the user deletes the run directory.
   They can be large; tell the user which run directory to remove when the investigation is over.
-- `dla run abort` closes the run; it does not delete anything.
+- `dla run abort` stops the processes DLA started (after checking pid and start time), runs the cleanup actions of attaches and marks the run aborted; it never kills a target DLA did not start and does not delete anything.

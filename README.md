@@ -131,6 +131,22 @@ question to the user. If `DLA_CONSENT_TIERS` is set (`1-4`, or a list such as `1
 `DLA_CONSENT_RAW_VALUES` set to a true value also allows raw values. An invalid
 `DLA_CONSENT_TIERS` makes `dla run init` fail.
 
+## How a diagnosis runs
+
+The skill first picks an entry path from the request: a repository, a running local process,
+captured heap dumps, or only a symptom (it asks once for the target and, when nobody can answer,
+records the target as unresolved and stops rather than guessing). `dla run init --entry
+repository|process|artifact|symptom` starts the run. When the probe finds two or more runtimes,
+`dla run dispatch --workers jvm,rust` gives each runtime a share of the time budget and the skill
+starts one `dla:worker` subagent per runtime in one turn; each worker writes its own ledger slice
+(`dla --worker <name> ...`). The core waits, runs `dla ledger merge` (duplicates, contradictions
+and unfinished workers become open items, so a killed worker leaves the run INCOMPLETE), then has a
+blind `dla:verifier` subagent re-derive site, holder and mechanism from `dla bundle <finding>` for
+each confirmed finding, and renders `dla report`. With one runtime the core does everything itself.
+A heap-dump-only run needs a series of at least three dumps of one process to confirm anything,
+and never claims a source line. The stage detail, failure recovery and per-runtime notes are in
+[skills/detect-leak-anywhere/references/](skills/detect-leak-anywhere/references/).
+
 ## Install
 
 From the Claude Code prompt:

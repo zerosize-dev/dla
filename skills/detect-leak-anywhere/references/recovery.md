@@ -1,0 +1,82 @@
+# Recovery
+
+What to do when something fails, and what to record so the run stays honest. Each failure leaves a
+recorded gap or an open item; none is a reason to claim more than the evidence shows. A refusal
+from `dla` prints the fixing command: run it first.
+
+## Missing tool
+
+A backend or tool the runtime could use is not on the machine (`missing` in coverage after
+`dla probe`, `blocked` after `dla sweep`).
+- Remedy: `dla install <backend>` once, after tier-1 consent, in the core before any dispatch.
+- Record: if the install fails or is declined, leave the gap as coverage says; for an item that
+  needed it, `dla ledger resolve <F> --as unresolved --reason tool_missing --remedy "install <tool>:
+  <command>"`. Never run the tool by hand as a substitute and never install into project source.
+- A `dla` command named in these files that the installed release lacks: same, reason
+  `tool_missing`, remedy naming the command.
+
+## Failed attach
+
+`dla attach` or `dla sample --pid` fails (no such process, wrong uid, attach socket not writable,
+ptrace refused, the tool exits non-zero), or the target exited.
+- Remedy: read the printed effects and the error; check the pid with `dla run status` (a process
+  DLA started is in its registry); retry once only if the cause is fixed. A JVM attach needs the
+  same user and a writable `/tmp`; heaptrack `--pid` is refused while `kernel.yama.ptrace_scope`
+  is above 0; memray needs to be importable by the target's own interpreter.
+- Record: `dla ledger resolve <F|O> --as unresolved --reason env_unavailable --remedy "<what to
+  change on the machine, then rerun dla attach ...>"`; reason `privilege_declined` when the tier
+  was not consented. Then `dla run abort --reason "attach failed"` if the run is being abandoned:
+  it undoes what was attached and never kills the target.
+
+## Insufficient resources
+
+`dla attach` refuses with `insufficient-resources` (exit 2): the expected dump times 1.2 exceeds free
+disk, or the peak extra memory exceeds 0.8 of available memory (a Node heap snapshot costs about
+12x the heap in use; a JVM heap dump is about the used heap).
+- Remedy: do the cheaper operation (`jcmd histogram`, `nmt`, `thread-dump`, `node-inspector
+  memory`), free disk space, or ask the user to run the capture where memory allows and give the
+  files back (artifact path). Note a refused Node snapshot may leave the inspector open until the
+  target exits.
+- Record: the preflight is already in the evidence. Resolve the item `suspected_static_only` or
+  `unresolved` with reason `env_unavailable` and a remedy naming the missing disk or memory in
+  bytes.
+
+## Truncated output
+
+A summary reports `truncated` (object cap reached, `--max-objects`), a series drops columns beyond
+64, or a command output is bounded and points to the full record.
+- Remedy: read the full record named by the pointer; for a truncated heap summary rerun with a
+  higher `--max-objects` only if memory allows.
+- Record: treat the figures as lower bounds, keep the `limitations` text, and say in the report
+  that retained sizes are approximate. Never confirm from a truncated summary alone when a smaller
+  or cleaner capture is possible.
+
+## Failed binary download
+
+`dla` is not found, or the SessionStart download failed.
+- Remedy: restart the session, run `command -v dla`, or use `${CLAUDE_PLUGIN_ROOT}/bin/dla`; the
+  shim prints the path and the manual download command. Placing the binary by hand is described in
+  the README.
+- Record: with no binary no run can be recorded. Tell the user what is missing and the command to
+  fix it; do not produce a diagnosis or report in prose.
+
+## Worker killed or over budget
+
+A worker subagent died, was interrupted or passed its deadline without `ledger done`.
+- `dla ledger merge` copies its slice (a torn last line is dropped), marks the worker killed or
+  over-budget, opens the item "worker <w> did not finish (slice ends at line N)" and the run is
+  INCOMPLETE; the worker's open findings keep it so.
+- Remedy: `dla run dispatch` refuses a worker name that is already registered, so a killed worker
+  is not restarted in the same run. Resolve its open items yourself with reasons and remedies and
+  tell the user a new run scoped to that runtime would cover it.
+- Record: `dla ledger resolve <O> --as unresolved --reason time_budget|env_unavailable --remedy
+  "start a new run for the <runtime> runtime"`. A second `dla ledger merge` is safe.
+
+## Budget exhausted
+
+A command refuses with `time-budget` (the worker's deadline or the run deadline passed).
+- Remedy: stop starting long commands. Disposition everything still open.
+- Record: `dla ledger resolve <F> --as unresolved --reason time_budget --remedy "<what to run next
+  and how long it needs>"` for each unresolved item (a candidate with only static evidence may be
+  `suspected_static_only` with the same reason), then `dla ledger done` in a worker, or
+  `dla ledger merge`, `dla report` in the core. Report the run as INCOMPLETE with the list.
