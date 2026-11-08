@@ -46,6 +46,18 @@ pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, St
     Err(last)
 }
 
+/// How close to the deadline a read timeout counts as the deadline's.
+const SLACK: Duration = Duration::from_millis(20);
+
+/// True for the errors a socket read timeout produces: `TimedOut` on Linux and Windows,
+/// `WouldBlock` (EAGAIN) on macOS and the BSDs.
+pub fn is_timeout(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    )
+}
+
 /// Sets both socket timeouts to the smaller of `timeout` and the time left until `deadline`.
 /// Returns false when the deadline has passed.
 pub fn arm(stream: &TcpStream, timeout: Duration, deadline: Instant) -> bool {
@@ -97,8 +109,13 @@ pub fn get(
                     return Err(format!("response from {host}:{port} is over 32 MiB"));
                 }
             }
-            // A timeout after the headers arrived still leaves a usable partial body for
-            // servers that do not close; treat it as the end only when nothing was read.
+            // A read timeout that the overall deadline caused is an error, whatever was
+            // read so far: the body is incomplete.
+            Err(e) if is_timeout(&e) && Instant::now() + SLACK >= deadline => {
+                return Err(expired());
+            }
+            // A per-read timeout after the headers arrived still leaves a usable partial body
+            // for servers that do not close; treat it as the end only when something was read.
             Err(e) if raw.is_empty() => {
                 return Err(format!("reading {host}:{port}{path} failed: {e}"));
             }

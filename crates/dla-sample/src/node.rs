@@ -147,17 +147,30 @@ impl DeadlineStream {
     }
 }
 
+impl DeadlineStream {
+    /// A socket timeout is reported as `TimedOut` on every platform (macOS gives `WouldBlock`).
+    fn timed(r: io::Result<usize>) -> io::Result<usize> {
+        r.map_err(|e| {
+            if http::is_timeout(&e) {
+                io::Error::new(io::ErrorKind::TimedOut, e)
+            } else {
+                e
+            }
+        })
+    }
+}
+
 impl Read for DeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.arm()?;
-        self.inner.read(buf)
+        Self::timed(self.inner.read(buf))
     }
 }
 
 impl Write for DeadlineStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.arm()?;
-        self.inner.write(buf)
+        Self::timed(self.inner.write(buf))
     }
 
     fn flush(&mut self) -> io::Result<()> {

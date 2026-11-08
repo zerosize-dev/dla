@@ -318,7 +318,13 @@ fn rust_and_native_command_mode_use_the_shim() {
         m.run.argv
     );
     assert_eq!(&m.run.argv[1..], ["--iterations", "{n}"]);
-    assert_eq!(m.agent, AgentKind::AllocShim);
+    // Windows has no allocator shim: the harness measures operating-system columns only.
+    let want = if cfg!(windows) {
+        AgentKind::None
+    } else {
+        AgentKind::AllocShim
+    };
+    assert_eq!(m.agent, want);
     if cfg!(target_os = "linux") {
         assert!(
             env(&m.run, "LD_PRELOAD")
