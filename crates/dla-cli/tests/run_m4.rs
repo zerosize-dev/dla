@@ -620,11 +620,12 @@ fn bundle_carries_site_excerpt_and_evidence_without_labels() {
             if path.is_dir() {
                 stack.push(path);
             } else {
+                // The manifest lists paths with `/` on every platform.
                 names.push(
                     path.strip_prefix(&bundle)
                         .unwrap()
                         .to_string_lossy()
-                        .into_owned(),
+                        .replace('\\', "/"),
                 );
                 if path.extension().is_some_and(|x| x == "json") {
                     let doc: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();

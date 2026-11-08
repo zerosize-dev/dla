@@ -278,10 +278,20 @@ pub fn dir_writable_by(dir: &Path, uid: u32, gids: &[u32]) -> Result<(), String>
 
 /// The current user's ID (`None` off Linux).
 pub fn own_uid() -> Option<u32> {
-    let (uid, _) = std::fs::read_to_string("/proc/self/status")
-        .map(|t| parse_status_ids(&t))
+    if let Ok(t) = std::fs::read_to_string("/proc/self/status") {
+        return parse_status_ids(&t).0;
+    }
+    // No /proc (macOS): ask `id -u`.
+    let out = std::process::Command::new("id")
+        .arg("-u")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
         .ok()?;
-    uid
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 /// Waits until `path` exists and its size has not changed for `quiet`, at most `max`.
