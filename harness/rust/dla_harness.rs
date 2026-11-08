@@ -142,13 +142,15 @@ fn os_values() -> Vec<(&'static str, u64)> {
     ];
     for line in text.lines() {
         for (prefix, name, scale) in keys {
-            if let Some(rest) = line.strip_prefix(prefix)
-                && let Some(v) = rest
+            // Nested rather than a let chain: the driver must build on every edition.
+            if let Some(rest) = line.strip_prefix(prefix) {
+                if let Some(v) = rest
                     .split_whitespace()
                     .next()
                     .and_then(|v| v.parse::<u64>().ok())
-            {
-                out.push((name, v * scale));
+                {
+                    out.push((name, v * scale));
+                }
             }
         }
     }

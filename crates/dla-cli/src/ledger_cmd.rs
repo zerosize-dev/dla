@@ -24,7 +24,7 @@ pub enum LedgerCmd {
     Add(AddArgs),
     /// Disposition a finding or open item, or answer a checklist item.
     Resolve(ResolveArgs),
-    /// Record writers, removers, holder, owner or region of a finding (no state change).
+    /// Record writers, removers, holder, owner, region or site of a finding (no state change).
     Annotate(AnnotateArgs),
     /// Move a finding under test; needs a harness record, and a non-leak sibling for a
     /// leak-side finding.
@@ -73,6 +73,9 @@ pub struct AnnotateArgs {
     /// heap | off-heap | non-heap; only set when none is recorded.
     #[arg(long, value_parser = parse_enum::<Region>)]
     region: Option<Region>,
+    /// `file:line` of the finding; only set when the finding has no site yet.
+    #[arg(long, value_name = "FILE:LINE")]
+    site: Option<String>,
 }
 
 /// Flags of `dla ledger add`.
@@ -291,6 +294,7 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
         holder: a.holder,
         owner: a.owner,
         region: a.region,
+        site: a.site,
         ..FindingAnnotation::new(a.finding.clone())
     })?;
     let dla_core::Record::FindingAnnotated(rec) = &line.record else {
@@ -312,6 +316,9 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     }
     if let Some(r) = rec.region {
         out["region"] = json!(r.as_str());
+    }
+    if let Some(s) = &rec.site {
+        out["site"] = json!(s);
     }
     Ok(out)
 }

@@ -523,7 +523,7 @@ fn confirm_leak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
             codes::SITE_REQUIRED,
             format!("{id} cannot be confirmed without a site (file:line)"),
             "a site on the finding",
-            "a finding's site is set when it is added: dla ledger add --origin <origin> --evidence <id> --site <file:line> --holder <holder>   (then test and confirm that finding)",
+            format!("dla ledger annotate {id} --site <file:line>"),
         ));
     }
     if ctx.finding.holder.is_none() {

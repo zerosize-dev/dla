@@ -72,8 +72,8 @@ pub struct OpenItemResolved {
     pub resolution: Resolution,
 }
 
-/// Writers and removers found for a finding's holder, and its holder, owner and region
-/// when none is recorded yet. It does not change the finding's state; the report lists
+/// Writers and removers found for a finding's holder, and its holder, owner, region and
+/// site when none is recorded yet. It does not change the finding's state; the report lists
 /// the sites under the finding.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct FindingAnnotation {
@@ -97,6 +97,9 @@ pub struct FindingAnnotation {
     /// Memory region; applied only when the finding has no region yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<Region>,
+    /// `file:line` of the finding; applied only when the finding has no site yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
 }
 
 impl FindingAnnotation {
@@ -110,6 +113,7 @@ impl FindingAnnotation {
             holder: None,
             owner: None,
             region: None,
+            site: None,
         }
     }
 }

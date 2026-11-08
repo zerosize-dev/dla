@@ -422,9 +422,17 @@ pub struct HarnessDump {
     /// Grouped counters: base name to site to value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<BTreeMap<String, BTreeMap<String, f64>>>,
-    /// Unsymbolized sites: base name to address to value.
+    /// Unsymbolized allocation stacks from the allocator shim: stack key to
+    /// `{live_bytes, live_blocks, allocs, frames: [{a, m, o}]}` (hex strings), kept as
+    /// JSON because its shape belongs to the shim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_sites: Option<BTreeMap<String, BTreeMap<String, f64>>>,
+    pub raw_sites: Option<serde_json::Value>,
+    /// Loaded modules the shim's frames refer to: `[{path, bias}]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modules: Option<serde_json::Value>,
+    /// The shim's own bookkeeping counters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shim: Option<serde_json::Value>,
     /// Probe readings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probes: Option<Vec<DumpProbe>>,

@@ -182,6 +182,9 @@ pub fn build_report(
             }
             exercised.extend(&hit);
             let entry_points: Vec<String> = hit.iter().map(|&i| entries[i].1.clone()).collect();
+            let iteration = matches!(r.kind, WorkloadKind::Main | WorkloadKind::Script)
+                .then(|| iteration::detect(scan, r.runtime, &r.command, &r.cwd, &r.file, &r.srcs))
+                .flatten();
             Workload {
                 id: r.id,
                 kind: r.kind,
@@ -194,8 +197,8 @@ pub fn build_report(
                     .then(|| BUILD_FAILS.to_owned()),
                 rank: u32::try_from(entry_points.len()).unwrap_or(u32::MAX),
                 entry_points,
-                iteration_arg: None,
-                iteration_default: None,
+                iteration_arg: iteration.as_ref().map(|i| i.template.clone()),
+                iteration_default: iteration.and_then(|i| i.default),
             }
         })
         .collect();

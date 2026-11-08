@@ -205,7 +205,40 @@ impl Sampler {
     }
 }
 
-#[derive(Default)]
+/// Takes one OS reading at a time on the caller's thread, for callers that interleave other
+/// per-tick work (runtime counters) with the OS sample.
+#[derive(Debug)]
+pub struct TickSampler {
+    pid: u32,
+    tree: bool,
+    origin: Instant,
+    tracker: Tracker,
+}
+
+impl TickSampler {
+    /// A sampler of `pid` whose `t_ms` counts from `origin`. With `tree`, figures are summed
+    /// over the process and its descendants as in [`Sampler`].
+    pub fn new(pid: u32, tree: bool, origin: Instant) -> Self {
+        Self {
+            pid,
+            tree,
+            origin,
+            tracker: Tracker::default(),
+        }
+    }
+
+    /// Reads the process now. Fails with [`SampleError::NoSuchProcess`] once it has exited.
+    pub fn sample(&mut self) -> Result<OsSample, SampleError> {
+        take(self.pid, self.tree, &mut self.tracker, self.origin)
+    }
+
+    /// The descendant with the largest resident memory seen so far (tree mode).
+    pub fn largest_descendant(&self) -> Option<LargestDescendant> {
+        self.tracker.largest
+    }
+}
+
+#[derive(Debug, Default)]
 struct Tracker {
     largest: Option<LargestDescendant>,
 }

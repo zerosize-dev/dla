@@ -242,7 +242,7 @@ impl Index {
 
     fn check_annotation(&self, a: &FindingAnnotation) -> Result<(), Refusal> {
         self.require_finding(&a.finding, "annotation")?;
-        for site in a.writers.iter().chain(&a.removers) {
+        for site in a.writers.iter().chain(&a.removers).chain(&a.site) {
             check_site(site).map_err(|m| {
                 Refusal::new(
                     codes::INVALID_SITE,
@@ -278,14 +278,15 @@ impl Index {
             && a.holder.is_none()
             && a.owner.is_none()
             && a.region.is_none()
+            && a.site.is_none()
         {
             return Err(Refusal::new(
                 codes::EMPTY_ANNOTATION,
                 format!(
-                    "annotation of {} has no writer, remover, note, holder, owner or region",
+                    "annotation of {} has no writer, remover, note, holder, owner, region or site",
                     a.finding
                 ),
-                "at least one --writer, --remover, --note, --holder, --owner or --region",
+                "at least one --writer, --remover, --note, --holder, --owner, --region or --site",
                 format!(
                     "dla ledger annotate {} --writer src/Main.java:42",
                     a.finding
@@ -300,6 +301,7 @@ impl Index {
                 a.holder.map(|h| h.to_string()),
             ),
             ("owner", f.owner.clone(), a.owner.clone()),
+            ("site", f.site.clone(), a.site.clone()),
             (
                 "region",
                 f.region.map(|r| r.to_string()),
@@ -662,6 +664,9 @@ impl Index {
                 if let Some(f) = self.findings.get_mut(&a.finding) {
                     f.holder = f.holder.or(a.holder);
                     f.region = f.region.or(a.region);
+                    if f.site.is_none() {
+                        f.site.clone_from(&a.site);
+                    }
                     if f.owner.is_none() {
                         f.owner.clone_from(&a.owner);
                     }
@@ -1108,8 +1113,8 @@ impl Ledger {
         })
     }
 
-    /// Appends a full annotation: writers, removers, a note, and the holder, owner and
-    /// region of a finding that has none yet. A value that differs from one the finding
+    /// Appends a full annotation: writers, removers, a note, and the holder, owner,
+    /// region and site of a finding that has none yet. A value that differs from one the finding
     /// already has is refused with `annotation-conflict`; the same value is accepted.
     pub fn annotate_record(&mut self, annotation: FindingAnnotation) -> Result<LedgerLine, Error> {
         self.append(Record::FindingAnnotated(annotation))

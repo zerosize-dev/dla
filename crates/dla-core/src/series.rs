@@ -670,7 +670,9 @@ pub fn column_meta(name: &str) -> ColumnMeta {
         "jvm.nmt_committed" => meta(Bytes, Gauge, Process, true, true),
         "jvm.threads" | "jvm.classes_loaded" => meta(Count, Counter, NonHeap, true, true),
         // Go.
-        "go.heap_live" | "go.heap_objects" => meta(Bytes, Gauge, Heap, true, true),
+        "go.heap_live" | "go.heap_objects" | "go.heap_inuse" => {
+            meta(Bytes, Gauge, Heap, true, true)
+        }
         "go.total" | "go.released" => meta(Bytes, Gauge, Process, true, true),
         "go.stacks" => meta(Bytes, Gauge, NonHeap, true, true),
         "go.goroutines" => meta(Count, Counter, NonHeap, true, true),

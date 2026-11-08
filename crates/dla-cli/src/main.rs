@@ -170,7 +170,9 @@ fn dispatch(cli: Cli) -> Res<Output> {
         Command::Trend(a) => {
             trend_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
         }
-        Command::Gap(a) => gap_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json),
+        Command::Gap(a) => {
+            gap_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
         Command::AllocTest(a) => {
             alloc_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
         }

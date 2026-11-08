@@ -79,6 +79,9 @@
         "type": "string"
       }
     },
+    "modules": {
+      "description": "Loaded modules the shim's frames refer to: `[{path, bias}]`."
+    },
     "phase": {
       "description": "Checkpoint, exit or tick.",
       "$ref": "#/$defs/DumpPhase"
@@ -114,18 +117,7 @@
       ]
     },
     "raw_sites": {
-      "description": "Unsymbolized sites: base name to address to value.",
-      "type": [
-        "object",
-        "null"
-      ],
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": {
-          "type": "number",
-          "format": "double"
-        }
-      }
+      "description": "Unsymbolized allocation stacks from the allocator shim: stack key to\n`{live_bytes, live_blocks, allocs, frames: [{a, m, o}]}` (hex strings), kept as\nJSON because its shape belongs to the shim."
     },
     "runtime": {
       "description": "Runtime name (`jvm`, `go`, ...).",
@@ -133,6 +125,9 @@
         "string",
         "null"
       ]
+    },
+    "shim": {
+      "description": "The shim's own bookkeeping counters."
     },
     "t_ms": {
       "description": "Milliseconds since the process started.",

@@ -1944,6 +1944,18 @@ fn ledger_confirm_needs_a_site() {
     ok(p, &["ledger", "refute", "F1.n1", "--evidence", &d.leak]);
     let e = refused(p, &["ledger", "confirm", "F1", "--evidence", &d.growth]);
     assert_eq!(e["code"], "site-required");
+    assert!(
+        e["fix"]
+            .as_str()
+            .unwrap()
+            .contains("dla ledger annotate F1 --site"),
+        "{e}"
+    );
+    // The annotation sets the site once; a different site conflicts.
+    let a = ok(p, &["ledger", "annotate", "F1", "--site", "src/cache.go:9"]);
+    assert_eq!(a["site"], "src/cache.go:9");
+    let e = refused(p, &["ledger", "annotate", "F1", "--site", "src/other.go:2"]);
+    assert_eq!(e["code"], "annotation-conflict");
 }
 
 #[test]

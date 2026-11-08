@@ -802,6 +802,37 @@ fn annotate_fills_holder_owner_and_region_once() {
 }
 
 #[test]
+fn annotate_sets_a_missing_site_and_refuses_a_different_one() {
+    let mut l = m3_ledger();
+    let f = match l
+        .add_finding(NewFinding::new(origin("census"), vec![eid(E_STATIC)]))
+        .unwrap()
+        .record
+    {
+        dla_core::Record::FindingAdded { finding } => finding.id,
+        _ => unreachable!(),
+    };
+    assert!(l.finding(&f).unwrap().site.is_none());
+    // A malformed site is refused.
+    let r = refusal(annotate(&mut l, &f, |a| a.site = Some("nocolon".into())));
+    assert_eq!(r.code, codes::INVALID_SITE);
+    annotate(&mut l, &f, |a| a.site = Some("src/a.go:12".into())).unwrap();
+    assert_eq!(l.finding(&f).unwrap().site.as_deref(), Some("src/a.go:12"));
+    // The same site is accepted; a different one is a conflict and changes nothing.
+    annotate(&mut l, &f, |a| a.site = Some("src/a.go:12".into())).unwrap();
+    let r = refusal(annotate(&mut l, &f, |a| a.site = Some("src/b.go:3".into())));
+    assert_eq!(r.code, codes::ANNOTATION_CONFLICT);
+    assert!(r.message.contains("site"), "{}", r.message);
+    assert_eq!(l.finding(&f).unwrap().site.as_deref(), Some("src/a.go:12"));
+    // Replay derives the site from the annotation line.
+    let again = Ledger::from_text(&to_text(&l)).unwrap();
+    assert_eq!(
+        again.finding(&f).unwrap().site.as_deref(),
+        Some("src/a.go:12")
+    );
+}
+
+#[test]
 fn annotate_still_needs_something_in_it_and_a_finding() {
     let (mut l, f, _) = pair();
     let r = refusal(annotate(&mut l, &f, |_| {}));

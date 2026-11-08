@@ -246,7 +246,8 @@ pub struct GrowthSummary {
     /// Count of columns per shape.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub shapes: BTreeMap<String, u32>,
-    /// `pass` when at least one column of this kind passed. Absent on live samples.
+    /// `pass` when at least one column of this kind passed. Written by `dla trend` only;
+    /// the raw `growth-series` record of `dla sample` has no gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<GateVerdict>,
     /// How many passed columns were cut to keep the result bounded.

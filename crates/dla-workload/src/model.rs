@@ -10,7 +10,7 @@ use dla_census::parse::{Lang, parse, tree_sitter::Node};
 use dla_core::{runtime::Runtime, workload::WorkloadKind};
 
 /// Directories that never hold project sources.
-const SKIP_DIRS: &[&str] = &[
+pub const SKIP_DIRS: &[&str] = &[
     ".git",
     ".dla",
     "target",
