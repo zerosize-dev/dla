@@ -310,7 +310,10 @@ fn rust_and_native_command_mode_use_the_shim() {
             .ends_with("harness/H1/work/target")
     );
     assert!(
-        m.run.argv[0].ends_with("target/release/rollup-agent"),
+        m.run.argv[0].ends_with(&format!(
+            "target/release/rollup-agent{}",
+            std::env::consts::EXE_SUFFIX
+        )),
         "{:?}",
         m.run.argv
     );
@@ -401,8 +404,11 @@ fn driver_mode_instantiates_templates() {
         assert_eq!(m.run.argv.last().map(String::as_str), Some("shop.DlaLoop"));
         let build = &m.build.as_ref().unwrap().argv[2];
         assert!(
-            build.starts_with("sh ./build.sh && javac -cp out:")
-                && build.ends_with("driver/DlaLoop.java"),
+            // The classpath separator is the platform's (`;` on Windows).
+            build.starts_with(&format!(
+                "sh ./build.sh && javac -cp out{}",
+                if cfg!(windows) { ';' } else { ':' }
+            )) && build.ends_with("driver/DlaLoop.java"),
             "{build}"
         );
     }

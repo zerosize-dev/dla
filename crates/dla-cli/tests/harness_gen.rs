@@ -230,7 +230,10 @@ fn rust_and_native_gen_build_the_shim() {
     ok(&project, &["harness", "gen", "--lang", "rust"]);
     let m = manifest(&run_dir, "H1");
     assert_eq!(m["build"]["argv"][1], "build");
-    assert!(argv(&m["run"])[0].ends_with("target/release/outline-service"));
+    assert!(argv(&m["run"])[0].ends_with(&format!(
+        "target/release/outline-service{}",
+        std::env::consts::EXE_SUFFIX
+    )));
     assert_eq!(m["agent"], "alloc-shim");
     assert!(run_dir.join("harness/H1/agent/libdlashim.so").is_file() || cfg!(target_os = "macos"));
 
