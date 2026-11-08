@@ -398,8 +398,13 @@ mod tests {
 
     #[test]
     fn cleanup_strings_round_trip_through_the_grammar() {
+        let abs = if cfg!(windows) {
+            r"C:\tmp\heaptrack_fifo42"
+        } else {
+            "/tmp/heaptrack_fifo42"
+        };
         let cases = [
-            Cleanup::Rm(PathBuf::from("/tmp/heaptrack_fifo42")),
+            Cleanup::Rm(PathBuf::from(abs)),
             Cleanup::Run(vec!["memray".into(), "detach".into(), "123".into()]),
             Cleanup::Note("inspector stays open until the process exits".into()),
         ];

@@ -464,6 +464,8 @@ mod tests {
         assert_eq!(C::parse(&c.render()), Some(c));
     }
 
+    // heaptrack runs on Linux only; `/tmp/...` is not an absolute path on Windows.
+    #[cfg(unix)]
     #[test]
     fn the_fifo_follows_the_script_pid() {
         assert_eq!(fifo_path(77), PathBuf::from("/tmp/heaptrack_fifo77"));
