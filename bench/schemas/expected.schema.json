@@ -12,6 +12,10 @@
       "description": "False when no harness can run here.",
       "type": "boolean"
     },
+    "entry": {
+      "description": "Entry path: `repository` (default), `artifact` or `symptom`.",
+      "$ref": "#/$defs/Entry"
+    },
     "id": {
       "description": "Same as the directory name.",
       "type": "string"
@@ -38,8 +42,18 @@
       ]
     },
     "runtime": {
-      "description": "Runtime.",
+      "description": "Primary runtime; in a multi-runtime fixture it is one of `runtimes`.",
       "$ref": "#/$defs/Runtime"
+    },
+    "runtimes": {
+      "description": "All runtimes of a multi-runtime fixture; absent for one runtime.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Runtime"
+      }
     },
     "schema_version": {
       "description": "Schema version; 1.",
@@ -95,6 +109,26 @@
           "description": "Two independent leaks.",
           "type": "string",
           "const": "multi-leak"
+        }
+      ]
+    },
+    "Entry": {
+      "description": "How the diagnosis starts: the entry path of the run.",
+      "oneOf": [
+        {
+          "description": "A source repository is the starting point (the default).",
+          "type": "string",
+          "const": "repository"
+        },
+        {
+          "description": "Only artifacts, such as a series of heap dumps, are given; no source.",
+          "type": "string",
+          "const": "artifact"
+        },
+        {
+          "description": "Only a symptom is given; the target is not named.",
+          "type": "string",
+          "const": "symptom"
         }
       ]
     },
@@ -198,9 +232,27 @@
           "maxItems": 2,
           "minItems": 2
         },
+        "owner": {
+          "description": "Owning field or container as `package.Class.field`; findings without a\nsource site are matched on it. Required when `site` is absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "region": {
           "description": "Where the memory lives.",
           "$ref": "#/$defs/Region"
+        },
+        "runtime": {
+          "description": "Runtime of this leak in a multi-runtime fixture; defaults to the fixture's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Runtime"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "share": {
           "description": "Share of the total growth (relevant with more than one leak).",
@@ -209,14 +261,16 @@
           "default": 1.0
         },
         "site": {
-          "description": "Project-relative `path:line` of the retaining or allocating line.",
-          "type": "string"
+          "description": "Project-relative `path:line` of the retaining or allocating line.\nOptional for artifact fixtures, which have no source; then `owner` is required.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
         "id",
-        "site",
         "holder",
         "region",
         "cause"
@@ -247,6 +301,24 @@
         "id": {
           "description": "Identifier within the fixture, such as `N1`.",
           "type": "string"
+        },
+        "owner": {
+          "description": "Optional owning field or container as `package.Class.field`, the\nalternative to `site` for fixtures without source.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runtime": {
+          "description": "Runtime of this non-leak in a multi-runtime fixture; defaults to the fixture's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Runtime"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "site": {
           "description": "Optional project-relative `path:line`.",

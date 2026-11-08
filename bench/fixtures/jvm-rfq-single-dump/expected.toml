@@ -1,0 +1,15 @@
+schema_version = 1
+id = "jvm-rfq-single-dump"
+runtime = "jvm"
+category = "impossible"
+dynamic_confirmation = false
+entry = "artifact"
+
+[task]
+prompt = """
+The quote desk service's resident memory climbs through the trading day and
+the container is restarted by the orchestrator when it reaches its limit. A heap
+dump taken from the running service is in dumps/; the source is not
+available. Find out what is holding the memory.
+"""
+

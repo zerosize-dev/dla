@@ -188,6 +188,9 @@ pub struct FixtureRow {
     pub errors: Vec<String>,
     /// Reasons this fixture fails the acceptance.
     pub failures: Vec<String>,
+    /// Why the fixture was not run (its entry path has no source tree yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
     /// The reason this fixture is on the expected-failure list, when it failed as listed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub xfail: Option<String>,
@@ -1407,8 +1410,11 @@ fn grade_row(row: &mut FixtureRow, fixtures: &Path, ledger: &Path) {
             if expected.dynamic_confirmation {
                 for (l, o) in &confirmable {
                     if !o.found {
-                        row.failures
-                            .push(format!("leak {} ({}) is not confirmed", l.id, l.site));
+                        row.failures.push(format!(
+                            "leak {} ({}) is not confirmed",
+                            l.id,
+                            l.site.as_deref().or(l.owner.as_deref()).unwrap_or("")
+                        ));
                     }
                 }
             }
@@ -1577,6 +1583,13 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         id: id.clone(),
         ..FixtureRow::default()
     };
+    if let Ok(expected) = load_expected(&sh.args.fixtures, &id)
+        && let Some(why) = expected.entry.skip_reason()
+    {
+        row.category = expected.category.as_str().to_owned();
+        row.skipped = Some(why.to_owned());
+        return row;
+    }
     let project = sh.work.join(&id);
     let setup = copy_project(&fixture_dir.join("project"), &project)
         .and_then(|()| git(&project, &["init", "-q"]))
@@ -1738,7 +1751,9 @@ pub fn render_table(res: &DynamicResult) -> String {
             if f.claims { "yes" } else { "no" },
             if f.rule_outs { "yes" } else { "no" },
             format!("{}/{}", f.leaks_found, f.leaks_expected),
-            if let Some(why) = &f.xfail {
+            if let Some(why) = &f.skipped {
+                format!("skipped: {why}")
+            } else if let Some(why) = &f.xfail {
                 format!("xfail: {why}")
             } else if f.failures.is_empty() {
                 "pass".to_owned()

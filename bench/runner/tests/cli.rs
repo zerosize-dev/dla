@@ -229,3 +229,51 @@ fn run_json_and_findings_samples_validate_against_their_schemas() {
     let inst: serde_json::Value = serde_json::from_str(&m).unwrap();
     assert!(v.is_valid(&inst));
 }
+
+#[cfg(unix)]
+#[test]
+fn static_and_dynamic_skip_artifact_and_symptom_fixtures_with_a_reason() {
+    let t = tempfile::tempdir().unwrap();
+    let fixtures = t.path().join("fixtures");
+    let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/m4-sample/fixtures");
+    for (id, notes) in [
+        ("art-series", "project/dumps/heap-0.hprof.gz"),
+        ("sym", "project/NOTES.txt"),
+    ] {
+        fs::create_dir_all(fixtures.join(id)).unwrap();
+        copy_dir(&sample.join(id), &fixtures.join(id));
+        let n = fixtures.join(id).join(notes);
+        fs::create_dir_all(n.parent().unwrap()).unwrap();
+        fs::write(n, "notes").unwrap();
+    }
+    for cmd in ["static", "dynamic"] {
+        let json = t.path().join(format!("{cmd}.json"));
+        // The dla binary is never started: both fixtures are skipped before any command runs.
+        let out = bin()
+            .args([cmd, "--dla-bin", "/bin/true", "--repo-root"])
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+            .arg("--fixtures")
+            .arg(&fixtures)
+            .arg("--json")
+            .arg(&json)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            text.contains("entry artifact: the project holds heap dumps and no source"),
+            "{cmd}: {text}"
+        );
+        assert!(text.contains("entry symptom:"), "{cmd}: {text}");
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&json).unwrap()).unwrap();
+        let rows = v["fixtures"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        for r in rows {
+            assert!(r["skipped"].as_str().unwrap().starts_with("entry "), "{r}");
+            assert_eq!(r["failures"].as_array().unwrap().len(), 0, "{r}");
+        }
+    }
+}

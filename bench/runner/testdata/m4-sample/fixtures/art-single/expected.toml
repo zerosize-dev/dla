@@ -1,0 +1,17 @@
+schema_version = 1
+id = "art-single"
+runtime = "jvm"
+entry = "artifact"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = "p"
+
+[[leak]]
+id = "L1"
+owner = "quotes.RfqDesk.OPEN"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+confirmable = false

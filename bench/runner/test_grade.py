@@ -652,11 +652,11 @@ class StatisticsTest(EnvCase):
         self.assertEqual((m["num"], m["den"], m["value"], m["mean"], m["stdev"]), (0, 0, None, None, None))
         self.assertEqual(m["per_run"], [{"run": 1, "num": 0, "den": 0, "value": None}])
 
-    def test_all_twelve_metrics_present(self):
+    def test_all_thirteen_metrics_present(self):
         self.env.run("t", findings=[])
         m = self.env.group()["metrics"]
         self.assertEqual(sorted(m), sorted(grade.METRIC_NAMES))
-        self.assertEqual(len(m), 12)
+        self.assertEqual(len(m), 13)
         for v in m.values():
             self.assertEqual(sorted(v), ["den", "mean", "num", "per_run", "stdev", "value"])
 
@@ -1259,6 +1259,199 @@ class CliTest(EnvCase):
         rc, err = self.call(str(self.env.results), "--fixtures", str(self.env.fixtures))
         self.assertEqual(rc, 1)
         self.assertIn("ghost", err)
+
+
+# ---------------------------------------------------------------------------
+# M4 rules: owner matching, workers, merged findings, artifact entry
+# ---------------------------------------------------------------------------
+
+ARTIFACT_BODY = """
+[[leak]]
+id = "L1"
+owner = "quotes.RfqDesk.OPEN"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+"""
+
+
+def raw(*records):
+    return "\n".join(json.dumps(r) for r in records) + "\n"
+
+
+def owner_leak(owner="quotes.RfqDesk.OPEN"):
+    return {"id": "L1", "owner": owner}
+
+
+def fnd(owner=None, site=None, state="confirmed", hypothesis=False):
+    return grade.new_finding(state, site, "static/global", None, hypothesis, False, owner, None)
+
+
+class OwnerMatchTest(unittest.TestCase):
+    def m(self, owner, site=None, leak=None):
+        f = fnd(owner, site)
+        return grade.leak_status([f], leak or owner_leak())[0]
+
+    def test_equal_and_dotted_suffix(self):
+        self.assertTrue(self.m("quotes.RfqDesk.OPEN"))
+        self.assertTrue(self.m("app.quotes.RfqDesk.OPEN"))
+        self.assertTrue(self.m("  quotes.RfqDesk.OPEN\n"))
+
+    def test_site_plays_no_part(self):
+        self.assertTrue(self.m("quotes.RfqDesk.OPEN", "x.java:1"))
+        self.assertFalse(self.m(None, "quotes/RfqDesk.java:12"))
+
+    def test_boundary_case_and_shorter(self):
+        self.assertFalse(self.m("appquotes.RfqDesk.OPEN"))
+        self.assertFalse(self.m("RfqDesk.OPEN"))
+        self.assertFalse(self.m("quotes.RfqDesk.OPEN.next"))
+        self.assertFalse(self.m("quotes.rfqdesk.open"))
+
+    def test_owner_on_a_leak_with_a_site_is_not_used(self):
+        leak = {"id": "L1", "site": "src/cache.py:10", "owner": "a.B.c"}
+        self.assertFalse(grade.leak_status([fnd("a.B.c")], leak)[0])
+        self.assertTrue(grade.leak_status([fnd(None, "src/cache.py:10")], leak)[0])
+
+    def test_leak_with_neither_matches_nothing(self):
+        self.assertFalse(grade.leak_status([fnd("a.B.c", "a.py:1")], {"id": "L1"})[0])
+
+
+class WorkerLedgerTest(EnvCase):
+    def parse(self, text):
+        d = self.env.run("fx", ledger_text=text)
+        return grade.parse_ledger(d / "ledger.jsonl")[1]
+
+    def test_owner_from_added_annotated_and_findings_json(self):
+        f = self.parse(raw(
+            {"type": "finding_added", "finding": {"id": "F1", "owner": "a.B.c"}},
+            {"type": "finding_added", "finding": {"id": "F2"}},
+            {"type": "finding_added", "finding": {"id": "F3", "owner": 7}},
+            {"type": "finding_annotated", "finding": "F1", "owner": "x.Y.z"},
+            {"type": "finding_annotated", "finding": "F2", "owner": "x.Y.z"},
+        ))
+        self.assertEqual([x["owner"] for x in f], ["a.B.c", "x.Y.z", None])
+        d = self.env.run("fy", findings=[{"owner": "a.B.c"}, {"owner": 3}])
+        j = grade.parse_findings_json(d / "findings.json")
+        self.assertEqual([x["owner"] for x in j], ["a.B.c", None])
+        self.assertTrue(all(x["worker"] is None for x in j))
+
+    def test_prefixes_and_worker_fields_key_the_findings(self):
+        f = self.parse(raw(
+            {"type": "finding_added", "worker": "jvm", "finding": {"id": "F1", "site": "a.kt:1"}},
+            {"type": "finding_added", "worker": "rust", "finding": {"id": "F1", "site": "b.rs:2"}},
+            {"type": "finding_added", "worker": "rust", "finding": {"id": "jvm/F2", "site": "c.kt:3"}},
+            {"type": "finding_added", "finding": {"id": "F1", "site": "core.txt:4"}},
+            {"type": "transition", "worker": "rust", "finding": "F1", "to": "confirmed"},
+            {"type": "transition", "finding": "jvm/F2", "to": "strong"},
+            {"type": "transition", "finding": "F1", "to": "refuted"},
+            {"type": "finding_added", "finding": {"id": "/F9"}},
+        ))
+        self.assertEqual(
+            [(x["worker"], x["site"] or "-", x["state"]) for x in f],
+            [("jvm", "a.kt:1", "open"), ("rust", "b.rs:2", "confirmed"),
+             ("jvm", "c.kt:3", "strong"), (None, "core.txt:4", "refuted"), (None, "-", "open")],
+        )
+
+    def test_merged_duplicate_is_removed_and_canonical_unchanged(self):
+        base = [
+            {"type": "finding_added", "finding": {"id": "jvm/F1", "site": "a.kt:1"}},
+            {"type": "finding_added", "finding": {"id": "rust/F1", "site": "a.kt:1"}},
+            {"type": "transition", "finding": "jvm/F1", "to": "suspected_static_only"},
+            {"type": "transition", "finding": "rust/F1", "to": "confirmed"},
+        ]
+        merged = self.parse(raw(*base, {"type": "finding_merged", "canonical": "jvm/F1", "duplicate": "rust/F1"}))
+        self.assertEqual([(x["worker"], x["state"]) for x in merged], [("jvm", "suspected")])
+        bare = self.parse(raw(*base, {"type": "finding_merged", "worker": "rust",
+                                      "canonical": "jvm/F1", "duplicate": "F1"}))
+        self.assertEqual(len(bare), 1)
+        for ignored in (
+            {"type": "finding_merged", "canonical": "jvm/F1", "duplicate": "jvm/F1"},
+            {"type": "finding_merged", "canonical": "jvm/F1", "duplicate": "nope/F1"},
+            {"type": "finding_merged", "canonical": "nope/F1", "duplicate": "jvm/F1"},
+            {"type": "finding_merged", "canonical": "jvm/F1"},
+            {"type": "finding_merged", "canonical": 1, "duplicate": 2},
+        ):
+            self.assertEqual(len(self.parse(raw(*base, ignored))), 2, ignored)
+        again = self.parse(raw(
+            *base,
+            {"type": "finding_merged", "canonical": "jvm/F1", "duplicate": "rust/F1"},
+            {"type": "finding_added", "finding": {"id": "rust/F1", "site": "b.kt:2"}},
+        ))
+        self.assertEqual(len(again), 2)
+
+    def test_verification_and_slice_records_change_nothing(self):
+        f = self.parse(raw(
+            {"type": "slice_started", "worker": "jvm", "runtime": "jvm", "base_seq": 3},
+            {"type": "finding_added", "finding": {"id": "F1", "site": "a.py:1"}},
+            {"type": "verification", "finding": "F1", "to": "confirmed", "result": "agrees"},
+            {"type": "slice_done", "worker": "jvm", "open": 0},
+            {"type": "slice_merged", "worker": "jvm", "lines": 4},
+        ))
+        self.assertEqual([(x["state"]) for x in f], ["open"])
+
+    def test_merge_removes_a_claim_only_the_duplicate_made(self):
+        leak = {"id": "L1", "site": "src/cache.py:10"}
+        lines = [
+            {"type": "finding_added", "finding": {"id": "jvm/F1", "site": "x.py:1"}},
+            {"type": "finding_added", "finding": {"id": "rust/F1", "site": "src/cache.py:10"}},
+            {"type": "transition", "finding": "rust/F1", "to": "confirmed"},
+        ]
+        self.assertTrue(grade.leak_status(self.parse(raw(*lines)), leak)[0])
+        merged = self.parse(raw(*lines, {"type": "finding_merged", "canonical": "jvm/F1", "duplicate": "rust/F1"}))
+        self.assertFalse(grade.leak_status(merged, leak)[0])
+        self.assertFalse(any(grade.is_claim(f) for f in merged))
+
+    def test_chosen_finding_carries_the_worker(self):
+        leak = {"id": "L1", "site": "src/cache.py:10"}
+        f = self.parse(raw(
+            {"type": "finding_added", "finding": {"id": "jvm/F1", "site": "src/cache.py:10"}},
+            {"type": "finding_added", "finding": {"id": "rust/F1", "site": "src/cache.py:10"}},
+            {"type": "transition", "finding": "jvm/F1", "to": "confirmed"},
+            {"type": "transition", "finding": "rust/F1", "to": "strong"},
+        ))
+        self.assertEqual(grade.leak_status(f, leak)[2]["worker"], "rust")
+
+
+class SourceOverclaimTest(EnvCase):
+    def contrib(self, findings, entry="artifact"):
+        fx = {"category": "archetype-leak", "entry": entry, "leak": [owner_leak()]}
+        return grade.evaluate_run(fx, findings)[0]["source_overclaim_rate"]
+
+    def test_artifact_runs_with_a_claim_naming_a_site(self):
+        claim = lambda site, **kw: fnd("quotes.RfqDesk.OPEN", site, **kw)
+        self.assertEqual(self.contrib([]), [0, 1])
+        self.assertEqual(self.contrib([claim(None)]), [0, 1])
+        self.assertEqual(self.contrib([claim("   ")]), [0, 1])
+        self.assertEqual(self.contrib([claim("a/B.java:3")]), [1, 1])
+        self.assertEqual(self.contrib([claim("a/B.java:3", state="strong")]), [1, 1])
+        self.assertEqual(self.contrib([claim("a/B.java:3", state="suspected")]), [0, 1])
+        self.assertEqual(self.contrib([claim("a/B.java:3", hypothesis=True)]), [0, 1])
+
+    def test_repository_runs_never_count(self):
+        self.assertEqual(self.contrib([fnd("a.B.c", "x.java:1")], entry="repository"), [0, 0])
+        fx = {"category": "archetype-leak", "leak": [owner_leak()]}
+        self.assertEqual(grade.evaluate_run(fx, [])[0]["source_overclaim_rate"], [0, 0])
+
+    def test_thirteen_metrics_and_end_to_end_provenance(self):
+        e = self.env
+        (e.fixtures / "art").mkdir()
+        (e.fixtures / "art" / "expected.toml").write_text(
+            'schema_version = 1\nid = "art"\nruntime = "jvm"\nentry = "artifact"\n'
+            'category = "archetype-leak"\ndynamic_confirmation = true\n[task]\nprompt = "p"\n'
+            + ARTIFACT_BODY)
+        e.run("art", 1, ledger_text=raw(
+            {"type": "finding_added", "worker": "jvm", "finding": {"id": "F1", "owner": "app.quotes.RfqDesk.OPEN", "holder": "static/global"}},
+            {"type": "transition", "worker": "jvm", "finding": "F1", "to": "confirmed"}))
+        e.run("art", 2, ledger_text=raw(
+            {"type": "finding_added", "finding": {"id": "F1", "owner": "quotes.RfqDesk.OPEN", "site": "q/R.java:1"}},
+            {"type": "transition", "finding": "F1", "to": "strong"}))
+        g = e.group()
+        self.assertEqual(len(g["metrics"]), 13)
+        so = g["metrics"]["source_overclaim_rate"]
+        self.assertEqual((so["num"], so["den"]), (1, 2))
+        self.assertEqual(g["fixtures"]["art"]["worker_provenance"], {"L1": {"jvm": 1}})
+        self.assertEqual(g["fixtures"]["art"]["leaks"]["L1"]["found"], 2)
+
 
 
 class GoldenSampleTest(unittest.TestCase):

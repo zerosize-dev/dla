@@ -23,6 +23,20 @@ pub enum Runtime {
     Native,
 }
 
+impl Runtime {
+    /// The lowercase spelling used in files and by `dla probe`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Runtime::Jvm => "jvm",
+            Runtime::Go => "go",
+            Runtime::Rust => "rust",
+            Runtime::Node => "node",
+            Runtime::Python => "python",
+            Runtime::Native => "native",
+        }
+    }
+}
+
 /// Category of a fixture.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -112,6 +126,49 @@ pub enum Region {
     NonHeap,
 }
 
+/// How the diagnosis starts: the entry path of the run.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Entry {
+    /// A source repository is the starting point (the default).
+    #[default]
+    Repository,
+    /// Only artifacts, such as a series of heap dumps, are given; no source.
+    Artifact,
+    /// Only a symptom is given; the target is not named.
+    Symptom,
+}
+
+impl Entry {
+    /// The lowercase spelling used in files.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Entry::Repository => "repository",
+            Entry::Artifact => "artifact",
+            Entry::Symptom => "symptom",
+        }
+    }
+
+    /// Why the source-driven static and dynamic drivers skip a fixture of this
+    /// entry path, or `None` when they run it.
+    pub fn skip_reason(self) -> Option<&'static str> {
+        match self {
+            Entry::Repository => None,
+            Entry::Artifact => Some(
+                "entry artifact: the project holds heap dumps and no source, so there is nothing to probe, sweep, census or run",
+            ),
+            Entry::Symptom => {
+                Some("entry symptom: the project holds no source to probe, sweep, census or run")
+            }
+        }
+    }
+
+    /// True for the default entry path.
+    pub fn is_repository(&self) -> bool {
+        *self == Entry::Repository
+    }
+}
+
 fn yes() -> bool {
     true
 }
@@ -162,7 +219,16 @@ pub struct Leak {
     /// Identifier within the fixture, such as `L1`.
     pub id: String,
     /// Project-relative `path:line` of the retaining or allocating line.
-    pub site: String,
+    /// Optional for artifact fixtures, which have no source; then `owner` is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    /// Owning field or container as `package.Class.field`; findings without a
+    /// source site are matched on it. Required when `site` is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Runtime of this leak in a multi-runtime fixture; defaults to the fixture's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<Runtime>,
     /// Inclusive line range that counts as the site; defaults to `[line, line]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines: Option<[u32; 2]>,
@@ -196,6 +262,13 @@ pub struct NonLeak {
     /// Optional project-relative `path:line`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
+    /// Optional owning field or container as `package.Class.field`, the
+    /// alternative to `site` for fixtures without source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Runtime of this non-leak in a multi-runtime fixture; defaults to the fixture's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<Runtime>,
     /// Non-leak ID (`N-*`) or `UNCLASSIFIED`.
     #[schemars(extend("enum" = [
         "N-ALLOC", "N-HEADROOM", "N-WARM", "N-HWM", "N-SCALE", "N-INTENT", "N-OBSERVER",
@@ -215,8 +288,14 @@ pub struct Expected {
     pub schema_version: u32,
     /// Same as the directory name.
     pub id: String,
-    /// Runtime.
+    /// Primary runtime; in a multi-runtime fixture it is one of `runtimes`.
     pub runtime: Runtime,
+    /// All runtimes of a multi-runtime fixture; absent for one runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtimes: Option<Vec<Runtime>>,
+    /// Entry path: `repository` (default), `artifact` or `symptom`.
+    #[serde(default, skip_serializing_if = "Entry::is_repository")]
+    pub entry: Entry,
     /// Category.
     pub category: Category,
     /// Trap/control partner, reciprocal.
@@ -344,7 +423,7 @@ pub struct PerRun {
     pub value: Option<f64>,
 }
 
-/// The twelve ratio metrics.
+/// The thirteen ratio metrics.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct Metrics {
     /// Found leaks over the leak set.
@@ -371,6 +450,10 @@ pub struct Metrics {
     pub trap_miss_rate: Ratio,
     /// Decoy runs that claim.
     pub trap_false_alarm_rate: Ratio,
+    /// Artifact-entry runs with a claim that carries a source site. Absent in
+    /// results graded before the metric existed.
+    #[serde(default)]
+    pub source_overclaim_rate: Option<Ratio>,
 }
 
 /// Unexplained growth share.
@@ -471,6 +554,10 @@ pub struct FixtureStats {
     pub rule_out_runs: u64,
     /// Counts per expected leak.
     pub leaks: BTreeMap<String, LeakCounts>,
+    /// Informational: per leak, the runs in which it was found with a chosen
+    /// finding of each worker. Absent when no chosen finding has a worker.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub worker_provenance: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
 /// One ablation with one archetypes setting.
@@ -480,7 +567,7 @@ pub struct Group {
     pub ablation: String,
     /// `on` or `off`.
     pub archetypes: String,
-    /// The twelve ratio metrics.
+    /// The thirteen ratio metrics.
     pub metrics: Metrics,
     /// Unexplained growth share.
     pub unexplained_growth_share: Unexplained,

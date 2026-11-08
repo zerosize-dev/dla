@@ -13,13 +13,32 @@ use serde_json::Value;
 use crate::{
     Res,
     fixture::{fixture_dirs, load_expected},
-    model::{Category, Expected, LEAK_CAUSES, NON_LEAK_CAUSES},
+    gzip::{GZIP_MAGIC, gunzip_prefix},
+    model::{Category, Entry, Expected, LEAK_CAUSES, NON_LEAK_CAUSES, Runtime},
     schema_cmd,
 };
 
 const SOURCE_EXTENSIONS: [&str; 11] = [
     "java", "kt", "go", "rs", "js", "mjs", "cjs", "ts", "py", "c", "h",
 ];
+/// Source file extensions per runtime, for the multi-runtime rule.
+fn runtime_extensions(r: Runtime) -> &'static [&'static str] {
+    match r {
+        Runtime::Jvm => &["java", "kt"],
+        Runtime::Go => &["go"],
+        Runtime::Rust => &["rs"],
+        Runtime::Node => &["js", "mjs", "cjs", "ts"],
+        Runtime::Python => &["py"],
+        Runtime::Native => &["c", "h"],
+    }
+}
+
+/// What a heap dump file name must look like inside `project/dumps/`.
+const DUMP_SUFFIX: &str = ".hprof.gz";
+/// How much of a dump is inflated to read its header.
+const DUMP_HEADER_BYTES: usize = 64;
+/// The text every HPROF file starts with.
+const HPROF_MAGIC: &str = "JAVA PROFILE 1.0.";
 const BUILD_DIRS: [&str; 4] = ["target", "node_modules", "__pycache__", "build"];
 const BUILD_EXTENSIONS: [&str; 6] = ["class", "o", "pyc", "so", "dll", "exe"];
 
@@ -148,10 +167,15 @@ fn validate_fixture(
         out.push("project/ is missing".to_owned());
         None
     };
-    if let Some(p) = &project {
-        check_project(p, &mut out);
-    }
     let toml_path = dir.join("expected.toml");
+    let entry = fs::read_to_string(&toml_path)
+        .ok()
+        .and_then(|t| toml::from_str::<Expected>(&t).ok())
+        .map(|e| e.entry)
+        .unwrap_or_default();
+    if let Some(p) = &project {
+        check_project(p, entry, &mut out);
+    }
     let Ok(text) = fs::read_to_string(&toml_path) else {
         out.push("expected.toml is missing or unreadable".to_owned());
         return out;
@@ -189,7 +213,65 @@ fn validate_fixture(
     out
 }
 
-fn check_project(p: &Project, out: &mut Vec<String>) {
+/// The header of a heap dump file: the HPROF text and the timestamp in milliseconds.
+fn hprof_header(inflated: &[u8]) -> Result<u64, String> {
+    if !inflated.starts_with(HPROF_MAGIC.as_bytes()) {
+        return Err(format!(
+            "does not inflate to a file starting with {HPROF_MAGIC:?}"
+        ));
+    }
+    let Some(nul) = inflated.iter().position(|&c| c == 0) else {
+        return Err("the HPROF header text has no terminator".to_owned());
+    };
+    let Some(ts) = inflated.get(nul + 1 + 4..nul + 1 + 12) else {
+        return Err("the HPROF header ends before its timestamp".to_owned());
+    };
+    let mut b = [0u8; 8];
+    b.copy_from_slice(ts);
+    Ok(u64::from_be_bytes(b))
+}
+
+/// The artifact rules: dumps under `dumps/`, gzip-wrapped, each an HPROF file, with distinct
+/// header timestamps.
+fn check_dumps(p: &Project, out: &mut Vec<String>) {
+    let dumps: Vec<(&String, &Vec<u8>)> = p
+        .files
+        .iter()
+        .filter(|(path, _)| path.starts_with("dumps/"))
+        .collect();
+    if !dumps.iter().any(|(path, _)| path.ends_with(DUMP_SUFFIX)) {
+        out.push(format!(
+            "artifact fixture: project/dumps/ needs at least one *{DUMP_SUFFIX} file"
+        ));
+    }
+    let mut stamps: BTreeMap<u64, &str> = BTreeMap::new();
+    for (path, data) in dumps {
+        if !path.ends_with(DUMP_SUFFIX) {
+            out.push(format!(
+                "project/{path}: dumps are stored as *{DUMP_SUFFIX}; this name does not end so"
+            ));
+            continue;
+        }
+        if data.len() < 2 || data[..2] != GZIP_MAGIC {
+            out.push(format!(
+                "project/{path}: does not start with the gzip magic 1f 8b"
+            ));
+            continue;
+        }
+        match gunzip_prefix(data, DUMP_HEADER_BYTES).and_then(|h| hprof_header(&h)) {
+            Err(e) => out.push(format!("project/{path}: {e}")),
+            Ok(ts) => {
+                if let Some(other) = stamps.insert(ts, path) {
+                    out.push(format!(
+                        "project/{path}: header timestamp {ts} equals that of project/{other}; a series needs distinct timestamps"
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn check_project(p: &Project, entry: Entry, out: &mut Vec<String>) {
     let mut source_files = 0;
     let mut source_lines = 0;
     for (path, data) in &p.files {
@@ -221,21 +303,129 @@ fn check_project(p: &Project, out: &mut Vec<String>) {
             }
         }
     }
-    if !(3..=10).contains(&source_files) {
-        out.push(format!(
-            "project/ has {source_files} source files; the rule is 3 to 10"
-        ));
-    }
-    if !(150..=600).contains(&source_lines) {
-        out.push(format!(
-            "project/ has {source_lines} source lines; the rule is 150 to 600"
-        ));
+    match entry {
+        Entry::Repository => {
+            if !(3..=10).contains(&source_files) {
+                out.push(format!(
+                    "project/ has {source_files} source files; the rule is 3 to 10"
+                ));
+            }
+            if !(150..=600).contains(&source_lines) {
+                out.push(format!(
+                    "project/ has {source_lines} source lines; the rule is 150 to 600"
+                ));
+            }
+            if p.files.keys().any(|f| f.ends_with(".kt")) {
+                let build = p
+                    .files
+                    .get("build.sh")
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("");
+                if !build.contains("kotlinc") {
+                    out.push(
+                        "project/ has .kt sources, so it needs a build.sh that compiles with kotlinc when present and else with the embeddable compiler (see FIXTURES.md)".to_owned(),
+                    );
+                }
+            }
+        }
+        Entry::Artifact => {
+            check_dumps(p, out);
+            if source_files > 0 {
+                out.push(format!(
+                    "artifact fixture: project/ holds {source_files} source file(s); an artifact fixture has dumps and no source"
+                ));
+            }
+        }
+        Entry::Symptom => {
+            if source_files > 0 {
+                out.push(format!(
+                    "symptom fixture: project/ holds {source_files} source file(s); it may hold only non-source notes"
+                ));
+            }
+        }
     }
 }
 
 fn scan_hints(text: &str, mut hit: impl FnMut(&str)) {
     for m in hint_re().find_iter(text) {
         hit(&m.as_str().to_lowercase());
+    }
+}
+
+/// An owner is a `package.Class.field` string: no spaces, no path or line parts.
+fn check_owner(who: &str, owner: &str, out: &mut Vec<String>) {
+    if owner.is_empty()
+        || owner != owner.trim()
+        || owner.contains(|c: char| c.is_whitespace() || c == '/' || c == '\\' || c == ':')
+    {
+        out.push(format!(
+            "{who}: owner {owner:?} must be a package.Class.field string without spaces, slashes or colons"
+        ));
+    }
+}
+
+/// The multi-runtime rules: `runtimes` holds the primary `runtime` once per entry, at least two
+/// entries, each with source files in `project/`; a per-leak `runtime` is one of them.
+fn check_runtimes(exp: &Expected, project: Option<&Project>, out: &mut Vec<String>) {
+    let all: Vec<Runtime> = match &exp.runtimes {
+        Some(list) => {
+            if list.len() < 2 {
+                out.push(
+                    "runtimes lists fewer than two runtimes; omit it for one runtime".to_owned(),
+                );
+            }
+            if !list.contains(&exp.runtime) {
+                out.push(format!(
+                    "runtime {:?} (the primary) must be one of runtimes",
+                    exp.runtime.as_str()
+                ));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for r in list {
+                if !seen.insert(r.as_str()) {
+                    out.push(format!("runtimes lists {:?} twice", r.as_str()));
+                }
+            }
+            list.clone()
+        }
+        None => vec![exp.runtime],
+    };
+    let per_leak = exp
+        .leak
+        .iter()
+        .map(|l| (format!("leak {}", l.id), l.runtime))
+        .chain(
+            exp.non_leak
+                .iter()
+                .map(|n| (format!("non_leak {}", n.id), n.runtime)),
+        );
+    for (who, rt) in per_leak {
+        if let Some(rt) = rt
+            && !all.contains(&rt)
+        {
+            out.push(format!(
+                "{who}: runtime {:?} is not one of the fixture's runtimes",
+                rt.as_str()
+            ));
+        }
+    }
+    if exp.runtimes.is_some()
+        && exp.entry == Entry::Repository
+        && let Some(p) = project
+    {
+        for r in &all {
+            let has_source = p.files.keys().any(|f| {
+                f.rsplit_once('.')
+                    .is_some_and(|(_, e)| runtime_extensions(*r).contains(&e))
+            });
+            if !has_source {
+                out.push(format!(
+                    "runtimes lists {:?} but project/ has no {} source files",
+                    r.as_str(),
+                    runtime_extensions(*r).join("/")
+                ));
+            }
+        }
     }
 }
 
@@ -280,9 +470,27 @@ fn check_semantics(
             ));
         }
     }
+    check_runtimes(exp, project, out);
+    // An artifact or symptom fixture has no source tree, so a site cannot be located.
+    let located = exp.entry == Entry::Repository;
     for l in &exp.leak {
-        let Some(c) = site_re().captures(&l.site) else {
-            out.push(format!("leak {}: site {:?} is not path:line", l.id, l.site));
+        if let Some(owner) = &l.owner {
+            check_owner(&format!("leak {}", l.id), owner, out);
+        }
+        let Some(site) = &l.site else {
+            if l.owner.is_none() {
+                out.push(format!(
+                    "leak {}: needs a site, or an owner when there is no site",
+                    l.id
+                ));
+            }
+            if !l.alt_sites.is_empty() || l.lines.is_some() {
+                out.push(format!("leak {}: lines and alt_sites need a site", l.id));
+            }
+            continue;
+        };
+        let Some(c) = site_re().captures(site) else {
+            out.push(format!("leak {}: site {:?} is not path:line", l.id, site));
             continue;
         };
         let line: u32 = c[2].parse().unwrap_or(0);
@@ -293,7 +501,7 @@ fn check_semantics(
                 l.id
             ));
         }
-        if let Some(p) = project {
+        if let Some(p) = project.filter(|_| located) {
             if let Err(e) = check_location(p, &c[1], lo.min(line).max(1), hi.max(line)) {
                 out.push(format!("leak {}: site {e}", l.id));
             }
@@ -317,13 +525,16 @@ fn check_semantics(
         }
     }
     for n in &exp.non_leak {
+        if let Some(owner) = &n.owner {
+            check_owner(&format!("non_leak {}", n.id), owner, out);
+        }
         let Some(site) = &n.site else { continue };
         let Some(c) = site_re().captures(site) else {
             out.push(format!("non_leak {}: site {site:?} is not path:line", n.id));
             continue;
         };
         let line: u32 = c[2].parse().unwrap_or(0);
-        if let Some(p) = project
+        if let Some(p) = project.filter(|_| located)
             && let Err(e) = check_location(p, &c[1], line, line)
         {
             out.push(format!("non_leak {}: site {e}", n.id));

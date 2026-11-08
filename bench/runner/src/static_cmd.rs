@@ -98,6 +98,9 @@ pub struct FixtureRow {
     pub backends_missing: Vec<String>,
     /// Backends marked blocked, as `worker/backend`.
     pub backends_blocked: Vec<String>,
+    /// Why the fixture was not run (its entry path has no source tree).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
     /// Stage failures.
     pub errors: Vec<String>,
     /// Reasons this fixture fails the acceptance.
@@ -337,6 +340,13 @@ fn run_fixture(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let expected = load_expected(fixtures, &id)?;
+    if let Some(why) = expected.entry.skip_reason() {
+        return Ok(FixtureRow {
+            id,
+            skipped: Some(why.to_owned()),
+            ..FixtureRow::default()
+        });
+    }
     let project = work.join(&id);
     copy_project(&fixture_dir.join("project"), &project)?;
     git(&project, &["init", "-q"])?;
@@ -379,7 +389,17 @@ fn run_fixture(
             })
             .unwrap_or_default();
     }
-    for lang in row.runtimes.clone() {
+    // A multi-runtime fixture runs every runtime it lists, and the probe must see each.
+    let mut langs = row.runtimes.clone();
+    for rt in expected.runtimes.iter().flatten().map(|r| r.as_str()) {
+        if !row.runtimes.iter().any(|d| d == rt) {
+            row.failures.push(format!(
+                "runtime {rt} is listed in runtimes but the probe did not detect it"
+            ));
+            langs.push(rt.to_owned());
+        }
+    }
+    for lang in langs {
         stage(&mut row, &["sweep", "--lang", &lang]);
         stage(&mut row, &["census", "--lang", &lang]);
     }
@@ -398,6 +418,8 @@ fn run_fixture(
         .map(|c| Finding {
             state: State::Open,
             site: Some(c.site.clone()),
+            owner: None,
+            worker: None,
             holder: None,
             label: None,
             hypothesis: false,
@@ -414,7 +436,11 @@ fn run_fixture(
             .collect();
         row.leaks.push(LeakRow {
             id: leak.id.clone(),
-            site: leak.site.clone(),
+            site: leak
+                .site
+                .clone()
+                .or_else(|| leak.owner.clone())
+                .unwrap_or_default(),
             confirmable: leak.confirmable,
             flagged: outcome.flagged,
             origins: origins.into_iter().collect(),
@@ -504,7 +530,7 @@ pub fn render_table(res: &StaticResult) -> String {
         "missing",
         "blocked",
     ));
-    for f in &res.fixtures {
+    for f in res.fixtures.iter().filter(|f| f.skipped.is_none()) {
         let conf: Vec<&LeakRow> = f.leaks.iter().filter(|l| l.confirmable).collect();
         let hit = conf.iter().filter(|l| l.flagged).count();
         let all_hit = f.leaks.iter().filter(|l| l.flagged).count();
@@ -522,6 +548,21 @@ pub fn render_table(res: &StaticResult) -> String {
             f.backends_missing.len(),
             f.backends_blocked.len(),
         ));
+    }
+    let skipped: Vec<&FixtureRow> = res
+        .fixtures
+        .iter()
+        .filter(|f| f.skipped.is_some())
+        .collect();
+    if !skipped.is_empty() {
+        s.push_str("\nskipped\n");
+        for f in skipped {
+            s.push_str(&format!(
+                "  {}: {}\n",
+                f.id,
+                f.skipped.as_deref().unwrap_or("")
+            ));
+        }
     }
     s.push_str("\nleaks (flagged by origin)\n");
     for f in &res.fixtures {

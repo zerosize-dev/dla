@@ -30,7 +30,7 @@ pub fn render_group(g: &Group) -> String {
     let _ = writeln!(s, "## {} (archetypes {})\n", g.ablation, g.archetypes);
     s.push_str("| Metric | Value | Num/Den | Mean ± stdev over runs |\n|---|---|---|---|\n");
     let m = &g.metrics;
-    let rows: [(&str, &Ratio); 12] = [
+    let mut rows: Vec<(&str, &Ratio)> = vec![
         ("leak_recall", &m.leak_recall),
         ("archetype_free_recall", &m.archetype_free_recall),
         ("flagged_recall", &m.flagged_recall),
@@ -44,6 +44,9 @@ pub fn render_group(g: &Group) -> String {
         ("trap_miss_rate", &m.trap_miss_rate),
         ("trap_false_alarm_rate", &m.trap_false_alarm_rate),
     ];
+    if let Some(r) = &m.source_overclaim_rate {
+        rows.push(("source_overclaim_rate", r));
+    }
     for (n, r) in rows {
         s.push_str(&ratio_row(n, r));
     }
@@ -99,7 +102,14 @@ pub fn render_group(g: &Group) -> String {
         } else {
             f.leaks
                 .iter()
-                .map(|(l, c)| format!("{l}: {}/{}/{}", c.found, c.flagged, c.grounded))
+                .map(|(l, c)| {
+                    let mut cell = format!("{l}: {}/{}/{}", c.found, c.flagged, c.grounded);
+                    if let Some(w) = f.worker_provenance.get(l) {
+                        let by: Vec<String> = w.iter().map(|(k, n)| format!("{k} {n}")).collect();
+                        cell.push_str(&format!(" (workers {})", by.join(", ")));
+                    }
+                    cell
+                })
                 .collect::<Vec<_>>()
                 .join("; ")
         };

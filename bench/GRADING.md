@@ -16,6 +16,11 @@ the ambiguity here first.
   coverage.json   present when dla wrote one
 ```
 
+A run with several workers also holds `ledger.<worker>.jsonl` (the slices) and
+`bundle/<id>/index.json`. The graders read neither: the merged `ledger.jsonl`
+is the only ledger input, and a run that was killed before the merge is graded
+on whatever `ledger.jsonl` holds.
+
 `<ablation>` is `no-skill`, `prose`, `gates` or `full`; `<n>` is the run index
 starting at 1. Fixtures are read from `bench/fixtures/<fixture>/expected.toml`
 (override with `--fixtures <dir>`). A run directory whose fixture has no
@@ -51,6 +56,10 @@ a non-numeric `cost_usd` is treated as absent.
 Fixture fields: a leak without `confirmable` is confirmable (default `true`).
 The expected `site` path and `alt_sites` paths are used exactly as written.
 An `alt_sites` entry that is not `path:line` or `path:start-end` is ignored.
+A leak may have no `site`; it then has an `owner` (a `package.Class.field`
+string). `entry` is `repository` (default), `artifact` or `symptom`; only
+`artifact` matters here (see `source_overclaim_rate`). `runtime`, `runtimes` and
+a leak's own `runtime` are not used for grading.
 
 Every float sum in this document is taken in ascending order of fixture id,
 then run index.
@@ -59,8 +68,9 @@ then run index.
 
 Every run is reduced to a list of findings with these fields:
 `state` (one of `confirmed`, `strong`, `refuted`, `suspected`, `unresolved`,
-`open`), `site` (string or null), `holder` (string or null), `label` (string
-or null), `hypothesis` (bool) and `discriminator` (bool).
+`open`), `site` (string or null), `owner` (string or null), `holder` (string
+or null), `label` (string or null), `worker` (string or null), `hypothesis`
+(bool) and `discriminator` (bool).
 
 **Source selection.** If `ledger.jsonl` exists and contains at least one
 `finding_added` record, the source is `ledger`. Otherwise, if `findings.json`
@@ -68,11 +78,21 @@ exists and is a JSON object whose `findings` member is an array, the source
 is `findings`. Otherwise the source is `none` and the list is empty.
 
 **From `ledger.jsonl`.** Read the file line by line. Skip a line that is not
-a JSON object or has no string `type`. Apply records in file order:
+a JSON object or has no string `type`. Apply records in file order.
+
+A finding id may carry a worker prefix (`jvm/F3`), and a line may carry a
+`worker` member. The **key** of a finding id `i` on a line is `i` when `i`
+contains `/` or the line has no `worker` member that is a non-empty string;
+otherwise it is the line's `worker`, then `/`, then `i`. Every id below (the
+finding's own `id`, a record's `finding`, `canonical` and `duplicate`) is
+turned into a key this way, using the line it appears on, and findings are
+looked up and replaced by key. The finding's **worker** is the text before the
+first `/` of its key, or null when the key has no `/` or that text is empty.
 
 - `finding_added`: create a finding from the record's `finding` object with
-  state `open`, `site`, `holder` and `label` taken from its `site`, `holder`
-  and `archetype` members (null when absent or not a string), and
+  state `open`, `site`, `owner`, `holder` and `label` taken from its `site`,
+  `owner`, `holder` and `archetype` members (null when absent or not a
+  string), and
   `hypothesis` true when its `parent` member is a non-empty string. Key it by
   its `id`. A repeated `id` removes the earlier finding and adds the new one at
   the position of the later line. A record whose `finding` is not an object or
@@ -84,10 +104,18 @@ a JSON object or has no string `type`. Apply records in file order:
   `unresolved` → `unresolved`, anything else → `open`.
 - `finding_annotated`: if a finding with the record's `finding` id exists,
   set its `holder` from the record's `holder` when the finding's `holder` is
-  null and the record's is a string, and likewise `site` (this is how
-  `dla ledger annotate --holder/--site` fills a value the finding was added
-  without; a value that is already set never changes).
-- Every other record type is ignored.
+  null and the record's is a string, and likewise `site` and `owner` (this is
+  how `dla ledger annotate --holder/--site/--owner` fills a value the finding
+  was added without; a value that is already set never changes).
+- `finding_merged`: if the records' `canonical` and `duplicate` are strings
+  that give two different keys, and a finding exists under both, the finding
+  under the `duplicate` key is removed and the one under the `canonical` key
+  keeps its own state and fields unchanged, so the claim is counted once.
+  Otherwise the record has no effect. A later `finding_added` with the
+  duplicate's key creates a finding again.
+- Every other record type is ignored, in particular `verification`,
+  `slice_started`, `slice_done` and `slice_merged`: they change no finding and
+  no metric.
 
 For this source, `discriminator` is true exactly when the final state is
 `refuted` (the ledger refuses `refuted` without a discriminator). Findings
@@ -100,13 +128,18 @@ finding in array order; other elements are skipped. `verdict`
 are strings. `label` is `cause` when it is a string matching
 `^(L-[A-Z]+|N-[A-Z]+|UNCLASSIFIED)$`, else null. `hypothesis` is false.
 `discriminator` is true when the verdict is `not-a-leak` and `discriminator`
-is a string that is non-empty after trimming whitespace.
+is a string that is non-empty after trimming whitespace. `owner` is taken when
+it is a string; `worker` is null.
 
 A finding is a **claim** when it is not a hypothesis and its state is
 `confirmed` or `strong`. It is a **rule-out** when its state is `refuted` and
 `discriminator` is true (hypotheses included).
 
 ## Matching a finding to an expected leak
+
+A leak with a `site` is matched by site, as follows. A leak without a `site`
+is matched by owner (below); an `owner` on a leak that has a `site` is not
+used for matching.
 
 Parse the finding's `site` with `^(.*?):([0-9]+)(?::[0-9]+)?$`, matched
 against the whole string (a trailing newline does not match), into a path and
@@ -117,6 +150,13 @@ leak's path, and the line lies inside the leak's `lines` (default
 `[line, line]`). It also matches when the same path rule and line test hold
 for any entry of the leak's `alt_sites`; an entry is `path:line` (range
 `[line, line]`) or `path:start-end` (range `[start, end]`).
+
+**Owner matching.** A leak without `site` matches a finding whose `owner` is
+not null and, after trimming whitespace from both, equals the leak's `owner`
+or ends with `.` followed by the leak's `owner`. The comparison is exact and
+case-sensitive; a finding with no `owner` never matches. A leak with neither
+`site` nor `owner` matches nothing. The finding's `site` plays no part in an
+owner match.
 
 A leak is **found** in a run when some non-hypothesis finding in state
 `confirmed` or `strong` matches it, and **flagged** when some non-hypothesis
@@ -146,6 +186,7 @@ fixture whose category is `archetype-leak`, `archetype-free` or `multi-leak`.
 | `non_leak_precision` | runs of `non-leak` fixtures | runs with no claim and at least one rule-out |
 | `trap_miss_rate` | runs of `archetype-leak` fixtures that have a `pair` | runs where some leak with `confirmable = true` is not found |
 | `trap_false_alarm_rate` | runs of `decoy-control` fixtures | runs with at least one claim |
+| `source_overclaim_rate` | runs of fixtures with `entry = "artifact"` | runs with at least one claim whose `site` is not null and not empty after trimming |
 
 Each ratio metric is written as:
 
@@ -194,6 +235,12 @@ mapping every expected leak `id` (confirmable or not) to
 `{"found": n, "flagged": n, "grounded": n}` counted over runs (`grounded`:
 found and the chosen finding's holder matches).
 
+When at least one found leak's chosen finding has a worker, the fixture also
+has `worker_provenance`: an object mapping the leak `id` to an object that maps
+each worker name to the number of runs in which that leak was found with a
+chosen finding of that worker. Leaks with no worker are left out, and the
+member is absent when empty. It is informational and part of no metric.
+
 ## `metrics.json`
 
 ```json
@@ -212,7 +259,7 @@ found and the chosen finding's holder matches).
 }
 ```
 
-Groups are sorted by `ablation`, then `archetypes`. All twelve ratio metrics
+Groups are sorted by `ablation`, then `archetypes`. All thirteen ratio metrics
 are always present. Object key order does not matter. The file is UTF-8 JSON
 with a trailing newline.
 

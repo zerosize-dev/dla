@@ -248,7 +248,8 @@ fn no_skill_run_collects_everything_and_resumes() {
     let w = |sub: &str| work.join(sub).display().to_string();
     assert_eq!(
         settings["sandbox"]["filesystem"]["allowWrite"],
-        serde_json::json!([w("project"), w("cache"), w("tmp")])
+        serde_json::json!([w("project"), w("cache"), w("tmp"), "/tmp"]),
+        "Bash may write in /tmp (JVM attach), after the run's own directories"
     );
     let allow = settings["permissions"]["allow"].to_string();
     assert!(
@@ -259,6 +260,15 @@ fn no_skill_run_collects_everything_and_resumes() {
         !allow.contains("\"Write\"") && !allow.contains("\"Edit\""),
         "{allow}"
     );
+    assert!(
+        allow.contains("\"Agent\"") && allow.contains("\"Task\""),
+        "subagents are allowed: {allow}"
+    );
+    assert!(
+        !allow.contains("(//tmp/**)") && !allow.contains("(//tmp)"),
+        "Edit and Write get no rule for /tmp: {allow}"
+    );
+    assert!(envtxt.contains("DLA_DEFAULT_BUDGET=20m"), "{envtxt}");
     assert!(envtxt.contains(&format!("CLAUDE_CODE_TMPDIR={}", w("tmp"))));
     for var in [
         "GOCACHE",
@@ -1053,4 +1063,196 @@ fn an_empty_run_between_productive_ones_does_not_abort() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(e.calls(), 6);
+}
+
+const FAKE_WORKERS: &str = r#"
+cfg="$CLAUDE_CONFIG_DIR"
+env | sort > "$cfg/env.txt"
+echo '{"type":"system","subtype":"init","model":"fake-model"}'
+mkdir -p .dla/R1/bundle/B1 .dla/R1/bundle/B2/raw
+echo R1 > .dla/current
+echo '{"type":"finding_added","finding":{"id":"jvm/F1","site":"src/main.py:1"}}' > .dla/R1/ledger.jsonl
+echo '{"type":"slice_started","worker":"jvm"}' > .dla/R1/ledger.jvm.jsonl
+echo '{"type":"slice_started","worker":"rust"}' > .dla/R1/ledger.rust.jsonl
+echo '{"type":"x"}' > .dla/R1/ledger.notes.txt
+echo '{"id":"B1"}' > .dla/R1/bundle/B1/index.json
+echo '{"id":"B2"}' > .dla/R1/bundle/B2/index.json
+echo 'raw evidence' > .dla/R1/bundle/B2/raw/heap.txt
+echo '{}' > .dla/R1/state.json
+echo '{"type":"result","total_cost_usd":0.1,"num_turns":1,"usage":{}}'
+"#;
+
+#[test]
+fn worker_ledgers_and_bundle_indexes_are_collected_and_the_budget_is_set() {
+    let e = Env::new(FAKE_WORKERS);
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--fixtures",
+            "fx-a",
+            "--runs",
+            "1",
+            "--keep-work",
+            "--child-budget",
+            "7m",
+        ])
+        .env("DLA_DEFAULT_BUDGET", "9h")
+        .env("DLA_WORKER", "parent-worker")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rd = e.run_dir("no-skill", "on", "fx-a", 1);
+    assert!(rd.join("ledger.jsonl").is_file());
+    assert!(rd.join("ledger.jvm.jsonl").is_file());
+    assert!(rd.join("ledger.rust.jsonl").is_file());
+    assert!(!rd.join("ledger.notes.txt").exists());
+    assert_eq!(
+        fs::read_to_string(rd.join("bundle/B1/index.json"))
+            .unwrap()
+            .trim(),
+        "{\"id\":\"B1\"}"
+    );
+    assert!(rd.join("bundle/B2/index.json").is_file());
+    assert!(
+        !rd.join("bundle/B2/raw").exists(),
+        "only index files are collected"
+    );
+    let cfg = e.work_dir("no-skill", "on", "fx-a", 1).join("config");
+    let envtxt = fs::read_to_string(cfg.join("env.txt")).unwrap();
+    assert!(envtxt.contains("DLA_DEFAULT_BUDGET=7m"), "{envtxt}");
+    assert!(
+        !envtxt.contains("9h") && !envtxt.contains("DLA_WORKER"),
+        "{envtxt}"
+    );
+
+    // A second attempt does not keep files of the first one.
+    fs::remove_file(rd.join("run.json")).unwrap();
+    fs::write(rd.join("ledger.stale.jsonl"), "x\n").unwrap();
+    fs::create_dir_all(rd.join("bundle/OLD")).unwrap();
+    fs::write(rd.join("bundle/OLD/index.json"), "x").unwrap();
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--fixtures",
+            "fx-a",
+            "--runs",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(!rd.join("ledger.stale.jsonl").exists());
+    assert!(!rd.join("bundle/OLD").exists());
+    assert!(rd.join("ledger.jvm.jsonl").is_file());
+}
+
+#[test]
+fn an_invalid_child_budget_is_refused_before_anything_starts() {
+    let e = Env::new(FAKE_OK);
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--fixtures",
+            "fx-a",
+            "--child-budget",
+            "soon",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--child-budget") && err.contains("20m"),
+        "{err}"
+    );
+    assert_eq!(e.calls(), 0);
+}
+
+#[test]
+fn the_default_work_root_is_in_the_cache_directory() {
+    let e = Env::new(FAKE_OK);
+    let xdg = e.root.join("xdg-cache");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_dla-bench"));
+    c.arg("run")
+        .arg("--fixtures-dir")
+        .arg(e.root.join("fx"))
+        .arg("--out")
+        .arg(e.root.join("out/res"))
+        .arg("--claude-bin")
+        .arg(e.root.join("claude"))
+        .arg("--repo-root")
+        .arg(e.root.join("repo"))
+        .args([
+            "--ablation",
+            "no-skill",
+            "--fixtures",
+            "fx-a",
+            "--runs",
+            "1",
+            "--keep-work",
+        ])
+        .env("FAKE_LOG", e.root.join("calls.log"))
+        .env("XDG_CACHE_HOME", &xdg);
+    let out = c.output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        xdg.join("dla-bench/res/no-skill/archetypes-on/fx-a/1/project/src/main.py")
+            .is_file()
+    );
+    // Without XDG_CACHE_HOME the directory comes from HOME.
+    let home = e.root.join("home");
+    fs::remove_dir_all(e.root.join("out")).unwrap();
+    let mut c = Command::new(env!("CARGO_BIN_EXE_dla-bench"));
+    c.arg("run")
+        .arg("--fixtures-dir")
+        .arg(e.root.join("fx"))
+        .arg("--out")
+        .arg(e.root.join("out/res"))
+        .arg("--claude-bin")
+        .arg(e.root.join("claude"))
+        .arg("--repo-root")
+        .arg(e.root.join("repo"))
+        .args([
+            "--ablation",
+            "no-skill",
+            "--fixtures",
+            "fx-a",
+            "--runs",
+            "1",
+            "--keep-work",
+        ])
+        .env("FAKE_LOG", e.root.join("calls.log"))
+        .env_remove("XDG_CACHE_HOME")
+        .env("HOME", &home);
+    let out = c.output().unwrap();
+    assert!(out.status.success());
+    assert!(
+        home.join(".cache/dla-bench/res/no-skill/archetypes-on/fx-a/1/project")
+            .is_dir()
+    );
+    // A work root inside a denied path is still refused.
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--fixtures",
+            "fx-a",
+            "--work-root",
+            e.root.join("out/res/inside").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("inside the denied path"));
 }

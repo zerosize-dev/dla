@@ -1,0 +1,15 @@
+schema_version = 1
+id = "art-flat"
+runtime = "jvm"
+entry = "artifact"
+category = "decoy-control"
+dynamic_confirmation = true
+
+[task]
+prompt = "p"
+
+[[non_leak]]
+id = "N1"
+owner = "quotes.RfqDesk.RECENT"
+cause = "N-WARM"
+discriminator = "the entry count stops at the same value from the second dump on"

@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "owner": "RfqDesk.OPEN", "site": "quotes/RfqDesk.java:12", "holder": "static/global"}}
+{"type": "transition", "finding": "F1", "to": "confirmed"}

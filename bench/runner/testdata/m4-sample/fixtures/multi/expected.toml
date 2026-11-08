@@ -1,0 +1,27 @@
+schema_version = 1
+id = "multi"
+runtime = "jvm"
+runtimes = ["jvm", "rust"]
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "p"
+
+[[leak]]
+id = "L1"
+site = "kotlin/shop/Audit.kt:7"
+runtime = "jvm"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 0.3
+
+[[leak]]
+id = "L2"
+site = "native/src/lib.rs:20"
+runtime = "rust"
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-HANDLE"
+share = 0.7

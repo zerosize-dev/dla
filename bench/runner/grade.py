@@ -36,6 +36,7 @@ METRIC_NAMES = (
     "non_leak_precision",
     "trap_miss_rate",
     "trap_false_alarm_rate",
+    "source_overclaim_rate",
 )
 TRANSITION_STATES = {
     "confirmed": "confirmed",
@@ -84,15 +85,32 @@ def is_number(v):
 # ---------------------------------------------------------------------------
 
 
-def new_finding(state, site, holder, label, hypothesis, discriminator):
+def new_finding(state, site, holder, label, hypothesis, discriminator, owner=None, worker=None):
     return {
         "state": state,
         "site": site,
+        "owner": owner,
+        "worker": worker,
         "holder": holder,
         "label": label,
         "hypothesis": hypothesis,
         "discriminator": discriminator,
     }
+
+
+def ledger_key(fid, rec):
+    """The key of a finding id on a ledger line: the id when it carries a worker
+    prefix or the line has no worker, else "<worker>/<id>"."""
+    worker = rec.get("worker")
+    if isinstance(worker, str) and worker != "" and "/" not in fid:
+        return worker + "/" + fid
+    return fid
+
+
+def worker_of_key(key):
+    """The non-empty text before the first "/" of a finding key, else None."""
+    head, sep, _ = key.partition("/")
+    return head if sep and head else None
 
 
 def str_or_none(v):
@@ -135,34 +153,51 @@ def parse_ledger(path):
                 continue
             parent = fin.get("parent")
             hyp = isinstance(parent, str) and parent != ""
-            if fid in by_id:
-                order.remove(fid)
-            order.append(fid)
-            by_id[fid] = new_finding(
+            key = ledger_key(fid, rec)
+            if key in by_id:
+                order.remove(key)
+            order.append(key)
+            by_id[key] = new_finding(
                 "open",
                 str_or_none(fin.get("site")),
                 str_or_none(fin.get("holder")),
                 str_or_none(fin.get("archetype")),
                 hyp,
                 False,
+                str_or_none(fin.get("owner")),
+                worker_of_key(key),
             )
         elif rtype == "transition":
             fid = rec.get("finding")
-            if isinstance(fid, str) and fid in by_id:
+            key = ledger_key(fid, rec) if isinstance(fid, str) else None
+            if key is not None and key in by_id:
                 to = rec.get("to")
-                by_id[fid]["state"] = (
+                by_id[key]["state"] = (
                     TRANSITION_STATES.get(to, "open") if isinstance(to, str) else "open"
                 )
         elif rtype == "finding_annotated":
             # `dla ledger annotate --holder/--site` fills a holder or site the
             # finding was added without; it never changes one that is set.
             fid = rec.get("finding")
-            if isinstance(fid, str) and fid in by_id:
-                f = by_id[fid]
+            key = ledger_key(fid, rec) if isinstance(fid, str) else None
+            if key is not None and key in by_id:
+                f = by_id[key]
                 if f["holder"] is None:
                     f["holder"] = str_or_none(rec.get("holder"))
                 if f["site"] is None:
                     f["site"] = str_or_none(rec.get("site"))
+                if f["owner"] is None:
+                    f["owner"] = str_or_none(rec.get("owner"))
+        elif rtype == "finding_merged":
+            # The duplicate collapses into the canonical finding.
+            canonical = rec.get("canonical")
+            duplicate = rec.get("duplicate")
+            if isinstance(canonical, str) and isinstance(duplicate, str):
+                ck = ledger_key(canonical, rec)
+                dk = ledger_key(duplicate, rec)
+                if ck != dk and ck in by_id and dk in by_id:
+                    order.remove(dk)
+                    del by_id[dk]
     findings = [by_id[i] for i in order]
     for f in findings:
         f["discriminator"] = f["state"] == "refuted"
@@ -197,6 +232,8 @@ def parse_findings_json(path):
                 label,
                 False,
                 has_disc,
+                str_or_none(el.get("owner")),
+                None,
             )
         )
     return out
@@ -247,6 +284,17 @@ def path_matches(path, leak_path):
     return path == leak_path or path.endswith("/" + leak_path)
 
 
+def owner_matches(finding, leak):
+    """A leak without a site matches by owner: equal, or ending with "." + owner."""
+    found = finding["owner"]
+    wanted = leak.get("owner")
+    if not isinstance(found, str) or not isinstance(wanted, str):
+        return False
+    found = found.strip(ASCII_WS)
+    wanted = wanted.strip(ASCII_WS)
+    return found == wanted or found.endswith("." + wanted)
+
+
 def leak_targets(leak):
     """List of (path, lo, hi) that count as the leak's site."""
     targets = []
@@ -292,10 +340,13 @@ def finding_matches(finding, targets):
 
 def leak_status(findings, leak):
     """Return (found, flagged, chosen finding or None) for one expected leak."""
-    targets = leak_targets(leak)
-    matching = [
-        f for f in findings if not f["hypothesis"] and finding_matches(f, targets)
-    ]
+    if leak.get("site") is None:
+        matching = [f for f in findings if not f["hypothesis"] and owner_matches(f, leak)]
+    else:
+        targets = leak_targets(leak)
+        matching = [
+            f for f in findings if not f["hypothesis"] and finding_matches(f, targets)
+        ]
     flagged = any(f["state"] in FLAG_STATES for f in matching)
     strong = [f for f in matching if f["state"] == "strong"]
     confirmed = [f for f in matching if f["state"] == "confirmed"]
@@ -328,6 +379,7 @@ def evaluate_run(fixture, findings):
             "found": 1 if found else 0,
             "flagged": 1 if flagged else 0,
             "grounded": 1 if grounded else 0,
+            "worker": chosen["worker"] if found else None,
         }
 
     if cat in LEAK_SET_CATEGORIES:
@@ -382,6 +434,13 @@ def evaluate_run(fixture, findings):
     if cat == "decoy-control":
         contrib["trap_false_alarm_rate"][1] += 1
         contrib["trap_false_alarm_rate"][0] += 1 if claims else 0
+    if fixture.get("entry") == "artifact":
+        contrib["source_overclaim_rate"][1] += 1
+        with_site = any(
+            is_claim(f) and f["site"] is not None and f["site"].strip(ASCII_WS) != ""
+            for f in findings
+        )
+        contrib["source_overclaim_rate"][0] += 1 if with_site else 0
 
     stats = {
         "claim": claims,
@@ -551,6 +610,9 @@ def grade_group(ablation, archetypes, runs, fixtures, incomplete=0):
         for lid, st in stats["leaks"].items():
             for k in ("found", "flagged", "grounded"):
                 blk["leaks"][lid][k] += st[k]
+            if st["worker"] is not None:
+                by_worker = blk.setdefault("worker_provenance", {}).setdefault(lid, {})
+                by_worker[st["worker"]] = by_worker.get(st["worker"], 0) + 1
         cov = coverage_residuals(r["dir"])
         if cov is not None:
             resid_r += cov[0]

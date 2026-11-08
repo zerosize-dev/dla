@@ -103,7 +103,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub out: Option<PathBuf>,
     /// Where working copies live; must be outside the repository (default:
-    /// /tmp/dla-bench).
+    /// ${XDG_CACHE_HOME:-$HOME/.cache}/dla-bench).
     #[arg(long)]
     pub work_root: Option<PathBuf>,
     /// Extra path the child may not read (repeatable). The repository, the
@@ -121,6 +121,10 @@ pub struct RunArgs {
     /// Maximum agent turns per run.
     #[arg(long, default_value_t = 80)]
     pub max_turns: u32,
+    /// Time budget handed to the child's `dla` runs (DLA_DEFAULT_BUDGET):
+    /// seconds, minutes or hours, such as 90s, 20m or 2h.
+    #[arg(long, default_value = "20m")]
+    pub child_budget: String,
     /// Seconds before a run's process group is killed.
     #[arg(long, default_value_t = 1500)]
     pub timeout: u64,
@@ -235,6 +239,56 @@ impl Collector {
         }
     }
 
+    /// Copies `ledger.<worker>.jsonl` (regular files only) from `run` to `out_dir`;
+    /// worker ledgers of an earlier attempt are removed first. The merged
+    /// `ledger.jsonl` is copied separately.
+    fn collect_worker_ledgers(&mut self, run: &Path, out_dir: &Path) {
+        remove_worker_ledgers(out_dir);
+        let Ok(rd) = fs::read_dir(run) else { return };
+        for entry in rd.flatten() {
+            self.entries += 1;
+            if self.entries > COLLECT_MAX_ENTRIES {
+                self.skip(run, "entry limit reached");
+                return;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_worker_ledger_name(&name) {
+                self.copy_file(&entry.path(), &out_dir.join(&name));
+            }
+        }
+    }
+
+    /// Copies `bundle/<id>/index.json` (never anything else of a bundle, and never
+    /// through a link) from `run` to `out_dir`; an earlier attempt's bundles are removed first.
+    fn collect_bundle_indexes(&mut self, run: &Path, out_dir: &Path) {
+        let _ = fs::remove_dir_all(out_dir.join("bundle"));
+        let from = run.join("bundle");
+        if !Self::is_real_dir(&from) {
+            if fs::symlink_metadata(&from).is_ok() {
+                self.skip(&from, "not a directory");
+            }
+            return;
+        }
+        let Ok(rd) = fs::read_dir(&from) else { return };
+        for entry in rd.flatten() {
+            self.entries += 1;
+            if self.entries > COLLECT_MAX_ENTRIES {
+                self.skip(&from, "entry limit reached");
+                return;
+            }
+            let dir = entry.path();
+            if !Self::is_real_dir(&dir) {
+                continue;
+            }
+            let dest = out_dir.join("bundle").join(entry.file_name());
+            let _ = fs::create_dir_all(&dest);
+            self.copy_file(&dir.join("index.json"), &dest.join("index.json"));
+            if fs::read_dir(&dest).is_ok_and(|mut d| d.next().is_none()) {
+                let _ = fs::remove_dir(&dest);
+            }
+        }
+    }
+
     /// Copies the files of `src` named `<prefix>*.json`, recursing into real directories.
     fn copy_dir(&mut self, src: &Path, dst: &Path, prefix: char, depth: usize) {
         if depth > COLLECT_MAX_DEPTH {
@@ -302,6 +356,25 @@ pub fn strip_frontmatter_hooks(text: &str) -> String {
         out.push_str(line);
     }
     out
+}
+
+/// A worker ledger file name: `ledger.<worker>.jsonl` with a non-empty worker
+/// (the merged `ledger.jsonl` is not one).
+fn is_worker_ledger_name(name: &str) -> bool {
+    name.strip_prefix("ledger.")
+        .and_then(|rest| rest.strip_suffix(".jsonl"))
+        .is_some_and(|w| !w.is_empty())
+}
+
+/// Removes collected worker ledgers and bundle indexes of an earlier attempt.
+fn remove_worker_ledgers(out_dir: &Path) {
+    if let Ok(rd) = fs::read_dir(out_dir) {
+        for e in rd.flatten() {
+            if is_worker_ledger_name(&e.file_name().to_string_lossy()) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
 }
 
 fn remove_file_if_exists(p: &Path) {
@@ -418,6 +491,7 @@ pub fn keep_env_var(name: &str) -> bool {
         "CCR_",
         "DOCUMENTS_MCP",
         "SBX_",
+        "DLA_",
         "MODAL_",
         "FSSPEC_",
         "CLOUDSDK_",
@@ -429,16 +503,29 @@ pub fn keep_env_var(name: &str) -> bool {
         "GH_TOKEN",
         "GITHUB_TOKEN",
         "IS_SANDBOX",
-        "DLA_BIN",
-        "DLA_ARCHETYPES",
-        "DLA_CONSENT_TIERS",
-        "DLA_CONSENT_RAW_VALUES",
     ];
     !denied_prefix.iter().any(|p| name.starts_with(p)) && !denied_name.contains(&name)
 }
 
-/// The default parent of the working copies.
-pub const DEFAULT_WORK_ROOT: &str = "/tmp/dla-bench";
+/// The default parent of the working copies, resolved from the given
+/// environment values: `$XDG_CACHE_HOME/dla-bench`, else `$HOME/.cache/dla-bench`.
+/// Empty values count as unset. Kept out of the system temporary directory, which
+/// the children may write to.
+pub fn default_work_root_from(xdg_cache_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    let set = |v: Option<&str>| v.filter(|x| !x.is_empty()).map(PathBuf::from);
+    set(xdg_cache_home)
+        .or_else(|| set(home).map(|h| h.join(".cache")))
+        .map(|c| c.join("dla-bench"))
+}
+
+/// The default parent of the working copies, resolved from the environment now.
+pub fn default_work_root() -> Res<PathBuf> {
+    default_work_root_from(
+        std::env::var("XDG_CACHE_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+    .ok_or_else(|| "neither XDG_CACHE_HOME nor HOME is set; pass --work-root".to_owned())
+}
 
 /// True when denying `p` would also deny Claude Code's shared per-user
 /// temporary directory (`claude-<uid>` under the system temp directory):
@@ -465,17 +552,26 @@ fn rule_path(p: &Path) -> String {
 
 /// The Claude Code settings that confine a child session: Bash runs in the
 /// operating system sandbox with no network, writes only in the working copy
-/// and in `allow_write` (the same places the Edit and Write tools may touch),
-/// and neither the sandbox nor the file tools can read `deny_read`. The default permission mode applies; a call that would need a
-/// prompt is refused in headless mode.
-pub fn sandbox_settings(deny_read: &[PathBuf], allow_write: &[PathBuf]) -> Value {
+/// and in `allow_write` (the same places the Edit and Write tools may touch)
+/// plus `sandbox_extra_write` (places only Bash may write to, such as the
+/// system temporary directory that JVM attach needs), and neither the sandbox
+/// nor the file tools can read `deny_read`. `deny_write` lists places the
+/// sandbox may not write to even when a parent directory is writable.
+/// The default permission mode applies; a call that would need a prompt is
+/// refused in headless mode.
+pub fn sandbox_settings(
+    deny_read: &[PathBuf],
+    allow_write: &[PathBuf],
+    sandbox_extra_write: &[PathBuf],
+    deny_write: &[PathBuf],
+) -> Value {
     let tools = ["Read", "Edit", "Write", "Glob", "Grep"];
     // Bash is allowed outright so that commands using shell variables are not
     // refused for being uncheckable; every Bash command still runs inside the
     // sandbox, because unsandboxed commands are disallowed and the session
     // refuses to start without the sandbox. Edit and Write are not covered by
     // the sandbox: they may only touch the places Bash may write to.
-    let mut allow: Vec<String> = ["Bash", "Read", "Glob", "Grep"]
+    let mut allow: Vec<String> = ["Bash", "Read", "Glob", "Grep", "Agent", "Task"]
         .into_iter()
         .map(str::to_owned)
         .collect();
@@ -494,16 +590,25 @@ pub fn sandbox_settings(deny_read: &[PathBuf], allow_write: &[PathBuf]) -> Value
     deny.push("WebSearch".to_owned());
     let paths =
         |v: &[PathBuf]| -> Vec<String> { v.iter().map(|p| p.display().to_string()).collect() };
+    let sandbox_write: Vec<PathBuf> = allow_write
+        .iter()
+        .chain(sandbox_extra_write)
+        .cloned()
+        .collect();
+    let mut filesystem = serde_json::json!({
+        "denyRead": paths(deny_read),
+        "allowWrite": paths(&sandbox_write),
+    });
+    if !deny_write.is_empty() {
+        filesystem["denyWrite"] = serde_json::json!(paths(deny_write));
+    }
     serde_json::json!({
         "sandbox": {
             "enabled": true,
             "autoAllowBashIfSandboxed": true,
             "allowUnsandboxedCommands": false,
             "failIfUnavailable": true,
-            "filesystem": {
-                "denyRead": paths(deny_read),
-                "allowWrite": paths(allow_write),
-            },
+            "filesystem": filesystem,
         },
         "permissions": {
             "allow": allow,
@@ -821,6 +926,8 @@ pub fn child_env(
     for (k, v) in cache_env(cache, &rustup_home) {
         set(&k, v);
     }
+    // The parent's DLA_* variables never reach the child; the budget is set explicitly.
+    set("DLA_DEFAULT_BUDGET", args.child_budget.clone());
     if args.ablation.uses_plugin() {
         set("DLA_CONSENT_TIERS", "1-4".to_owned());
         set("DLA_CONSENT_RAW_VALUES", "1".to_owned());
@@ -968,6 +1075,7 @@ struct Ctx<'a> {
     variant_spec: Option<VariantSpec>,
     dla_bin: Option<PathBuf>,
     deny_read: Vec<PathBuf>,
+    deny_write: Vec<PathBuf>,
     probe_prompt: Option<String>,
 }
 
@@ -1002,6 +1110,38 @@ fn collect_dla_files(project: &Path, out_dir: &Path) {
     collect_run_files(&project.join(".dla").join(id), out_dir);
 }
 
+/// The denied-read paths that lie inside the writable system temporary directory:
+/// the sandbox must not write there either, or a child could overwrite the parent
+/// session's files (the scratch directory of the orchestrating session, for one).
+pub fn deny_write_under_shared_tmp(deny_read: &[PathBuf]) -> Vec<PathBuf> {
+    let bases = [PathBuf::from(SANDBOX_SHARED_WRITE), std::env::temp_dir()];
+    let mut out: Vec<PathBuf> = deny_read
+        .iter()
+        .filter(|p| bases.iter().any(|b| p.starts_with(b)))
+        .cloned()
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Whether `text` is a budget `dla` accepts: a positive integer and `s`, `m` or `h`.
+pub fn valid_budget(text: &str) -> bool {
+    let Some(unit) = text.chars().last() else {
+        return false;
+    };
+    let digits = &text[..text.len() - unit.len_utf8()];
+    matches!(unit, 's' | 'm' | 'h')
+        && !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && digits.parse::<u64>().is_ok_and(|n| n > 0)
+}
+
+/// The system temporary directory, writable for Bash only: JVM attach sockets and
+/// `hsperfdata` live there, so `jcmd` cannot reach a JVM otherwise. The Edit and
+/// Write tools do not get it.
+pub const SANDBOX_SHARED_WRITE: &str = "/tmp";
+
 /// Name of the file in the output directory that lists what collection left out.
 const COLLECT_LOG: &str = "collect-skipped.txt";
 
@@ -1019,6 +1159,8 @@ pub fn collect_run_files(run: &Path, out_dir: &Path) {
         copy_if_exists(&run.join(f), &out_dir.join(f));
     }
     let mut c = Collector::default();
+    c.collect_worker_ledgers(run, out_dir);
+    c.collect_bundle_indexes(run, out_dir);
     for (d, prefix) in [("series", 'S'), ("trend", 'T'), ("alloc", 'A')] {
         let _ = fs::remove_dir_all(out_dir.join(d));
         let from = run.join(d);
@@ -1079,6 +1221,8 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     for f in RUN_ARTIFACTS {
         remove_file_if_exists(&out_dir.join(f));
     }
+    remove_worker_ledgers(&out_dir);
+    let _ = fs::remove_dir_all(out_dir.join("bundle"));
     let work = ctx
         .work_root
         .join(args.ablation.as_str())
@@ -1097,8 +1241,13 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     let settings_path = work.join("settings.json");
     let writable = [project.clone(), cache.clone(), tmp.clone()];
-    let mut settings = serde_json::to_string_pretty(&sandbox_settings(&ctx.deny_read, &writable))
-        .map_err(|e| e.to_string())?;
+    let mut settings = serde_json::to_string_pretty(&sandbox_settings(
+        &ctx.deny_read,
+        &writable,
+        &[PathBuf::from(SANDBOX_SHARED_WRITE)],
+        &ctx.deny_write,
+    ))
+    .map_err(|e| e.to_string())?;
     settings.push('\n');
     fs::write(&settings_path, settings).map_err(|e| format!("{}: {e}", settings_path.display()))?;
     let mut plugin_dir = None;
@@ -1290,7 +1439,7 @@ pub fn run(args: &RunArgs) -> Res<String> {
         .unwrap_or_else(|| "results".to_owned());
     let work_root = match &args.work_root {
         Some(p) => absolute(p)?,
-        None => PathBuf::from(DEFAULT_WORK_ROOT),
+        None => default_work_root()?,
     }
     .join(&results_name);
     let repo_abs = absolute(&args.repo_root)?;
@@ -1299,6 +1448,12 @@ pub fn run(args: &RunArgs) -> Res<String> {
             "--work-root {} is inside the repository {}; working copies must live outside it",
             work_root.display(),
             repo_abs.display()
+        ));
+    }
+    if !valid_budget(&args.child_budget) {
+        return Err(format!(
+            "--child-budget {:?} is not a duration; use seconds, minutes or hours such as 90s, 20m or 2h",
+            args.child_budget
         ));
     }
     let mut args = args.clone();
@@ -1415,6 +1570,7 @@ pub fn run(args: &RunArgs) -> Res<String> {
             bad.display()
         ));
     }
+    let deny_write = deny_write_under_shared_tmp(&deny_read);
     let probe_prompt = match &args.probe_prompt {
         Some(p) => Some(fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?),
         None => None,
@@ -1426,6 +1582,7 @@ pub fn run(args: &RunArgs) -> Res<String> {
         variant_spec,
         dla_bin,
         deny_read,
+        deny_write,
         probe_prompt,
     };
     let earlier = finished_cost(&out_root, args.retry_errored);
@@ -1551,6 +1708,205 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn collecting_worker_ledgers_and_bundle_indexes() {
+        use std::os::unix::fs::symlink;
+        let t = tempfile::tempdir().unwrap();
+        let (run, out, secret) = (
+            t.path().join("run"),
+            t.path().join("out"),
+            t.path().join("host"),
+        );
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(secret.join("x"), "host secret").unwrap();
+        fs::create_dir_all(run.join("bundle/B1")).unwrap();
+        fs::create_dir_all(run.join("bundle/B2")).unwrap();
+        fs::create_dir_all(run.join("bundle/B3")).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        fs::write(run.join("ledger.jsonl"), "merged\n").unwrap();
+        fs::write(run.join("ledger.jvm.jsonl"), "jvm\n").unwrap();
+        fs::write(run.join("ledger.rust.jsonl"), "rust\n").unwrap();
+        fs::write(run.join("ledger..jsonl"), "no worker").unwrap();
+        fs::write(run.join("ledger.jvm.json"), "wrong suffix").unwrap();
+        fs::write(run.join("ledgerx.jsonl"), "wrong prefix").unwrap();
+        symlink(secret.join("x"), run.join("ledger.evil.jsonl")).unwrap();
+        fs::create_dir_all(run.join("ledger.dir.jsonl")).unwrap();
+        fs::write(run.join("bundle/B1/index.json"), "{}").unwrap();
+        fs::write(run.join("bundle/B1/raw.bin"), "not collected").unwrap();
+        symlink(secret.join("x"), run.join("bundle/B2/index.json")).unwrap();
+        symlink(&secret, run.join("bundle/B4")).unwrap();
+        // Stale files of an earlier attempt.
+        fs::write(out.join("ledger.old.jsonl"), "stale").unwrap();
+        fs::create_dir_all(out.join("bundle/OLD")).unwrap();
+        fs::write(out.join("bundle/OLD/index.json"), "stale").unwrap();
+        collect_run_files(&run, &out);
+        assert_eq!(
+            fs::read_to_string(out.join("ledger.jsonl")).unwrap(),
+            "merged\n"
+        );
+        assert_eq!(
+            fs::read_to_string(out.join("ledger.jvm.jsonl")).unwrap(),
+            "jvm\n"
+        );
+        assert!(out.join("ledger.rust.jsonl").is_file());
+        for n in [
+            "ledger..jsonl",
+            "ledger.jvm.json",
+            "ledgerx.jsonl",
+            "ledger.evil.jsonl",
+            "ledger.dir.jsonl",
+            "ledger.old.jsonl",
+        ] {
+            assert!(!out.join(n).exists(), "{n}");
+        }
+        assert!(out.join("bundle/B1/index.json").is_file());
+        assert!(!out.join("bundle/B1/raw.bin").exists());
+        assert!(
+            !out.join("bundle/B2").exists(),
+            "a linked index is not copied"
+        );
+        assert!(!out.join("bundle/B3").exists(), "no index, no directory");
+        assert!(!out.join("bundle/B4").exists());
+        assert!(!out.join("bundle/OLD").exists());
+        let log = fs::read_to_string(out.join(COLLECT_LOG)).unwrap();
+        assert!(
+            log.contains("ledger.evil.jsonl") && log.contains("symbolic link"),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn worker_ledgers_respect_the_byte_cap() {
+        let t = tempfile::tempdir().unwrap();
+        let (run, out) = (t.path().join("run"), t.path().join("out"));
+        fs::create_dir_all(&run).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let mut c = Collector {
+            bytes: COLLECT_MAX_BYTES - 1,
+            ..Collector::default()
+        };
+        fs::write(run.join("ledger.a.jsonl"), "too big for what is left").unwrap();
+        c.collect_worker_ledgers(&run, &out);
+        assert!(!out.join("ledger.a.jsonl").exists());
+        assert!(c.skipped.iter().any(|s| s.contains("byte limit reached")));
+    }
+
+    #[test]
+    fn default_work_root_is_under_the_cache_dir_not_tmp() {
+        assert_eq!(
+            default_work_root_from(Some("/x/cache"), Some("/home/u")),
+            Some(PathBuf::from("/x/cache/dla-bench"))
+        );
+        assert_eq!(
+            default_work_root_from(Some(""), Some("/home/u")),
+            Some(PathBuf::from("/home/u/.cache/dla-bench"))
+        );
+        assert_eq!(
+            default_work_root_from(None, Some("/home/u")),
+            Some(PathBuf::from("/home/u/.cache/dla-bench"))
+        );
+        assert_eq!(default_work_root_from(None, None), None);
+        assert_eq!(default_work_root_from(Some(""), Some("")), None);
+        let d = default_work_root_from(None, Some("/home/u")).unwrap();
+        assert!(!d.starts_with("/tmp"));
+        assert!(!covers_shared_tmp(&d));
+    }
+
+    #[test]
+    fn sandbox_tmp_is_writable_for_bash_only() {
+        let deny = [PathBuf::from("/repo")];
+        let allow = [PathBuf::from("/w/cache")];
+        let v = sandbox_settings(&deny, &allow, &[PathBuf::from("/tmp")], &[]);
+        assert_eq!(
+            v["sandbox"]["filesystem"]["allowWrite"],
+            serde_json::json!(["/w/cache", "/tmp"])
+        );
+        assert!(v["sandbox"]["filesystem"].get("denyWrite").is_none());
+        let rules = serde_json::to_string(&v["permissions"]).unwrap();
+        assert!(
+            !rules.contains("//tmp"),
+            "no Edit or Write rule for /tmp: {rules}"
+        );
+        let allowed: Vec<&str> = v["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect();
+        assert!(allowed.contains(&"Agent") && allowed.contains(&"Task"));
+        let v = sandbox_settings(
+            &deny,
+            &allow,
+            &[PathBuf::from("/tmp")],
+            &[PathBuf::from("/tmp/claude-0/s")],
+        );
+        assert_eq!(
+            v["sandbox"]["filesystem"]["denyWrite"],
+            serde_json::json!(["/tmp/claude-0/s"])
+        );
+    }
+
+    #[test]
+    fn denied_paths_inside_tmp_are_write_denied_too() {
+        let deny = [
+            PathBuf::from("/repo"),
+            PathBuf::from("/tmp/claude-0/-home-u/sess/scratchpad"),
+            PathBuf::from("/tmp/claude-0/-home-u/sess/scratchpad"),
+            PathBuf::from("/home/u/.claude"),
+        ];
+        assert_eq!(
+            deny_write_under_shared_tmp(&deny),
+            vec![PathBuf::from("/tmp/claude-0/-home-u/sess/scratchpad")]
+        );
+    }
+
+    #[test]
+    fn child_budget_reaches_the_child_and_parent_dla_vars_do_not() {
+        let parent = vec![
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            ("DLA_DEFAULT_BUDGET".to_owned(), "3h".to_owned()),
+            ("DLA_OTHER".to_owned(), "x".to_owned()),
+        ];
+        let get = |env: &[(String, String)], k: &str| {
+            env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone())
+        };
+        for abl in [Ablation::NoSkill, Ablation::Full] {
+            let env = child_env(
+                parent.clone(),
+                Path::new("/cfg"),
+                Path::new("/w/cache"),
+                Path::new("/w/tmp"),
+                None,
+                &args(abl, Archetypes::On),
+            );
+            assert_eq!(get(&env, "DLA_DEFAULT_BUDGET").as_deref(), Some("20m"));
+            assert_eq!(get(&env, "DLA_OTHER"), None);
+            assert_eq!(
+                env.iter()
+                    .filter(|(n, _)| n == "DLA_DEFAULT_BUDGET")
+                    .count(),
+                1
+            );
+        }
+        let mut a = args(Ablation::Gates, Archetypes::On);
+        a.child_budget = "90s".into();
+        let env = child_env(
+            parent,
+            Path::new("/cfg"),
+            Path::new("/w/cache"),
+            Path::new("/w/tmp"),
+            None,
+            &a,
+        );
+        assert_eq!(get(&env, "DLA_DEFAULT_BUDGET").as_deref(), Some("90s"));
+        assert!(!keep_env_var("DLA_DEFAULT_BUDGET") && !keep_env_var("DLA_BIN"));
+        assert!(valid_budget("20m") && valid_budget("90s") && valid_budget("2h"));
+        for bad in ["", "m", "20", "20x", "-5m", "1.5h", "0s"] {
+            assert!(!valid_budget(bad), "{bad}");
+        }
+    }
+
     #[test]
     fn collecting_a_run_caps_entries() {
         let t = tempfile::tempdir().unwrap();
@@ -1576,7 +1932,7 @@ mod tests {
         assert!(!covers_shared_tmp(Path::new(
             "/tmp/claude-0/-home-user-dla"
         )));
-        assert!(!covers_shared_tmp(Path::new("/tmp/dla-bench")));
+        assert!(!covers_shared_tmp(Path::new("/home/u/.cache/dla-bench")));
         assert!(!covers_shared_tmp(Path::new("/home/user/dla")));
     }
 
@@ -1725,6 +2081,7 @@ mod tests {
             probe_prompt: None,
             model: None,
             max_turns: 5,
+            child_budget: "20m".into(),
             timeout: 5,
             budget_usd: None,
             retry_errored: false,
@@ -1806,7 +2163,7 @@ mod tests {
     fn settings_confine_bash_and_the_file_tools() {
         let deny = [PathBuf::from("/repo"), PathBuf::from("/root/.claude")];
         let allow = [PathBuf::from("/w/cache")];
-        let v = sandbox_settings(&deny, &allow);
+        let v = sandbox_settings(&deny, &allow, &[], &[]);
         let sb = &v["sandbox"];
         assert_eq!(sb["enabled"], true);
         assert_eq!(sb["autoAllowBashIfSandboxed"], true);
@@ -1829,6 +2186,8 @@ mod tests {
                 "Read",
                 "Glob",
                 "Grep",
+                "Agent",
+                "Task",
                 "Edit(//w/cache/**)",
                 "Write(//w/cache/**)"
             ]),

@@ -77,6 +77,18 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "worker_provenance": {
+          "description": "Informational: per leak, the runs in which it was found with a chosen\nfinding of each worker. Absent when no chosen finding has a worker.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          }
         }
       },
       "required": [
@@ -107,7 +119,7 @@
           }
         },
         "metrics": {
-          "description": "The twelve ratio metrics.",
+          "description": "The thirteen ratio metrics.",
           "$ref": "#/$defs/Metrics"
         },
         "unexplained_growth_share": {
@@ -158,7 +170,7 @@
       ]
     },
     "Metrics": {
-      "description": "The twelve ratio metrics.",
+      "description": "The thirteen ratio metrics.",
       "type": "object",
       "properties": {
         "archetype_free_recall": {
@@ -200,6 +212,18 @@
         "second_leak_recall": {
           "description": "Other leaks found in multi-leak runs.",
           "$ref": "#/$defs/Ratio"
+        },
+        "source_overclaim_rate": {
+          "description": "Artifact-entry runs with a claim that carries a source site. Absent in\nresults graded before the metric existed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ratio"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "trap_false_alarm_rate": {
           "description": "Decoy runs that claim.",

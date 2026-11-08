@@ -1,0 +1,24 @@
+schema_version = 1
+id = "jvm-rfq-dump-series"
+runtime = "jvm"
+category = "archetype-leak"
+pair = "jvm-rfq-dump-series-capped"
+dynamic_confirmation = true
+entry = "artifact"
+
+[task]
+prompt = """
+The quote desk service's resident memory climbs through the trading day and
+the container is restarted by the orchestrator when it reaches its limit. Heap
+dumps taken from the running service are in dumps/; the source is not
+available. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+owner = "quotes.RfqDesk.OPEN"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = true

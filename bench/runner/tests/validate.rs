@@ -394,3 +394,355 @@ fn schema_enums_match_the_cause_constants() {
     assert_eq!(leak_enum, &serde_json::json!(LEAK_CAUSES));
     assert_eq!(non_enum, &serde_json::json!(NON_LEAK_CAUSES));
 }
+
+// ---- entry paths, owners, multi-runtime
+
+/// A gzip file whose single stored block holds `data` (the checksum is not checked).
+fn gz(data: &[u8]) -> Vec<u8> {
+    let mut g = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 1];
+    let len = data.len() as u16;
+    g.extend_from_slice(&len.to_le_bytes());
+    g.extend_from_slice(&(!len).to_le_bytes());
+    g.extend_from_slice(data);
+    g.extend_from_slice(&[0; 8]);
+    g
+}
+
+/// The start of a heap dump file: the header text, the id size and the timestamp.
+fn hprof(timestamp_ms: u64) -> Vec<u8> {
+    let mut d = b"JAVA PROFILE 1.0.2\0".to_vec();
+    d.extend_from_slice(&8u32.to_be_bytes());
+    d.extend_from_slice(&timestamp_ms.to_be_bytes());
+    d.extend_from_slice(&[0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    d
+}
+
+fn write_bytes(p: &Path, data: &[u8]) {
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, data).unwrap();
+}
+
+const ARTIFACT_TOML: &str = r#"schema_version = 1
+id = "ID"
+runtime = "jvm"
+entry = "artifact"
+category = "archetype-leak"
+dynamic_confirmation = true
+[task]
+prompt = "p"
+[[leak]]
+id = "L1"
+owner = "quotes.RfqDesk.OPEN"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+"#;
+
+/// An artifact fixture with the given dump timestamps and no source.
+fn make_artifact(root: &Path, id: &str, stamps: &[u64]) {
+    let d = root.join(id);
+    write(&d.join("README.md"), "readme\n");
+    write(&d.join("expected.toml"), &ARTIFACT_TOML.replace("ID", id));
+    for (i, ts) in stamps.iter().enumerate() {
+        write_bytes(
+            &d.join(format!("project/dumps/heap-{i}.hprof.gz")),
+            &gz(&hprof(*ts)),
+        );
+    }
+}
+
+#[test]
+fn an_artifact_fixture_skips_the_source_rules_and_checks_its_dumps() {
+    let t = tempfile::tempdir().unwrap();
+    make_artifact(t.path(), "art", &[1_000, 2_000, 3_000]);
+    assert_eq!(problems(t.path()), Vec::<String>::new());
+}
+
+#[test]
+fn artifact_dump_checks() {
+    let t = tempfile::tempdir().unwrap();
+    make_artifact(t.path(), "same", &[5, 5]);
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "same: project/dumps/heap-1.hprof.gz: header timestamp 5 equals"
+        ),
+        "{p:?}"
+    );
+
+    make_artifact(t.path(), "none", &[]);
+    write(
+        &t.path().join("none/project/dumps/notes.txt"),
+        "capture notes\n",
+    );
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "none: artifact fixture: project/dumps/ needs at least one"
+        ),
+        "{p:?}"
+    );
+    assert!(has(&p, "dumps are stored as *.hprof.gz"), "{p:?}");
+
+    make_artifact(t.path(), "plain", &[1]);
+    write_bytes(
+        &t.path().join("plain/project/dumps/heap-9.hprof.gz"),
+        &hprof(9),
+    );
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "plain: project/dumps/heap-9.hprof.gz: does not start with the gzip magic"
+        ),
+        "{p:?}"
+    );
+
+    make_artifact(t.path(), "text", &[1]);
+    write_bytes(
+        &t.path().join("text/project/dumps/heap-9.hprof.gz"),
+        &gz(b"not a heap dump at all, just text padding"),
+    );
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "text: project/dumps/heap-9.hprof.gz: does not inflate to a file starting with"
+        ),
+        "{p:?}"
+    );
+
+    make_artifact(t.path(), "short", &[1]);
+    write_bytes(
+        &t.path().join("short/project/dumps/heap-9.hprof.gz"),
+        &gz(b"JAVA PROFILE 1.0.2\0\0\0"),
+    );
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "short: project/dumps/heap-9.hprof.gz: the HPROF header ends before its timestamp"
+        ),
+        "{p:?}"
+    );
+
+    make_artifact(t.path(), "broken", &[1]);
+    let mut bad = gz(&hprof(7));
+    bad.truncate(14);
+    write_bytes(&t.path().join("broken/project/dumps/heap-9.hprof.gz"), &bad);
+    let p = problems(t.path());
+    assert!(has(&p, "broken: project/dumps/heap-9.hprof.gz:"), "{p:?}");
+
+    make_artifact(t.path(), "src", &[1]);
+    write(&t.path().join("src/project/Main.java"), "class Main {}\n");
+    assert!(has(
+        &problems(t.path()),
+        "src: artifact fixture: project/ holds 1 source file"
+    ));
+}
+
+#[test]
+fn artifact_leaks_need_an_owner_and_need_no_site() {
+    let t = tempfile::tempdir().unwrap();
+    make_artifact(t.path(), "noowner", &[1, 2]);
+    write(
+        &t.path().join("noowner/expected.toml"),
+        &ARTIFACT_TOML
+            .replace("noowner", "x")
+            .replace("ID", "noowner")
+            .replace("owner = \"quotes.RfqDesk.OPEN\"\n", ""),
+    );
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "noowner: leak L1: needs a site, or an owner when there is no site"
+        ),
+        "{p:?}"
+    );
+    for (id, owner) in [("sp", "a b.C.d"), ("sl", "a/b.C.d"), ("pad", " a.B.c")] {
+        make_artifact(t.path(), id, &[1, 2]);
+        write(
+            &t.path().join(format!("{id}/expected.toml")),
+            &ARTIFACT_TOML
+                .replace("ID", id)
+                .replace("quotes.RfqDesk.OPEN", owner),
+        );
+        let p = problems(t.path());
+        assert!(has(&p, &format!("{id}: leak L1: owner")), "{id}: {p:?}");
+    }
+}
+
+#[test]
+fn a_symptom_fixture_holds_only_notes() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path().join("sym");
+    write(&d.join("README.md"), "r\n");
+    write(&d.join("project/NOTES.txt"), "operator notes\n");
+    write(
+        &d.join("expected.toml"),
+        r#"schema_version = 1
+id = "sym"
+runtime = "jvm"
+entry = "symptom"
+category = "impossible"
+dynamic_confirmation = false
+[task]
+prompt = "p"
+"#,
+    );
+    assert_eq!(problems(t.path()), Vec::<String>::new());
+    write(&d.join("project/Main.java"), "class Main {}\n");
+    assert!(has(
+        &problems(t.path()),
+        "sym: symptom fixture: project/ holds 1 source file"
+    ));
+}
+
+fn multi_toml(id: &str, runtimes: &str, extra: &str) -> String {
+    format!(
+        r#"schema_version = 1
+id = "{id}"
+runtime = "jvm"
+{runtimes}
+category = "multi-leak"
+dynamic_confirmation = true
+[task]
+prompt = "p"
+[[leak]]
+id = "L1"
+site = "src/a.py:10"
+{extra}
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 0.5
+[[leak]]
+id = "L2"
+site = "native/lib.rs:2"
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-HANDLE"
+share = 0.5
+"#
+    )
+}
+
+#[test]
+fn multi_runtime_fixtures_need_sources_for_every_runtime() {
+    let t = tempfile::tempdir().unwrap();
+    let mk = |id: &str, toml: &str, rust: bool| {
+        let d = t.path().join(id);
+        write(&d.join("README.md"), "r\n");
+        for f in ["a", "b"] {
+            write(&d.join(format!("project/src/{f}.py")), &filler(f, 60));
+        }
+        write(&d.join("project/Main.java"), &filler("m", 40));
+        if rust {
+            write(&d.join("project/native/lib.rs"), &filler("n", 40));
+        }
+        write(&d.join("expected.toml"), toml);
+    };
+    mk(
+        "ok",
+        &multi_toml("ok", "runtimes = [\"jvm\", \"rust\"]", "runtime = \"jvm\""),
+        true,
+    );
+    assert_eq!(problems(t.path()), Vec::<String>::new());
+
+    mk(
+        "norust",
+        &multi_toml("norust", "runtimes = [\"jvm\", \"rust\"]", ""),
+        false,
+    );
+    // The native/lib.rs site also fails to exist; the runtime rule is the one under test.
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "norust: runtimes lists \"rust\" but project/ has no rs source files"
+        ),
+        "{p:?}"
+    );
+
+    mk(
+        "prim",
+        &multi_toml("prim", "runtimes = [\"go\", \"rust\"]", ""),
+        true,
+    );
+    let p = problems(t.path());
+    assert!(
+        has(
+            &p,
+            "prim: runtime \"jvm\" (the primary) must be one of runtimes"
+        ),
+        "{p:?}"
+    );
+    assert!(
+        has(
+            &p,
+            "prim: runtimes lists \"go\" but project/ has no go source files"
+        ),
+        "{p:?}"
+    );
+
+    mk("one", &multi_toml("one", "runtimes = [\"jvm\"]", ""), true);
+    assert!(has(
+        &problems(t.path()),
+        "one: runtimes lists fewer than two runtimes"
+    ));
+    mk(
+        "dup",
+        &multi_toml("dup", "runtimes = [\"jvm\", \"rust\", \"jvm\"]", ""),
+        true,
+    );
+    assert!(has(
+        &problems(t.path()),
+        "dup: runtimes lists \"jvm\" twice"
+    ));
+    mk(
+        "leakrt",
+        &multi_toml(
+            "leakrt",
+            "runtimes = [\"jvm\", \"rust\"]",
+            "runtime = \"go\"",
+        ),
+        true,
+    );
+    assert!(has(
+        &problems(t.path()),
+        "leakrt: leak L1: runtime \"go\" is not one of the fixture's runtimes"
+    ));
+}
+
+#[test]
+fn kotlin_counts_as_source_and_needs_a_build_script_with_kotlinc() {
+    let t = tempfile::tempdir().unwrap();
+    let d = t.path().join("kt");
+    write(&d.join("README.md"), "r\n");
+    for f in ["A", "B", "C"] {
+        write(&d.join(format!("project/src/{f}.kt")), &filler(f, 60));
+    }
+    write(
+        &d.join("expected.toml"),
+        &trap("kt", "")
+            .replace("python", "jvm")
+            .replace("src/a.py:10", "src/A.kt:10"),
+    );
+    let p = problems(t.path());
+    assert!(
+        has(&p, "kt: project/ has .kt sources, so it needs a build.sh"),
+        "{p:?}"
+    );
+    assert!(
+        !has(&p, "source files"),
+        "three .kt files satisfy the size rule: {p:?}"
+    );
+    write(
+        &d.join("project/build.sh"),
+        "#!/bin/sh\nif command -v kotlinc >/dev/null; then kotlinc src/*.kt; else java -cp \"$KCP\" K2JVMCompiler src/*.kt; fi\n",
+    );
+    assert_eq!(problems(t.path()), Vec::<String>::new());
+}

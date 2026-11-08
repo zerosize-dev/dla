@@ -1,0 +1,11 @@
+schema_version = 1
+id = "symptom-no-target"
+runtime = "jvm"
+category = "impossible"
+dynamic_confirmation = false
+entry = "symptom"
+
+[task]
+prompt = """
+My app is using too much memory. Find out what is holding it.
+"""

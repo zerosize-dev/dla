@@ -1,0 +1,10 @@
+{"type": "slice_started", "worker": "jvm", "runtime": "jvm"}
+{"type": "finding_added", "finding": {"id": "F1", "site": "kotlin/shop/Audit.kt:7", "holder": "static/global", "archetype": "L-COLLECT"}, "worker": "jvm"}
+{"type": "transition", "finding": "F1", "to": "confirmed", "worker": "jvm"}
+{"type": "finding_added", "finding": {"id": "rust/F1", "site": "native/src/lib.rs:20", "holder": "native-handle/global-ref", "archetype": "L-HANDLE"}}
+{"type": "finding_added", "finding": {"id": "rust/F2", "site": "native/src/lib.rs:20", "holder": "native-handle/global-ref"}}
+{"type": "transition", "finding": "rust/F1", "to": "strong"}
+{"type": "transition", "finding": "rust/F2", "to": "confirmed"}
+{"type": "finding_merged", "canonical": "rust/F1", "duplicate": "rust/F2"}
+{"type": "verification", "finding": "rust/F1", "result": "agrees"}
+{"type": "slice_done", "worker": "jvm"}

@@ -491,3 +491,29 @@ fn only_fixtures_with_a_finished_run_need_an_expected_toml() {
     assert_eq!((g.usage.runs, g.usage.incomplete), (1, 1));
     assert_eq!(g.fixtures.keys().collect::<Vec<_>>(), ["fx-trap"]);
 }
+
+#[test]
+fn m4_sample_matches_hand_derived_numbers() {
+    let s = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/m4-sample");
+    let m = grade::grade_dir(&s.join("results"), &s.join("fixtures")).unwrap();
+    assert_eq!(m.groups.len(), 1);
+    let g = &m.groups[0];
+    let pair = |r: &dla_bench::model::Ratio| (r.num, r.den);
+    // Artifact runs: art-series (3), art-flat (3), art-single (2); two of them claim with a site.
+    let so = g.metrics.source_overclaim_rate.as_ref().unwrap();
+    assert_eq!(pair(so), (2, 8));
+    let per: Vec<_> = so.per_run.iter().map(|p| (p.num, p.den)).collect();
+    assert_eq!(per, [(0, 3), (2, 3), (0, 2)]);
+    // art-single run 1 and nothing else among the three impossible runs claims.
+    assert_eq!(pair(&g.metrics.overclaim_rate), (1, 3));
+    // A merged-away duplicate is no claim: art-flat run 3 is not a false confirmation.
+    assert_eq!(pair(&g.metrics.false_confirmation_rate), (1, 3));
+    // art-series L1 is found in runs 1 and 3, multi finds L1 twice and L2 once.
+    assert_eq!(pair(&g.metrics.leak_recall), (5, 7));
+    assert_eq!(pair(&g.metrics.second_leak_recall), (1, 2));
+    let multi = &g.fixtures["multi"];
+    assert_eq!(multi.worker_provenance["L1"]["jvm"], 2);
+    assert_eq!(multi.worker_provenance["L2"]["rust"], 1);
+    assert_eq!(g.fixtures["art-series"].worker_provenance["L1"]["jvm"], 1);
+    assert!(g.fixtures["art-flat"].worker_provenance.is_empty());
+}

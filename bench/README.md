@@ -33,14 +33,23 @@ structure (unknown fields are errors), validates it against
 (id equals the directory name, each `site` and `alt_sites` entry exists in
 `project/` with the line inside the file, `lines` contains the site line,
 shares sum to 1 for several leaks, pairs are reciprocal with identical
-prompts, category rules, no committed build outputs, 3 to 10 source files and
-150 to 600 source lines) and scans `project/` for hint words
+prompts, category rules, no committed build outputs, and for the default
+`repository` entry 3 to 10 source files and 150 to 600 source lines) and scans `project/` for hint words
 (`leak*`, `todo`, `fixme`, `fix`, `bug`, `unbounded`, `bounded`,
 `never freed|removed|cleared|closed|stopped|released`) with word boundaries,
 case-insensitively. File names are scanned too, and `_` counts as a separator,
 so `order_leak_count` is caught. It prints one `fixture: problem` line per
 problem and exits 1 if there is any. An empty or missing fixtures directory is
 valid.
+
+The entry paths change the rules (see `FIXTURES.md`): an `artifact` fixture
+(`entry = "artifact"`) has no source-size rule and no site check; instead every
+`project/dumps/*.hprof.gz` must be a gzip file that inflates to a file starting
+with `JAVA PROFILE 1.0.`, with timestamps in the dump headers that differ from
+each other. A `symptom` fixture may hold only non-source notes. A fixture with
+`runtimes = [...]` needs source files for each listed runtime, and `.kt` sources
+need a `build.sh` that tries `kotlinc` first. A `[[leak]]` without `site` needs an
+`owner`.
 
 Regenerate and check the schemas with `dla-bench schema` and
 `dla-bench schema --check` (CI runs the check).
@@ -63,8 +72,9 @@ Per (fixture, run index) the runner:
    `<work-root>/<results name>/<ablation>/archetypes-<x>/<fixture>/<n>/project`,
    runs `git init` and commits it as `bench <bench@example.invalid>`;
    `expected.toml` and `README.md` are never copied. `--work-root` defaults to
-   `/tmp/dla-bench` and must be outside the repository (and outside every
-   path the child may not read, see below);
+   `${XDG_CACHE_HOME:-$HOME/.cache}/dla-bench` (resolved when the command runs,
+   not in `/tmp`, which the children may write to) and must be outside the
+   repository (and outside every path the child may not read, see below);
 2. gives the run a fresh `CLAUDE_CONFIG_DIR` inside that directory, writes the
    sandbox settings (below) to `<run dir>/settings.json` and creates the
    toolchain cache directories;
@@ -119,7 +129,9 @@ cleanly is removed; keep it with `--keep-work`, failed runs are always kept.
   same command with `--retry-errored` to redo them and the rest of the queue.
 
 Other flags: `--fixtures a,b|all`, `--fixtures-dir`, `--model`, `--max-turns`
-(default 80), `--timeout` (default 1500), `--repo-root` (where the plugin
+(default 80), `--timeout` (default 1500), `--child-budget` (default `20m`: the
+time budget the child's `dla` runs get, passed as `DLA_DEFAULT_BUDGET`; a
+duration such as `90s`, `20m` or `2h`), `--repo-root` (where the plugin
 sources are), `--ablations-dir`, `--dla-bin`, `--claude-bin`, `--deny-read
 <path>` (repeatable, see below) and `--probe-prompt <file>` (use the file as
 the prompt instead of the fixture's task; for checking the sandbox).
@@ -167,6 +179,10 @@ prefers `DLA_BIN`, so runs use the local build.
   findings.json     when the model wrote one in the project root
   ledger.jsonl state.json report.md coverage.json
                     copied from .dla/<id in .dla/current>/ when dla ran
+  ledger.<worker>.jsonl
+                    the slices of the workers of a multi-runtime run
+  bundle/<id>/index.json
+                    the index file of each verification bundle
 <out>/metrics.json  written by `grade`
 <out>/table.md      written by `table`
 ```
@@ -205,11 +221,29 @@ differing paths. `table` renders `metrics.json` into `table.md`: one metric
 table per group (value, numerator/denominator, mean and standard deviation
 over run indexes), a usage table and a per-fixture table.
 
+`metrics.json` has thirteen ratio metrics. `source_overclaim_rate` is the share
+of `artifact`-entry runs that claim a leak at a source site although no source
+was given; it is null when a results directory holds no such run, which is the
+case for every result before M4. A finding may carry an `owner`, a leak without a
+`site` is matched by it, ledger ids may carry a worker prefix (`jvm/F3`), and a
+merged duplicate counts once; the per-fixture `worker_provenance` (only present
+when a chosen finding has a worker) says which worker produced the finding that
+found each leak. It is informational and part of no metric. See `GRADING.md`.
+
 The two graders implement `GRADING.md` independently and must agree exactly.
 CI grades every sample under `bench/runner/testdata/*/` with both and
-compares. `bench/runner/testdata/rust-sample` also holds
+compares (`cargo test -p dla-bench --test graders_agree` does the same when
+`python3` is installed). `bench/runner/testdata/rust-sample` also holds
 `expected-metrics.json`, the golden result that was derived by hand from the
-sample runs and is compared by the Rust tests.
+sample runs and is compared by the Rust tests. `testdata/m4-sample` covers the
+rules added in M4 (owner matching, worker prefixes, merged findings, artifact
+overclaim, worker provenance); its numbers are asserted in `tests/golden.rs`.
+
+`dla-bench static` and `dla-bench dynamic` skip fixtures whose `entry` is
+`artifact` or `symptom` (they hold no source to probe or run) and report them as
+skipped with the reason, in the table and as `skipped` in the JSON; `static` runs
+every runtime a multi-runtime fixture lists and fails the fixture when the probe
+does not detect one of them.
 
 ## Dynamic acceptance
 
@@ -277,9 +311,10 @@ its JSON output (`NNN-<command>.log`), `row.json` (the row with the policy's
 decisions) and the run files (`ledger.jsonl`, `report.md`, `series/`, `trend/`,
 `alloc/`, `harness/H*/harness.json`).
 
-`dla-bench run` also copies `series/S*.json`, `trend/T*.json`, `alloc/A*.json` and
-`harness/H*/harness.json` and `run-*.json` of the child's dla run next to its
-`ledger.jsonl` (never `work/`, `agent/`, `out/` or `logs/`). The run directory is
+`dla-bench run` also copies `series/S*.json`, `trend/T*.json`, `alloc/A*.json`,
+`harness/H*/harness.json` and `run-*.json`, every `ledger.<worker>.jsonl` and every
+`bundle/<id>/index.json` of the child's dla run next to its
+`ledger.jsonl` (never `work/`, `agent/`, `out/`, `logs/` or the rest of a bundle). The run directory is
 writable by the sandboxed model, so the copy never follows a symbolic link, copies
 only regular files with those names, and stops at 6 directory levels, 2000
 entries and 64 MiB; whatever it left out is listed in `collect-skipped.txt` next
@@ -323,14 +358,16 @@ additional failure (a regression must not hide behind the entry).
   therefore never inherited, so `dla` never mistakes the parent for the run's
   session. The runner sets `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER=1`,
   `CLAUDE_CODE_TMPDIR` (a `tmp` directory of the run, so that parallel runs do
-  not see each other's temporary files), the toolchain caches and the `DLA_*`
-  values of the ablation.
+  not see each other's temporary files), the toolchain caches, `DLA_DEFAULT_BUDGET`
+  (from `--child-budget`, so the budget paths of `dla` run inside the
+  timeout) and the other `DLA_*` values of the ablation.
 - Every child runs under Claude Code's own Bash sandbox, written to the run's
   `settings.json` (`sandbox_settings` in `bench/runner/src/run.rs`):
   `sandbox.enabled`, `autoAllowBashIfSandboxed`, `allowUnsandboxedCommands:
   false` and `failIfUnavailable: true` (a machine without bubblewrap and
   socat fails the run instead of running unconfined). Bash commands can write
-  only in the working copy and the run's `cache` and `tmp` directories, and
+  only in the working copy, the run's `cache` and `tmp` directories and the system
+  temporary directory `/tmp` (JVM attach needs it), and
   have no network: no `allowedDomains` are configured, so every connection is
   refused by the sandbox's proxy (this includes package registries; builds
   must work offline, and `GOPROXY=off`, `PIP_NO_INDEX=1`,
@@ -339,7 +376,9 @@ additional failure (a regression must not hide behind the entry).
 - The paths in `sandbox.filesystem.denyRead` are invisible to Bash. The Read,
   Edit, Write, Glob and Grep tools are not covered by the sandbox, so the same
   paths are also in `permissions.deny` (as `Tool(//absolute/path/**)`), and
-  Edit and Write are allowed only under the working copy, `cache` and `tmp`.
+  Edit and Write are allowed only under the working copy, `cache` and `tmp`
+  (not `/tmp`). The `Agent` and `Task` tools are allowed, so a skill can
+  dispatch subagents.
   The denied paths are the repository root (answer keys), the fixtures
   directory, the results directory, `~/.claude`, the parent's
   `CLAUDE_CONFIG_DIR` and every `--deny-read` path. Pass the scratch
@@ -360,10 +399,23 @@ additional failure (a regression must not hide behind the entry).
   another variable that cannot be checked before it runs, for example
   `make; echo "exit=$?"`, is refused; the model usually retries the parts as
   separate commands, which costs a turn.
-- Known gaps: parallel runs share the machine's other directories, so a
-  session could list `/tmp/dla-bench` and read another run's working copy
-  (never an answer key); and the sandbox only confines what the model does, not
-  what the plugin's hooks do.
+- Writable `/tmp`: a child can read and write everything in `/tmp` that is
+  not denied, including other sessions' files under `/tmp/claude-<uid>`. A path
+  passed with `--deny-read` that lies under `/tmp` is hidden from Bash (the
+  sandbox mounts an empty directory over it, so reads, writes and deletes of its
+  files do not reach the real one; verified, see `docs/VERIFY.md`) and is also
+  listed in `sandbox.filesystem.denyWrite`. Denying the shared `claude-<uid>`
+  directory itself, for reading or writing, breaks every Bash call, so the
+  runner refuses it. Pass your own session's scratch directory with
+  `--deny-read`. The working copies are no longer in `/tmp` for that reason: a
+  child cannot reach another run's working copy.
+- Inside the sandbox the PID namespace is separate and `/proc` does not show it:
+  the runner's own processes are invisible to the child, and `jcmd -l` lists a
+  JVM the child started but `jcmd <pid> <command>` and `jstack <pid>` fail with
+  "non existent JVM pid" (a SIGQUIT thread dump with `kill -QUIT` works). Attach
+  backends cannot be exercised in a benchmark child.
+- Known gaps: the sandbox only confines what the model does, not what the
+  plugin's hooks do.
 - The cost is real: every run is a full agent session with builds and
   measurements. A trivial two-turn call is about 0.02 USD; a diagnosis run is
   orders of magnitude more. Use `--runs 1 --fixtures <id>` first, set

@@ -14,8 +14,8 @@ use crate::{
     Res,
     fixture::load_expected,
     model::{
-        Category, Cost, Expected, FixtureStats, Group, Leak, LeakCounts, Metrics, MetricsFile,
-        PerRun, Ratio, Sources, SumMean, Unexplained, UsageStats, WallSeconds,
+        Category, Cost, Entry, Expected, FixtureStats, Group, Leak, LeakCounts, Metrics,
+        MetricsFile, PerRun, Ratio, Sources, SumMean, Unexplained, UsageStats, WallSeconds,
     },
 };
 
@@ -48,6 +48,10 @@ pub struct Finding {
     pub state: State,
     /// `path:line`.
     pub site: Option<String>,
+    /// Owning field or container, `package.Class.field`.
+    pub owner: Option<String>,
+    /// Worker that wrote the finding (text before the first `/` of its key).
+    pub worker: Option<String>,
     /// Holder.
     pub holder: Option<String>,
     /// Archetype label.
@@ -96,6 +100,27 @@ fn state_of_to(to: Option<&str>) -> State {
     }
 }
 
+/// The key of a ledger finding id on a line: the id when it already carries a
+/// worker prefix or the line has no worker, else `<worker>/<id>`.
+fn ledger_key(id: &str, rec: &Value) -> String {
+    let worker = rec
+        .get("worker")
+        .and_then(Value::as_str)
+        .filter(|w| !w.is_empty());
+    match worker {
+        Some(w) if !id.contains('/') => format!("{w}/{id}"),
+        _ => id.to_owned(),
+    }
+}
+
+/// The worker of a finding key: the non-empty text before its first `/`.
+fn worker_of_key(key: &str) -> Option<String> {
+    key.split_once('/')
+        .map(|(w, _)| w)
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+}
+
 /// Replays a ledger leniently. `None` when it holds no `finding_added` record.
 pub fn findings_from_ledger(text: &str) -> Option<Vec<Finding>> {
     findings_from_ledger_bytes(text.as_bytes())
@@ -130,9 +155,12 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
                 let Some(id) = f.get("id").and_then(Value::as_str) else {
                     continue;
                 };
+                let key = ledger_key(id, &rec);
                 let finding = Finding {
                     state: State::Open,
                     site: str_of(f, "site"),
+                    owner: str_of(f, "owner"),
+                    worker: worker_of_key(&key),
                     holder: str_of(f, "holder"),
                     label: str_of(f, "archetype"),
                     hypothesis: f
@@ -141,14 +169,15 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
                         .is_some_and(|p| !p.is_empty()),
                     discriminator: false,
                 };
-                list.retain(|(i, _)| i != id);
-                list.push((id.to_owned(), finding));
+                list.retain(|(i, _)| *i != key);
+                list.push((key, finding));
             }
             "transition" => {
                 let Some(id) = rec.get("finding").and_then(Value::as_str) else {
                     continue;
                 };
-                if let Some((_, f)) = list.iter_mut().find(|(i, _)| i == id) {
+                let key = ledger_key(id, &rec);
+                if let Some((_, f)) = list.iter_mut().find(|(i, _)| *i == key) {
                     f.state = state_of_to(rec.get("to").and_then(Value::as_str));
                 }
             }
@@ -158,13 +187,34 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
                 let Some(id) = rec.get("finding").and_then(Value::as_str) else {
                     continue;
                 };
-                if let Some((_, f)) = list.iter_mut().find(|(i, _)| i == id) {
+                let key = ledger_key(id, &rec);
+                if let Some((_, f)) = list.iter_mut().find(|(i, _)| *i == key) {
                     if f.holder.is_none() {
                         f.holder = str_of(&rec, "holder");
                     }
                     if f.site.is_none() {
                         f.site = str_of(&rec, "site");
                     }
+                    if f.owner.is_none() {
+                        f.owner = str_of(&rec, "owner");
+                    }
+                }
+            }
+            // The duplicate collapses into the canonical finding.
+            "finding_merged" => {
+                let (Some(canonical), Some(duplicate)) = (
+                    rec.get("canonical").and_then(Value::as_str),
+                    rec.get("duplicate").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                let (canonical, duplicate) =
+                    (ledger_key(canonical, &rec), ledger_key(duplicate, &rec));
+                if canonical != duplicate
+                    && list.iter().any(|(i, _)| *i == canonical)
+                    && list.iter().any(|(i, _)| *i == duplicate)
+                {
+                    list.retain(|(i, _)| *i != duplicate);
                 }
             }
             _ => {}
@@ -221,6 +271,8 @@ pub fn findings_from_json(v: &Value) -> Option<Vec<Finding>> {
         out.push(Finding {
             state,
             site: str_of(e, "site"),
+            owner: str_of(e, "owner"),
+            worker: None,
             holder: str_of(e, "holder"),
             label,
             hypothesis: false,
@@ -286,7 +338,8 @@ fn path_matches(found: &str, wanted: &str) -> bool {
 
 fn leak_ranges(leak: &Leak) -> Vec<(String, u64, u64)> {
     let mut v = Vec::new();
-    if let Some(c) = site_re().captures(&leak.site)
+    if let Some(site) = &leak.site
+        && let Some(c) = site_re().captures(site)
         && let Ok(line) = c[2].parse::<u64>()
     {
         let (lo, hi) = leak
@@ -311,14 +364,30 @@ fn leak_ranges(leak: &Leak) -> Vec<(String, u64, u64)> {
     v
 }
 
-/// Whether the finding's site names the leak (site range or any alt site).
+/// Whether the finding names the leak: by site range or alt site when the leak
+/// has a `site`, else by owner (equal, or ending with `.` and the leak's owner,
+/// after trimming whitespace).
 pub fn site_matches(finding: &Finding, leak: &Leak) -> bool {
+    if leak.site.is_none() {
+        return owner_matches(finding, leak);
+    }
     let Some((path, line)) = finding.site.as_deref().and_then(parse_site) else {
         return false;
     };
     leak_ranges(leak)
         .iter()
         .any(|(p, lo, hi)| path_matches(&path, p) && *lo <= line && line <= *hi)
+}
+
+fn owner_matches(finding: &Finding, leak: &Leak) -> bool {
+    let (Some(found), Some(wanted)) = (finding.owner.as_deref(), leak.owner.as_deref()) else {
+        return false;
+    };
+    let (found, wanted) = (
+        found.trim_matches(is_ascii_ws),
+        wanted.trim_matches(is_ascii_ws),
+    );
+    found == wanted || found.ends_with(&format!(".{wanted}"))
 }
 
 /// The outcome of one expected leak in one run.
@@ -332,6 +401,8 @@ pub struct LeakOutcome {
     pub chosen_holder: Option<String>,
     /// Label of the chosen finding, when found.
     pub chosen_label: Option<String>,
+    /// Worker of the chosen finding, when found.
+    pub chosen_worker: Option<String>,
 }
 
 /// Evaluates every expected leak against the findings of one run.
@@ -370,13 +441,14 @@ pub fn leak_outcomes(exp: &Expected, findings: &[Finding]) -> Vec<LeakOutcome> {
                 flagged,
                 chosen_holder: chosen.and_then(|f| f.holder.clone()),
                 chosen_label: chosen.and_then(|f| f.label.clone()),
+                chosen_worker: chosen.and_then(|f| f.worker.clone()),
             }
         })
         .collect()
 }
 
 /// Metric names in output order.
-pub const METRIC_NAMES: [&str; 12] = [
+pub const METRIC_NAMES: [&str; 13] = [
     "leak_recall",
     "archetype_free_recall",
     "flagged_recall",
@@ -389,6 +461,7 @@ pub const METRIC_NAMES: [&str; 12] = [
     "non_leak_precision",
     "trap_miss_rate",
     "trap_false_alarm_rate",
+    "source_overclaim_rate",
 ];
 
 /// One run, graded.
@@ -404,8 +477,8 @@ pub struct RunGrade {
     pub rule_out: bool,
     /// Per expected leak.
     pub leaks: Vec<LeakOutcome>,
-    /// `(num, den)` of the twelve metrics, in [`METRIC_NAMES`] order.
-    pub parts: [(u64, u64); 12],
+    /// `(num, den)` of the thirteen metrics, in [`METRIC_NAMES`] order.
+    pub parts: [(u64, u64); 13],
 }
 
 /// Grades one run's normalised findings against its fixture.
@@ -414,7 +487,7 @@ pub fn grade_findings(exp: &Expected, source: Source, findings: &[Finding]) -> R
     let outcomes = leak_outcomes(exp, findings);
     let claim = findings.iter().any(Finding::is_claim);
     let rule_out = findings.iter().any(Finding::is_rule_out);
-    let mut p = [(0u64, 0u64); 12];
+    let mut p = [(0u64, 0u64); 13];
     let in_set = matches!(
         cat,
         Category::ArchetypeLeak | Category::ArchetypeFree | Category::MultiLeak
@@ -484,6 +557,15 @@ pub fn grade_findings(exp: &Expected, source: Source, findings: &[Finding]) -> R
     }
     if cat == Category::DecoyControl {
         p[11] = (u64::from(claim), 1);
+    }
+    if exp.entry == Entry::Artifact {
+        let with_site = findings.iter().any(|f| {
+            f.is_claim()
+                && f.site
+                    .as_deref()
+                    .is_some_and(|s| !s.trim_matches(is_ascii_ws).is_empty())
+        });
+        p[12] = (u64::from(with_site), 1);
     }
     RunGrade {
         category: cat,
@@ -721,6 +803,7 @@ fn aggregate(
         non_leak_precision: m(9),
         trap_miss_rate: m(10),
         trap_false_alarm_rate: m(11),
+        source_overclaim_rate: Some(m(12)),
     };
     // Unexplained growth.
     let (mut r_sum, mut t_sum, mut k) = (0.0, 0.0, 0u64);
@@ -811,6 +894,7 @@ fn aggregate(
                     .iter()
                     .map(|l| (l.id.clone(), LeakCounts::default()))
                     .collect(),
+                worker_provenance: BTreeMap::new(),
             });
         st.runs += 1;
         st.claim_runs += u64::from(r.grade.claim);
@@ -821,6 +905,15 @@ fn aggregate(
             c.flagged += u64::from(o.flagged);
             c.grounded +=
                 u64::from(o.found && o.chosen_holder.as_deref() == Some(leak.holder.as_str()));
+            if o.found
+                && let Some(w) = &o.chosen_worker
+            {
+                *st.worker_provenance
+                    .entry(leak.id.clone())
+                    .or_default()
+                    .entry(w.clone())
+                    .or_default() += 1;
+            }
         }
     }
     Group {

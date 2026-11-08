@@ -1,0 +1,1 @@
+{"findings": [{"owner": "quotes.RfqDesk.RECENT", "holder": "static/global", "region": "heap", "verdict": "not-a-leak", "mechanism": "m", "evidence": "e", "discriminator": "flat after dump 2"}]}

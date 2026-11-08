@@ -320,6 +320,33 @@
           "stdev": 0.0,
           "value": 0.0
         },
+        "source_overclaim_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
         "trap_false_alarm_rate": {
           "den": 0,
           "mean": null,
@@ -774,6 +801,33 @@
           ],
           "stdev": 0.471405,
           "value": 0.333333
+        },
+        "source_overclaim_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         },
         "trap_false_alarm_rate": {
           "den": 3,
@@ -1230,6 +1284,33 @@
           "stdev": 0.5,
           "value": 0.5
         },
+        "source_overclaim_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
         "trap_false_alarm_rate": {
           "den": 3,
           "mean": 0.333333,
@@ -1474,6 +1555,21 @@
           "value": null
         },
         "second_leak_recall": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "source_overclaim_rate": {
           "den": 0,
           "mean": null,
           "num": 0,

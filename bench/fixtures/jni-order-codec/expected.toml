@@ -1,0 +1,36 @@
+schema_version = 1
+id = "jni-order-codec"
+runtime = "jvm"
+runtimes = ["jvm", "rust"]
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The order codec service's resident memory climbs steadily during long replay
+runs, and the container is restarted by the orchestrator when it reaches its
+limit. The JVM heap graphs account for only part of the growth. Find out what
+is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "native/src/lib.rs:43"
+lines = [43, 43]
+alt_sites = ["kotlin/shop/Encoder.kt:12-15"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-HANDLE"
+share = 0.68
+confirmable = true
+
+[[leak]]
+id = "L2"
+site = "kotlin/shop/Audit.kt:12"
+lines = [12, 12]
+alt_sites = ["kotlin/shop/Audit.kt:9"]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 0.32
+confirmable = true

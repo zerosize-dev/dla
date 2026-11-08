@@ -256,6 +256,27 @@
           ],
           "mean": 0.5,
           "stdev": 0.5
+        },
+        "source_overclaim_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         }
       },
       "unexplained_growth_share": {
@@ -698,6 +719,33 @@
           ],
           "mean": 0.0,
           "stdev": 0.0
+        },
+        "source_overclaim_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         }
       },
       "unexplained_growth_share": {
@@ -1107,6 +1155,33 @@
           ],
           "mean": 0.333333,
           "stdev": 0.471405
+        },
+        "source_overclaim_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         }
       },
       "unexplained_growth_share": {

@@ -1,0 +1,5 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "z.java:9", "owner": "a.B.c"}}
+{"type": "transition", "finding": "F1", "to": "suspected_static_only"}
+{"type": "finding_added", "finding": {"id": "F2", "site": "z.java:9", "owner": "a.B.c"}, "worker": "jvm"}
+{"type": "transition", "finding": "F2", "to": "confirmed", "worker": "jvm"}
+{"type": "finding_merged", "canonical": "F1", "duplicate": "jvm/F2"}

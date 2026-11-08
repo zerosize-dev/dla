@@ -36,6 +36,8 @@ fn finding(state: State, site: Option<&str>) -> Finding {
     Finding {
         state,
         site: site.map(str::to_owned),
+        owner: None,
+        worker: None,
         holder: Some("static/global".into()),
         label: Some("L-COLLECT".into()),
         hypothesis: false,
@@ -415,6 +417,8 @@ fn at(state: State, site: &str, holder: &str, label: Option<&str>) -> Finding {
     Finding {
         state,
         site: Some(site.into()),
+        owner: None,
+        worker: None,
         holder: Some(holder.into()),
         label: label.map(str::to_owned),
         hypothesis: false,
@@ -771,4 +775,252 @@ confirmable = false
     let fs = [at(State::Confirmed, "c.js:1", "static/global", None)];
     let g = grade_findings(&e, Source::Findings, &fs);
     assert_eq!(g.parts[3], (0, 0));
+}
+
+// ---- M4 rules: owner matching, workers, merged findings, artifact entry
+
+const ARTIFACT: &str = r#"
+schema_version = 1
+id = "a"
+runtime = "jvm"
+entry = "artifact"
+category = "archetype-leak"
+dynamic_confirmation = true
+[task]
+prompt = "p"
+[[leak]]
+id = "L1"
+owner = "quotes.RfqDesk.OPEN"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+"#;
+
+fn owned(state: State, owner: Option<&str>, site: Option<&str>) -> Finding {
+    Finding {
+        owner: owner.map(str::to_owned),
+        ..finding(state, site)
+    }
+}
+
+#[test]
+fn a_leak_without_site_matches_by_owner() {
+    let e = exp(ARTIFACT);
+    let leak = &e.leak[0];
+    let m =
+        |o: Option<&str>, site: Option<&str>| site_matches(&owned(State::Confirmed, o, site), leak);
+    assert!(m(Some("quotes.RfqDesk.OPEN"), None));
+    assert!(m(Some("app.quotes.RfqDesk.OPEN"), None));
+    assert!(m(Some("  quotes.RfqDesk.OPEN\n"), None), "trimmed");
+    assert!(
+        m(Some("quotes.RfqDesk.OPEN"), Some("x.java:1")),
+        "the site plays no part"
+    );
+    assert!(
+        !m(Some("appquotes.RfqDesk.OPEN"), None),
+        "needs a dot boundary"
+    );
+    assert!(!m(Some("RfqDesk.OPEN"), None), "shorter is not a match");
+    assert!(!m(Some("quotes.RfqDesk.OPEN.next"), None));
+    assert!(!m(Some("quotes.rfqdesk.open"), None), "case-sensitive");
+    assert!(
+        !m(None, Some("quotes/RfqDesk.java:12")),
+        "no owner never matches"
+    );
+}
+
+#[test]
+fn an_owner_on_a_leak_with_a_site_is_not_used() {
+    let e = exp(&TRAP.replace(
+        "cause = \"L-COLLECT\"",
+        "cause = \"L-COLLECT\"\nowner = \"a.B.c\"",
+    ));
+    let f = owned(State::Confirmed, Some("a.B.c"), None);
+    assert!(!site_matches(&f, &e.leak[0]));
+    assert!(site_matches(
+        &owned(State::Confirmed, None, Some("src/cache.py:9")),
+        &e.leak[0]
+    ));
+}
+
+#[test]
+fn owner_flows_from_added_annotated_and_findings_json() {
+    let text = [
+        r#"{"type":"finding_added","finding":{"id":"F1","owner":"a.B.c"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"F2"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"F3","owner":7}}"#,
+        r#"{"type":"finding_annotated","finding":"F1","owner":"x.Y.z"}"#,
+        r#"{"type":"finding_annotated","finding":"F2","owner":"x.Y.z"}"#,
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).unwrap();
+    assert_eq!(f[0].owner.as_deref(), Some("a.B.c"));
+    assert_eq!(f[1].owner.as_deref(), Some("x.Y.z"));
+    assert_eq!(f[2].owner, None);
+    let j = findings_from_json(&json!({"findings": [{"owner": "a.B.c"}, {"owner": 3}]})).unwrap();
+    assert_eq!(j[0].owner.as_deref(), Some("a.B.c"));
+    assert_eq!(j[1].owner, None);
+    assert!(j.iter().all(|f| f.worker.is_none()));
+}
+
+#[test]
+fn worker_prefixes_and_worker_fields_key_the_findings() {
+    let text = [
+        // The same bare id from two workers is two findings.
+        r#"{"type":"finding_added","worker":"jvm","finding":{"id":"F1","site":"a.kt:1"}}"#,
+        r#"{"type":"finding_added","worker":"rust","finding":{"id":"F1","site":"b.rs:2"}}"#,
+        // A prefixed id keeps its own prefix whatever the line says.
+        r#"{"type":"finding_added","worker":"rust","finding":{"id":"jvm/F2","site":"c.kt:3"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"F1","site":"core.txt:4"}}"#,
+        r#"{"type":"transition","worker":"rust","finding":"F1","to":"confirmed"}"#,
+        r#"{"type":"transition","finding":"jvm/F2","to":"strong"}"#,
+        r#"{"type":"transition","finding":"F1","to":"refuted"}"#,
+        r#"{"type":"finding_added","finding":{"id":"/F9"}}"#,
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).unwrap();
+    let view: Vec<(Option<&str>, &str, State)> = f
+        .iter()
+        .map(|x| {
+            (
+                x.worker.as_deref(),
+                x.site.as_deref().unwrap_or("-"),
+                x.state,
+            )
+        })
+        .collect();
+    assert_eq!(
+        view,
+        [
+            (Some("jvm"), "a.kt:1", State::Open),
+            (Some("rust"), "b.rs:2", State::Confirmed),
+            (Some("jvm"), "c.kt:3", State::Strong),
+            (None, "core.txt:4", State::Refuted),
+            (None, "-", State::Open),
+        ]
+    );
+}
+
+#[test]
+fn a_merged_duplicate_is_removed_and_the_canonical_keeps_its_state() {
+    let base = [
+        r#"{"type":"finding_added","finding":{"id":"jvm/F1","site":"a.kt:1"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"rust/F1","site":"a.kt:1"}}"#,
+        r#"{"type":"transition","finding":"jvm/F1","to":"suspected_static_only"}"#,
+        r#"{"type":"transition","finding":"rust/F1","to":"confirmed"}"#,
+    ];
+    let with = |extra: &str| {
+        let mut v = base.to_vec();
+        v.push(extra);
+        findings_from_ledger(&v.join("\n")).unwrap()
+    };
+    let merged = with(r#"{"type":"finding_merged","canonical":"jvm/F1","duplicate":"rust/F1"}"#);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(
+        merged[0].state,
+        State::Suspected,
+        "nothing is copied to the canonical"
+    );
+    assert_eq!(merged[0].worker.as_deref(), Some("jvm"));
+    // A worker field qualifies bare ids in the record.
+    let bare =
+        with(r#"{"type":"finding_merged","worker":"rust","canonical":"jvm/F1","duplicate":"F1"}"#);
+    assert_eq!(bare.len(), 1);
+    for ignored in [
+        r#"{"type":"finding_merged","canonical":"jvm/F1","duplicate":"jvm/F1"}"#,
+        r#"{"type":"finding_merged","canonical":"jvm/F1","duplicate":"nope/F1"}"#,
+        r#"{"type":"finding_merged","canonical":"nope/F1","duplicate":"jvm/F1"}"#,
+        r#"{"type":"finding_merged","canonical":"jvm/F1"}"#,
+        r#"{"type":"finding_merged","canonical":1,"duplicate":2}"#,
+    ] {
+        assert_eq!(with(ignored).len(), 2, "{ignored}");
+    }
+    // The duplicate can be added again later.
+    let mut v = base.to_vec();
+    v.push(r#"{"type":"finding_merged","canonical":"jvm/F1","duplicate":"rust/F1"}"#);
+    v.push(r#"{"type":"finding_added","finding":{"id":"rust/F1","site":"b.kt:2"}}"#);
+    assert_eq!(findings_from_ledger(&v.join("\n")).unwrap().len(), 2);
+}
+
+#[test]
+fn a_merge_removes_the_claim_that_only_the_duplicate_made() {
+    let e = exp(TRAP);
+    let lines = [
+        r#"{"type":"finding_added","finding":{"id":"jvm/F1","site":"x.py:1"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"rust/F1","site":"src/cache.py:10"}}"#,
+        r#"{"type":"transition","finding":"rust/F1","to":"confirmed"}"#,
+    ];
+    let plain = findings_from_ledger(&lines.join("\n")).unwrap();
+    assert!(grade_findings(&e, Source::Ledger, &plain).leaks[0].found);
+    let mut v = lines.to_vec();
+    v.push(r#"{"type":"finding_merged","canonical":"jvm/F1","duplicate":"rust/F1"}"#);
+    let merged = findings_from_ledger(&v.join("\n")).unwrap();
+    let g = grade_findings(&e, Source::Ledger, &merged);
+    assert!(!g.leaks[0].found && !g.claim);
+}
+
+#[test]
+fn verification_and_slice_records_change_nothing() {
+    let text = [
+        r#"{"type":"slice_started","worker":"jvm","runtime":"jvm","base_seq":3}"#,
+        r#"{"type":"finding_added","finding":{"id":"F1","site":"a.py:1"}}"#,
+        r#"{"type":"verification","finding":"F1","to":"confirmed","result":"agrees"}"#,
+        r#"{"type":"slice_done","worker":"jvm","open":0}"#,
+        r#"{"type":"slice_merged","worker":"jvm","lines":4}"#,
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).unwrap();
+    assert_eq!(f.len(), 1);
+    assert_eq!(f[0].state, State::Open);
+}
+
+#[test]
+fn the_chosen_finding_carries_the_worker() {
+    let e = exp(TRAP);
+    let text = [
+        r#"{"type":"finding_added","finding":{"id":"jvm/F1","site":"src/cache.py:10"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"rust/F1","site":"src/cache.py:10"}}"#,
+        r#"{"type":"transition","finding":"jvm/F1","to":"confirmed"}"#,
+        r#"{"type":"transition","finding":"rust/F1","to":"strong"}"#,
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).unwrap();
+    let o = &leak_outcomes(&e, &f)[0];
+    assert_eq!(
+        o.chosen_worker.as_deref(),
+        Some("rust"),
+        "strong beats confirmed"
+    );
+}
+
+#[test]
+fn source_overclaim_counts_artifact_runs_with_a_claim_that_names_a_site() {
+    let art = exp(ARTIFACT);
+    let part = |f: Vec<Finding>| grade_findings(&art, Source::Ledger, &f).parts[12];
+    let claim = |site: Option<&str>| owned(State::Confirmed, Some("quotes.RfqDesk.OPEN"), site);
+    assert_eq!(part(vec![]), (0, 1), "every artifact run counts");
+    assert_eq!(part(vec![claim(None)]), (0, 1));
+    assert_eq!(
+        part(vec![claim(Some("   "))]),
+        (0, 1),
+        "a blank site is no site"
+    );
+    assert_eq!(part(vec![claim(Some("a/B.java:3"))]), (1, 1));
+    let mut strong = claim(Some("a/B.java:3"));
+    strong.state = State::Strong;
+    assert_eq!(part(vec![strong]), (1, 1));
+    let mut suspected = claim(Some("a/B.java:3"));
+    suspected.state = State::Suspected;
+    assert_eq!(part(vec![suspected]), (0, 1), "only claims count");
+    let mut hypothesis = claim(Some("a/B.java:3"));
+    hypothesis.hypothesis = true;
+    assert_eq!(part(vec![hypothesis]), (0, 1));
+    // A repository run never counts, whatever it claims.
+    let repo = exp(TRAP);
+    let p = grade_findings(
+        &repo,
+        Source::Ledger,
+        &[finding(State::Confirmed, Some("src/cache.py:10"))],
+    );
+    assert_eq!(p.parts[12], (0, 0));
 }

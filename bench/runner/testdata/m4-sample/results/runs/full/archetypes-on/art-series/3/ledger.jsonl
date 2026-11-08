@@ -1,0 +1,7 @@
+{"type": "slice_started", "worker": "jvm", "runtime": "jvm"}
+{"type": "finding_added", "finding": {"id": "F1", "owner": "app.quotes.RfqDesk.OPEN ", "holder": "static/global", "archetype": "L-COLLECT"}, "worker": "jvm"}
+{"type": "finding_added", "finding": {"id": "F2", "owner": "native.Other.field"}, "worker": "rust"}
+{"type": "transition", "finding": "F1", "to": "confirmed", "worker": "jvm"}
+{"type": "transition", "finding": "F2", "to": "confirmed", "worker": "rust"}
+{"type": "finding_merged", "canonical": "jvm/F1", "duplicate": "rust/F2"}
+{"type": "verification", "finding": "jvm/F1", "result": "agrees"}

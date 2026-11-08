@@ -1,0 +1,16 @@
+schema_version = 1
+id = "art-series"
+runtime = "jvm"
+entry = "artifact"
+category = "archetype-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "p"
+
+[[leak]]
+id = "L1"
+owner = "quotes.RfqDesk.OPEN"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"

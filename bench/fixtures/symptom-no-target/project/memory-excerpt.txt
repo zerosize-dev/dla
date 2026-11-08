@@ -1,0 +1,11 @@
+Memory panel, last 24 hours (pasted from a dashboard)
+
+time     used     available   swap
+00:00    3.1 GiB  4.7 GiB     0.0 GiB
+04:00    3.4 GiB  4.4 GiB     0.0 GiB
+08:00    4.2 GiB  3.6 GiB     0.1 GiB
+12:00    5.6 GiB  2.2 GiB     0.4 GiB
+16:00    6.9 GiB  0.9 GiB     1.2 GiB
+20:00    7.4 GiB  0.4 GiB     1.9 GiB
+
+Host: 8 GiB total.

@@ -1,0 +1,4 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "kotlin/shop/Audit.kt:7", "holder": "static/global"}, "worker": "jvm"}
+{"type": "transition", "finding": "F1", "to": "confirmed", "worker": "jvm"}
+{"type": "finding_added", "finding": {"id": "rust/H1", "site": "native/src/lib.rs:20", "parent": "rust/F1"}}
+{"type": "transition", "finding": "rust/H1", "to": "confirmed"}

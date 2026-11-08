@@ -1,0 +1,21 @@
+schema_version = 1
+id = "jvm-rfq-dump-series-capped"
+runtime = "jvm"
+category = "decoy-control"
+pair = "jvm-rfq-dump-series"
+dynamic_confirmation = true
+entry = "artifact"
+
+[task]
+prompt = """
+The quote desk service's resident memory climbs through the trading day and
+the container is restarted by the orchestrator when it reaches its limit. Heap
+dumps taken from the running service are in dumps/; the source is not
+available. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+owner = "quotes.RfqDesk.RECENT"
+cause = "N-WARM"
+discriminator = "the holder grows from 9002 to 13502 dominated objects (510061 to 762061 retained bytes, +49%) between the first two dumps, then stays at 13502 objects and 762061 to 764281 retained bytes (+0.3%) in the third dump: the access-ordered map evicts past a fixed size, so the growth was a fill that stopped"
