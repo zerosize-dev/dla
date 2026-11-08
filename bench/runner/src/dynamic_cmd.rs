@@ -1930,8 +1930,18 @@ pub fn run(args: &DynamicArgs) -> Res<String> {
             res.fixtures.len() - xfail
         ))
     } else {
+        // What the policy decided for each failing fixture, so a CI log shows why without
+        // the uploaded logs.
+        let mut trail = String::new();
+        for f in res.fixtures.iter().filter(|f| !f.failures.is_empty()) {
+            trail.push_str(&format!("\n{} decisions:", f.id));
+            for line in f.steps.iter().chain(f.errors.iter()) {
+                trail.push_str("\n  ");
+                trail.push_str(line);
+            }
+        }
         Err(format!(
-            "{} failure(s):\n{}",
+            "{} failure(s):\n{}{trail}",
             res.failures.len(),
             res.failures.join("\n")
         ))
