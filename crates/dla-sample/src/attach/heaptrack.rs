@@ -213,23 +213,22 @@ pub(crate) fn run(
     let shim_dir = out_dir.join(".shim");
     let marker = shim_dir.join("stopped");
     let shim = shim_dir.join("gdb");
-    std::fs::create_dir_all(&shim_dir)
-        .and_then(|()| std::fs::write(&shim, shim_script(&p.gdb, &marker)))
-        .and_then(|()| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))
-            }
-            #[cfg(not(unix))]
-            Ok(())
-        })
-        .map_err(|e| {
-            AttachError::failed(
-                format!("cannot write the gdb shim in {}: {e}", shim_dir.display()),
-                "check free disk",
-            )
-        })?;
+    let write_shim = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&shim_dir)?;
+        std::fs::write(&shim, shim_script(&p.gdb, &marker))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755))?;
+        }
+        Ok(())
+    };
+    write_shim().map_err(|e| {
+        AttachError::failed(
+            format!("cannot write the gdb shim in {}: {e}", shim_dir.display()),
+            "check free disk",
+        )
+    })?;
     let stop = Cleanup::Run(vec![
         shim.display().to_string(),
         "--dla-stop".into(),

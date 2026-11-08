@@ -130,13 +130,19 @@ pub fn is_alive(pid: u32) -> bool {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        Command::new("kill")
-            .args(["-s", "0", &pid.to_string()])
+        // `ps -o stat=` prints the state letters, or nothing (exit 1) when the pid is gone.
+        // A zombie (`Z`) has exited and only waits to be reaped, so it is not alive; `kill -0`
+        // would say it is.
+        Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+            .output()
+            .is_ok_and(|o| {
+                let stat = String::from_utf8_lossy(&o.stdout);
+                let stat = stat.trim();
+                o.status.success() && !stat.is_empty() && !stat.starts_with('Z')
+            })
     }
     #[cfg(windows)]
     {

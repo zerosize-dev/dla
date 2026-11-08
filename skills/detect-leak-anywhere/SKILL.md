@@ -41,10 +41,10 @@ Run stages 1 and 2 (intake, consent, probe, `dla install`) in the core first.
 
 - **One runtime** in scope: the core runs stages 3 to 8 itself. No dispatch.
 - **Two or more runtimes** (repository path): `dla run dispatch --workers jvm,rust` registers one worker per runtime and prints, for each, the facts to hand over: run id, worker name, deadline, reference path, scope and the command prefix `dla --run <id> --worker <name>`.
-  1. Start one `dla:worker` subagent per runtime IN ONE TURN (parallel Agent calls). Each prompt holds exactly the printed facts for that worker and nothing else.
-  2. The core writes no findings and runs no stage commands while workers run. Wait for all of them.
+  1. Start one `dla:worker` subagent per runtime IN ONE MESSAGE: one Agent call per worker, each with `run_in_background: false`, so they run in parallel and the turn waits for all of them. Each prompt holds exactly the printed facts for that worker and nothing else.
+  2. The core writes no findings and runs no stage commands while workers run. Never end your turn while a worker runs: an unattended session has no later turn and stops background agents when it ends. If an Agent call returns at once ("launched in the background"), wait in this turn: `sleep 60; dla run status` until every worker shows `done` or its deadline has passed.
   3. `dla ledger merge`. It copies the slices, dedupes equal (site, holder) findings, opens items for contradictions, runtimes without a worker and workers that did not finish (the run is then INCOMPLETE). Safe to repeat; killed workers: `references/recovery.md`.
-  4. For each confirmed finding `F`: `dla bundle F` (prints the directory and a manifest sha256), start one `dla:verifier` subagent given only that directory, run id and sha. It runs `dla ledger verify`. If the `dla:verifier` agent does not exist, skip verification and write "not independently verified: no verifier agent" in your answer.
+  4. For each confirmed finding `F`: `dla bundle F` (prints the directory and a manifest sha256), start one `dla:verifier` subagent (`run_in_background: false`) given only that directory, run id and sha. It runs `dla ledger verify`. If the `dla:verifier` agent does not exist, skip verification and write "not independently verified: no verifier agent" in your answer.
   5. `dla run status`, then `dla report`.
 
 ## Stage checklist
