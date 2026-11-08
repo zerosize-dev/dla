@@ -173,7 +173,7 @@ fn python_command_mode_harness() {
             .is_file()
     );
     assert!(!ctx.run_dir.join("harness/H1/work/.dla").exists());
-    assert_eq!((m.warmup, m.iterations, m.step), (1, 8, 890));
+    assert_eq!((m.warmup, m.iterations, m.step), (1, 8, 440));
     assert!(
         m.detectors.is_empty()
             || m.detectors
@@ -324,7 +324,7 @@ fn rust_and_native_command_mode_use_the_shim() {
         );
         assert!(ctx.run_dir.join("harness/H1/agent/libdlashim.so").is_file());
     }
-    assert_eq!(m.step, 220);
+    assert_eq!(m.step, 110);
 
     let (_d2, ctx2) = prepare("native-frame-decoder", Runtime::Native);
     generate(&ctx2, &opts(Runtime::Native)).unwrap();
@@ -625,8 +625,8 @@ fn a_workload_below_the_project_root_keeps_its_cwd() {
     assert_eq!(m.run.cwd, "svc");
     assert_eq!(m.run.argv, ["node", "load.js", "--iterations", "{n}"]);
     assert_eq!(
-        m.step, 130,
-        "four times the visible default of 300 over nine points"
+        m.step, 70,
+        "twice the visible default of 300 over nine points"
     );
     assert!(ctx.run_dir.join("harness/H1/work/svc/load.js").is_file());
 }

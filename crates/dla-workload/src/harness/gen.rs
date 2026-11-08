@@ -439,11 +439,14 @@ fn write_agent(rt: Runtime, driver: bool, agent: &Path) -> Result<(), Refusal> {
 // Steps
 // ---------------------------------------------------------------------------------------
 
-/// Units per point so that the largest `n` is about four times the workload's default
-/// (8000 when the default is unknown), at least 1.
+/// Units per point so that the largest `n` is about twice the workload's default
+/// (4000 when the default is unknown), at least 1. Twice the default keeps a point
+/// within the workload's own time budget under an agent (tracemalloc and the
+/// allocator shim slow a workload several times) while leaving eight post-warm-up
+/// points for the gate.
 pub fn choose_step(default: Option<u64>, warmup: u32, iterations: u32) -> u64 {
     let points = u64::from(warmup + iterations).max(1);
-    let target = default.map_or(8000, |d| d.saturating_mul(4));
+    let target = default.map_or(4000, |d| d.saturating_mul(2));
     let raw = (target / points).max(1);
     if raw >= 50 { (raw + 5) / 10 * 10 } else { raw }
 }
@@ -1210,13 +1213,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn step_targets_four_times_the_default() {
-        // 9 points, default 2000: largest n = 9 * step ~ 8000.
-        assert_eq!(choose_step(Some(2000), 1, 8), 890);
-        assert_eq!(choose_step(None, 1, 8), 890);
-        assert_eq!(choose_step(Some(5000), 1, 8), 2220);
+    fn step_targets_twice_the_default() {
+        // 9 points, default 2000: largest n = 9 * step ~ 4000.
+        assert_eq!(choose_step(Some(2000), 1, 8), 440);
+        assert_eq!(choose_step(None, 1, 8), 440);
+        assert_eq!(choose_step(Some(5000), 1, 8), 1110);
         assert_eq!(choose_step(Some(1), 1, 8), 1);
-        assert_eq!(choose_step(Some(10), 1, 8), 4);
+        assert_eq!(choose_step(Some(10), 1, 8), 2);
     }
 
     #[test]
