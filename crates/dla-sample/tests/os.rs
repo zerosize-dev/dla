@@ -82,7 +82,7 @@ fn exited_but_unreaped_child_counts_as_gone() {
     let pid = child.id();
     child.kill().expect("kill");
     // Wait for the exit without reaping so the process lingers as a zombie on unix.
-    for _ in 0..100 {
+    for _ in 0..500 {
         if !os::is_alive(pid) {
             break;
         }
@@ -103,7 +103,9 @@ fn sampler_collects_until_stopped() {
         },
     )
     .expect("start");
-    std::thread::sleep(Duration::from_millis(150));
+    // Generous: the sampler needs two ticks after its first sample, and a loaded CI runner
+    // can stall a 20 ms thread for a long time.
+    std::thread::sleep(Duration::from_millis(600));
     assert!(sampler.is_running());
     let out = sampler.stop();
     assert!(out.samples.len() >= 3, "{} samples", out.samples.len());
@@ -131,7 +133,7 @@ fn sampler_ends_when_the_process_exits() {
     .expect("start");
     child.kill().expect("kill");
     child.wait().expect("reap");
-    for _ in 0..100 {
+    for _ in 0..500 {
         if !sampler.is_running() {
             break;
         }

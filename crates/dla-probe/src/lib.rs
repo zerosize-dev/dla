@@ -339,7 +339,7 @@ fn toolchain(d: &scan::Detected, timeout: Duration) -> Vec<ToolVersion> {
                 q.push(("npm", &["--version"], ""));
             }
         }
-        Runtime::Python => q.push(("python3", &["--version"], "")),
+        Runtime::Python => q.push((build::python_program(), &["--version"], "")),
         Runtime::Native => {
             q.push(("cc", &["--version"], ""));
             if d.build_files.iter().any(|f| f.ends_with("akefile")) {

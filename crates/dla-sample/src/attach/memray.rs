@@ -56,7 +56,15 @@ pub fn method_for(version: (u32, u32, u32)) -> &'static str {
 /// The interpreters to try: the target's own executable only. The target's `argv[0]` is
 /// whatever the target (or its parent) chose to put there, so it is never executed.
 fn interpreter_candidates(req: &Request) -> Vec<PathBuf> {
-    vec![PathBuf::from(format!("/proc/{}/exe", req.target.pid))]
+    #[cfg(target_os = "linux")]
+    {
+        vec![PathBuf::from(format!("/proc/{}/exe", req.target.pid))]
+    }
+    // No /proc: ask the kernel for the path of the running image (never argv[0]).
+    #[cfg(not(target_os = "linux"))]
+    {
+        crate::proc::exe_path(req.target.pid).into_iter().collect()
+    }
 }
 
 pub(crate) fn plan(req: &Request) -> Result<Plan, AttachError> {
@@ -431,10 +439,15 @@ mod tests {
     #[test]
     fn the_targets_argv0_is_never_an_interpreter_or_a_hint() {
         let r = target("/usr/bin/python3.12", "/tmp/evil.sh");
+        #[cfg(target_os = "linux")]
         assert_eq!(
             interpreter_candidates(&r),
             [PathBuf::from("/proc/4242/exe")]
         );
+        // Off Linux the path comes from the kernel; a pid that is not running has none, and
+        // argv[0] is never offered.
+        #[cfg(not(target_os = "linux"))]
+        assert!(!interpreter_candidates(&r).contains(&PathBuf::from("/tmp/evil.sh")));
         assert_eq!(interp_hint(&r), "/usr/bin/python3.12");
         // A resolved path with whitespace, or no absolute path, falls back to python3.
         assert_eq!(interp_hint(&target("/opt/my py/python3", "x")), "python3");

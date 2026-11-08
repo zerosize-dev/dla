@@ -42,6 +42,23 @@ impl Plan {
     }
 }
 
+/// The Python launcher: Windows installs `python`, not `python3`.
+pub(crate) fn python_program() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
+/// The program to start for `name`. Windows only starts `.exe` files by bare name, so
+/// `npm`, `mvn` and `gradle` (`.cmd` or `.bat` launchers) are looked up on `PATH` with
+/// their extensions; elsewhere the name is left to the OS.
+fn program_path(name: &str) -> PathBuf {
+    if cfg!(windows)
+        && let Some(f) = crate::registry::locate(name, None, std::env::var_os("PATH").as_deref())
+    {
+        return f.path;
+    }
+    PathBuf::from(name)
+}
+
 fn sub(scratch: &Path, name: &str) -> String {
     scratch.join(name).to_string_lossy().into_owned()
 }
@@ -111,7 +128,7 @@ pub fn plan(tree: &Tree, d: &Detected, scratch: &Path) -> Result<Plan, String> {
         }
         Runtime::Python => {
             let mut p = Plan::new(
-                "python3",
+                python_program(),
                 &[
                     "-m",
                     "compileall",
@@ -176,7 +193,13 @@ pub fn run_one(tree: &Tree, d: &Detected, scratch: &Path, timeout: Duration) -> 
         .collect();
     let before = snapshot(&cwd);
     let t = Instant::now();
-    let o = exec::run(Path::new(&plan.program), &args, Some(&cwd), &env, timeout);
+    let o = exec::run(
+        &program_path(&plan.program),
+        &args,
+        Some(&cwd),
+        &env,
+        timeout,
+    );
     let duration_ms = u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
     let wrote = new_paths(&cwd, &before, d.probe.runtime);
     let (status, tail) = if let Some(e) = &o.spawn_error {
@@ -337,7 +360,10 @@ mod tests {
         assert!(plan(&t, &det[0], scratch).is_err());
         let (_d, t, det) = proj(&[("a.py", "")]);
         let p = plan(&t, &det[0], scratch).unwrap();
-        assert!(p.line().starts_with("python3 -m compileall"));
+        assert!(
+            p.line()
+                .starts_with(&format!("{} -m compileall", python_program()))
+        );
         assert!(p.env[0].1.starts_with("/tmp/s"));
     }
 

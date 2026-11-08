@@ -526,6 +526,8 @@ fn go_goroutines_are_counted_by_creation_site() {
     assert!(ratio(ctl, "go.heap_live") < 1.5);
 }
 
+// The shim is preloaded with `LD_PRELOAD` and symbolized with GNU `addr2line`: Linux only.
+#[cfg(target_os = "linux")]
 #[test]
 fn native_shim_sites_are_symbolized_to_the_leaking_line() {
     if !have(&["cc", "make", "addr2line"]) {
@@ -613,6 +615,8 @@ fn native_shim_sites_are_symbolized_to_the_leaking_line() {
     );
 }
 
+// The shim is preloaded with `LD_PRELOAD` and symbolized with GNU `addr2line`: Linux only.
+#[cfg(target_os = "linux")]
 #[test]
 fn native_peak_columns_carry_a_pool_plateau_that_live_bytes_hide() {
     if !have(&["cc", "make", "addr2line"]) {
@@ -1130,6 +1134,8 @@ fn inline_pythonpath_in_the_command_survives_the_agent_injection() {
     assert_eq!(log.trim(), "250");
 }
 
+// The shim is preloaded with `LD_PRELOAD` and symbolized with GNU `addr2line`: Linux only.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_native_command_through_a_shell_script_still_gives_shim_dumps() {
     if !have(&["cc", "make", "addr2line", "sh"]) {

@@ -378,15 +378,7 @@ fn timeout_kills_the_whole_process_group() {
     assert!(rj["cost_usd"].is_null());
     let pid = fs::read_to_string(&pidfile).unwrap().trim().to_owned();
     std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(
-        !Path::new(&format!("/proc/{pid}")).exists() || {
-            // a zombie awaiting its parent still has a /proc entry; its state says so
-            fs::read_to_string(format!("/proc/{pid}/stat"))
-                .map(|s| s.contains(") Z"))
-                .unwrap_or(true)
-        },
-        "background child {pid} survived the timeout"
-    );
+    assert!(gone(&pid), "background child {pid} survived the timeout");
 }
 
 #[test]
@@ -726,11 +718,23 @@ fn gates_run_passes_the_plugin_dir_binary_and_consent() {
 
 // ---- interrupts, lock, retry, budget, systematic failure, artifacts, errors
 
+/// True when no live process has this pid: it does not exist, or it is a zombie that
+/// only awaits its parent. `ps` answers on Linux and macOS alike (macOS has no `/proc`);
+/// `/proc` is the fallback where `ps` is not installed.
 fn gone(pid: &str) -> bool {
-    !Path::new(&format!("/proc/{pid}")).exists()
-        || fs::read_to_string(format!("/proc/{pid}/stat"))
-            .map(|s| s.contains(") Z"))
-            .unwrap_or(true)
+    match Command::new("ps").args(["-o", "stat=", "-p", pid]).output() {
+        Ok(o) => {
+            let state = String::from_utf8_lossy(&o.stdout);
+            let state = state.trim();
+            state.is_empty() || state.starts_with('Z')
+        }
+        Err(_) => {
+            !Path::new(&format!("/proc/{pid}")).exists()
+                || fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .map(|s| s.contains(") Z"))
+                    .unwrap_or(true)
+        }
+    }
 }
 
 fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {

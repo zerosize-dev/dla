@@ -28,7 +28,13 @@ impl Sleeper {
             .map(|d| d.join("sleep"))
             .find(|p| p.is_file())
             .expect("sleep on PATH");
+        // Linux reads the executable name from /proc/<pid>/exe, which follows a symlink, so
+        // it needs a copy. Elsewhere the name comes from argv[0], and a symlink works without
+        // copying a system binary (copies of Apple's signed arm64e tools can be refused).
+        #[cfg(target_os = "linux")]
         fs::copy(sleep, &exe).unwrap();
+        #[cfg(not(target_os = "linux"))]
+        std::os::unix::fs::symlink(sleep, &exe).unwrap();
         // A fork in another test thread can still hold the copy's write handle for a
         // moment, and exec then fails with ETXTBSY ("text file busy"): retry briefly.
         let mut tries = 0;

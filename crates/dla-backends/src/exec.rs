@@ -288,11 +288,12 @@ fn millis(t: Instant) -> u64 {
     u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-// Unix only: the tests spawn `sh -c ...` and check process-group kill behaviour.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    // Spawns `sh -c ...`.
+    #[cfg(unix)]
     #[test]
     fn captures_both_streams_and_the_exit_code() {
         let o = run(&Cmd::new("sh").args(["-c", "echo out; echo err >&2; exit 3"]));
@@ -302,6 +303,8 @@ mod tests {
         assert!(!o.timed_out && o.failure_reason().is_none());
     }
 
+    // Spawns `sh -c ...`.
+    #[cfg(unix)]
     #[test]
     fn a_timeout_kills_the_process_tree() {
         let o = run(&Cmd::new("sh")
@@ -319,6 +322,8 @@ mod tests {
         assert!(o.failure_reason().unwrap().starts_with("could not start"));
     }
 
+    // Spawns `sh -c ...`.
+    #[cfg(unix)]
     #[test]
     fn env_is_set_and_removed() {
         let o = run(&Cmd::new("sh")

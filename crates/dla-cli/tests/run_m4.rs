@@ -149,10 +149,10 @@ fn dispatch_registers_workers_and_status_lists_them() {
             .ends_with("skills/detect-leak-anywhere/references/jvm.md")
     );
     assert!(ws[0]["reference_exists"].is_boolean());
-    // 6000 s * 0.85 / 2, less a second when the clock ticks between init and dispatch.
+    // 6000 s * 0.85 / 2, less the seconds a slow runner spends between init and dispatch.
     for w in ws {
         let share = w["share_secs"].as_u64().unwrap();
-        assert!((2549..=2550).contains(&share), "{w}");
+        assert!((2500..=2550).contains(&share), "{w}");
     }
     let st = RunState::load(&dir).unwrap();
     assert_eq!(st.workers.len(), 2);

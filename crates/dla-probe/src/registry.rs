@@ -180,6 +180,16 @@ pub fn tool_bin_dirs(tools: &Path) -> Vec<PathBuf> {
     ]
 }
 
+/// Candidate file names for `bin` in one directory (on Windows also with the
+/// executable extensions).
+fn candidates(dir: &Path, bin: &str) -> Vec<PathBuf> {
+    let mut v = vec![dir.join(bin)];
+    if cfg!(windows) {
+        v.extend(["exe", "cmd", "bat"].map(|ext| dir.join(format!("{bin}.{ext}"))));
+    }
+    v
+}
+
 /// Looks for an executable named `bin` in the tools dir, then on `path_var`.
 pub fn locate(
     bin: &str,
@@ -188,8 +198,7 @@ pub fn locate(
 ) -> Option<Found> {
     if let Some(t) = tools {
         for d in tool_bin_dirs(t) {
-            let c = d.join(bin);
-            if is_executable(&c) {
+            if let Some(c) = candidates(&d, bin).into_iter().find(|c| is_executable(c)) {
                 return Some(Found {
                     path: c,
                     source: "tools-dir",
@@ -202,22 +211,11 @@ pub fn locate(
         if d.as_os_str().is_empty() {
             continue;
         }
-        let c = d.join(bin);
-        if is_executable(&c) {
+        if let Some(c) = candidates(&d, bin).into_iter().find(|c| is_executable(c)) {
             return Some(Found {
                 path: c,
                 source: "path",
             });
-        }
-        #[cfg(windows)]
-        for ext in ["exe", "cmd", "bat"] {
-            let c = d.join(format!("{bin}.{ext}"));
-            if is_executable(&c) {
-                return Some(Found {
-                    path: c,
-                    source: "path",
-                });
-            }
         }
     }
     None

@@ -337,11 +337,14 @@ impl PathMap {
             return None;
         }
         let p = PathBuf::from(&s);
-        let abs = if p.is_absolute() || (s.len() > 2 && s.as_bytes()[1] == b':') {
-            normalize(&p)
-        } else {
-            normalize(&self.bases[0].join(&p))
-        };
+        // A leading `/` is rooted on every platform: on Windows `Path::is_absolute`
+        // rejects `/etc/passwd` (no drive), which would make it project-relative.
+        let abs =
+            if p.is_absolute() || s.starts_with('/') || (s.len() > 2 && s.as_bytes()[1] == b':') {
+                normalize(&p)
+            } else {
+                normalize(&self.bases[0].join(&p))
+            };
         for root in &self.roots {
             if let Ok(r) = abs.strip_prefix(normalize(root)) {
                 return clean_rel(r);

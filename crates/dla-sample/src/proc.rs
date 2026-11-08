@@ -35,6 +35,21 @@ pub fn command_line(pid: u32) -> Option<Vec<String>> {
     }
 }
 
+/// The path of the executable image `pid` is running, from the kernel (not from `argv[0]`).
+/// Only macOS can answer here (`proc_pidpath`); Linux callers read `/proc/<pid>/exe`.
+#[cfg(not(target_os = "linux"))]
+pub fn exe_path(pid: u32) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        imp::exe_path(pid)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 /// The base name of an executable path without a Windows `.exe` suffix.
 pub fn exe_name(arg0: &str) -> &str {
     let base = arg0.rsplit(['/', '\\']).next().unwrap_or(arg0);
@@ -111,6 +126,19 @@ pub fn signal_usr1(pid: u32) -> Result<(), String> {
 #[cfg(unix)]
 mod imp {
     #![allow(unsafe_code)]
+
+    #[cfg(target_os = "macos")]
+    pub fn exe_path(pid: u32) -> Option<std::path::PathBuf> {
+        use std::os::unix::ffi::OsStringExt;
+        let raw = libc::c_int::try_from(pid).ok()?;
+        // PROC_PIDPATHINFO_MAXSIZE is 4 * MAXPATHLEN.
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: `buf` is writable for the `buf.len()` bytes passed.
+        let n = unsafe { libc::proc_pidpath(raw, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        let n = usize::try_from(n).ok().filter(|&n| n > 0)?;
+        buf.truncate(n);
+        Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(buf)))
+    }
 
     pub fn signal_usr1(pid: u32) -> Result<(), String> {
         let pid = libc::pid_t::try_from(pid).map_err(|_| format!("pid {pid} is out of range"))?;

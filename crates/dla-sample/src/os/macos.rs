@@ -11,15 +11,23 @@ fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
+/// The pid as the C type libproc takes. A pid above `i32::MAX` would wrap to a negative
+/// number, which libproc may read as a process group or reject with something other than
+/// `ESRCH`; no such process can exist.
+fn c_pid(pid: u32) -> Option<c_int> {
+    c_int::try_from(pid).ok()
+}
+
 /// Fills `T` from `proc_pidinfo`; `Err(errno)` when the call fails or returns a short read.
 fn pidinfo<T>(pid: u32, flavor: c_int) -> Result<T, i32> {
+    let raw = c_pid(pid).ok_or(libc::ESRCH)?;
     // SAFETY: the libproc structs are plain old data; all-zero is a valid value.
     let mut info: T = unsafe { zeroed() };
     let size = size_of::<T>() as c_int;
     // SAFETY: `info` is a writable buffer of exactly `size` bytes.
     let got = unsafe {
         libc::proc_pidinfo(
-            pid as c_int,
+            raw,
             flavor,
             0,
             ptr::from_mut(&mut info).cast::<c_void>(),
@@ -36,9 +44,9 @@ fn pidinfo<T>(pid: u32, flavor: c_int) -> Result<T, i32> {
 }
 
 fn fd_count(pid: u32) -> Result<u64, i32> {
+    let raw = c_pid(pid).ok_or(libc::ESRCH)?;
     // SAFETY: a null buffer with size 0 asks libproc for the required size.
-    let needed =
-        unsafe { libc::proc_pidinfo(pid as c_int, libc::PROC_PIDLISTFDS, 0, ptr::null_mut(), 0) };
+    let needed = unsafe { libc::proc_pidinfo(raw, libc::PROC_PIDLISTFDS, 0, ptr::null_mut(), 0) };
     if needed <= 0 {
         return Err(errno());
     }
@@ -48,7 +56,7 @@ fn fd_count(pid: u32) -> Result<u64, i32> {
     // SAFETY: `buf` is writable for `buf.len()` bytes.
     let got = unsafe {
         libc::proc_pidinfo(
-            pid as c_int,
+            raw,
             libc::PROC_PIDLISTFDS,
             0,
             buf.as_mut_ptr().cast::<c_void>(),
@@ -63,13 +71,16 @@ fn fd_count(pid: u32) -> Result<u64, i32> {
 
 pub(super) fn sample(pid: u32) -> Result<OsSample, SampleError> {
     let mut out = OsSample::default();
+    let Some(raw) = c_pid(pid) else {
+        return Err(SampleError::NoSuchProcess(pid));
+    };
 
     // SAFETY: rusage_info_v4 is plain old data; all-zero is a valid value.
     let mut ri: libc::rusage_info_v4 = unsafe { zeroed() };
     // SAFETY: the buffer is a rusage_info_v4 as RUSAGE_INFO_V4 requires.
     let rc = unsafe {
         libc::proc_pid_rusage(
-            pid as c_int,
+            raw,
             libc::RUSAGE_INFO_V4,
             ptr::from_mut(&mut ri).cast::<libc::rusage_info_t>(),
         )
@@ -122,12 +133,15 @@ pub(super) fn is_alive(pid: u32) -> bool {
 }
 
 fn children(pid: u32) -> Vec<u32> {
+    let Some(raw) = c_pid(pid) else {
+        return Vec::new();
+    };
     const CAPACITY: usize = 4096;
     let mut buf = vec![0 as c_int; CAPACITY];
     // SAFETY: `buf` is writable for CAPACITY * 4 bytes.
     let got = unsafe {
         libc::proc_listchildpids(
-            pid as c_int,
+            raw,
             buf.as_mut_ptr().cast::<c_void>(),
             (CAPACITY * size_of::<c_int>()) as c_int,
         )

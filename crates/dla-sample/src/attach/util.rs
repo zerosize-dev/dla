@@ -178,7 +178,7 @@ pub fn inspect_target(pid: u32) -> Option<TargetInfo> {
         .or_else(|| args.first().cloned());
     let (uid, gids) = std::fs::read_to_string(format!("/proc/{pid}/status"))
         .map(|t| parse_status_ids(&t))
-        .unwrap_or_default();
+        .unwrap_or_else(|_| ps_ids(pid));
     let rss = crate::os::sample(pid)
         .ok()
         .and_then(|s| s.values.get(crate::os::RSS_COLUMN).copied())
@@ -192,6 +192,24 @@ pub fn inspect_target(pid: u32) -> Option<TargetInfo> {
         args,
         rss,
     })
+}
+
+/// The uid and primary gid of `pid` from `ps -o uid=,gid=`, for systems without `/proc`
+/// (macOS). The supplementary groups are not known there.
+fn ps_ids(pid: u32) -> (Option<u32>, Vec<u32>) {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-o", "uid=,gid=", "-p", &pid.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return (None, Vec::new());
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut it = text.split_whitespace().map(|w| w.parse::<u32>().ok());
+    let uid = it.next().flatten();
+    let gids = it.next().flatten().into_iter().collect();
+    (uid, gids)
 }
 
 /// The real uid and the group list (real gid first) of a `/proc/<pid>/status` text.

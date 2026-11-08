@@ -292,9 +292,10 @@ mod tests {
 
     #[test]
     fn cleanup_grammar() {
+        let abs = if cfg!(windows) { r"C:\tmp\x" } else { "/tmp/x" };
         assert_eq!(
-            CleanupAction::parse("rm /tmp/x").unwrap(),
-            CleanupAction::Rm("/tmp/x".into())
+            CleanupAction::parse(&format!("rm {abs}")).unwrap(),
+            CleanupAction::Rm(abs.into())
         );
         assert!(CleanupAction::parse("rm relative/x").is_err());
         assert!(CleanupAction::parse("rm").is_err());

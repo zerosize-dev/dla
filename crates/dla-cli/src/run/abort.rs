@@ -126,7 +126,15 @@ fn run_allowed(run_dir: &Path, argv: &[String]) -> bool {
         return false;
     };
     let path = Path::new(program);
-    let base = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    // Windows programs carry an `.exe` suffix (`jcmd.exe`); elsewhere the name is exact.
+    let base = if cfg!(windows) {
+        file.strip_suffix(".exe")
+            .or_else(|| file.strip_suffix(".EXE"))
+            .unwrap_or(file)
+    } else {
+        file
+    };
     match base {
         "jcmd" | "memray" => path.is_absolute() || path.components().count() == 1,
         "gdb" => {
