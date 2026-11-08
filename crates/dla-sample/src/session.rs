@@ -386,7 +386,9 @@ mod tests {
             fail_after: None,
             zero: true,
         });
-        let out = run(config(400), vec![b]).unwrap();
+        // Long enough for three backend readings on a loaded CI runner (macOS ran short at
+        // 400 ms).
+        let out = run(config(1500), vec![b]).unwrap();
         assert!(out.points.len() >= 4, "{}", out.points.len());
         assert!(out.points.iter().all(|p| p.values.contains_key("os.rss")));
         let counts: Vec<f64> = out
@@ -394,7 +396,7 @@ mod tests {
             .iter()
             .filter_map(|p| p.values.get("fake.count").copied())
             .collect();
-        assert!(counts.len() >= 3);
+        assert!(counts.len() >= 3, "{counts:?}");
         assert!(counts.windows(2).all(|w| w[1] > w[0]), "{counts:?}");
         // Ticks between readings have no value; zero-fill gives 0 where the backend answered
         // without the site, never where it did not answer.

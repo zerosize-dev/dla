@@ -17,7 +17,7 @@ is holding the memory.
 id = "L1"
 site = "native/src/lib.rs:43"
 lines = [43, 43]
-alt_sites = ["kotlin/shop/Encoder.kt:12-15"]
+alt_sites = ["kotlin/shop/Encoder.kt:12-15", "native/src/lib.rs:19"]
 holder = "native-handle/global-ref"
 region = "off-heap"
 cause = "L-HANDLE"

@@ -28,8 +28,9 @@ order in eight is a wholesale order whose frame is 24,592 bytes, above the
 The call chain does not join the two: the Kotlin handle is a plain `Long`, so
 no heap object retains the native frames.
 
-Expected sites: L1 `native/src/lib.rs:43` (alternative: the early return,
-`kotlin/shop/Encoder.kt:12-15`); L2 `kotlin/shop/Audit.kt:12` (alternative: the
+Expected sites: L1 `native/src/lib.rs:43` (alternatives: the early return,
+`kotlin/shop/Encoder.kt:12-15`, and the `FRAMES` map that holds the frames,
+`native/src/lib.rs:19`); L2 `kotlin/shop/Audit.kt:12` (alternative: the
 declaration at line 9).
 
 ## Build and run
