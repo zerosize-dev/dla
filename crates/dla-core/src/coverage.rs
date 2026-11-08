@@ -235,6 +235,40 @@ impl CoverageManifest {
         self.worker_mut(worker).entry_points = entry_points;
     }
 
+    /// Records how many workload iterations ran for a worker.
+    pub fn set_iterations(&mut self, worker: &str, iterations: u64) {
+        self.worker_mut(worker).iterations = Some(iterations);
+    }
+
+    /// Adds entry points that were exercised, keeping the list sorted and without
+    /// duplicates. The entries already there stay.
+    pub fn add_exercised(&mut self, worker: &str, entries: impl IntoIterator<Item = String>) {
+        let list = &mut self.worker_mut(worker).entry_points.exercised;
+        list.extend(entries);
+        list.sort();
+        list.dedup();
+    }
+
+    /// Replaces the residual rows of the regions named by `rows`; rows of other regions
+    /// stay. The result is ordered by region.
+    pub fn set_residual(&mut self, rows: Vec<ResidualRow>) {
+        self.residual
+            .retain(|old| rows.iter().all(|new| new.region != old.region));
+        self.residual.extend(rows);
+        self.residual.sort_by_key(|r| r.region);
+    }
+
+    /// Declares a blind spot of a runtime's tooling, once.
+    pub fn add_blind_spot(&mut self, runtime: &str, text: &str) {
+        let spot = BlindSpot {
+            runtime: runtime.to_owned(),
+            text: text.to_owned(),
+        };
+        if !self.blind_spots.contains(&spot) {
+            self.blind_spots.push(spot);
+        }
+    }
+
     /// Writes the manifest to `<run_dir>/coverage.json` atomically.
     pub fn save(&self, run_dir: &Path) -> Result<(), Error> {
         write_atomic(
@@ -298,6 +332,42 @@ mod tests {
             m.workers["jvm"].backends["spotbugs"].status,
             BackendStatus::Blocked
         );
+    }
+
+    fn row(region: Region, residual: f64) -> ResidualRow {
+        ResidualRow {
+            region,
+            total_slope: 10.0,
+            attributed_slope: 10.0 - residual,
+            residual,
+            unit: "bytes/n".into(),
+            threshold: 2.5,
+            open_item: None,
+        }
+    }
+
+    #[test]
+    fn dynamic_helpers_keep_lists_sorted_and_replace_by_region() {
+        let mut m = CoverageManifest::new(None);
+        m.set_iterations("go", 4000);
+        m.set_iterations("go", 8000);
+        assert_eq!(m.workers["go"].iterations, Some(8000));
+        m.add_exercised("go", ["b.Run".to_owned(), "a.Main".to_owned()]);
+        m.add_exercised("go", ["b.Run".to_owned(), "c.Start".to_owned()]);
+        assert_eq!(
+            m.workers["go"].entry_points.exercised,
+            ["a.Main", "b.Run", "c.Start"]
+        );
+        m.set_residual(vec![row(Region::OffHeap, 1.0), row(Region::Heap, 5.0)]);
+        assert_eq!(m.residual[0].region, Region::Heap);
+        m.set_residual(vec![row(Region::Heap, 0.0)]);
+        assert_eq!(m.residual.len(), 2);
+        assert_eq!(m.residual[0].residual, 0.0);
+        assert_eq!(m.residual[1].region, Region::OffHeap);
+        m.add_blind_spot("jvm", "native memory");
+        m.add_blind_spot("jvm", "native memory");
+        m.add_blind_spot("go", "cgo");
+        assert_eq!(m.blind_spots.len(), 2);
     }
 
     #[test]

@@ -12,16 +12,16 @@ use std::{
 };
 
 use crate::{
-    SCHEMA_VERSION,
+    LEDGER_SCHEMA_VERSION,
     checklist::{AnswerStatus, Checklist, ChecklistAnswer, ChecklistEntry},
     error::{Error, Refusal, ReplayError, codes},
     evidence::{EvidenceRecord, NewEvidence},
     finding::{
-        Explanation, Finding, FindingState, Holder, Locus, Origin, Region, RepairClass, Shape,
-        UNCLASSIFIED, check_site,
+        Explanation, Finding, FindingState, Holder, Locus, NON_LEAK_IDS, Origin, Region,
+        RepairClass, Shape, UNCLASSIFIED, check_site, claims_nonleak, nonleak_id,
     },
     ids::{EvidenceId, FindingId, OpenItemId},
-    machine::{self, EvidenceLookup, M0Rules, TransitionContext},
+    machine::{self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, TransitionContext},
     record::{
         FindingAnnotation, LedgerLine, OpenItem, OpenItemResolved, Record, Resolution, Transition,
     },
@@ -131,6 +131,24 @@ impl EvidenceLookup for Index {
     }
 }
 
+impl FindingLookup for Index {
+    fn finding(&self, id: &FindingId) -> Option<&Finding> {
+        self.findings.get(id)
+    }
+    fn family(&self, id: &FindingId) -> Vec<&Finding> {
+        let Some(f) = self.findings.get(id) else {
+            return Vec::new();
+        };
+        let root = f.root_id();
+        let Some(root) = self.findings.get(&root) else {
+            return vec![f];
+        };
+        std::iter::once(root)
+            .chain(root.siblings.iter().filter_map(|s| self.findings.get(s)))
+            .collect()
+    }
+}
+
 fn empty(s: &Option<String>) -> bool {
     s.as_deref().is_none_or(|t| t.trim().is_empty())
 }
@@ -177,7 +195,9 @@ impl Index {
     }
 
     /// Validates a record against the current state without changing anything.
-    fn check(&self, record: &Record) -> Result<(), Refusal> {
+    /// `version` is the schema version of the line that carries it: version 1 lines
+    /// replay under the M0 rules, later ones under the M3 rules.
+    fn check(&self, record: &Record, version: u32) -> Result<(), Refusal> {
         match record {
             Record::Evidence(e) => {
                 if self.evidence.contains_key(&e.evidence_id) {
@@ -190,8 +210,8 @@ impl Index {
                 }
                 e.check_result_size()
             }
-            Record::FindingAdded { finding } => self.check_finding(finding),
-            Record::Transition(t) => self.check_transition(t),
+            Record::FindingAdded { finding } => self.check_finding(finding, version),
+            Record::Transition(t) => self.check_transition(t, version),
             Record::OpenItem(o) => {
                 if self.open_items.contains_key(&o.id) {
                     return Err(Refusal::new(
@@ -244,21 +264,70 @@ impl Index {
                 format!("dla ledger annotate {} --note \"<text>\"", a.finding),
             ));
         }
-        if a.writers.is_empty() && a.removers.is_empty() && a.note.is_none() {
+        if a.owner.as_deref().is_some_and(|o| o.trim().is_empty()) {
+            return Err(Refusal::new(
+                codes::EMPTY_FIELD,
+                "the annotation owner is blank",
+                "owner text, or omit --owner",
+                format!("dla ledger annotate {} --owner \"<field>\"", a.finding),
+            ));
+        }
+        if a.writers.is_empty()
+            && a.removers.is_empty()
+            && a.note.is_none()
+            && a.holder.is_none()
+            && a.owner.is_none()
+            && a.region.is_none()
+        {
             return Err(Refusal::new(
                 codes::EMPTY_ANNOTATION,
-                format!("annotation of {} has no writer, remover or note", a.finding),
-                "at least one --writer, --remover or --note",
+                format!(
+                    "annotation of {} has no writer, remover, note, holder, owner or region",
+                    a.finding
+                ),
+                "at least one --writer, --remover, --note, --holder, --owner or --region",
                 format!(
                     "dla ledger annotate {} --writer src/Main.java:42",
                     a.finding
                 ),
             ));
         }
+        let f = self.require_finding(&a.finding, "annotation")?;
+        let conflicts = [
+            (
+                "holder",
+                f.holder.map(|h| h.to_string()),
+                a.holder.map(|h| h.to_string()),
+            ),
+            ("owner", f.owner.clone(), a.owner.clone()),
+            (
+                "region",
+                f.region.map(|r| r.to_string()),
+                a.region.map(|r| r.to_string()),
+            ),
+        ];
+        for (field, have, want) in conflicts {
+            if let (Some(have), Some(want)) = (have, want)
+                && have != want
+            {
+                return Err(Refusal::new(
+                    codes::ANNOTATION_CONFLICT,
+                    format!(
+                        "{} already has {field} {have:?}; an annotation only fills a {field} that is not set yet, and it cannot change it to {want:?}",
+                        a.finding
+                    ),
+                    format!("{field} {have:?} or a new finding"),
+                    format!(
+                        "keep {have:?}, or record the corrected {field} on a new hypothesis: dla ledger add --origin hypothesis --sibling-of {} --hypothesis \"<cause>\" --refute-if \"<result>\" --evidence <id>",
+                        f.root_id()
+                    ),
+                ));
+            }
+        }
         Ok(())
     }
 
-    fn check_finding(&self, f: &Finding) -> Result<(), Refusal> {
+    fn check_finding(&self, f: &Finding, version: u32) -> Result<(), Refusal> {
         let id = &f.id;
         if self.findings.contains_key(id) {
             return Err(Refusal::new(
@@ -293,6 +362,27 @@ impl Index {
                 ),
                 "archetype UNCLASSIFIED",
                 "omit the archetype; only `dla ledger label` assigns one",
+            ));
+        }
+        if version >= 2
+            && let Some(h) = f.hypothesis.as_deref()
+            && claims_nonleak(h)
+            && nonleak_id(h).is_none()
+        {
+            return Err(Refusal::new(
+                codes::INVALID_VALUE,
+                format!(
+                    "hypothesis {h:?} of {id} begins with N- but does not name a non-leak explanation: use one of {}, followed by nothing, a space or a colon",
+                    NON_LEAK_IDS.join(", ")
+                ),
+                format!(
+                    "a hypothesis starting with one of {}",
+                    NON_LEAK_IDS.join("|")
+                ),
+                format!(
+                    "dla ledger add --origin hypothesis --sibling-of {} --hypothesis \"N-WARM: <detail>\" --refute-if \"<result>\" --evidence <id>",
+                    f.root_id()
+                ),
             ));
         }
         if !f.siblings.is_empty() {
@@ -365,7 +455,7 @@ impl Index {
         self.require_evidence(&f.contradicts, &format!("finding {id}"), &fix)
     }
 
-    fn check_transition(&self, t: &Transition) -> Result<(), Refusal> {
+    fn check_transition(&self, t: &Transition, version: u32) -> Result<(), Refusal> {
         let finding = self.require_finding(&t.finding, "transition")?;
         if finding.state != t.from {
             return Err(Refusal::new(
@@ -385,8 +475,13 @@ impl Index {
             remedy: t.remedy.as_deref(),
             evidence: &t.evidence,
             lookup: self,
+            findings: self,
         };
-        machine::check_transition(&M0Rules, &ctx)
+        if version >= 2 {
+            machine::check_transition(&M3Rules, &ctx)
+        } else {
+            machine::check_transition(&M0Rules, &ctx)
+        }
     }
 
     fn check_open_item_resolved(&self, r: &OpenItemResolved) -> Result<(), Refusal> {
@@ -495,8 +590,21 @@ impl Index {
         }
     }
 
+    /// Fills `shape` and `region` of a just-confirmed leak-side finding from its
+    /// growth evidence. Done during replay, so no record field carries it.
+    fn derive_on_confirm(&mut self, id: &FindingId) {
+        let Some(f) = self.findings.get(id) else {
+            return;
+        };
+        let derived = machine::derive_attributes(f, self);
+        if let Some(f) = self.findings.get_mut(id) {
+            f.shape = f.shape.or(derived.shape);
+            f.region = f.region.or(derived.region);
+        }
+    }
+
     /// Applies a record that [`Index::check`] accepted. Cannot fail.
-    fn commit(&mut self, record: &Record) {
+    fn commit(&mut self, record: &Record, version: u32) {
         match record {
             Record::Evidence(e) => {
                 self.evidence.insert(e.evidence_id.clone(), e.clone());
@@ -529,6 +637,9 @@ impl Index {
                         }
                     }
                 }
+                if version >= 2 && t.to == FindingState::Confirmed {
+                    self.derive_on_confirm(&t.finding);
+                }
             }
             Record::OpenItem(o) => {
                 self.open_items.insert(
@@ -548,6 +659,13 @@ impl Index {
                 self.answers.insert(a.item.clone(), a.clone());
             }
             Record::FindingAnnotated(a) => {
+                if let Some(f) = self.findings.get_mut(&a.finding) {
+                    f.holder = f.holder.or(a.holder);
+                    f.region = f.region.or(a.region);
+                    if f.owner.is_none() {
+                        f.owner.clone_from(&a.owner);
+                    }
+                }
                 let slot = self.annotations.entry(a.finding.clone()).or_default();
                 for (list, new) in [
                     (&mut slot.writers, &a.writers),
@@ -702,9 +820,9 @@ impl Ledger {
             }
             ledger
                 .index
-                .check(&line.record)
+                .check(&line.record, line.schema_version)
                 .map_err(|r| replay_err(p, n, false, r))?;
-            ledger.index.commit(&line.record);
+            ledger.index.commit(&line.record, line.schema_version);
             ledger.lines.push(line);
         }
         Ok(ledger)
@@ -822,9 +940,9 @@ impl Ledger {
     // ----- writers -----
 
     fn append(&mut self, record: Record) -> Result<LedgerLine, Error> {
-        self.index.check(&record)?;
+        self.index.check(&record, LEDGER_SCHEMA_VERSION)?;
         let line = LedgerLine {
-            schema_version: SCHEMA_VERSION,
+            schema_version: LEDGER_SCHEMA_VERSION,
             seq: self.next_seq(),
             ts: now_utc(),
             record,
@@ -848,7 +966,7 @@ impl Ledger {
                 .map_err(|e| Error::io(path, e))?;
             self.ends_with_newline = true;
         }
-        self.index.commit(&line.record);
+        self.index.commit(&line.record, line.schema_version);
         self.lines.push(line.clone());
         Ok(line)
     }
@@ -982,11 +1100,25 @@ impl Ledger {
         removers: Vec<String>,
         note: Option<String>,
     ) -> Result<LedgerLine, Error> {
-        self.append(Record::FindingAnnotated(FindingAnnotation {
-            finding: finding.clone(),
+        self.annotate_record(FindingAnnotation {
             writers,
             removers,
             note,
-        }))
+            ..FindingAnnotation::new(finding.clone())
+        })
+    }
+
+    /// Appends a full annotation: writers, removers, a note, and the holder, owner and
+    /// region of a finding that has none yet. A value that differs from one the finding
+    /// already has is refused with `annotation-conflict`; the same value is accepted.
+    pub fn annotate_record(&mut self, annotation: FindingAnnotation) -> Result<LedgerLine, Error> {
+        self.append(Record::FindingAnnotated(annotation))
+    }
+
+    /// The warning to print after confirming `id`: set when no passing growth column the
+    /// finding cites is tied to it. `None` for other findings and states.
+    pub fn confirm_warning(&self, id: &FindingId) -> Option<String> {
+        let f = self.index.findings.get(id)?;
+        machine::confirm_warning(f, &self.index)
     }
 }

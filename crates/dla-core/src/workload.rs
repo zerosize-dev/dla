@@ -43,6 +43,14 @@ pub struct Workload {
     pub not_exercisable: Option<String>,
     /// Rank: the number of entry points it exercises. Higher runs first.
     pub rank: u32,
+    /// How the workload takes an iteration count, as a command-line template with `{n}`
+    /// (`--iterations {n}`, `-n {n}`, `{n}`); absent when none was detected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iteration_arg: Option<String>,
+    /// The iteration count the workload runs when none is given, when visible in the
+    /// source (`flag.Int("n", 2000, ...)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iteration_default: Option<u64>,
 }
 
 /// The `workloads.json` document.

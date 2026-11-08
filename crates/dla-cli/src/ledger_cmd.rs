@@ -1,4 +1,4 @@
-//! `dla ledger add`, `dla ledger resolve` and `dla ledger annotate`.
+//! `dla ledger add`, `resolve`, `annotate`, `test`, `confirm` and `refute`.
 
 use clap::{Args, Subcommand, ValueEnum};
 use dla_core::{
@@ -7,6 +7,7 @@ use dla_core::{
     checklist::{AnswerStatus, Checklist, ChecklistAnswer},
     error::codes as core_codes,
     finding::{Explanation, ExplanationTag, Holder, Locus, Region, RepairClass, Shape},
+    record::FindingAnnotation,
 };
 use serde_json::{Value, json};
 
@@ -23,8 +24,27 @@ pub enum LedgerCmd {
     Add(AddArgs),
     /// Disposition a finding or open item, or answer a checklist item.
     Resolve(ResolveArgs),
-    /// Record writers and removers found for a finding's holder (no state change).
+    /// Record writers, removers, holder, owner or region of a finding (no state change).
     Annotate(AnnotateArgs),
+    /// Move a finding under test; needs a harness record, and a non-leak sibling for a
+    /// leak-side finding.
+    Test(MoveArgs),
+    /// Confirm a finding (see `dla ledger test`); leak-side needs passing growth, a site,
+    /// a holder and a refuted N-* sibling.
+    Confirm(MoveArgs),
+    /// Refute a finding with a discriminator whose verdict opposes it.
+    Refute(MoveArgs),
+}
+
+/// Flags of `dla ledger test`, `confirm` and `refute`.
+#[derive(Args, Debug)]
+pub struct MoveArgs {
+    /// The finding (F3, F3.n1).
+    #[arg(value_parser = parse_enum::<FindingId>)]
+    finding: FindingId,
+    /// Evidence IDs the move cites, comma separated.
+    #[arg(long, value_delimiter = ',', value_parser = parse_enum::<EvidenceId>)]
+    evidence: Vec<EvidenceId>,
 }
 
 /// Flags of `dla ledger annotate`.
@@ -42,6 +62,17 @@ pub struct AnnotateArgs {
     /// Free-text note.
     #[arg(long)]
     note: Option<String>,
+    /// What holds the memory; only set when the finding has no holder yet:
+    /// static/global | registration-table | container-field | thread-local | blocked-stack |
+    /// closure/continuation | native-handle/global-ref | cycle-only
+    #[arg(long, value_parser = parse_enum::<Holder>)]
+    holder: Option<Holder>,
+    /// Owning field or container on the retention path; only set when none is recorded.
+    #[arg(long)]
+    owner: Option<String>,
+    /// heap | off-heap | non-heap; only set when none is recorded.
+    #[arg(long, value_parser = parse_enum::<Region>)]
+    region: Option<Region>,
 }
 
 /// Flags of `dla ledger add`.
@@ -253,18 +284,64 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
 pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     RunState::load(&ctx.run_dir)?;
     let mut ledger = Ledger::load(&ctx.run_dir)?;
-    let line = ledger.annotate(&a.finding, a.writers, a.removers, a.note)?;
+    let line = ledger.annotate_record(FindingAnnotation {
+        writers: a.writers,
+        removers: a.removers,
+        note: a.note,
+        holder: a.holder,
+        owner: a.owner,
+        region: a.region,
+        ..FindingAnnotation::new(a.finding.clone())
+    })?;
     let dla_core::Record::FindingAnnotated(rec) = &line.record else {
         unreachable!("annotate appends a finding_annotated record");
     };
-    Ok(json!({
+    let mut out = json!({
         "ok": true,
         "id": a.finding.to_string(),
         "writers": rec.writers.len(),
         "removers": rec.removers.len(),
         "seq": line.seq,
         "record": ctx.ledger_line(line.seq),
-    }))
+    });
+    if let Some(h) = rec.holder {
+        out["holder"] = json!(h.as_str());
+    }
+    if let Some(o) = &rec.owner {
+        out["owner"] = json!(o);
+    }
+    if let Some(r) = rec.region {
+        out["region"] = json!(r.as_str());
+    }
+    Ok(out)
+}
+
+/// Runs `dla ledger test`, `confirm` or `refute`: one transition citing evidence.
+pub fn move_to(ctx: &Ctx, a: MoveArgs, to: FindingState) -> Res<Value> {
+    RunState::load(&ctx.run_dir)?;
+    let mut ledger = Ledger::load(&ctx.run_dir)?;
+    let by = match to {
+        FindingState::UnderTest => "dla ledger test",
+        FindingState::Confirmed => "dla ledger confirm",
+        _ => "dla ledger refute",
+    };
+    let from = ledger.finding(&a.finding).map(|f| f.state);
+    let line = ledger.transition(&a.finding, to, None, None, a.evidence.clone(), by)?;
+    let mut out = json!({
+        "ok": true,
+        "finding": a.finding.to_string(),
+        "from": from.map(|s| s.to_string()),
+        "to": to.as_str(),
+        "evidence": a.evidence.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "seq": line.seq,
+        "record": ctx.ledger_line(line.seq),
+    });
+    if to == FindingState::Confirmed
+        && let Some(w) = ledger.confirm_warning(&a.finding)
+    {
+        out["warning"] = json!(w);
+    }
+    Ok(out)
 }
 
 /// Runs `dla ledger resolve`.

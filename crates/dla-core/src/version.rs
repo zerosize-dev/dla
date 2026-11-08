@@ -3,11 +3,15 @@
 //! `state.json`, `coverage.json` and every ledger line carry `schema_version`.
 //! A newer version is refused; an older one is migrated step by step through a
 //! table of `n -> n+1` functions, or refused plainly when no path exists. The
-//! tables are empty in M0 because no older version exists.
+//! tables are empty because no document has needed a migration yet.
+//!
+//! Ledger lines are the exception to migration: versions 1 and 2 are both current.
+//! Each line keeps its version, because the version selects the rule set the line
+//! is replayed under (1: M0 rules, 2: M3 rules).
 
 use serde_json::Value;
 
-use crate::SCHEMA_VERSION;
+use crate::{LEDGER_SCHEMA_VERSION, SCHEMA_VERSION};
 
 /// One migration step from `from` to `from + 1`, working on raw JSON.
 #[derive(Clone, Copy)]
@@ -133,8 +137,31 @@ pub fn read_version(doc: &Value) -> Option<u32> {
         .and_then(|v| u32::try_from(v).ok())
 }
 
-/// Brings `doc` to [`SCHEMA_VERSION`] using the artifact's migration table.
+/// Brings `doc` to [`SCHEMA_VERSION`] using the artifact's migration table. A ledger
+/// line is accepted unchanged when its version is between 1 and
+/// [`LEDGER_SCHEMA_VERSION`].
 pub fn upgrade(doc: Value, artifact: Artifact, what: &str) -> Result<Value, UpgradeError> {
+    if artifact == Artifact::LedgerLine {
+        let found = read_version(&doc).ok_or_else(|| {
+            UpgradeError::Malformed(format!(
+                "{what}: missing or invalid `schema_version` (expected a non-negative integer)"
+            ))
+        })?;
+        if (1..=LEDGER_SCHEMA_VERSION).contains(&found) {
+            return Ok(doc);
+        }
+        let kind = if found > LEDGER_SCHEMA_VERSION {
+            SchemaErrorKind::Newer
+        } else {
+            SchemaErrorKind::CannotMigrate
+        };
+        return Err(UpgradeError::Schema(SchemaError {
+            what: what.to_owned(),
+            found,
+            supported: LEDGER_SCHEMA_VERSION,
+            kind,
+        }));
+    }
     upgrade_with(doc, artifact.migrations(), SCHEMA_VERSION, what)
 }
 

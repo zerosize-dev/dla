@@ -93,6 +93,26 @@ pub mod codes {
     pub const UNKNOWN_BACKEND: &str = "unknown-backend";
     /// A tool could not be installed or run.
     pub const TOOL_FAILED: &str = "tool-failed";
+    /// A leak-side finding went under test without a harness record.
+    pub const HARNESS_REQUIRED: &str = "harness-required";
+    /// A leak-side finding went under test without a non-leak sibling.
+    pub const SIBLING_REQUIRED: &str = "sibling-required";
+    /// Confirmation without a growth record whose gate passed.
+    pub const GROWTH_GATE_FAILED: &str = "growth-gate-failed";
+    /// Confirmation of a finding that has no site.
+    pub const SITE_REQUIRED: &str = "site-required";
+    /// Confirmation of a finding that has no holder.
+    pub const HOLDER_REQUIRED: &str = "holder-required";
+    /// Confirmation of a leak without a refuted non-leak sibling.
+    pub const NONLEAK_REFUTATION_REQUIRED: &str = "nonleak-refutation-required";
+    /// Confirmation of a non-leak hypothesis whose leak-side root is not refuted.
+    pub const LEAK_REFUTATION_REQUIRED: &str = "leak-refutation-required";
+    /// A discriminator points the other way (or names another family).
+    pub const DISCRIMINATOR_DIRECTION: &str = "discriminator-direction";
+    /// An annotation conflicts with a value the finding already has.
+    pub const ANNOTATION_CONFLICT: &str = "annotation-conflict";
+    /// A series file is invalid.
+    pub const INVALID_SERIES: &str = "invalid-series";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

@@ -1,0 +1,474 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TrendReport",
+  "description": "`trend/T<n>.json`.",
+  "type": "object",
+  "properties": {
+    "columns": {
+      "description": "One entry per analysed column.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ColumnTrend"
+      }
+    },
+    "id": {
+      "description": "`T2`.",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Schema version (1).",
+      "type": "integer",
+      "format": "uint32",
+      "default": 1,
+      "minimum": 0
+    },
+    "series": {
+      "description": "The series analysed (`S3`).",
+      "type": "string"
+    },
+    "thresholds": {
+      "description": "Thresholds the gate used.",
+      "$ref": "#/$defs/GateThresholds"
+    }
+  },
+  "required": [
+    "id",
+    "series",
+    "thresholds",
+    "columns"
+  ],
+  "$defs": {
+    "ColumnKind": {
+      "description": "Whether a column is a level or an integer unit count.",
+      "oneOf": [
+        {
+          "description": "A level (bytes, a ratio): judged by the slope gate.",
+          "type": "string",
+          "const": "gauge"
+        },
+        {
+          "description": "An integer unit count (goroutines, fds, entries): judged by the every-delta rule.",
+          "type": "string",
+          "const": "counter"
+        }
+      ]
+    },
+    "ColumnTrend": {
+      "description": "The trend of one series column over its post-warm-up points.",
+      "type": "object",
+      "properties": {
+        "candidates": {
+          "description": "Findings whose site matches the column.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FindingId"
+          }
+        },
+        "every_delta": {
+          "description": "Every-delta rule (counters only).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EveryDelta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finding": {
+          "description": "Finding the column was probed for.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gate": {
+          "description": "Gate verdict.",
+          "$ref": "#/$defs/GateVerdict"
+        },
+        "gate_failed": {
+          "description": "Why the gate failed, one reason per failed condition.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "halves": {
+          "description": "Slopes of the two halves.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HalfSplit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Gauge or counter.",
+          "$ref": "#/$defs/ColumnKind"
+        },
+        "mk": {
+          "description": "Mann-Kendall test.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MannKendall"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "n": {
+          "description": "Post-warm-up points with a value.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "name": {
+          "description": "Column name.",
+          "type": "string"
+        },
+        "noise": {
+          "description": "Robust residual standard deviation around the Sen fit.",
+          "type": "number",
+          "format": "double"
+        },
+        "region": {
+          "description": "Region of the column.",
+          "$ref": "#/$defs/SeriesRegion"
+        },
+        "rise": {
+          "description": "Slope times the x span of the post-warm-up points.",
+          "type": "number",
+          "format": "double"
+        },
+        "sen": {
+          "description": "Theil-Sen slope.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TheilSen"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shape": {
+          "description": "Shape of the curve.",
+          "$ref": "#/$defs/TrendShape"
+        },
+        "site": {
+          "description": "`file:line` the column is tied to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "Unit of the column.",
+          "$ref": "#/$defs/Unit"
+        }
+      },
+      "required": [
+        "name",
+        "unit",
+        "kind",
+        "region",
+        "n",
+        "noise",
+        "rise",
+        "shape",
+        "gate"
+      ]
+    },
+    "EveryDelta": {
+      "description": "CPython's every-delta rule for integer counters: every consecutive delta is at least one.",
+      "type": "object",
+      "properties": {
+        "all_at_least_one": {
+          "description": "True when every delta is >= 1.",
+          "type": "boolean"
+        },
+        "deltas": {
+          "description": "Number of deltas examined.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max": {
+          "description": "Largest delta.",
+          "type": "number",
+          "format": "double"
+        },
+        "min": {
+          "description": "Smallest delta.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "deltas",
+        "all_at_least_one",
+        "min",
+        "max"
+      ]
+    },
+    "FindingId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$"
+    },
+    "GateThresholds": {
+      "description": "Thresholds of the slope gate. Provisional until the M7 calibration.",
+      "type": "object",
+      "properties": {
+        "alpha": {
+          "description": "Significance level for Mann-Kendall and the Sen interval.",
+          "type": "number",
+          "format": "double"
+        },
+        "calibrated": {
+          "description": "False until the thresholds are calibrated on the benchmark.",
+          "type": "boolean"
+        },
+        "min_half_ratio": {
+          "description": "Minimum second-half / first-half slope ratio (non-decaying growth).",
+          "type": "number",
+          "format": "double"
+        },
+        "min_points": {
+          "description": "Minimum post-warm-up points.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "noise_multiple": {
+          "description": "Rise must exceed this multiple of the noise.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "min_points",
+        "alpha",
+        "min_half_ratio",
+        "noise_multiple",
+        "calibrated"
+      ]
+    },
+    "GateVerdict": {
+      "description": "Outcome of the slope gate.",
+      "oneOf": [
+        {
+          "description": "The series shows growth that passes the gate.",
+          "type": "string",
+          "const": "pass"
+        },
+        {
+          "description": "It does not.",
+          "type": "string",
+          "const": "fail"
+        }
+      ]
+    },
+    "HalfSplit": {
+      "description": "Theil-Sen slopes of the first and second half of the points.",
+      "type": "object",
+      "properties": {
+        "first": {
+          "description": "Slope of the first half.",
+          "type": "number",
+          "format": "double"
+        },
+        "ratio": {
+          "description": "`second / first` when `first > 0`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "second": {
+          "description": "Slope of the second half.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "first",
+        "second"
+      ]
+    },
+    "MannKendall": {
+      "description": "Mann-Kendall trend test.",
+      "type": "object",
+      "properties": {
+        "p_increasing": {
+          "description": "One-sided p-value for an increasing trend (exact for small samples without ties).",
+          "type": "number",
+          "format": "double"
+        },
+        "s": {
+          "description": "S statistic: sum of sign(y_j - y_i) over i < j.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "tau": {
+          "description": "Kendall's tau: S / (n(n-1)/2).",
+          "type": "number",
+          "format": "double"
+        },
+        "var_s": {
+          "description": "Variance of S, corrected for ties.",
+          "type": "number",
+          "format": "double"
+        },
+        "z": {
+          "description": "Standardised statistic with continuity correction.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "s",
+        "var_s",
+        "z",
+        "p_increasing",
+        "tau"
+      ]
+    },
+    "SeriesRegion": {
+      "description": "Memory region of a column.",
+      "oneOf": [
+        {
+          "description": "Managed heap and holder probes.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native allocator, direct buffers, unexplained growth.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Threads, goroutines, stacks, fds, timers, listeners, metaspace.",
+          "type": "string",
+          "const": "non-heap"
+        },
+        {
+          "description": "Whole-process totals.",
+          "type": "string",
+          "const": "process"
+        }
+      ]
+    },
+    "TheilSen": {
+      "description": "Theil-Sen slope with Sen's confidence interval.",
+      "type": "object",
+      "properties": {
+        "hi": {
+          "description": "Upper bound of the confidence interval.",
+          "type": "number",
+          "format": "double"
+        },
+        "intercept": {
+          "description": "Median of y - slope * x.",
+          "type": "number",
+          "format": "double"
+        },
+        "lo": {
+          "description": "Lower bound of the confidence interval.",
+          "type": "number",
+          "format": "double"
+        },
+        "slope": {
+          "description": "Median of pairwise slopes.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slope",
+        "intercept",
+        "lo",
+        "hi"
+      ]
+    },
+    "TrendShape": {
+      "description": "Shape of a measured series after warm-up.",
+      "oneOf": [
+        {
+          "description": "Fewer than three points.",
+          "type": "string",
+          "const": "insufficient"
+        },
+        {
+          "description": "No trend beyond noise.",
+          "type": "string",
+          "const": "flat"
+        },
+        {
+          "description": "Falling.",
+          "type": "string",
+          "const": "declining"
+        },
+        {
+          "description": "Steady growth.",
+          "type": "string",
+          "const": "steady"
+        },
+        {
+          "description": "Growth in discrete steps.",
+          "type": "string",
+          "const": "stair"
+        },
+        {
+          "description": "A transient rise that returns.",
+          "type": "string",
+          "const": "spike"
+        },
+        {
+          "description": "Growth that levels off.",
+          "type": "string",
+          "const": "plateau"
+        }
+      ]
+    },
+    "Unit": {
+      "description": "Unit of a column.",
+      "oneOf": [
+        {
+          "description": "Bytes.",
+          "type": "string",
+          "const": "bytes"
+        },
+        {
+          "description": "A count of things.",
+          "type": "string",
+          "const": "count"
+        },
+        {
+          "description": "A ratio.",
+          "type": "string",
+          "const": "ratio"
+        },
+        {
+          "description": "Seconds.",
+          "type": "string",
+          "const": "seconds"
+        }
+      ]
+    }
+  }
+}

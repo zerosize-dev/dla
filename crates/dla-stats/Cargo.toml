@@ -1,11 +1,19 @@
 [package]
 name = "dla-stats"
-description = "DLA statistics (future)"
+description = "DLA statistics: Mann-Kendall, Theil-Sen, half-split slopes, the every-delta rule and growth shape"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
+
+[dependencies]
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+proptest = "1.11.0"
+serde_json.workspace = true
 
 [lints]
 workspace = true

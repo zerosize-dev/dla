@@ -46,7 +46,9 @@ tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Denied, not forbidden: dla-sample opts in for libproc and Win32 calls in its
+# platform modules only.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

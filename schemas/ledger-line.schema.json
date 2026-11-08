@@ -659,18 +659,47 @@
       ]
     },
     "FindingAnnotation": {
-      "description": "Writers and removers found for a finding's holder. It does not change the finding's\nstate; the report lists the sites under the finding.",
+      "description": "Writers and removers found for a finding's holder, and its holder, owner and region\nwhen none is recorded yet. It does not change the finding's state; the report lists\nthe sites under the finding.",
       "type": "object",
       "properties": {
         "finding": {
           "description": "The finding.",
           "$ref": "#/$defs/FindingId"
         },
+        "holder": {
+          "description": "What holds the memory; applied only when the finding has no holder yet.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Holder"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "note": {
           "description": "Free-text note.",
           "type": [
             "string",
             "null"
+          ]
+        },
+        "owner": {
+          "description": "Owning field or container; applied only when the finding has no owner yet.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "description": "Memory region; applied only when the finding has no region yet.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Region"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "removers": {

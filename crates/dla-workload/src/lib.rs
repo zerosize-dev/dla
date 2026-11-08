@@ -192,6 +192,8 @@ pub fn build_report(
                     .then(|| BUILD_FAILS.to_owned()),
                 rank: u32::try_from(entry_points.len()).unwrap_or(u32::MAX),
                 entry_points,
+                iteration_arg: None,
+                iteration_default: None,
             }
         })
         .collect();

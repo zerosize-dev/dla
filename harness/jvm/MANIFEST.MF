@@ -1,0 +1,4 @@
+Premain-Class: dla.harness.DlaAgent
+Agent-Class: dla.harness.DlaAgent
+Can-Redefine-Classes: false
+Can-Retransform-Classes: false

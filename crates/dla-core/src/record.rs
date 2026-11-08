@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     checklist::ChecklistAnswer,
     evidence::EvidenceRecord,
-    finding::{Finding, FindingState, UnresolvedReason},
+    finding::{Finding, FindingState, Holder, Region, UnresolvedReason},
     ids::{EvidenceId, FindingId, OpenItemId},
 };
 
@@ -72,8 +72,9 @@ pub struct OpenItemResolved {
     pub resolution: Resolution,
 }
 
-/// Writers and removers found for a finding's holder. It does not change the finding's
-/// state; the report lists the sites under the finding.
+/// Writers and removers found for a finding's holder, and its holder, owner and region
+/// when none is recorded yet. It does not change the finding's state; the report lists
+/// the sites under the finding.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct FindingAnnotation {
     /// The finding.
@@ -87,6 +88,30 @@ pub struct FindingAnnotation {
     /// Free-text note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// What holds the memory; applied only when the finding has no holder yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder: Option<Holder>,
+    /// Owning field or container; applied only when the finding has no owner yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Memory region; applied only when the finding has no region yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<Region>,
+}
+
+impl FindingAnnotation {
+    /// An annotation of `finding` with nothing in it yet.
+    pub fn new(finding: FindingId) -> Self {
+        Self {
+            finding,
+            writers: Vec::new(),
+            removers: Vec::new(),
+            note: None,
+            holder: None,
+            owner: None,
+            region: None,
+        }
+    }
 }
 
 /// The body of a ledger line, tagged by `type`.

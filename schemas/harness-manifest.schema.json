@@ -1,0 +1,530 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HarnessManifest",
+  "description": "`harness/H<n>/harness.json`.",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "description": "What measures the process.",
+      "$ref": "#/$defs/AgentKind"
+    },
+    "build": {
+      "description": "Built once before measuring.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CommandSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "detectors": {
+      "description": "Library detector flags switched on.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "gaps": {
+      "description": "Gaps, for example \"pytest-memray not installed: standard-library driver used\".",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "id": {
+      "description": "`H2`.",
+      "type": "string"
+    },
+    "iter_arg": {
+      "description": "How the iteration count is passed (`--iterations {n}`, `-n {n}`, `{n}`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "iterations": {
+      "description": "Points after the warm-up (default 8).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "key_modes": {
+      "description": "Driver mode: fresh and repeated; command mode: native.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/KeyMode"
+      }
+    },
+    "mode": {
+      "description": "Command or driver.",
+      "$ref": "#/$defs/HarnessMode"
+    },
+    "probes": {
+      "description": "Holder probes.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProbeSpec"
+      }
+    },
+    "run": {
+      "description": "The measured command; `{n}` is replaced by the iteration count in command mode.",
+      "$ref": "#/$defs/CommandSpec"
+    },
+    "runtime": {
+      "description": "Runtime of the workload.",
+      "$ref": "#/$defs/Runtime"
+    },
+    "schema_version": {
+      "description": "Schema version (1).",
+      "type": "integer",
+      "format": "uint32",
+      "default": 1,
+      "minimum": 0
+    },
+    "scratch": {
+      "description": "Run-relative path of the scratch copy, for example `harness/H2/work`.",
+      "type": "string"
+    },
+    "step": {
+      "description": "Command mode: `n_k = step * k`; driver mode: units per round.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "timeout_secs": {
+      "description": "Timeout per measured process in seconds (default 300).",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "tools": {
+      "description": "Named tools used (junit, pytest-memray, goleak, dhat).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "warmup": {
+      "description": "Leading points that are warm-up (default 1).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "workload": {
+      "description": "Workload ID from discovery.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "runtime",
+    "mode",
+    "scratch",
+    "run",
+    "warmup",
+    "iterations",
+    "step",
+    "key_modes",
+    "agent",
+    "timeout_secs"
+  ],
+  "$defs": {
+    "AgentKind": {
+      "description": "What measures the process.",
+      "oneOf": [
+        {
+          "description": "JVM premain agent.",
+          "type": "string",
+          "const": "jvm-agent"
+        },
+        {
+          "description": "Python `sitecustomize` module.",
+          "type": "string",
+          "const": "py-sitecustomize"
+        },
+        {
+          "description": "Node `--require` preload.",
+          "type": "string",
+          "const": "node-preload"
+        },
+        {
+          "description": "Go test wrapper around `main`.",
+          "type": "string",
+          "const": "go-test-wrapper"
+        },
+        {
+          "description": "`LD_PRELOAD` allocator shim.",
+          "type": "string",
+          "const": "alloc-shim"
+        },
+        {
+          "description": "JVM loop test.",
+          "type": "string",
+          "const": "driver-jvm"
+        },
+        {
+          "description": "Python loop test.",
+          "type": "string",
+          "const": "driver-python"
+        },
+        {
+          "description": "Node loop test.",
+          "type": "string",
+          "const": "driver-node"
+        },
+        {
+          "description": "Go loop test.",
+          "type": "string",
+          "const": "driver-go"
+        },
+        {
+          "description": "Rust loop test.",
+          "type": "string",
+          "const": "driver-rust"
+        },
+        {
+          "description": "C or C++ loop test.",
+          "type": "string",
+          "const": "driver-native"
+        },
+        {
+          "description": "Nothing beyond OS sampling.",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    },
+    "CommandSpec": {
+      "description": "A command to run in the scratch copy.",
+      "type": "object",
+      "properties": {
+        "argv": {
+          "description": "Program and arguments.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "description": "Working directory, relative to the scratch root.",
+          "type": "string"
+        },
+        "env": {
+          "description": "Extra environment variables.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "argv",
+        "cwd"
+      ]
+    },
+    "FindingId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$"
+    },
+    "HarnessMode": {
+      "description": "How the harness drives the workload.",
+      "oneOf": [
+        {
+          "description": "DLA runs the workload's own command once per point.",
+          "type": "string",
+          "const": "command"
+        },
+        {
+          "description": "A generated loop test runs inside one process.",
+          "type": "string",
+          "const": "driver"
+        }
+      ]
+    },
+    "KeyMode": {
+      "description": "How the keys of the workload are produced.",
+      "oneOf": [
+        {
+          "description": "Every unit of work uses a new key.",
+          "type": "string",
+          "const": "fresh"
+        },
+        {
+          "description": "Every unit of work reuses the same keys.",
+          "type": "string",
+          "const": "repeated"
+        },
+        {
+          "description": "The keys are whatever the workload makes (command mode).",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    },
+    "ProbeSpec": {
+      "description": "One holder probe.",
+      "type": "object",
+      "properties": {
+        "finding": {
+          "description": "The finding the probe was derived from.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "description": "`P1`.",
+          "type": "string"
+        },
+        "site": {
+          "description": "Definition site (`file:line`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "What to read.",
+          "$ref": "#/$defs/ProbeTarget"
+        }
+      },
+      "required": [
+        "id",
+        "target"
+      ]
+    },
+    "ProbeTarget": {
+      "description": "What a probe reads.",
+      "oneOf": [
+        {
+          "description": "Every static field of a JVM class.",
+          "type": "object",
+          "properties": {
+            "class": {
+              "description": "Fully qualified class name.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "jvm-class"
+            }
+          },
+          "required": [
+            "kind",
+            "class"
+          ]
+        },
+        {
+          "description": "One static field of a JVM class.",
+          "type": "object",
+          "properties": {
+            "class": {
+              "description": "Fully qualified class name.",
+              "type": "string"
+            },
+            "field": {
+              "description": "Field name.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "jvm-static"
+            }
+          },
+          "required": [
+            "kind",
+            "class",
+            "field"
+          ]
+        },
+        {
+          "description": "Every module-level name of a Python module.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "py-module"
+            },
+            "module": {
+              "description": "Module name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "module"
+          ]
+        },
+        {
+          "description": "One module-level Python name.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "py-global"
+            },
+            "module": {
+              "description": "Module name.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "module",
+            "name"
+          ]
+        },
+        {
+          "description": "A Python attribute path such as `ReportBuilder.category_totals`.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "py-attr"
+            },
+            "module": {
+              "description": "Module name.",
+              "type": "string"
+            },
+            "qualname": {
+              "description": "Qualified name inside the module.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "module",
+            "qualname"
+          ]
+        },
+        {
+          "description": "Every top-level binding of a Node module file.",
+          "type": "object",
+          "properties": {
+            "file": {
+              "description": "Project-relative file.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "node-module"
+            }
+          },
+          "required": [
+            "kind",
+            "file"
+          ]
+        },
+        {
+          "description": "One top-level binding of a Node module file.",
+          "type": "object",
+          "properties": {
+            "file": {
+              "description": "Project-relative file.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "node-binding"
+            },
+            "name": {
+              "description": "Binding name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "file",
+            "name"
+          ]
+        },
+        {
+          "description": "A Go package variable, reachable only from a driver test in that package.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "go-var"
+            },
+            "name": {
+              "description": "Variable name.",
+              "type": "string"
+            },
+            "package_dir": {
+              "description": "Package directory.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "package_dir",
+            "name"
+          ]
+        }
+      ]
+    },
+    "Runtime": {
+      "description": "A language runtime DLA investigates. The wire spelling is also the default\nworker key in `coverage.json` and the value of `--lang`.",
+      "oneOf": [
+        {
+          "description": "Java, Kotlin and other JVM languages.",
+          "type": "string",
+          "const": "jvm"
+        },
+        {
+          "description": "Go.",
+          "type": "string",
+          "const": "go"
+        },
+        {
+          "description": "Rust.",
+          "type": "string",
+          "const": "rust"
+        },
+        {
+          "description": "Node.js (JavaScript and TypeScript).",
+          "type": "string",
+          "const": "node"
+        },
+        {
+          "description": "Python.",
+          "type": "string",
+          "const": "python"
+        },
+        {
+          "description": "C and C++.",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    }
+  }
+}

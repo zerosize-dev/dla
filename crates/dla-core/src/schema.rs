@@ -9,10 +9,13 @@ use crate::{
     detectors::DetectorFile,
     evidence::EvidenceRecord,
     finding::Finding,
+    harness::{HarnessDump, HarnessManifest},
     probe::ProbeReport,
     record::LedgerLine,
+    series::SeriesFile,
     state::RunState,
     static_hit::StaticHit,
+    trend::TrendReport,
     workload::{Workload, WorkloadReport},
 };
 
@@ -32,6 +35,10 @@ pub fn all() -> Vec<(&'static str, Schema)> {
         ("census-entry", schema_for!(CensusEntry)),
         ("workload", schema_for!(Workload)),
         ("workload-report", schema_for!(WorkloadReport)),
+        ("series", schema_for!(SeriesFile)),
+        ("trend", schema_for!(TrendReport)),
+        ("harness-manifest", schema_for!(HarnessManifest)),
+        ("harness-dump", schema_for!(HarnessDump)),
     ]
 }
 

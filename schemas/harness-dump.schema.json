@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HarnessDump",
+  "description": "One JSON line of `out/<pid>.jsonl`. Only `dla_harness` and `phase` are required.",
+  "type": "object",
+  "properties": {
+    "argv": {
+      "description": "Command line of the process.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "coverage": {
+      "description": "What was exercised.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DumpCoverage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "detectors": {
+      "description": "Library detector hits.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/DumpDetector"
+      }
+    },
+    "dla_harness": {
+      "description": "Dump format version ([`DUMP_VERSION`]).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "exe": {
+      "description": "Executable path.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "gc_forced": {
+      "description": "True when a collection was forced before reading.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "groups": {
+      "description": "Grouped counters: base name to site to value.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
+    "limitations": {
+      "description": "Known limits of this dump.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "phase": {
+      "description": "Checkpoint, exit or tick.",
+      "$ref": "#/$defs/DumpPhase"
+    },
+    "pid": {
+      "description": "Process ID.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "probes": {
+      "description": "Probe readings.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/DumpProbe"
+      }
+    },
+    "purge": {
+      "description": "The purge applied, when `DLA_PURGE` was set.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DumpPurge"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "raw_sites": {
+      "description": "Unsymbolized sites: base name to address to value.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
+    "runtime": {
+      "description": "Runtime name (`jvm`, `go`, ...).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "t_ms": {
+      "description": "Milliseconds since the process started.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "types": {
+      "description": "Top types by count.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/DumpType"
+      }
+    },
+    "values": {
+      "description": "Readings (after the forced collection where the runtime has one).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "double"
+      }
+    },
+    "values_pre_gc": {
+      "description": "Readings taken just before the forced collection.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "double"
+      }
+    },
+    "x": {
+      "description": "Position on the axis (units completed).",
+      "type": [
+        "number",
+        "null"
+      ],
+      "format": "double"
+    }
+  },
+  "required": [
+    "dla_harness",
+    "phase"
+  ],
+  "$defs": {
+    "DumpCoverage": {
+      "description": "What the process exercised.",
+      "type": "object",
+      "properties": {
+        "file": {
+          "description": "Or a file holding them.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "items": {
+          "description": "The items, inline.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "description": "`classes` or `functions`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DumpDetector": {
+      "description": "A library detector hit.",
+      "type": "object",
+      "properties": {
+        "lib": {
+          "description": "Library name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "site": {
+          "description": "Where it was raised.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "description": "The log line or message.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DumpPhase": {
+      "description": "When in the process a dump line was written.",
+      "oneOf": [
+        {
+          "description": "One round of a driver.",
+          "type": "string",
+          "const": "checkpoint"
+        },
+        {
+          "description": "The end of the process.",
+          "type": "string",
+          "const": "exit"
+        },
+        {
+          "description": "A periodic dump.",
+          "type": "string",
+          "const": "tick"
+        }
+      ]
+    },
+    "DumpProbe": {
+      "description": "One probe reading.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Estimated bytes.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "error": {
+          "description": "Why it could not be read.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Probe ID (`P1`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Short name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Full path of the probed thing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reachable": {
+          "description": "Objects reachable from it.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "size": {
+          "description": "Entries in the holder.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "DumpPurge": {
+      "description": "A purge applied just before the last reading.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "description": "Values after the purge.",
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "default": {}
+        },
+        "before": {
+          "description": "Values before the purge.",
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "default": {}
+        },
+        "kind": {
+          "description": "`trim`, `gc`, `free-os-memory`, ...",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DumpType": {
+      "description": "A type with many instances.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Bytes they hold.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "count": {
+          "description": "Live instances.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "name": {
+          "description": "Type name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

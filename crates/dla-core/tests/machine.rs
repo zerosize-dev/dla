@@ -48,40 +48,50 @@ fn graph_matches_the_spec_exactly() {
     assert!(allowed_targets(S::Strong).is_empty());
 }
 
-/// Drives a finding into `state` through legal moves on a fresh ledger.
+/// Drives F1 (a leak-side finding with a site, a holder and an N-WARM sibling F1.n1 that is
+/// already refuted) into `state` through legal moves on a fresh ledger.
 fn finding_in(state: S) -> (dla_core::Ledger, dla_core::FindingId) {
-    let mut l = ledger();
-    let f = add_f1(&mut l);
-    let mv = |l: &mut dla_core::Ledger, to, reason, remedy: Option<&str>, ev| {
-        l.transition(&f, to, reason, remedy.map(String::from), ev, "test")
-            .unwrap();
+    let mut l = m3_ledger();
+    let f = add_leak(&mut l);
+    let n = add_sibling(&mut l, &f, "N-WARM");
+    go(&mut l, &n, S::Refuted, &[E_DISC_LEAK]);
+    let mv = |l: &mut dla_core::Ledger, to, reason, remedy: Option<&str>, ev: &[u32]| {
+        l.transition(
+            &f,
+            to,
+            reason,
+            remedy.map(String::from),
+            ev.iter().map(|n| eid(*n)).collect(),
+            "test",
+        )
+        .unwrap();
     };
     match state {
         S::Candidate => {}
-        S::UnderTest => mv(&mut l, S::UnderTest, None, None, vec![]),
+        S::UnderTest => mv(&mut l, S::UnderTest, None, None, &[E_HARNESS]),
         S::Confirmed => {
-            mv(&mut l, S::UnderTest, None, None, vec![]);
-            mv(&mut l, S::Confirmed, None, None, vec![]);
+            mv(&mut l, S::UnderTest, None, None, &[E_HARNESS]);
+            mv(&mut l, S::Confirmed, None, None, &[E_GROWTH_PASS]);
         }
         S::Strong => {
-            mv(&mut l, S::UnderTest, None, None, vec![]);
-            mv(&mut l, S::Confirmed, None, None, vec![]);
-            mv(&mut l, S::Strong, None, None, vec![]);
+            mv(&mut l, S::UnderTest, None, None, &[E_HARNESS]);
+            mv(&mut l, S::Confirmed, None, None, &[E_GROWTH_PASS]);
+            mv(&mut l, S::Strong, None, None, &[]);
         }
-        S::Refuted => mv(&mut l, S::Refuted, None, None, vec![eid(2)]),
+        S::Refuted => mv(&mut l, S::Refuted, None, None, &[E_DISC_NONLEAK]),
         S::SuspectedStaticOnly => mv(
             &mut l,
             S::SuspectedStaticOnly,
             Some(UnresolvedReason::NotExercised),
             Some("run it"),
-            vec![],
+            &[],
         ),
         S::Unresolved => mv(
             &mut l,
             S::Unresolved,
             Some(UnresolvedReason::TimeBudget),
             Some("more time"),
-            vec![],
+            &[],
         ),
     }
     (l, f)
@@ -96,7 +106,9 @@ fn plain_move(state: S, to: S) -> Result<(), Error> {
             Some("install it".to_owned()),
             vec![eid(1)],
         ),
-        S::Refuted => (None, None, vec![eid(2)]),
+        S::Refuted => (None, None, vec![eid(E_DISC_NONLEAK)]),
+        S::UnderTest => (None, None, vec![eid(E_HARNESS)]),
+        S::Confirmed => (None, None, vec![eid(E_GROWTH_PASS)]),
         _ => (None, None, vec![]),
     };
     l.transition(&f, to, reason, remedy, ev, "test").map(|_| ())
@@ -238,7 +250,7 @@ fn unknown_evidence_and_findings_are_refused() {
 fn leaving_unresolved_clears_reason_and_remedy() {
     let (mut l, f) = finding_in(S::Unresolved);
     assert!(l.finding(&f).unwrap().reason.is_some());
-    l.transition(&f, S::UnderTest, None, None, vec![], "t")
+    l.transition(&f, S::UnderTest, None, None, vec![eid(E_HARNESS)], "t")
         .unwrap();
     let fin = l.finding(&f).unwrap();
     assert!(fin.reason.is_none() && fin.remedy.is_none());
@@ -304,7 +316,8 @@ fn illegal_transition_fix_comes_from_the_source_state() {
     assert_eq!(r.code, codes::ILLEGAL_TRANSITION);
     assert!(r.message.contains("already unresolved"), "{}", r.message);
     assert!(!r.fix.contains("--as unresolved"), "{}", r.fix);
-    assert!(r.fix.contains("available from M3"), "{}", r.fix);
+    assert!(r.fix.contains("dla ledger test F1 --evidence"), "{}", r.fix);
+    assert!(!r.fix.contains("available from M3"), "{}", r.fix);
 
     // confirmed -> unresolved: only `strong` is allowed, and it arrives later.
     let (mut l, f) = finding_in(S::Confirmed);
@@ -335,7 +348,8 @@ fn illegal_transition_fix_comes_from_the_source_state() {
     ));
     assert!(r.fix.contains("--as unresolved"), "{}", r.fix);
     assert!(!r.fix.contains("--as suspected_static_only"), "{}", r.fix);
-    assert!(r.fix.contains("available from M3"), "{}", r.fix);
+    assert!(r.fix.contains("dla ledger test F1 --evidence"), "{}", r.fix);
+    assert!(!r.fix.contains("available from M3"), "{}", r.fix);
 }
 
 #[test]
@@ -351,10 +365,65 @@ fn terminal_states_are_final_and_point_at_a_new_hypothesis() {
 }
 
 #[test]
-fn refute_fix_names_the_milestone_it_arrives_in() {
+fn test_confirm_and_refute_exist_and_only_strong_is_later() {
     let (mut l, f) = finding_in(S::Candidate);
     let r = refusal(l.transition(&f, S::Refuted, None, None, vec![], "t"));
-    assert!(r.fix.contains("available from M3"), "{}", r.fix);
+    assert_eq!(r.code, codes::DISCRIMINATOR_REQUIRED);
+    assert!(
+        r.fix
+            .contains("dla ledger refute F1 --evidence <discriminator evidence id>"),
+        "{}",
+        r.fix
+    );
+    // candidate -> confirmed is not an edge; the fix offers test and refute, now.
+    let r = refusal(l.transition(&f, S::Confirmed, None, None, vec![], "t"));
+    assert_eq!(r.code, codes::ILLEGAL_TRANSITION);
+    assert!(r.fix.contains("dla ledger test F1"), "{}", r.fix);
+    assert!(r.fix.contains("dla ledger refute F1"), "{}", r.fix);
+    assert!(!r.fix.contains("available from M3"), "{}", r.fix);
+    let (mut l, f) = finding_in(S::Confirmed);
+    let r = refusal(l.transition(&f, S::Refuted, None, None, vec![], "t"));
+    assert!(
+        r.fix.contains("dla ledger strong F1") && r.fix.contains("M6"),
+        "{}",
+        r.fix
+    );
+}
+
+#[test]
+fn version_one_lines_replay_under_the_m0_rules() {
+    // The same moves that M3 refuses (no harness, no sibling, no growth) are valid in
+    // a ledger written before M3: version 1 lines replay under M0Rules.
+    let v1 = |seq: u64, body: &str| line(seq, body);
+    let text = [
+        v1(1, EVIDENCE_BODY),
+        v1(
+            2,
+            r#""type":"finding_added","finding":{"id":"F1","state":"candidate","origin":"census","supports":["E1"]}"#,
+        ),
+        v1(
+            3,
+            r#""type":"transition","finding":"F1","from":"candidate","to":"under_test","evidence":[],"by":"x""#,
+        ),
+        v1(
+            4,
+            r#""type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":[],"by":"x""#,
+        ),
+    ]
+    .concat();
+    let l = dla_core::Ledger::from_text(&text).unwrap();
+    assert_eq!(l.finding(&fid(1)).unwrap().state, S::Confirmed);
+    // The same lines written as version 2 are refused at the first move.
+    let v2 = text.replace("\"schema_version\":1", "\"schema_version\":2");
+    match dla_core::Ledger::from_text(&v2) {
+        Err(Error::Replay(e)) => {
+            assert_eq!(
+                (e.line, e.refusal.code.as_str()),
+                (3, codes::HARNESS_REQUIRED)
+            );
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

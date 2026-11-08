@@ -128,6 +128,22 @@
           "description": "Stable identifier, for example `go:test:./...`.",
           "type": "string"
         },
+        "iteration_arg": {
+          "description": "How the workload takes an iteration count, as a command-line template with `{n}`\n(`--iterations {n}`, `-n {n}`, `{n}`); absent when none was detected.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "iteration_default": {
+          "description": "The iteration count the workload runs when none is given, when visible in the\nsource (`flag.Int(\"n\", 2000, ...)`).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "kind": {
           "description": "What it is.",
           "$ref": "#/$defs/WorkloadKind"

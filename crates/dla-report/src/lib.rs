@@ -11,8 +11,11 @@ use std::fmt::Write as _;
 use dla_core::{
     EvidenceId, EvidenceRecord, Finding, FindingState, RunView, UNCLASSIFIED,
     coverage::{BackendStatus, CoverageManifest, ResidualRow},
+    discriminator::favors_of,
     evidence::CoverageStatus,
+    machine::is_passing_growth,
     status,
+    trend::{GrowthSummary, PassedColumn},
 };
 
 /// Label shown for a finding that no archetype describes.
@@ -131,6 +134,44 @@ fn header(out: &mut String, view: &RunView, st: &dla_core::ReportStatus) {
         s.unresolved
     );
     let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
+    let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
+}
+
+/// The iterations run and entry points exercised per worker, or `not measured` when the
+/// manifest records neither.
+fn coverage_line(coverage: Option<&CoverageManifest>) -> String {
+    let Some(cov) = coverage else {
+        return "not measured".to_owned();
+    };
+    let parts: Vec<String> = cov
+        .workers
+        .iter()
+        .filter(|(_, w)| {
+            w.iterations.is_some()
+                || !w.entry_points.discovered.is_empty()
+                || !w.entry_points.exercised.is_empty()
+        })
+        .map(|(name, w)| {
+            let iterations = w
+                .iterations
+                .map_or_else(|| "no iterations".to_owned(), |n| plural_n(n, "iteration"));
+            let exercised = w.entry_points.exercised.len();
+            let discovered = w.entry_points.discovered.len().max(exercised);
+            format!(
+                "{} {iterations}, {exercised} of {discovered} entry points exercised",
+                inline(name)
+            )
+        })
+        .collect();
+    if parts.is_empty() {
+        "not measured".to_owned()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn plural_n(n: u64, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
 fn residual_line(coverage: Option<&CoverageManifest>) -> String {
@@ -221,6 +262,97 @@ fn findings(out: &mut String, view: &RunView) {
     }
 }
 
+/// A number without trailing zeros: whole numbers print as integers, others with at
+/// most four decimals.
+fn num(x: f64) -> String {
+    if x.fract() == 0.0 && x.abs() < 1e15 {
+        return format!("{x:.0}");
+    }
+    let t = format!("{x:.4}");
+    t.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// `<column> <slope> <unit>/<axis> (<shape>, gate pass, <evidence>)` for a confirmed or
+/// strong finding: the passing column of its growth evidence that is tied to it (by
+/// `finding`, equal site or `candidates`), else the first passing column.
+fn growth_line(view: &RunView, f: &Finding) -> Option<String> {
+    if !matches!(f.state, FindingState::Confirmed | FindingState::Strong) {
+        return None;
+    }
+    let mut fallback: Option<(PassedColumn, GrowthSummary, EvidenceId)> = None;
+    let mut bare: Option<EvidenceId> = None;
+    for e in f
+        .supports
+        .iter()
+        .filter_map(|id| view.ledger.evidence_by_id(id))
+        .filter(|e| is_passing_growth(e))
+    {
+        let Some(summary) = GrowthSummary::from_result(&e.result) else {
+            bare.get_or_insert_with(|| e.evidence_id.clone());
+            continue;
+        };
+        if let Some(c) = summary
+            .passed
+            .iter()
+            .find(|c| c.tied_to(&f.id, f.site.as_deref()))
+        {
+            return Some(growth_text(c, &summary, &e.evidence_id));
+        }
+        if fallback.is_none()
+            && let Some(c) = summary.passed.first()
+        {
+            fallback = Some((c.clone(), summary.clone(), e.evidence_id.clone()));
+        }
+        if summary.passed.is_empty() {
+            bare.get_or_insert_with(|| e.evidence_id.clone());
+        }
+    }
+    match (fallback, bare) {
+        (Some((c, s, id)), _) => Some(growth_text(&c, &s, &id)),
+        (None, Some(id)) => Some(format!("gate pass, {id}")),
+        (None, None) => None,
+    }
+}
+
+fn growth_text(c: &PassedColumn, s: &GrowthSummary, id: &EvidenceId) -> String {
+    let mut text = code(&c.column);
+    if let Some(slope) = c.slope {
+        let unit = c.unit.map_or("units", |u| u.as_str());
+        let axis = s.axis.as_deref().unwrap_or("x");
+        let _ = write!(text, " {} {unit}/{}", num(slope), inline(axis));
+    }
+    let shape = c
+        .shape
+        .and_then(|sh| serde_json::to_value(sh).ok())
+        .and_then(|v| v.as_str().map(str::to_owned));
+    match shape {
+        Some(sh) => format!("{text} ({sh}, gate pass, {id})"),
+        None => format!("{text} (gate pass, {id})"),
+    }
+}
+
+/// `<test> (<favors>) <evidence>` for each discriminator that refuted the finding.
+fn ruled_out_by(view: &RunView, f: &Finding) -> Option<String> {
+    let parts: Vec<String> = f
+        .contradicts
+        .iter()
+        .filter_map(|id| view.ledger.evidence_by_id(id))
+        .filter(|e| e.kind == dla_core::EvidenceKind::Discriminator)
+        .map(|e| {
+            let test = e
+                .result
+                .get("test")
+                .and_then(|t| t.as_str())
+                .map_or_else(|| "discriminator".to_owned(), inline);
+            match favors_of(e) {
+                Some(fv) => format!("{test} ({fv}) {}", e.evidence_id),
+                None => format!("{test} {}", e.evidence_id),
+            }
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     match (&f.parent, &f.hypothesis) {
         (Some(_), Some(h)) => {
@@ -237,6 +369,9 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
         }
     }
     let _ = writeln!(out, "- State: {}", f.state_label());
+    if let Some(g) = growth_line(view, f) {
+        let _ = writeln!(out, "- Growth: {g}");
+    }
     let cl = classes(view, f);
     if !cl.is_empty() {
         let _ = writeln!(out, "- Evidence classes: {cl}");
@@ -339,6 +474,9 @@ fn ruled_out(out: &mut String, view: &RunView) {
                 ids(&disc)
             }
         );
+        if let Some(r) = ruled_out_by(view, f) {
+            let _ = writeln!(out, "  - Ruled out by: {r}");
+        }
         if let Some(h) = &f.hypothesis {
             let _ = writeln!(out, "  - Hypothesis: {}", inline(h));
         }

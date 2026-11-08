@@ -8,6 +8,8 @@ Findings: 2 enumerated, 0 dispositioned; confirmed 0, strong 0, refuted 0, suspe
 
 Residual: heap 0.5 MB/h unattributed of 10 total (threshold 1); off-heap 6 MB/h unattributed of 8 total (threshold 1) ABOVE THRESHOLD, see O1
 
+Coverage: jvm no iterations, 1 of 2 entry points exercised
+
 ## Open items
 
 - **F1**: finding F1 is candidate and has no disposition. Fix: `dla ledger resolve F1 --as unresolved --reason time_budget --remedy "<text>"`

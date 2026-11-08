@@ -29,6 +29,7 @@ use clap::{
     CommandFactory, Parser, Subcommand,
     error::{ContextKind, ContextValue, ErrorKind},
 };
+use dla_core::FindingState;
 use serde_json::{Value, json};
 
 use crate::{
@@ -109,6 +110,15 @@ fn dispatch(cli: Cli) -> Res<Output> {
         }
         Command::Ledger(ledger_cmd::LedgerCmd::Annotate(a)) => {
             ledger_cmd::annotate(&ctx()?, a).map(Output::Json)
+        }
+        Command::Ledger(ledger_cmd::LedgerCmd::Test(a)) => {
+            ledger_cmd::move_to(&ctx()?, a, FindingState::UnderTest).map(Output::Json)
+        }
+        Command::Ledger(ledger_cmd::LedgerCmd::Confirm(a)) => {
+            ledger_cmd::move_to(&ctx()?, a, FindingState::Confirmed).map(Output::Json)
+        }
+        Command::Ledger(ledger_cmd::LedgerCmd::Refute(a)) => {
+            ledger_cmd::move_to(&ctx()?, a, FindingState::Refuted).map(Output::Json)
         }
         Command::Report => {
             let r = report::run(&ctx()?)?;

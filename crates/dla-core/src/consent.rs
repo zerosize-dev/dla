@@ -1,7 +1,17 @@
 //! Consent for intrusive steps: parsing the tier list and building the record.
 //!
 //! One consent is recorded per run. The tiers are the privilege tiers 1 to 4 of the
-//! safety reference; a ceiling caps which tiers may be granted.
+//! safety reference; a ceiling caps which tiers may be granted. Tiers escalate by
+//! intrusiveness:
+//!
+//! | Tier | Covers |
+//! |---|---|
+//! | 1 | Build and run project code in a scratch copy under the run directory: builds, tests, harness loops, preload agents, allocator shims and in-process probes in processes DLA starts, intervention edits in the scratch copy, installing analyzers into the plugin data directory |
+//! | 2 | Observe a running local process DLA did not start: `/proc` or libproc sampling of a PID, jcmd attach, Node inspector (SIGUSR1), Python remote exec, reading a Go pprof endpoint |
+//! | 3 | Debugger or kernel level: ptrace attach (gdb, heaptrack --pid, goref), eBPF/bpftrace, perf, valgrind with vgdb, another process's fd table, GPU counters; may need root |
+//! | 4 | Capture memory contents: heap dumps, heap snapshots, core dumps, memray attach captures. Outputs may contain secrets and stay in `.dla/` |
+//!
+//! Raw values in summaries need separate consent (`--raw-values`).
 
 use chrono::{DateTime, Utc};
 
@@ -60,6 +70,30 @@ pub fn parse_tiers(text: &str) -> Result<Vec<u8>, Refusal> {
     tiers.sort_unstable();
     tiers.dedup();
     Ok(tiers)
+}
+
+/// Writes sorted, distinct tiers the way `dla consent --tiers` reads them: runs of
+/// three or more become a range, so `[1, 2, 3, 4]` is `1-4`, `[1, 2, 4]` is `1,2,4`
+/// and `[1, 3]` is `1,3`.
+pub fn format_tiers(tiers: &[u8]) -> String {
+    let mut sorted = tiers.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let mut j = i;
+        while j + 1 < sorted.len() && sorted[j + 1] == sorted[j] + 1 {
+            j += 1;
+        }
+        if j - i >= 2 {
+            parts.push(format!("{}-{}", sorted[i], sorted[j]));
+        } else {
+            parts.extend(sorted[i..=j].iter().map(u8::to_string));
+        }
+        i = j + 1;
+    }
+    parts.join(",")
 }
 
 /// Parses a ceiling: a single tier from 1 to 4.
@@ -149,6 +183,28 @@ mod tests {
         assert_eq!(parse_tiers("1-2, 4").unwrap(), vec![1, 2, 4]);
         for bad in ["", "0", "5", "1-5", "4-1", "a", "1,,2", "1-"] {
             assert!(parse_tiers(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn tiers_are_written_the_way_they_are_read() {
+        for (tiers, text) in [
+            (vec![1], "1"),
+            (vec![1, 2], "1,2"),
+            (vec![1, 2, 3], "1-3"),
+            (vec![1, 2, 3, 4], "1-4"),
+            (vec![1, 3], "1,3"),
+            (vec![1, 2, 4], "1,2,4"),
+            (vec![4, 1, 2, 3, 2], "1-4"),
+            (vec![2, 3, 4], "2-4"),
+        ] {
+            assert_eq!(format_tiers(&tiers), text);
+            assert_eq!(parse_tiers(text).unwrap(), {
+                let mut t = tiers.clone();
+                t.sort_unstable();
+                t.dedup();
+                t
+            });
         }
     }
 

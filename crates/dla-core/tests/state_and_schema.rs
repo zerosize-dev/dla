@@ -168,7 +168,11 @@ fn schema_export_is_complete_and_deterministic() {
             "static-hit",
             "census-entry",
             "workload",
-            "workload-report"
+            "workload-report",
+            "series",
+            "trend",
+            "harness-manifest",
+            "harness-dump"
         ]
     );
     let first: Vec<String> = all.iter().map(|(_, s)| schema::render(s)).collect();
@@ -191,6 +195,7 @@ fn result_size_constants() {
     assert_eq!(dla_core::MAX_RESULT_BYTES, 2048);
     assert_eq!(dla_core::MAX_OUTPUT_BYTES, 2048);
     assert_eq!(dla_core::SCHEMA_VERSION, 1);
+    assert_eq!(dla_core::LEDGER_SCHEMA_VERSION, 2);
 }
 
 #[test]

@@ -278,6 +278,41 @@ impl JsonSchema for Origin {
     }
 }
 
+/// The seven non-leak explanations a sibling hypothesis can name.
+pub const NON_LEAK_IDS: [&str; 7] = [
+    "N-ALLOC",
+    "N-HEADROOM",
+    "N-WARM",
+    "N-HWM",
+    "N-SCALE",
+    "N-INTENT",
+    "N-OBSERVER",
+];
+
+/// The `N-*` id a hypothesis begins with, when it is one of [`NON_LEAK_IDS`] followed by
+/// the end of the text, a space or a colon.
+pub fn nonleak_id(hypothesis: &str) -> Option<&'static str> {
+    let text = hypothesis.trim_start();
+    NON_LEAK_IDS.iter().copied().find(|id| {
+        text.strip_prefix(id)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', ':']))
+    })
+}
+
+/// True when the hypothesis begins with `N-`, whether or not it names a valid id.
+pub fn claims_nonleak(hypothesis: &str) -> bool {
+    hypothesis.trim_start().starts_with("N-")
+}
+
+/// Which side of the leak question a finding argues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Polarity {
+    /// The finding says memory is leaked.
+    Leak,
+    /// The finding says the growth has a non-leak explanation (an `N-*` sibling).
+    NonLeak,
+}
+
 fn default_archetype() -> String {
     UNCLASSIFIED.to_owned()
 }
@@ -377,6 +412,21 @@ impl Finding {
             siblings: Vec::new(),
             explanation: None,
         }
+    }
+
+    /// Leak-side for a top-level finding and for a sibling whose hypothesis does not
+    /// begin with an `N-*` id; non-leak for a sibling that does.
+    pub fn polarity(&self) -> Polarity {
+        if self.parent.is_some() && self.hypothesis.as_deref().and_then(nonleak_id).is_some() {
+            Polarity::NonLeak
+        } else {
+            Polarity::Leak
+        }
+    }
+
+    /// The finding that roots this finding's family: its parent, or itself.
+    pub fn root_id(&self) -> FindingId {
+        self.parent.clone().unwrap_or_else(|| self.id.clone())
     }
 
     /// The state rendered with its reason, such as `unresolved(time_budget)`.

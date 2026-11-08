@@ -1,0 +1,419 @@
+// Code generated for the DLA harness; not part of the project. Driver mode.
+//
+// Placed in the package under test (so package-level variables and unexported functions are
+// reachable) as zz_dla_driver_test.go. Fill the two DLA-HOOK bodies below and nothing else; keep
+// the loop as it is. Run with:
+//
+//	go test -vet=off -count=1 -run '^TestDLADriver$' [-tags dlagoleak] ./<package dir>
+//
+// One process, one `checkpoint` record per round (x = units completed). Keys: DLA_KEY_MODE=fresh
+// uses key = i (every unit sees a new key); DLA_KEY_MODE=repeated uses key = i % repeat (a bounded
+// key space). DLA_WARMUP warm-up rounds, then DLA_ROUNDS measured rounds of DLA_STEP units each
+// (the defaults are baked in at generation time).
+
+package @@DLA_PACKAGE@@
+
+import (
+	dlabytes "bytes"
+	dlajson "encoding/json"
+	dlaos "os"
+	dlafilepath "path/filepath"
+	dlaruntime "runtime"
+	dladebug "runtime/debug"
+	dlametrics "runtime/metrics"
+	dlapprof "runtime/pprof"
+	dlastrconv "strconv"
+	dlastrings "strings"
+	dlasync "sync"
+	dlatesting "testing"
+	dlatime "time"
+)
+
+// DLA-ENGINE-BEGIN (identical in zz_dla_harness_test.go.tmpl and zz_dla_driver_test.go.tmpl)
+
+// dlaMetric maps a runtime/metrics sample to a dump column.
+type dlaMetric struct{ metric, column string }
+
+var dlaMetrics = []dlaMetric{
+	{"/gc/heap/live:bytes", "go.heap_live"},
+	{"/memory/classes/heap/objects:bytes", "go.heap_objects"},
+	{"/memory/classes/total:bytes", "go.total"},
+	{"/memory/classes/heap/released:bytes", "go.released"},
+	{"/memory/classes/heap/stacks:bytes", "go.stacks"},
+	{"/sched/goroutines:goroutines", "go.goroutines"},
+}
+
+var (
+	dlaStart        = dlatime.Now()
+	dlaArgv         = append([]string(nil), dlaos.Args...)
+	dlaMu           dlasync.Mutex
+	dlaCheckpointed bool
+	dlaDetectors    []map[string]any
+	dlaProbeHook    func() []map[string]any // driver mode: GoVar probes read by the hook
+	dlaNotes        []string
+)
+
+func dlaEnv(name string) string { return dlaos.Getenv(name) }
+
+func dlaIter() *int {
+	if n, err := dlastrconv.Atoi(dlaEnv("DLA_ITER")); err == nil {
+		return &n
+	}
+	return nil
+}
+
+// dlaReadMetrics reads the runtime/metrics columns; unsupported metrics are noted once.
+func dlaReadMetrics(notes *[]string) map[string]float64 {
+	samples := make([]dlametrics.Sample, len(dlaMetrics))
+	for i, m := range dlaMetrics {
+		samples[i].Name = m.metric
+	}
+	dlametrics.Read(samples)
+	out := make(map[string]float64, len(samples))
+	for i, s := range samples {
+		switch s.Value.Kind() {
+		case dlametrics.KindUint64:
+			out[dlaMetrics[i].column] = float64(s.Value.Uint64())
+		case dlametrics.KindFloat64:
+			out[dlaMetrics[i].column] = s.Value.Float64()
+		default:
+			*notes = append(*notes, "runtime metric unavailable: "+s.Name)
+		}
+	}
+	return out
+}
+
+// dlaOSValues reads the process figures from /proc/self/status (Linux).
+func dlaOSValues() map[string]float64 {
+	out := map[string]float64{}
+	data, err := dlaos.ReadFile("/proc/self/status")
+	if err != nil {
+		return out
+	}
+	keys := map[string]string{
+		"VmRSS": "os.rss", "RssAnon": "os.rss_anon", "RssFile": "os.rss_file", "RssShmem": "os.rss_shmem",
+		"VmSwap": "os.swap", "VmData": "os.vm_data", "VmHWM": "os.vm_hwm",
+	}
+	for _, line := range dlastrings.Split(string(data), "\n") {
+		key, rest, ok := dlastrings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		fields := dlastrings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		n, err := dlastrconv.ParseFloat(fields[0], 64)
+		if err != nil {
+			continue
+		}
+		if col, ok := keys[key]; ok {
+			out[col] = n * 1024
+		} else if key == "Threads" {
+			out["os.threads"] = n
+		}
+	}
+	return out
+}
+
+func dlaMerge(dst map[string]float64, src map[string]float64) map[string]float64 {
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func dlaEvalRoot(p string) string {
+	if p == "" {
+		return ""
+	}
+	if abs, err := dlafilepath.Abs(p); err == nil {
+		p = abs
+	}
+	if real, err := dlafilepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	return dlafilepath.ToSlash(p)
+}
+
+// dlaSite makes a "created by" location relative to DLA_PROJECT (and GOROOT-relative for the
+// standard library); other locations keep their path.
+func dlaSite(file, line string) string {
+	file = dlafilepath.ToSlash(file)
+	for _, root := range []string{dlaEnv("DLA_PROJECT"), dlaEvalRoot(dlaEnv("DLA_PROJECT"))} {
+		root = dlastrings.TrimRight(dlafilepath.ToSlash(root), "/")
+		if root != "" && dlastrings.HasPrefix(file, root+"/") {
+			return file[len(root)+1:] + ":" + line
+		}
+	}
+	if goroot := dlastrings.TrimRight(dlafilepath.ToSlash(dlaruntime.GOROOT()), "/"); goroot != "" && dlastrings.HasPrefix(file, goroot+"/") {
+		return "$GOROOT/" + file[len(goroot)+1:] + ":" + line
+	}
+	return file + ":" + line
+}
+
+// dlaGoroutines parses the goroutine profile (debug=2) into counts per "created by" site. The
+// harness's own ticker goroutine and those created by the testing package or the runtime are
+// left out; goroutines without a creator (main) are not grouped.
+func dlaGoroutines() map[string]float64 {
+	groups := map[string]float64{}
+	profile := dlapprof.Lookup("goroutine")
+	if profile == nil {
+		return groups
+	}
+	var buf dlabytes.Buffer
+	if err := profile.WriteTo(&buf, 2); err != nil {
+		return groups
+	}
+	for _, block := range dlastrings.Split(buf.String(), "\n\n") {
+		lines := dlastrings.Split(dlastrings.TrimSpace(block), "\n")
+		creator := -1
+		for i, line := range lines {
+			if dlastrings.HasPrefix(line, "created by ") {
+				creator = i
+			}
+		}
+		if creator < 0 || creator+1 >= len(lines) {
+			continue
+		}
+		fn, _, _ := dlastrings.Cut(dlastrings.TrimPrefix(lines[creator], "created by "), " in goroutine ")
+		if dlastrings.HasPrefix(fn, "testing.") || dlastrings.HasPrefix(fn, "runtime.") || dlastrings.Contains(fn, ".dlaStartTicker") {
+			continue
+		}
+		loc := dlastrings.TrimSpace(lines[creator+1])
+		if at := dlastrings.LastIndex(loc, " +0x"); at > 0 {
+			loc = loc[:at]
+		}
+		cut := dlastrings.LastIndex(loc, ":")
+		if cut <= 0 {
+			continue
+		}
+		file, line := loc[:cut], loc[cut+1:]
+		groups[dlaSite(file, line)]++
+	}
+	return groups
+}
+
+// dlaPurgeFigures picks the figures a purge is judged by out of a value set.
+func dlaPurgeFigures(values map[string]float64) map[string]float64 {
+	out := map[string]float64{}
+	for _, k := range []string{"go.released", "go.total", "go.heap_objects", "os.rss", "os.rss_anon"} {
+		if v, ok := values[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func dlaPurgeSnapshot() map[string]float64 {
+	var notes []string
+	return dlaPurgeFigures(dlaMerge(dlaReadMetrics(&notes), dlaOSValues()))
+}
+
+// dlaBuild assembles one record. A tick record is cheap: no collection, no probes.
+func dlaBuild(phase string, x *int, last bool) map[string]any {
+	var notes []string
+	tick := phase == "tick"
+	rec := map[string]any{
+		"dla_harness": 1, "phase": phase, "pid": dlaos.Getpid(), "argv": dlaArgv, "runtime": "go",
+		"t_ms": dlatime.Since(dlaStart).Milliseconds(), "gc_forced": !tick,
+	}
+	if exe, err := dlaos.Executable(); err == nil {
+		rec["exe"] = exe
+	}
+	if x != nil {
+		rec["x"] = *x
+	}
+	var pre map[string]float64
+	if !tick {
+		m := dlaReadMetrics(&notes)
+		pre = map[string]float64{}
+		for _, k := range []string{"go.heap_objects", "go.total", "go.goroutines"} {
+			if v, ok := m[k]; ok {
+				pre[k] = v
+			}
+		}
+		if v, ok := dlaOSValues()["os.rss"]; ok {
+			pre["os.rss"] = v
+		}
+		dlaruntime.GC()
+		dlaruntime.GC()
+	}
+	values := dlaMerge(dlaReadMetrics(&notes), dlaOSValues())
+	rec["values"] = values
+	if pre != nil {
+		rec["values_pre_gc"] = pre
+	}
+	rec["groups"] = map[string]any{"go.goroutines": dlaGoroutines()}
+	if purge := dlaEnv("DLA_PURGE"); last && !tick && purge != "" && purge != "none" {
+		switch purge {
+		case "free-os-memory":
+			// before = the figures read right after the forced collections above
+			before := dlaPurgeFigures(values)
+			dladebug.FreeOSMemory()
+			rec["purge"] = map[string]any{"kind": purge, "before": before, "after": dlaPurgeSnapshot()}
+		case "gc":
+			rec["purge"] = map[string]any{"kind": purge, "before": pre, "after": dlaPurgeFigures(values)}
+		default:
+			notes = append(notes, "purge '"+purge+"' is not supported by the go agent (free-os-memory, gc)")
+			rec["purge"] = map[string]any{"kind": purge}
+		}
+	}
+	if dlaProbeHook != nil && !tick {
+		rec["probes"] = dlaProbeHook()
+	}
+	if len(dlaDetectors) > 0 && !tick {
+		rec["detectors"] = dlaDetectors
+	}
+	notes = append(notes, dlaNotes...)
+	if tick {
+		notes = append(notes, "tick record: no forced collection")
+	}
+	rec["limitations"] = dlaUnique(notes)
+	return rec
+}
+
+func dlaUnique(in []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// dlaDump appends one record to DLA_HARNESS_OUT. It never panics.
+func dlaDump(phase string, x *int, last bool) {
+	out := dlaEnv("DLA_HARNESS_OUT")
+	if out == "" {
+		return
+	}
+	dlaMu.Lock()
+	defer dlaMu.Unlock()
+	defer func() { _ = recover() }()
+	line, err := dlajson.Marshal(dlaBuild(phase, x, last))
+	if err != nil {
+		line, _ = dlajson.Marshal(map[string]any{"dla_harness": 1, "phase": phase, "runtime": "go", "limitations": []string{"dump failed: " + err.Error()}})
+	}
+	_ = dlaos.MkdirAll(dlafilepath.Dir(out), 0o755)
+	f, err := dlaos.OpenFile(out, dlaos.O_APPEND|dlaos.O_CREATE|dlaos.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(append(line, '\n'))
+	_ = f.Close()
+}
+
+// dlaStartTicker writes a tick record every DLA_TICK_MS (when set) and returns a stop function
+// that waits for the ticker goroutine to end.
+func dlaStartTicker() func() {
+	ms, err := dlastrconv.Atoi(dlaEnv("DLA_TICK_MS"))
+	if err != nil || ms <= 0 {
+		return func() {}
+	}
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		t := dlatime.NewTicker(dlatime.Duration(ms) * dlatime.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				dlaDump("tick", nil, false)
+			}
+		}
+	}()
+	var once dlasync.Once
+	return func() { once.Do(func() { close(done); <-stopped }) }
+}
+
+// DLA-ENGINE-END
+
+const (
+	dlaDefaultStep   = @@DLA_STEP@@
+	dlaDefaultWarmup = @@DLA_WARMUP@@
+	dlaDefaultRounds = @@DLA_ROUNDS@@
+	dlaDefaultRepeat = @@DLA_REPEAT@@
+)
+
+// dlaT is the running test, for hooks that need t.TempDir or t.Fatal.
+var dlaT *dlatesting.T
+
+// dlaGoleakCheck is set by zz_dla_goleak_test.go (build tag dlagoleak) when go.uber.org/goleak is
+// available; it returns the leaked-goroutine report, or "" when none leaked.
+var dlaGoleakCheck func() string
+
+func dlaIntEnv(name string, def int) int {
+	if n, err := dlastrconv.Atoi(dlaEnv(name)); err == nil && n > 0 {
+		return n
+	}
+	return def
+}
+
+// dlaSetup builds the objects under test once, before the first round.
+func dlaSetup() {
+	// DLA-HOOK setup: construct the services/caches/pools the workload needs and keep them in package-level variables (package-private API is usable here; use dlaT for t.TempDir or t.Fatal)
+	panic("DLA-HOOK setup has not been filled in")
+}
+
+// dlaUnit performs one unit of work for key (i is the 1-based unit number).
+func dlaUnit(i, key int) {
+	// DLA-HOOK unit: perform exactly one unit of the workload for this key (derive request ids/names/payloads from key so a repeated key reproduces an earlier request)
+	panic("DLA-HOOK unit has not been filled in")
+}
+
+// dlaProbes reports package variables for the GoVar probes of probes.json: one record per variable.
+func dlaProbes() []map[string]any {
+	// DLA-HOOK probes: return one dlaProbe(id, name, path, size) per probed package variable (id = the probe id from probes.json, path = "<package dir>.<name>", size = len(...) of the map/slice/chan or the entry count); leave the empty list when there are none
+	return nil
+}
+
+// dlaProbe builds one probe record; size is the number of entries the variable holds.
+func dlaProbe(id, name, path string, size int) map[string]any {
+	return map[string]any{"id": id, "name": name, "path": path, "size": size, "reachable": nil, "bytes": nil, "error": nil}
+}
+
+// TestDLADriver runs warm-up and measured rounds and writes a checkpoint after each.
+func TestDLADriver(t *dlatesting.T) {
+	dlaT = t
+	step := dlaIntEnv("DLA_STEP", dlaDefaultStep)
+	warmup := dlaIntEnv("DLA_WARMUP", dlaDefaultWarmup)
+	rounds := dlaIntEnv("DLA_ROUNDS", dlaDefaultRounds)
+	repeat := dlaIntEnv("DLA_REPEAT", dlaDefaultRepeat)
+	repeated := dlaEnv("DLA_KEY_MODE") == "repeated"
+	stop := dlaStartTicker()
+	defer stop()
+	dlaSetup()
+	dlaProbeHook = dlaProbes
+	total := warmup + rounds
+	done := 0
+	for round := 1; round <= total; round++ {
+		for n := 0; n < step; n++ {
+			done++
+			key := done
+			if repeated {
+				key = done % repeat
+			}
+			dlaUnit(done, key)
+		}
+		last := round == total
+		if last {
+			stop()
+			if dlaGoleakCheck != nil {
+				if report := dlaGoleakCheck(); report != "" {
+					if len(report) > 2000 {
+						report = report[:2000]
+					}
+					dlaDetectors = append(dlaDetectors, map[string]any{"lib": "goleak", "text": report, "site": nil})
+				}
+			}
+		}
+		x := done
+		dlaDump("checkpoint", &x, last)
+	}
+}

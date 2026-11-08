@@ -61,6 +61,24 @@ fn coverage() -> CoverageManifest {
     .unwrap()
 }
 
+fn dynamic_coverage() -> CoverageManifest {
+    serde_json::from_value(json!({
+        "schema_version": 1,
+        "workers": {
+            "go": {
+                "runtime": "go",
+                "entry_points": {
+                    "discovered": ["cmd/bus.Run", "cmd/bus.Serve", "cmd/cache.Warm"],
+                    "exercised": ["cmd/bus.Run", "cmd/cache.Warm"]
+                },
+                "iterations": 8000
+            },
+            "python": {"runtime": "python"}
+        }
+    }))
+    .unwrap()
+}
+
 fn check_golden(name: &str, actual: &str) {
     let path = format!("{}/tests/golden/{name}.md", env!("CARGO_MANIFEST_DIR"));
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
@@ -81,6 +99,61 @@ fn golden_complete_with_refuted_and_unresolved() {
 fn golden_incomplete_with_open_items_and_coverage() {
     let md = render_markdown(&view("incomplete", Some(coverage())));
     check_golden("incomplete", &md);
+}
+
+#[test]
+fn golden_dynamic_confirmed_and_ruled_out() {
+    let md = render_markdown(&view("dynamic", Some(dynamic_coverage())));
+    check_golden("dynamic", &md);
+}
+
+#[test]
+fn confirmed_findings_show_their_growth_column() {
+    let md = render_markdown(&view("dynamic", None));
+    // The tied column (F1) is chosen, not the first one (os.rss).
+    assert!(
+        md.contains("- Growth: `probe:Registry.listeners` 412 bytes/n (steady, gate pass, E3)\n"),
+        "{md}"
+    );
+    assert_eq!(md.matches("- Growth:").count(), 1);
+    // Findings that are not confirmed never get a growth line.
+    let md = render_markdown(&view("complete", None));
+    assert!(!md.contains("- Growth:"));
+}
+
+#[test]
+fn refuted_findings_name_the_discriminator_verdict() {
+    let md = render_markdown(&view("dynamic", None));
+    let ruled = md.split("## Ruled out").nth(1).unwrap();
+    let ruled = ruled.split("## Blind spots").next().unwrap();
+    assert!(
+        ruled.contains("  - Ruled out by: plateau+purge (leak) E4\n"),
+        "{ruled}"
+    );
+    assert!(
+        ruled.contains("  - Ruled out by: plateau (non-leak) E5\n"),
+        "{ruled}"
+    );
+    // A discriminator with no test or verdict in its result is still named.
+    let md = render_markdown(&view("complete", None));
+    assert!(md.contains("  - Ruled out by: discriminator E3\n"), "{md}");
+}
+
+#[test]
+fn coverage_line_reports_iterations_and_exercised_entry_points() {
+    let md = render_markdown(&view("dynamic", Some(dynamic_coverage())));
+    assert!(
+        md.contains("Coverage: go 8000 iterations, 2 of 3 entry points exercised\n"),
+        "{md}"
+    );
+    let md = render_markdown(&view("dynamic", None));
+    assert!(md.contains("Coverage: not measured\n"));
+    // The jvm worker of the other fixture has exercised entry points but no iterations.
+    let md = render_markdown(&view("incomplete", Some(coverage())));
+    assert!(
+        md.contains("Coverage: jvm no iterations, 1 of 2 entry points exercised\n"),
+        "{md}"
+    );
 }
 
 #[test]

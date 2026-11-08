@@ -1,0 +1,74 @@
+# JVM agent and driver
+
+| File | Role |
+|---|---|
+| `DlaAgent.java` | `premain` agent (package `dla.harness`): registers the exit dump and optional ticks |
+| `DlaDump.java` | dump, probe and walk code plus a tiny JSON reader/writer (package `dla.harness`); shared by the agent and the driver |
+| `DlaHarness.java` | loop driver template (package `@@DLA_PACKAGE@@`, class `@@DLA_CLASS@@`) |
+| `MANIFEST.MF` | jar manifest (`Premain-Class: dla.harness.DlaAgent`) |
+
+## Build (done by dla at gen/run time, JDK 11+)
+
+```
+javac -d agent/classes DlaAgent.java DlaDump.java
+jar --create --file dla-agent.jar --manifest MANIFEST.MF -C agent/classes .
+```
+
+## Inject
+
+Append to any existing value (never replace it; the `Picked up JAVA_TOOL_OPTIONS` stderr line is
+expected):
+
+```
+JAVA_TOOL_OPTIONS="$JAVA_TOOL_OPTIONS -javaagent:<abs>/dla-agent.jar -XX:NativeMemoryTracking=summary"
+```
+
+plus the environment contract of `harness/README.md`. Tool JVMs (javac, jar, jshell, maven,
+gradle, ant, sbt, detected from `sun.java.command`) are skipped, so build steps may inherit the
+variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid>.jfr,settings=profile`.
+
+## What the exit dump records
+
+- `values` after `System.gc()` twice: `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used`,
+  `jvm.nonheap_committed`, `jvm.threads`, `jvm.classes_loaded`, `jvm.nmt_committed` (only when NMT
+  is on, otherwise a limitation), and `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`,
+  `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.threads` read from `/proc/self/status`.
+- `values_pre_gc`: `jvm.heap_used`, `jvm.heap_committed`, `os.rss` just before the collections.
+- `types`: top 20 classes by instance count from `gcClassHistogram` (array names as `byte[]`).
+- `coverage`: `{"kind":"classes","items":[...]}`; classes loaded from `DLA_PROJECT` first, then
+  other non-JDK classes of the application and library loaders; capped at 4000.
+- `probes`: `JvmClass` yields one record per static field of reference type (primitives, strings,
+  numbers, enums and `Class` constants are skipped); `JvmStatic` yields one record. `size` is the
+  size of a Collection/Map/array, `reachable` the objects reached by a bounded iterative walk
+  (max 2,000,000), `bytes` a shallow estimate assuming compressed oops. The walk descends into
+  arrays, Collection/Map contents (through their API, so JDK-internal nodes are not counted) and
+  reference fields of application classes; it counts but does not descend into enums, strings,
+  boxed numbers and references, and skips `Class`, `ClassLoader`, `Thread`, reflection, `Module`
+  and `java.lang.invoke` objects. A class that is not loaded gives `error: "class not loaded: ..."`.
+- `purge`: `trim-native-heap` runs the `systemTrimNativeHeap` diagnostic command and records the
+  `os.*` values before and after; `gc` records the values before the forced collection and after.
+
+## Driver
+
+`java -cp <scratch classes>:<agent classes or jar> <package>.<class>`; compile it with the agent
+classes on the classpath (`javac -cp agent/classes ...`) into the scratch build output. The driver
+writes one `checkpoint` record per round via `DlaDump.checkpoint(unitsDone, lastRound)`.
+A JUnit 5 variant is generated only when `junit-platform-console-standalone` is on the classpath.
+
+### Placeholders
+
+| Placeholder | Where | Meaning |
+|---|---|---|
+| `@@DLA_PACKAGE@@` | `DlaHarness.java` | package of the workload (the `package` line is removed when empty) |
+| `@@DLA_CLASS@@` | `DlaHarness.java` | driver class name (file is written as `<class>.java`) |
+| `@@DLA_STEP@@` | `DlaHarness.java` | units per round (default for `DLA_STEP`) |
+| `@@DLA_WARMUP@@` | `DlaHarness.java` | warm-up rounds (default for `DLA_WARMUP`) |
+| `@@DLA_ROUNDS@@` | `DlaHarness.java` | measured rounds (default for `DLA_ROUNDS`) |
+| `@@DLA_REPEAT@@` | `DlaHarness.java` | repeated key space size (default for `DLA_REPEAT`) |
+
+### Hooks
+
+| Hook | Signature | Fill with |
+|---|---|---|
+| `DLA-HOOK setup` | `static void setup() throws Exception` | construct the services/caches under test (package-private API is usable); keep references in static fields |
+| `DLA-HOOK unit` | `static void unit(int i, int key) throws Exception` | one unit of the workload for `key`; derive ids and payloads from `key` so a repeated key reproduces an earlier request |

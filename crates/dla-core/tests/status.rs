@@ -50,13 +50,12 @@ fn answered_checklist_and_no_findings_is_complete() {
 
 #[test]
 fn candidate_and_under_test_block_with_a_fix() {
-    let mut l = ledger();
+    let mut l = m3_ledger();
     answer_all(&mut l);
     add_f1(&mut l);
-    l.add_finding(NewFinding::new(origin("census"), vec![eid(1)]))
-        .unwrap();
-    l.transition(&fid(2), S::UnderTest, None, None, vec![], "t")
-        .unwrap();
+    // F1.n1 is a non-leak sibling, which may go under test without a sibling of its own.
+    let n1 = add_sibling(&mut l, &fid(1), "N-WARM");
+    go(&mut l, &n1, S::UnderTest, &[E_HARNESS]);
     let s = status(&view(l.clone()));
     assert!(!s.complete);
     assert_eq!(s.blocking.len(), 2);
@@ -71,9 +70,7 @@ fn candidate_and_under_test_block_with_a_fix() {
         (1, 1)
     );
 
-    for f in [fid(1), fid(2)] {
-        let from = l.finding(&f).unwrap().state;
-        let _ = from;
+    for f in [fid(1), n1] {
         l.transition(
             &f,
             S::Unresolved,
@@ -98,9 +95,13 @@ fn candidate_and_under_test_block_with_a_fix() {
 
 #[test]
 fn every_disposition_state_counts_and_does_not_block() {
-    let mut l = ledger();
+    let mut l = m3_ledger();
     answer_all(&mut l);
-    for _ in 0..5 {
+    // F1 confirmed and F2 strong, each with a refuted N-WARM sibling.
+    confirmed_leak(&mut l);
+    let (strong, _) = confirmed_leak(&mut l);
+    go(&mut l, &strong, S::Strong, &[]);
+    for _ in 0..2 {
         l.add_finding(NewFinding::new(origin("census"), vec![eid(1)]))
             .unwrap();
     }
@@ -108,28 +109,22 @@ fn every_disposition_state_counts_and_does_not_block() {
         let rem = reason.map(|_| "r".to_owned());
         l.transition(&fid(n), to, reason, rem, ev, "t").unwrap();
     };
-    tr(&mut l, 1, S::UnderTest, None, vec![]);
-    tr(&mut l, 1, S::Confirmed, None, vec![]);
-    tr(&mut l, 2, S::UnderTest, None, vec![]);
-    tr(&mut l, 2, S::Confirmed, None, vec![]);
-    tr(&mut l, 2, S::Strong, None, vec![]);
-    tr(&mut l, 3, S::Refuted, None, vec![eid(2)]);
     tr(
         &mut l,
-        4,
+        3,
         S::SuspectedStaticOnly,
         Some(UnresolvedReason::NotExercised),
         vec![],
     );
     tr(
         &mut l,
-        5,
+        4,
         S::Unresolved,
         Some(UnresolvedReason::NoHarness),
         vec![],
     );
     let s = status(&view(l));
-    assert!(s.complete);
+    assert!(s.complete, "{:?}", s.blocking);
     let c = s.counts.by_state;
     assert_eq!(
         (
@@ -139,9 +134,9 @@ fn every_disposition_state_counts_and_does_not_block() {
             c.suspected_static_only,
             c.unresolved
         ),
-        (1, 1, 1, 1, 1)
+        (1, 1, 2, 1, 1)
     );
-    assert_eq!(s.counts.dispositioned, 5);
+    assert_eq!(s.counts.dispositioned, 6);
 }
 
 #[test]

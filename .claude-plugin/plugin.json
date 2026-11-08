@@ -18,7 +18,7 @@
     "privilege_ceiling": {
       "type": "number",
       "title": "Privilege ceiling",
-      "description": "Highest privilege tier (1 to 4) that DLA may offer. DLA asks one consent question per run covering tiers 1 to 4, and this ceiling caps which tiers that question can include. The tiers are defined in references/safety-and-effects.md. The default is 4.",
+      "description": "Highest privilege tier (1 to 4) that DLA may offer. DLA asks one consent question per run covering tiers 1 to 4, and this ceiling caps which tiers that question can include. Tiers escalate by intrusiveness: 1 builds and runs project code in a scratch copy under the run directory (builds, tests, harness loops, preload agents, in-process probes); 2 observes a running local process DLA did not start (/proc or libproc sampling of a PID, jcmd attach, Node inspector, a Go pprof endpoint); 3 is debugger or kernel level (ptrace attach, eBPF, perf, valgrind, may need root); 4 captures memory contents (heap dumps, heap snapshots, core dumps), whose outputs may contain secrets. The full definitions are in references/safety-and-effects.md. The default is 4.",
       "default": 4,
       "min": 1,
       "max": 4

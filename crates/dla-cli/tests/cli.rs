@@ -653,7 +653,7 @@ fn newer_schema_in_a_ledger_line_exits_3() {
     let dir = fixture_project();
     append_line(
         &fixture_ledger(&dir),
-        r#"{"schema_version":2,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
+        r#"{"schema_version":3,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
     );
     let o = run(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
     assert_eq!(o.code, 3, "{}", o.stdout);
@@ -860,6 +860,10 @@ fn schema_writes_and_checks() {
         "run-state",
         "coverage-manifest",
         "checklist",
+        "series",
+        "trend",
+        "harness-manifest",
+        "harness-dump",
     ];
     for n in names {
         let text = fs::read_to_string(out.join(format!("{n}.schema.json"))).unwrap();
@@ -962,7 +966,7 @@ fn add_reports_the_new_finding_for_a_sibling_of_a_non_last_finding() {
             "--sibling-of",
             "F1",
             "--hypothesis",
-            "N-POOL",
+            "N-HWM",
             "--refute-if",
             "x",
         ],
@@ -1005,7 +1009,8 @@ fn illegal_transition_refusals_never_repeat_the_refused_command() {
     assert_eq!(e["code"], "illegal-transition");
     let fix = e["fix"].as_str().unwrap();
     assert!(!fix.contains("--as unresolved"), "{fix}");
-    assert!(fix.contains("available from M3"), "{fix}");
+    assert!(fix.contains("dla ledger test F1 --evidence"), "{fix}");
+    assert!(!fix.contains("available from M3"), "{fix}");
 }
 
 #[test]
@@ -1216,7 +1221,11 @@ fn usage_errors_name_the_argument_and_the_subcommand_help() {
             vec!["run", "ledger", "report", "schema"],
         ),
         (vec!["run"], "dla run --help", vec!["init", "status"]),
-        (vec!["ledger"], "dla ledger --help", vec!["add", "resolve"]),
+        (
+            vec!["ledger"],
+            "dla ledger --help",
+            vec!["add", "resolve", "annotate", "test", "confirm", "refute"],
+        ),
     ] {
         let o = run(dir.path(), &args);
         assert_eq!(o.code, 1);
@@ -1668,4 +1677,363 @@ fn stage_commands_need_a_run() {
     let dir = tempfile::tempdir().unwrap();
     let e = refused(dir.path(), &["sweep", "--lang", "go"]);
     assert_eq!(e["code"], "no-run");
+}
+
+// ---- ledger test, confirm and refute
+
+/// Appends a version 2 evidence line (hand-written: there is no CLI that adds evidence)
+/// and returns its number.
+fn append_evidence(dir: &Path, run_id: &str, kind: &str, authority: &str, result: &str) -> String {
+    let ledger = dir.join(".dla").join(run_id).join("ledger.jsonl");
+    let text = fs::read_to_string(&ledger).unwrap();
+    let seq = text.lines().count() as u64 + 1;
+    let n = text.matches("\"type\":\"evidence\"").count() + 1;
+    let line = format!(
+        r#"{{"schema_version":2,"seq":{seq},"ts":"2026-01-02T03:05:00Z","type":"evidence","evidence_id":"E{n}","source":{{"repo":{{"commit":"abc"}}}},"tool":{{"name":"dla","version":"1"}},"authority":"{authority}","kind":"{kind}","result":{result},"coverage":{{"status":"complete"}}}}"#
+    );
+    append_line(&ledger, &line);
+    format!("E{n}")
+}
+
+struct Dynamic {
+    dir: tempfile::TempDir,
+    run_id: String,
+    harness: String,
+    growth: String,
+    leak: String,
+    nonleak: String,
+}
+
+/// E1 run-config, then a harness record, a passing growth record and two discriminators.
+fn dynamic_project() -> Dynamic {
+    let (dir, run_id) = fresh_run();
+    let p = dir.path();
+    let harness = append_evidence(
+        p,
+        &run_id,
+        "workload",
+        "test",
+        r#"{"harness":"H1","mode":"command"}"#,
+    );
+    let growth = append_evidence(
+        p,
+        &run_id,
+        "growth-series",
+        "test",
+        r#"{"trend":"T1","series":"S1","axis":"n","gate":"pass","passed":[{"column":"probe:Cache.entries","region":"heap","site":"src/cache.go:9","finding":"F1","slope":12.5,"unit":"bytes","shape":"stair"}]}"#,
+    );
+    let leak = append_evidence(
+        p,
+        &run_id,
+        "discriminator",
+        "test",
+        r#"{"test":"plateau","favors":"leak","supports":["leak"],"finding":null}"#,
+    );
+    let nonleak = append_evidence(
+        p,
+        &run_id,
+        "discriminator",
+        "test",
+        r#"{"test":"purge","favors":"non-leak","supports":["N-ALLOC"],"finding":null}"#,
+    );
+    Dynamic {
+        dir,
+        run_id,
+        harness,
+        growth,
+        leak,
+        nonleak,
+    }
+}
+
+fn add_leak_finding(p: &Path, site: Option<&str>) {
+    let mut args = vec!["ledger", "add", "--origin", "census", "--evidence", "E1"];
+    if let Some(s) = site {
+        args.extend(["--site", s]);
+    }
+    ok(p, &args);
+}
+
+fn add_nonleak_sibling(p: &Path, root: &str, hypothesis: &str) -> Value {
+    ok(
+        p,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--evidence",
+            "E1",
+            "--sibling-of",
+            root,
+            "--hypothesis",
+            hypothesis,
+            "--refute-if",
+            "growth continues over the extra cycles",
+        ],
+    )
+}
+
+#[test]
+fn ledger_test_refuses_each_missing_rule_and_names_the_fix() {
+    let d = dynamic_project();
+    let p = d.dir.path();
+    add_leak_finding(p, Some("src/cache.go:9"));
+    // No harness cited.
+    let e = refused(p, &["ledger", "test", "F1", "--evidence", &d.growth]);
+    assert_eq!(e["code"], "harness-required");
+    assert!(
+        e["fix"].as_str().unwrap().contains("dla harness gen"),
+        "{e}"
+    );
+    let e = refused(p, &["ledger", "test", "F1"]);
+    assert_eq!(e["code"], "harness-required");
+    // A harness, but no non-leak sibling.
+    let e = refused(p, &["ledger", "test", "F1", "--evidence", &d.harness]);
+    assert_eq!(e["code"], "sibling-required");
+    assert!(
+        e["fix"]
+            .as_str()
+            .unwrap()
+            .starts_with("dla ledger add --sibling-of F1 --origin hypothesis --hypothesis N-WARM"),
+        "{e}"
+    );
+    // A malformed N-* hypothesis is refused on add.
+    let e = refused(
+        p,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--evidence",
+            "E1",
+            "--sibling-of",
+            "F1",
+            "--hypothesis",
+            "N-NOPE",
+            "--refute-if",
+            "x",
+        ],
+    );
+    assert_eq!(e["code"], "invalid-value");
+    add_nonleak_sibling(p, "F1", "N-WARM");
+    let t = ok(p, &["ledger", "test", "F1", "--evidence", &d.harness]);
+    assert_eq!(t["finding"], "F1");
+    assert_eq!(
+        (t["from"].as_str(), t["to"].as_str()),
+        (Some("candidate"), Some("under_test"))
+    );
+    assert_eq!(t["evidence"], serde_json::json!([d.harness]));
+    assert!(t.get("warning").is_none());
+}
+
+#[test]
+fn ledger_confirm_walks_through_every_leak_refusal_to_confirmed() {
+    let d = dynamic_project();
+    let p = d.dir.path();
+    // F1 has a site but no holder.
+    add_leak_finding(p, Some("src/cache.go:9"));
+    add_nonleak_sibling(p, "F1", "N-WARM: the cache fills during warm-up");
+    ok(p, &["ledger", "test", "F1", "--evidence", &d.harness]);
+
+    let e = refused(p, &["ledger", "confirm", "F1"]);
+    assert_eq!(e["code"], "growth-gate-failed");
+    assert!(e["fix"].as_str().unwrap().starts_with("dla trend "), "{e}");
+    let e = refused(p, &["ledger", "confirm", "F1", "--evidence", &d.growth]);
+    assert_eq!(e["code"], "holder-required");
+    assert_eq!(
+        e["fix"],
+        "dla ledger annotate F1 --holder <holder> [--owner <text>]"
+    );
+    let a = ok(
+        p,
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--holder",
+            "container-field",
+            "--owner",
+            "Cache.entries",
+        ],
+    );
+    assert_eq!(a["holder"], "container-field");
+    let e = refused(p, &["ledger", "confirm", "F1", "--evidence", &d.growth]);
+    assert_eq!(e["code"], "nonleak-refutation-required");
+    assert!(
+        e["fix"]
+            .as_str()
+            .unwrap()
+            .contains("dla ledger refute F1.n1"),
+        "{e}"
+    );
+    // Refuting the sibling needs a discriminator that favors leak, not non-leak.
+    let e = refused(p, &["ledger", "refute", "F1.n1", "--evidence", &d.nonleak]);
+    assert_eq!(e["code"], "discriminator-direction");
+    let e = refused(p, &["ledger", "refute", "F1.n1"]);
+    assert_eq!(e["code"], "discriminator-required");
+    let r = ok(p, &["ledger", "refute", "F1.n1", "--evidence", &d.leak]);
+    assert_eq!(r["to"], "refuted");
+    let c = ok(p, &["ledger", "confirm", "F1", "--evidence", &d.growth]);
+    assert_eq!(
+        (c["from"].as_str(), c["to"].as_str()),
+        (Some("under_test"), Some("confirmed"))
+    );
+    assert!(c.get("warning").is_none(), "the column is bound to F1: {c}");
+
+    // The shape and region were derived on confirm; the report shows the growth line.
+    let md = Command::cargo_bin("dla")
+        .unwrap()
+        .arg("--project")
+        .arg(p)
+        .arg("report")
+        .output()
+        .unwrap();
+    let md = String::from_utf8(md.stdout).unwrap();
+    assert!(
+        md.contains(&format!(
+            "- Growth: `probe:Cache.entries` 12.5 bytes/n (stair, gate pass, {})",
+            d.growth
+        )),
+        "{md}"
+    );
+    assert!(
+        md.contains("- Shape: stair") && md.contains("- Region: heap"),
+        "{md}"
+    );
+    assert!(
+        md.contains(&format!("Ruled out by: plateau (leak) {}", d.leak)),
+        "{md}"
+    );
+    let _ = &d.run_id;
+}
+
+#[test]
+fn ledger_confirm_warns_when_no_passing_column_is_tied_to_the_finding() {
+    let d = dynamic_project();
+    let p = d.dir.path();
+    add_leak_finding(p, Some("src/other.go:1"));
+    ok(
+        p,
+        &["ledger", "annotate", "F1", "--holder", "static/global"],
+    );
+    add_nonleak_sibling(p, "F1", "N-HWM");
+    ok(p, &["ledger", "test", "F1", "--evidence", &d.harness]);
+    ok(p, &["ledger", "refute", "F1.n1", "--evidence", &d.leak]);
+    // Passing growth, but for another holder (F7 at another site).
+    let other = append_evidence(
+        p,
+        &d.run_id,
+        "growth-series",
+        "test",
+        r#"{"trend":"T2","series":"S2","gate":"pass","passed":[{"column":"probe:Elsewhere","region":"heap","site":"src/else.go:3","finding":"F7","shape":"steady"}]}"#,
+    );
+    let c = ok(p, &["ledger", "confirm", "F1", "--evidence", &other]);
+    let w = c["warning"].as_str().expect("a warning");
+    assert!(w.contains("F1") && w.contains("tied"), "{w}");
+}
+
+#[test]
+fn ledger_confirm_needs_a_site() {
+    let d = dynamic_project();
+    let p = d.dir.path();
+    add_leak_finding(p, None);
+    add_nonleak_sibling(p, "F1", "N-WARM");
+    ok(p, &["ledger", "test", "F1", "--evidence", &d.harness]);
+    ok(p, &["ledger", "refute", "F1.n1", "--evidence", &d.leak]);
+    let e = refused(p, &["ledger", "confirm", "F1", "--evidence", &d.growth]);
+    assert_eq!(e["code"], "site-required");
+}
+
+#[test]
+fn a_non_leak_hypothesis_is_confirmed_after_the_leak_side_is_refuted() {
+    let d = dynamic_project();
+    let p = d.dir.path();
+    add_leak_finding(p, Some("src/cache.go:9"));
+    add_nonleak_sibling(p, "F1", "N-ALLOC");
+    ok(p, &["ledger", "test", "F1.n1", "--evidence", &d.harness]);
+    let e = refused(p, &["ledger", "confirm", "F1.n1", "--evidence", &d.nonleak]);
+    assert_eq!(e["code"], "leak-refutation-required");
+    assert!(
+        e["fix"].as_str().unwrap().contains("dla ledger refute F1"),
+        "{e}"
+    );
+    let e = refused(p, &["ledger", "refute", "F1", "--evidence", &d.leak]);
+    assert_eq!(e["code"], "discriminator-direction");
+    ok(p, &["ledger", "refute", "F1", "--evidence", &d.nonleak]);
+    let c = ok(p, &["ledger", "confirm", "F1.n1", "--evidence", &d.nonleak]);
+    assert_eq!(c["to"], "confirmed");
+    let status = ok(p, &["run", "status"]);
+    assert!(status.to_string().contains("confirmed"));
+}
+
+#[test]
+fn annotate_conflicts_are_refused_and_the_same_value_is_accepted() {
+    let (dir, _) = fresh_run();
+    add_census(dir.path());
+    ok(
+        dir.path(),
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--holder",
+            "thread-local",
+            "--region",
+            "heap",
+        ],
+    );
+    ok(
+        dir.path(),
+        &["ledger", "annotate", "F1", "--holder", "thread-local"],
+    );
+    for (flag, value) in [("--holder", "cycle-only"), ("--region", "off-heap")] {
+        let e = refused(dir.path(), &["ledger", "annotate", "F1", flag, value]);
+        assert_eq!(e["code"], "annotation-conflict", "{flag}");
+    }
+    ok(
+        dir.path(),
+        &["ledger", "annotate", "F1", "--owner", "Pool.slots"],
+    );
+    let e = refused(
+        dir.path(),
+        &["ledger", "annotate", "F1", "--owner", "Other.slots"],
+    );
+    assert_eq!(e["code"], "annotation-conflict");
+    let o = run(
+        dir.path(),
+        &["ledger", "annotate", "F1", "--holder", "nonsense"],
+    );
+    assert_eq!(o.code, 1, "{}", o.stdout);
+}
+
+#[test]
+fn new_ledger_lines_are_version_two_and_old_ones_still_replay() {
+    let dir = fixture_project();
+    // The hand-written run is entirely version 1.
+    let o = ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
+    assert_eq!(o["run_id"], FIXTURE_RUN);
+    ok(
+        dir.path(),
+        &[
+            "--run",
+            FIXTURE_RUN,
+            "ledger",
+            "annotate",
+            "F1",
+            "--note",
+            "n",
+        ],
+    );
+    let text = fs::read_to_string(fixture_ledger(&dir)).unwrap();
+    let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert_eq!(last["schema_version"], 2);
+    assert!(
+        text.lines()
+            .next()
+            .unwrap()
+            .contains("\"schema_version\":1")
+    );
+    ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
 }

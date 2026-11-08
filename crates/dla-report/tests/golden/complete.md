@@ -8,6 +8,8 @@ Findings: 3 enumerated, 3 dispositioned; confirmed 1, strong 0, refuted 1, suspe
 
 Residual: not measured
 
+Coverage: not measured
+
 ## Findings
 
 ### F1: **Novel mechanism (UNCLASSIFIED)**
@@ -39,6 +41,7 @@ Residual: not measured
 ## Ruled out
 
 - **F2** (UNCLASSIFIED): discriminator E3
+  - Ruled out by: discriminator E3
   - Hypothesis: N-WARM
   - Refuted if: growth is flat after warmup
   - Contradicting evidence: E3

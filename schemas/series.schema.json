@@ -1,0 +1,455 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SeriesFile",
+  "description": "`series/S<n>.json`.",
+  "type": "object",
+  "properties": {
+    "axis": {
+      "description": "What x means.",
+      "$ref": "#/$defs/Axis"
+    },
+    "columns": {
+      "description": "The measured quantities (at most [`MAX_COLUMNS`]).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Column"
+      }
+    },
+    "events": {
+      "description": "Events between points.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SeriesEvent"
+      }
+    },
+    "id": {
+      "description": "`S3`.",
+      "type": "string"
+    },
+    "limitations": {
+      "description": "Known limits of this series.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "points": {
+      "description": "The rows, in x order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Point"
+      }
+    },
+    "schema_version": {
+      "description": "Schema version (1).",
+      "type": "integer",
+      "format": "uint32",
+      "default": 1,
+      "minimum": 0
+    },
+    "source": {
+      "description": "Where it came from.",
+      "$ref": "#/$defs/SeriesSource"
+    },
+    "warmup": {
+      "description": "Number of leading points that are warm-up.",
+      "type": "integer",
+      "format": "uint32",
+      "default": 0,
+      "minimum": 0
+    }
+  },
+  "required": [
+    "id",
+    "source",
+    "axis",
+    "columns",
+    "points"
+  ],
+  "$defs": {
+    "Axis": {
+      "description": "What the x value of a point means.",
+      "oneOf": [
+        {
+          "description": "Units of work completed.",
+          "type": "string",
+          "const": "iteration"
+        },
+        {
+          "description": "Seconds since the start.",
+          "type": "string",
+          "const": "seconds"
+        },
+        {
+          "description": "The iteration count passed to the workload.",
+          "type": "string",
+          "const": "n"
+        }
+      ]
+    },
+    "Column": {
+      "description": "One measured quantity.",
+      "type": "object",
+      "properties": {
+        "after_gc": {
+          "description": "True when the value was read after a forced collection.",
+          "type": "boolean",
+          "default": false
+        },
+        "baseline": {
+          "description": "True for the always-sampled region series.",
+          "type": "boolean",
+          "default": false
+        },
+        "finding": {
+          "description": "Finding this column was probed for.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "description": "Gauge or counter.",
+          "$ref": "#/$defs/ColumnKind"
+        },
+        "name": {
+          "description": "Stable name, for example `os.rss` or `go.goroutines@internal/notify/sub.go:33`.",
+          "type": "string"
+        },
+        "region": {
+          "description": "Memory region.",
+          "$ref": "#/$defs/SeriesRegion"
+        },
+        "scope": {
+          "description": "Process or container.",
+          "$ref": "#/$defs/ColumnScope"
+        },
+        "site": {
+          "description": "`file:line` this column is tied to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Origin of the figure: `proc-status`, `jvm-agent`, `go-harness`, `shim`, ...",
+          "type": "string"
+        },
+        "unit": {
+          "description": "Unit.",
+          "$ref": "#/$defs/Unit"
+        }
+      },
+      "required": [
+        "name",
+        "unit",
+        "kind",
+        "region",
+        "scope",
+        "source"
+      ]
+    },
+    "ColumnKind": {
+      "description": "Whether a column is a level or an integer unit count.",
+      "oneOf": [
+        {
+          "description": "A level (bytes, a ratio): judged by the slope gate.",
+          "type": "string",
+          "const": "gauge"
+        },
+        {
+          "description": "An integer unit count (goroutines, fds, entries): judged by the every-delta rule.",
+          "type": "string",
+          "const": "counter"
+        }
+      ]
+    },
+    "ColumnScope": {
+      "description": "What a column's figure covers.",
+      "oneOf": [
+        {
+          "description": "The measured process.",
+          "type": "string",
+          "const": "process"
+        },
+        {
+          "description": "The whole container (cgroup figures).",
+          "type": "string",
+          "const": "container"
+        }
+      ]
+    },
+    "FindingId": {
+      "type": "string",
+      "pattern": "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$"
+    },
+    "KeyMode": {
+      "description": "How the keys of the workload are produced.",
+      "oneOf": [
+        {
+          "description": "Every unit of work uses a new key.",
+          "type": "string",
+          "const": "fresh"
+        },
+        {
+          "description": "Every unit of work reuses the same keys.",
+          "type": "string",
+          "const": "repeated"
+        },
+        {
+          "description": "The keys are whatever the workload makes (command mode).",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    },
+    "Point": {
+      "description": "One row of the table, aligned with the columns.",
+      "type": "object",
+      "properties": {
+        "t_ms": {
+          "description": "Milliseconds since the start of the run.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "values": {
+          "description": "One value per column; `null` when the column could not be read at this point.",
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "x": {
+          "description": "Position on the axis.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x",
+        "t_ms",
+        "values"
+      ]
+    },
+    "Runtime": {
+      "description": "A language runtime DLA investigates. The wire spelling is also the default\nworker key in `coverage.json` and the value of `--lang`.",
+      "oneOf": [
+        {
+          "description": "Java, Kotlin and other JVM languages.",
+          "type": "string",
+          "const": "jvm"
+        },
+        {
+          "description": "Go.",
+          "type": "string",
+          "const": "go"
+        },
+        {
+          "description": "Rust.",
+          "type": "string",
+          "const": "rust"
+        },
+        {
+          "description": "Node.js (JavaScript and TypeScript).",
+          "type": "string",
+          "const": "node"
+        },
+        {
+          "description": "Python.",
+          "type": "string",
+          "const": "python"
+        },
+        {
+          "description": "C and C++.",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    },
+    "SeriesEvent": {
+      "description": "Something that happened between points.",
+      "type": "object",
+      "properties": {
+        "after_point": {
+          "description": "Index of the point the event follows.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "detail": {
+          "description": "Free-form detail.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`purge:trim`, `purge:gc`, ...",
+          "type": "string"
+        }
+      },
+      "required": [
+        "after_point",
+        "kind"
+      ]
+    },
+    "SeriesRegion": {
+      "description": "Memory region of a column.",
+      "oneOf": [
+        {
+          "description": "Managed heap and holder probes.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native allocator, direct buffers, unexplained growth.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Threads, goroutines, stacks, fds, timers, listeners, metaspace.",
+          "type": "string",
+          "const": "non-heap"
+        },
+        {
+          "description": "Whole-process totals.",
+          "type": "string",
+          "const": "process"
+        }
+      ]
+    },
+    "SeriesSource": {
+      "description": "Where a series came from.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Command line of the measured process.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "derived_from": {
+          "description": "The series a gap series was derived from (`S2`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "Harness ID (`H2`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Harness, sample, alloc-test or gap.",
+          "$ref": "#/$defs/SeriesSourceKind"
+        },
+        "mode": {
+          "description": "Key mode of the run.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KeyMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pid": {
+          "description": "Sampled PID (`sample --pid`).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "runtime": {
+          "description": "Runtime of the measured process.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Runtime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workload": {
+          "description": "Workload ID from discovery.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "SeriesSourceKind": {
+      "description": "Where a series came from.",
+      "oneOf": [
+        {
+          "description": "A harness run.",
+          "type": "string",
+          "const": "harness"
+        },
+        {
+          "description": "A live sample of a process.",
+          "type": "string",
+          "const": "sample"
+        },
+        {
+          "description": "An allocation test.",
+          "type": "string",
+          "const": "alloc-test"
+        },
+        {
+          "description": "A derived runtime-accounted versus unexplained split.",
+          "type": "string",
+          "const": "gap"
+        }
+      ]
+    },
+    "Unit": {
+      "description": "Unit of a column.",
+      "oneOf": [
+        {
+          "description": "Bytes.",
+          "type": "string",
+          "const": "bytes"
+        },
+        {
+          "description": "A count of things.",
+          "type": "string",
+          "const": "count"
+        },
+        {
+          "description": "A ratio.",
+          "type": "string",
+          "const": "ratio"
+        },
+        {
+          "description": "Seconds.",
+          "type": "string",
+          "const": "seconds"
+        }
+      ]
+    }
+  }
+}

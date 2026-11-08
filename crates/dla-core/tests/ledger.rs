@@ -293,17 +293,17 @@ fn replay_malformed_and_blank_lines() {
 }
 
 #[test]
-fn schema_versions_zero_and_two() {
+fn ledger_line_schema_versions() {
     let v = |n: u32| ev_line(1).replace("\"schema_version\":1", &format!("\"schema_version\":{n}"));
-    let Err(e @ Error::Schema(_)) = Ledger::from_text(&v(2)) else {
-        panic!("v2 should be refused")
+    let Err(e @ Error::Schema(_)) = Ledger::from_text(&v(3)) else {
+        panic!("v3 should be refused")
     };
     assert_eq!(e.exit_code(), 3);
     let msg = e.to_string();
     assert!(
         msg.contains("newer dla")
-            && msg.contains("schema 2")
-            && msg.contains("reads 1")
+            && msg.contains("schema 3")
+            && msg.contains("reads 2")
             && msg.contains("upgrade the plugin"),
         "{msg}"
     );
@@ -317,7 +317,10 @@ fn schema_versions_zero_and_two() {
         "{msg}"
     );
     assert!(msg.contains("ledger line 1"));
+    // Versions 1 and 2 are both current and keep their number.
     assert!(Ledger::from_text(&v(1)).is_ok());
+    let l = Ledger::from_text(&v(2)).unwrap();
+    assert_eq!(l.lines()[0].schema_version, 2);
 }
 
 #[test]
@@ -506,7 +509,14 @@ fn appends_to_file_only_and_reloads() {
         FindingState::Candidate
     );
     again
-        .transition(&fid(1), FindingState::UnderTest, None, None, vec![], "test")
+        .transition(
+            &fid(1),
+            FindingState::Unresolved,
+            Some(UnresolvedReason::TimeBudget),
+            Some("more time".into()),
+            vec![],
+            "test",
+        )
         .unwrap();
     assert_eq!(
         Ledger::load(dir.path())
@@ -514,7 +524,7 @@ fn appends_to_file_only_and_reloads() {
             .finding(&fid(1))
             .unwrap()
             .state,
-        FindingState::UnderTest
+        FindingState::Unresolved
     );
 }
 
@@ -542,7 +552,7 @@ fn written_lines_have_the_documented_shape() {
         ))
         .unwrap();
     let v: serde_json::Value = serde_json::to_value(&line).unwrap();
-    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["schema_version"], 2);
     assert_eq!(v["seq"], 1);
     assert_eq!(v["type"], "evidence");
     assert_eq!(v["evidence_id"], "E1");
