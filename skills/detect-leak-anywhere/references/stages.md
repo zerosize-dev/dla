@@ -70,7 +70,9 @@ per file or directory). No source, so no site is ever added or annotated on an a
 7. Stages 8 and 9. The report must make no source-mapping claim.
 
 ### Symptom only
-Ask once for the target. No answer or an unattended run: `intake.target` unresolved as in
+Only when the request names no target and the working directory holds no source code (a request
+that describes a service while you sit in its repository is the repository path). Ask once for
+the target. No answer or an unattended run: `intake.target` unresolved as in
 `SKILL.md`, `dla report`, stop. With an answer, re-route to the path it picks (the run is already
 `--entry symptom`; start a new run with the right `--entry` if the target is a process or dumps).
 

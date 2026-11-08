@@ -24,14 +24,14 @@ Each command prints one small JSON object and a pointer to the full record. A re
 
 ## Router: pick the entry path before anything else
 
-The user's request names the target. If it does not, ask once ("Which repository, running process, heap dump files, or symptom?"). When nobody can answer (an unattended run, or no reply), create the run with `dla run init --entry symptom`, record `dla ledger resolve intake.target --status unresolved --reason env_unavailable --remedy "<name the repository, pid or dump files>"`, run `dla report` and stop. Never guess a target from the working directory.
+The target is what the request names (a path, a pid or port, dump files). Otherwise it is the working directory when that holds source code (`git ls-files`, or the files there): you were started inside the project, so a request that only describes a service or symptom ("the gateway's memory climbs") means this repository. That is not a guess; take the repository path. Ask once ("Which repository, running process or heap dump files?") only when the working directory holds no source and the request names nothing, or the request names a target that is not here. When nobody can answer (an unattended run, or no reply), create the run with `dla run init --entry symptom`, record `dla ledger resolve intake.target --status unresolved --reason env_unavailable --remedy "<name the repository, pid or dump files>"`, run `dla report` and stop. Never invent a target that is neither named nor in the working directory.
 
 | Path | When | Start with | Stages |
 |---|---|---|---|
-| repository | source tree named, or a path/repo given | `dla run init --entry repository [--scope module\|service --scope-path <dir> --exclude <p>]` | all (stages.md 1-9) |
+| repository | a source tree in the working directory, or a path/repo given | `dla run init --entry repository [--scope module\|service --scope-path <dir> --exclude <p>]` | all (stages.md 1-9) |
 | process | a pid, process name or port of a running local process | `dla run init --entry process` | 1 (consent tier 2+), 2, 4 with `dla sample --pid` / `dla attach`, 5-9 |
 | artifact | heap dump files, no live process | `dla run init --entry artifact --artifact <path>...` | 1, 6 (`dla summarize heap-graph` once over ALL dumps), 5, 8, 9 |
-| symptom | only "memory grows", no target | ask once, then re-route; else stop as above | 1, then the path the answer picks |
+| symptom | only "memory grows", nothing named and no source here | ask once, then re-route; else stop as above | 1, then the path the answer picks |
 
 Add `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` to `dla run init`. Per-path rules (process consent tiers, artifact series rules, scope) are in `references/stages.md`; failures in `references/recovery.md`; per-runtime notes in `references/<jvm|go|rust|node|python|native>.md`.
 

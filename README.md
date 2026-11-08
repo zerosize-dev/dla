@@ -143,8 +143,9 @@ question to the user. If `DLA_CONSENT_TIERS` is set (`1-4`, or a list such as `1
 ## How a diagnosis runs
 
 The skill first picks an entry path from the request: a repository, a running local process,
-captured heap dumps, or only a symptom (it asks once for the target and, when nobody can answer,
-records the target as unresolved and stops rather than guessing). `dla run init --entry
+captured heap dumps, or only a symptom. The repository it was started in is the target unless the
+request names another one; with no source there and nothing named, it asks once and, when nobody
+can answer, records the target as unresolved and stops rather than guessing. `dla run init --entry
 repository|process|artifact|symptom` starts the run. When the probe finds two or more runtimes,
 `dla run dispatch --workers jvm,rust` gives each runtime a share of the time budget and the skill
 starts one `dla:worker` subagent per runtime in one turn; each worker writes its own ledger slice
