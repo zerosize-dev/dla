@@ -70,7 +70,10 @@ fn relative_to(work: &Path, path: &str) -> Option<String> {
 /// A path as a string that compares equal across spellings: forward slashes, no
 /// Windows verbatim prefix (`\\?\`), and lower case on Windows.
 fn comparable(path: &str) -> String {
-    let p = path.strip_prefix(r"\\?\").unwrap_or(path).replace('\\', "/");
+    let p = path
+        .strip_prefix(r"\\?\")
+        .unwrap_or(path)
+        .replace('\\', "/");
     let p = p.trim_end_matches('/').to_owned();
     if cfg!(windows) { p.to_lowercase() } else { p }
 }
@@ -544,10 +547,19 @@ mod tests {
 
     #[test]
     fn file_urls_decode_and_drop_the_slash_before_a_drive() {
-        assert_eq!(file_url_path("file:///C:/a%20b/x.js").as_deref(), Some("C:/a b/x.js"));
-        assert_eq!(file_url_path("file:///home/u/x.js").as_deref(), Some("/home/u/x.js"));
+        assert_eq!(
+            file_url_path("file:///C:/a%20b/x.js").as_deref(),
+            Some("C:/a b/x.js")
+        );
+        assert_eq!(
+            file_url_path("file:///home/u/x.js").as_deref(),
+            Some("/home/u/x.js")
+        );
         assert_eq!(file_url_path("node:internal/x"), None);
-        assert_eq!(comparable(r"\\?\C:\W\"), if cfg!(windows) { "c:/w" } else { "C:/W" });
+        assert_eq!(
+            comparable(r"\\?\C:\W\"),
+            if cfg!(windows) { "c:/w" } else { "C:/W" }
+        );
     }
 
     #[test]
