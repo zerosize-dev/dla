@@ -32,6 +32,12 @@ pub const DEFAULT_MAX_OBJECTS: usize = 20_000_000;
 /// Default cap on dominator iterations.
 pub const DEFAULT_MAX_PASSES: u32 = 100;
 
+/// How many times its compressed size a gzip dump may inflate to (real dumps compress
+/// about 10x; deflate cannot exceed about 1030x).
+pub const MAX_INFLATE_RATIO: u64 = 100;
+/// Smallest inflate limit, so tiny files are not refused on ratio alone.
+pub const MIN_INFLATE_LIMIT: u64 = 64 << 20;
+
 /// Why a dump could not be summarized.
 #[derive(Debug)]
 pub enum HprofError {
@@ -45,6 +51,10 @@ pub enum HprofError {
     Malformed(String),
     /// A gzip dump could not be inflated.
     Gzip(GzipError),
+    /// A gzip dump would inflate past the allowed size (limit in bytes).
+    InflateTooLarge(u64),
+    /// The disk filled up while a gzip dump was being inflated.
+    DiskFull,
 }
 
 impl fmt::Display for HprofError {
@@ -58,6 +68,12 @@ impl fmt::Display for HprofError {
             ),
             Self::Malformed(m) => write!(f, "malformed dump: {m}"),
             Self::Gzip(e) => write!(f, "cannot inflate the dump: {e}"),
+            Self::InflateTooLarge(l) => write!(
+                f,
+                "the gzip dump inflates to more than {l} bytes ({}x its size at most is allowed)",
+                MAX_INFLATE_RATIO
+            ),
+            Self::DiskFull => f.write_str("no space left on the device while inflating the dump"),
         }
     }
 }
@@ -97,6 +113,9 @@ pub struct Options {
     /// Whether 64-bit references are taken to be 4 bytes (compressed oops) when sizing
     /// objects; `None` assumes so for dumps under 24 GiB.
     pub compressed_oops: Option<bool>,
+    /// Bytes a gzip dump may inflate to at most; `None` allows [`MAX_INFLATE_RATIO`] times
+    /// the compressed size (at least [`MIN_INFLATE_LIMIT`]).
+    pub max_inflated: Option<u64>,
 }
 
 impl Default for Options {
@@ -106,6 +125,7 @@ impl Default for Options {
             max_objects: DEFAULT_MAX_OBJECTS,
             max_passes: DEFAULT_MAX_PASSES,
             compressed_oops: None,
+            max_inflated: None,
         }
     }
 }
@@ -154,6 +174,32 @@ fn unique_tmp(dir: &Path, stem: &str) -> PathBuf {
     }
 }
 
+/// Passes writes through until `limit` bytes were written, then fails and records it.
+struct Limited<'a, W: io::Write> {
+    inner: W,
+    left: u64,
+    exceeded: &'a std::cell::Cell<bool>,
+}
+
+impl<W: io::Write> io::Write for Limited<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.len() as u64 > self.left {
+            self.exceeded.set(true);
+            return Err(io::Error::other("inflate limit exceeded"));
+        }
+        self.left -= buf.len() as u64;
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn is_storage_full(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::StorageFull || e.raw_os_error() == Some(28)
+}
+
 /// Removes the inflated copy when dropped.
 struct TempFile(PathBuf);
 
@@ -182,8 +228,33 @@ pub fn summarize(path: &Path, opts: &Options) -> Result<HeapSummary, HprofError>
             let t0 = Instant::now();
             {
                 let input = File::open(path)?;
-                let out = BufWriter::with_capacity(1 << 20, File::create(&tmp.0)?);
-                gunzip(io::BufReader::new(input), out)?;
+                let limit = opts.max_inflated.unwrap_or_else(|| {
+                    input
+                        .metadata()
+                        .map_or(0, |m| m.len())
+                        .saturating_mul(MAX_INFLATE_RATIO)
+                        .max(MIN_INFLATE_LIMIT)
+                });
+                let exceeded = std::cell::Cell::new(false);
+                let mut out = Limited {
+                    inner: BufWriter::with_capacity(1 << 20, File::create(&tmp.0)?),
+                    left: limit,
+                    exceeded: &exceeded,
+                };
+                let done = gunzip(io::BufReader::new(input), &mut out)
+                    .map_err(|e| (exceeded.get(), e))
+                    .and_then(|_| {
+                        io::Write::flush(&mut out).map_err(|e| (false, GzipError::Io(e)))
+                    });
+                if let Err((over, e)) = done {
+                    return Err(if over {
+                        HprofError::InflateTooLarge(limit)
+                    } else if matches!(&e, GzipError::Io(io) if is_storage_full(io)) {
+                        HprofError::DiskFull
+                    } else {
+                        e.into()
+                    });
+                }
             }
             let inflate_ms = t0.elapsed().as_millis() as u64;
             let mut s = analyze::analyze(&tmp.0, &params)?;

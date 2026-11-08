@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "src/A.kt:7", "holder": "static/global", "archetype": "UNCLASSIFIED"}}
+{"type": "transition", "finding": "F1", "from": "x", "to": "confirmed"}

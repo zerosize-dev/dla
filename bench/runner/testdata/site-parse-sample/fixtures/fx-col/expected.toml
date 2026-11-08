@@ -1,0 +1,16 @@
+schema_version = 1
+id = "fx-col"
+runtime = "node"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = "Two things seem to grow."
+
+[[leak]]
+id = "L1"
+site = "src/A.kt:7:3"
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0

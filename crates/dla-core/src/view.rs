@@ -240,7 +240,18 @@ pub fn status(view: &RunView) -> ReportStatus {
             kind: BlockingKind::Run,
             id: view.state.run_id.clone(),
             description: format!("run is {}{why}", view.state.status),
-            fix: "dla run init".to_owned(),
+            fix: if view.state.status == RunStatus::Incomplete
+                && view
+                    .state
+                    .incomplete_reason
+                    .as_deref()
+                    .is_some_and(|r| r.starts_with(crate::merge::UNFINISHED_REASON))
+            {
+                "let the unfinished workers end (dla --worker <name> ledger done), then dla ledger merge"
+                    .to_owned()
+            } else {
+                "dla run init".to_owned()
+            },
         });
     }
     ReportStatus {

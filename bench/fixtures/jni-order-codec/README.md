@@ -37,6 +37,8 @@ declaration at line 9).
 
 Toolchain: OpenJDK 21, Rust stable, Kotlin 2.0.21 through `kotlinc` when it is
 on `PATH` and otherwise the embeddable compiler jars from `~/.m2` (offline).
+With `kotlinc` the stdlib is the `lib/kotlin-stdlib.jar` next to it; otherwise,
+or when that file is missing, the cached 2.0.21 jar from `~/.m2`.
 
 ```
 cd project && ./build.sh            # builds libcodec, compiles Kotlin, runs both test suites

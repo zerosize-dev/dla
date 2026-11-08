@@ -177,6 +177,40 @@ fn artifact_paths(
     Ok(out)
 }
 
+/// Refuses a scope that would not mean what the user typed: an absolute, `..` or
+/// empty path, a glob exclude, or a module/service path that is not a directory
+/// under the project. Nothing is silently widened to the whole repository.
+fn check_scope(sc: &Scope) -> Res<()> {
+    sc.validate().map_err(|why| {
+        Failure::refuse(
+            core_codes::INVALID_VALUE,
+            why,
+            "--scope-path <path relative to the project root> and plain relative --exclude paths",
+            "dla run init --scope module --scope-path <path relative to the project root>",
+        )
+    })
+}
+
+/// A module or service scope must name a directory of the project.
+fn check_scope_dir(project: &std::path::Path, sc: &Scope) -> Res<()> {
+    if sc.kind != ScopeKind::Repository {
+        let rel = dla_core::paths::slash(&sc.path);
+        if !project.join(rel.trim_start_matches("./")).is_dir() {
+            return Err(Failure::refuse(
+                core_codes::INVALID_VALUE,
+                format!(
+                    "scope path {} is not a directory under {}",
+                    sc.path,
+                    dla_core::paths::to_slash(project)
+                ),
+                "an existing directory of the project as --scope-path",
+                "dla run init --scope module --scope-path <path relative to the project root>",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Runs one `dla run ...` subcommand. `ctx` resolves the run (not needed by `init`).
 pub fn dispatch(
     project_arg: Option<&std::path::Path>,
@@ -187,7 +221,7 @@ pub fn dispatch(
         RunCmd::Init(a) => init(project_arg, a),
         RunCmd::Status => run_status(&ctx()?),
         RunCmd::Dispatch(a) => workers::dispatch(&ctx()?, a),
-        RunCmd::Abort(a) => abort::run(&ctx()?, a),
+        RunCmd::Abort(a) => abort::run(&ctx()?, &project_root(project_arg)?, a),
     }
 }
 
@@ -211,6 +245,9 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         }),
         _ => None,
     };
+    if let Some(sc) = &scope {
+        check_scope(sc)?;
+    }
     let entry = a.entry.unwrap_or(EntryPath::Repository);
     let artifacts = artifact_paths(&project, entry, &a.artifact)?;
     let headless = headless_consent()?;
@@ -228,6 +265,9 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         entry,
         &artifacts,
     )?;
+    if let Some(sc) = &scope {
+        check_scope_dir(&project, sc)?;
+    }
     let mut st = RunState::init(
         &root_text,
         session.as_deref(),
@@ -339,11 +379,17 @@ fn headless_consent() -> Res<Option<state::Consent>> {
 
 /// Runs `dla run status`.
 pub fn run_status(ctx: &Ctx) -> Res<Value> {
-    let view = RunView::load(&ctx.run_dir)?;
-    let rs = status(&view);
+    let (view, rs) = match ctx.worker.as_deref() {
+        Some(w) => worker_status(ctx, w)?,
+        None => {
+            let view = RunView::load(&ctx.run_dir)?;
+            let rs = status(&view);
+            (view, rs)
+        }
+    };
     let total = rs.blocking.len();
     let shown: Vec<_> = rs.blocking.iter().take(3).collect();
-    let revisit = revisit_entries(&view);
+    let revisit = revisit_entries(&view, ctx.worker.as_deref());
     let revisit_total = revisit.len();
     let mut out = json!({
         "ok": true,
@@ -362,6 +408,33 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         (&mut out, workers::status_parts(ctx, &view.state))
     {
         o.extend(extra);
+    }
+    if let Some(w) = &ctx.worker {
+        out["worker"] = json!(w);
+    } else {
+        // Core mode: slices whose lines the main ledger has not merged, and slices
+        // that end in a torn fragment (a worker killed mid-write).
+        let unmerged: Vec<Value> = view
+            .unmerged_slices()
+            .into_iter()
+            .map(|s| {
+                json!({
+                    "worker": s.worker,
+                    "lines": s.lines,
+                    "merged": view.ledger.merged_lines(&s.worker),
+                    "done": s.done,
+                    "torn_tail": s.torn_tail,
+                })
+            })
+            .collect();
+        let torn: Vec<&str> = view
+            .slices
+            .iter()
+            .filter(|s| s.torn_tail)
+            .map(|s| s.worker.as_str())
+            .collect();
+        out["unmerged_slices"] = Value::Array(unmerged);
+        out["torn_tails"] = json!(torn);
     }
     out["revisit"] = Value::Array(Vec::new());
     out["revisit_total"] = json!(revisit_total);
@@ -386,6 +459,73 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     Ok(out)
 }
 
+/// The status view of one worker: its slice replayed over the main ledger, with only
+/// what the worker itself must act on in `blocking`: its own findings and open items
+/// (IDs carry `<worker>/`) and the run-level items (an aborted run, a spent time
+/// budget). The checklist and other workers' items belong to the core.
+fn worker_status(ctx: &Ctx, w: &str) -> Res<(RunView, dla_core::view::ReportStatus)> {
+    use dla_core::view::{BlockingItem, BlockingKind};
+    let state = RunState::load(&ctx.run_dir)?;
+    let ledger = Ledger::load_for(&ctx.run_dir, Some(w))?;
+    let coverage = dla_core::CoverageManifest::load(&ctx.run_dir)?;
+    let view = RunView::new(state, ledger, coverage);
+    let mut rs = status(&view);
+    let mine = |id: &str| id.split_once('/').is_some_and(|(p, _)| p == w);
+    rs.blocking.retain(|b| match b.kind {
+        BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
+        BlockingKind::ChecklistItem => false,
+        BlockingKind::Run => true,
+    });
+    // The counts describe this worker's slice, not the whole run.
+    let mut counts = dla_core::view::StatusCounts::default();
+    for f in view.ledger.findings().filter(|f| mine(&f.id.to_string())) {
+        counts.enumerated += 1;
+        counts.dispositioned += usize::from(f.state.is_dispositioned());
+        let slot = &mut counts.by_state;
+        match f.state {
+            FindingState::Candidate => slot.candidate += 1,
+            FindingState::UnderTest => slot.under_test += 1,
+            FindingState::Confirmed => slot.confirmed += 1,
+            FindingState::Strong => slot.strong += 1,
+            FindingState::Refuted => slot.refuted += 1,
+            FindingState::SuspectedStaticOnly => slot.suspected_static_only += 1,
+            FindingState::Unresolved => slot.unresolved += 1,
+        }
+    }
+    counts.open_items = rs
+        .blocking
+        .iter()
+        .filter(|b| b.kind == BlockingKind::OpenItem)
+        .count();
+    rs.counts = counts;
+    let now = state::now_utc();
+    let deadline = view
+        .state
+        .worker(w)
+        .map(|e| (format!("worker {w}"), e.deadline));
+    for (who, at) in deadline
+        .into_iter()
+        .chain([("run".to_owned(), view.state.budget.deadline)])
+    {
+        if now > at {
+            rs.blocking.push(BlockingItem {
+                kind: BlockingKind::Run,
+                id: view.state.run_id.clone(),
+                description: format!(
+                    "the {who} time budget is spent (deadline {}); no new stage may start",
+                    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                ),
+                fix: format!(
+                    "dla --worker {w} ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\", then dla --worker {w} ledger done"
+                ),
+            });
+            break;
+        }
+    }
+    rs.complete = rs.blocking.is_empty();
+    Ok((view, rs))
+}
+
 /// At most this many `revisit` entries are listed; `revisit_total` has the real count.
 const MAX_REVISIT: usize = 10;
 
@@ -395,7 +535,7 @@ const MAX_REMEDY_CHARS: usize = 120;
 /// Findings that need another look (`unresolved`, `suspected_static_only`), in ledger
 /// order: `{id, state, reason, remedy}`. They do not block the report, so `blocking`
 /// never lists them.
-fn revisit_entries(view: &RunView) -> Vec<Value> {
+fn revisit_entries(view: &RunView, worker: Option<&str>) -> Vec<Value> {
     view.ledger
         .lines()
         .iter()
@@ -403,6 +543,7 @@ fn revisit_entries(view: &RunView) -> Vec<Value> {
             Record::FindingAdded { finding } => view.ledger.finding(&finding.id),
             _ => None,
         })
+        .filter(|f| worker.is_none_or(|w| f.id.prefix() == Some(w)))
         .filter(|f| {
             matches!(
                 f.state,

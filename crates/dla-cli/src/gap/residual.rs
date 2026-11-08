@@ -167,7 +167,7 @@ fn attribute(ledger: &Ledger, series: &SeriesFile) -> Attribution {
         let tied: Vec<_> = here
             .iter()
             .flat_map(|g| g.passed.iter())
-            .filter(|c| c.tied_to(&f.id, f.site.as_deref()))
+            .filter(|c| c.tied_to_owner(&f.id, f.site.as_deref(), f.owner.as_deref()))
             .collect();
         if tied.is_empty() {
             limitations.push(format!(

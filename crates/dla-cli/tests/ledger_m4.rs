@@ -249,6 +249,11 @@ fn a_worker_writes_prefixed_ids_to_its_slice_and_the_core_merges_them() {
         ],
     );
     assert_eq!(e["code"], "slice-closed");
+    assert!(
+        !e["fix"].as_str().unwrap().contains("run dispatch"),
+        "dispatch refuses a registered worker: {e}"
+    );
+    assert!(e["fix"].as_str().unwrap().contains("ledger merge"), "{e}");
     ok(p, &["--worker", "rust", "ledger", "done"]);
 
     // The core merges: both slices, one duplicate, nothing unfinished.
@@ -563,4 +568,83 @@ fn a_killed_worker_leaves_a_valid_merged_ledger_and_an_incomplete_run() {
         fs::read_to_string(run_dir.join("ledger.jsonl")).unwrap(),
         before
     );
+}
+
+#[test]
+fn parallel_adds_by_one_worker_leave_a_valid_slice_with_distinct_ids() {
+    let (dir, _id, run_dir) = project("node");
+    let p = dir.path();
+    // Start the slice, then race several writers.
+    add(p, Some("node"), "a.js:1");
+    let children: Vec<_> = (2..10)
+        .map(|n| {
+            let mut c = std::process::Command::new(assert_cmd::cargo::cargo_bin("dla"));
+            c.arg("--project").arg(p);
+            for var in [
+                "DLA_RUN",
+                "DLA_WORKER",
+                "CLAUDE_SESSION_ID",
+                "CLAUDE_CODE_SESSION_ID",
+            ] {
+                c.env_remove(var);
+            }
+            c.stdout(std::process::Stdio::null())
+                .args([
+                    "--worker",
+                    "node",
+                    "ledger",
+                    "add",
+                    "--origin",
+                    "census",
+                    "--evidence",
+                    "E1",
+                    "--site",
+                    &format!("a.js:{n}"),
+                    "--holder",
+                    "static/global",
+                ])
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for mut c in children {
+        assert!(c.wait().unwrap().success());
+    }
+    let text = fs::read_to_string(run_dir.join("ledger.node.jsonl")).unwrap();
+    let mut seqs = Vec::new();
+    let mut ids = Vec::new();
+    for l in text.lines() {
+        let v: Value = serde_json::from_str(l).unwrap();
+        seqs.push(v["seq"].as_u64().unwrap());
+        if v["type"] == "finding_added" {
+            ids.push(v["finding"]["id"].as_str().unwrap().to_owned());
+        }
+    }
+    assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>());
+    assert_eq!(ids.len(), 9);
+    let mut uniq = ids.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uniq.len(), 9, "{ids:?}");
+    // The slice replays and merges.
+    let m = ok(p, &["ledger", "merge"]);
+    assert_eq!(m["merged_lines"]["node"], seqs.len() as u64);
+}
+
+#[test]
+fn a_bad_slice_does_not_stop_the_merge_of_the_others() {
+    let (dir, _id, run_dir) = project("go,rust");
+    let p = dir.path();
+    add(p, Some("go"), "a.go:1");
+    add(p, Some("rust"), "z.rs:1");
+    ok(p, &["--worker", "rust", "ledger", "done"]);
+    let sp = run_dir.join("ledger.go.jsonl");
+    let mut t = fs::read_to_string(&sp).unwrap();
+    t = t.replacen("\"seq\":2", "\"seq\":7", 1);
+    fs::write(&sp, t).unwrap();
+    let m = ok(p, &["ledger", "merge"]);
+    assert_eq!(m["invalid_slices"][0], "go");
+    assert_eq!(m["merged_lines"]["rust"], 3);
+    assert_eq!(worker_status(&run_dir, "go"), "killed");
+    assert_eq!(worker_status(&run_dir, "rust"), "done");
 }

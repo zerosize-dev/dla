@@ -263,6 +263,22 @@ fn two_languages_never_share_a_raw_file() {
     );
 }
 
+/// Two runtimes can share a backend (codeql); each gets its own scratch directory.
+#[cfg(unix)]
+#[test]
+fn the_scratch_directory_is_per_language_and_backend() {
+    let f = fixture(TABLE, &PY);
+    fake_tool(
+        &f,
+        "ruff",
+        "if [ \"$1\" = \"--version\" ]; then echo 'ruff 1.0.0'; exit 0; fi\nmkdir -p \"$RUFF_CACHE_DIR\"\necho '{\"runs\":[{\"results\":[]}]}'",
+    );
+    sweep_with(&f.ctx, Runtime::Python, &env(&f)).unwrap();
+    let tmp = f.ctx.run_dir.join("tmp");
+    assert!(tmp.join("python-ruff/cache/ruff").is_dir());
+    assert!(!tmp.join("ruff").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_second_sweep_skips_existing_candidates_and_keeps_the_counts() {

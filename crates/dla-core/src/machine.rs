@@ -395,7 +395,11 @@ fn passing_columns(
             continue;
         };
         for c in summary.passed {
-            if c.tied_to(&finding.id, finding.site.as_deref()) {
+            if c.tied_to_owner(
+                &finding.id,
+                finding.site.as_deref(),
+                finding.owner.as_deref(),
+            ) {
                 tied.push(c);
             } else {
                 other.push(c);

@@ -417,11 +417,13 @@ fn is_prefix(prefix: &[&str], of: &[&str]) -> bool {
 }
 
 impl Scope {
-    /// The scope's own root as components (empty for a repository scope).
-    fn root(&self) -> Vec<&str> {
+    /// The scope's own root as components (empty for a repository scope); `None` for a
+    /// module or service scope whose path is absolute or climbs out with `..`, which
+    /// matches nothing (fail closed) rather than the whole repository.
+    fn root(&self) -> Option<Vec<&str>> {
         match self.kind {
-            ScopeKind::Repository => Vec::new(),
-            ScopeKind::Module | ScopeKind::Service => components(&self.path).unwrap_or_default(),
+            ScopeKind::Repository => Some(Vec::new()),
+            ScopeKind::Module | ScopeKind::Service => components(&self.path),
         }
     }
 
@@ -429,6 +431,41 @@ impl Scope {
         self.excluded
             .iter()
             .any(|e| components(e).is_some_and(|ex| !ex.is_empty() && is_prefix(&ex, rel)))
+    }
+
+    /// Checks that the scope says what it means: a module or service path is a
+    /// non-empty path relative to the project root without `..`, and every excluded
+    /// path is a plain relative path (no `..`, no absolute path, no glob characters,
+    /// which are not supported). The error names the offending value. Existence under
+    /// the project is checked by the caller, which knows the project root.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.kind != ScopeKind::Repository {
+            match components(&self.path) {
+                Some(c) if !c.is_empty() => {}
+                _ => {
+                    return Err(format!(
+                        "scope path {:?} must be a non-empty path relative to the project root, without ..",
+                        self.path
+                    ));
+                }
+            }
+        }
+        for e in &self.excluded {
+            match components(e) {
+                Some(c) if !c.is_empty() => {}
+                _ => {
+                    return Err(format!(
+                        "excluded path {e:?} must be a non-empty path relative to the project root, without .."
+                    ));
+                }
+            }
+            if e.contains(['*', '?', '[', '{']) {
+                return Err(format!(
+                    "excluded path {e:?} has a glob character; exclusions are plain paths (a directory excludes everything under it)"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Whether a project-relative path (`/` separators) is inside the scope: for a
@@ -440,7 +477,7 @@ impl Scope {
         let Some(rel) = components(rel_path) else {
             return false;
         };
-        is_prefix(&self.root(), &rel) && !self.excluded_hit(&rel)
+        self.root().is_some_and(|root| is_prefix(&root, &rel)) && !self.excluded_hit(&rel)
     }
 
     /// Whether a walk should descend into the project-relative directory `rel_dir`:
@@ -449,7 +486,9 @@ impl Scope {
         let Some(rel) = components(rel_dir) else {
             return false;
         };
-        let root = self.root();
+        let Some(root) = self.root() else {
+            return false;
+        };
         (is_prefix(&root, &rel) || is_prefix(&rel, &root)) && !self.excluded_hit(&rel)
     }
 }

@@ -18,4 +18,4 @@ available. Find out what is holding the memory.
 id = "N1"
 owner = "quotes.RfqDesk.RECENT"
 cause = "N-WARM"
-discriminator = "the holder grows from 9002 to 13502 dominated objects (510061 to 762061 retained bytes, +49%) between the first two dumps, then stays at 13502 objects and 762061 to 764281 retained bytes (+0.3%) in the third dump: the access-ordered map evicts past a fixed size, so the growth was a fill that stopped"
+discriminator = "the holder grows from 9002 to 13502 dominated objects (536272 to 800272 retained bytes, +49%) between the first two dumps, then stays at 13502 objects and 800272 retained bytes (no change) in the third dump: the access-ordered map evicts past a fixed size, so the growth was a fill that stopped"

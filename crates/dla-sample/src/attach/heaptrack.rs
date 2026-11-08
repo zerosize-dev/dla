@@ -27,7 +27,7 @@ use super::{
     Backend, Detail, Done, Plan, Request, Tracker,
     parse::parse_heaptrack_print,
     resources::Estimate,
-    util::{AttachError, Cleanup, clip, output_name},
+    util::{AttachError, Cleanup, clip, output_name, same_process},
 };
 use crate::exec;
 
@@ -135,7 +135,7 @@ pub(crate) fn plan(req: &Request) -> Result<Plan, AttachError> {
         stopping: format!("after {secs}s (--duration) DLA calls heaptrack_stop() through gdb, then waits for the heaptrack script to finish"),
         effects: vec![
             format!("gdb attaches to {pid} with ptrace and injects libheaptrack_inject; the target stops for a moment, and every malloc and free is traced afterwards, which slows it"),
-            format!("heaptrack runs in a directory under the run directory; it creates the FIFO /tmp/heaptrack_fifo<script pid>"),
+            "heaptrack runs in a directory under the run directory; it creates the FIFO /tmp/heaptrack_fifo<script pid>".to_owned(),
             "the injected library stays mapped in the target after the recording".into(),
         ],
         cleanup: vec![
@@ -278,9 +278,13 @@ pub(crate) fn run(
     if !injected {
         let tail = log_tail(&log_path);
         let exited = matches!(child.try_wait(), Ok(Some(_)));
-        if !exited {
+        if !exited && same_process(&req.target) {
             // The script is still running: stop the recording the controlled way.
-            let _ = exec::run(to_command(&stop), Duration::from_secs(30));
+            let stopped =
+                exec::run(to_command(&stop), Duration::from_secs(30)).is_ok_and(|r| r.success);
+            if stopped {
+                t.keep(&stop);
+            }
             wait_child(&mut child, Duration::from_secs(30));
         }
         let _ = std::fs::remove_file(&fifo);
@@ -300,10 +304,13 @@ pub(crate) fn run(
                 "repeat the command",
             ));
         }
-        if !crate::os::is_alive(pid) {
+        if !same_process(&req.target) {
+            t.forget_runs();
             wait_child(&mut child, Duration::from_secs(20));
             return Err(AttachError::failed(
-                format!("process {pid} exited while heaptrack was recording"),
+                format!(
+                    "process {pid} exited (or its pid was reused) while heaptrack was recording"
+                ),
                 "repeat the command on a running process",
             ));
         }
@@ -311,6 +318,13 @@ pub(crate) fn run(
     }
 
     // Stop: heaptrack_stop() through gdb, then let the script finish by itself.
+    if !same_process(&req.target) {
+        t.forget_runs();
+        return Err(AttachError::failed(
+            format!("process {pid} exited (or its pid was reused) before heaptrack was stopped"),
+            "repeat the command on a running process",
+        ));
+    }
     let t_stop = Instant::now();
     let r = exec::run(to_command(&stop), Duration::from_secs(60)).map_err(|e| {
         AttachError::failed(

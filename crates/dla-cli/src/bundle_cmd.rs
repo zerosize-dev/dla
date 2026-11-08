@@ -119,15 +119,33 @@ fn evidence_ids(ledger: &dla_core::Ledger, id: &FindingId) -> Vec<EvidenceId> {
     ids
 }
 
+/// The resolved path of `rel` under `base`, or `None` when `rel` is not a plain
+/// relative path (an absolute path, a Windows drive prefix, `.` or `..` parts) or when
+/// the file resolves, through a symlink, to somewhere outside `base`.
+fn contained(base: &Path, rel: &str) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    let rel_path = Path::new(rel);
+    if rel.is_empty()
+        || rel.starts_with(['/', '\\'])
+        || !rel_path
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+        || rel.split(['/', '\\']).any(|c| c == "..")
+        || rel.as_bytes().get(1) == Some(&b':')
+    {
+        return None;
+    }
+    let canon_base = fs::canonicalize(base).ok()?;
+    let canon = fs::canonicalize(base.join(rel_path)).ok()?;
+    canon.starts_with(&canon_base).then_some(canon)
+}
+
 /// Numbered excerpt of `file` around `line`, when the file is a readable source file
 /// inside the project.
 fn excerpt(project: &Path, site: &str) -> Option<String> {
     let (file, line) = site.rsplit_once(':')?;
     let line: usize = line.parse().ok()?;
-    if file.starts_with('/') || file.split(['/', '\\']).any(|c| c == "..") {
-        return None;
-    }
-    let path = project.join(file);
+    let path = contained(project, file)?;
     let meta = fs::metadata(&path).ok()?;
     if !meta.is_file() || meta.len() > MAX_SOURCE_BYTES {
         return None;
@@ -179,7 +197,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
                 core_codes::INVALID_VALUE,
                 e.to_string(),
                 "a finding id such as F3 or jvm/F3",
-                "dla ledger resolve --help   (finding ids are listed by dla run status)",
+                "dla run status   (the finding ids it lists, such as F3 or jvm/F3)",
             )
         })?;
     if id.prefix().is_none()
@@ -258,15 +276,20 @@ fn build(
         rec.insert("authority".into(), json!(e.authority.as_str()));
         rec.insert("result".into(), result);
         if let Some(raw) = &e.raw {
-            let src = tc.run_dir.join(raw);
-            let safe = !raw.starts_with('/') && !raw.split(['/', '\\']).any(|c| c == "..");
+            let contained_src = contained(&tc.run_dir, raw);
+            let safe = contained_src.is_some();
+            let src = contained_src.unwrap_or_default();
             let name = format!(
                 "evidence/{}-{}",
                 e.evidence_id.to_string().replace('/', "_"),
                 raw.rsplit('/').next().unwrap_or("raw")
             );
             if !safe || !src.is_file() || !is_written(&src) {
-                omitted.push(format!("{eid}: {raw} is missing"));
+                omitted.push(if safe {
+                    format!("{eid}: {raw} is missing")
+                } else {
+                    format!("{eid}: {raw} is not a file inside the run directory")
+                });
             } else if fs::metadata(&src).is_ok_and(|m| m.len() > MAX_COPY_BYTES) {
                 omitted.push(format!("{eid}: {raw} is over {MAX_COPY_BYTES} bytes"));
             } else {

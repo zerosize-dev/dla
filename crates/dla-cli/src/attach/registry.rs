@@ -75,8 +75,10 @@ pub fn add_cleanup(run_dir: &std::path::Path, pid: u32, command: &str, action: &
     });
 }
 
-/// Marks the attach finished (the target keeps running) and replaces the cleanup list by what
-/// is still left to do.
+/// Replaces the cleanup list by what is still left to do and marks the attach finished (the
+/// target keeps running). An attach that still has an action to execute (a recording to stop,
+/// a file to remove) stays open, so `dla run abort` runs the action; a record with only notes
+/// left is stopped.
 pub fn finish(
     run_dir: &std::path::Path,
     pid: u32,
@@ -85,7 +87,9 @@ pub fn finish(
 ) -> Result<(), dla_core::Error> {
     RunState::update(run_dir, |s| {
         if let Some(p) = find(s, pid, command) {
-            p.stopped_at = Some(Utc::now());
+            if !left.iter().any(Cleanup::executable) {
+                p.stopped_at = Some(Utc::now());
+            }
             p.cleanup = left.iter().map(Cleanup::render).collect();
         }
         Ok(())
@@ -128,6 +132,43 @@ mod tests {
         let mut s = state_with(ProcessRole::Started, Some("2026-01-01T00:00:10Z"));
         s.processes[0].stopped_at = Some(Utc::now());
         assert!(!started_by_dla(&s, 77, Some("2026-01-01T00:00:10Z")));
+    }
+
+    #[test]
+    fn an_attach_with_cleanup_left_to_run_stays_open_for_abort() {
+        let mut s = state_with(ProcessRole::Attached, Some("2026-01-01T00:00:10Z"));
+        s.processes[0].command = "attach P1: heaptrack record".into();
+        let dir = tempfile::tempdir().unwrap();
+        s.save(dir.path()).unwrap();
+        let stop = Cleanup::Run(vec![
+            "/x/.shim/gdb".into(),
+            "--dla-stop".into(),
+            "77".into(),
+        ]);
+        let note = Cleanup::Note("stays mapped".into());
+        finish(
+            dir.path(),
+            77,
+            "attach P1: heaptrack record",
+            &[stop.clone(), note.clone()],
+        )
+        .unwrap();
+        let s = RunState::load(dir.path()).unwrap();
+        assert!(
+            s.processes[0].stopped_at.is_none(),
+            "abort must still see it"
+        );
+        assert_eq!(s.processes[0].cleanup, [stop.render(), note.render()]);
+        finish(
+            dir.path(),
+            77,
+            "attach P1: heaptrack record",
+            std::slice::from_ref(&note),
+        )
+        .unwrap();
+        let s = RunState::load(dir.path()).unwrap();
+        assert!(s.processes[0].stopped_at.is_some());
+        assert_eq!(s.processes[0].cleanup, [note.render()]);
     }
 
     #[test]

@@ -116,6 +116,18 @@ impl<'a> Matcher<'a> {
         {
             out.push(f.clone());
         }
+        // A probe column named after a holder (`probe:Audit.trail`) is tied to the
+        // findings whose owner is that holder, whether or not it has a site.
+        for f in self.ledger.findings() {
+            if f.polarity() == Polarity::Leak
+                && f.owner
+                    .as_deref()
+                    .is_some_and(|o| dla_core::trend::probe_column_matches_owner(&c.name, o))
+                && !out.contains(&f.id)
+            {
+                out.push(f.id.clone());
+            }
+        }
         let Some((file, line)) = c.site.as_deref().and_then(split) else {
             return out;
         };
@@ -247,6 +259,23 @@ mod tests {
             m.candidates(&trend_of("nowhere.go:1", Some(FindingId::new(9))))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_probe_column_is_tied_to_the_finding_with_that_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ledger = ledger_with(&[("census", Some("Audit.kt:3"))]);
+        let mut nf = NewFinding::new(
+            Origin::parse("census").unwrap(),
+            vec![dla_core::EvidenceId::new(1)],
+        );
+        nf.owner = Some("shop.codec.Audit.trail".into());
+        ledger.add_finding(nf).unwrap();
+        let mut m = Matcher::new(dir.path(), &ledger);
+        let mut c = trend_of("nowhere.kt:1", None);
+        c.name = "probe:Audit.trail.size".into();
+        c.site = None;
+        assert_eq!(m.candidates(&c), [FindingId::new(2)]);
     }
 
     #[test]

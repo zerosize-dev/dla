@@ -405,3 +405,144 @@ fn generated_journal_dumps_when_a_jdk_is_present() {
         check_journal(&s, n);
     }
 }
+
+// ---- hostile inputs
+
+use common::hprof_builder::{B, T_INT};
+
+fn many_fields(n: usize) -> Vec<(String, u8)> {
+    (0..n).map(|i| (format!("f{i}"), T_INT)).collect()
+}
+
+fn class_with_fields(b: &mut B, id: u64, sup: u64, n: usize) {
+    let owned = many_fields(n);
+    let fields: Vec<(&str, u8)> = owned.iter().map(|(s, t)| (s.as_str(), *t)).collect();
+    b.class_dump(id, sup, 0, 0, &fields, &[]);
+}
+
+fn expect_malformed(bytes: &[u8], what: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let t0 = std::time::Instant::now();
+    let e = summarize(&write(dir.path(), "h.hprof", bytes), &opts(dir.path())).unwrap_err();
+    assert!(e.to_string().contains(what), "{e}");
+    assert!(
+        matches!(e, dla_parsers::hprof::HprofError::Malformed(_)),
+        "{e}"
+    );
+    assert!(t0.elapsed().as_secs() < 20, "took {:?}", t0.elapsed());
+}
+
+#[test]
+fn self_super_class_with_many_fields_is_refused_quickly() {
+    let mut b = B::new(8, 1);
+    let c = b.declare("app.Loop");
+    class_with_fields(&mut b, c, c, 65535);
+    expect_malformed(&b.finish(1), "loops");
+}
+
+#[test]
+fn super_cycle_is_refused_quickly() {
+    let mut b = B::new(8, 1);
+    let x = b.declare("app.X");
+    let y = b.declare("app.Y");
+    let z = b.declare("app.Z");
+    class_with_fields(&mut b, x, y, 100);
+    class_with_fields(&mut b, y, z, 100);
+    class_with_fields(&mut b, z, x, 100);
+    expect_malformed(&b.finish(1), "loops");
+}
+
+#[test]
+fn a_chain_with_huge_field_counts_is_refused_quickly() {
+    let mut b = B::new(8, 1);
+    let ids: Vec<u64> = (0..20).map(|i| b.declare(&format!("app.C{i}"))).collect();
+    for (i, &id) in ids.iter().enumerate() {
+        let sup = ids.get(i + 1).copied().unwrap_or(0);
+        class_with_fields(&mut b, id, sup, 65535);
+    }
+    expect_malformed(&b.finish(1), "instance fields");
+}
+
+#[test]
+fn a_gzip_that_inflates_past_the_limit_is_refused_and_cleaned_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = model(8, 5, 200, 10);
+    let gz = write(dir.path(), "m.hprof.gz", &stored_gzip(&m.dump));
+    let work = dir.path().join("work");
+    let o = Options {
+        max_inflated: Some(1000),
+        ..opts(&work)
+    };
+    let e = summarize(&gz, &o).unwrap_err();
+    assert!(
+        matches!(e, dla_parsers::hprof::HprofError::InflateTooLarge(1000)),
+        "{e}"
+    );
+    assert_eq!(fs::read_dir(&work).unwrap().count(), 0, "temp file left");
+    // The default limit (a multiple of the compressed size, at least 64 MiB) passes it.
+    assert!(summarize(&gz, &opts(&work)).is_ok());
+}
+
+#[test]
+fn a_real_deflate_bomb_stops_at_the_default_ratio() {
+    // 1 GiB of zeros as ~1 MiB of deflate (stored-free, fixed-Huffman runs would be
+    // long to build; use max-length matches of a dynamic-free fixed block instead).
+    let dir = tempfile::tempdir().unwrap();
+    // Fixed-Huffman block: literal 0, then repeated (length 258, distance 1) matches.
+    let mut bits: Vec<bool> = vec![true, true, false]; // BFINAL=1, BTYPE=01 (LSB first)
+    let push_code = |bits: &mut Vec<bool>, code: u32, len: u32| {
+        for i in (0..len).rev() {
+            bits.push((code >> i) & 1 == 1);
+        }
+    };
+    push_code(&mut bits, 0x30, 8); // literal 0
+    let total_matches = 1_000_000usize; // 258 MB
+    for _ in 0..total_matches {
+        push_code(&mut bits, 0xc5, 8); // length symbol 285 (258)
+        push_code(&mut bits, 0, 5); // distance code 0 (1)
+    }
+    push_code(&mut bits, 0, 7); // end of block
+    let mut raw = vec![0u8; bits.len().div_ceil(8)];
+    for (i, b) in bits.iter().enumerate() {
+        if *b {
+            raw[i / 8] |= 1 << (i % 8);
+        }
+    }
+    let mut gz = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+    gz.extend_from_slice(&raw);
+    gz.extend_from_slice(&[0; 8]); // trailer is never reached
+    let p = write(dir.path(), "bomb.hprof.gz", &gz);
+    let work = dir.path().join("work");
+    let o = Options {
+        max_inflated: Some(1 << 20),
+        ..opts(&work)
+    };
+    let t0 = std::time::Instant::now();
+    let e = summarize(&p, &o).unwrap_err();
+    assert!(
+        matches!(e, dla_parsers::hprof::HprofError::InflateTooLarge(_)),
+        "{e}"
+    );
+    assert!(t0.elapsed().as_secs() < 20);
+    assert_eq!(fs::read_dir(&work).unwrap().count(), 0, "temp file left");
+}
+
+#[test]
+fn two_adjacent_statics_to_one_object_are_both_holders() {
+    let mut b = B::new(8, 1);
+    let obj = b.declare("java.lang.Object");
+    let host = b.declare("app.Host");
+    let payload = b.byte_array(&[1u8; 4000]);
+    b.class_dump(obj, 0, 0, 0, &[], &[]);
+    b.class_dump(host, obj, 0, 0, &[], &[("A", payload), ("B", payload)]);
+    b.root(0x05, host, 0, 0);
+    let dir = tempfile::tempdir().unwrap();
+    let s = summarize(
+        &write(dir.path(), "s.hprof", &b.finish(1)),
+        &opts(dir.path()),
+    )
+    .unwrap();
+    let keys: Vec<&str> = s.tracked.iter().map(|h| h.key.as_str()).collect();
+    assert!(keys.contains(&"static:app.Host.A"), "{keys:?}");
+    assert!(keys.contains(&"static:app.Host.B"), "{keys:?}");
+}

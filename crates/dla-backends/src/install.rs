@@ -688,6 +688,34 @@ pub fn execute(ctx: &ToolCtx, rec: &Recipe, env: &ToolEnv) -> Result<String, Ref
         .ok_or_else(|| failure(rec, "the installed tool was not found afterwards"))
 }
 
+/// Name of the lock file in the tools directory.
+const LOCK_FILE: &str = ".install.lock";
+
+/// Takes the exclusive lock of the tools directory, waiting for another install to
+/// finish. The lock is released when the returned file is dropped (or the process
+/// ends), so two workers installing at once cannot interleave their writes.
+fn lock_tools(tools: &Path) -> Result<fs::File, Refusal> {
+    let fail = |why: String| {
+        Refusal::new(
+            codes::TOOL_FAILED,
+            format!("cannot lock the tools directory: {why}"),
+            "an exclusive lock on the tools directory",
+            "check that the tools directory is writable, then run `dla install` again",
+        )
+    };
+    fs::create_dir_all(tools).map_err(|e| fail(format!("{}: {e}", tools.display())))?;
+    let path = tools.join(LOCK_FILE);
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| fail(format!("{}: {e}", path.display())))?;
+    file.lock()
+        .map_err(|e| fail(format!("{}: {e}", path.display())))?;
+    Ok(file)
+}
+
 /// Installs one backend.
 pub fn install(ctx: &ToolCtx, backend: &str) -> Result<StageOutcome, Refusal> {
     ctx.require_tier(1, "dla install")?;
@@ -699,6 +727,8 @@ pub fn install(ctx: &ToolCtx, backend: &str) -> Result<StageOutcome, Refusal> {
             "run through bin/dla, or export DLA_DATA_DIR=<writable directory>",
         ));
     };
+    // Held until this function returns.
+    let _lock = lock_tools(&tools)?;
     let rec = match recipe(backend, &tools, Platform::current()) {
         Ok(r) => r,
         Err(why) => {
@@ -748,6 +778,23 @@ mod tests {
         windows: false,
         macos: false,
     };
+
+    #[test]
+    fn the_tools_directory_lock_is_exclusive_until_dropped() {
+        let d = tempfile::tempdir().unwrap();
+        let tools = d.path().join("tools");
+        let held = lock_tools(&tools).unwrap();
+        let other = fs::OpenOptions::new()
+            .write(true)
+            .open(tools.join(LOCK_FILE))
+            .unwrap();
+        assert!(matches!(
+            other.try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        drop(held);
+        assert!(other.try_lock().is_ok());
+    }
 
     fn tools() -> PathBuf {
         PathBuf::from("/data/tools")

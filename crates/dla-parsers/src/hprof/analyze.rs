@@ -285,6 +285,61 @@ impl Shape<'_> {
     }
 }
 
+/// Most instance fields one class may have, own and inherited. HotSpot dumps stay far
+/// below it; it bounds the layout work for hostile files.
+const MAX_SLOTS_PER_CLASS: u64 = 1 << 20;
+
+/// Refuses a dump whose superclass chains loop or whose classes declare an absurd number
+/// of fields, before any layout is computed from them.
+fn check_hierarchy(classes: &[ClassDump], class_idx: &IdMap<u64, u32>) -> Result<(), HprofError> {
+    // 0 = unvisited, 1 = on the current walk, 2 = done.
+    let mut state = vec![0u8; classes.len()];
+    let mut total = vec![0u64; classes.len()];
+    let mut path: Vec<usize> = Vec::new();
+    for start in 0..classes.len() {
+        if state[start] != 0 {
+            continue;
+        }
+        path.clear();
+        let mut cur = start;
+        let mut below = 0u64;
+        loop {
+            match state[cur] {
+                1 => {
+                    return Err(HprofError::Malformed(format!(
+                        "the class hierarchy loops (class {:#x} is its own ancestor)",
+                        classes[cur].id
+                    )));
+                }
+                2 => {
+                    below = total[cur];
+                    break;
+                }
+                _ => {}
+            }
+            state[cur] = 1;
+            path.push(cur);
+            let c = &classes[cur];
+            match class_idx.get(&c.super_id) {
+                Some(&s) if c.super_id != 0 => cur = s as usize,
+                _ => break,
+            }
+        }
+        for &i in path.iter().rev() {
+            below += classes[i].fields.len() as u64;
+            if below > MAX_SLOTS_PER_CLASS {
+                return Err(HprofError::Malformed(format!(
+                    "class {:#x} declares more than {MAX_SLOTS_PER_CLASS} instance fields including inherited ones",
+                    classes[i].id
+                )));
+            }
+            total[i] = below;
+            state[i] = 2;
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------
 // Pass 2
 // ---------------------------------------------------------------------------------------
@@ -369,10 +424,9 @@ impl Visitor for Build<'_> {
             .copied()
             .unwrap_or(self.unknown_ty);
         for &(name, value) in &c.statics {
-            let before = self.edges.len();
-            self.edge(value);
-            if self.edges.len() > before {
-                let t = self.edges[self.edges.len() - 1];
+            let t = self.table.find(self.ids, value);
+            if t != NONE && !self.edge_overflow {
+                self.edge(value);
                 self.statics_out.push((cidx, name, t));
             }
         }
@@ -638,8 +692,10 @@ impl Analysis<'_> {
                 let utf16 = coder.is_some_and(|c| data.get(c.off as usize) == Some(&1));
                 Some(if utf16 {
                     let u: Vec<u16> = bytes
-                        .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|&c| u16::from_le_bytes(c))
                         .collect();
                     String::from_utf16_lossy(&u)
                 } else {
@@ -649,8 +705,10 @@ impl Analysis<'_> {
             5 => {
                 self.rd.read_vec((take * 2).min(n * 2), &mut bytes).ok()?;
                 let u: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&c| u16::from_be_bytes(c))
                     .collect();
                 Some(String::from_utf16_lossy(&u))
             }
@@ -778,6 +836,7 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
     for (i, c) in classes.iter().enumerate() {
         class_idx.insert(c.id, i as u32);
     }
+    check_hierarchy(&classes, &class_idx)?;
     let class_names: Vec<String> = classes
         .iter()
         .map(|c| match p1.load.get(&c.id) {

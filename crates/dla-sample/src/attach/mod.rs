@@ -33,9 +33,9 @@ pub use parse::{
     parse_memray_stats, parse_nmt_summary,
 };
 pub use resources::{
-    Estimate, MemoryAvailable, cgroup_path, cgroup_v1_available, cgroup_v2_available,
-    dump_exceeds_disk, free_disk, gate, human, parse_meminfo_available, peak_exceeds_memory,
-    read_memory_available,
+    Estimate, MemoryAvailable, cgroup_available_at, cgroup_path, cgroup_v1_available,
+    cgroup_v2_available, dump_exceeds_disk, free_disk, gate, human, parse_meminfo_available,
+    peak_exceeds_memory, read_memory_available,
 };
 pub use util::{
     AttachError, Cleanup, ErrorKind, TargetInfo, dir_writable_by, inspect_target, mode_grants,
@@ -338,6 +338,12 @@ impl<'a> Tracker<'a> {
         self.left.retain(|l| l != c);
     }
 
+    /// The target is no longer the process that was inspected (it exited and the pid may be
+    /// reused): the commands that address it by pid must never run, so they leave the list.
+    pub(crate) fn forget_runs(&mut self) {
+        self.left.retain(|l| !matches!(l, Cleanup::Run(_)));
+    }
+
     /// `c` was carried out: it moves from the left list to the done list.
     pub(crate) fn done(&mut self, c: &Cleanup, what: impl Into<String>) {
         self.left.retain(|l| l != c);
@@ -356,13 +362,43 @@ pub fn run(
 ) -> Finished {
     let mut t = Tracker::new(register);
     let started = std::time::Instant::now();
-    let result = match plan.detail {
-        Detail::Jcmd(ref p) => jcmd::run(p, &plan, req, out_dir, &mut t),
-        Detail::Node(ref p) => node::run(p, &plan, req, out_dir, &mut t),
-        Detail::Memray(ref p) => memray::run(p, &plan, req, out_dir, &mut t),
-        Detail::Heaptrack(ref p) => heaptrack::run(p, &plan, req, out_dir, &mut t),
-        Detail::Goref(ref p) => goref::run(p, &plan, req, out_dir, &mut t),
+    // The plan may be old (the gate, the consent prompt): the pid must still be the process
+    // that was inspected before anything is sent to it.
+    let result = if !util::same_process(&req.target) {
+        Err(AttachError::not_ready(
+            format!(
+                "process {} exited or was replaced before the attach started",
+                req.target.pid
+            ),
+            "the process that was inspected, still running",
+            "repeat the command on the running process",
+        ))
+    } else {
+        run_backend(&plan, req, out_dir, &mut t)
     };
+    finish_run(result, started, t)
+}
+
+fn run_backend(
+    plan: &Plan,
+    req: &Request,
+    out_dir: &Path,
+    t: &mut Tracker<'_>,
+) -> Result<Done, AttachError> {
+    match plan.detail {
+        Detail::Jcmd(ref p) => jcmd::run(p, plan, req, out_dir, t),
+        Detail::Node(ref p) => node::run(p, plan, req, out_dir, t),
+        Detail::Memray(ref p) => memray::run(p, plan, req, out_dir, t),
+        Detail::Heaptrack(ref p) => heaptrack::run(p, plan, req, out_dir, t),
+        Detail::Goref(ref p) => goref::run(p, plan, req, out_dir, t),
+    }
+}
+
+fn finish_run(
+    result: Result<Done, AttachError>,
+    started: std::time::Instant,
+    mut t: Tracker<'_>,
+) -> Finished {
     // A failed attach removes the partial files it registered for removal.
     if result.is_err() {
         let rms: Vec<Cleanup> = t

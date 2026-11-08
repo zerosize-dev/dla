@@ -136,7 +136,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AttachArgs) -> 
             host: Some(m),
             cgroup: None,
         },
-        None => read_memory_available(),
+        None => read_memory_available(Some(a.pid)),
     };
     let pre = preflight(&target, &plan, disk, memory);
     eprintln!(
@@ -203,6 +203,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AttachArgs) -> 
         Ok(d) => d,
         Err(e) => {
             let mut f = parts::refusal(e.clone());
+            let pending: Vec<String> = fin
+                .cleanup_left
+                .iter()
+                .filter(|c| c.executable())
+                .map(Cleanup::render)
+                .collect();
+            if !pending.is_empty() {
+                f.refusal.message = format!(
+                    "{} (the target may still be traced or recorded; left to do, `dla run abort` runs it: {})",
+                    f.refusal.message,
+                    pending.join("; ")
+                );
+            }
             if !fin.cleanup_done.is_empty() {
                 f.refusal.message = format!(
                     "{} (cleaned up: {})",

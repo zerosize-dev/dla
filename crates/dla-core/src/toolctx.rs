@@ -94,9 +94,15 @@ impl ToolCtx {
         make_dir(&self.run_dir.join(stage))
     }
 
-    /// Creates and returns `<run>/tmp`: the home of tool caches and scratch output.
+    /// Creates and returns `<run>/tmp`, the home of tool caches and scratch output; in
+    /// worker mode `<run>/tmp/<worker>`, so workers running a stage at the same time
+    /// never share (and clobber) a database, SARIF file or inflate temp file.
     pub fn tmp_dir(&self) -> Result<PathBuf, Refusal> {
-        make_dir(&self.run_dir.join("tmp"))
+        let base = self.run_dir.join("tmp");
+        match self.worker.as_deref() {
+            Some(w) => make_dir(&base.join(w)),
+            None => make_dir(&base),
+        }
     }
 
     /// The consent tiers recorded in `state.json` (empty when no consent was given).
@@ -115,11 +121,22 @@ impl ToolCtx {
     pub fn require_tier(&self, tier: u8, what: &str) -> Result<(), Refusal> {
         let state = RunState::load(&self.run_dir).map_err(|e| e.to_refusal())?;
         let Some(consent) = state.consent else {
+            // Consent is the run's one decision, taken by the user or the runner:
+            // `dla consent` refuses in worker mode, so a worker is pointed at the
+            // core call.
+            let fix = if self.worker.is_some() {
+                format!(
+                    "ask the core to run: dla --run {} consent --tiers 1-4   (without --worker)",
+                    self.run_id
+                )
+            } else {
+                "dla consent --tiers 1-4".to_owned()
+            };
             return Err(Refusal::new(
                 codes::CONSENT_REQUIRED,
                 format!("{what} needs consent tier {tier}, and this run has no consent yet"),
                 format!("consent tier {tier} in state.json"),
-                "dla consent --tiers 1-4",
+                fix,
             ));
         };
         if consent.tiers.contains(&tier) {
@@ -722,7 +739,14 @@ mod tests {
         let (_d, ctx) = run(None);
         let s = ctx.stage_dir("sweep").unwrap();
         assert_eq!(s, ctx.run_dir.join("sweep"));
-        assert!(ctx.tmp_dir().unwrap().is_dir());
+        assert_eq!(ctx.tmp_dir().unwrap(), ctx.run_dir.join("tmp"));
+        let mut w1 = ctx.clone();
+        w1.worker = Some("jvm".into());
+        let mut w2 = ctx.clone();
+        w2.worker = Some("python".into());
+        assert_eq!(w1.tmp_dir().unwrap(), ctx.run_dir.join("tmp").join("jvm"));
+        assert_ne!(w1.tmp_dir().unwrap(), w2.tmp_dir().unwrap());
+        assert!(w2.tmp_dir().unwrap().is_dir());
         assert_eq!(ctx.pointer("sweep/x.json"), ".dla/r1/sweep/x.json");
     }
 

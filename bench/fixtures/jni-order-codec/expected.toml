@@ -9,8 +9,7 @@ dynamic_confirmation = true
 prompt = """
 The order codec service's resident memory climbs steadily during long replay
 runs, and the container is restarted by the orchestrator when it reaches its
-limit. The JVM heap graphs account for only part of the growth. Find out what
-is holding the memory.
+limit. Find out what is holding the memory.
 """
 
 [[leak]]

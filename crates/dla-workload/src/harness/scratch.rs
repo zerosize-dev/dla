@@ -159,6 +159,36 @@ fn copy_symlink(project: &Path, dest: &Path, src: &Path, to: &Path) -> Result<()
     }
 }
 
+/// Root-level directories that hold build configuration or dependencies, copied whole
+/// under a scope.
+const ROOT_BUILD_DIRS: [&str; 4] = ["gradle", "buildSrc", ".mvn", "vendor"];
+
+/// Whether a file outside the scope is still needed to build what is inside it: any
+/// non-source file in a directory above the scope (`svc/go.mod` for the scope
+/// `svc/a`, a parent `pom.xml` or `Cargo.toml`) and everything under the root-level
+/// build directories.
+fn keeps_for_build(scope: &Scope, rel: &Path, slash: &str) -> bool {
+    if rel
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .is_some_and(|c| ROOT_BUILD_DIRS.contains(&c))
+    {
+        return true;
+    }
+    if Lang::from_path(rel).is_some() {
+        return false;
+    }
+    let root: Vec<&str> = scope
+        .path
+        .split(['/', '\\'])
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    let dir: Vec<&str> = slash.split('/').collect();
+    let dir = &dir[..dir.len() - 1];
+    dir.len() < root.len() && root[..dir.len()] == *dir
+}
+
 /// Copies the project into `dest` (created). The `.dla` directory is never copied.
 pub fn copy_project(project: &Path, dest: &Path) -> std::io::Result<CopyReport> {
     copy_project_scoped(project, dest, None)
@@ -195,7 +225,7 @@ pub fn copy_project_scoped(
         if let Some(scope) = scope {
             let slash = dla_core::paths::to_slash(&rel);
             let at_root = rel.components().count() == 1;
-            if !at_root && !scope.includes(&slash) {
+            if !at_root && !scope.includes(&slash) && !keeps_for_build(scope, &rel, &slash) {
                 report.out_of_scope += 1;
                 if let Some(lang) = Lang::from_path(&rel)
                     && !dla_census::walk::is_test_path(&slash)
@@ -246,7 +276,7 @@ pub fn copy_project_scoped(
     }
     if report.out_of_scope > 0 {
         report.gaps.push(format!(
-            "scratch copy: {} file(s) outside the run's scope not copied (only the scope and the files at the project root are)",
+            "scratch copy: {} file(s) outside the run's scope not copied (only the scope, the files at the project root, the build files above the scope and the root-level build directories are)",
             report.out_of_scope
         ));
     }
@@ -318,6 +348,49 @@ mod tests {
         assert_eq!(r.out_of_scope_sources[&Runtime::Jvm], 2);
         assert_eq!(r.out_of_scope_sources[&Runtime::Python], 1);
         assert!(r.gaps.iter().any(|g| g.contains("outside the run's scope")));
+    }
+
+    #[test]
+    fn scoped_copy_keeps_build_files_above_the_scope_and_root_build_dirs() {
+        use dla_core::state::ScopeKind;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        for f in [
+            "svc/go.mod",
+            "svc/go.sum",
+            "svc/main.go",
+            "svc/a/a.go",
+            "svc/b/b.go",
+            "svc/b/go.txt",
+            "gradle/libs.versions.toml",
+            "buildSrc/build.gradle.kts",
+            "vendor/m/m.go",
+            "other/Cargo.toml",
+        ] {
+            let path = p.join(f);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        }
+        let scope = Scope {
+            kind: ScopeKind::Module,
+            path: "svc/a".into(),
+            excluded: vec![],
+        };
+        let dest = d.path().join("w");
+        copy_project_scoped(&p, &dest, Some(&scope)).unwrap();
+        for kept in [
+            "svc/go.mod",
+            "svc/go.sum",
+            "svc/a/a.go",
+            "gradle/libs.versions.toml",
+            "buildSrc/build.gradle.kts",
+            "vendor/m/m.go",
+        ] {
+            assert!(dest.join(kept).is_file(), "{kept} missing");
+        }
+        for dropped in ["svc/main.go", "svc/b", "other"] {
+            assert!(!dest.join(dropped).exists(), "{dropped} copied");
+        }
     }
 
     #[test]

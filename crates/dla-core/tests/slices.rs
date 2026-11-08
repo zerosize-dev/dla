@@ -550,8 +550,8 @@ fn merge_finds_slices_that_were_never_registered() {
 }
 
 #[test]
-fn merge_refuses_an_invalid_slice_and_names_the_file() {
-    let dir = new_run(&["jvm"]);
+fn an_invalid_slice_is_noted_and_the_other_slices_still_merge() {
+    let dir = new_run(&["jvm", "rust"]);
     let mut j = slice(dir.path(), "jvm");
     candidate_in_slice(&mut j, "a.go:1", Holder::StaticGlobal);
     candidate_in_slice(&mut j, "b.go:2", Holder::StaticGlobal);
@@ -560,9 +560,73 @@ fn merge_refuses_an_invalid_slice_and_names_the_file() {
     let mut lines: Vec<&str> = text.lines().collect();
     lines[1] = "{not json";
     fs::write(&path, lines.join("\n") + "\n").unwrap();
-    let r = merge(dir.path()).unwrap_err().to_refusal();
-    assert_eq!(r.code, m4::SLICE_INVALID);
-    assert!(r.fix.contains("ledger.jvm.jsonl"), "{r}");
+    // rust sorts after jvm: it used to be skipped with the error.
+    let mut r = slice(dir.path(), "rust");
+    candidate_in_slice(&mut r, "z.rs:1", Holder::StaticGlobal);
+    r.finish_slice().unwrap();
+
+    let rep = merge(dir.path()).unwrap();
+    assert_eq!(rep.invalid_slices, ["jvm"]);
+    assert_eq!(rep.merged_lines.get("rust"), Some(&3));
+    assert_eq!(rep.unfinished.len(), 1);
+    assert_eq!(rep.unfinished[0].worker, "jvm");
+    let main = Ledger::load(dir.path()).unwrap();
+    let item = main
+        .open_items()
+        .find(|o| o.item.text.starts_with("slice of worker jvm is invalid"))
+        .expect("an open item names the bad slice");
+    assert!(
+        item.item.text.contains("ledger.jvm.jsonl"),
+        "{}",
+        item.item.text
+    );
+    let st = RunState::load(dir.path()).unwrap();
+    assert_eq!(st.worker("jvm").unwrap().status, WorkerStatus::Killed);
+    assert_eq!(st.worker("rust").unwrap().status, WorkerStatus::Done);
+    assert_eq!(st.status, RunStatus::Incomplete);
+
+    // Repeating does not raise the item again; fixing the line lets the slice in.
+    merge(dir.path()).unwrap();
+    let main = Ledger::load(dir.path()).unwrap();
+    assert_eq!(
+        main.open_items()
+            .filter(|o| o.item.text.starts_with("slice of worker jvm is invalid"))
+            .count(),
+        1
+    );
+    fs::write(&path, text).unwrap();
+    let rep = merge(dir.path()).unwrap();
+    assert!(rep.invalid_slices.is_empty());
+    assert_eq!(rep.merged_lines.get("jvm"), Some(&3));
+}
+
+#[test]
+fn a_tear_inside_a_multibyte_character_is_dropped_like_any_other_torn_tail() {
+    use std::io::Write;
+    let dir = new_run(&["go", "jvm"]);
+    let mut g = slice(dir.path(), "go");
+    candidate_in_slice(&mut g, "a.go:1", Holder::StaticGlobal);
+    let mut j = slice(dir.path(), "jvm");
+    j.finish_slice().unwrap();
+    let path = slice_path(dir.path(), "go");
+    let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    f.write_all(b"{\"schema_version\":3,\"seq\":4,\"type\":\"note\",\"text\":\"caf\xC3")
+        .unwrap();
+    drop(f);
+
+    // The merge is not blocked and says the tail was torn.
+    let rep = merge(dir.path()).unwrap();
+    assert_eq!(rep.torn_tail, ["go"]);
+    assert!(rep.invalid_slices.is_empty());
+    assert_eq!(rep.merged_lines.get("go"), Some(&2));
+    // The worker restarts: the fragment is reported, then cut by the next write.
+    drop(g);
+    let mut g = slice(dir.path(), "go");
+    assert!(g.torn_tail().is_some());
+    candidate_in_slice(&mut g, "b.go:2", Holder::StaticGlobal);
+    let text = fs::read_to_string(&path).unwrap();
+    assert_eq!(text.lines().count(), 3);
+    assert!(text.ends_with('\n'));
 }
 
 // ---------------------------------------------------------------- cross-worker gate
@@ -778,6 +842,170 @@ fn a_late_worker_that_finishes_clears_the_incomplete_status_the_merge_set() {
     assert_eq!(st.status, RunStatus::Active);
     assert!(st.incomplete_reason.is_none());
     assert_eq!(st.worker("jvm").unwrap().status, WorkerStatus::Done);
+}
+
+#[test]
+fn a_worker_that_finishes_after_a_merge_closes_its_did_not_finish_item() {
+    let dir = new_run(&["jvm"]);
+    let mut j = slice(dir.path(), "jvm");
+    candidate_in_slice(&mut j, "a.go:1", Holder::StaticGlobal);
+    merge(dir.path()).unwrap();
+    let open = |dir: &std::path::Path| {
+        Ledger::load(dir)
+            .unwrap()
+            .open_items()
+            .filter(|o| o.item.text.starts_with("worker jvm did not finish"))
+            .map(|o| o.resolution.is_none())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(open(dir.path()), [true]);
+    j.finish_slice().unwrap();
+    merge(dir.path()).unwrap();
+    assert_eq!(
+        open(dir.path()),
+        [false],
+        "closed by the merge, not raised twice"
+    );
+    let main = Ledger::load(dir.path()).unwrap();
+    let view = RunView::new(RunState::load(dir.path()).unwrap(), main, None);
+    assert!(
+        !status(&view)
+            .blocking
+            .iter()
+            .any(|b| b.description.contains("did not finish")),
+    );
+}
+
+#[test]
+fn an_item_the_core_resolved_is_not_raised_again_by_the_next_merge() {
+    let dir = new_run(&["jvm"]);
+    let mut j = slice(dir.path(), "jvm");
+    candidate_in_slice(&mut j, "a.go:1", Holder::StaticGlobal);
+    merge(dir.path()).unwrap();
+    let mut main = Ledger::load(dir.path()).unwrap();
+    let id = main.open_items().next().unwrap().item.id.clone();
+    main.resolve_open_item(
+        &id,
+        dla_core::record::Resolution::Unresolved {
+            reason: dla_core::finding::UnresolvedReason::TimeBudget,
+            remedy: "rerun the jvm worker".into(),
+        },
+    )
+    .unwrap();
+    merge(dir.path()).unwrap();
+    let main = Ledger::load(dir.path()).unwrap();
+    assert_eq!(main.open_items().count(), 1);
+}
+
+#[test]
+fn a_run_with_unfinished_workers_points_at_finishing_them_not_at_run_init() {
+    let dir = new_run(&["jvm"]);
+    let mut j = slice(dir.path(), "jvm");
+    candidate_in_slice(&mut j, "a.go:1", Holder::StaticGlobal);
+    merge(dir.path()).unwrap();
+    let main = Ledger::load(dir.path()).unwrap();
+    let view = RunView::new(RunState::load(dir.path()).unwrap(), main, None);
+    let run = status(&view)
+        .blocking
+        .into_iter()
+        .find(|b| matches!(b.kind, dla_core::view::BlockingKind::Run))
+        .unwrap();
+    assert!(
+        run.fix.contains("ledger merge") && !run.fix.contains("run init"),
+        "{}",
+        run.fix
+    );
+}
+
+fn confirm_existing(l: &mut Ledger, f: &dla_core::FindingId) {
+    let n = add_sibling(l, f, "N-WARM");
+    go(l, &n, FindingState::Refuted, &[E_DISC_LEAK]);
+    go(l, f, FindingState::UnderTest, &[E_HARNESS]);
+    go(l, f, FindingState::Confirmed, &[E_GROWTH_PASS]);
+}
+
+#[test]
+fn a_duplicate_that_is_confirmed_after_the_merge_becomes_the_canonical_finding() {
+    let dir = new_run(&["jvm", "rust"]);
+    let mut j = slice(dir.path(), "jvm");
+    let jf = candidate_in_slice(&mut j, "a.go:1", Holder::StaticGlobal);
+    let mut r = slice(dir.path(), "rust");
+    let rf = candidate_in_slice(&mut r, "a.go:1", Holder::StaticGlobal);
+    let rep = merge(dir.path()).unwrap();
+    assert_eq!(rep.duplicates[0].canonical, jf.to_string());
+
+    confirm_existing(&mut r, &rf);
+    let rep = merge(dir.path()).unwrap();
+    assert_eq!(rep.duplicates.len(), 1);
+    assert_eq!(rep.duplicates[0].canonical, rf.to_string());
+    assert_eq!(rep.duplicates[0].duplicate, jf.to_string());
+
+    let main = Ledger::load(dir.path()).unwrap();
+    assert_eq!(main.merged_into(&jf), Some(&rf));
+    assert_eq!(main.merged_into(&rf), None);
+    let view = RunView::new(RunState::load(dir.path()).unwrap(), main, None);
+    let st = status(&view);
+    assert_eq!(st.counts.by_state.confirmed, 1, "{:?}", st.counts);
+
+    // Stable: nothing more to do.
+    assert!(merge(dir.path()).unwrap().duplicates.is_empty());
+}
+
+#[test]
+fn a_better_third_finding_takes_over_without_a_chain() {
+    let dir = new_run(&["jvm", "rust", "zig"]);
+    let mut j = slice(dir.path(), "jvm");
+    let jf = candidate_in_slice(&mut j, "a.go:1", Holder::StaticGlobal);
+    let mut r = slice(dir.path(), "rust");
+    let rf = candidate_in_slice(&mut r, "a.go:1", Holder::StaticGlobal);
+    merge(dir.path()).unwrap();
+    let mut z = slice(dir.path(), "zig");
+    let zf = confirm_in_slice(&mut z, "a.go:1", Holder::StaticGlobal);
+    merge(dir.path()).unwrap();
+    let main = Ledger::load(dir.path()).unwrap();
+    assert_eq!(main.merged_into(&jf), Some(&zf));
+    assert_eq!(
+        main.merged_into(&rf),
+        Some(&zf),
+        "no jvm -> zig <- rust chain"
+    );
+    let mut dups: Vec<String> = main
+        .duplicates_of(&zf)
+        .iter()
+        .map(|d| d.to_string())
+        .collect();
+    dups.sort();
+    assert_eq!(dups, [jf.to_string(), rf.to_string()]);
+}
+
+#[test]
+fn supports_added_to_a_duplicate_after_the_merge_reach_the_canonical_finding() {
+    let dir = new_run(&["jvm", "rust"]);
+    let mut j = slice(dir.path(), "jvm");
+    let jf = candidate_in_slice(&mut j, "a.go:1", Holder::StaticGlobal);
+    let mut r = slice(dir.path(), "rust");
+    let rf = candidate_in_slice(&mut r, "a.go:1", Holder::StaticGlobal);
+    merge(dir.path()).unwrap();
+    // Both move on to the same state; the duplicate cites one more piece of evidence.
+    for (l, f, ev) in [
+        (&mut j, &jf, vec![E_HARNESS]),
+        (&mut r, &rf, vec![E_HARNESS, E_DISCOVER]),
+    ] {
+        let n = add_sibling(l, f, "N-WARM");
+        go(l, &n, FindingState::Refuted, &[E_DISC_LEAK]);
+        go(l, f, FindingState::UnderTest, &ev);
+    }
+    let extra = eid(E_DISCOVER);
+    let main = Ledger::load(dir.path()).unwrap();
+    assert!(!main.finding(&jf).unwrap().supports.contains(&extra));
+    merge(dir.path()).unwrap();
+    let main = Ledger::load(dir.path()).unwrap();
+    assert_eq!(main.merged_into(&rf), Some(&jf));
+    assert!(main.finding(&jf).unwrap().supports.contains(&extra));
+    // And it settles.
+    let n = main.lines().len();
+    merge(dir.path()).unwrap();
+    assert_eq!(Ledger::load(dir.path()).unwrap().lines().len(), n);
 }
 
 #[test]

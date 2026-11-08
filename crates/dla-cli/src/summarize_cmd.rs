@@ -201,6 +201,18 @@ fn parse_failure(rel: &str, e: &hprof::HprofError) -> Failure {
             "a complete heap dump",
             "take the dump again (jcmd <pid> GC.heap_dump <file>) and rerun dla summarize heap-graph",
         ),
+        H::InflateTooLarge(_) => fail(
+            "insufficient-resources",
+            format!("{rel} cannot be read: {e}"),
+            "a gzip heap dump of a plausible size",
+            "inflate it yourself if it is genuine (gunzip -k <dump>.hprof.gz) and pass the .hprof, or take the dump again",
+        ),
+        H::DiskFull => fail(
+            "insufficient-resources",
+            format!("{rel} cannot be read: {e}"),
+            "free disk space for the inflated dump (several times the .gz size)",
+            "free disk space or point the run directory at a larger volume, then rerun dla summarize heap-graph",
+        ),
         H::Io(io) => Failure::from(Error::io(
             rel,
             std::io::Error::new(io.kind(), io.to_string()),
@@ -436,6 +448,9 @@ fn bound_holder(ledger: &Ledger, f: &FindingId, dumps: &[Dump]) -> Res<(FindingI
         .find(|h| h.key == owner || owner_of(h) == owner || format!("static:{owner}") == h.key);
     match hit {
         Some(h) => Ok((f.clone(), h.key.clone())),
+        // One dump has no series to bind: the finding is only checked to exist and to
+        // have an owner, and the retention-path evidence is still recorded.
+        None if dumps.len() == 1 => Ok((f.clone(), owner)),
         None => Err(fail(
             "holder-not-found",
             format!(

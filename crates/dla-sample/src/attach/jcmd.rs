@@ -14,7 +14,8 @@ use super::{
     parse::{parse_histogram, parse_jfr_summary, parse_nmt_summary},
     resources::Estimate,
     util::{
-        AttachError, Cleanup, clip, dir_writable_by, first_error_line, output_name, wait_stable,
+        AttachError, Cleanup, clip, dir_writable_by, first_error_line, output_name, same_process,
+        wait_stable,
     },
 };
 use crate::exec;
@@ -67,8 +68,51 @@ fn default_file(op: Op) -> (&'static str, &'static str) {
     }
 }
 
+/// Whether the maps text of a process lists the JVM library.
+pub(crate) fn maps_show_jvm(maps: &str) -> bool {
+    maps.lines().any(|l| {
+        l.rsplit('/')
+            .next()
+            .is_some_and(|f| f.starts_with("libjvm.") || f == "jvm.dll")
+    })
+}
+
+/// Positive evidence that `pid` is a JVM: a `java` executable, the JVM library in its maps, or
+/// the JVM's own `hsperfdata` file. `jcmd` signals (SIGQUIT) any process it is pointed at, so
+/// it must never see a pid that fails this test.
+pub(crate) fn is_jvm(req: &Request) -> bool {
+    let pid = req.target.pid;
+    let name = req.target.exe_name().to_ascii_lowercase();
+    if matches!(name.as_str(), "java" | "javaw" | "java.exe" | "javaw.exe") {
+        return true;
+    }
+    if std::fs::read_to_string(format!("/proc/{pid}/maps")).is_ok_and(|m| maps_show_jvm(&m)) {
+        return true;
+    }
+    let tmp = std::env::temp_dir();
+    let has_perf = |dir: &Path| {
+        std::fs::read_dir(dir).is_ok_and(|rd| {
+            rd.filter_map(Result::ok).any(|e| {
+                e.file_name().to_string_lossy().starts_with("hsperfdata_")
+                    && e.path().join(pid.to_string()).exists()
+            })
+        })
+    };
+    has_perf(&tmp) || has_perf(Path::new("/tmp"))
+}
+
 pub(crate) fn plan(req: &Request) -> Result<Plan, AttachError> {
     let pid = req.target.pid;
+    if !is_jvm(req) {
+        return Err(AttachError::not_ready(
+            format!(
+                "process {pid} ({}) shows no sign of being a JVM; jcmd was not run and no signal was sent",
+                req.target.exe_name()
+            ),
+            "a JVM (a java executable, libjvm in its maps, or an hsperfdata file)",
+            "check the pid with `jcmd -l` or `ps`; jcmd would send SIGQUIT to a process that is not a JVM",
+        ));
+    }
     let Some(exe) = find_tool("jcmd", req) else {
         return Err(AttachError::tool_missing(
             "jcmd is not installed, so the JVM cannot be inspected",
@@ -457,6 +501,13 @@ pub(crate) fn run(
             let limit = Duration::from_secs(secs + 30);
             let mut size =
                 wait_stable(&path, Duration::from_secs(secs + 3), Duration::from_secs(1));
+            if !same_process(&req.target) {
+                t.forget_runs();
+                return Err(AttachError::failed(
+                    format!("process {pid} exited (or its pid was reused) during the recording"),
+                    "repeat the command on a running JVM",
+                ));
+            }
             if size.is_none() {
                 // The recording ended but the file is not there yet: ask for the dump.
                 let _ = call(
@@ -481,6 +532,13 @@ pub(crate) fn run(
                     "repeat the command with a longer --duration",
                 ));
             };
+            if !same_process(&req.target) {
+                t.forget_runs();
+                return Err(AttachError::failed(
+                    format!("process {pid} exited (or its pid was reused) before JFR.stop"),
+                    "repeat the command on a running JVM",
+                ));
+            }
             let _ = call(
                 &p.exe,
                 pid,
@@ -545,6 +603,21 @@ pub(crate) fn count_threads(json_text: &str) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_jvm_library_in_maps_is_recognised() {
+        let jvm = "7f00-7f01 r-xp 0 08:01 5 /usr/lib/jvm/java-21/lib/server/libjvm.so\n";
+        assert!(maps_show_jvm(jvm));
+        assert!(maps_show_jvm(
+            "1-2 r-xp 0 0:0 0 C:\\jdk\\bin\\server/jvm.dll\n"
+        ));
+        assert!(!maps_show_jvm(
+            "7f00-7f01 r-xp 0 08:01 5 /usr/lib/libc.so.6\n"
+        ));
+        assert!(!maps_show_jvm(
+            "7f00-7f01 r-xp 0 08:01 5 /opt/libjvmti-fake.txt\n"
+        ));
+    }
 
     #[test]
     fn thread_dump_json_is_counted() {

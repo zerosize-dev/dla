@@ -57,7 +57,11 @@ struct Env {
 
 impl Env {
     fn new(fake_body: &str) -> Env {
-        let t = tempfile::tempdir().unwrap();
+        // Not in the system temporary directory: `run` refuses a work root there.
+        let t = tempfile::Builder::new()
+            .prefix("run-fake-")
+            .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+            .unwrap();
         let root = t.path().to_path_buf();
         fixture(&root.join("fx"), "fx-a");
         fixture(&root.join("fx"), "fx-b");
@@ -410,6 +414,27 @@ fn budget_stops_new_runs() {
 }
 
 #[test]
+fn an_overflowing_child_budget_is_refused_up_front() {
+    let e = Env::new(FAKE_OK);
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--runs",
+            "1",
+            "--fixtures",
+            "fx-a",
+            "--child-budget",
+            "18446744073709551615h",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not a duration"));
+    assert_eq!(e.calls(), 0);
+}
+
+#[test]
 fn work_root_inside_the_repository_is_refused() {
     let e = Env::new(FAKE_OK);
     let out = e
@@ -427,6 +452,30 @@ fn work_root_inside_the_repository_is_refused() {
         .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("outside"));
+}
+
+#[test]
+fn work_root_inside_the_system_temp_directory_is_refused() {
+    let e = Env::new(FAKE_OK);
+    for root in ["/tmp/dla-bench-test-w", "/private/tmp/dla-bench-test-w"] {
+        let out = e
+            .cmd(&[
+                "--ablation",
+                "no-skill",
+                "--runs",
+                "1",
+                "--fixtures",
+                "fx-a",
+                "--work-root",
+                root,
+            ])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{root}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("system temporary directory"), "{err}");
+        assert_eq!(e.calls(), 0);
+    }
 }
 
 #[test]

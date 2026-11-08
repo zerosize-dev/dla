@@ -1,7 +1,8 @@
 //! Worker slices: `ledger.<worker>.jsonl` next to the main `ledger.jsonl`.
 //!
-//! Each worker appends only to its own slice (one writer per file, so no lock). The
-//! slice's first line is `slice_started`; a finished worker ends it with `slice_done`.
+//! Each worker appends only to its own slice. A worker that issues parallel `dla` calls
+//! has several writers, so every slice write runs under an exclusive lock on
+//! `ledger.<worker>.lock` ([`lock`]). The slice's first line is `slice_started`; a finished worker ends it with `slice_done`.
 //! A process killed mid-write can leave a torn final line (no trailing newline, not
 //! valid JSON); [`split`] finds it so replay can drop it and say so. The main ledger
 //! never gets that treatment: it stays strict.
@@ -9,8 +10,10 @@
 //! The merge of slices into the main ledger lives in [`crate::merge`].
 
 use std::{
-    fs,
+    collections::BTreeMap,
+    fs, io,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
 };
 
 use sha2::{Digest, Sha256};
@@ -46,6 +49,53 @@ pub mod codes {
 /// File name of a worker's slice, `ledger.<worker>.jsonl`.
 pub fn slice_file_name(worker: &str) -> String {
     format!("ledger.{worker}.jsonl")
+}
+
+/// `<run_dir>/ledger.<worker>.lock`: the file the slice's writers lock.
+pub fn lock_path(run_dir: &Path, worker: &str) -> PathBuf {
+    run_dir.join(format!("ledger.{worker}.lock"))
+}
+
+/// Locks held by this process, so opening the same slice twice here does not wait for
+/// itself.
+static HELD: Mutex<BTreeMap<PathBuf, Weak<fs::File>>> = Mutex::new(BTreeMap::new());
+
+/// Takes the exclusive lock of `worker`'s slice, waiting for other processes. The lock
+/// is released when the last clone of the returned handle is dropped, and by the system
+/// when the process dies, so a killed worker never stalls the others. A second request
+/// for the same slice from the same process shares the handle instead of waiting.
+pub fn lock(run_dir: &Path, worker: &str) -> Result<Arc<fs::File>, Error> {
+    let path = lock_path(run_dir, worker);
+    let mut held = HELD.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(f) = held.get(&path).and_then(Weak::upgrade) {
+        return Ok(f);
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| Error::io(&path, e))?;
+    file.lock().map_err(|e| Error::io(&path, e))?;
+    let file = Arc::new(file);
+    held.retain(|_, w| w.strong_count() > 0);
+    held.insert(path, Arc::downgrade(&file));
+    Ok(file)
+}
+
+/// Reads a slice file as text. Only the complete lines (up to the last newline) have to
+/// be valid UTF-8, because that is all a process killed in the middle of a write leaves
+/// behind: a final fragment that was cut inside a multi-byte character is decoded
+/// lossily, so it is not valid JSON and [`split`] reports it as torn.
+pub fn read_text(path: &Path) -> io::Result<String> {
+    let bytes = fs::read(path)?;
+    let cut = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let (done, tail) = bytes.split_at(cut);
+    let mut text = std::str::from_utf8(done)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+        .to_owned();
+    text.push_str(&String::from_utf8_lossy(tail));
+    Ok(text)
 }
 
 /// `<run_dir>/ledger.<worker>.jsonl`.
@@ -180,7 +230,7 @@ pub fn summarize(worker: &str, text: &str) -> SliceSummary {
 pub fn summaries(run_dir: &Path) -> Result<Vec<SliceSummary>, Error> {
     let mut out = Vec::new();
     for w in slice_workers(run_dir)? {
-        if let Ok(text) = fs::read_to_string(slice_path(run_dir, &w)) {
+        if let Ok(text) = read_text(&slice_path(run_dir, &w)) {
             out.push(summarize(&w, &text));
         }
     }
@@ -221,6 +271,24 @@ mod tests {
         let s = split("{");
         assert!(s.lines.is_empty());
         assert_eq!(s.torn, Some(TornTail { line: 1, bytes: 1 }));
+    }
+
+    #[test]
+    fn a_tear_inside_a_multibyte_character_is_a_torn_tail() {
+        let dir = std::env::temp_dir().join(format!("dla-slice-read-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("s.jsonl");
+        let mut b = b"{\"a\":1}\n{\"t\":\"caf".to_vec();
+        b.push(0xC3);
+        fs::write(&p, &b).unwrap();
+        let text = read_text(&p).unwrap();
+        let s = split(&text);
+        assert_eq!(s.lines, ["{\"a\":1}"]);
+        assert!(s.torn.is_some());
+        // Bad bytes in a complete line stay an error.
+        fs::write(&p, b"{\"a\":\"\xC3\"}\n").unwrap();
+        assert!(read_text(&p).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

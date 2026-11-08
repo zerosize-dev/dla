@@ -33,15 +33,16 @@ Total added: 3,970,964 bytes.
 
 ## Measurements
 
-Same parser as the partner:
+Figures from `dla summarize heap-graph` on the shipped dumps (retained bytes
+are approximate; counts are exact):
 
 | dump (requests) | `quotes.RfqDesk.RECENT` retained | dominated objects |
 |---|---|---|
-| 1000 | 510,061 B | 9,002 |
-| 1500 | 762,061 B | 13,502 |
-| 3000 | 764,281 B | 13,502 |
+| 1000 | 536,272 B | 9,002 |
+| 1500 | 800,272 B | 13,502 |
+| 3000 | 800,272 B | 13,502 |
 
-First interval: +252,000 B (+49.4%), +4,500 objects. Later interval: +2,220 B
-(+0.29%), +0 objects. The holder is full at 1500 requests (13,502 dominated
+First interval: +264,000 B (+49.2%), +4,500 objects. Later interval: +0 B,
++0 objects. The holder is full at 1500 requests (13,502 dominated
 objects) and does not change after that. The third dump is the largest file
 although the holder did not grow; file size is not a signal.

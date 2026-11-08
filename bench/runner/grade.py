@@ -53,6 +53,7 @@ VERDICT_STATES = {
 
 ABLATIONS = ("no-skill", "prose", "gates", "full")
 ASCII_WS = " \t\r\n"
+U64_MAX = (1 << 64) - 1
 
 SITE_RE = re.compile(r"^(.*?):([0-9]+)(?::[0-9]+)?\Z")
 ALT_RE = re.compile(r"^(.*):([0-9]+)(?:-([0-9]+))?\Z")
@@ -274,10 +275,13 @@ def parse_site(site):
     m = SITE_RE.match(site)
     if not m:
         return None
+    line = int(m.group(2))
+    if line > U64_MAX:
+        return None
     path = m.group(1).replace("\\", "/")
     while path.startswith("./"):
         path = path[2:]
-    return path, int(m.group(2))
+    return path, line
 
 
 def path_matches(path, leak_path):
@@ -299,23 +303,20 @@ def leak_targets(leak):
     """List of (path, lo, hi) that count as the leak's site."""
     targets = []
     site = leak.get("site")
-    if isinstance(site, str) and ":" in site:
-        p, _, ln = site.rpartition(":")
-        try:
-            line = int(ln)
-        except ValueError:
-            line = None
-        if line is not None:
-            lines = leak.get("lines")
-            if (
-                isinstance(lines, list)
-                and len(lines) == 2
-                and all(isinstance(x, int) and not isinstance(x, bool) for x in lines)
-            ):
-                lo, hi = lines
-            else:
-                lo, hi = line, line
-            targets.append((p, lo, hi))
+    m = SITE_RE.match(site) if isinstance(site, str) else None
+    if m and int(m.group(2)) <= U64_MAX:
+        p = m.group(1)
+        line = int(m.group(2))
+        lines = leak.get("lines")
+        if (
+            isinstance(lines, list)
+            and len(lines) == 2
+            and all(isinstance(x, int) and not isinstance(x, bool) for x in lines)
+        ):
+            lo, hi = lines
+        else:
+            lo, hi = line, line
+        targets.append((p, lo, hi))
     alts = leak.get("alt_sites")
     if isinstance(alts, list):
         for alt in alts:
@@ -326,6 +327,8 @@ def leak_targets(leak):
                 continue
             lo = int(m.group(2))
             hi = int(m.group(3)) if m.group(3) is not None else lo
+            if lo > U64_MAX or hi > U64_MAX:
+                continue
             targets.append((m.group(1), lo, hi))
     return targets
 

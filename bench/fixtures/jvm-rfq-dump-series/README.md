@@ -39,18 +39,18 @@ Total added: 4,296,270 bytes (the middle dump is shared byte for byte with
 
 ## Measurements
 
-Retained bytes and dominated object count of the static holder, from a
-dominator-tree pass over each dump (a prototype HPROF parser that skips
-`Reference.referent` and treats every class as a root):
+Retained bytes and dominated object count of the static holder, as
+`dla summarize heap-graph` reports them for the shipped dumps (retained bytes
+are approximate; counts are exact):
 
 | dump (requests) | `quotes.RfqDesk.OPEN` retained | dominated objects |
 |---|---|---|
-| 1500 | 738,036 B | 13,502 |
-| 3000 | 1,478,228 B | 27,002 |
-| 4500 | 2,226,612 B | 40,502 |
+| 1500 | 788,256 B | 13,502 |
+| 3000 | 1,576,448 B | 27,002 |
+| 4500 | 2,372,832 B | 40,502 |
 
 Both columns rise strictly across every interval. The increase of the second
-interval (748,384 B, 13,500 objects) is 101% of the first (740,192 B, 13,500
+interval (796,384 B, 13,500 objects) is 101% of the first (788,192 B, 13,500
 objects), so the growth does not slow. The JVM baseline (about 4.5 MB of
 classes and interned strings) is identical in every dump and is not retained by
 this holder. File size is not a signal: it is dominated by the JVM

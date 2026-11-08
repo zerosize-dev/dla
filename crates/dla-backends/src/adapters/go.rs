@@ -65,6 +65,35 @@ fn go_cmd(program: &std::path::Path, job: &Job, dir: &std::path::Path) -> Result
     Ok(isolate(cmd, job))
 }
 
+/// The package pattern a module-wide tool is pointed at from the module directory
+/// `dir`: `./<scope>/...` when the scope lies below the module (so a compile error in
+/// a sibling package outside the scope cannot block the in-scope results), `./...`
+/// otherwise.
+pub fn package_pattern(job: &Job, dir: &std::path::Path) -> String {
+    let module = dir
+        .strip_prefix(job.project())
+        .ok()
+        .map(dla_core::paths::to_slash)
+        .unwrap_or_default();
+    pattern_for(&job.target(), &module)
+}
+
+/// [`package_pattern`] on strings: `target` is the scope directory and `module` the
+/// module directory, both project-relative (`.` or empty for the root).
+fn pattern_for(target: &str, module: &str) -> String {
+    let rest = if module.is_empty() || module == "." {
+        Some(target)
+    } else {
+        target
+            .strip_prefix(module)
+            .and_then(|r| r.strip_prefix('/'))
+    };
+    match rest {
+        Some(r) if !r.is_empty() && r != "." => format!("./{r}/..."),
+        _ => "./...".to_owned(),
+    }
+}
+
 /// The result of one tool run in one module.
 struct Single {
     parsed: Parsed,
@@ -170,8 +199,9 @@ pub fn staticcheck(job: &Job) -> Outcome {
     let version = version_of(Cmd::new(&prog).arg("-version"));
     let ids = job.rule_ids();
     per_module("staticcheck", version, job, &|dir| {
+        let pattern = package_pattern(job, dir);
         let cmd = go_cmd(&prog, job, dir).map_err(|e| (e, vec![]))?;
-        let cmd = cmd.args(["-checks", &csv(&ids), "-f", "sarif", "./..."]);
+        let cmd = cmd.args(["-checks", &csv(&ids), "-f", "sarif", &pattern]);
         let out = exec::run(&cmd);
         let rec = run_record(&cmd, &out);
         if let Some(r) = out.failure_reason() {
@@ -309,6 +339,7 @@ pub fn golangci(job: &Job) -> Outcome {
     per_module("golangci-lint", version, job, &|dir| {
         let i = n.get();
         n.set(i + 1);
+        let pattern = package_pattern(job, dir);
         let sarif_path = job.scratch.join(format!("golangci-{i}.sarif"));
         let text_path = job.scratch.join(format!("golangci-{i}.txt"));
         let _ = fs::remove_file(&sarif_path);
@@ -325,7 +356,7 @@ pub fn golangci(job: &Job) -> Outcome {
             .arg("--show-stats=false")
             .arg(format!("--output.sarif.path={}", sarif_path.display()))
             .arg(format!("--output.text.path={}", text_path.display()))
-            .arg("./...");
+            .arg(&pattern);
         let out = exec::run(&cmd);
         let mut rec = run_record(&cmd, &out);
         if let Some(r) = out.failure_reason() {
@@ -426,12 +457,13 @@ pub fn govet(job: &Job) -> Outcome {
     let version = version_of(Cmd::new(&prog).arg("version"));
     let ids = job.rule_ids();
     per_module("govet", version, job, &|dir| {
+        let pattern = package_pattern(job, dir);
         let cmd = go_cmd(&prog, job, dir).map_err(|e| (e, vec![]))?;
         let mut cmd = cmd.args(["vet", "-json"]);
         for id in &ids {
             cmd = cmd.arg(format!("-{id}"));
         }
-        let cmd = cmd.arg("./...");
+        let cmd = cmd.arg(&pattern);
         let out = exec::run(&cmd);
         let rec = run_record(&cmd, &out);
         if let Some(r) = out.failure_reason() {
@@ -464,6 +496,17 @@ mod tests {
 
     fn pm() -> PathMap {
         PathMap::new(Path::new("/proj"))
+    }
+
+    #[test]
+    fn package_pattern_points_at_the_scope_below_the_module() {
+        assert_eq!(pattern_for("svc/a", "svc"), "./a/...");
+        assert_eq!(pattern_for("a/b", ""), "./a/b/...");
+        assert_eq!(pattern_for(".", "svc"), "./...");
+        assert_eq!(pattern_for("svc", "svc"), "./...");
+        assert_eq!(pattern_for("svcx/a", "svc"), "./...");
+        assert_eq!(pattern_for("other", "svc"), "./...");
+        assert_eq!(pattern_for(".", "."), "./...");
     }
 
     #[test]

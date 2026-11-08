@@ -163,11 +163,6 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
         failure: "leak L1 (native/src/lib.rs:43) is not confirmed",
         reason: "no Rust workload: the native code runs only under the JVM, so the rust worker finds no main workload with an iteration argument (harness gen: workload-required) and ends with its census candidates suspected_static_only; inside the JVM harness the native frames show only as os.rss growth, which no probe column ties to a finding",
     },
-    ExpectedFailure {
-        fixture: "jni-order-codec",
-        failure: "leak L2 (kotlin/shop/Audit.kt:12) is not confirmed",
-        reason: "the census holder of the Kotlin object is `shop.codec.Audit.INSTANCE` (a flat probe column) while the passing probe column is `shop.codec.Audit.trail`, which `dla trend` ties to no finding; `alloc-test --finding` judges the INSTANCE column, favors non-leak, and the mechanical policy refutes the candidate",
-    },
 ];
 
 /// The result for one fixture.
@@ -2081,15 +2076,14 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_list_names_both_slices_of_the_jni_fixture() {
+    fn the_shipped_list_names_only_the_native_slice_of_the_jni_fixture() {
         let jni: Vec<&str> = EXPECTED_FAILURES
             .iter()
             .filter(|e| e.fixture == "jni-order-codec")
             .map(|e| e.failure)
             .collect();
-        assert_eq!(jni.len(), 2);
-        assert!(jni.iter().any(|f| f.contains("native/src/lib.rs:43")));
-        assert!(jni.iter().any(|f| f.contains("kotlin/shop/Audit.kt:12")));
+        assert_eq!(jni.len(), 1);
+        assert!(jni[0].contains("native/src/lib.rs:43"));
     }
 
     #[cfg(unix)]

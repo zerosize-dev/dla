@@ -13,7 +13,10 @@ use super::{
     Backend, Detail, Done, Plan, Request, Tracker,
     parse::parse_memray_stats,
     resources::Estimate,
-    util::{AttachError, Cleanup, clip, first_error_line, output_name, proc_environ, wait_stable},
+    util::{
+        AttachError, Cleanup, clip, first_error_line, output_name, proc_environ, same_process,
+        wait_stable,
+    },
 };
 use crate::exec;
 
@@ -50,21 +53,10 @@ pub fn method_for(version: (u32, u32, u32)) -> &'static str {
     }
 }
 
+/// The interpreters to try: the target's own executable only. The target's `argv[0]` is
+/// whatever the target (or its parent) chose to put there, so it is never executed.
 fn interpreter_candidates(req: &Request) -> Vec<PathBuf> {
-    let mut c = Vec::new();
-    if let Some(a0) = req.target.args.first() {
-        let p = PathBuf::from(a0);
-        if p.is_absolute() && p.is_file() {
-            c.push(p);
-        } else if !a0.contains('/')
-            && let Some(found) = exec::find_exe(a0, &[])
-        {
-            c.push(found);
-        }
-    }
-    c.push(PathBuf::from(format!("/proc/{}/exe", req.target.pid)));
-    c.dedup();
-    c
+    vec![PathBuf::from(format!("/proc/{}/exe", req.target.pid))]
 }
 
 pub(crate) fn plan(req: &Request) -> Result<Plan, AttachError> {
@@ -107,7 +99,7 @@ pub(crate) fn plan(req: &Request) -> Result<Plan, AttachError> {
             Err(e) => last = e,
         }
     }
-    let Some((interp, (ver, memray_ver))) = found else {
+    let Some((_interp, (ver, memray_ver))) = found else {
         return Err(AttachError::not_ready(
             format!("memray cannot be imported by the interpreter of process {pid} ({last})"),
             "memray importable in the target's Python environment",
@@ -146,7 +138,16 @@ pub(crate) fn plan(req: &Request) -> Result<Plan, AttachError> {
     }
     // 2. The memray command itself.
     let mut extra = req.tool_dirs.clone();
-    if let Some(parent) = interp.parent().filter(|_| interp.is_absolute()) {
+    // A virtualenv keeps `memray` next to its interpreter: the directory of the target's
+    // resolved executable (not of anything the target says about itself).
+    if let Some(parent) = req
+        .target
+        .exe
+        .as_deref()
+        .map(Path::new)
+        .filter(|e| e.is_absolute())
+        .and_then(Path::parent)
+    {
         extra.push(parent.to_path_buf());
     }
     let (cmd, runs_alone) = if let Some(m) = exec::find_exe("memray", &extra) {
@@ -257,12 +258,15 @@ pub(crate) fn plan(req: &Request) -> Result<Plan, AttachError> {
     })
 }
 
+/// The interpreter named in the install hint: the resolved executable of the target when it is
+/// a plain absolute path, else `python3`. Never the target's `argv[0]`.
 fn interp_hint(req: &Request) -> String {
     req.target
-        .args
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "python3".to_owned())
+        .exe
+        .as_deref()
+        .filter(|e| e.starts_with('/') && !e.contains(char::is_whitespace))
+        .unwrap_or("python3")
+        .to_owned()
 }
 
 fn tracer_pid(pid: u32) -> Option<u32> {
@@ -319,9 +323,12 @@ pub(crate) fn run(
     // The tracker runs inside the target for `secs`; wait for it to end by itself.
     let end = Instant::now() + Duration::from_secs(secs + 1);
     while Instant::now() < end {
-        if !crate::os::is_alive(pid) {
+        if !same_process(&req.target) {
+            t.forget_runs();
             return Err(AttachError::failed(
-                format!("process {pid} exited while memray was tracking it"),
+                format!(
+                    "process {pid} exited (or its pid was reused) while memray was tracking it"
+                ),
                 "repeat the command on a running process",
             ));
         }
@@ -400,6 +407,39 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn target(exe: &str, argv0: &str) -> Request {
+        Request {
+            target: super::super::TargetInfo {
+                pid: 4242,
+                exe: Some(exe.to_owned()),
+                uid: None,
+                gids: vec![],
+                start_time: None,
+                args: vec![argv0.to_owned(), "-c".into(), "pass".into()],
+                rss: None,
+            },
+            backend: super::super::Backend::Memray,
+            op: super::super::Op::Record,
+            duration: Duration::from_secs(1),
+            out_name: None,
+            dump_root: PathBuf::new(),
+            tool_dirs: vec![],
+        }
+    }
+
+    #[test]
+    fn the_targets_argv0_is_never_an_interpreter_or_a_hint() {
+        let r = target("/usr/bin/python3.12", "/tmp/evil.sh");
+        assert_eq!(
+            interpreter_candidates(&r),
+            [PathBuf::from("/proc/4242/exe")]
+        );
+        assert_eq!(interp_hint(&r), "/usr/bin/python3.12");
+        // A resolved path with whitespace, or no absolute path, falls back to python3.
+        assert_eq!(interp_hint(&target("/opt/my py/python3", "x")), "python3");
+        assert_eq!(interp_hint(&target("python3", "/tmp/evil.sh")), "python3");
+    }
 
     #[test]
     fn python_check_output_is_parsed() {

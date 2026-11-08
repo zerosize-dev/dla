@@ -633,12 +633,15 @@ fn merge(ctx: &Ctx) -> Res<Value> {
     if !r.torn_tail.is_empty() {
         out["torn_tail"] = json!(r.torn_tail);
     }
+    if !r.invalid_slices.is_empty() {
+        out["invalid_slices"] = json!(r.invalid_slices);
+    }
     if !r.uncovered_runtimes.is_empty() {
         out["uncovered_runtimes"] = json!(r.uncovered_runtimes);
     }
     if !r.unfinished.is_empty() {
         out["next"] = json!(
-            "dla run status   (each unfinished worker has an open item; resolve it or rerun the worker)"
+            "dla run status   (each unfinished worker has an open item; it closes by itself when the worker ends its slice and the merge is repeated)"
         );
     }
     Ok(out)

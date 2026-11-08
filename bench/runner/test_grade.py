@@ -183,6 +183,17 @@ def match(site, leak_site, lines=None, alts=None):
 
 
 class MatchTest(unittest.TestCase):
+    def test_expected_site_with_a_column_matches_like_the_finding_parser(self):
+        self.assertTrue(match("src/A.kt:7", "src/A.kt:7:3"))
+        self.assertTrue(match("src/A.kt:7:9", "src/A.kt:7:3"))
+        self.assertFalse(match("src/A.kt:3", "src/A.kt:7:3"))
+
+    def test_line_numbers_beyond_u64_are_no_location(self):
+        big = "1" + "0" * 20
+        self.assertIsNone(grade.parse_site("a.py:" + big))
+        self.assertFalse(match("a.py:" + big, "a.py:" + big))
+        self.assertEqual(grade.leak_targets({"site": "a.py:" + big}), [])
+
     def test_exact_and_default_range(self):
         self.assertTrue(match("a/b.py:10", "a/b.py:10"))
         self.assertFalse(match("a/b.py:11", "a/b.py:10"))

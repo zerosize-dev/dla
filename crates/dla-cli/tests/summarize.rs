@@ -665,3 +665,82 @@ fn real_jvm_plateau_series_is_not_a_leak() {
         .unwrap();
     assert_eq!(held["result"]["favors"], "non-leak", "{held}");
 }
+
+#[test]
+fn single_dump_records_evidence_even_when_the_finding_owner_is_not_a_holder() {
+    let p = Project::new();
+    let files = three(&p, [200, 400, 600]);
+    ok(p.path(), &["summarize", "heap-graph", &files[0]]);
+    ok(
+        p.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--evidence",
+            "E1",
+        ],
+    );
+    ok(
+        p.path(),
+        &["ledger", "annotate", "F1", "--owner", "app.Nothing.THERE"],
+    );
+    let before = p.evidence("retention-path").len();
+    let v = ok(
+        p.path(),
+        &["summarize", "heap-graph", &files[1], "--finding", "F1"],
+    );
+    assert_eq!(v["reasons"][0], "dumps < 3");
+    assert_eq!(p.evidence("retention-path").len(), before + 1);
+    // With a series the same owner is still refused.
+    let e = refused(
+        p.path(),
+        &[
+            "summarize",
+            "heap-graph",
+            &files[0],
+            &files[1],
+            &files[2],
+            "--finding",
+            "F1",
+        ],
+    );
+    assert_eq!(e["code"], "holder-not-found");
+}
+
+#[test]
+fn a_hostile_class_hierarchy_is_a_clean_refusal() {
+    let p = Project::new();
+    let mut b = hprof_builder::B::new(8, T0);
+    let c = b.declare("app.Loop");
+    let names: Vec<String> = (0..65535).map(|i| format!("f{i}")).collect();
+    let fields: Vec<(&str, u8)> = names
+        .iter()
+        .map(|n| (n.as_str(), hprof_builder::T_INT))
+        .collect();
+    b.class_dump(c, c, 0, 0, &fields, &[]);
+    let rel = p.put("cyc.hprof", &b.finish(1));
+    let e = refused(p.path(), &["summarize", "heap-graph", &rel]);
+    assert_eq!(e["code"], "malformed-artifact");
+    assert!(e["message"].as_str().unwrap().contains("loops"), "{e}");
+}
+
+#[test]
+fn a_dump_with_no_classes_is_reported_as_such() {
+    let p = Project::new();
+    let rels: Vec<String> = (0..3)
+        .map(|i| {
+            let b = hprof_builder::B::new(8, T0 + 1000 * i);
+            p.put(&format!("empty{i}.hprof"), &b.finish(1))
+        })
+        .collect();
+    let e = refused(
+        p.path(),
+        &["summarize", "heap-graph", &rels[0], &rels[1], &rels[2]],
+    );
+    assert_eq!(e["code"], "dumps-not-comparable");
+    let m = e["message"].as_str().unwrap();
+    assert!(m.contains("lists no loaded classes"), "{m}");
+    assert!(!m.contains("of the earlier dump's 1"), "{m}");
+}

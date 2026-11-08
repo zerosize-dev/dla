@@ -141,7 +141,7 @@ fn project() -> Project {
 }
 
 /// A child that is killed and reaped when dropped.
-struct Guard(Child);
+struct Guard(Child, #[allow(dead_code)] Option<tempfile::TempDir>);
 
 impl Guard {
     fn pid(&self) -> u32 {
@@ -168,7 +168,39 @@ fn sleeper() -> Guard {
             .stderr(Stdio::null())
             .spawn()
             .unwrap(),
+        None,
     )
+}
+
+/// A `sleep` process whose executable is called `java`, standing in for a JVM that a fake
+/// `jcmd` answers for.
+fn java_sleeper() -> Guard {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("java");
+    let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|d| d.join("sleep"))
+        .find(|p| p.is_file())
+        .expect("sleep on PATH");
+    fs::copy(sleep, &exe).unwrap();
+    // A fork in another test thread can still hold the copy's write handle for a moment,
+    // and exec then fails with ETXTBSY ("text file busy"): retry briefly.
+    let mut tries = 0;
+    let child = loop {
+        match Proc::new(&exe)
+            .arg("300")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => break c,
+            Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => panic!("spawn {}: {e}", exe.display()),
+        }
+    };
+    Guard(child, Some(dir))
 }
 
 /// Starts `cmd` and waits for a line containing `ready` on stdout.
@@ -190,7 +222,7 @@ fn start_ready(mut cmd: Proc, ready: &str) -> Guard {
             sink.clear();
         }
     });
-    Guard(child)
+    Guard(child, None)
 }
 
 fn have(tool: &str, flag: &str) -> bool {
@@ -367,7 +399,7 @@ fn a_missing_tool_is_refused_with_the_install_command() {
 
 #[test]
 fn insufficient_disk_or_memory_is_refused_before_anything_is_created() {
-    let target = sleeper();
+    let target = java_sleeper();
     let pid = target.pid().to_string();
     let p = project();
     p.tool("jcmd", FAKE_JCMD);
@@ -403,7 +435,7 @@ fn insufficient_disk_or_memory_is_refused_before_anything_is_created() {
 
 #[test]
 fn a_fake_jcmd_attach_writes_files_a_registry_record_and_one_artifact_evidence() {
-    let mut target = sleeper();
+    let mut target = java_sleeper();
     let pid = target.pid();
     let p = project();
     p.tool("jcmd", FAKE_JCMD);
@@ -486,7 +518,7 @@ fn a_fake_jcmd_attach_writes_files_a_registry_record_and_one_artifact_evidence()
 
 #[test]
 fn a_process_dla_started_needs_only_tier_one() {
-    let target = sleeper();
+    let target = java_sleeper();
     let pid = target.pid();
     let p = project_with(Some("1"));
     p.tool("jcmd", FAKE_JCMD);
@@ -837,4 +869,151 @@ fn memray_records_a_python_process_when_memray_is_importable() {
     assert!(v["summary"]["allocations"].as_u64().unwrap() > 5, "{v}");
     assert!(v["files"].as_array().unwrap().len() >= 2, "{v}");
     assert!(py.alive());
+}
+
+#[test]
+fn jcmd_does_not_signal_a_process_that_is_not_a_jvm() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("got-sigquit");
+    let script = format!(
+        "trap 'echo quit > {}; exit 0' QUIT; echo ready; while :; do sleep 0.1; done",
+        marker.display()
+    );
+    let mut cmd = Proc::new("sh");
+    cmd.args(["-c", &script]);
+    let mut target = start_ready(cmd, "ready");
+    let called = dir.path().join("jcmd-called");
+    let p = project();
+    p.tool(
+        "jcmd",
+        &format!("touch {}; kill -QUIT $1", called.display()),
+    );
+    let (code, v) = p.attach(
+        &[],
+        &[
+            "jcmd",
+            "--pid",
+            &target.pid().to_string(),
+            "--op",
+            "histogram",
+        ],
+    );
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(v["error"]["code"], "target-not-ready");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no signal was sent"),
+        "{v}"
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!called.exists() && !marker.exists(), "SIGQUIT was sent");
+    assert!(target.alive());
+}
+
+#[test]
+fn out_cannot_name_a_file_dla_writes_into_the_attach_directory() {
+    let target = java_sleeper();
+    let pid = target.pid().to_string();
+    let p = project();
+    p.tool("jcmd", FAKE_JCMD);
+    for name in ["preflight.json", "heaptrack.log", "x.stats.json"] {
+        let (code, v) = p.attach(
+            &[],
+            &["jcmd", "--pid", &pid, "--op", "histogram", "--out", name],
+        );
+        assert_eq!(code, 2, "{name}: {v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("writes itself"),
+            "{v}"
+        );
+    }
+    assert!(!p.run_dir.join("attach/P1").exists());
+}
+
+#[test]
+fn a_failed_attach_stays_open_so_abort_can_run_what_is_left() {
+    let target = java_sleeper();
+    let pid = target.pid().to_string();
+    let p = project();
+    let stopped = p.path().join("jfr-stopped");
+    p.tool(
+        "jcmd",
+        &format!(
+            r#"case "$2" in
+  VM.version) echo "JDK 21.0.1";;
+  JFR.start) echo "Could not start recording";;
+  JFR.stop) touch {};;
+  *) exit 1;;
+esac"#,
+            stopped.display()
+        ),
+    );
+    let (code, v) = p.attach(
+        &[],
+        &["jcmd", "--pid", &pid, "--op", "jfr", "--duration", "1s"],
+    );
+    assert_eq!(code, 2, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("JFR.stop") && msg.contains("dla run abort"),
+        "{msg}"
+    );
+    let st = p.state();
+    let rec = &st["processes"][0];
+    assert!(
+        rec["stopped_at"].is_null(),
+        "abort skips stopped records: {rec}"
+    );
+    assert!(
+        rec["cleanup"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c.as_str().unwrap().contains("JFR.stop")),
+        "{rec}"
+    );
+}
+
+#[test]
+fn memray_never_executes_the_targets_argv0() {
+    if !have("python3", "--version") || !have("bash", "--version") {
+        eprintln!("skipped: python3 or bash is missing");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let evil = dir.path().join("evil.sh");
+    let pwned = dir.path().join("pwned");
+    fs::write(&evil, format!("#!/bin/sh\ntouch {}\n", pwned.display())).unwrap();
+    fs::set_permissions(&evil, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut cmd = Proc::new("bash");
+    cmd.args([
+        "-c",
+        &format!(
+            "exec -a {} python3 -c 'import sys,time; print(\"ready\", flush=True); time.sleep(120)'",
+            evil.display()
+        ),
+    ]);
+    let target = start_ready(cmd, "ready");
+    let p = project();
+    let (_, v) = p.attach(
+        &[("PYTHONPATH", "")],
+        &[
+            "memray",
+            "--pid",
+            &target.pid().to_string(),
+            "--op",
+            "record",
+            "--duration",
+            "1s",
+        ],
+    );
+    assert!(!pwned.exists(), "argv[0] of the target was executed: {v}");
+    if v["ok"] == false {
+        assert!(!v.to_string().contains("evil.sh"), "{v}");
+    }
 }

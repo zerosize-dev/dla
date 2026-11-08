@@ -103,6 +103,7 @@ fn tied(
     series: &SeriesFile,
     root: &FindingId,
     site: Option<&str>,
+    owner: Option<&str>,
     trend: Option<&TrendReport>,
 ) -> (Vec<String>, &'static str) {
     let passes = |name: &str| {
@@ -132,6 +133,15 @@ fn tied(
         .collect();
     if !by_site.is_empty() {
         return (order(by_site), "the columns at its site");
+    }
+    let by_owner: Vec<String> = series
+        .columns
+        .iter()
+        .filter(|c| owner.is_some_and(|o| dla_core::trend::probe_column_matches_owner(&c.name, o)))
+        .map(|c| c.name.clone())
+        .collect();
+    if !by_owner.is_empty() {
+        return (order(by_owner), "the probe columns named after its owner");
     }
     let by_candidate: Vec<String> = trend
         .into_iter()
@@ -191,7 +201,17 @@ pub fn pick(
             .finding(&root)
             .and_then(|r| r.site.clone())
             .or_else(|| f.site.clone());
-        let (cols, how) = tied(series, &root, root_site.as_deref(), trend);
+        let root_owner = ledger
+            .finding(&root)
+            .and_then(|r| r.owner.clone())
+            .or_else(|| f.owner.clone());
+        let (cols, how) = tied(
+            series,
+            &root,
+            root_site.as_deref(),
+            root_owner.as_deref(),
+            trend,
+        );
         if let Some(first) = cols.first() {
             p.primary = Some(first.clone());
             p.voting.push(first.clone());

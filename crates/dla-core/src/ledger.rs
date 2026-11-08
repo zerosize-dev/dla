@@ -363,7 +363,7 @@ impl Index {
                 m4::SLICE_CLOSED,
                 format!("slice of {w} is closed by slice_done; it takes no more records"),
                 "an open slice",
-                "tell the core to run `dla run dispatch` again, or record the item in the main ledger after `dla ledger merge`",
+                "the core runs `dla ledger merge`, then records the item in the main ledger (`dla ledger add ...`); a closed slice cannot be reopened",
             ));
         }
         if !matches!(record, Record::SliceStarted(_)) && state.is_none_or(|s| s.started.is_none()) {
@@ -526,13 +526,17 @@ impl Index {
                 )));
             }
         }
-        if self.merged_into.contains_key(&m.duplicate) {
+        // Repeating a merge re-unions the supports; the reverse of an earlier merge
+        // (the duplicate has since become the more advanced finding) swaps the roles.
+        let repeat = self.merged_into.get(&m.duplicate) == Some(&m.canonical);
+        let swap = self.merged_into.get(&m.canonical) == Some(&m.duplicate);
+        if !repeat && self.merged_into.contains_key(&m.duplicate) {
             return Err(bad(format!(
                 "{} is already merged into another finding",
                 m.duplicate
             )));
         }
-        if self.merged_into.contains_key(&m.canonical) {
+        if !swap && self.merged_into.contains_key(&m.canonical) {
             return Err(bad(format!(
                 "{} is itself a duplicate; merge into its canonical finding",
                 m.canonical
@@ -1068,6 +1072,15 @@ impl Index {
                         }
                     }
                 }
+                // The canonical may have been a duplicate of the new duplicate (a swap),
+                // and the new duplicate may have duplicates of its own: point them all
+                // at the canonical so the chain stays one level deep.
+                self.merged_into.remove(&m.canonical);
+                for target in self.merged_into.values_mut() {
+                    if *target == m.duplicate {
+                        target.clone_from(&m.canonical);
+                    }
+                }
                 self.merged_into
                     .insert(m.duplicate.clone(), m.canonical.clone());
             }
@@ -1107,6 +1120,8 @@ struct SliceMode {
     valid_bytes: u64,
     /// A torn fragment follows them and the next write cuts it off.
     torn_pending: bool,
+    /// The slice's write lock, held while this ledger lives (see [`slice::lock`]).
+    lock: Option<std::sync::Arc<fs::File>>,
 }
 
 /// A record on its way into the file.
@@ -1196,13 +1211,20 @@ impl Ledger {
         if !crate::ids::valid_worker_name(w) {
             return Err(bad_worker(w).into());
         }
+        // The lock covers the replay and every write made through the result, so
+        // parallel calls of one worker never allocate the same seq or ID.
+        let lock = slice::lock(run_dir, w)?;
         let sp = slice::slice_path(run_dir, w);
-        let text = match fs::read_to_string(&sp) {
+        let text = match slice::read_text(&sp) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(Error::io(&sp, e)),
         };
-        Self::load_slice_from(run_dir, w, &text)
+        let mut ledger = Self::load_slice_from(run_dir, w, &text)?;
+        if let Some(sm) = &mut ledger.slice {
+            sm.lock = Some(lock);
+        }
+        Ok(ledger)
     }
 
     /// Like [`Ledger::load_for`] for slice text already in memory (the merge reads the
@@ -1256,6 +1278,7 @@ impl Ledger {
                 base_len,
                 valid_bytes: cut.valid_bytes() as u64,
                 torn_pending: cut.torn.is_some(),
+                lock: None,
             }),
             torn_tail: cut.torn.clone(),
         };

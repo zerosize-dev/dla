@@ -21,6 +21,36 @@ pub const IDENTITY_TOLERANCE_SECS: i64 = 2;
 /// Longest a `run` cleanup action may take.
 pub const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Runs `kill -s <signal> -- <target>`: the `kill` binary when one can be started,
+/// else the shell builtin (minimal images ship no `kill` binary). Only a failure to
+/// start the binary falls back; a non-zero exit (no such process) is the answer.
+#[cfg(unix)]
+fn unix_kill(signal: &str, target: &str) -> bool {
+    unix_kill_with("kill", signal, target)
+}
+
+#[cfg(unix)]
+fn unix_kill_with(program: &str, signal: &str, target: &str) -> bool {
+    let quiet = |c: &mut Command| {
+        c.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+    };
+    match quiet(Command::new(program).args(["-s", signal, "--", target])) {
+        Ok(s) => s.success(),
+        Err(_) => quiet(
+            Command::new("sh")
+                .arg("-c")
+                .arg(r#"kill -s "$1" -- "$2""#)
+                .arg("dla-kill")
+                .arg(signal)
+                .arg(target),
+        )
+        .is_ok_and(|s| s.success()),
+    }
+}
+
 /// Sends `signal` (`TERM`, `KILL`, ... without the `SIG` prefix) to the process group
 /// `pgid`. Returns whether the signal was delivered. On unix this runs
 /// `kill -s <SIG> -- -<pgid>` (dash rejects `kill -KILL -- -pgid`); on Windows it runs
@@ -31,14 +61,7 @@ pub fn kill_group(pgid: u32, signal: &str) -> bool {
     }
     #[cfg(unix)]
     {
-        Command::new("kill")
-            .args(["-s", signal, "--"])
-            .arg(format!("-{pgid}"))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        unix_kill(signal, &format!("-{pgid}"))
     }
     #[cfg(windows)]
     {
@@ -68,14 +91,7 @@ pub fn kill_pid(pid: u32, signal: &str) -> bool {
     }
     #[cfg(unix)]
     {
-        Command::new("kill")
-            .args(["-s", signal, "--"])
-            .arg(pid.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+        unix_kill(signal, &pid.to_string())
     }
     #[cfg(windows)]
     {
@@ -309,6 +325,27 @@ mod tests {
             run_bounded(&a(&["sleep", "5"]), Duration::from_millis(150)),
             RunOutcome::TimedOut
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_falls_back_to_the_shell_builtin_when_the_binary_cannot_start() {
+        use std::os::unix::process::CommandExt;
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(unix_kill_with(
+            "dla-no-such-kill-binary",
+            "KILL",
+            &format!("-{pid}")
+        ));
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+        // A binary that starts and fails (no such process) is the answer, not a fallback.
+        assert!(!unix_kill_with("kill", "KILL", "-999999999"));
     }
 
     #[test]

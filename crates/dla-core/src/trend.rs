@@ -203,6 +203,31 @@ pub struct PassedColumn {
     pub unit: Option<Unit>,
 }
 
+/// True when the probe column `column` (`probe:<Class>.<field>`, optionally with a
+/// `.size` or `.bytes` suffix) measures the holder named `owner` (`<Class>.<field>`,
+/// possibly package-qualified). The two match when equal or when one is a trailing
+/// run of dotted components of the other.
+pub fn probe_column_matches_owner(column: &str, owner: &str) -> bool {
+    let Some(name) = column.strip_prefix("probe:") else {
+        return false;
+    };
+    let stem = ["size", "bytes"]
+        .iter()
+        .find_map(|s| name.strip_suffix(s).and_then(|n| n.strip_suffix('.')));
+    let dotted_suffix = |long: &str, short: &str| {
+        long == short
+            || long
+                .strip_suffix(short)
+                .is_some_and(|rest| rest.ends_with('.'))
+    };
+    let owner = owner.trim();
+    !owner.is_empty()
+        && [Some(name), stem]
+            .into_iter()
+            .flatten()
+            .any(|n| !n.is_empty() && (dotted_suffix(owner, n) || dotted_suffix(n, owner)))
+}
+
 impl PassedColumn {
     /// True when the column is tied to the finding `id` with `site`: by its `finding`,
     /// by an equal site, or by listing the finding among its candidates.
@@ -211,6 +236,12 @@ impl PassedColumn {
         self.finding.as_deref() == Some(id.as_str())
             || site.is_some() && self.site.as_deref() == site
             || self.candidates.contains(&id)
+    }
+
+    /// [`Self::tied_to`], or a probe column named after the finding's `owner`
+    /// (`probe:Audit.trail` for the owner `shop.codec.Audit.trail`).
+    pub fn tied_to_owner(&self, id: &FindingId, site: Option<&str>, owner: Option<&str>) -> bool {
+        self.tied_to(id, site) || owner.is_some_and(|o| probe_column_matches_owner(&self.column, o))
     }
 }
 
@@ -273,9 +304,19 @@ impl GrowthSummary {
     /// The first passing column bound to the finding `id` (or `site`), else the first
     /// passing column.
     pub fn best_column(&self, id: &FindingId, site: Option<&str>) -> Option<&PassedColumn> {
+        self.best_column_for(id, site, None)
+    }
+
+    /// [`Self::best_column`], also tying a probe column to the finding's `owner`.
+    pub fn best_column_for(
+        &self,
+        id: &FindingId,
+        site: Option<&str>,
+        owner: Option<&str>,
+    ) -> Option<&PassedColumn> {
         self.passed
             .iter()
-            .find(|c| c.tied_to(id, site))
+            .find(|c| c.tied_to_owner(id, site, owner))
             .or_else(|| self.passed.first())
     }
 }
@@ -284,6 +325,44 @@ impl GrowthSummary {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_probe_column_ties_to_the_owner_of_a_finding() {
+        assert!(probe_column_matches_owner(
+            "probe:Audit.trail",
+            "shop.codec.Audit.trail"
+        ));
+        assert!(probe_column_matches_owner(
+            "probe:Audit.trail.size",
+            "shop.codec.Audit.trail"
+        ));
+        assert!(probe_column_matches_owner(
+            "probe:Audit.trail.bytes",
+            "Audit.trail"
+        ));
+        assert!(probe_column_matches_owner(
+            "probe:shop.codec.Audit.trail",
+            "Audit.trail"
+        ));
+        assert!(probe_column_matches_owner("probe:Cache.size", "Cache.size"));
+        assert!(!probe_column_matches_owner(
+            "probe:Audit.trail",
+            "shop.codec.Audit.other"
+        ));
+        assert!(!probe_column_matches_owner(
+            "probe:Audit.trail",
+            "xAudit.trail"
+        ));
+        assert!(!probe_column_matches_owner("os.rss", "Audit.trail"));
+        assert!(!probe_column_matches_owner("probe:Audit.trail", ""));
+        let col = PassedColumn {
+            column: "probe:Audit.trail".into(),
+            ..PassedColumn::default()
+        };
+        let id = FindingId::new(2);
+        assert!(!col.tied_to(&id, None));
+        assert!(col.tied_to_owner(&id, None, Some("shop.codec.Audit.trail")));
+    }
 
     fn trend() -> TrendReport {
         TrendReport {

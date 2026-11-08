@@ -244,3 +244,42 @@ fn old_state_files_read_as_repository_without_workers() {
     assert_eq!(loaded.entry, EntryPath::Repository);
     assert!(loaded.artifacts.is_empty() && loaded.workers.is_empty());
 }
+
+fn scope(
+    kind: dla_core::state::ScopeKind,
+    path: &str,
+    excluded: &[&str],
+) -> dla_core::state::Scope {
+    dla_core::state::Scope {
+        kind,
+        path: path.to_owned(),
+        excluded: excluded.iter().map(|s| (*s).to_owned()).collect(),
+    }
+}
+
+#[test]
+fn a_scope_with_an_unusable_path_matches_nothing_and_does_not_validate() {
+    use dla_core::state::ScopeKind::{Module, Repository, Service};
+    for bad in ["../other", "/abs/svc/a", "svc/../../x", "C:\\x", "", "."] {
+        let sc = scope(Module, bad, &[]);
+        assert!(sc.validate().is_err(), "{bad:?} must not validate");
+        if !bad.is_empty() && bad != "." {
+            // Fail closed: never the whole repository.
+            assert!(!sc.includes("src/a.rs"), "{bad:?} widened the scope");
+            assert!(!sc.may_contain("src"), "{bad:?} widened the walk");
+        }
+    }
+    assert!(scope(Service, "svc/a", &[]).validate().is_ok());
+    let sc = scope(Module, "svc/a", &["svc/a/gen"]);
+    assert!(sc.validate().is_ok());
+    assert!(
+        sc.includes("svc/a/x.go") && !sc.includes("svc/b/x.go") && !sc.includes("svc/a/gen/x.go")
+    );
+    assert!(scope(Repository, ".", &["vendor"]).validate().is_ok());
+    for bad in ["../x", "/x", "", "**/node_modules", "*.generated", "a/[b]"] {
+        assert!(
+            scope(Repository, ".", &[bad]).validate().is_err(),
+            "exclude {bad:?} must not validate"
+        );
+    }
+}

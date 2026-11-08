@@ -1125,16 +1125,57 @@ pub fn deny_write_under_shared_tmp(deny_read: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
-/// Whether `text` is a budget `dla` accepts: a positive integer and `s`, `m` or `h`.
+/// Whether `text` is a budget `dla` accepts: a positive integer and `s`, `m` or `h`,
+/// whose value in seconds fits in a `u64` (as `dla` checks).
 pub fn valid_budget(text: &str) -> bool {
     let Some(unit) = text.chars().last() else {
         return false;
     };
+    let mult: u64 = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        _ => return false,
+    };
     let digits = &text[..text.len() - unit.len_utf8()];
-    matches!(unit, 's' | 'm' | 'h')
-        && !digits.is_empty()
+    !digits.is_empty()
         && digits.chars().all(|c| c.is_ascii_digit())
-        && digits.parse::<u64>().is_ok_and(|n| n > 0)
+        && digits
+            .parse::<u64>()
+            .is_ok_and(|n| n > 0 && n.checked_mul(mult).is_some())
+}
+
+/// Whether `p` lies in the shared temporary directory that the sandbox lets every child
+/// write (`/tmp`, the system temp directory, `/private/tmp`, and their resolved forms).
+/// `p` need not exist: its deepest existing ancestor is resolved.
+pub fn in_shared_tmp(p: &Path) -> bool {
+    let mut bases = vec![
+        PathBuf::from(SANDBOX_SHARED_WRITE),
+        PathBuf::from("/private/tmp"),
+        std::env::temp_dir(),
+    ];
+    let resolved: Vec<PathBuf> = bases
+        .iter()
+        .filter_map(|b| fs::canonicalize(b).ok())
+        .collect();
+    bases.extend(resolved);
+    let mut rest = PathBuf::new();
+    let mut anchor = p;
+    let resolved_p = loop {
+        if let Ok(c) = fs::canonicalize(anchor) {
+            break c.join(&rest);
+        }
+        match (anchor.parent(), anchor.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest = Path::new(name).join(&rest);
+                anchor = parent;
+            }
+            _ => break p.to_path_buf(),
+        }
+    };
+    bases
+        .iter()
+        .any(|b| p.starts_with(b) || resolved_p.starts_with(b))
 }
 
 /// The system temporary directory, writable for Bash only: JVM attach sockets and
@@ -1448,6 +1489,13 @@ pub fn run(args: &RunArgs) -> Res<String> {
             "--work-root {} is inside the repository {}; working copies must live outside it",
             work_root.display(),
             repo_abs.display()
+        ));
+    }
+    if in_shared_tmp(&work_root) {
+        return Err(format!(
+            "--work-root {} is inside the system temporary directory, which every child can write; \
+             pass a --work-root outside it",
+            work_root.display()
         ));
     }
     if !valid_budget(&args.child_budget) {
@@ -1902,9 +1950,30 @@ mod tests {
         assert_eq!(get(&env, "DLA_DEFAULT_BUDGET").as_deref(), Some("90s"));
         assert!(!keep_env_var("DLA_DEFAULT_BUDGET") && !keep_env_var("DLA_BIN"));
         assert!(valid_budget("20m") && valid_budget("90s") && valid_budget("2h"));
-        for bad in ["", "m", "20", "20x", "-5m", "1.5h", "0s"] {
+        for bad in [
+            "",
+            "m",
+            "20",
+            "20x",
+            "-5m",
+            "1.5h",
+            "0s",
+            "18446744073709551615h",
+            "18446744073709551615m",
+            "5124095576030432h",
+        ] {
             assert!(!valid_budget(bad), "{bad}");
         }
+        assert!(valid_budget("18446744073709551615s") && valid_budget("5124095576030431h"));
+    }
+
+    #[test]
+    fn shared_tmp_is_recognised_for_missing_paths_too() {
+        assert!(in_shared_tmp(Path::new("/tmp/w/res")));
+        assert!(in_shared_tmp(Path::new("/tmp")));
+        assert!(in_shared_tmp(&std::env::temp_dir().join("nope/deeper")));
+        assert!(!in_shared_tmp(Path::new("/home/u/.cache/dla-bench")));
+        assert!(!in_shared_tmp(Path::new("/tmpfoo/w")));
     }
 
     #[test]

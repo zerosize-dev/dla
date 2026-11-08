@@ -26,9 +26,32 @@ pub struct DiscoverArgs {
 /// Runs `dla workload discover`.
 pub fn discover(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: DiscoverArgs) -> Res<Value> {
     let tc = stage::tool_ctx(project, ctx, data);
+    let lang = effective_lang(a.lang, ctx.worker.as_deref());
     stage::finish(
         "workload discover",
-        json!({"lang": a.lang.map(|l| l.as_str())}),
-        dla_workload::discover(&tc, a.lang),
+        json!({"lang": lang.map(|l| l.as_str())}),
+        dla_workload::discover(&tc, lang),
     )
+}
+
+/// `--lang`, else the worker's own runtime (a worker's slice only speaks for its
+/// runtime, as `dla probe` does), else every detected runtime.
+fn effective_lang(explicit: Option<Runtime>, worker: Option<&str>) -> Option<Runtime> {
+    explicit.or_else(|| worker.and_then(|w| w.parse::<Runtime>().ok()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_worker_discovers_only_its_own_runtime() {
+        assert_eq!(effective_lang(None, Some("go")), Some(Runtime::Go));
+        assert_eq!(
+            effective_lang(Some(Runtime::Rust), Some("go")),
+            Some(Runtime::Rust)
+        );
+        assert_eq!(effective_lang(None, Some("main")), None);
+        assert_eq!(effective_lang(None, None), None);
+    }
 }

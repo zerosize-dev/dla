@@ -149,6 +149,22 @@ impl TargetInfo {
     }
 }
 
+/// Whether the process `target.pid` is still the process that was inspected: alive, and (when
+/// the start time was readable) with the same start time. A reused pid reads as gone.
+pub fn same_process(target: &TargetInfo) -> bool {
+    if !crate::os::is_alive(target.pid) {
+        return false;
+    }
+    match (
+        target.start_time.as_deref(),
+        crate::os::process_start_time(target.pid),
+    ) {
+        (Some(was), Some(now)) => crate::os::same_start_time(was, &now),
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
 /// Reads the identity of `pid`; `None` when it is not running.
 pub fn inspect_target(pid: u32) -> Option<TargetInfo> {
     if !crate::os::is_alive(pid) {
@@ -312,6 +328,11 @@ pub fn first_error_line(stderr: &str, stdout: &str) -> String {
         .to_owned()
 }
 
+/// Files DLA writes into the attach directory besides the main artifact.
+const RESERVED_NAMES: [&str; 2] = ["preflight.json", "heaptrack.log"];
+/// Name endings of derived artifacts (`memray stats`, `heaptrack_print`).
+const RESERVED_SUFFIXES: [&str; 2] = [".stats.json", "-print.txt"];
+
 /// Rejects names that are not a plain file name; returns it with `default_ext` appended when
 /// it has no extension.
 pub fn output_name(name: &str, default_ext: &str) -> Result<String, String> {
@@ -327,11 +348,20 @@ pub fn output_name(name: &str, default_ext: &str) -> Result<String, String> {
             "{name:?} is not a plain file name (letters, digits, '.', '_' and '-', at most 64 characters)"
         ));
     }
-    if name.contains('.') || default_ext.is_empty() {
-        Ok(name.to_owned())
+    let full = if name.contains('.') || default_ext.is_empty() {
+        name.to_owned()
     } else {
-        Ok(format!("{name}.{default_ext}"))
+        format!("{name}.{default_ext}")
+    };
+    let lower = full.to_ascii_lowercase();
+    if RESERVED_NAMES.contains(&lower.as_str())
+        || RESERVED_SUFFIXES.iter().any(|s| lower.ends_with(s))
+    {
+        return Err(format!(
+            "{name:?} is a file DLA writes itself into the attach directory; pick another name"
+        ));
     }
+    Ok(full)
 }
 
 #[cfg(test)]
@@ -401,6 +431,22 @@ mod tests {
         for bad in ["", "../x", "a/b", ".hidden", "a b", "x..y"] {
             assert!(output_name(bad, "bin").is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn output_names_cannot_take_the_files_dla_writes() {
+        for bad in [
+            "preflight.json",
+            "Preflight.JSON",
+            "heaptrack.log",
+            "a.stats.json",
+            "x-print.txt",
+        ] {
+            let e = output_name(bad, "bin").unwrap_err();
+            assert!(e.contains("writes itself"), "{bad}: {e}");
+        }
+        assert!(output_name("preflight", "json").is_err());
+        assert!(output_name("before.json", "json").is_ok());
     }
 
     #[test]

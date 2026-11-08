@@ -8,10 +8,10 @@ the dump alone does not decide the question.
 
 ## Why nothing can be confirmed
 
-The dump shows a large static holder, `quotes.RfqDesk.OPEN`, with 1,478,228
+The dump shows a large static holder, `quotes.RfqDesk.OPEN`, with 1,576,448
 retained bytes and 27,002 dominated objects. A warm-up fill that will stop and
 growth that will continue look identical in a single dump (the partner
-`jvm-rfq-dump-series-capped` holds 762,061 bytes and 13,502 objects at the top
+`jvm-rfq-dump-series-capped` holds 800,272 bytes and 13,502 objects at the top
 of its fill). Growth is a property of change between dumps of one process, and
 there is only one point.
 

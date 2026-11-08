@@ -307,7 +307,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
         let outcome = if backend == "dla" {
             run_dla(ctx, lang)
         } else {
-            let scratch = tmp.join(backend);
+            let scratch = tmp.join(format!("{}-{backend}", lang.as_str()));
             fs::create_dir_all(&scratch).map_err(|e| Error::io(&scratch, e).to_refusal())?;
             let job = Job {
                 ctx,

@@ -225,6 +225,17 @@ mod abort {
         }
     }
 
+    /// An executable `<dir>/bin/<name>` shell script with the given body.
+    fn stub(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let path = bin.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
     #[test]
     fn abort_kills_verified_groups_cleans_attachments_and_is_idempotent() {
         let p = project();
@@ -233,12 +244,15 @@ mod abort {
         let mut reused = sleeper();
         let target_start = dla_sample::os::process_start_time(target.id());
         assert!(target_start.is_some());
-        let junk = p.path().join("attach-junk.txt");
+        let junk = dir.join("attach/P1/dump.hprof");
+        fs::create_dir_all(junk.parent().unwrap()).unwrap();
         fs::write(&junk, "x").unwrap();
+        let ran = p.path().join("stub-ran");
+        let jcmd = stub(p.path(), "jcmd", &format!("touch {}", ran.display()));
         let cleanup = vec![
             format!("rm {}", junk.display()),
             "note the inspector stays open".to_owned(),
-            r#"run ["true"]"#.to_owned(),
+            format!(r#"run ["{}","1","JFR.stop"]"#, jcmd.display()),
         ];
         RunState::update(&dir, |s| {
             s.processes.push(record(
@@ -289,6 +303,7 @@ mod abort {
             "mismatch was signalled"
         );
         assert!(!junk.exists(), "cleanup rm did not run");
+        assert!(ran.exists(), "the registered tool did not run");
 
         let st = RunState::load(&dir).unwrap();
         assert_eq!(st.status, RunStatus::Aborted);
@@ -321,6 +336,101 @@ mod abort {
     }
 
     #[test]
+    fn abort_refuses_a_state_file_from_another_project() {
+        let p = project();
+        let (id, dir) = init(p.path(), &[]);
+        let victim = p.path().join("victim.txt");
+        fs::write(&victim, "x").unwrap();
+        RunState::update(&dir, |s| {
+            s.project_root = "/somewhere/else".into();
+            s.processes.push(record(
+                1,
+                None,
+                ProcessRole::Attached,
+                vec![format!("rm {}", victim.display())],
+            ));
+            Ok(())
+        })
+        .unwrap();
+        let e = refused(p.path(), &["--run", &id, "run", "abort"]);
+        assert!(e["message"].as_str().unwrap().contains("not this project"));
+        assert!(victim.exists());
+        assert_eq!(RunState::load(&dir).unwrap().status, RunStatus::Active);
+    }
+
+    #[test]
+    fn abort_never_runs_or_deletes_what_dla_did_not_register() {
+        let p = project();
+        let (id, dir) = init(p.path(), &[]);
+        let victim = p.path().join("victim.txt");
+        fs::write(&victim, "x").unwrap();
+        let pwned = p.path().join("pwned");
+        let evil = stub(p.path(), "sh2", &format!("touch {}", pwned.display()));
+        RunState::update(&dir, |s| {
+            s.processes.push(record(
+                1,
+                None,
+                ProcessRole::Attached,
+                vec![
+                    format!("rm {}", victim.display()),
+                    format!("rm {}/attach/../../victim.txt", dir.display()),
+                    format!(r#"run ["{}"]"#, evil.display()),
+                    r#"run ["sh","-c","touch pwned"]"#.to_owned(),
+                    format!(
+                        r#"run ["{}/attach/P1/.shim/gdb","--dla-stop","1"]"#,
+                        p.path().display()
+                    ),
+                ],
+            ));
+            Ok(())
+        })
+        .unwrap();
+        let (code, v) = run(p.path(), &["--run", &id, "run", "abort"]);
+        assert_eq!((code, v["failed"].as_u64()), (0, Some(1)), "{v}");
+        assert!(victim.exists(), "a file outside the run was deleted");
+        assert!(!pwned.exists(), "an unregistered program ran");
+        assert!(v["notes"][0].as_str().unwrap().contains("refused"), "{v}");
+        assert!(
+            RunState::load(&dir).unwrap().processes[0]
+                .stopped_at
+                .is_none(),
+            "a refused cleanup must stay visible"
+        );
+    }
+
+    #[test]
+    fn attached_cleanup_skips_the_pid_bound_commands_when_the_pid_was_reused() {
+        let p = project();
+        let (id, dir) = init(p.path(), &[]);
+        let mut other = sleeper();
+        let ran = p.path().join("ran");
+        let jcmd = stub(p.path(), "jcmd", &format!("touch {}", ran.display()));
+        let fifo = dir.join("attach/P1/file.jfr");
+        fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+        fs::write(&fifo, "x").unwrap();
+        RunState::update(&dir, |s| {
+            s.processes.push(record(
+                other.id(),
+                Some("2001-01-01T00:00:00Z".into()),
+                ProcessRole::Attached,
+                vec![
+                    format!("rm {}", fifo.display()),
+                    format!(r#"run ["{}","{}","JFR.stop"]"#, jcmd.display(), other.id()),
+                ],
+            ));
+            Ok(())
+        })
+        .unwrap();
+        let v = ok(p.path(), &["--run", &id, "run", "abort"]);
+        assert_eq!(v["gone"], 1, "{v}");
+        assert!(!ran.exists(), "ran a command against a reused pid");
+        assert!(!fifo.exists(), "the rm action still runs");
+        assert!(other.try_wait().unwrap().is_none());
+        other.kill().unwrap();
+        other.wait().unwrap();
+    }
+
+    #[test]
     fn a_failed_cleanup_keeps_the_record_for_a_retry() {
         let p = project();
         let (id, dir) = init(p.path(), &[]);
@@ -329,7 +439,10 @@ mod abort {
                 1,
                 None,
                 ProcessRole::Attached,
-                vec![r#"run ["false"]"#.to_owned()],
+                vec![format!(
+                    r#"run ["{}"]"#,
+                    stub(p.path(), "jcmd", "exit 1").display()
+                )],
             ));
             Ok(())
         })
@@ -546,4 +659,244 @@ fn bundle_carries_site_excerpt_and_evidence_without_labels() {
 
     let e = refused(p.path(), &["--run", &id, "bundle", "F9"]);
     assert_eq!(e["code"], "unknown-finding");
+}
+
+#[cfg(unix)]
+#[test]
+fn bundle_does_not_follow_symlinks_out_of_the_run_or_the_project() {
+    let p = project();
+    let (id, dir) = init(p.path(), &[]);
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(
+        outside.path().join("secret.json"),
+        r#"{"token":"OUTSIDE-SECRET"}"#,
+    )
+    .unwrap();
+    fs::write(
+        outside.path().join("Secret.java"),
+        "class OUTSIDE_SECRET {}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("series")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("secret.json"),
+        dir.join("series/link.json"),
+    )
+    .unwrap();
+    fs::create_dir_all(p.path().join("src")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("Secret.java"),
+        p.path().join("src/Secret.java"),
+    )
+    .unwrap();
+    let mut ledger = Ledger::load(&dir).unwrap();
+    let e = ledger
+        .add_evidence(evidence(
+            EvidenceKind::GrowthSeries,
+            Authority::Test,
+            json!({"gate": "pass"}),
+            Some("series/link.json"),
+        ))
+        .unwrap();
+    let eid = match e.record {
+        dla_core::Record::Evidence(e) => e.evidence_id,
+        other => panic!("{other:?}"),
+    };
+    let mut nf = NewFinding::new(Origin::parse("detector:ruff/B019").unwrap(), vec![eid]);
+    nf.site = Some("src/Secret.java:1".into());
+    ledger.add_finding(nf).unwrap();
+    drop(ledger);
+
+    let v = ok(p.path(), &["--run", &id, "bundle", "F1"]);
+    assert_eq!(v["excerpt"], false, "{v}");
+    let bundle = dir.join("bundle/F1");
+    let mut all = String::new();
+    let mut stack = vec![bundle];
+    while let Some(d) = stack.pop() {
+        for ent in fs::read_dir(d).unwrap() {
+            let path = ent.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                all.push_str(&String::from_utf8_lossy(&fs::read(path).unwrap()));
+            }
+        }
+    }
+    assert!(
+        !all.contains("OUTSIDE"),
+        "bundle leaked outside bytes: {all}"
+    );
+    assert!(all.contains("not a file inside the run directory"), "{all}");
+}
+
+#[test]
+fn run_init_refuses_scopes_that_would_widen_or_exclude_nothing() {
+    let p = project();
+    fs::create_dir_all(p.path().join("svc/a")).unwrap();
+    let abs = p.path().join("svc/a").display().to_string();
+    for args in [
+        vec![
+            "run",
+            "init",
+            "--scope",
+            "module",
+            "--scope-path",
+            "../other",
+        ],
+        vec![
+            "run",
+            "init",
+            "--scope",
+            "module",
+            "--scope-path",
+            abs.as_str(),
+        ],
+        vec![
+            "run",
+            "init",
+            "--scope",
+            "service",
+            "--scope-path",
+            "svc/missing",
+        ],
+        vec![
+            "run",
+            "init",
+            "--scope",
+            "module",
+            "--scope-path",
+            "svc/a",
+            "--exclude",
+            "../x",
+        ],
+        vec![
+            "run",
+            "init",
+            "--scope",
+            "module",
+            "--scope-path",
+            "svc/a",
+            "--exclude",
+            "**/node_modules",
+        ],
+    ] {
+        let e = refused(p.path(), &args);
+        assert_eq!(e["code"], "invalid-value", "{args:?}: {e}");
+    }
+    assert!(!p.path().join(".dla").exists(), "a refused init left a run");
+    let (_, dir) = init(
+        p.path(),
+        &[
+            "--scope",
+            "module",
+            "--scope-path",
+            "svc/a",
+            "--exclude",
+            "svc/a/gen",
+        ],
+    );
+    assert_eq!(RunState::load(&dir).unwrap().scope.unwrap().path, "svc/a");
+}
+
+#[test]
+fn consent_is_refused_in_worker_mode_and_writes_no_ledger() {
+    let p = project();
+    let (id, dir) = init(p.path(), &[]);
+    let before = fs::read(dir.join("ledger.jsonl")).unwrap();
+    let e = refused(
+        p.path(),
+        &["--run", &id, "--worker", "jvm", "consent", "--tiers", "1"],
+    );
+    assert!(
+        e["message"].as_str().unwrap().contains("--worker jvm"),
+        "{e}"
+    );
+    assert_eq!(e["fix"], format!("dla --run {id} consent --tiers 1-4"));
+    assert_eq!(fs::read(dir.join("ledger.jsonl")).unwrap(), before);
+    assert!(RunState::load(&dir).unwrap().consent.is_none());
+    ok(p.path(), &["--run", &id, "consent", "--tiers", "1"]);
+}
+
+#[test]
+fn status_in_worker_mode_lists_only_the_workers_items_and_core_mode_reports_slices() {
+    let p = project();
+    let (id, dir) = init(p.path(), &["--budget", "100m"]);
+    ok(p.path(), &["run", "dispatch", "--workers", "jvm,rust"]);
+    let add = |ledger: &mut Ledger, site: &str| {
+        let e = ledger
+            .add_evidence(evidence(
+                EvidenceKind::StaticHit,
+                Authority::Static,
+                json!({"hits": 1}),
+                None,
+            ))
+            .unwrap();
+        let eid = match e.record {
+            dla_core::Record::Evidence(e) => e.evidence_id,
+            other => panic!("{other:?}"),
+        };
+        let mut nf = NewFinding::new(Origin::parse("detector:ruff/B019").unwrap(), vec![eid]);
+        nf.site = Some(site.into());
+        ledger.add_finding(nf).unwrap();
+    };
+    add(&mut Ledger::load(&dir).unwrap(), "src/Core.java:1");
+    add(
+        &mut Ledger::load_for(&dir, Some("jvm")).unwrap(),
+        "src/A.java:1",
+    );
+    add(
+        &mut Ledger::load_for(&dir, Some("rust")).unwrap(),
+        "src/b.rs:1",
+    );
+
+    let s = ok(
+        p.path(),
+        &["--run", &id, "--worker", "jvm", "run", "status"],
+    );
+    assert_eq!(s["worker"], "jvm");
+    let ids: Vec<&str> = s["blocking"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["jvm/F1"], "{s}");
+    assert_eq!(s["blocking_total"], 1);
+    assert_eq!(s["counts"]["enumerated"], 1);
+    assert!(s.get("unmerged_slices").is_none());
+
+    // A spent worker deadline is a run-level item the worker must act on.
+    RunState::update(&dir, |st| {
+        st.workers[0].deadline = now_utc() - chrono::TimeDelta::try_seconds(5).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let s = ok(
+        p.path(),
+        &["--run", &id, "--worker", "jvm", "run", "status"],
+    );
+    assert_eq!(s["blocking_total"], 2, "{s}");
+    assert!(
+        s["blocking"][1]["description"]
+            .as_str()
+            .unwrap()
+            .contains("worker jvm time budget is spent"),
+        "{s}"
+    );
+
+    let s = ok(p.path(), &["--run", &id, "run", "status"]);
+    let un: Vec<&str> = s["unmerged_slices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["worker"].as_str().unwrap())
+        .collect();
+    assert_eq!(un, ["jvm", "rust"], "{s}");
+    assert_eq!(s["torn_tails"], json!([]));
+    // A torn fragment at the end of a slice is reported.
+    let mut slice = fs::read(dir.join("ledger.rust.jsonl")).unwrap();
+    slice.extend_from_slice(b"{\"type\":\"evid");
+    fs::write(dir.join("ledger.rust.jsonl"), slice).unwrap();
+    let s = ok(p.path(), &["--run", &id, "run", "status"]);
+    assert_eq!(s["torn_tails"], json!(["rust"]), "{s}");
 }

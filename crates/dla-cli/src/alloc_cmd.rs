@@ -315,6 +315,15 @@ fn trend_of(
                     }
                 }
             }
+            for f in ledger.findings() {
+                if f.polarity() == Polarity::Leak
+                    && f.owner
+                        .as_deref()
+                        .is_some_and(|o| dla_core::trend::probe_column_matches_owner(&col.name, o))
+                {
+                    push(&f.id);
+                }
+            }
             if let Some(old) = previous.and_then(|t| t.columns.iter().find(|c| c.name == col.name))
             {
                 for f in &old.candidates {
@@ -748,8 +757,10 @@ fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
         })
         .filter_map(|e| {
             let g = GrowthSummary::from_result(&e.result)?;
-            (g.passed_gate() && g.best_column(&root.id, root.site.as_deref()).is_some())
-                .then(|| e.evidence_id.clone())
+            (g.passed_gate()
+                && g.best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
+                    .is_some())
+            .then(|| e.evidence_id.clone())
         })
         .last()
 }

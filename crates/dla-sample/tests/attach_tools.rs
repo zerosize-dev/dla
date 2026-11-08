@@ -16,18 +16,38 @@ use dla_sample::attach::{
 };
 
 /// A child that is killed when dropped.
-struct Sleeper(Child);
+struct Sleeper(Child, #[allow(dead_code)] tempfile::TempDir);
 
 impl Sleeper {
+    /// A `sleep` whose executable is called `java`: the fake `jcmd` answers for a JVM, and the
+    /// jcmd backend only runs against something that looks like one.
     fn start() -> Self {
-        Self(
-            Command::new("sleep")
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("java");
+        let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|d| d.join("sleep"))
+            .find(|p| p.is_file())
+            .expect("sleep on PATH");
+        fs::copy(sleep, &exe).unwrap();
+        // A fork in another test thread can still hold the copy's write handle for a
+        // moment, and exec then fails with ETXTBSY ("text file busy"): retry briefly.
+        let mut tries = 0;
+        let child = loop {
+            match Command::new(&exe)
                 .arg("120")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .unwrap(),
-        )
+            {
+                Ok(c) => break c,
+                Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => panic!("spawn {}: {e}", exe.display()),
+            }
+        };
+        Self(child, dir)
     }
 }
 
@@ -311,4 +331,88 @@ fn memray_and_node_refuse_a_process_of_another_kind_without_touching_it() {
     assert!(e.message.contains("SIGUSR1 is not sent"), "{}", e.message);
     // sleep(1) would have died of SIGUSR1.
     assert!(attach::inspect_target(f.target.0.id()).is_some());
+}
+
+#[test]
+fn jcmd_is_never_run_against_a_process_that_is_not_a_jvm() {
+    // A plain `sleep` shows no sign of a JVM: the fake jcmd would leave a marker if called.
+    let dir = tempfile::tempdir().unwrap();
+    let tools = dir.path().join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    let marker = dir.path().join("jcmd-was-called");
+    script(&tools, "jcmd", &format!("touch '{}'", marker.display()));
+    let mut child = Command::new("sleep")
+        .arg("120")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let req = Request {
+        target: inspect_target(child.id()).unwrap(),
+        backend: Backend::Jcmd,
+        op: Op::Histogram,
+        duration: Duration::from_secs(1),
+        out_name: None,
+        dump_root: dir.path().to_path_buf(),
+        tool_dirs: vec![tools],
+    };
+    let e = plan(&req).expect_err("not a JVM");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(e.kind, ErrorKind::NotReady);
+    assert!(e.message.contains("no signal was sent"), "{}", e.message);
+    assert!(!marker.exists(), "jcmd must not run against a non-JVM");
+}
+
+#[test]
+fn a_reused_pid_is_not_attached_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = format!(
+        r#"case "$2" in VM.version) echo "JDK 21.0.1";; *) touch '{}/called'; exit 1;; esac"#,
+        dir.path().display()
+    );
+    let f = fixture("jcmd", &body);
+    let mut req = request(&f, Backend::Jcmd, Op::Histogram);
+    let p = plan(&req).expect("plan");
+    // Between the plan and the run, the pid now belongs to a different process.
+    req.target.start_time = Some("2001-01-01T00:00:00Z".into());
+    let fin = run(p, &req, &f.out, &mut |_: &Cleanup| {});
+    let e = fin.result.expect_err("identity differs");
+    assert!(e.message.contains("replaced"), "{}", e.message);
+    assert!(!dir.path().join("called").exists());
+}
+
+#[test]
+fn a_target_that_dies_during_a_recording_gets_no_stop_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("stop-called");
+    let mut f = fixture("jcmd", "exit 1");
+    let pid = f.target.0.id();
+    let body = format!(
+        r#"case "$2" in
+  VM.version) echo "JDK 21.0.1";;
+  JFR.start) kill -9 {pid}; echo "Started recording 1";;
+  JFR.stop) touch '{}';;
+  *) exit 1;;
+esac"#,
+        marker.display()
+    );
+    script(&f.tools, "jcmd", &body);
+    let req = request(&f, Backend::Jcmd, Op::Jfr);
+    let (fin, registered) = run_plan(&req, &f);
+    let _ = f.target.0.wait();
+    let e = fin.result.expect_err("the target died");
+    assert!(e.message.contains("exited"), "{}", e.message);
+    assert!(!marker.exists(), "JFR.stop must not go to a gone pid");
+    assert!(
+        registered.iter().any(|r| r.contains("JFR.stop")),
+        "it was registered while the target lived: {registered:?}"
+    );
+    assert!(
+        fin.cleanup_left
+            .iter()
+            .all(|c| !matches!(c, Cleanup::Run(_))),
+        "{:?}",
+        fin.cleanup_left
+    );
 }

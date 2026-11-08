@@ -109,6 +109,38 @@ pub fn process_start_time(pid: u32) -> Option<String> {
     imp::process_start_time(pid)
 }
 
+/// Whether two [`process_start_time`] strings name the same instant, within 2 s (the
+/// figure is derived from the boot time, which a clock step can move). Strings that are not
+/// timestamps must be equal.
+pub fn same_start_time(a: &str, b: &str) -> bool {
+    match (start_epoch(a), start_epoch(b)) {
+        (Some(x), Some(y)) => (x - y).abs() <= 2,
+        _ => a == b,
+    }
+}
+
+/// Seconds since the epoch of `YYYY-MM-DDTHH:MM:SSZ`.
+fn start_epoch(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() != 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[19] != b'Z' {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let (h, mi, se) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Days from civil (proleptic Gregorian).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + se)
+}
+
 /// Whether `pid` is a running process (a zombie awaiting reaping counts as not alive).
 pub fn is_alive(pid: u32) -> bool {
     imp::is_alive(pid)
@@ -339,6 +371,20 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_times_match_within_two_seconds() {
+        let a = "2026-01-01T10:00:00Z";
+        assert!(same_start_time(a, "2026-01-01T10:00:02Z"));
+        assert!(same_start_time(a, "2026-01-01T09:59:58Z"));
+        assert!(!same_start_time(a, "2026-01-01T10:00:03Z"));
+        assert!(same_start_time(
+            "2026-03-01T00:00:00Z",
+            "2026-02-28T23:59:59Z"
+        ));
+        assert!(same_start_time("boot+5", "boot+5"));
+        assert!(!same_start_time("boot+5", "boot+6"));
+    }
 
     #[test]
     fn merge_sums_process_figures_and_keeps_root_container_figures() {

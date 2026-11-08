@@ -29,7 +29,7 @@ Coverage: not measured
 - **intake.workload**: checklist item intake.workload is unanswered: What can exercise the suspected path? Fix: `dla ledger resolve intake.workload --status answered --evidence E1`
 - **intake.consent**: checklist item intake.consent is unanswered: Which intrusive steps has the user allowed, and are raw values permitted in evidence? Fix: `dla ledger resolve intake.consent --status answered --evidence E1`
 - **intake.budget**: checklist item intake.budget is unanswered: How much wall-clock time may the investigation use? Fix: `dla ledger resolve intake.budget --status answered --evidence E1`
-- **20260101-000000-abcd**: run is incomplete: workers did not finish: rust (slice ends at line 3). Fix: `dla run init`
+- **20260101-000000-abcd**: run is incomplete: workers did not finish: rust (slice ends at line 3). Fix: `let the unfinished workers end (dla --worker <name> ledger done), then dla ledger merge`
 
 ## Workers
 

@@ -52,8 +52,14 @@ pub fn check(earlier: &HeapSummary, later: &HeapSummary) -> Result<(), String> {
             "the later dump has only {app_common} of the earlier dump's {app_total} application classes: a different program"
         ));
     }
+    if earlier.class_hashes.is_empty() {
+        return Err(
+            "the earlier dump lists no loaded classes, so it cannot be compared with the later one"
+                .to_owned(),
+        );
+    }
     let common = shared(&earlier.class_hashes, &later.class_hashes);
-    let total = earlier.class_hashes.len().max(1);
+    let total = earlier.class_hashes.len();
     let share = common as f64 / total as f64;
     if share < CLASS_OVERLAP {
         return Err(format!(

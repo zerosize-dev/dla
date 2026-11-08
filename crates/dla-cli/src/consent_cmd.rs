@@ -81,6 +81,16 @@ fn evidence_id(ledger: &Ledger, seq: u64) -> String {
 
 /// Runs `dla consent`.
 pub fn run(ctx: &Ctx, project: &Path, a: ConsentArgs) -> Res<Value> {
+    if let Some(w) = &ctx.worker {
+        return Err(Failure::refuse(
+            core_codes::INVALID_VALUE,
+            format!(
+                "consent is the run's one decision, taken by the user or the runner, and this call carries --worker {w}"
+            ),
+            "a call without --worker",
+            format!("dla --run {} consent --tiers 1-4", ctx.run_id),
+        ));
+    }
     let tiers = consent::parse_tiers(&a.tiers).map_err(Failure::from)?;
     let ceiling = a
         .ceiling

@@ -1,0 +1,351 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "ablation": "full",
+      "archetypes": "on",
+      "metrics": {
+        "leak_recall": {
+          "num": 1,
+          "den": 3,
+          "value": 0.333333,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 2,
+              "value": 0.5
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.25,
+          "stdev": 0.25
+        },
+        "archetype_free_recall": {
+          "num": 1,
+          "den": 3,
+          "value": 0.333333,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 2,
+              "value": 0.5
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.25,
+          "stdev": 0.25
+        },
+        "flagged_recall": {
+          "num": 1,
+          "den": 3,
+          "value": 0.333333,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 2,
+              "value": 0.5
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.25,
+          "stdev": 0.25
+        },
+        "second_leak_recall": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "grounded_attribution": {
+          "num": 1,
+          "den": 1,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "label_accuracy": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "forced_fit_rate": {
+          "num": 0,
+          "den": 1,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "overclaim_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "false_confirmation_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "non_leak_precision": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "trap_miss_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "trap_false_alarm_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "source_overclaim_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        }
+      },
+      "unexplained_growth_share": {
+        "value": null,
+        "runs": 0
+      },
+      "usage": {
+        "runs": 3,
+        "incomplete": 0,
+        "errored": 0,
+        "sources": {
+          "ledger": 3,
+          "findings": 0,
+          "none": 0
+        },
+        "input_tokens": {
+          "sum": 9,
+          "mean": 3.0
+        },
+        "output_tokens": {
+          "sum": 21,
+          "mean": 7.0
+        },
+        "cache_read_input_tokens": {
+          "sum": 0,
+          "mean": 0.0
+        },
+        "cache_creation_input_tokens": {
+          "sum": 33,
+          "mean": 11.0
+        },
+        "wall_seconds": {
+          "sum": 0.023438,
+          "mean": 0.007812,
+          "max": 0.007812
+        },
+        "cost_usd": {
+          "sum": 0.375,
+          "mean": 0.125
+        }
+      },
+      "fixtures": {
+        "fx-big": {
+          "category": "archetype-free",
+          "runs": 2,
+          "claim_runs": 2,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 0,
+              "flagged": 0,
+              "grounded": 0
+            }
+          }
+        },
+        "fx-col": {
+          "category": "archetype-free",
+          "runs": 1,
+          "claim_runs": 1,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 1,
+              "flagged": 1,
+              "grounded": 1
+            }
+          }
+        }
+      }
+    }
+  ]
+}

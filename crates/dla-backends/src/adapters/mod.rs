@@ -40,7 +40,7 @@ pub struct Job<'a> {
     pub rules: Vec<&'a Detector>,
     /// Where tools are found.
     pub env: &'a ToolEnv,
-    /// `tmp/<backend>` under the run directory (created).
+    /// `tmp/<lang>-<backend>` under the run directory (created).
     pub scratch: PathBuf,
     /// Hard limit for the main tool run.
     pub timeout: Duration,

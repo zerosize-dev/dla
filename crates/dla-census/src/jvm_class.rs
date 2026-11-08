@@ -179,6 +179,11 @@ fn class_holders(c: &ClassFile, file: &str, text: &str, info: &ProjectInfo, out:
         .flat_map(|m| m.lines.iter().map(|(_, l)| u32::from(*l)))
         .min()
         .unwrap_or(1);
+    // A Kotlin `object` keeps its properties as static fields of the class; `INSTANCE`
+    // only points at the object, so it is a holder only when no property is.
+    let kotlin_object = c.source_file.as_deref().is_some_and(|f| f.ends_with(".kt"));
+    let mut instance: Option<Raw> = None;
+    let mut properties = 0_usize;
     for f in &c.fields {
         if f.access & ACC_SYNTHETIC != 0 || f.access & ACC_ENUM != 0 {
             continue;
@@ -197,17 +202,20 @@ fn class_holders(c: &ClassFile, file: &str, text: &str, info: &ProjectInfo, out:
             let line = put_line(clinit, &c.name, &f.name)
                 .or_else(|| decl_line(text, &f.name))
                 .unwrap_or(first_line);
-            out.push(
-                Raw::new(
-                    "singleton-instance",
-                    Holder::StaticGlobal,
-                    Region::Heap,
-                    file,
-                    line,
-                    format!("{class_dotted}.{}", f.name),
-                )
-                .tracking(&f.name, Scope::Project, false),
-            );
+            let raw = Raw::new(
+                "singleton-instance",
+                Holder::StaticGlobal,
+                Region::Heap,
+                file,
+                line,
+                format!("{class_dotted}.{}", f.name),
+            )
+            .tracking(&f.name, Scope::Project, false);
+            if kotlin_object && f.name == "INSTANCE" {
+                instance = Some(raw);
+            } else {
+                out.push(raw);
+            }
             continue;
         }
         if is_static && f.name == "Companion" {
@@ -246,6 +254,9 @@ fn class_holders(c: &ClassFile, file: &str, text: &str, info: &ProjectInfo, out:
         }
         .or_else(|| decl_line(text, &f.name))
         .unwrap_or(first_line);
+        if is_static {
+            properties += 1;
+        }
         let private = f.access & crate::classfile::ACC_PRIVATE != 0;
         let scope = if private && !is_static {
             Scope::File
@@ -263,6 +274,11 @@ fn class_holders(c: &ClassFile, file: &str, text: &str, info: &ProjectInfo, out:
             )
             .tracking(&f.name, scope, !is_static && !private),
         );
+    }
+    if let Some(raw) = instance
+        && properties == 0
+    {
+        out.push(raw);
     }
     for m in &c.methods {
         if m.access & ACC_NATIVE != 0 {
@@ -385,5 +401,45 @@ mod tests {
         );
         // The class also does `new Thread` in its static initializer.
         assert_eq!(got[1].3, "thread");
+    }
+
+    fn kotlin_object(props: &[(&str, &str)]) -> Vec<Raw> {
+        use crate::classfile::Field;
+        let st = ACC_STATIC;
+        let mut fields = vec![Field {
+            access: st,
+            name: "INSTANCE".into(),
+            descriptor: "Lshop/Audit;".into(),
+        }];
+        fields.extend(props.iter().map(|(n, d)| Field {
+            access: st,
+            name: (*n).into(),
+            descriptor: (*d).into(),
+        }));
+        let c = ClassFile {
+            name: "shop/Audit".into(),
+            source_file: Some("Audit.kt".into()),
+            fields,
+            ..ClassFile::default()
+        };
+        let text = "package shop\nobject Audit {\n  val trail = ArrayList<Entry>()\n}\n";
+        let mut out = Vec::new();
+        class_holders(&c, "Audit.kt", text, &ProjectInfo::default(), &mut out);
+        out
+    }
+
+    #[test]
+    fn a_kotlin_object_reports_its_growing_property_not_instance() {
+        let out = kotlin_object(&[("trail", "Ljava/util/ArrayList;")]);
+        let owners: Vec<&str> = out.iter().map(|r| r.owner.as_str()).collect();
+        assert_eq!(owners, ["shop.Audit.trail"], "{owners:?}");
+        assert_eq!(out[0].line, 3);
+    }
+
+    #[test]
+    fn a_kotlin_object_without_properties_keeps_instance() {
+        let out = kotlin_object(&[]);
+        let owners: Vec<&str> = out.iter().map(|r| r.owner.as_str()).collect();
+        assert_eq!(owners, ["shop.Audit.INSTANCE"]);
     }
 }

@@ -31,11 +31,11 @@ use serde::Serialize;
 use crate::{
     coverage::CoverageManifest,
     error::{Error, Refusal},
-    finding::{Finding, FindingState, Polarity},
+    finding::{Finding, FindingState, Polarity, UnresolvedReason},
     ids::FindingId,
     ledger::Ledger,
     probe::ProbeReport,
-    record::SliceMerged,
+    record::{Resolution, SliceMerged},
     slice::{self, codes as m4},
     state::{RunState, RunStatus, WorkerStatus, now_utc},
 };
@@ -82,6 +82,8 @@ pub struct MergeReport {
     pub unfinished: Vec<Unfinished>,
     /// Probed runtimes no worker covers.
     pub uncovered_runtimes: Vec<String>,
+    /// Workers whose slice cannot be replayed: it was left out of this merge.
+    pub invalid_slices: Vec<String>,
     /// The run status after the merge.
     pub status: RunStatus,
 }
@@ -134,10 +136,11 @@ fn groups(ledger: &Ledger) -> BTreeMap<(String, String), Vec<Finding>> {
     out
 }
 
+/// Whether an open item, resolved or not, starts with `starts_with`.
 fn has_open_item(ledger: &Ledger, starts_with: &str) -> bool {
     ledger
         .open_items()
-        .any(|o| o.resolution.is_none() && o.item.text.starts_with(starts_with))
+        .any(|o| o.item.text.starts_with(starts_with))
 }
 
 /// Merges every slice of the run in `run_dir` into its main ledger and applies the
@@ -157,6 +160,7 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
         contradictions: Vec::new(),
         unfinished: Vec::new(),
         uncovered_runtimes: Vec::new(),
+        invalid_slices: Vec::new(),
         status: state.status,
     };
     // worker -> (lines in slice, finished)
@@ -165,14 +169,35 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
     // ---- 1. slices into the main ledger
     for w in &names {
         let sp = slice::slice_path(run_dir, w);
-        let text = match fs::read_to_string(&sp) {
+        let text = match slice::read_text(&sp) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(Error::io(&sp, e)),
         };
         let cut = slice::split(&text);
-        let replayed =
-            Ledger::load_slice_from(run_dir, w, &text).map_err(|e| invalid_slice(w, &e))?;
+        let replayed = match Ledger::load_slice_from(run_dir, w, &text) {
+            Ok(r) => r,
+            Err(e) => {
+                // One bad slice must not stop the others: note it and carry on. Lines
+                // merged from it earlier stay; the worker counts as unfinished.
+                let why = invalid_slice(w, &e).to_refusal().message;
+                let prefix = format!("slice of worker {w} is invalid");
+                if !has_open_item(&main, &prefix) {
+                    main.open_item_add(
+                        &format!(
+                            "{prefix}: {why} (correct or delete the bad line of ledger.{w}.jsonl, then dla ledger merge)"
+                        ),
+                        None,
+                        MERGE_BY,
+                    )?;
+                }
+                report.invalid_slices.push(w.clone());
+                let merged = main.merged_lines(w);
+                slice_facts.insert(w.clone(), (merged, false));
+                report.total_lines.insert(w.clone(), merged);
+                continue;
+            }
+        };
         let n = replayed.lines().len();
         let done = replayed.slice_info(w).is_some_and(|r| r.done.is_some());
         if cut.torn.is_some() {
@@ -217,10 +242,12 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
                 report.contradictions.push(text);
             }
         }
-        // Refuted findings are verdicts, not duplicates; nor is a finding merged already.
+        // Refuted findings are verdicts, not duplicates. Findings merged earlier stay in
+        // the pool: a duplicate that has since moved further than its canonical takes
+        // over (a swap), and one that gained supports is folded in again.
         let mut live: Vec<&Finding> = members
             .iter()
-            .filter(|f| f.state != FindingState::Refuted && main.merged_into(&f.id).is_none())
+            .filter(|f| f.state != FindingState::Refuted)
             .collect();
         if live.len() < 2 {
             continue;
@@ -231,12 +258,32 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
                 .then_with(|| a.id.prefix().cmp(&b.id.prefix()))
                 .then_with(|| a.id.cmp(&b.id))
         });
-        let canonical = live[0].id.clone();
+        let canonical = live[0];
         for dup in live.iter().skip(1) {
-            if dup.id.prefix() == canonical.prefix() {
+            if dup.id.prefix() == canonical.id.prefix() {
                 continue;
             }
-            merge_pair(&mut main, &mut report, &canonical, &dup.id)?;
+            match main.merged_into(&dup.id) {
+                // Already folded into this one: only the supports may be out of date.
+                Some(c) if *c == canonical.id => {
+                    if !dup.supports.iter().all(|e| canonical.supports.contains(e)) {
+                        main.merge_findings(&canonical.id, &dup.id)?;
+                    }
+                }
+                // Folded into another finding of the group: that one is handled itself.
+                Some(_) => {}
+                None => {
+                    // A canonical that is itself a duplicate of `dup` swaps with it; one
+                    // that is a duplicate of something else waits for that finding.
+                    if main
+                        .merged_into(&canonical.id)
+                        .is_some_and(|c| *c != dup.id)
+                    {
+                        continue;
+                    }
+                    merge_pair(&mut main, &mut report, &canonical.id, &dup.id)?;
+                }
+            }
         }
     }
 
@@ -247,6 +294,26 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
         let (lines, done) = slice_facts.get(w).copied().unwrap_or((0, false));
         if done {
             status_of.insert(w.clone(), WorkerStatus::Done);
+            // It finished after an earlier merge called it unfinished: close that item.
+            let open: Vec<_> = main
+                .open_items()
+                .filter(|o| {
+                    o.resolution.is_none()
+                        && o.item
+                            .text
+                            .starts_with(&format!("worker {w} did not finish"))
+                })
+                .map(|o| o.item.id.clone())
+                .collect();
+            for id in open {
+                main.resolve_open_item(
+                    &id,
+                    Resolution::Unresolved {
+                        reason: UnresolvedReason::TimeBudget,
+                        remedy: format!("worker {w} finished after the merge that raised this"),
+                    },
+                )?;
+            }
             continue;
         }
         let over = state.worker(w).is_some_and(|e| now > e.deadline);
@@ -261,6 +328,7 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
             slice_lines: lines,
             status: status.to_string(),
         });
+        // Resolved items count: a core that closed it has accepted the worker's end.
         if !has_open_item(&main, &format!("worker {w} did not finish")) {
             main.open_item_add(
                 &format!("worker {w} did not finish (slice ends at line {lines})"),

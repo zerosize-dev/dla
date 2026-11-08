@@ -55,6 +55,9 @@ a non-numeric `cost_usd` is treated as absent.
 
 Fixture fields: a leak without `confirmable` is confirmable (default `true`).
 The expected `site` path and `alt_sites` paths are used exactly as written.
+The expected `site` is parsed with the same expression as a finding's `site`
+(below), so a trailing `:column` is ignored; a line number, in a `site` or an
+`alt_sites` entry, that does not fit in 64 bits gives no location.
 An `alt_sites` entry that is not `path:line` or `path:start-end` is ignored.
 A leak may have no `site`; it then has an `owner` (a `package.Class.field`
 string). `entry` is `repository` (default), `artifact` or `symptom`; only

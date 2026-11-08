@@ -13,6 +13,12 @@ K=$M/org/jetbrains/kotlin
 STD=$K/kotlin-stdlib/2.0.21/kotlin-stdlib-2.0.21.jar
 mkdir -p out
 if command -v kotlinc >/dev/null 2>&1; then
+    # The stdlib next to kotlinc (the compiler and the program then use one version);
+    # the cached jar when this install has no lib/kotlin-stdlib.jar.
+    KC=$(command -v kotlinc)
+    KC=$(readlink -f "$KC" 2>/dev/null || echo "$KC")
+    KLIB=$(dirname "$KC")/../lib/kotlin-stdlib.jar
+    if [ -f "$KLIB" ]; then STD=$KLIB; fi
     kotlinc -d out kotlin/shop/*.kt
 else
     CP=$K/kotlin-compiler-embeddable/2.0.21/kotlin-compiler-embeddable-2.0.21.jar:$STD
@@ -25,7 +31,6 @@ else
     java -cp "$CP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -cp "$STD" -d out kotlin/shop/*.kt
 fi
 
-# On a machine with kotlinc, the stdlib is found next to it; fall back to the cached jar otherwise.
 RUN_CP="out:$STD"
 LIB="-Djava.library.path=native/target/release"
 java -ea $LIB -cp "$RUN_CP" shop.codec.CodecTestKt
