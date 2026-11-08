@@ -1102,7 +1102,11 @@ mod tests {
         assert_eq!(
             p.run.argv,
             [
-                "/r/harness/H1/work/target/release/rollup-agent",
+                format!(
+                    "/r/harness/H1/work/target/release/rollup-agent{}",
+                    std::env::consts::EXE_SUFFIX
+                )
+                .as_str(),
                 "--iterations",
                 "{n}"
             ]

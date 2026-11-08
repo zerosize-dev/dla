@@ -54,11 +54,52 @@ fn relative_to(work: &Path, path: &str) -> Option<String> {
         return Some(path.trim_start_matches("./").replace('\\', "/"));
     }
     let canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    let rel = canon
-        .strip_prefix(work)
-        .or_else(|_| p.strip_prefix(work))
-        .ok()?;
-    Some(rel.to_string_lossy().replace('\\', "/"))
+    let root = comparable(&work.to_string_lossy());
+    [canon.to_string_lossy().into_owned(), path.to_owned()]
+        .iter()
+        .find_map(|cand| {
+            let c = comparable(cand);
+            let rest = c.strip_prefix(&root)?.strip_prefix('/')?;
+            // Keep the original spelling of the remainder (case matters on Unix).
+            let orig = cand.replace('\\', "/");
+            let start = orig.len().checked_sub(rest.len())?;
+            Some(orig.get(start..).unwrap_or(rest).to_owned())
+        })
+}
+
+/// A path as a string that compares equal across spellings: forward slashes, no
+/// Windows verbatim prefix (`\\?\`), and lower case on Windows.
+fn comparable(path: &str) -> String {
+    let p = path.strip_prefix(r"\\?\").unwrap_or(path).replace('\\', "/");
+    let p = p.trim_end_matches('/').to_owned();
+    if cfg!(windows) { p.to_lowercase() } else { p }
+}
+
+/// The local path of a `file://` URL as V8 writes it: percent-decoded, and on Windows
+/// without the slash before the drive letter (`file:///C:/a` is `C:/a`).
+fn file_url_path(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("file://")?;
+    let bytes = rest.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(b) = u8::from_str_radix(&rest[i + 1..i + 3], 16)
+        {
+            out.push(b);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    let path = String::from_utf8(out).ok()?;
+    let b = path.as_bytes();
+    if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+        return Some(path[1..].to_owned());
+    }
+    Some(path)
 }
 
 /// Items of the dump coverage sections, following a `file` pointer when there is one.
@@ -181,10 +222,10 @@ fn node_functions(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String)> {
             let Some(url) = script.get("url").and_then(Value::as_str) else {
                 continue;
             };
-            let Some(path) = url.strip_prefix("file://") else {
+            let Some(path) = file_url_path(url) else {
                 continue;
             };
-            let Some(rel) = relative_to(work, &path.replace("%20", " ")) else {
+            let Some(rel) = relative_to(work, &path) else {
                 continue;
             };
             if rel.starts_with("node_modules/") || rel.contains("/node_modules/") {
@@ -502,12 +543,27 @@ mod tests {
     }
 
     #[test]
+    fn file_urls_decode_and_drop_the_slash_before_a_drive() {
+        assert_eq!(file_url_path("file:///C:/a%20b/x.js").as_deref(), Some("C:/a b/x.js"));
+        assert_eq!(file_url_path("file:///home/u/x.js").as_deref(), Some("/home/u/x.js"));
+        assert_eq!(file_url_path("node:internal/x"), None);
+        assert_eq!(comparable(r"\\?\C:\W\"), if cfg!(windows) { "c:/w" } else { "C:/W" });
+    }
+
+    #[test]
     fn node_v8_files_give_functions_with_calls() {
         let dir = tempfile::tempdir().unwrap();
         let work = dir.path().canonicalize().unwrap();
         let cov = work.join("cov");
         fs::create_dir_all(&cov).unwrap();
-        let url = format!("file://{}/src/heartbeat.js", work.display());
+        // As V8 writes it: forward slashes, and `file:///C:/...` on Windows.
+        let shown = work.to_string_lossy().replace('\\', "/");
+        let shown = shown.strip_prefix("//?/").unwrap_or(&shown).to_owned();
+        let url = if shown.starts_with('/') {
+            format!("file://{shown}/src/heartbeat.js")
+        } else {
+            format!("file:///{shown}/src/heartbeat.js")
+        };
         fs::write(
             cov.join("coverage-1.json"),
             json!({"result":[{"url":url,"functions":[

@@ -358,7 +358,7 @@ mod tests {
             }
             let mut r = Reading::default();
             r.values.insert("fake.count".into(), f64::from(self.polls));
-            if self.zero && self.polls == 2 {
+            if self.zero && self.polls % 2 == 0 {
                 r.values.insert("fake.site@a.rs:1".into(), 3.0);
             }
             r.notes.push("fake is approximate".into());
