@@ -153,6 +153,16 @@ def parse_ledger(path):
                 by_id[fid]["state"] = (
                     TRANSITION_STATES.get(to, "open") if isinstance(to, str) else "open"
                 )
+        elif rtype == "finding_annotated":
+            # `dla ledger annotate --holder/--site` fills a holder or site the
+            # finding was added without; it never changes one that is set.
+            fid = rec.get("finding")
+            if isinstance(fid, str) and fid in by_id:
+                f = by_id[fid]
+                if f["holder"] is None:
+                    f["holder"] = str_or_none(rec.get("holder"))
+                if f["site"] is None:
+                    f["site"] = str_or_none(rec.get("site"))
     findings = [by_id[i] for i in order]
     for f in findings:
         f["discriminator"] = f["state"] == "refuted"

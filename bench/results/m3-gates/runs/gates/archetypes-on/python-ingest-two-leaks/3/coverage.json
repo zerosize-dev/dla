@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "python": {
+      "runtime": "python",
+      "backends": {
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 4,
+          "dispositioned": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 2,
+          "dispositioned": 0
+        },
+        "pylint": {
+          "status": "ran",
+          "version": "4.1.3",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "ruff": {
+          "status": "ran",
+          "version": "0.16.9",
+          "enumerated": 0,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "ingest/load.py::make_batches",
+          "ingest/load.py::run",
+          "ingest/models.py::Summary.add",
+          "ingest/models.py::Summary.mean",
+          "ingest/parser.py::parse_batch",
+          "ingest/parser.py::parse_line",
+          "ingest/pipeline.py::Pipeline.process_batch",
+          "ingest/registry.py::fire",
+          "ingest/registry.py::listener_count",
+          "ingest/registry.py::reset",
+          "ingest/registry.py::subscribe"
+        ],
+        "exercised": [
+          "ingest/load.py::make_batches",
+          "ingest/load.py::run",
+          "ingest/models.py::Summary.add",
+          "ingest/parser.py::parse_batch",
+          "ingest/parser.py::parse_line",
+          "ingest/pipeline.py::Pipeline.process_batch",
+          "ingest/registry.py::fire",
+          "ingest/registry.py::subscribe"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "region": "heap",
+      "total_slope": 2678.6479437229436,
+      "attributed_slope": 0.0,
+      "residual": 2678.6479437229436,
+      "unit": "bytes/n",
+      "threshold": 669.6619859307359,
+      "open_item": "O1"
+    }
+  ],
+  "blind_spots": []
+}

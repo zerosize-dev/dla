@@ -152,6 +152,21 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
                     f.state = state_of_to(rec.get("to").and_then(Value::as_str));
                 }
             }
+            // `dla ledger annotate --holder/--site` fills a holder or site the finding
+            // was added without; it never changes one that is set.
+            "finding_annotated" => {
+                let Some(id) = rec.get("finding").and_then(Value::as_str) else {
+                    continue;
+                };
+                if let Some((_, f)) = list.iter_mut().find(|(i, _)| i == id) {
+                    if f.holder.is_none() {
+                        f.holder = str_of(&rec, "holder");
+                    }
+                    if f.site.is_none() {
+                        f.site = str_of(&rec, "site");
+                    }
+                }
+            }
             _ => {}
         }
     }

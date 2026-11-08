@@ -1,0 +1,1180 @@
+{
+  "schema_version": 1,
+  "run_id": "20261108-130319-e34d",
+  "session_id": "18126dcc-9db3-4fab-bd74-dd84b1620047",
+  "project_root": "/tmp/dla-bench/m3-gates/gates/archetypes-on/node-socket-heartbeat-cleared/2/project",
+  "created_at": "2026-11-08T13:03:19Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-08T13:03:19Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-08T13:03:19Z",
+    "deadline": "2026-11-08T14:03:19Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T13:03:36Z",
+      "kind": "harness",
+      "command": "node load.js --iterations 440",
+      "started_at": "2026-11-08T13:03:36Z",
+      "stopped_at": "2026-11-08T13:03:36Z"
+    },
+    {
+      "pid": 18,
+      "kind": "harness",
+      "command": "node load.js --iterations 880",
+      "started_at": "2026-11-08T13:03:36Z",
+      "stopped_at": "2026-11-08T13:03:36Z"
+    },
+    {
+      "pid": 26,
+      "kind": "harness",
+      "command": "node load.js --iterations 1320",
+      "started_at": "2026-11-08T13:03:36Z",
+      "stopped_at": "2026-11-08T13:03:37Z"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "node load.js --iterations 1760",
+      "started_at": "2026-11-08T13:03:37Z",
+      "stopped_at": "2026-11-08T13:03:37Z"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "node load.js --iterations 2200",
+      "started_at": "2026-11-08T13:03:37Z",
+      "stopped_at": "2026-11-08T13:03:38Z"
+    },
+    {
+      "pid": 50,
+      "kind": "harness",
+      "command": "node load.js --iterations 2640",
+      "started_at": "2026-11-08T13:03:38Z",
+      "stopped_at": "2026-11-08T13:03:38Z"
+    },
+    {
+      "pid": 58,
+      "kind": "harness",
+      "command": "node load.js --iterations 3080",
+      "started_at": "2026-11-08T13:03:38Z",
+      "stopped_at": "2026-11-08T13:03:39Z"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "node load.js --iterations 3520",
+      "started_at": "2026-11-08T13:03:39Z",
+      "stopped_at": "2026-11-08T13:03:39Z"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "node load.js --iterations 3960",
+      "started_at": "2026-11-08T13:03:39Z",
+      "stopped_at": "2026-11-08T13:03:40Z"
+    },
+    {
+      "pid": 82,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:03:40Z",
+      "stopped_at": "2026-11-08T13:03:40Z"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:04:00Z",
+      "stopped_at": "2026-11-08T13:04:01Z"
+    },
+    {
+      "pid": 33,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:04:01Z",
+      "stopped_at": "2026-11-08T13:04:02Z"
+    },
+    {
+      "pid": 41,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:04:02Z",
+      "stopped_at": "2026-11-08T13:04:03Z"
+    },
+    {
+      "pid": 49,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:04:03Z",
+      "stopped_at": "2026-11-08T13:04:03Z"
+    },
+    {
+      "pid": 57,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:04:03Z",
+      "stopped_at": "2026-11-08T13:04:04Z"
+    },
+    {
+      "pid": 65,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:04:04Z",
+      "stopped_at": "2026-11-08T13:04:05Z"
+    },
+    {
+      "pid": 73,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:04:05Z",
+      "stopped_at": "2026-11-08T13:04:06Z"
+    },
+    {
+      "pid": 81,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:04:06Z",
+      "stopped_at": "2026-11-08T13:04:07Z"
+    },
+    {
+      "pid": 89,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:04:07Z",
+      "stopped_at": "2026-11-08T13:04:08Z"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T13:04:11Z",
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:04:11Z",
+      "stopped_at": "2026-11-08T13:04:12Z"
+    },
+    {
+      "pid": 18,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:04:12Z",
+      "stopped_at": "2026-11-08T13:04:12Z"
+    },
+    {
+      "pid": 26,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:04:12Z",
+      "stopped_at": "2026-11-08T13:04:13Z"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:04:13Z",
+      "stopped_at": "2026-11-08T13:04:14Z"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:04:14Z",
+      "stopped_at": "2026-11-08T13:04:15Z"
+    },
+    {
+      "pid": 50,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:04:15Z",
+      "stopped_at": "2026-11-08T13:04:16Z"
+    },
+    {
+      "pid": 58,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:04:16Z",
+      "stopped_at": "2026-11-08T13:04:17Z"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:04:17Z",
+      "stopped_at": "2026-11-08T13:04:18Z"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:04:18Z",
+      "stopped_at": "2026-11-08T13:04:18Z"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T13:04:27Z",
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:04:27Z",
+      "stopped_at": "2026-11-08T13:04:27Z"
+    },
+    {
+      "pid": 18,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:04:27Z",
+      "stopped_at": "2026-11-08T13:04:28Z"
+    },
+    {
+      "pid": 26,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:04:28Z",
+      "stopped_at": "2026-11-08T13:04:29Z"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:04:29Z",
+      "stopped_at": "2026-11-08T13:04:30Z"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:04:30Z",
+      "stopped_at": "2026-11-08T13:04:31Z"
+    },
+    {
+      "pid": 50,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:04:31Z",
+      "stopped_at": "2026-11-08T13:04:32Z"
+    },
+    {
+      "pid": 58,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:04:32Z",
+      "stopped_at": "2026-11-08T13:04:33Z"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:04:33Z",
+      "stopped_at": "2026-11-08T13:04:34Z"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:04:34Z",
+      "stopped_at": "2026-11-08T13:04:34Z"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T13:04:39Z",
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:04:39Z",
+      "stopped_at": "2026-11-08T13:04:40Z"
+    },
+    {
+      "pid": 18,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:04:40Z",
+      "stopped_at": "2026-11-08T13:04:41Z"
+    },
+    {
+      "pid": 26,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:04:41Z",
+      "stopped_at": "2026-11-08T13:04:42Z"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:04:42Z",
+      "stopped_at": "2026-11-08T13:04:43Z"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:04:43Z",
+      "stopped_at": "2026-11-08T13:04:44Z"
+    },
+    {
+      "pid": 50,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:04:44Z",
+      "stopped_at": "2026-11-08T13:04:44Z"
+    },
+    {
+      "pid": 58,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:04:44Z",
+      "stopped_at": "2026-11-08T13:04:45Z"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:04:45Z",
+      "stopped_at": "2026-11-08T13:04:47Z"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:04:47Z",
+      "stopped_at": "2026-11-08T13:04:47Z"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T13:04:50Z",
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:04:50Z",
+      "stopped_at": "2026-11-08T13:04:51Z"
+    },
+    {
+      "pid": 18,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:04:51Z",
+      "stopped_at": "2026-11-08T13:04:51Z"
+    },
+    {
+      "pid": 26,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:04:51Z",
+      "stopped_at": "2026-11-08T13:04:52Z"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:04:52Z",
+      "stopped_at": "2026-11-08T13:04:53Z"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:04:53Z",
+      "stopped_at": "2026-11-08T13:04:54Z"
+    },
+    {
+      "pid": 50,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:04:54Z",
+      "stopped_at": "2026-11-08T13:04:55Z"
+    },
+    {
+      "pid": 58,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:04:55Z",
+      "stopped_at": "2026-11-08T13:04:56Z"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:04:56Z",
+      "stopped_at": "2026-11-08T13:04:57Z"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:04:57Z",
+      "stopped_at": "2026-11-08T13:04:57Z"
+    },
+    {
+      "pid": 88,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:04:57Z",
+      "stopped_at": "2026-11-08T13:04:58Z"
+    },
+    {
+      "pid": 96,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:04:58Z",
+      "stopped_at": "2026-11-08T13:04:59Z"
+    },
+    {
+      "pid": 104,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:04:59Z",
+      "stopped_at": "2026-11-08T13:04:59Z"
+    },
+    {
+      "pid": 112,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:04:59Z",
+      "stopped_at": "2026-11-08T13:05:00Z"
+    },
+    {
+      "pid": 120,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:00Z",
+      "stopped_at": "2026-11-08T13:05:01Z"
+    },
+    {
+      "pid": 128,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:05:01Z",
+      "stopped_at": "2026-11-08T13:05:02Z"
+    },
+    {
+      "pid": 136,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:05:02Z",
+      "stopped_at": "2026-11-08T13:05:03Z"
+    },
+    {
+      "pid": 144,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:05:03Z",
+      "stopped_at": "2026-11-08T13:05:04Z"
+    },
+    {
+      "pid": 152,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:05:04Z",
+      "stopped_at": "2026-11-08T13:05:04Z"
+    },
+    {
+      "pid": 166,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:05:04Z",
+      "stopped_at": "2026-11-08T13:05:05Z"
+    },
+    {
+      "pid": 174,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:05:05Z",
+      "stopped_at": "2026-11-08T13:05:06Z"
+    },
+    {
+      "pid": 182,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:05:06Z",
+      "stopped_at": "2026-11-08T13:05:07Z"
+    },
+    {
+      "pid": 190,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:05:07Z",
+      "stopped_at": "2026-11-08T13:05:08Z"
+    },
+    {
+      "pid": 198,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:08Z",
+      "stopped_at": "2026-11-08T13:05:09Z"
+    },
+    {
+      "pid": 206,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:05:09Z",
+      "stopped_at": "2026-11-08T13:05:10Z"
+    },
+    {
+      "pid": 214,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:05:10Z",
+      "stopped_at": "2026-11-08T13:05:11Z"
+    },
+    {
+      "pid": 222,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:05:11Z",
+      "stopped_at": "2026-11-08T13:05:12Z"
+    },
+    {
+      "pid": 230,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:05:12Z",
+      "stopped_at": "2026-11-08T13:05:12Z"
+    },
+    {
+      "pid": 244,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:05:12Z",
+      "stopped_at": "2026-11-08T13:05:13Z"
+    },
+    {
+      "pid": 252,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:05:13Z",
+      "stopped_at": "2026-11-08T13:05:14Z"
+    },
+    {
+      "pid": 260,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:05:14Z",
+      "stopped_at": "2026-11-08T13:05:15Z"
+    },
+    {
+      "pid": 268,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:05:15Z",
+      "stopped_at": "2026-11-08T13:05:15Z"
+    },
+    {
+      "pid": 276,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:15Z",
+      "stopped_at": "2026-11-08T13:05:16Z"
+    },
+    {
+      "pid": 284,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:05:16Z",
+      "stopped_at": "2026-11-08T13:05:17Z"
+    },
+    {
+      "pid": 292,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:05:17Z",
+      "stopped_at": "2026-11-08T13:05:19Z"
+    },
+    {
+      "pid": 300,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:05:19Z",
+      "stopped_at": "2026-11-08T13:05:20Z"
+    },
+    {
+      "pid": 308,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:05:20Z",
+      "stopped_at": "2026-11-08T13:05:20Z"
+    },
+    {
+      "pid": 322,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:05:20Z",
+      "stopped_at": "2026-11-08T13:05:21Z"
+    },
+    {
+      "pid": 330,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:05:21Z",
+      "stopped_at": "2026-11-08T13:05:22Z"
+    },
+    {
+      "pid": 338,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:05:22Z",
+      "stopped_at": "2026-11-08T13:05:23Z"
+    },
+    {
+      "pid": 346,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:05:23Z",
+      "stopped_at": "2026-11-08T13:05:23Z"
+    },
+    {
+      "pid": 354,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:23Z",
+      "stopped_at": "2026-11-08T13:05:24Z"
+    },
+    {
+      "pid": 362,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:05:24Z",
+      "stopped_at": "2026-11-08T13:05:25Z"
+    },
+    {
+      "pid": 370,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:05:25Z",
+      "stopped_at": "2026-11-08T13:05:26Z"
+    },
+    {
+      "pid": 378,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:05:26Z",
+      "stopped_at": "2026-11-08T13:05:28Z"
+    },
+    {
+      "pid": 386,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:05:28Z",
+      "stopped_at": "2026-11-08T13:05:28Z"
+    },
+    {
+      "pid": 400,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:05:28Z",
+      "stopped_at": "2026-11-08T13:05:29Z"
+    },
+    {
+      "pid": 408,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:05:29Z",
+      "stopped_at": "2026-11-08T13:05:29Z"
+    },
+    {
+      "pid": 416,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:05:29Z",
+      "stopped_at": "2026-11-08T13:05:30Z"
+    },
+    {
+      "pid": 424,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:05:30Z",
+      "stopped_at": "2026-11-08T13:05:31Z"
+    },
+    {
+      "pid": 432,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:31Z",
+      "stopped_at": "2026-11-08T13:05:32Z"
+    },
+    {
+      "pid": 440,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:05:32Z",
+      "stopped_at": "2026-11-08T13:05:33Z"
+    },
+    {
+      "pid": 448,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:05:33Z",
+      "stopped_at": "2026-11-08T13:05:34Z"
+    },
+    {
+      "pid": 456,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:05:34Z",
+      "stopped_at": "2026-11-08T13:05:35Z"
+    },
+    {
+      "pid": 464,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:05:35Z",
+      "stopped_at": "2026-11-08T13:05:35Z"
+    },
+    {
+      "pid": 478,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:05:35Z",
+      "stopped_at": "2026-11-08T13:05:36Z"
+    },
+    {
+      "pid": 486,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:05:36Z",
+      "stopped_at": "2026-11-08T13:05:37Z"
+    },
+    {
+      "pid": 494,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:05:37Z",
+      "stopped_at": "2026-11-08T13:05:38Z"
+    },
+    {
+      "pid": 502,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:05:38Z",
+      "stopped_at": "2026-11-08T13:05:39Z"
+    },
+    {
+      "pid": 510,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:39Z",
+      "stopped_at": "2026-11-08T13:05:39Z"
+    },
+    {
+      "pid": 518,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:05:39Z",
+      "stopped_at": "2026-11-08T13:05:41Z"
+    },
+    {
+      "pid": 526,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:05:41Z",
+      "stopped_at": "2026-11-08T13:05:42Z"
+    },
+    {
+      "pid": 534,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:05:42Z",
+      "stopped_at": "2026-11-08T13:05:43Z"
+    },
+    {
+      "pid": 542,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:05:43Z",
+      "stopped_at": "2026-11-08T13:05:43Z"
+    },
+    {
+      "pid": 39,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:05:48Z",
+      "stopped_at": "2026-11-08T13:05:49Z"
+    },
+    {
+      "pid": 47,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:05:49Z",
+      "stopped_at": "2026-11-08T13:05:50Z"
+    },
+    {
+      "pid": 55,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:05:50Z",
+      "stopped_at": "2026-11-08T13:05:51Z"
+    },
+    {
+      "pid": 63,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:05:51Z",
+      "stopped_at": "2026-11-08T13:05:51Z"
+    },
+    {
+      "pid": 71,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:51Z",
+      "stopped_at": "2026-11-08T13:05:53Z"
+    },
+    {
+      "pid": 79,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:05:53Z",
+      "stopped_at": "2026-11-08T13:05:53Z"
+    },
+    {
+      "pid": 87,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:05:53Z",
+      "stopped_at": "2026-11-08T13:05:54Z"
+    },
+    {
+      "pid": 95,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:05:54Z",
+      "stopped_at": "2026-11-08T13:05:55Z"
+    },
+    {
+      "pid": 103,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:05:55Z",
+      "stopped_at": "2026-11-08T13:05:56Z"
+    },
+    {
+      "pid": 117,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:05:56Z",
+      "stopped_at": "2026-11-08T13:05:56Z"
+    },
+    {
+      "pid": 125,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:05:56Z",
+      "stopped_at": "2026-11-08T13:05:57Z"
+    },
+    {
+      "pid": 133,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:05:57Z",
+      "stopped_at": "2026-11-08T13:05:58Z"
+    },
+    {
+      "pid": 141,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:05:58Z",
+      "stopped_at": "2026-11-08T13:05:59Z"
+    },
+    {
+      "pid": 149,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:05:59Z",
+      "stopped_at": "2026-11-08T13:06:00Z"
+    },
+    {
+      "pid": 157,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:06:00Z",
+      "stopped_at": "2026-11-08T13:06:01Z"
+    },
+    {
+      "pid": 165,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:06:01Z",
+      "stopped_at": "2026-11-08T13:06:01Z"
+    },
+    {
+      "pid": 173,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:06:01Z",
+      "stopped_at": "2026-11-08T13:06:03Z"
+    },
+    {
+      "pid": 181,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:06:03Z",
+      "stopped_at": "2026-11-08T13:06:03Z"
+    },
+    {
+      "pid": 195,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:06:03Z",
+      "stopped_at": "2026-11-08T13:06:04Z"
+    },
+    {
+      "pid": 203,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:06:04Z",
+      "stopped_at": "2026-11-08T13:06:05Z"
+    },
+    {
+      "pid": 211,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:06:05Z",
+      "stopped_at": "2026-11-08T13:06:05Z"
+    },
+    {
+      "pid": 219,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:06:05Z",
+      "stopped_at": "2026-11-08T13:06:06Z"
+    },
+    {
+      "pid": 227,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:06:06Z",
+      "stopped_at": "2026-11-08T13:06:07Z"
+    },
+    {
+      "pid": 235,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:06:07Z",
+      "stopped_at": "2026-11-08T13:06:08Z"
+    },
+    {
+      "pid": 243,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:06:08Z",
+      "stopped_at": "2026-11-08T13:06:09Z"
+    },
+    {
+      "pid": 251,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:06:09Z",
+      "stopped_at": "2026-11-08T13:06:10Z"
+    },
+    {
+      "pid": 259,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:06:10Z",
+      "stopped_at": "2026-11-08T13:06:10Z"
+    },
+    {
+      "pid": 273,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:06:10Z",
+      "stopped_at": "2026-11-08T13:06:11Z"
+    },
+    {
+      "pid": 281,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:06:11Z",
+      "stopped_at": "2026-11-08T13:06:12Z"
+    },
+    {
+      "pid": 289,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:06:12Z",
+      "stopped_at": "2026-11-08T13:06:13Z"
+    },
+    {
+      "pid": 297,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:06:13Z",
+      "stopped_at": "2026-11-08T13:06:15Z"
+    },
+    {
+      "pid": 305,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:06:15Z",
+      "stopped_at": "2026-11-08T13:06:16Z"
+    },
+    {
+      "pid": 313,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:06:16Z",
+      "stopped_at": "2026-11-08T13:06:17Z"
+    },
+    {
+      "pid": 321,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:06:17Z",
+      "stopped_at": "2026-11-08T13:06:18Z"
+    },
+    {
+      "pid": 329,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:06:18Z",
+      "stopped_at": "2026-11-08T13:06:19Z"
+    },
+    {
+      "pid": 337,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:06:19Z",
+      "stopped_at": "2026-11-08T13:06:19Z"
+    },
+    {
+      "pid": 351,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:06:19Z",
+      "stopped_at": "2026-11-08T13:06:20Z"
+    },
+    {
+      "pid": 359,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:06:20Z",
+      "stopped_at": "2026-11-08T13:06:20Z"
+    },
+    {
+      "pid": 367,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:06:20Z",
+      "stopped_at": "2026-11-08T13:06:21Z"
+    },
+    {
+      "pid": 375,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:06:21Z",
+      "stopped_at": "2026-11-08T13:06:22Z"
+    },
+    {
+      "pid": 383,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:06:22Z",
+      "stopped_at": "2026-11-08T13:06:23Z"
+    },
+    {
+      "pid": 391,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:06:23Z",
+      "stopped_at": "2026-11-08T13:06:24Z"
+    },
+    {
+      "pid": 399,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:06:24Z",
+      "stopped_at": "2026-11-08T13:06:25Z"
+    },
+    {
+      "pid": 407,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:06:25Z",
+      "stopped_at": "2026-11-08T13:06:27Z"
+    },
+    {
+      "pid": 415,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:06:27Z",
+      "stopped_at": "2026-11-08T13:06:27Z"
+    },
+    {
+      "pid": 429,
+      "kind": "harness",
+      "command": "node load.js --iterations 4400",
+      "started_at": "2026-11-08T13:06:27Z",
+      "stopped_at": "2026-11-08T13:06:28Z"
+    },
+    {
+      "pid": 437,
+      "kind": "harness",
+      "command": "node load.js --iterations 4840",
+      "started_at": "2026-11-08T13:06:28Z",
+      "stopped_at": "2026-11-08T13:06:29Z"
+    },
+    {
+      "pid": 445,
+      "kind": "harness",
+      "command": "node load.js --iterations 5280",
+      "started_at": "2026-11-08T13:06:29Z",
+      "stopped_at": "2026-11-08T13:06:30Z"
+    },
+    {
+      "pid": 453,
+      "kind": "harness",
+      "command": "node load.js --iterations 5720",
+      "started_at": "2026-11-08T13:06:30Z",
+      "stopped_at": "2026-11-08T13:06:30Z"
+    },
+    {
+      "pid": 461,
+      "kind": "harness",
+      "command": "node load.js --iterations 6160",
+      "started_at": "2026-11-08T13:06:30Z",
+      "stopped_at": "2026-11-08T13:06:31Z"
+    },
+    {
+      "pid": 469,
+      "kind": "harness",
+      "command": "node load.js --iterations 6600",
+      "started_at": "2026-11-08T13:06:31Z",
+      "stopped_at": "2026-11-08T13:06:32Z"
+    },
+    {
+      "pid": 477,
+      "kind": "harness",
+      "command": "node load.js --iterations 7040",
+      "started_at": "2026-11-08T13:06:32Z",
+      "stopped_at": "2026-11-08T13:06:33Z"
+    },
+    {
+      "pid": 485,
+      "kind": "harness",
+      "command": "node load.js --iterations 7480",
+      "started_at": "2026-11-08T13:06:33Z",
+      "stopped_at": "2026-11-08T13:06:34Z"
+    },
+    {
+      "pid": 493,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-08T13:06:34Z",
+      "stopped_at": "2026-11-08T13:06:35Z"
+    }
+  ],
+  "redaction_salt": "ae105f5b61d7bf37d8f0898cf1f1591d",
+  "report": {
+    "path": ".dla/20261108-130319-e34d/report.md",
+    "sha256": "58e6974756f4d489b84bc3bca1397ef10037545e29b4a93f0b62bdcf53705795",
+    "rendered_at": "2026-11-08T13:06:41Z"
+  }
+}

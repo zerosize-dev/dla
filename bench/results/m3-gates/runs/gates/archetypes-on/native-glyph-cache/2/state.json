@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "run_id": "20261108-125658-ca59",
+  "session_id": "8c79e6bb-f42c-4b19-b606-9a81ea9508da",
+  "project_root": "/tmp/dla-bench/m3-gates/gates/archetypes-on/native-glyph-cache/2/project",
+  "created_at": "2026-11-08T12:56:58Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-08T12:56:58Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-08T12:56:58Z",
+    "deadline": "2026-11-08T13:56:58Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T12:57:18Z",
+      "kind": "harness",
+      "command": "make",
+      "started_at": "2026-11-08T12:57:18Z",
+      "stopped_at": "2026-11-08T12:57:19Z"
+    },
+    {
+      "pid": 17,
+      "kind": "harness",
+      "command": "./textrun --iterations 440",
+      "started_at": "2026-11-08T12:57:19Z",
+      "stopped_at": "2026-11-08T12:57:19Z"
+    },
+    {
+      "pid": 21,
+      "kind": "harness",
+      "command": "./textrun --iterations 880",
+      "started_at": "2026-11-08T12:57:19Z",
+      "stopped_at": "2026-11-08T12:57:19Z"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "./textrun --iterations 1320",
+      "started_at": "2026-11-08T12:57:19Z",
+      "stopped_at": "2026-11-08T12:57:19Z"
+    },
+    {
+      "pid": 29,
+      "kind": "harness",
+      "command": "./textrun --iterations 1760",
+      "started_at": "2026-11-08T12:57:19Z",
+      "stopped_at": "2026-11-08T12:57:19Z"
+    },
+    {
+      "pid": 33,
+      "kind": "harness",
+      "command": "./textrun --iterations 2200",
+      "started_at": "2026-11-08T12:57:19Z",
+      "stopped_at": "2026-11-08T12:57:20Z"
+    },
+    {
+      "pid": 37,
+      "kind": "harness",
+      "command": "./textrun --iterations 2640",
+      "started_at": "2026-11-08T12:57:20Z",
+      "stopped_at": "2026-11-08T12:57:20Z"
+    },
+    {
+      "pid": 41,
+      "kind": "harness",
+      "command": "./textrun --iterations 3080",
+      "started_at": "2026-11-08T12:57:20Z",
+      "stopped_at": "2026-11-08T12:57:20Z"
+    },
+    {
+      "pid": 45,
+      "kind": "harness",
+      "command": "./textrun --iterations 3520",
+      "started_at": "2026-11-08T12:57:20Z",
+      "stopped_at": "2026-11-08T12:57:21Z"
+    },
+    {
+      "pid": 49,
+      "kind": "harness",
+      "command": "./textrun --iterations 3960",
+      "started_at": "2026-11-08T12:57:21Z",
+      "stopped_at": "2026-11-08T12:57:21Z"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "./textrun --iterations 4400",
+      "started_at": "2026-11-08T12:57:36Z",
+      "stopped_at": "2026-11-08T12:57:36Z"
+    },
+    {
+      "pid": 23,
+      "kind": "harness",
+      "command": "./textrun --iterations 4840",
+      "started_at": "2026-11-08T12:57:36Z",
+      "stopped_at": "2026-11-08T12:57:36Z"
+    },
+    {
+      "pid": 27,
+      "kind": "harness",
+      "command": "./textrun --iterations 5280",
+      "started_at": "2026-11-08T12:57:36Z",
+      "stopped_at": "2026-11-08T12:57:37Z"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "./textrun --iterations 5720",
+      "started_at": "2026-11-08T12:57:37Z",
+      "stopped_at": "2026-11-08T12:57:37Z"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "./textrun --iterations 6160",
+      "started_at": "2026-11-08T12:57:37Z",
+      "stopped_at": "2026-11-08T12:57:38Z"
+    },
+    {
+      "pid": 39,
+      "kind": "harness",
+      "command": "./textrun --iterations 6600",
+      "started_at": "2026-11-08T12:57:38Z",
+      "stopped_at": "2026-11-08T12:57:38Z"
+    },
+    {
+      "pid": 43,
+      "kind": "harness",
+      "command": "./textrun --iterations 7040",
+      "started_at": "2026-11-08T12:57:38Z",
+      "stopped_at": "2026-11-08T12:57:39Z"
+    },
+    {
+      "pid": 47,
+      "kind": "harness",
+      "command": "./textrun --iterations 7480",
+      "started_at": "2026-11-08T12:57:39Z",
+      "stopped_at": "2026-11-08T12:57:39Z"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "./textrun --iterations 4400",
+      "started_at": "2026-11-08T12:57:42Z",
+      "stopped_at": "2026-11-08T12:57:42Z"
+    },
+    {
+      "pid": 70,
+      "kind": "harness",
+      "command": "./textrun --iterations 4840",
+      "started_at": "2026-11-08T12:57:42Z",
+      "stopped_at": "2026-11-08T12:57:43Z"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "./textrun --iterations 5280",
+      "started_at": "2026-11-08T12:57:43Z",
+      "stopped_at": "2026-11-08T12:57:43Z"
+    },
+    {
+      "pid": 78,
+      "kind": "harness",
+      "command": "./textrun --iterations 5720",
+      "started_at": "2026-11-08T12:57:43Z",
+      "stopped_at": "2026-11-08T12:57:44Z"
+    },
+    {
+      "pid": 82,
+      "kind": "harness",
+      "command": "./textrun --iterations 6160",
+      "started_at": "2026-11-08T12:57:44Z",
+      "stopped_at": "2026-11-08T12:57:44Z"
+    },
+    {
+      "pid": 86,
+      "kind": "harness",
+      "command": "./textrun --iterations 6600",
+      "started_at": "2026-11-08T12:57:44Z",
+      "stopped_at": "2026-11-08T12:57:45Z"
+    },
+    {
+      "pid": 90,
+      "kind": "harness",
+      "command": "./textrun --iterations 7040",
+      "started_at": "2026-11-08T12:57:45Z",
+      "stopped_at": "2026-11-08T12:57:45Z"
+    },
+    {
+      "pid": 94,
+      "kind": "harness",
+      "command": "./textrun --iterations 7480",
+      "started_at": "2026-11-08T12:57:45Z",
+      "stopped_at": "2026-11-08T12:57:46Z"
+    }
+  ],
+  "redaction_salt": "abf4672476b0355994b7b566d4a49aee",
+  "report": {
+    "path": ".dla/20261108-125658-ca59/report.md",
+    "sha256": "cb4302f9562730a789e4255b763d8021cf70859ac6fd9ea2f8e631ee452ac22b",
+    "rendered_at": "2026-11-08T12:57:55Z"
+  }
+}

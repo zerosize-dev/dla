@@ -82,6 +82,11 @@ a JSON object or has no string `type`. Apply records in file order:
   state from the record's `to`: `confirmed` → `confirmed`, `strong` →
   `strong`, `refuted` → `refuted`, `suspected_static_only` → `suspected`,
   `unresolved` → `unresolved`, anything else → `open`.
+- `finding_annotated`: if a finding with the record's `finding` id exists,
+  set its `holder` from the record's `holder` when the finding's `holder` is
+  null and the record's is a string, and likewise `site` (this is how
+  `dla ledger annotate --holder/--site` fills a value the finding was added
+  without; a value that is already set never changes).
 - Every other record type is ignored.
 
 For this source, `discriminator` is true exactly when the final state is

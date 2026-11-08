@@ -1,0 +1,73 @@
+{
+  "basis": "every column that passed the gate in the latest trend of the harness, and os.rss",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 3760000.0,
+        "extra_slope": 484.0,
+        "main_slope": 617.7,
+        "noise": 783800.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 73520000.0,
+        "before": 75780000.0,
+        "drop": 2265000.0,
+        "growth": 14820000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 3942000.0,
+        "extra_slope": 507.4,
+        "main_slope": 617.7,
+        "noise": 803100.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 75530000.0,
+        "before": 75780000.0,
+        "drop": 254000.0,
+        "growth": 14820000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": null,
+  "purge": "trim-native-heap",
+  "series": "S3",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T2"
+}

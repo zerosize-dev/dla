@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "jvm",
+  "mode": "command",
+  "workload": "jvm:main:build.sh:run",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "sh",
+      "./build.sh",
+      "run",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "JAVA_TOOL_OPTIONS",
+        "-javaagent:/tmp/dla-bench/m3-gates/gates/archetypes-on/jvm-order-cache/1/project/.dla/20261108-124105-52f2/harness/H1/agent/dla-agent.jar -XX:NativeMemoryTracking=summary"
+      ]
+    ]
+  },
+  "iter_arg": "{n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 1110,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F2",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.Catalog",
+        "field": "PRODUCTS"
+      },
+      "site": "src/shop/Catalog.java:9"
+    },
+    {
+      "id": "P2",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.Main",
+        "field": "CUSTOMERS"
+      },
+      "site": "src/shop/Main.java:5"
+    },
+    {
+      "id": "P3",
+      "finding": "F5",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.OrderCache",
+        "field": "ORDERS_BY_ID"
+      },
+      "site": "src/shop/OrderCache.java:8"
+    },
+    {
+      "id": "P4",
+      "finding": "F2",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.Catalog"
+      },
+      "site": "src/shop/Catalog.java:9"
+    },
+    {
+      "id": "P5",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.Main"
+      },
+      "site": "src/shop/Main.java:5"
+    },
+    {
+      "id": "P6",
+      "finding": "F4",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.Order"
+      },
+      "site": "src/shop/Order.java:6"
+    },
+    {
+      "id": "P7",
+      "finding": "F5",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.OrderCache"
+      },
+      "site": "src/shop/OrderCache.java:8"
+    }
+  ],
+  "agent": "jvm-agent",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "timeout_secs": 300
+}

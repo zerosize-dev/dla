@@ -1,0 +1,104 @@
+{
+  "basis": "named with --column",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 170000.0,
+        "pre_rise": 35240000.0,
+        "verdict": "headroom"
+      },
+      "name": "node.heap_used",
+      "plateau": {
+        "extra_rise": 26860.0,
+        "extra_slope": 8.721,
+        "main_slope": 52.61,
+        "noise": 2874.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 4940000.0,
+        "before": 48860000.0,
+        "drop": 43920000.0,
+        "growth": 44160000.0,
+        "kind": "gc",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 37970000.0,
+        "extra_slope": 12330.0,
+        "main_slope": 19300.0,
+        "noise": 1317000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 176100000.0,
+        "before": 176300000.0,
+        "drop": 221200.0,
+        "growth": 108400000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 37770000.0,
+        "extra_slope": 12260.0,
+        "main_slope": 20730.0,
+        "noise": 1286000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F4",
+  "harness": "H1",
+  "id": "A14",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S29",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "gc",
+  "series": "S30",
+  "supports": [
+    "N-HEADROOM",
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T16"
+}

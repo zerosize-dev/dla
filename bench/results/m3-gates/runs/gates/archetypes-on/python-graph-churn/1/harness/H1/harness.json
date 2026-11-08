@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "python",
+  "mode": "command",
+  "workload": "python:main:outlines/load.py",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "python3",
+      "-m",
+      "outlines.load",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "PYTHONPATH",
+        "/tmp/dla-bench/m3-gates/gates/archetypes-on/python-graph-churn/1/project/.dla/20261108-123248-442d/harness/H1/agent"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F1",
+      "target": {
+        "kind": "py-module",
+        "module": "outlines.parser"
+      },
+      "site": "outlines/parser.py:25"
+    }
+  ],
+  "agent": "py-sitecustomize",
+  "detectors": [
+    "-W error::ResourceWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300
+}

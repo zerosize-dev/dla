@@ -1,0 +1,455 @@
+{
+  "schema_version": 1,
+  "id": "S4",
+  "source": {
+    "kind": "alloc-test",
+    "harness": "H1",
+    "workload": "rust:main:src/main.rs",
+    "mode": "native",
+    "runtime": "rust",
+    "command": "/tmp/dla-bench/m3-gates/gates/archetypes-on/rust-batch-buffers/1/project/.dla/20261108-123310-67b8/harness/H1/work/target/release/rollup-agent --iterations {n}"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "os.rss",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_shmem",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.swap",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.vm_data",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.vm_hwm",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.fds",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_blocks",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.peak_bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    }
+  ],
+  "points": [
+    {
+      "x": 110.0,
+      "t_ms": 2674,
+      "values": [
+        10870784.0,
+        8286208.0,
+        2584576.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18706432.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 220.0,
+      "t_ms": 4745,
+      "values": [
+        10858496.0,
+        8290304.0,
+        2568192.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18694144.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 330.0,
+      "t_ms": 7076,
+      "values": [
+        10833920.0,
+        8282112.0,
+        2551808.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18669568.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 440.0,
+      "t_ms": 9683,
+      "values": [
+        10817536.0,
+        8286208.0,
+        2531328.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18718720.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 550.0,
+      "t_ms": 11693,
+      "values": [
+        10862592.0,
+        8294400.0,
+        2568192.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18685952.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 660.0,
+      "t_ms": 13736,
+      "values": [
+        10858496.0,
+        8290304.0,
+        2568192.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18759680.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 770.0,
+      "t_ms": 15800,
+      "values": [
+        10842112.0,
+        8290304.0,
+        2551808.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18677760.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 18078,
+      "values": [
+        10838016.0,
+        8286208.0,
+        2551808.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18595840.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 990.0,
+      "t_ms": 20623,
+      "values": [
+        10870784.0,
+        8286208.0,
+        2584576.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18665472.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1100.0,
+      "t_ms": 22200,
+      "values": [
+        10842112.0,
+        8290304.0,
+        2551808.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18685952.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1210.0,
+      "t_ms": 24927,
+      "values": [
+        10870784.0,
+        8286208.0,
+        2584576.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18706432.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 26391,
+      "values": [
+        10854400.0,
+        8286208.0,
+        2568192.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18690048.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1430.0,
+      "t_ms": 29035,
+      "values": [
+        10858496.0,
+        8290304.0,
+        2568192.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18694144.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1540.0,
+      "t_ms": 31798,
+      "values": [
+        10850304.0,
+        8282112.0,
+        2568192.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18685952.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1650.0,
+      "t_ms": 34092,
+      "values": [
+        10842112.0,
+        8290304.0,
+        2551808.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18685952.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 35391,
+      "values": [
+        10858496.0,
+        8290304.0,
+        2568192.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18694144.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    },
+    {
+      "x": 1870.0,
+      "t_ms": 37824,
+      "values": [
+        10833920.0,
+        8290304.0,
+        2543616.0,
+        0.0,
+        0.0,
+        10461184.0,
+        18628608.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        9464231.0
+      ]
+    }
+  ],
+  "events": [
+    {
+      "after_point": 16,
+      "kind": "purge:trim",
+      "detail": "{\"after\":{\"os.rss\":6987776.0,\"os.rss_anon\":4444160.0,\"os.rss_file\":2543616.0,\"os.rss_shmem\":0.0,\"os.swap\":0.0,\"os.threads\":1.0,\"os.vm_data\":6803456.0,\"os.vm_hwm\":18628608.0},\"before\":{\"os.fds\":3.0,\"os.rss\":10833920.0,\"os.rss_anon\":8290304.0,\"os.rss_file\":2543616.0,\"os.rss_shmem\":0.0,\"os.swap\":0.0,\"os.threads\":1.0,\"os.vm_data\":10461184.0,\"os.vm_hwm\":18628608.0},\"kind\":\"trim\"}"
+    }
+  ],
+  "limitations": [
+    "544 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "points 1 to 9 come from S1; the extra points from S3"
+  ]
+}

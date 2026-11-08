@@ -1,0 +1,385 @@
+{
+  "schema_version": 1,
+  "run_id": "20261108-125236-7c87",
+  "session_id": "10955672-51ad-4e1a-9b2d-a072092a1ebf",
+  "project_root": "/tmp/dla-bench/m3-gates/gates/archetypes-on/native-frame-decoder/2/project",
+  "created_at": "2026-11-08T12:52:36Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-08T12:52:36Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-08T12:52:36Z",
+    "deadline": "2026-11-08T13:52:36Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T12:52:54Z",
+      "kind": "harness",
+      "command": "make",
+      "started_at": "2026-11-08T12:52:54Z",
+      "stopped_at": "2026-11-08T12:52:54Z"
+    },
+    {
+      "pid": 20,
+      "kind": "harness",
+      "command": "./framedec --iterations 440",
+      "started_at": "2026-11-08T12:52:54Z",
+      "stopped_at": "2026-11-08T12:52:54Z"
+    },
+    {
+      "pid": 24,
+      "kind": "harness",
+      "command": "./framedec --iterations 880",
+      "started_at": "2026-11-08T12:52:54Z",
+      "stopped_at": "2026-11-08T12:52:54Z"
+    },
+    {
+      "pid": 28,
+      "kind": "harness",
+      "command": "./framedec --iterations 1320",
+      "started_at": "2026-11-08T12:52:55Z",
+      "stopped_at": "2026-11-08T12:52:55Z"
+    },
+    {
+      "pid": 32,
+      "kind": "harness",
+      "command": "./framedec --iterations 1760",
+      "started_at": "2026-11-08T12:52:55Z",
+      "stopped_at": "2026-11-08T12:52:55Z"
+    },
+    {
+      "pid": 36,
+      "kind": "harness",
+      "command": "./framedec --iterations 2200",
+      "started_at": "2026-11-08T12:52:55Z",
+      "stopped_at": "2026-11-08T12:52:55Z"
+    },
+    {
+      "pid": 40,
+      "kind": "harness",
+      "command": "./framedec --iterations 2640",
+      "started_at": "2026-11-08T12:52:56Z",
+      "stopped_at": "2026-11-08T12:52:56Z"
+    },
+    {
+      "pid": 44,
+      "kind": "harness",
+      "command": "./framedec --iterations 3080",
+      "started_at": "2026-11-08T12:52:56Z",
+      "stopped_at": "2026-11-08T12:52:57Z"
+    },
+    {
+      "pid": 48,
+      "kind": "harness",
+      "command": "./framedec --iterations 3520",
+      "started_at": "2026-11-08T12:52:57Z",
+      "stopped_at": "2026-11-08T12:52:57Z"
+    },
+    {
+      "pid": 52,
+      "kind": "harness",
+      "command": "./framedec --iterations 3960",
+      "started_at": "2026-11-08T12:52:57Z",
+      "stopped_at": "2026-11-08T12:52:58Z"
+    },
+    {
+      "pid": 17,
+      "kind": "harness",
+      "command": "./framedec --iterations 4400",
+      "started_at": "2026-11-08T12:53:02Z",
+      "stopped_at": "2026-11-08T12:53:03Z"
+    },
+    {
+      "pid": 21,
+      "kind": "harness",
+      "command": "./framedec --iterations 4840",
+      "started_at": "2026-11-08T12:53:03Z",
+      "stopped_at": "2026-11-08T12:53:03Z"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "./framedec --iterations 5280",
+      "started_at": "2026-11-08T12:53:04Z",
+      "stopped_at": "2026-11-08T12:53:04Z"
+    },
+    {
+      "pid": 29,
+      "kind": "harness",
+      "command": "./framedec --iterations 5720",
+      "started_at": "2026-11-08T12:53:04Z",
+      "stopped_at": "2026-11-08T12:53:05Z"
+    },
+    {
+      "pid": 33,
+      "kind": "harness",
+      "command": "./framedec --iterations 6160",
+      "started_at": "2026-11-08T12:53:05Z",
+      "stopped_at": "2026-11-08T12:53:06Z"
+    },
+    {
+      "pid": 37,
+      "kind": "harness",
+      "command": "./framedec --iterations 6600",
+      "started_at": "2026-11-08T12:53:06Z",
+      "stopped_at": "2026-11-08T12:53:07Z"
+    },
+    {
+      "pid": 41,
+      "kind": "harness",
+      "command": "./framedec --iterations 7040",
+      "started_at": "2026-11-08T12:53:07Z",
+      "stopped_at": "2026-11-08T12:53:08Z"
+    },
+    {
+      "pid": 45,
+      "kind": "harness",
+      "command": "./framedec --iterations 7480",
+      "started_at": "2026-11-08T12:53:08Z",
+      "stopped_at": "2026-11-08T12:53:09Z"
+    },
+    {
+      "pid": 17,
+      "kind": "harness",
+      "command": "./framedec --iterations 4400",
+      "started_at": "2026-11-08T12:53:19Z",
+      "stopped_at": "2026-11-08T12:53:19Z"
+    },
+    {
+      "pid": 21,
+      "kind": "harness",
+      "command": "./framedec --iterations 4840",
+      "started_at": "2026-11-08T12:53:19Z",
+      "stopped_at": "2026-11-08T12:53:20Z"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "./framedec --iterations 5280",
+      "started_at": "2026-11-08T12:53:20Z",
+      "stopped_at": "2026-11-08T12:53:21Z"
+    },
+    {
+      "pid": 29,
+      "kind": "harness",
+      "command": "./framedec --iterations 5720",
+      "started_at": "2026-11-08T12:53:21Z",
+      "stopped_at": "2026-11-08T12:53:21Z"
+    },
+    {
+      "pid": 33,
+      "kind": "harness",
+      "command": "./framedec --iterations 6160",
+      "started_at": "2026-11-08T12:53:22Z",
+      "stopped_at": "2026-11-08T12:53:22Z"
+    },
+    {
+      "pid": 37,
+      "kind": "harness",
+      "command": "./framedec --iterations 6600",
+      "started_at": "2026-11-08T12:53:22Z",
+      "stopped_at": "2026-11-08T12:53:23Z"
+    },
+    {
+      "pid": 41,
+      "kind": "harness",
+      "command": "./framedec --iterations 7040",
+      "started_at": "2026-11-08T12:53:23Z",
+      "stopped_at": "2026-11-08T12:53:24Z"
+    },
+    {
+      "pid": 45,
+      "kind": "harness",
+      "command": "./framedec --iterations 7480",
+      "started_at": "2026-11-08T12:53:24Z",
+      "stopped_at": "2026-11-08T12:53:25Z"
+    },
+    {
+      "pid": 67,
+      "kind": "harness",
+      "command": "./framedec --iterations 4400",
+      "started_at": "2026-11-08T12:53:25Z",
+      "stopped_at": "2026-11-08T12:53:26Z"
+    },
+    {
+      "pid": 71,
+      "kind": "harness",
+      "command": "./framedec --iterations 4840",
+      "started_at": "2026-11-08T12:53:26Z",
+      "stopped_at": "2026-11-08T12:53:27Z"
+    },
+    {
+      "pid": 75,
+      "kind": "harness",
+      "command": "./framedec --iterations 5280",
+      "started_at": "2026-11-08T12:53:27Z",
+      "stopped_at": "2026-11-08T12:53:27Z"
+    },
+    {
+      "pid": 79,
+      "kind": "harness",
+      "command": "./framedec --iterations 5720",
+      "started_at": "2026-11-08T12:53:27Z",
+      "stopped_at": "2026-11-08T12:53:28Z"
+    },
+    {
+      "pid": 83,
+      "kind": "harness",
+      "command": "./framedec --iterations 6160",
+      "started_at": "2026-11-08T12:53:28Z",
+      "stopped_at": "2026-11-08T12:53:29Z"
+    },
+    {
+      "pid": 87,
+      "kind": "harness",
+      "command": "./framedec --iterations 6600",
+      "started_at": "2026-11-08T12:53:29Z",
+      "stopped_at": "2026-11-08T12:53:30Z"
+    },
+    {
+      "pid": 91,
+      "kind": "harness",
+      "command": "./framedec --iterations 7040",
+      "started_at": "2026-11-08T12:53:30Z",
+      "stopped_at": "2026-11-08T12:53:31Z"
+    },
+    {
+      "pid": 95,
+      "kind": "harness",
+      "command": "./framedec --iterations 7480",
+      "started_at": "2026-11-08T12:53:31Z",
+      "stopped_at": "2026-11-08T12:53:32Z"
+    },
+    {
+      "pid": 105,
+      "kind": "harness",
+      "command": "./framedec --iterations 4400",
+      "started_at": "2026-11-08T12:53:32Z",
+      "stopped_at": "2026-11-08T12:53:32Z"
+    },
+    {
+      "pid": 109,
+      "kind": "harness",
+      "command": "./framedec --iterations 4840",
+      "started_at": "2026-11-08T12:53:33Z",
+      "stopped_at": "2026-11-08T12:53:33Z"
+    },
+    {
+      "pid": 113,
+      "kind": "harness",
+      "command": "./framedec --iterations 5280",
+      "started_at": "2026-11-08T12:53:33Z",
+      "stopped_at": "2026-11-08T12:53:34Z"
+    },
+    {
+      "pid": 117,
+      "kind": "harness",
+      "command": "./framedec --iterations 5720",
+      "started_at": "2026-11-08T12:53:34Z",
+      "stopped_at": "2026-11-08T12:53:35Z"
+    },
+    {
+      "pid": 121,
+      "kind": "harness",
+      "command": "./framedec --iterations 6160",
+      "started_at": "2026-11-08T12:53:35Z",
+      "stopped_at": "2026-11-08T12:53:36Z"
+    },
+    {
+      "pid": 125,
+      "kind": "harness",
+      "command": "./framedec --iterations 6600",
+      "started_at": "2026-11-08T12:53:36Z",
+      "stopped_at": "2026-11-08T12:53:37Z"
+    },
+    {
+      "pid": 129,
+      "kind": "harness",
+      "command": "./framedec --iterations 7040",
+      "started_at": "2026-11-08T12:53:37Z",
+      "stopped_at": "2026-11-08T12:53:38Z"
+    },
+    {
+      "pid": 133,
+      "kind": "harness",
+      "command": "./framedec --iterations 7480",
+      "started_at": "2026-11-08T12:53:38Z",
+      "stopped_at": "2026-11-08T12:53:39Z"
+    },
+    {
+      "pid": 143,
+      "kind": "harness",
+      "command": "./framedec --iterations 4400",
+      "started_at": "2026-11-08T12:53:39Z",
+      "stopped_at": "2026-11-08T12:53:39Z"
+    },
+    {
+      "pid": 147,
+      "kind": "harness",
+      "command": "./framedec --iterations 4840",
+      "started_at": "2026-11-08T12:53:39Z",
+      "stopped_at": "2026-11-08T12:53:40Z"
+    },
+    {
+      "pid": 151,
+      "kind": "harness",
+      "command": "./framedec --iterations 5280",
+      "started_at": "2026-11-08T12:53:40Z",
+      "stopped_at": "2026-11-08T12:53:41Z"
+    },
+    {
+      "pid": 155,
+      "kind": "harness",
+      "command": "./framedec --iterations 5720",
+      "started_at": "2026-11-08T12:53:41Z",
+      "stopped_at": "2026-11-08T12:53:41Z"
+    },
+    {
+      "pid": 159,
+      "kind": "harness",
+      "command": "./framedec --iterations 6160",
+      "started_at": "2026-11-08T12:53:42Z",
+      "stopped_at": "2026-11-08T12:53:42Z"
+    },
+    {
+      "pid": 163,
+      "kind": "harness",
+      "command": "./framedec --iterations 6600",
+      "started_at": "2026-11-08T12:53:42Z",
+      "stopped_at": "2026-11-08T12:53:43Z"
+    },
+    {
+      "pid": 167,
+      "kind": "harness",
+      "command": "./framedec --iterations 7040",
+      "started_at": "2026-11-08T12:53:43Z",
+      "stopped_at": "2026-11-08T12:53:44Z"
+    },
+    {
+      "pid": 171,
+      "kind": "harness",
+      "command": "./framedec --iterations 7480",
+      "started_at": "2026-11-08T12:53:44Z",
+      "stopped_at": "2026-11-08T12:53:45Z"
+    }
+  ],
+  "redaction_salt": "34fe6a1fce4052c6259fa3edec2ac867",
+  "report": {
+    "path": ".dla/20261108-125236-7c87/report.md",
+    "sha256": "698b42d22f5d91987126fa053eb22c495ba0e3f5b4b7e55ad0fa465edd0e22d7",
+    "rendered_at": "2026-11-08T12:53:49Z"
+  }
+}

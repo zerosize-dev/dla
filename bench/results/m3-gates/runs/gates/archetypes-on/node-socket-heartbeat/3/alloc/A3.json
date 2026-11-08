@@ -1,0 +1,95 @@
+{
+  "basis": "the columns at its site of F5",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "node.listeners@src/gateway.js:24",
+      "plateau": {
+        "extra_rise": 3520.0,
+        "extra_slope": 1.0,
+        "main_slope": 1.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 36090000.0,
+        "extra_slope": 11720.0,
+        "main_slope": 19960.0,
+        "noise": 729600.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 177200000.0,
+        "before": 175800000.0,
+        "drop": -1442000.0,
+        "growth": 107700000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 35910000.0,
+        "extra_slope": 11660.0,
+        "main_slope": 20060.0,
+        "noise": 281400.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F5",
+  "harness": "H1",
+  "id": "A3",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S6",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "node.listeners@src/gateway.js:24",
+  "purge": "gc",
+  "series": "S7",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T4"
+}

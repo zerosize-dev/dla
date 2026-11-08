@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "run_id": "20261108-122938-1b78",
+  "session_id": "9f33ff5a-0abd-41a2-95ef-31a104055778",
+  "project_root": "/tmp/dla-bench/m3-gates/gates/archetypes-on/go-buffer-pool/1/project",
+  "created_at": "2026-11-08T12:29:38Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-08T12:29:38Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-08T12:29:38Z",
+    "deadline": "2026-11-08T13:29:38Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T12:30:11Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -run ^$ -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:11Z",
+      "stopped_at": "2026-11-08T12:30:19Z"
+    },
+    {
+      "pid": 1107,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p1-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:19Z",
+      "stopped_at": "2026-11-08T12:30:20Z"
+    },
+    {
+      "pid": 1174,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p2-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:20Z",
+      "stopped_at": "2026-11-08T12:30:22Z"
+    },
+    {
+      "pid": 1240,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p3-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:22Z",
+      "stopped_at": "2026-11-08T12:30:24Z"
+    },
+    {
+      "pid": 1314,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p4-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:24Z",
+      "stopped_at": "2026-11-08T12:30:27Z"
+    },
+    {
+      "pid": 1391,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p5-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:27Z",
+      "stopped_at": "2026-11-08T12:30:30Z"
+    },
+    {
+      "pid": 1464,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p6-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:30Z",
+      "stopped_at": "2026-11-08T12:30:36Z"
+    },
+    {
+      "pid": 1523,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p7-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:36Z",
+      "stopped_at": "2026-11-08T12:30:46Z"
+    },
+    {
+      "pid": 1590,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p8-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:46Z",
+      "stopped_at": "2026-11-08T12:30:56Z"
+    },
+    {
+      "pid": 1656,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p9-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:30:56Z",
+      "stopped_at": "2026-11-08T12:31:07Z"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T12:31:34Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p10-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:31:34Z",
+      "stopped_at": "2026-11-08T12:31:44Z"
+    },
+    {
+      "pid": 73,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p11-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:31:44Z",
+      "stopped_at": "2026-11-08T12:31:54Z"
+    },
+    {
+      "pid": 141,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p12-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:31:54Z",
+      "stopped_at": "2026-11-08T12:32:06Z"
+    },
+    {
+      "pid": 210,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p13-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:32:06Z",
+      "stopped_at": "2026-11-08T12:32:19Z"
+    },
+    {
+      "pid": 279,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p14-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:32:19Z",
+      "stopped_at": "2026-11-08T12:32:32Z"
+    },
+    {
+      "pid": 351,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p15-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:32:32Z",
+      "stopped_at": "2026-11-08T12:32:45Z"
+    },
+    {
+      "pid": 420,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p16-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:32:45Z",
+      "stopped_at": "2026-11-08T12:32:57Z"
+    },
+    {
+      "pid": 484,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p17-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-08T12:32:57Z",
+      "stopped_at": "2026-11-08T12:33:08Z"
+    }
+  ],
+  "redaction_salt": "9885345cfdb74bb8c535ebea3abff2d7",
+  "report": {
+    "path": ".dla/20261108-122938-1b78/report.md",
+    "sha256": "0b90b7651f9c96a86fd2dc4d1552671b96a0ef473a140c65d9f0c88479ae131b",
+    "rendered_at": "2026-11-08T12:33:13Z"
+  }
+}

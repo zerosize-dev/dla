@@ -252,6 +252,22 @@ class LedgerParseTest(EnvCase):
         self.assertEqual((f["state"], f["site"], f["holder"], f["label"], f["hypothesis"]),
                          ("open", "a.py:1", "static/global", "L-X", False))
 
+    def test_annotation_fills_a_missing_holder_or_site_and_never_overwrites(self):
+        lines = [
+            json.dumps({"type": "finding_added", "finding": {"id": "F1", "site": "a.c:29"}}),
+            json.dumps({"type": "finding_added", "finding": {"id": "F2", "holder": "static/global"}}),
+            json.dumps({"type": "finding_annotated", "finding": "F1",
+                        "holder": "native-handle/global-ref", "site": "b.c:1"}),
+            json.dumps({"type": "finding_annotated", "finding": "F2",
+                        "holder": "cycle-only", "site": "c.c:2"}),
+            json.dumps({"type": "finding_annotated", "finding": "F9", "holder": "cycle-only"}),
+            json.dumps({"type": "finding_annotated", "finding": "F1", "holder": 5}),
+        ]
+        _, fs = self.parse(ledger(*lines))
+        self.assertEqual(len(fs), 2)
+        self.assertEqual((fs[0]["holder"], fs[0]["site"]), ("native-handle/global-ref", "a.c:29"))
+        self.assertEqual((fs[1]["holder"], fs[1]["site"]), ("static/global", "c.c:2"))
+
     def test_missing_or_nonstring_members_are_null(self):
         line = json.dumps({"type": "finding_added",
                            "finding": {"id": "f", "site": 5, "holder": None, "archetype": 3}})

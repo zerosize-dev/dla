@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "rust",
+  "mode": "command",
+  "workload": "rust:main:src/main.rs",
+  "scratch": "harness/H1/work",
+  "build": {
+    "argv": [
+      "cargo",
+      "build",
+      "--release",
+      "--bin",
+      "rollup-agent"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "CARGO_PROFILE_RELEASE_DEBUG",
+        "line-tables-only"
+      ],
+      [
+        "CARGO_TARGET_DIR",
+        "/tmp/dla-bench/m3-gates/gates/archetypes-on/rust-batch-buffers/3/project/.dla/20261108-131426-0a99/harness/H1/work/target"
+      ]
+    ]
+  },
+  "run": {
+    "argv": [
+      "/tmp/dla-bench/m3-gates/gates/archetypes-on/rust-batch-buffers/3/project/.dla/20261108-131426-0a99/harness/H1/work/target/release/rollup-agent",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "LD_PRELOAD",
+        "/tmp/dla-bench/m3-gates/gates/archetypes-on/rust-batch-buffers/3/project/.dla/20261108-131426-0a99/harness/H1/agent/libdlashim.so"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 110,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [],
+  "agent": "alloc-shim",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300
+}

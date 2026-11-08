@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "id": "S2",
+  "source": {
+    "kind": "gap",
+    "harness": "H1",
+    "workload": "rust:main:src/main.rs",
+    "mode": "native",
+    "runtime": "rust",
+    "command": "/tmp/dla-bench/m3-gates/gates/archetypes-on/rust-tree-parent-links-weak/2/project/.dla/20261108-130455-a6ff/harness/H1/work/target/release/outline-service --iterations {n}",
+    "derived_from": "S1"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "gap.accounted",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    },
+    {
+      "name": "gap.unexplained",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    }
+  ],
+  "points": [
+    {
+      "x": 220.0,
+      "t_ms": 294,
+      "values": [
+        544.0,
+        3857888.0
+      ]
+    },
+    {
+      "x": 440.0,
+      "t_ms": 509,
+      "values": [
+        544.0,
+        3915232.0
+      ]
+    },
+    {
+      "x": 660.0,
+      "t_ms": 777,
+      "values": [
+        544.0,
+        3902944.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 1054,
+      "values": [
+        544.0,
+        3964384.0
+      ]
+    },
+    {
+      "x": 1100.0,
+      "t_ms": 1263,
+      "values": [
+        544.0,
+        3968480.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 1515,
+      "values": [
+        544.0,
+        3923424.0
+      ]
+    },
+    {
+      "x": 1540.0,
+      "t_ms": 1808,
+      "values": [
+        544.0,
+        3927520.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 2020,
+      "values": [
+        544.0,
+        3968480.0
+      ]
+    },
+    {
+      "x": 1980.0,
+      "t_ms": 2329,
+      "values": [
+        544.0,
+        3948000.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "544 live bytes sit in allocations with no frame in the project (library-internal or without debug info)"
+  ]
+}

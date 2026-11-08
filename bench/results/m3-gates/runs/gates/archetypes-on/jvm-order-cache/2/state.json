@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "run_id": "20261108-130151-b47b",
+  "session_id": "6f50a84c-3b04-483e-8d3c-b807ccac6ac3",
+  "project_root": "/tmp/dla-bench/m3-gates/gates/archetypes-on/jvm-order-cache/2/project",
+  "created_at": "2026-11-08T13:01:51Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-08T13:01:51Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-08T13:01:51Z",
+    "deadline": "2026-11-08T14:01:51Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-08T13:02:20Z",
+      "kind": "harness",
+      "command": "sh ./build.sh run 1110",
+      "started_at": "2026-11-08T13:02:20Z",
+      "stopped_at": "2026-11-08T13:02:22Z"
+    },
+    {
+      "pid": 107,
+      "kind": "harness",
+      "command": "sh ./build.sh run 2220",
+      "started_at": "2026-11-08T13:02:22Z",
+      "stopped_at": "2026-11-08T13:02:24Z"
+    },
+    {
+      "pid": 204,
+      "kind": "harness",
+      "command": "sh ./build.sh run 3330",
+      "started_at": "2026-11-08T13:02:24Z",
+      "stopped_at": "2026-11-08T13:02:26Z"
+    },
+    {
+      "pid": 301,
+      "kind": "harness",
+      "command": "sh ./build.sh run 4440",
+      "started_at": "2026-11-08T13:02:26Z",
+      "stopped_at": "2026-11-08T13:02:28Z"
+    },
+    {
+      "pid": 398,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5550",
+      "started_at": "2026-11-08T13:02:28Z",
+      "stopped_at": "2026-11-08T13:02:30Z"
+    },
+    {
+      "pid": 495,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6660",
+      "started_at": "2026-11-08T13:02:30Z",
+      "stopped_at": "2026-11-08T13:02:32Z"
+    },
+    {
+      "pid": 592,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7770",
+      "started_at": "2026-11-08T13:02:32Z",
+      "stopped_at": "2026-11-08T13:02:35Z"
+    },
+    {
+      "pid": 689,
+      "kind": "harness",
+      "command": "sh ./build.sh run 8880",
+      "started_at": "2026-11-08T13:02:35Z",
+      "stopped_at": "2026-11-08T13:02:38Z"
+    },
+    {
+      "pid": 786,
+      "kind": "harness",
+      "command": "sh ./build.sh run 9990",
+      "started_at": "2026-11-08T13:02:38Z",
+      "stopped_at": "2026-11-08T13:02:41Z"
+    },
+    {
+      "pid": 17,
+      "kind": "harness",
+      "command": "sh ./build.sh run 11100",
+      "started_at": "2026-11-08T13:02:45Z",
+      "stopped_at": "2026-11-08T13:02:48Z"
+    },
+    {
+      "pid": 114,
+      "kind": "harness",
+      "command": "sh ./build.sh run 12210",
+      "started_at": "2026-11-08T13:02:48Z",
+      "stopped_at": "2026-11-08T13:02:50Z"
+    },
+    {
+      "pid": 211,
+      "kind": "harness",
+      "command": "sh ./build.sh run 13320",
+      "started_at": "2026-11-08T13:02:50Z",
+      "stopped_at": "2026-11-08T13:02:52Z"
+    },
+    {
+      "pid": 308,
+      "kind": "harness",
+      "command": "sh ./build.sh run 14430",
+      "started_at": "2026-11-08T13:02:52Z",
+      "stopped_at": "2026-11-08T13:02:54Z"
+    },
+    {
+      "pid": 405,
+      "kind": "harness",
+      "command": "sh ./build.sh run 15540",
+      "started_at": "2026-11-08T13:02:54Z",
+      "stopped_at": "2026-11-08T13:02:56Z"
+    },
+    {
+      "pid": 502,
+      "kind": "harness",
+      "command": "sh ./build.sh run 16650",
+      "started_at": "2026-11-08T13:02:56Z",
+      "stopped_at": "2026-11-08T13:02:58Z"
+    },
+    {
+      "pid": 599,
+      "kind": "harness",
+      "command": "sh ./build.sh run 17760",
+      "started_at": "2026-11-08T13:02:59Z",
+      "stopped_at": "2026-11-08T13:03:01Z"
+    },
+    {
+      "pid": 696,
+      "kind": "harness",
+      "command": "sh ./build.sh run 18870",
+      "started_at": "2026-11-08T13:03:01Z",
+      "stopped_at": "2026-11-08T13:03:03Z"
+    }
+  ],
+  "redaction_salt": "e5c3b4225681de44320c131297a652a9",
+  "report": {
+    "path": ".dla/20261108-130151-b47b/report.md",
+    "sha256": "4464083e504e1f320b595d1ace3782f8b48c01c57b862667d35d4e4311c832df",
+    "rendered_at": "2026-11-08T13:03:08Z"
+  }
+}

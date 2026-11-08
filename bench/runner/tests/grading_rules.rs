@@ -105,6 +105,25 @@ fn ledger_replay_skips_bad_lines_and_ignores_other_records() {
 }
 
 #[test]
+fn an_annotation_fills_a_missing_holder_or_site_and_never_overwrites() {
+    let text = [
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"site\":\"a.c:29\"}}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F2\",\"holder\":\"static/global\"}}",
+        "{\"type\":\"finding_annotated\",\"finding\":\"F1\",\"holder\":\"native-handle/global-ref\",\"site\":\"b.c:1\"}",
+        "{\"type\":\"finding_annotated\",\"finding\":\"F2\",\"holder\":\"cycle-only\",\"site\":\"c.c:2\"}",
+        "{\"type\":\"finding_annotated\",\"finding\":\"F9\",\"holder\":\"cycle-only\"}",
+        "{\"type\":\"finding_annotated\",\"finding\":\"F1\",\"holder\":5}",
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).expect("has finding_added");
+    assert_eq!(f.len(), 2);
+    assert_eq!(f[0].holder.as_deref(), Some("native-handle/global-ref"));
+    assert_eq!(f[0].site.as_deref(), Some("a.c:29"));
+    assert_eq!(f[1].holder.as_deref(), Some("static/global"));
+    assert_eq!(f[1].site.as_deref(), Some("c.c:2"));
+}
+
+#[test]
 fn ledger_state_mapping() {
     let mut lines = String::new();
     for (i, to) in [

@@ -1,0 +1,100 @@
+{
+  "basis": "the primary column of the region of F2",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 28220000.0,
+        "pre_rise": 28090000.0,
+        "verdict": "none"
+      },
+      "name": "node.heap_used",
+      "plateau": {
+        "extra_rise": 13150000.0,
+        "extra_slope": 4269.0,
+        "main_slope": 4285.0,
+        "noise": 16220.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 36490000.0,
+        "before": 37920000.0,
+        "drop": 1439000.0,
+        "growth": 31540000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 32320000.0,
+        "extra_slope": 10490.0,
+        "main_slope": 7882.0,
+        "noise": 2211000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 113500000.0,
+        "before": 113400000.0,
+        "drop": -131100.0,
+        "growth": 54660000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 26960000.0,
+        "extra_slope": 8753.0,
+        "main_slope": 8048.0,
+        "noise": 4938000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F2",
+  "harness": "H1",
+  "id": "A5",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S10",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "node.heap_used",
+  "purge": "gc",
+  "series": "S11",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T6"
+}

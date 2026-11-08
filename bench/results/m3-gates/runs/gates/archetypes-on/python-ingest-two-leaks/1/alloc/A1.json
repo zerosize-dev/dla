@@ -1,0 +1,115 @@
+{
+  "basis": "its probe column of F3",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "probe:ingest.parser._newest",
+      "plateau": {
+        "extra_rise": 56280.0,
+        "extra_slope": 15.99,
+        "main_slope": 15.97,
+        "noise": 12.6,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "probe:ingest.parser._newest.bytes",
+      "plateau": {
+        "extra_rise": 2022000.0,
+        "extra_slope": 656.5,
+        "main_slope": 655.5,
+        "noise": 1112.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 16740000.0,
+        "extra_slope": 5435.0,
+        "main_slope": 5343.0,
+        "noise": 548100.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59530000.0,
+        "before": 58910000.0,
+        "drop": -618500.0,
+        "growth": 38470000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 16740000.0,
+        "extra_slope": 5435.0,
+        "main_slope": 5343.0,
+        "noise": 548100.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59530000.0,
+        "before": 58910000.0,
+        "drop": -618500.0,
+        "growth": 22750000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F3",
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "probe:ingest.parser._newest",
+  "purge": "trim",
+  "series": "S3",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T2"
+}

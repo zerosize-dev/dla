@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "id": "S1",
+  "source": {
+    "kind": "harness",
+    "harness": "H1",
+    "workload": "rust:main:src/main.rs",
+    "mode": "native",
+    "runtime": "rust",
+    "command": "/tmp/dla-bench/m3-gates/gates/archetypes-on/rust-tree-parent-links-weak/3/project/.dla/20261108-132645-0690/harness/H1/work/target/release/outline-service --iterations {n}"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "os.rss",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.rss_shmem",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.swap",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.vm_data",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.vm_hwm",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.fds",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "os.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_blocks",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.live_bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    },
+    {
+      "name": "native.peak_bytes",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "shim"
+    }
+  ],
+  "points": [
+    {
+      "x": 220.0,
+      "t_ms": 250,
+      "values": [
+        3899392.0,
+        1396736.0,
+        2502656.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3899392.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        17158.0
+      ]
+    },
+    {
+      "x": 440.0,
+      "t_ms": 509,
+      "values": [
+        3948544.0,
+        1421312.0,
+        2527232.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3948544.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    },
+    {
+      "x": 660.0,
+      "t_ms": 739,
+      "values": [
+        3932160.0,
+        1421312.0,
+        2510848.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3932160.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 1011,
+      "values": [
+        3936256.0,
+        1425408.0,
+        2510848.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3936256.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    },
+    {
+      "x": 1100.0,
+      "t_ms": 1243,
+      "values": [
+        3944448.0,
+        1421312.0,
+        2523136.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3944448.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 1632,
+      "values": [
+        3952640.0,
+        1425408.0,
+        2527232.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3952640.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    },
+    {
+      "x": 1540.0,
+      "t_ms": 1813,
+      "values": [
+        3964928.0,
+        1421312.0,
+        2543616.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3964928.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 2094,
+      "values": [
+        3936256.0,
+        1425408.0,
+        2510848.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3936256.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    },
+    {
+      "x": 1980.0,
+      "t_ms": 2373,
+      "values": [
+        3952640.0,
+        1425408.0,
+        2527232.0,
+        0.0,
+        0.0,
+        3530752.0,
+        3952640.0,
+        3.0,
+        1.0,
+        1.0,
+        544.0,
+        19429.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "544 live bytes sit in allocations with no frame in the project (library-internal or without debug info)"
+  ]
+}
