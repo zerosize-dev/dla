@@ -1,9 +1,13 @@
 //! End-to-end tests of `dla harness run` on copies of the benchmark fixtures.
 //!
+//! Unix only: on Windows the harness has no allocator shim, no process groups and no
+//! `/proc`, and its command-mode support is a recorded gap (docs/VERIFY.md).
+//!
 //! Each test writes a manifest by hand (the way `dla harness gen` does), runs
 //! [`run_points`] and checks the produced series: leak fixtures grow in the column that
 //! names the leak, their paired controls stay flat. A test prints why it is skipped when
 //! the toolchain it needs is missing.
+#![cfg(unix)]
 
 use std::{
     fs,
@@ -719,11 +723,22 @@ fn jvm_agent_heap_and_probe_show_the_order_cache_leak() {
         leak.columns[i].site.as_deref(),
         Some("src/shop/OrderCache.java:8")
     );
-    assert!(ratio(leak, "jvm.heap_used") > 1.5);
+    // Absolute rises, not ratios: the base heap depends on the JDK and on how loaded the
+    // machine is, the per-request growth does not.
+    let rise = |s: &SeriesFile| {
+        let h = post(s, "jvm.heap_used");
+        h.last().unwrap().1 - h.first().unwrap().1
+    };
+    let leak_rise = rise(leak);
+    assert!(leak_rise > 400_000.0, "leak heap rise {leak_rise}");
     assert!(leak.column_index("jvm.nmt_committed").is_some());
     let ctl = &results[1];
     assert!(!passes(ctl, probe));
-    assert!(ratio(ctl, "jvm.heap_used") < 1.2);
+    let ctl_rise = rise(ctl);
+    assert!(
+        ctl_rise < leak_rise / 3.0,
+        "bounded heap rise {ctl_rise} against the leak's {leak_rise}"
+    );
 }
 
 #[test]

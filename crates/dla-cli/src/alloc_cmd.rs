@@ -906,6 +906,29 @@ mod tests {
     }
 
     #[test]
+    fn with_nothing_grown_the_runtime_heap_decides_an_unbound_test() {
+        let mut s = series(&[]);
+        s.columns[1] = col("go.heap_live");
+        let ledger = Ledger::from_text("").unwrap();
+        let trend = TrendReport {
+            schema_version: TREND_SCHEMA_VERSION,
+            id: "T1".to_owned(),
+            series: "S1".to_owned(),
+            thresholds: GateThresholds::default(),
+            columns: vec![],
+        };
+        let p = pick::pick(&s, &ledger, None, &[], Some(&trend), "H1").unwrap();
+        assert_eq!(p.voting, ["go.heap_live"], "{}", p.basis);
+        assert!(
+            p.tested.iter().any(|c| c == "os.rss"),
+            "os.rss is still reported"
+        );
+        // Without a trend there is nothing to say no column grew: os.rss votes.
+        let p = pick::pick(&s, &ledger, None, &[], None, "H1").unwrap();
+        assert!(p.voting.iter().any(|c| c == "os.rss"));
+    }
+
+    #[test]
     fn only_process_columns_use_the_rss_reference() {
         let s = series(&[]);
         assert!(reference_level(&s, 0) > 4e8);

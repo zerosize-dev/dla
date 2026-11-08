@@ -212,6 +212,7 @@ pub fn pick(
             p.basis = format!("the primary column of the region of {root}");
         }
     } else {
+        let mut any_passed = false;
         if let Some(t) = trend {
             let mut passed: Vec<&dla_core::trend::ColumnTrend> = t
                 .columns
@@ -230,19 +231,34 @@ pub fn pick(
                 let (ka, kb) = (key(a), key(b));
                 ka.0.cmp(&kb.0).then(ka.1.total_cmp(&kb.1))
             });
+            any_passed = !passed.is_empty();
             for c in passed.into_iter().take(MAX_PASSED) {
                 add(&mut p.voting, &c.name);
             }
         }
-        if series.column_index("os.rss").is_some() {
-            add(&mut p.voting, "os.rss");
-        }
-        p.basis = if trend.is_some() {
-            "every column that passed the gate in the latest trend of the harness, and os.rss"
+        // When the trend found no growth anywhere, the runtime's after-GC heap is the
+        // column to watch over the extra cycles: whole-process RSS steps once at a
+        // machine-dependent n (allocator and scavenger growth) and would decide a flat
+        // workload by that step alone. RSS still votes when it passed the gate itself, or
+        // when the runtime reports no heap column.
+        let heap = region_primary(series, Some(SeriesRegion::Heap));
+        let heap_present = heap != "os.rss" && series.column_index(heap).is_some();
+        if trend.is_some() && !any_passed && heap_present {
+            add(&mut p.voting, heap);
+            p.basis = format!(
+                "no column passed the gate in the latest trend of the harness: the runtime heap ({heap}) decides, os.rss is reported"
+            );
         } else {
-            "os.rss (no trend of this harness yet: dla trend <series> first to test its growing columns)"
+            if series.column_index("os.rss").is_some() {
+                add(&mut p.voting, "os.rss");
+            }
+            p.basis = if trend.is_some() {
+                "every column that passed the gate in the latest trend of the harness, and os.rss"
+            } else {
+                "os.rss (no trend of this harness yet: dla trend <series> first to test its growing columns)"
+            }
+            .to_owned();
         }
-        .to_owned();
     }
     for c in &p.voting.clone() {
         add(&mut p.tested, c);

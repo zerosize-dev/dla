@@ -658,7 +658,10 @@ fn a_non_git_project_keeps_nested_build_packages_and_reports_what_it_skipped() {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink("reports/build/gen.py", p.join("alias.py")).unwrap();
-        std::os::unix::fs::symlink("/etc/hostname", p.join("host.txt")).unwrap();
+        // A real file outside the project (`/etc/hostname` does not exist on macOS).
+        let outside = tempfile::tempdir().unwrap().keep();
+        fs::write(outside.join("host.txt"), "h\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("host.txt"), p.join("host.txt")).unwrap();
     }
     generate(&ctx, &opts(Runtime::Python)).unwrap();
     let work = ctx.run_dir.join("harness/H1/work");
