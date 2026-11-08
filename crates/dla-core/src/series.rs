@@ -583,3 +583,149 @@ mod tests {
         ));
     }
 }
+
+/// What a column name implies: unit, kind, region, and whether it is read after a
+/// forced collection. Shared by every writer of series files so the same name always
+/// means the same thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnMeta {
+    /// Unit.
+    pub unit: Unit,
+    /// Gauge or counter.
+    pub kind: ColumnKind,
+    /// Memory region.
+    pub region: SeriesRegion,
+    /// Process or container.
+    pub scope: ColumnScope,
+    /// True for the always-sampled region series (OS and runtime totals).
+    pub baseline: bool,
+    /// True when the figure is read after a forced collection.
+    pub after_gc: bool,
+}
+
+/// The catalog entry for a column name (spec section 1.1 naming).
+///
+/// * `<base>.pre_gc` is the same figure read before the forced collection
+///   (`after_gc = false`); otherwise managed-runtime heap figures are after GC.
+/// * `<base>@<file:line>` is a grouped counter of `<base>` tied to that site.
+/// * `probe:<target>` counts entries or reachable objects (counter, heap);
+///   `probe:<target>.bytes` is a byte estimate (gauge, heap).
+/// * `jvm.class:<name>.count` and `py.type:<name>.count` are per-type instance counts.
+///
+/// Unknown names are gauges in bytes, region process, not baseline.
+pub fn column_meta(name: &str) -> ColumnMeta {
+    use ColumnKind::{Counter, Gauge};
+    use SeriesRegion::{Heap, NonHeap, OffHeap, Process};
+    use Unit::{Bytes, Count};
+    let meta = |unit, kind, region, baseline, after_gc| ColumnMeta {
+        unit,
+        kind,
+        region,
+        scope: ColumnScope::Process,
+        baseline,
+        after_gc,
+    };
+    if let Some(base) = name.strip_suffix(".pre_gc") {
+        let m = column_meta(base);
+        return ColumnMeta {
+            after_gc: false,
+            baseline: false,
+            ..m
+        };
+    }
+    if let Some((base, _site)) = name.split_once('@') {
+        let m = column_meta(base);
+        return ColumnMeta {
+            baseline: false,
+            ..m
+        };
+    }
+    if let Some(rest) = name.strip_prefix("probe:") {
+        return if rest.ends_with(".bytes") {
+            meta(Bytes, Gauge, Heap, false, true)
+        } else {
+            meta(Count, Counter, Heap, false, true)
+        };
+    }
+    if (name.starts_with("jvm.class:") || name.starts_with("py.type:")) && name.ends_with(".count")
+    {
+        return meta(Count, Counter, Heap, false, true);
+    }
+    if name.starts_with("cgroup.") {
+        return ColumnMeta {
+            scope: ColumnScope::Container,
+            ..meta(Bytes, Gauge, Process, true, false)
+        };
+    }
+    match name {
+        // Operating system, whole process.
+        "os.rss" | "os.rss_anon" | "os.rss_file" | "os.rss_shmem" | "os.swap" | "os.vm_data"
+        | "os.vm_hwm" | "os.pss" | "os.pss_anon" | "os.private_dirty" | "os.phys_footprint"
+        | "os.private" | "os.pagefile" => meta(Bytes, Gauge, Process, true, false),
+        "os.fds" | "os.handles" | "os.threads" => meta(Count, Counter, NonHeap, true, false),
+        // JVM.
+        "jvm.heap_used" => meta(Bytes, Gauge, Heap, true, true),
+        "jvm.heap_committed" => meta(Bytes, Gauge, Heap, true, true),
+        "jvm.nonheap_used" | "jvm.nonheap_committed" => meta(Bytes, Gauge, NonHeap, true, true),
+        "jvm.nmt_committed" => meta(Bytes, Gauge, Process, true, true),
+        "jvm.threads" | "jvm.classes_loaded" => meta(Count, Counter, NonHeap, true, true),
+        // Go.
+        "go.heap_live" | "go.heap_objects" => meta(Bytes, Gauge, Heap, true, true),
+        "go.total" | "go.released" => meta(Bytes, Gauge, Process, true, true),
+        "go.stacks" => meta(Bytes, Gauge, NonHeap, true, true),
+        "go.goroutines" => meta(Count, Counter, NonHeap, true, true),
+        // Node.
+        "node.heap_used" | "node.heap_total" => meta(Bytes, Gauge, Heap, true, true),
+        "node.external" | "node.array_buffers" | "node.malloced_memory" => {
+            meta(Bytes, Gauge, OffHeap, true, true)
+        }
+        "node.timers" | "node.listeners" | "node.native_contexts" | "node.detached_contexts" => {
+            meta(Count, Counter, NonHeap, true, true)
+        }
+        // Python.
+        "py.traced" | "py.traced_peak" => meta(Bytes, Gauge, Heap, true, true),
+        "py.gc_objects" => meta(Count, Counter, Heap, true, true),
+        // Allocator (Rust, native, shim).
+        "native.live_bytes" | "native.peak_bytes" | "native.free_bytes" | "native.arena_bytes" => {
+            meta(Bytes, Gauge, Heap, true, false)
+        }
+        "native.live_blocks" => meta(Count, Counter, Heap, true, false),
+        // Gap split.
+        "gap.accounted" => meta(Bytes, Gauge, Process, false, false),
+        "gap.unexplained" => meta(Bytes, Gauge, OffHeap, false, false),
+        _ if name.starts_with("node.active.") => meta(Count, Counter, NonHeap, false, true),
+        _ => meta(Bytes, Gauge, Process, false, false),
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn names_map_to_the_documented_meaning() {
+        let m = column_meta("go.goroutines@internal/notify/subscription.go:33");
+        assert_eq!(
+            (m.kind, m.region, m.baseline),
+            (ColumnKind::Counter, SeriesRegion::NonHeap, false)
+        );
+        let m = column_meta("py.traced.pre_gc");
+        assert_eq!((m.unit, m.after_gc), (Unit::Bytes, false));
+        assert!(column_meta("py.traced").after_gc);
+        assert_eq!(
+            column_meta("probe:shop.OrderCache.ORDERS_BY_ID").kind,
+            ColumnKind::Counter
+        );
+        assert_eq!(
+            column_meta("probe:shop.OrderCache.ORDERS_BY_ID.bytes").kind,
+            ColumnKind::Gauge
+        );
+        assert_eq!(column_meta("cgroup.current").scope, ColumnScope::Container);
+        assert_eq!(column_meta("os.rss").region, SeriesRegion::Process);
+        assert_eq!(
+            column_meta("native.live_bytes@src/decoder.c:29").region,
+            SeriesRegion::Heap
+        );
+        assert_eq!(column_meta("gap.unexplained").region, SeriesRegion::OffHeap);
+    }
+}

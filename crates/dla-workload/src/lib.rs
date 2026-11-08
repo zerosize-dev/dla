@@ -36,6 +36,8 @@
 //!   (test, main, dev-server, script), then id.
 
 mod go;
+pub mod harness;
+pub mod iteration;
 mod jvm;
 pub mod model;
 mod native;

@@ -363,6 +363,8 @@ dependencies = [
  "dla-core",
  "dla-probe",
  "dla-report",
+ "dla-sample",
+ "dla-stats",
  "dla-workload",
  "getrandom 0.3.4",
  "hex",
@@ -443,6 +445,8 @@ version = "0.1.0"
 dependencies = [
  "dla-census",
  "dla-core",
+ "dla-sample",
+ "dla-stats",
  "regex",
  "serde",
  "serde_json",

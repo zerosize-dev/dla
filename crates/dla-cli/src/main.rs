@@ -4,13 +4,16 @@
 //! `dla report`, which prints the rendered markdown. Exit codes: 0 ok, 1 error
 //! (I/O, parse, usage), 2 refused by a rule, 3 schema version mismatch.
 
+mod alloc_cmd;
 mod budget;
 mod census_cmd;
 mod consent_cmd;
 mod ctx;
 mod fail;
+mod gap_cmd;
 mod git;
 mod gitignore;
+mod harness_cmd;
 mod install_cmd;
 mod ledger_cmd;
 mod out;
@@ -18,9 +21,11 @@ mod parse;
 mod probe_cmd;
 mod report;
 mod run;
+mod sample_cmd;
 mod schema_cmd;
 mod stage;
 mod sweep_cmd;
+mod trend_cmd;
 mod workload_cmd;
 
 use std::{io::Write, path::PathBuf, process::ExitCode};
@@ -86,6 +91,17 @@ enum Command {
     Workload(workload_cmd::WorkloadCmd),
     /// Install a static analysis backend into the plugin data directory.
     Install(install_cmd::InstallArgs),
+    /// Generate and run loop harnesses over a discovered workload.
+    #[command(subcommand)]
+    Harness(harness_cmd::HarnessCmd),
+    /// Sample a running process's memory, threads, handles and runtime counters into a series.
+    Sample(sample_cmd::SampleArgs),
+    /// Trend tests, slope gate and shape for every column of a series.
+    Trend(trend_cmd::TrendArgs),
+    /// Split process memory into runtime-accounted and unexplained; with --residual, what confirmed findings leave unexplained.
+    Gap(gap_cmd::GapArgs),
+    /// Re-run a harness with extra cycles and a trim or purge, and record which hypothesis the result favours.
+    AllocTest(alloc_cmd::AllocTestArgs),
 }
 
 /// What a command prints on success.
@@ -144,6 +160,19 @@ fn dispatch(cli: Cli) -> Res<Output> {
         }
         Command::Install(a) => {
             install_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Harness(c) => {
+            harness_cmd::run(&ctx()?, &project_root(project)?, data, c).map(Output::Json)
+        }
+        Command::Sample(a) => {
+            sample_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Trend(a) => {
+            trend_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+        Command::Gap(a) => gap_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json),
+        Command::AllocTest(a) => {
+            alloc_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
         }
     }
 }
