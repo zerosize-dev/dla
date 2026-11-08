@@ -11,7 +11,8 @@ twenty fixtures, three runs each, and the same model, limits and sandbox as
   and no verifier), with archetypes on.
 - **Model:** pinned, and recorded as `model` in each `run.json`.
 - **Binary:** `dla` built from commit 9060b5b. Later commits changed only the
-  unbound alloc-test (see `docs/VERIFY.md`) and test code.
+  unbound alloc-test, the `dla sample` socket timeouts (see `docs/VERIFY.md`)
+  and test code.
 - **Limits:** 80 turns and 1500 s per run, three runs in parallel.
 - **Cost:** $13.88 in total, $0.23 per run. Mean wall time was 185 s; the
   longest run took 877 s.
