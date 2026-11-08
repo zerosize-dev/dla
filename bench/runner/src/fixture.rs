@@ -39,6 +39,9 @@ When you are done, write ./findings.json with your conclusions:
 {"findings": [{"site": "path/to/file:line", "holder": "...", "region": "...", "verdict": "...",
   "mechanism": "...", "cause": "...", "evidence": "...", "discriminator": "..."}]}
 - site: project-relative file:line where the memory is retained, or allocated and never released.
+  Leave it "" when there is no source line (for example when only heap dumps are given).
+- owner: optional. The field or container that holds the memory, as package.Class.field. Give it for every
+  finding without a source line; it names the holder in the dump and is never a source location.
 - holder: static/global (a static field, singleton or module global), registration-table (a listener,
   timer, callback or subscription list), container-field (a collection field of a long-lived object),
   thread-local (thread-local or async-context storage), blocked-stack (a thread, goroutine, task or

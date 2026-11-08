@@ -46,13 +46,21 @@
           "description": "What keeps the memory alive and why it is never released.",
           "type": "string"
         },
+        "owner": {
+          "description": "Optional: the field or container that holds the memory, `package.Class.field`. For a\nfinding without a source line (an artifact run) it takes the place of `site`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "region": {
           "description": "`heap`, `off-heap` or `non-heap`.",
           "type": "string"
         },
         "site": {
-          "description": "Project-relative `path:line`.",
-          "type": "string"
+          "description": "Project-relative `path:line`; empty (or absent) for a finding without a source line.",
+          "type": "string",
+          "default": ""
         },
         "verdict": {
           "description": "`leak-confirmed`, `leak-suspected` or `not-a-leak`.",
@@ -60,7 +68,6 @@
         }
       },
       "required": [
-        "site",
         "holder",
         "region",
         "verdict",

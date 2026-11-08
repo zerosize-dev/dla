@@ -145,6 +145,11 @@ the prompt instead of the fixture's task; for checking the sandbox).
 | `gates` | the plugin without `hooks/`, without `agents/verifier.md`, with any `hooks:` block removed from the SKILL.md frontmatter; `DLA_BIN` points at `target/release/dla` | `/dla:detect-leak-anywhere ` + task + an unattended-run note |
 | `full` | the plugin as it is | same as `gates` |
 
+The `findings.json` instructions of `no-skill` and `prose` runs say that `site` stays
+empty for a finding without a source line (an artifact task) and that such a finding
+carries an optional `owner` (`package.Class.field`); both graders read `owner` from
+`findings.json` and match owner-only leaks by it (`GRADING.md`).
+
 `gates` and `full` build `dla` once with `cargo build --release -p dla-cli`
 (or use `--dla-bin`) and copy the binary to `<work-root>/<results name>/bin/dla`,
 because the repository is unreadable to the child; `DLA_BIN` points at the
@@ -239,11 +244,11 @@ sample runs and is compared by the Rust tests. `testdata/m4-sample` covers the
 rules added in M4 (owner matching, worker prefixes, merged findings, artifact
 overclaim, worker provenance); its numbers are asserted in `tests/golden.rs`.
 
-`dla-bench static` and `dla-bench dynamic` skip fixtures whose `entry` is
-`artifact` or `symptom` (they hold no source to probe or run) and report them as
-skipped with the reason, in the table and as `skipped` in the JSON; `static` runs
-every runtime a multi-runtime fixture lists and fails the fixture when the probe
-does not detect one of them.
+`dla-bench static` skips fixtures whose `entry` is `artifact` or `symptom` (they
+hold no source to probe) and reports them as skipped with the reason, in the table
+and as `skipped` in the JSON; `static` runs every runtime a multi-runtime fixture
+lists and fails the fixture when the probe does not detect one of them.
+`dla-bench dynamic` runs all three entry paths (below).
 
 ## Dynamic acceptance
 
@@ -272,7 +277,7 @@ command, and the rest of that fixture is skipped, so one stuck fixture cannot
 hold a worker until the job timeout). Each fixture's run is created with
 `--budget 2h`.
 
-The policy, per fixture:
+The policy, per fixture (repository entry, one runtime):
 
 1. `run init`, `probe --build`, `sweep` and `census` per detected runtime,
    `workload discover`.
@@ -320,9 +325,58 @@ only regular files with those names, and stops at 6 directory levels, 2000
 entries and 64 MiB; whatever it left out is listed in `collect-skipped.txt` next
 to the copied files and logged to stderr.
 
-CI runs the command in the `dynamic` job with all four toolchains installed.
-The `static` job covers the `--archetypes off` path, so `dynamic` does not
-repeat it.
+CI runs the command in the `dynamic` job with all four toolchains installed
+and, for `jni-order-codec`, the Kotlin compiler 2.0.21 (the official release zip,
+pinned with its sha256; the job also copies the compiler's `kotlin-stdlib.jar`
+to the `~/.m2` path the fixture's `build.sh` runs its classes with, because the
+runner has no Maven cache). The `static` job covers the `--archetypes off` path,
+so `dynamic` does not repeat it; it needs no Kotlin, because the failed JVM build
+only drops the class-file census and the source census and the DLA rules still
+flag both leaks.
+
+### Multi-runtime fixtures
+
+A fixture whose `runtimes` lists two or more runtimes (`jni-order-codec`) runs
+the workers. After `run init` and the core `probe --build` the driver calls
+`run dispatch --workers <runtimes the probe found>`; then, for each runtime in
+turn, it runs the policy above for that runtime only with `--worker <runtime>`
+on every command (`sweep`, `census`, `workload discover`, `harness gen/run`,
+`trend`, `alloc-test`, `ledger ...`; stage outputs land in
+`sweep/<lang>-<backend>.json` and `workload/<runtime>.json`), closes the slice
+with `ledger done`, and finally calls `ledger merge` and `report` in the core. A
+real session runs the workers at the same time; the driver runs them one after
+the other, which exercises the same slices and the same merge. The fixture
+fails unless the merge succeeded, every worker's `merged_lines` is above zero,
+no worker is unfinished and `coverage.json` has an entry for every runtime. The
+JSON row has `workers` (`name`, `harnesses`, `merged_lines`) and `merge`
+(`status`, `coverage_runtimes`, `duplicates`, `contradictions`, `unfinished`).
+Leak grading reads the merged ledger.
+
+### Artifact and symptom fixtures
+
+`entry = "artifact"` fixtures hold heap dumps and no source. The driver lists
+the `.hprof` and `.hprof.gz` files of the project, runs `run init --entry
+artifact --artifact <each dump>` and `summarize heap-graph <all dumps>`, and
+reads only the output of that command:
+
+- gate pass: for each candidate (the holder, with an owner and no site) an
+  N-WARM sibling, `ledger test` with the growth evidence, the sibling refuted
+  with the dump-plateau discriminator that favors leak, `ledger confirm` citing
+  the growth evidence. The finding names its owner and never a site; the M3
+  rules check re-reads that (owner set, no site, growth evidence with authority
+  `dump`).
+- gate fail because the holder stopped growing (a discriminator that favors
+  non-leak, no candidate): no claim. The holder is recorded as a finding with
+  its owner and refuted with the discriminator, which the graders count as a
+  rule-out.
+- fewer than three dumps: no claim. The largest holder of the newest dump is
+  recorded and resolved `suspected_static_only` (`not_exercised`) with a remedy
+  that asks for at least three dumps.
+
+`entry = "symptom"` fixtures: `run init --entry symptom`, then `ledger resolve
+intake.target --status unresolved --reason env_unavailable --remedy "<what is
+needed>"`, no stage, `report`. An impossible fixture whose ledger holds no
+finding at all passes the no-claim check.
 
 ### Expected failures
 
@@ -338,6 +392,13 @@ additional failure (a regression must not hide behind the entry).
 | fixture | failure | reason |
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
+| `jni-order-codec` | `leak L1 (native/src/lib.rs:43) is not confirmed` | No Rust workload: the native code runs only under the JVM, so the rust worker finds no main workload with an iteration argument (`harness gen`: `workload-required`) and its census candidates end `suspected_static_only`; in the JVM harness the native frames show only as `os.rss` growth, which no probe column ties to a finding. |
+| `jni-order-codec` | `leak L2 (kotlin/shop/Audit.kt:12) is not confirmed` | The census holder of the Kotlin `object` is `shop.codec.Audit.INSTANCE` (a flat probe column) while the passing probe column is `shop.codec.Audit.trail`, which `dla trend` ties to no finding; `alloc-test --finding` judges the INSTANCE column, favors non-leak, and the policy refutes the candidate. |
+
+`jni-order-codec` still meets the milestone's acceptance for multi-runtime
+runs (two workers, one merged ledger with both slices, merged coverage): the
+driver fails the fixture if that is not so, and the two listed failures concern
+only leak confirmation.
 
 ## Isolation and cost
 

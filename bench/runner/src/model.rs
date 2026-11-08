@@ -316,8 +316,13 @@ pub struct Expected {
 /// One entry of the `findings.json` that runs without dla write.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 pub struct FindingEntry {
-    /// Project-relative `path:line`.
+    /// Project-relative `path:line`; empty (or absent) for a finding without a source line.
+    #[serde(default)]
     pub site: String,
+    /// Optional: the field or container that holds the memory, `package.Class.field`. For a
+    /// finding without a source line (an artifact run) it takes the place of `site`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     /// One of the holder vocabulary.
     pub holder: String,
     /// `heap`, `off-heap` or `non-heap`.

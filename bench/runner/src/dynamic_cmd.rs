@@ -77,9 +77,16 @@ use crate::{
     Res,
     fixture::{fixture_dirs, load_expected},
     grade::{Source, State, findings_from_ledger, grade_findings},
-    model::Category,
+    model::{Category, Entry},
     run::{Archetypes, apply_archetypes_off, collect_run_files, copy_tree},
 };
+
+#[path = "dynamic/artifact.rs"]
+mod artifact;
+#[path = "dynamic/workers.rs"]
+mod workers;
+
+pub use workers::{MergeRow, WorkerRow};
 
 /// Alloc-tests run per fixture at most (each re-runs the harness).
 pub const MAX_ALLOC_TESTS: usize = 8;
@@ -145,11 +152,23 @@ pub struct ExpectedFailure {
 }
 
 /// Fixtures expected to fail; see [`ExpectedFailure`] and bench/README.md.
-pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[ExpectedFailure {
-    fixture: "rust-tree-parent-links",
-    failure: "leak L1 (src/section.rs:27) is not confirmed",
-    reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
-}];
+pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
+    ExpectedFailure {
+        fixture: "rust-tree-parent-links",
+        failure: "leak L1 (src/section.rs:27) is not confirmed",
+        reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
+    },
+    ExpectedFailure {
+        fixture: "jni-order-codec",
+        failure: "leak L1 (native/src/lib.rs:43) is not confirmed",
+        reason: "no Rust workload: the native code runs only under the JVM, so the rust worker finds no main workload with an iteration argument (harness gen: workload-required) and ends with its census candidates suspected_static_only; inside the JVM harness the native frames show only as os.rss growth, which no probe column ties to a finding",
+    },
+    ExpectedFailure {
+        fixture: "jni-order-codec",
+        failure: "leak L2 (kotlin/shop/Audit.kt:12) is not confirmed",
+        reason: "the census holder of the Kotlin object is `shop.codec.Audit.INSTANCE` (a flat probe column) while the passing probe column is `shop.codec.Audit.trail`, which `dla trend` ties to no finding; `alloc-test --finding` judges the INSTANCE column, favors non-leak, and the mechanical policy refutes the candidate",
+    },
+];
 
 /// The result for one fixture.
 #[derive(Serialize, Debug, Clone, Default)]
@@ -182,6 +201,14 @@ pub struct FixtureRow {
     pub leaks_expected: usize,
     /// Residual over total of the residual rows, when present.
     pub unexplained_growth_share: Option<f64>,
+    /// The entry path of the fixture (`repository`, `artifact` or `symptom`).
+    pub entry: String,
+    /// Workers of a multi-runtime fixture and what the merge took from each.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<WorkerRow>,
+    /// The merge of a multi-runtime fixture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge: Option<MergeRow>,
     /// What the policy did (one line per decision), for the log and the JSON.
     pub steps: Vec<String>,
     /// Commands that failed or were refused.
@@ -264,8 +291,19 @@ fn strings(v: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// What the task states about the fixture before the run: the entry path, the number of
+/// runtimes it spans and the dump files it hands over. None of it reveals a leak.
+struct Plan {
+    entry: Entry,
+    /// Runtimes the fixture declares (1 when it declares none).
+    runtimes: usize,
+    /// Heap dumps in the project (artifact entry), relative to the project root.
+    artifacts: Vec<String>,
+}
+
 /// One fixture's session: the scratch project, the logs and the notes.
 struct Fx<'a> {
+    plan: Plan,
     bin: &'a Path,
     project: PathBuf,
     plugin_root: &'a Path,
@@ -277,6 +315,8 @@ struct Fx<'a> {
     timeout: Duration,
     /// A command timed out: the rest of the fixture is skipped.
     timed_out: bool,
+    /// The worker the commands run as (`--worker <name>`), in worker mode.
+    worker: Option<String>,
 }
 
 /// How a command ended.
@@ -379,15 +419,18 @@ impl Fx<'_> {
                 json: Value::Null,
             };
         }
+        let mut cmd = Command::new(self.bin);
+        cmd.arg("--project").arg(&self.project);
+        if let Some(w) = &self.worker {
+            cmd.args(["--worker", w]);
+        }
         let result = run_limited(
-            Command::new(self.bin)
-                .arg("--project")
-                .arg(&self.project)
-                .args(args)
+            cmd.args(args)
                 .env("DLA_PLUGIN_ROOT", self.plugin_root)
                 .env("DLA_DATA_DIR", &self.data_dir)
                 .env("DLA_CONSENT_TIERS", "1-4")
                 .env_remove("DLA_RUN")
+                .env_remove("DLA_WORKER")
                 .current_dir(&self.project),
             self.timeout,
         );
@@ -449,9 +492,16 @@ impl Fx<'_> {
         Ok(self.project.join(".dla").join(id.trim()))
     }
 
+    /// The ledger as the current actor sees it: the main ledger, plus the worker's slice in
+    /// worker mode (a worker replays both).
     fn view(&self) -> View {
         match self.run_dir() {
-            Ok(d) => View::read(&d.join("ledger.jsonl")),
+            Ok(d) => match &self.worker {
+                Some(w) => {
+                    View::read_files(&[d.join("ledger.jsonl"), d.join(format!("ledger.{w}.jsonl"))])
+                }
+                None => View::read(&d.join("ledger.jsonl")),
+            },
             Err(_) => View::default(),
         }
     }
@@ -467,6 +517,7 @@ struct Fnd {
     state: String,
     origin: String,
     site: Option<String>,
+    owner: Option<String>,
     holder: Option<String>,
     parent: Option<String>,
     hypothesis: Option<String>,
@@ -500,10 +551,17 @@ struct View {
 
 impl View {
     fn read(path: &Path) -> View {
+        View::read_files(&[path.to_path_buf()])
+    }
+
+    /// Replays several ledger files in order (the main ledger, then a worker's slice).
+    fn read_files(paths: &[PathBuf]) -> View {
         let mut v = View::default();
-        let Ok(text) = fs::read_to_string(path) else {
-            return v;
-        };
+        let text: String = paths
+            .iter()
+            .filter_map(|p| fs::read_to_string(p).ok())
+            .collect::<Vec<_>>()
+            .join("\n");
         for line in text.lines() {
             let Ok(rec) = serde_json::from_str::<Value>(line) else {
                 continue;
@@ -532,6 +590,7 @@ impl View {
                         state: "candidate".to_owned(),
                         origin: s(f, "origin").unwrap_or_default(),
                         site: s(f, "site"),
+                        owner: s(f, "owner"),
                         holder: s(f, "holder"),
                         parent: s(f, "parent"),
                         hypothesis: s(f, "hypothesis"),
@@ -549,6 +608,9 @@ impl View {
                         }
                         if f.site.is_none() {
                             f.site = s(&rec, "site");
+                        }
+                        if f.owner.is_none() {
+                            f.owner = s(&rec, "owner");
                         }
                     }
                 }
@@ -673,8 +735,13 @@ struct Ran {
 }
 
 /// Main and script workloads with an iteration argument, best rank first.
-fn read_workloads(run_dir: &Path) -> Vec<(String, String)> {
-    let Ok(text) = fs::read_to_string(run_dir.join("workload/workloads.json")) else {
+fn read_workloads(run_dir: &Path, worker: Option<&str>) -> Vec<(String, String)> {
+    // The core writes `workload/workloads.json`, a worker `workload/<worker>.json`.
+    let file = match worker {
+        Some(w) => format!("workload/{w}.json"),
+        None => "workload/workloads.json".to_owned(),
+    };
+    let Ok(text) = fs::read_to_string(run_dir.join(file)) else {
         return Vec::new();
     };
     let Ok(v) = serde_json::from_str::<Value>(&text) else {
@@ -711,7 +778,7 @@ fn make_harnesses(
     let mut missing = None;
     let run_dir = fx.run_dir().unwrap_or_default();
     for lang in runtimes {
-        let others: Vec<String> = read_workloads(&run_dir)
+        let others: Vec<String> = read_workloads(&run_dir, fx.worker.as_deref())
             .into_iter()
             .filter(|(_, rt)| rt == lang)
             .map(|(id, _)| id)
@@ -1247,7 +1314,7 @@ fn test_growth(fx: &mut Fx, t: &TrendInfo, g: &str, ev: &str, alloc_tests: &mut 
 }
 
 /// Step 5: gap, then resolve what is left, then the report.
-fn finish(fx: &mut Fx, ran: &[Ran], no_harness: Option<&str>) {
+fn finish(fx: &mut Fx, ran: &[Ran], no_harness: Option<&str>, report: bool) {
     for r in ran {
         for s in &r.series {
             // Refusals are ignored: the gap needs series the runtime may not write.
@@ -1297,7 +1364,9 @@ fn finish(fx: &mut Fx, ran: &[Ran], no_harness: Option<&str>) {
         };
         resolve(fx, &id, "suspected_static_only", reason, remedy);
     }
-    fx.call(&["report"]);
+    if report {
+        fx.call(&["report"]);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1305,7 +1374,7 @@ fn finish(fx: &mut Fx, ran: &[Ran], no_harness: Option<&str>) {
 // ---------------------------------------------------------------------------
 
 /// The M3 rules, re-checked from the ledger for every confirmed leak-side finding.
-fn check_m3_rules(view: &View) -> Vec<String> {
+fn check_m3_rules(view: &View, entry: Entry) -> Vec<String> {
     let mut bad = Vec::new();
     for f in view
         .findings
@@ -1333,14 +1402,27 @@ fn check_m3_rules(view: &View) -> Vec<String> {
         let growth = f.supports.iter().chain(cited).any(|id| {
             view.evidence.get(id).is_some_and(|e| {
                 matches!(e.kind.as_str(), "growth-series" | "unit-count-series")
-                    && matches!(e.authority.as_str(), "test" | "live" | "dump")
+                    && if entry == Entry::Artifact {
+                        e.authority == "dump"
+                    } else {
+                        matches!(e.authority.as_str(), "test" | "live" | "dump")
+                    }
                     && e.result["gate"].as_str() == Some("pass")
             })
         });
         if !growth {
             bad.push(format!("{} cites no growth evidence with gate pass", f.id));
         }
-        if f.site.is_none() {
+        if entry == Entry::Artifact {
+            // The dumps' frames are thread context only: a confirmed artifact finding names
+            // its owner and never claims a source site.
+            if f.owner.is_none() {
+                bad.push(format!("{} has no owner", f.id));
+            }
+            if f.site.is_some() {
+                bad.push(format!("{} claims a source site on an artifact run", f.id));
+            }
+        } else if f.site.is_none() {
             bad.push(format!("{} has no site", f.id));
         }
         if f.holder.is_none() {
@@ -1382,9 +1464,14 @@ fn grade_row(row: &mut FixtureRow, fixtures: &Path, ledger: &Path) {
     };
     row.category = expected.category.as_str().to_owned();
     let text = fs::read_to_string(ledger).unwrap_or_default();
-    let Some(findings) = findings_from_ledger(&text) else {
-        row.failures.push("the ledger has no finding".to_owned());
-        return;
+    let findings = match findings_from_ledger(&text) {
+        Some(f) => f,
+        // An impossible fixture (nothing to diagnose) ends correctly with no finding at all.
+        None if expected.category == Category::Impossible => Vec::new(),
+        None => {
+            row.failures.push("the ledger has no finding".to_owned());
+            return;
+        }
     };
     let grade = grade_findings(&expected, Source::Ledger, &findings);
     row.claims = grade.claim;
@@ -1583,13 +1670,20 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         id: id.clone(),
         ..FixtureRow::default()
     };
-    if let Ok(expected) = load_expected(&sh.args.fixtures, &id)
-        && let Some(why) = expected.entry.skip_reason()
-    {
-        row.category = expected.category.as_str().to_owned();
-        row.skipped = Some(why.to_owned());
-        return row;
-    }
+    let expected = match load_expected(&sh.args.fixtures, &id) {
+        Ok(e) => e,
+        Err(e) => {
+            row.failures.push(e);
+            return row;
+        }
+    };
+    row.category = expected.category.as_str().to_owned();
+    row.entry = expected.entry.as_str().to_owned();
+    let mut plan = Plan {
+        entry: expected.entry,
+        runtimes: expected.runtimes.as_ref().map_or(1, Vec::len).max(1),
+        artifacts: Vec::new(),
+    };
     let project = sh.work.join(&id);
     let setup = copy_project(&fixture_dir.join("project"), &project)
         .and_then(|()| git(&project, &["init", "-q"]))
@@ -1601,7 +1695,17 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     }
     let data_dir = sh.work.join("data").join(&id);
     let _ = fs::create_dir_all(&data_dir);
+    if plan.entry == Entry::Artifact {
+        plan.artifacts = project_files(&project)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .filter(|p| p.ends_with(".hprof") || p.ends_with(".hprof.gz"))
+            .collect();
+        plan.artifacts.sort();
+    }
     let mut fx = Fx {
+        plan,
         bin: sh.bin,
         project: project.clone(),
         plugin_root: sh.plugin_root,
@@ -1611,6 +1715,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         row,
         timeout: Duration::from_secs(sh.args.command_timeout.max(1)),
         timed_out: false,
+        worker: None,
     };
     let _ = fs::remove_dir_all(&fx.log_dir);
     drive(&mut fx);
@@ -1618,7 +1723,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     if let Ok(run_dir) = fx.run_dir() {
         let view = View::read(&run_dir.join("ledger.jsonl"));
         grade_row(&mut row, &sh.args.fixtures, &run_dir.join("ledger.jsonl"));
-        for m in check_m3_rules(&view) {
+        for m in check_m3_rules(&view, expected.entry) {
             row.failures.push(format!("M3 rule: {m}"));
         }
         match residual_share(&view) {
@@ -1683,6 +1788,11 @@ pub fn apply_expected_failures(row: &mut FixtureRow, list: &[ExpectedFailure]) {
 }
 
 fn drive(fx: &mut Fx) {
+    match fx.plan.entry {
+        Entry::Artifact => return artifact::drive(fx),
+        Entry::Symptom => return artifact::drive_symptom(fx),
+        Entry::Repository => {}
+    }
     if !fx.call(&["run", "init", "--budget", RUN_BUDGET]).ok {
         return;
     }
@@ -1694,6 +1804,10 @@ fn drive(fx: &mut Fx) {
         builds = p.json["summary"]["builds"].clone();
     }
     fx.row.runtimes = runtimes.clone();
+    if fx.plan.runtimes >= 2 {
+        // Two or more runtimes: one worker per runtime, then the merge.
+        return workers::drive(fx, &runtimes, &builds);
+    }
     for lang in &runtimes {
         fx.call(&["sweep", "--lang", lang]);
         fx.call(&["census", "--lang", lang]);
@@ -1706,7 +1820,7 @@ fn drive(fx: &mut Fx) {
         analyse(fx, &ran);
     }
     // Only when nothing ran at all is the missing harness the reason for the rest.
-    finish(fx, &ran, if ran.is_empty() { missing } else { None });
+    finish(fx, &ran, if ran.is_empty() { missing } else { None }, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1724,7 +1838,7 @@ pub fn render_table(res: &DynamicResult) -> String {
         .unwrap_or(7)
         .max(7);
     s.push_str(&format!(
-        "{:<w$}  {:<14}  {:<7}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  result\n",
+        "{:<w$}  {:<14}  {:<8}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  result\n",
         "fixture",
         "category",
         "runtime",
@@ -1739,10 +1853,14 @@ pub fn render_table(res: &DynamicResult) -> String {
     ));
     for f in &res.fixtures {
         s.push_str(&format!(
-            "{:<w$}  {:<14}  {:<7}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  {}\n",
+            "{:<w$}  {:<14}  {:<8}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  {}\n",
             f.id,
             f.category,
-            f.runtimes.join(","),
+            if f.runtimes.is_empty() && f.entry != "repository" {
+                f.entry.clone()
+            } else {
+                f.runtimes.join(",")
+            },
             if f.harnesses.is_empty() { "no" } else { "yes" },
             f.series.len(),
             f.passed_columns,
@@ -1962,6 +2080,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_shipped_list_names_both_slices_of_the_jni_fixture() {
+        let jni: Vec<&str> = EXPECTED_FAILURES
+            .iter()
+            .filter(|e| e.fixture == "jni-order-codec")
+            .map(|e| e.failure)
+            .collect();
+        assert_eq!(jni.len(), 2);
+        assert!(jni.iter().any(|f| f.contains("native/src/lib.rs:43")));
+        assert!(jni.iter().any(|f| f.contains("kotlin/shop/Audit.kt:12")));
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_stuck_command_and_its_grandchild_are_killed_at_the_limit() {
@@ -2009,7 +2139,34 @@ mod tests {
                 r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
             ],
         );
-        assert!(check_m3_rules(&v).is_empty());
+        assert!(check_m3_rules(&v, Entry::Repository).is_empty());
+    }
+
+    #[test]
+    fn an_artifact_confirmation_names_an_owner_and_never_a_site() {
+        let dump_growth = r#"{"type":"evidence","evidence_id":"E1","authority":"dump","kind":"growth-series","result":{"gate":"pass"}}"#;
+        let owner_add = r#"{"type":"finding_added","finding":{"id":"F1","origin":"growth-series","owner":"a.B.c","holder":"static/global"}}"#;
+        let steps = [
+            r#"{"type":"transition","finding":"F1","from":"candidate","to":"under_test","evidence":[]}"#,
+            r#"{"type":"transition","finding":"F1.n1","from":"candidate","to":"refuted","evidence":[]}"#,
+            r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
+        ];
+        let mut ok = vec![dump_growth, owner_add, SIB];
+        ok.extend(steps);
+        assert!(check_m3_rules(&view("art-ok", &ok), Entry::Artifact).is_empty());
+        // A site on an artifact run is a source claim the dumps cannot support.
+        let mut sited = vec![dump_growth, ADD, SIB];
+        sited.extend(steps);
+        let bad = check_m3_rules(&view("art-site", &sited), Entry::Artifact).join("|");
+        assert!(
+            bad.contains("no owner") && bad.contains("source site"),
+            "{bad}"
+        );
+        // Growth from a harness (authority test) does not confirm an artifact finding.
+        let mut tested = vec![EV_PASS, owner_add, SIB];
+        tested.extend(steps);
+        let bad = check_m3_rules(&view("art-test", &tested), Entry::Artifact).join("|");
+        assert!(bad.contains("no growth evidence"), "{bad}");
     }
 
     #[test]
@@ -2023,7 +2180,7 @@ mod tests {
                 r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
             ],
         );
-        let bad = check_m3_rules(&v);
+        let bad = check_m3_rules(&v, Entry::Repository);
         assert!(
             bad.iter().any(|b| b.contains("refuted N-* sibling")),
             "{bad:?}"
@@ -2040,7 +2197,7 @@ mod tests {
                 r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
             ],
         );
-        let bad = check_m3_rules(&v).join("|");
+        let bad = check_m3_rules(&v, Entry::Repository).join("|");
         assert!(
             bad.contains("gate pass") && bad.contains("no holder"),
             "{bad}"

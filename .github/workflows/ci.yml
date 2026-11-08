@@ -140,6 +140,22 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      # jni-order-codec compiles Kotlin. The runner has no ~/.m2 with the compiler jars,
+      # so install the official compiler zip (pinned, with its checksum) and put the
+      # stdlib where the fixture's build.sh looks for it when it runs the classes.
+      - name: Kotlin compiler 2.0.21
+        run: |
+          set -eu
+          url=https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          sha256=0352c0a45bd22f80f6b26e485cd04da8047baa5de54865281fb9f89a4a7bcf2a
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/kotlin-compiler.zip" "$url"
+          echo "$sha256  $RUNNER_TEMP/kotlin-compiler.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/kotlin-compiler.zip" -d "$RUNNER_TEMP/kotlin"
+          echo "$RUNNER_TEMP/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
+          stdlib="$HOME/.m2/repository/org/jetbrains/kotlin/kotlin-stdlib/2.0.21"
+          mkdir -p "$stdlib"
+          cp "$RUNNER_TEMP/kotlin/kotlinc/lib/kotlin-stdlib.jar" "$stdlib/kotlin-stdlib-2.0.21.jar"
+          "$RUNNER_TEMP/kotlin/kotlinc/bin/kotlinc" -version
       - name: C toolchain and addr2line
         run: sudo apt-get update && sudo apt-get install -y build-essential binutils
       - name: Build dla and dla-bench
