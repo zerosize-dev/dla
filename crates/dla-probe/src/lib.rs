@@ -70,6 +70,9 @@ pub struct ProbeOptions {
     pub build_timeout: Duration,
     /// Time allowed for each version query.
     pub tool_timeout: Duration,
+    /// Restrict detection, tool queries and builds to this runtime. The CLI sets it in
+    /// worker mode (a worker's name is its runtime's name).
+    pub runtime: Option<Runtime>,
 }
 
 impl Default for ProbeOptions {
@@ -78,6 +81,7 @@ impl Default for ProbeOptions {
             build: false,
             build_timeout: Duration::from_secs(300),
             tool_timeout: Duration::from_secs(15),
+            runtime: None,
         }
     }
 }
@@ -105,12 +109,16 @@ pub fn run_with(
     path_var: Option<&std::ffi::OsStr>,
 ) -> Result<StageOutcome, Refusal> {
     if opts.build {
+        ctx.require_time("dla probe --build")?;
         ctx.require_tier(1, "dla probe --build")?;
     }
     let stage = ctx.stage_dir("probe")?;
     let tmp = ctx.tmp_dir()?;
     let tree = scan::Tree::walk(&ctx.project);
     let mut detected = scan::detect(&tree);
+    if let Some(rt) = opts.runtime {
+        detected.retain(|d| d.probe.runtime == rt);
+    }
     let runtimes: Vec<Runtime> = detected.iter().map(|d| d.probe.runtime).collect();
 
     for d in &mut detected {
@@ -139,7 +147,8 @@ pub fn run_with(
         builds,
     };
 
-    let raw_path = stage.join("probe.json");
+    let report_name = report_file(ctx.worker.as_deref());
+    let raw_path = stage.join(&report_name);
     write_atomic(&raw_path, to_pretty_json(&report).as_bytes()).map_err(|e| e.to_refusal())?;
 
     let summary = summarize(&report);
@@ -150,7 +159,7 @@ pub fn run_with(
         env!("CARGO_PKG_VERSION"),
         bounded(summary.evidence_result.clone(), &summary.counts),
     );
-    spec.raw = Some("probe/probe.json".to_owned());
+    spec.raw = Some(format!("probe/{report_name}"));
     spec.coverage = EvidenceCoverage {
         status: if tree.truncated {
             CoverageStatus::Partial
@@ -172,7 +181,7 @@ pub fn run_with(
         evidence: vec![evidence.to_string()],
         candidates: 0,
         skipped_duplicates: 0,
-        artifacts: vec![ctx.pointer("probe/probe.json")],
+        artifacts: vec![ctx.pointer(&format!("probe/{report_name}"))],
         summary: summary.cli,
     })
 }
@@ -402,9 +411,28 @@ fn tool_version(
     }
 }
 
+/// File name of the probe report under `probe/`: `probe.json` for the core (it is run-level
+/// and read by `dla ledger merge` and `dla run dispatch`), `<worker>.json` in worker mode,
+/// so a worker's probe (restricted to its runtime) never replaces the core's.
+pub fn report_file(worker: Option<&str>) -> String {
+    worker.map_or_else(|| "probe.json".to_owned(), |w| format!("{w}.json"))
+}
+
 /// The path of `probe.json` under a run directory.
 pub fn report_path(run_dir: &Path) -> PathBuf {
     run_dir.join("probe").join("probe.json")
+}
+
+/// The probe report a stage of `worker` reads: its own `probe/<worker>.json` when it
+/// ran one, else the core's `probe/probe.json`.
+pub fn report_path_for(run_dir: &Path, worker: Option<&str>) -> PathBuf {
+    if let Some(w) = worker {
+        let own = run_dir.join("probe").join(report_file(Some(w)));
+        if own.is_file() {
+            return own;
+        }
+    }
+    report_path(run_dir)
 }
 
 /// Reads `probe.json` of a run, when present (used by later stages to see build

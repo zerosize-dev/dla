@@ -220,3 +220,78 @@ pub fn line(seq: u64, body: &str) -> String {
 }
 
 pub const EVIDENCE_BODY: &str = r#""type":"evidence","evidence_id":"E1","source":{"repo":{"commit":"abc"}},"tool":{"name":"t","version":"1"},"authority":"static","kind":"static-hit","result":{}"#;
+
+// ---------------------------------------------------------------------------------------
+// M4: runs on disk with worker slices
+// ---------------------------------------------------------------------------------------
+
+use dla_core::state::{WorkerEntry, WorkerStatus};
+use std::path::Path;
+
+/// A run directory with `state.json` (the given workers registered, runtime = name,
+/// deadline in an hour) and a main ledger holding the evidence of [`m3_ledger`] (E1 to E16).
+pub fn new_run(workers: &[&str]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = run_state();
+    let now = now_utc();
+    for w in workers {
+        state.workers.push(WorkerEntry {
+            name: (*w).to_owned(),
+            runtime: (*w).to_owned(),
+            share_secs: 600,
+            deadline: now + chrono::TimeDelta::hours(1),
+            started_at: None,
+            status: WorkerStatus::Registered,
+            slice: format!("ledger.{w}.jsonl"),
+        });
+    }
+    state.save(dir.path()).unwrap();
+    write_main(dir.path(), &m3_ledger());
+    dir
+}
+
+/// Writes the lines of an in-memory ledger as `ledger.jsonl` in `dir`.
+pub fn write_main(dir: &Path, l: &Ledger) {
+    let text: String = l
+        .lines()
+        .iter()
+        .map(|x| serde_json::to_string(x).unwrap() + "\n")
+        .collect();
+    std::fs::write(dir.join("ledger.jsonl"), text).unwrap();
+}
+
+/// Opens `worker`'s slice of the run in `dir`.
+pub fn slice(dir: &Path, worker: &str) -> Ledger {
+    Ledger::load_for(dir, Some(worker)).unwrap()
+}
+
+/// In worker mode: adds a leak-side finding with a site and a holder (supported by E1),
+/// a N-WARM sibling, refutes the sibling, puts the finding under test and confirms it.
+/// Returns the finding's own ID (`<worker>/F<n>`).
+pub fn confirm_in_slice(l: &mut Ledger, site: &str, holder: Holder) -> FindingId {
+    let mut nf = NewFinding::new(origin("census"), vec![eid(E_STATIC)]);
+    nf.site = Some(site.into());
+    nf.holder = Some(holder);
+    let line = l.add_finding(nf).unwrap();
+    let Record::FindingAdded { finding } = line.record else {
+        unreachable!()
+    };
+    let f = finding.id;
+    let n = add_sibling(l, &f, "N-WARM");
+    go(l, &n, FindingState::Refuted, &[E_DISC_LEAK]);
+    go(l, &f, FindingState::UnderTest, &[E_HARNESS]);
+    go(l, &f, FindingState::Confirmed, &[E_GROWTH_PASS]);
+    f
+}
+
+/// In worker mode: adds a leak-side finding with a site and a holder in `candidate`.
+pub fn candidate_in_slice(l: &mut Ledger, site: &str, holder: Holder) -> FindingId {
+    let mut nf = NewFinding::new(origin("census"), vec![eid(E_STATIC)]);
+    nf.site = Some(site.into());
+    nf.holder = Some(holder);
+    let line = l.add_finding(nf).unwrap();
+    let Record::FindingAdded { finding } = line.record else {
+        unreachable!()
+    };
+    finding.id
+}

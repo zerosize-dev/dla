@@ -415,3 +415,132 @@ fn a_confirmed_non_leak_sibling_is_explained_not_novel_and_has_no_growth_line() 
     assert!(!section.contains("Novel mechanism"), "{section}");
     assert!(!section.contains("- Growth:"), "{section}");
 }
+
+/// A merged two-worker run: `jvm` finished, `rust` was killed with one unmerged slice
+/// line; a duplicate was folded into `jvm/F1`, one finding was verified and agreed, one
+/// did not. The state is a module scope with excluded paths and out-of-scope counts.
+fn workers_view() -> RunView {
+    use dla_core::state::{EntryPath, Scope, ScopeKind, WorkerEntry, WorkerStatus};
+    let mut st = state("20260101-000000-abcd");
+    st.status = RunStatus::Incomplete;
+    st.incomplete_reason = Some("workers did not finish: rust (slice ends at line 3)".to_owned());
+    st.scope = Some(Scope {
+        kind: ScopeKind::Module,
+        path: "services/api".to_owned(),
+        excluded: vec!["services/api/generated".to_owned(), "vendor".to_owned()],
+    });
+    let entry = |name: &str, status| WorkerEntry {
+        name: name.to_owned(),
+        runtime: name.to_owned(),
+        share_secs: 600,
+        deadline: now_utc(),
+        started_at: None,
+        status,
+        slice: format!("ledger.{name}.jsonl"),
+    };
+    st.workers = vec![
+        entry("jvm", WorkerStatus::Done),
+        entry("rust", WorkerStatus::Killed),
+    ];
+    st.entry = EntryPath::Repository;
+    let text = std::fs::read_to_string(format!(
+        "{}/tests/fixtures/workers.jsonl",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let cov: CoverageManifest = serde_json::from_value(json!({
+        "schema_version": 1,
+        "workers": {
+            "jvm": {"runtime": "jvm", "out_of_scope": 12},
+            "rust": {"runtime": "rust", "out_of_scope": 1}
+        },
+        "blind_spots": [{"runtime": "go", "text": "no worker covered this runtime"}]
+    }))
+    .unwrap();
+    RunView::new(st, Ledger::from_text(&text).unwrap(), Some(cov)).with_slices(vec![
+        dla_core::slice::SliceSummary {
+            worker: "jvm".to_owned(),
+            lines: 4,
+            done: true,
+            torn_tail: false,
+        },
+        dla_core::slice::SliceSummary {
+            worker: "rust".to_owned(),
+            lines: 4,
+            done: false,
+            torn_tail: true,
+        },
+    ])
+}
+
+#[test]
+fn golden_workers_merge_verification_and_scope() {
+    let md = render_markdown(&workers_view());
+    check_golden("workers", &md);
+}
+
+#[test]
+fn workers_section_lists_status_lines_done_and_torn_tail() {
+    let md = render_markdown(&workers_view());
+    assert!(
+        md.contains("- **jvm** (jvm): status done; 4 lines merged; slice done; torn tail: no\n"),
+        "{md}"
+    );
+    assert!(
+        md.contains("- **rust** (rust): status killed; 3 of 4 lines merged; slice not done; torn tail: yes, final line dropped\n"),
+        "{md}"
+    );
+    // Only the slice with lines the main ledger lacks is listed as unmerged.
+    let unmerged = md.split("### Unmerged slices").nth(1).unwrap();
+    let unmerged = unmerged.split("\n## ").next().unwrap();
+    assert!(
+        unmerged.contains("**rust**: 4 lines in ledger.rust.jsonl, 3 merged"),
+        "{unmerged}"
+    );
+    assert!(!unmerged.contains("jvm"), "{unmerged}");
+    assert!(md.contains("Scope: module `services/api`; excluded: `services/api/generated`, `vendor`; out of scope: jvm 12 files, rust 1 file\n"), "{md}");
+}
+
+#[test]
+fn a_merged_duplicate_is_shown_under_its_canonical_finding_only() {
+    let md = render_markdown(&workers_view());
+    assert!(md.contains("- Merged duplicates: rust/F1\n"), "{md}");
+    assert!(!md.contains("### rust/F1"), "{md}");
+    assert!(
+        md.contains("- **rust/F1** merged into **jvm/F1** (same site and holder; its evidence E1 is kept on jvm/F1)"),
+        "{md}"
+    );
+    // 3 findings are enumerated, not 4.
+    assert!(
+        md.contains("Findings: 3 enumerated, 0 dispositioned"),
+        "{md}"
+    );
+}
+
+#[test]
+fn verified_line_agrees_or_names_both_values() {
+    let md = render_markdown(&workers_view());
+    assert!(
+        md.contains("- Verified: agrees (verifier site `src/Registry.java:44`, holder static/global, label UNCLASSIFIED; bundle aaaaaaaaaaaa)\n"),
+        "{md}"
+    );
+    assert!(
+        md.contains("- Verified: DISAGREES (site: finding `native/pool.rs:7` vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local; bundle aaaaaaaaaaaa)\n"),
+        "{md}"
+    );
+}
+
+#[test]
+fn entry_line_names_the_artifacts_of_an_artifact_run() {
+    use dla_core::state::EntryPath;
+    let mut st = state("20260101-000000-abcd");
+    st.entry = EntryPath::Artifact;
+    st.artifacts = vec!["dumps/a.hprof.gz".to_owned(), "dumps/b.hprof.gz".to_owned()];
+    let md = render_markdown(&RunView::new(st, Ledger::from_text("").unwrap(), None));
+    assert!(
+        md.contains("Entry: artifact (`dumps/a.hprof.gz`, `dumps/b.hprof.gz`)\n"),
+        "{md}"
+    );
+    assert!(md.contains("Scope: repository; excluded: none; out of scope: none\n"));
+    assert!(!md.contains("## Workers"), "no workers, no section");
+}

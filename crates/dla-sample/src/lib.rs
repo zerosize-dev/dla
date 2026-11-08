@@ -5,6 +5,7 @@
 //! runtime counters (JVM through `jcmd`, Go through `net/http/pprof`, Node.js through the
 //! inspector, Python 3.14 through remote exec) and [`session`] runs both on a fixed cadence.
 
+pub mod attach;
 pub mod backend;
 mod exec;
 mod gopprof;

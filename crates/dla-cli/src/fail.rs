@@ -21,6 +21,8 @@ pub mod codes {
     pub const USAGE: &str = "usage";
     /// Generated schema files differ from the committed ones.
     pub const SCHEMA_DRIFT: &str = "schema-drift";
+    /// `ledger verify` names a bundle hash no bundle of the finding has.
+    pub const UNKNOWN_BUNDLE: &str = "unknown-bundle";
 }
 
 /// Why a command did not succeed, with the exit code to use.

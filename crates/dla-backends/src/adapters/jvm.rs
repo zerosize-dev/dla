@@ -193,9 +193,21 @@ pub fn errorprone(job: &Job) -> Outcome {
             vec![],
         );
     }
-    let sources = fsx::files_with_ext(job.project(), &["java"]);
+    let all_sources = fsx::files_with_ext(job.project(), &["java"]);
+    let sources: Vec<String> = all_sources
+        .iter()
+        .filter(|s| job.in_scope(s))
+        .cloned()
+        .collect();
     if sources.is_empty() {
-        return not_applicable(version, "no Java sources");
+        return not_applicable(
+            version,
+            if all_sources.is_empty() {
+                "no Java sources"
+            } else {
+                "no Java sources inside the run's scope"
+            },
+        );
     }
     let batches = source_batches(job.project(), &sources);
     let ids = job.rule_ids();
@@ -399,12 +411,15 @@ pub fn spotbugs(job: &Job) -> Outcome {
         return Outcome::missing("SpotBugs not found in the tools directory or on PATH");
     };
     let version = version_of(version_cmd);
-    let class_files = fsx::walk_with(
+    let class_files: Vec<String> = fsx::walk_with(
         job.project(),
         200_000,
         &|n| matches!(n, ".git" | ".dla" | "node_modules"),
         &|r| r.ends_with(".class"),
-    );
+    )
+    .into_iter()
+    .filter(|r| job.in_scope(r))
+    .collect();
     if class_files.is_empty() {
         return Outcome::blocked("no class files: run dla probe --build", vec![]);
     }
@@ -671,7 +686,10 @@ pub fn detekt(job: &Job) -> Outcome {
     vcmd = vcmd.arg("--version");
     let version = version_of(vcmd);
     let v2 = java_major(&version).is_some_and(|m| m >= 2);
-    if fsx::files_with_ext(job.project(), &["kt"]).is_empty() {
+    if !fsx::files_with_ext(job.project(), &["kt"])
+        .iter()
+        .any(|f| job.in_scope(f))
+    {
         return not_applicable(version, "no Kotlin sources");
     }
     let ids = job.rule_ids();
@@ -690,7 +708,7 @@ pub fn detekt(job: &Job) -> Outcome {
     let mut cmd = isolate(base, job)
         .cwd(job.project())
         .arg("--input")
-        .arg(job.project())
+        .arg(job.project().join(job.target()))
         .arg("--config")
         .arg(&cfg)
         .arg("--excludes")

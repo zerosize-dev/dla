@@ -76,6 +76,7 @@ pub fn unit_of(axis: Axis) -> String {
             Axis::Iteration => "iteration",
             Axis::Seconds => "second",
             Axis::N => "n",
+            Axis::Dump => "dump",
         }
     )
 }
@@ -394,7 +395,9 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     // The full table goes to a file; the evidence carries the bounded rows.
     let ev_id: EvidenceId = ledger.next_evidence_id();
     let dir = tc.stage_dir("gap")?;
-    let file = format!("gap/residual-{}-{ev_id}.json", src.id);
+    // A worker's evidence id carries a `<worker>/` prefix, which is no file name part.
+    let ev_file = ev_id.to_string().replace('/', "_");
+    let file = format!("gap/residual-{}-{ev_file}.json", src.id);
     let full: Vec<Value> = calcs
         .iter()
         .zip(&actions)
@@ -413,7 +416,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     let doc = json!({"series": src.id, "derived": derived.map(|d| d.id.clone()),
         "calibrated": false, "rows": full, "limitations": limitations});
     write_atomic(
-        &dir.join(format!("residual-{}-{ev_id}.json", src.id)),
+        &dir.join(format!("residual-{}-{ev_file}.json", src.id)),
         to_pretty_json(&doc).as_bytes(),
     )?;
 

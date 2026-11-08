@@ -1,4 +1,7 @@
-//! `dla run init` and `dla run status`.
+//! `dla run init`, `dla run status`, `dla run dispatch` and `dla run abort`.
+
+mod abort;
+mod workers;
 
 use clap::{Args, Subcommand};
 use dla_core::{
@@ -7,7 +10,7 @@ use dla_core::{
     evidence::{
         Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, NewEvidence, Source, Tool,
     },
-    state::{self, STATE_FILE, Scope, ScopeKind},
+    state::{self, EntryPath, STATE_FILE, Scope, ScopeKind},
     status,
 };
 use serde_json::{Value, json};
@@ -25,8 +28,12 @@ use crate::{
 pub enum RunCmd {
     /// Create a run directory, its state and an empty ledger.
     Init(InitArgs),
-    /// Show run id, stage, status, counts and the first blocking items.
+    /// Show run id, stage, status, entry path, workers, running processes, counts and the first blocking items.
     Status,
+    /// Register one worker per runtime with its share of the remaining budget (core only).
+    Dispatch(workers::DispatchArgs),
+    /// Stop the processes the run started, undo what it attached, and mark the run aborted (core only).
+    Abort(abort::AbortArgs),
 }
 
 /// Flags of `dla run init`.
@@ -47,6 +54,12 @@ pub struct InitArgs {
     /// Excluded path, repeatable (with --scope).
     #[arg(long, requires = "scope")]
     exclude: Vec<String>,
+    /// Entry path: repository (default), process, artifact or symptom.
+    #[arg(long, value_parser = parse_enum::<EntryPath>)]
+    entry: Option<EntryPath>,
+    /// Artifact file or directory relative to the project root, repeatable (entry artifact only, required there).
+    #[arg(long)]
+    artifact: Vec<String>,
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
@@ -62,6 +75,8 @@ fn run_config_result(
     session: &str,
     seconds: u64,
     scope: &Option<Scope>,
+    entry: EntryPath,
+    artifacts: &[String],
 ) -> Res<Value> {
     if session.chars().count() > MAX_SESSION_ID_CHARS {
         return Err(Failure::refuse(
@@ -79,6 +94,8 @@ fn run_config_result(
         "session_id": session,
         "budget_seconds": seconds,
         "scope": scope,
+        "entry": entry.as_str(),
+        "artifacts": artifacts,
     });
     let size = serde_json::to_string(&result).map_or(usize::MAX, |t| t.len());
     if size > MAX_RESULT_BYTES {
@@ -87,11 +104,77 @@ fn run_config_result(
             format!(
                 "the run configuration is {size} bytes, over the {MAX_RESULT_BYTES}-byte bound for an evidence record"
             ),
-            "a shorter --scope-path, fewer or shorter --exclude entries, or a shorter project path",
+            "a shorter --scope-path, fewer or shorter --exclude or --artifact entries, or a shorter project path",
             "dla run init --scope module --scope-path <short path> --exclude <short path>",
         ));
     }
     Ok(result)
+}
+
+/// Checks `--entry` against `--artifact` and returns the artifact paths as stored:
+/// relative to the project root, `/`-separated, existing. Artifact runs need at least
+/// one; the other entry paths take none.
+fn artifact_paths(
+    project: &std::path::Path,
+    entry: EntryPath,
+    given: &[String],
+) -> Res<Vec<String>> {
+    if entry != EntryPath::Artifact {
+        if let Some(first) = given.first() {
+            return Err(Failure::refuse(
+                core_codes::INVALID_VALUE,
+                format!("--artifact {first} is only allowed with --entry artifact"),
+                "--entry artifact, or no --artifact",
+                format!("dla run init --entry artifact --artifact {first}"),
+            ));
+        }
+        return Ok(Vec::new());
+    }
+    if given.is_empty() {
+        return Err(Failure::refuse(
+            core_codes::INVALID_VALUE,
+            "an artifact run needs the artifacts to examine",
+            "--artifact <path relative to the project root> (repeatable)",
+            "dla run init --entry artifact --artifact dumps/heap1.hprof.gz --artifact dumps/heap2.hprof.gz",
+        ));
+    }
+    let mut out: Vec<String> = Vec::new();
+    for g in given {
+        let path = std::path::Path::new(g);
+        let rel = if path.is_absolute() {
+            dla_core::paths::rel_slash(project, path)
+        } else {
+            Some(dla_core::paths::slash(g))
+        }
+        .map(|r| r.trim_start_matches("./").to_owned());
+        let rel = rel
+            .filter(|r| !r.is_empty() && !r.split('/').any(|c| c == "..") && !r.starts_with('/'))
+            .ok_or_else(|| {
+                Failure::refuse(
+                    core_codes::INVALID_VALUE,
+                    format!("artifact {g:?} is not a path inside the project"),
+                    "an artifact path relative to the project root, without ..",
+                    "dla run init --entry artifact --artifact <relative path>",
+                )
+            })?;
+        if !project.join(&rel).exists() {
+            return Err(Failure::refuse(
+                core_codes::INVALID_VALUE,
+                format!(
+                    "artifact {rel} does not exist under {}",
+                    dla_core::paths::to_slash(project)
+                ),
+                format!("the file {rel}"),
+                format!(
+                    "dla run init --entry artifact --artifact {rel}   (after copying it into the project)"
+                ),
+            ));
+        }
+        if !out.contains(&rel) {
+            out.push(rel);
+        }
+    }
+    Ok(out)
 }
 
 /// Runs one `dla run ...` subcommand. `ctx` resolves the run (not needed by `init`).
@@ -103,6 +186,8 @@ pub fn dispatch(
     match cmd {
         RunCmd::Init(a) => init(project_arg, a),
         RunCmd::Status => run_status(&ctx()?),
+        RunCmd::Dispatch(a) => workers::dispatch(&ctx()?, a),
+        RunCmd::Abort(a) => abort::run(&ctx()?, a),
     }
 }
 
@@ -126,6 +211,8 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         }),
         _ => None,
     };
+    let entry = a.entry.unwrap_or(EntryPath::Repository);
+    let artifacts = artifact_paths(&project, entry, &a.artifact)?;
     let headless = headless_consent()?;
     let root_text = dla_core::paths::to_slash(&project);
     let session_text = session
@@ -133,7 +220,14 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         .filter(|s| !s.is_empty())
         .unwrap_or("unknown")
         .to_owned();
-    let result = run_config_result(&root_text, &session_text, seconds, &scope)?;
+    let result = run_config_result(
+        &root_text,
+        &session_text,
+        seconds,
+        &scope,
+        entry,
+        &artifacts,
+    )?;
     let mut st = RunState::init(
         &root_text,
         session.as_deref(),
@@ -142,6 +236,8 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         state::now_utc(),
     )?;
     st.consent = headless;
+    st.entry = entry;
+    st.artifacts = artifacts;
     let ctx = Ctx {
         run_dir: state::run_dir(&project, &st.run_id),
         run_id: st.run_id.clone(),
@@ -200,6 +296,8 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         "status": st.status.as_str(),
         "session_id": st.session_id,
         "budget_seconds": seconds,
+        "entry": st.entry.as_str(),
+        "artifacts": st.artifacts,
         "evidence": "E1",
         "gitignore": ignored.as_str(),
         "record": ctx.pointer(STATE_FILE),
@@ -260,6 +358,11 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         "ledger": ctx.pointer(dla_core::state::LEDGER_FILE),
         "report": view.state.report.as_ref().map(|r| r.path.clone()),
     });
+    if let (Value::Object(o), Value::Object(extra)) =
+        (&mut out, workers::status_parts(ctx, &view.state))
+    {
+        o.extend(extra);
+    }
     out["revisit"] = Value::Array(Vec::new());
     out["revisit_total"] = json!(revisit_total);
     let mut truncated = total > shown.len();

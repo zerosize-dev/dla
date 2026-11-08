@@ -82,9 +82,27 @@ fn kind_order(k: WorkloadKind) -> u8 {
     }
 }
 
-/// Runtimes whose build failed in `probe/probe.json`, if that file exists.
+/// File name of the workload report under `workload/`: `workloads.json` in core mode,
+/// `<worker>.json` in worker mode, so concurrent workers never write the same file.
+pub fn report_file(worker: Option<&str>) -> String {
+    worker.map_or_else(|| "workloads.json".to_owned(), |w| format!("{w}.json"))
+}
+
+/// The probe report a stage reads: the worker's own `probe/<worker>.json` when it ran
+/// `dla probe`, else the core's `probe/probe.json`.
+pub(crate) fn probe_path(ctx: &ToolCtx) -> std::path::PathBuf {
+    if let Some(w) = ctx.worker.as_deref() {
+        let own = ctx.run_dir.join("probe").join(format!("{w}.json"));
+        if own.is_file() {
+            return own;
+        }
+    }
+    ctx.run_dir.join("probe/probe.json")
+}
+
+/// Runtimes whose build failed in the probe report, if there is one.
 fn failed_builds(ctx: &ToolCtx) -> BTreeSet<Runtime> {
-    let p = ctx.run_dir.join("probe/probe.json");
+    let p = probe_path(ctx);
     let Ok(text) = fs::read_to_string(p) else {
         return BTreeSet::new();
     };
@@ -116,7 +134,7 @@ pub fn build_report(
         (Runtime::Native, native::discover),
     ] {
         if wanted(rt) {
-            raws.extend(found(scan));
+            raws.extend(found(scan).into_iter().filter(|r| scan.includes(&r.file)));
         }
     }
     // Entry points of the wanted runtimes, by bare name.
@@ -254,12 +272,13 @@ pub fn build_report(
 /// Reads files only; a failed `dla probe --build` is recorded as a coverage gap, not
 /// an error.
 pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Refusal> {
-    let scan = Scan::new(&ctx.project);
+    let scan = Scan::scoped(&ctx.project, ctx.scope()?);
     let failed = failed_builds(ctx);
     let (report, runtimes) = build_report(&scan, lang, &failed);
 
     let dir = ctx.stage_dir("workload")?;
-    let file = dir.join("workloads.json");
+    let name = report_file(ctx.worker.as_deref());
+    let file = dir.join(&name);
     let mut text = serde_json::to_string_pretty(&report).map_err(|e| {
         Error::io(
             &file,
@@ -282,7 +301,11 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
         .flat_map(|w| w.entry_points.iter())
         .collect::<BTreeSet<_>>()
         .len();
-    let result = json!({
+    let out_of_scope: u64 = runtimes
+        .iter()
+        .map(|rt| scan.out_of_scope.get(rt).copied().unwrap_or(0))
+        .sum();
+    let mut result = json!({
         "workloads": report.workloads.len(),
         "by_kind": by_kind,
         "by_runtime": by_runtime,
@@ -295,13 +318,18 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
         })).collect::<Vec<_>>(),
     });
     let mut ledger = ctx.ledger()?;
+    if out_of_scope > 0
+        && let serde_json::Value::Object(m) = &mut result
+    {
+        m.insert("out_of_scope".into(), json!(out_of_scope));
+    }
     let mut spec = EvidenceSpec::new(
         EvidenceKind::Workload,
         "dla",
         env!("CARGO_PKG_VERSION"),
         result.clone(),
     );
-    spec.raw = Some("workload/workloads.json".into());
+    spec.raw = Some(format!("workload/{name}"));
     spec.limitations = vec![
         "entry points are matched to workloads by identifier name in the workload's own source files and, for up to two hops, in the bodies of the entry points reached; this is a name match, not a call graph".into(),
         "workloads were discovered by reading files; none was run".into(),
@@ -310,6 +338,10 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
 
     CoverageManifest::update(&ctx.run_dir, |m| {
         for rt in &runtimes {
+            if let Some(n) = scan.out_of_scope.get(rt) {
+                let w = m.worker_mut(rt.as_str());
+                w.out_of_scope = w.out_of_scope.max(*n);
+            }
             let mine = |id: &str| runtime_of_entry(&scan, id) == Some(*rt);
             let prev = m.worker_mut(rt.as_str()).entry_points.exercised.clone();
             m.set_entry_points(
@@ -339,7 +371,7 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
         candidates: 0,
         skipped_duplicates: 0,
         artifacts: vec![
-            ctx.pointer("workload/workloads.json"),
+            ctx.pointer(&format!("workload/{name}")),
             ctx.pointer("coverage.json"),
         ],
         summary: result,
@@ -742,5 +774,94 @@ mod tests {
         assert_eq!(ep.not_exercisable.len(), 1);
         let ledger = ctx.ledger().unwrap();
         assert_eq!(ledger.findings().count(), 0);
+    }
+
+    fn run_ctx(root: &Path, worker: Option<&str>) -> ToolCtx {
+        let run_dir = root.join(".dla/r1");
+        fs::create_dir_all(&run_dir).unwrap();
+        if !run_dir.join("state.json").exists() {
+            let mut st =
+                RunState::init(root.to_str().unwrap(), Some("s"), 3600, None, now_utc()).unwrap();
+            st.run_id = "r1".into();
+            st.save(&run_dir).unwrap();
+            Ledger::create(&run_dir).unwrap();
+        }
+        ToolCtx {
+            project: root.to_path_buf(),
+            run_dir,
+            run_id: "r1".into(),
+            source_commit: "abc".into(),
+            data_flag: None,
+            worker: worker.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn module_scope_hides_other_modules_and_excluded_dirs() {
+        let d = tempfile::tempdir().unwrap();
+        for m in ["a", "b"] {
+            put(d.path(), &format!("{m}/go.mod"), "module m\n\ngo 1.22\n");
+            put(
+                d.path(),
+                &format!("{m}/main.go"),
+                "package main\n\nfunc main() { Used() }\nfunc Used() {}\n",
+            );
+        }
+        put(
+            d.path(),
+            "a/gen/main.go",
+            "package main\n\nfunc main() {}\n",
+        );
+        let ctx = run_ctx(d.path(), None);
+        RunState::update(&ctx.run_dir, |s| {
+            s.scope = Some(dla_core::state::Scope {
+                kind: dla_core::state::ScopeKind::Module,
+                path: "a".into(),
+                excluded: vec!["a/gen".into()],
+            });
+            Ok(())
+        })
+        .unwrap();
+        let out = discover(&ctx, Some(Runtime::Go)).unwrap();
+        assert_eq!(
+            out.summary["out_of_scope"], 2,
+            "b/main.go and a/gen/main.go"
+        );
+        let rep: WorkloadReport = serde_json::from_str(
+            &fs::read_to_string(ctx.run_dir.join("workload/workloads.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(!rep.workloads.is_empty());
+        assert!(
+            rep.workloads
+                .iter()
+                .all(|w| w.file.starts_with("a/") && !w.file.starts_with("a/gen")),
+            "{:?}",
+            rep.workloads
+        );
+        assert!(rep.entry_points.iter().all(|e| e.starts_with("a/main.go")));
+        let cov = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+        assert_eq!(cov.workers["go"].out_of_scope, 2);
+    }
+
+    #[test]
+    fn workers_write_their_own_report_file() {
+        let d = tempfile::tempdir().unwrap();
+        go_project(d.path());
+        put(d.path(), "app.py", "def main():\n    pass\n\nmain()\n");
+        let core = run_ctx(d.path(), None);
+        let w_go = run_ctx(d.path(), Some("go"));
+        let w_py = run_ctx(d.path(), Some("python"));
+        discover(&w_go, Some(Runtime::Go)).unwrap();
+        discover(&w_py, Some(Runtime::Python)).unwrap();
+        let dir = core.run_dir.join("workload");
+        assert!(dir.join("go.json").is_file() && dir.join("python.json").is_file());
+        assert!(!dir.join("workloads.json").exists());
+        let go: WorkloadReport =
+            serde_json::from_str(&fs::read_to_string(dir.join("go.json")).unwrap()).unwrap();
+        assert!(go.workloads.iter().all(|w| w.runtime == Runtime::Go));
+        discover(&core, None).unwrap();
+        assert!(dir.join("workloads.json").is_file());
+        assert_eq!(report_file(Some("jvm")), "jvm.json");
     }
 }

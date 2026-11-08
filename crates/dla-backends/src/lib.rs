@@ -10,7 +10,7 @@
 //! [`sweep`] reads `<data dir>/detectors/<lang>.toml` through
 //! `dla_core::detectors::DetectorFile::parse` (which refuses with file and line), runs
 //! every backend the table names for the language, and writes per backend: raw output
-//! `.dla/<run>/sweep/<backend>.json`, ONE `static-hit` evidence record, one candidate
+//! `.dla/<run>/sweep/<lang>-<backend>.json`, ONE `static-hit` evidence record, one candidate
 //! per `(rule, site)` with origin `detector:<backend>/<rule>` (via
 //! `dla_core::toolctx::CandidateWriter`), and the backend's entry in `coverage.json`
 //! (`missing` + install hint, `blocked` + reason, or `ran` with `enumerated` = the

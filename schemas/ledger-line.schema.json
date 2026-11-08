@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "LedgerLine",
-  "description": "One line of `ledger.jsonl`.",
+  "description": "One line of `ledger.jsonl`.\n\n`worker` is the key of the worker a line belongs to. `dla ledger merge` sets it on the\nlines it copies from a slice. The slice records (`slice_started`, `slice_done`,\n`slice_merged`) carry the same key in their own body; on the wire it appears once,\nand reading such a line sets both.",
   "type": "object",
   "properties": {
     "schema_version": {
@@ -20,6 +20,13 @@
       "description": "When the line was appended (RFC 3339, UTC).",
       "type": "string",
       "format": "date-time"
+    },
+    "worker": {
+      "description": "The worker whose slice the line came from; set by `dla ledger merge` (schema 3).",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "oneOf": [
@@ -121,6 +128,76 @@
         }
       },
       "$ref": "#/$defs/FindingAnnotation",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A worker's slice began (first line of every `ledger.<worker>.jsonl`).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "slice_started"
+        }
+      },
+      "$ref": "#/$defs/SliceStarted",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A worker finished its slice.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "slice_done"
+        }
+      },
+      "$ref": "#/$defs/SliceDone",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "`dla ledger merge` copied lines of a slice into this ledger.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "slice_merged"
+        }
+      },
+      "$ref": "#/$defs/SliceMerged",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Two workers' findings are the same (site, holder): one is a duplicate of the other.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "finding_merged"
+        }
+      },
+      "$ref": "#/$defs/FindingMerged",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "An independent verifier looked at a finding's bundle.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "verification"
+        }
+      },
+      "$ref": "#/$defs/Verification",
       "required": [
         "type"
       ]
@@ -739,6 +816,24 @@
       "type": "string",
       "pattern": "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$"
     },
+    "FindingMerged": {
+      "description": "Replay semantics: the duplicate is excluded from the counts and the report's finding\nlist, and its supporting evidence is added to the canonical finding.",
+      "type": "object",
+      "properties": {
+        "canonical": {
+          "description": "The finding that stays.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "duplicate": {
+          "description": "The finding of another worker with the same site and holder.",
+          "$ref": "#/$defs/FindingId"
+        }
+      },
+      "required": [
+        "canonical",
+        "duplicate"
+      ]
+    },
     "FindingState": {
       "description": "Lifecycle state of a finding.",
       "oneOf": [
@@ -1044,6 +1139,93 @@
         }
       ]
     },
+    "SliceDone": {
+      "description": "The last line of a finished slice.",
+      "type": "object",
+      "properties": {
+        "open": {
+          "description": "IDs of the slice's findings and open items that have no disposition.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "worker": {
+          "description": "The worker.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "worker"
+      ]
+    },
+    "SliceMerged": {
+      "description": "Written by `dla ledger merge` after it copied lines of a slice.",
+      "type": "object",
+      "properties": {
+        "done": {
+          "description": "True when the merged lines include `slice_done`.",
+          "type": "boolean"
+        },
+        "lines": {
+          "description": "Slice lines merged so far, in total (a re-run appends only lines after this).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "description": "SHA-256 (lowercase hex) of the slice bytes those lines occupy.",
+          "type": "string"
+        },
+        "torn_tail": {
+          "description": "True when a torn final line was dropped.",
+          "type": "boolean"
+        },
+        "worker": {
+          "description": "The worker.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "worker",
+        "lines",
+        "sha256",
+        "torn_tail",
+        "done"
+      ]
+    },
+    "SliceStarted": {
+      "description": "The first line of a worker slice.",
+      "type": "object",
+      "properties": {
+        "base_seq": {
+          "description": "Length of the main ledger when the slice began: the slice may cite main IDs\ncreated by lines up to this one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "deadline": {
+          "description": "The worker's deadline (the run deadline when it was not registered).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "runtime": {
+          "description": "The runtime it covers (the worker name when it was not registered).",
+          "type": "string"
+        },
+        "worker": {
+          "description": "The worker.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "worker",
+        "runtime",
+        "base_seq",
+        "deadline"
+      ]
+    },
     "Source": {
       "description": "Where a piece of evidence came from.",
       "oneOf": [
@@ -1262,6 +1444,56 @@
           "type": "string",
           "const": "time_budget"
         }
+      ]
+    },
+    "Verification": {
+      "description": "What an independent verifier concluded from a finding's evidence bundle alone.",
+      "type": "object",
+      "properties": {
+        "agrees_holder": {
+          "description": "The verifier's holder is the finding's.",
+          "type": "boolean"
+        },
+        "agrees_site": {
+          "description": "The verifier's site is the finding's (same file, line within 3), or both are none.",
+          "type": "boolean"
+        },
+        "bundle": {
+          "description": "SHA-256 of the bundle manifest the verifier read.",
+          "type": "string"
+        },
+        "finding": {
+          "description": "The finding.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "holder": {
+          "description": "The verifier's holder.",
+          "$ref": "#/$defs/Holder"
+        },
+        "label": {
+          "description": "The verifier's label: an archetype ID or `UNCLASSIFIED`.",
+          "type": "string"
+        },
+        "mechanism": {
+          "description": "The verifier's mechanism, in words.",
+          "type": "string"
+        },
+        "site": {
+          "description": "The verifier's `file:line`, `None` when it found no site.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "finding",
+        "holder",
+        "mechanism",
+        "label",
+        "bundle",
+        "agrees_site",
+        "agrees_holder"
       ]
     }
   }

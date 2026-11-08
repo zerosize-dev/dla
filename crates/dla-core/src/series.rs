@@ -39,6 +39,8 @@ string_enum! {
         AllocTest = "alloc-test",
         /// A derived runtime-accounted versus unexplained split.
         Gap = "gap",
+        /// Holder sizes read from a series of heap dumps of one process.
+        Dump = "dump",
     }
 }
 
@@ -63,6 +65,8 @@ string_enum! {
         Seconds = "seconds",
         /// The iteration count passed to the workload.
         N = "n",
+        /// The position of a heap dump in a series ordered by capture time.
+        Dump = "dump",
     }
 }
 

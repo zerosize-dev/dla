@@ -19,9 +19,9 @@ escalate by intrusiveness: each one adds a kind of access the one before it does
 | Tier | Covers |
 |---|---|
 | 1 | Build and run project code in a scratch copy under the run directory: builds, tests, harness loops, preload agents, allocator shims and in-process probes in processes DLA starts, intervention edits in the scratch copy, installing analyzers into the plugin data directory |
-| 2 | Observe a running local process DLA did not start: `/proc` or libproc sampling of a PID, jcmd attach, Node inspector (SIGUSR1), Python remote exec, reading a Go pprof endpoint |
-| 3 | Debugger or kernel level: ptrace attach (gdb, heaptrack `--pid`, goref), eBPF/bpftrace, perf, valgrind with vgdb, another process's fd table, GPU counters; may need root |
-| 4 | Capture memory contents: heap dumps, heap snapshots, core dumps, memray attach captures. Outputs may contain secrets and stay in `.dla/` |
+| 2 | Observe a running local process DLA did not start: `/proc` or libproc sampling of a PID, jcmd attach (class histogram, thread dump, native memory summary, JFR recordings, which hold JVM arguments and environment variables), Node inspector (SIGUSR1) memory figures, Python remote exec, reading a Go pprof endpoint |
+| 3 | Debugger or kernel level: ptrace attach (gdb, heaptrack `--pid`, goref), memray attach (gdb injection below Python 3.14, `sys.remote_exec` on 3.14; it records allocation stacks, not contents), eBPF/bpftrace, perf, valgrind with vgdb, another process's fd table, GPU counters; may need root |
+| 4 | Capture memory contents: heap dumps (jcmd `GC.heap_dump`), heap snapshots (the Node inspector; peak extra memory about 12x the heap in use, and the target is blocked for seconds), core dumps. Outputs may contain secrets and stay in `.dla/` |
 
 Raw values in summaries are a separate consent (`--raw-values`). Without it the model sees only
 the shape of a value (length, character pattern, salted hash).

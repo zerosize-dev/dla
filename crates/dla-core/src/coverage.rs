@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::Error,
     finding::Region,
-    fsutil::{load_versioned, to_pretty_json, write_atomic},
+    fsutil::{load_versioned, to_pretty_json, with_run_lock, write_atomic},
     ids::OpenItemId,
     state::{COVERAGE_FILE, RunState, Scope},
     version::Artifact,
@@ -286,15 +286,18 @@ impl CoverageManifest {
     }
 
     /// Load-or-create, apply `f`, save: the one way commands update coverage. Other
-    /// workers' entries are preserved.
+    /// workers' entries are preserved. Runs under the same exclusive `run.lock` as
+    /// [`RunState::update`], so concurrent workers never lose an update.
     pub fn update(
         run_dir: &Path,
         f: impl FnOnce(&mut CoverageManifest),
     ) -> Result<CoverageManifest, Error> {
-        let mut m = Self::load_or_create(run_dir)?;
-        f(&mut m);
-        m.save(run_dir)?;
-        Ok(m)
+        with_run_lock(run_dir, || {
+            let mut m = Self::load_or_create(run_dir)?;
+            f(&mut m);
+            m.save(run_dir)?;
+            Ok(m)
+        })
     }
 }
 
@@ -404,6 +407,7 @@ mod tests {
         let names: Vec<_> = std::fs::read_dir(t.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n != crate::fsutil::RUN_LOCK_FILE)
             .collect();
         assert_eq!(names, [COVERAGE_FILE]);
     }

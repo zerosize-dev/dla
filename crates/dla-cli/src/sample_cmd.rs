@@ -376,6 +376,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
 
     let started = Instant::now();
     let tc = stage::tool_ctx(project, ctx, data);
+    tc.require_time("sampling")?;
     let state = RunState::load(&tc.run_dir)?;
     let start_time = dla_sample::os::process_start_time(pid);
     if !dla_sample::os::is_alive(pid) {
@@ -395,7 +396,14 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
 
     // How long may it run: never past the run budget.
     let mut notes: Vec<String> = Vec::new();
-    let remaining = (state.budget.deadline - chrono::Utc::now())
+    let deadline = ctx
+        .worker
+        .as_deref()
+        .and_then(|w| state.worker(w))
+        .map_or(state.budget.deadline, |w| {
+            w.deadline.min(state.budget.deadline)
+        });
+    let remaining = (deadline - chrono::Utc::now())
         .to_std()
         .unwrap_or(Duration::ZERO);
     if remaining < interval * 2 {

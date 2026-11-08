@@ -19,6 +19,7 @@ dla-census = { path = "crates/dla-census", version = "0.1.0" }
 dla-workload = { path = "crates/dla-workload", version = "0.1.0" }
 dla-stats = { path = "crates/dla-stats", version = "0.1.0" }
 dla-sample = { path = "crates/dla-sample", version = "0.1.0" }
+dla-parsers = { path = "crates/dla-parsers", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1", features = ["chrono04"] }

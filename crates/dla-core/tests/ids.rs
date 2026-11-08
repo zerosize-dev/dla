@@ -58,3 +58,69 @@ fn serde_uses_strings() {
     assert_eq!(serde_json::to_string(&id).unwrap(), "\"jvm/E3\"");
     assert!(serde_json::from_str::<EvidenceId>("\"X3\"").is_err());
 }
+
+#[test]
+fn worker_prefixes_follow_the_worker_name_rules() {
+    use dla_core::ids::valid_worker_name;
+    for ok in ["jvm", "go", "node-2", "a", "rust"] {
+        assert!(valid_worker_name(ok), "{ok}");
+        assert!(format!("{ok}/E1").parse::<EvidenceId>().is_ok());
+        assert!(format!("{ok}/F2.n1").parse::<FindingId>().is_ok());
+        assert!(format!("{ok}/O3").parse::<OpenItemId>().is_ok());
+    }
+    let long = "x".repeat(33);
+    for bad in [
+        "",
+        "Jvm",
+        "1jvm",
+        "-jvm",
+        "a_b",
+        "a b",
+        "a/b",
+        long.as_str(),
+    ] {
+        assert!(!valid_worker_name(bad), "{bad:?}");
+        assert!(
+            format!("{bad}/E1").parse::<EvidenceId>().is_err(),
+            "{bad:?}"
+        );
+        assert!(format!("{bad}/F1").parse::<FindingId>().is_err(), "{bad:?}");
+        assert!(
+            format!("{bad}/O1").parse::<OpenItemId>().is_err(),
+            "{bad:?}"
+        );
+    }
+    // A sibling keeps the worker and a parent of a prefixed sibling is prefixed.
+    let f: FindingId = "jvm/F2.n1".parse().unwrap();
+    assert_eq!(f.prefix(), Some("jvm"));
+    assert_eq!(f.parent().unwrap().to_string(), "jvm/F2");
+    assert_eq!(
+        FindingId::with_prefix(Some("jvm"), 4)
+            .sibling(2)
+            .to_string(),
+        "jvm/F4.n2"
+    );
+    assert_eq!(f.reprefixed(None).to_string(), "F2.n1");
+    assert_eq!(
+        EvidenceId::new(3).reprefixed(Some("go")).to_string(),
+        "go/E3"
+    );
+    assert_eq!(OpenItemId::with_prefix(Some("go"), 1).to_string(), "go/O1");
+}
+
+#[test]
+fn prefixed_ids_round_trip_through_serde_and_sort_after_plain_ones() {
+    for s in ["jvm/E3", "jvm/F2.n1", "jvm/O2"] {
+        let json = format!("\"{s}\"");
+        if let Ok(e) = serde_json::from_str::<EvidenceId>(&json) {
+            assert_eq!(serde_json::to_string(&e).unwrap(), json);
+        }
+        if let Ok(f) = serde_json::from_str::<FindingId>(&json) {
+            assert_eq!(serde_json::to_string(&f).unwrap(), json);
+        }
+        if let Ok(o) = serde_json::from_str::<OpenItemId>(&json) {
+            assert_eq!(serde_json::to_string(&o).unwrap(), json);
+        }
+    }
+    assert!(serde_json::from_str::<FindingId>("\"Jvm/F1\"").is_err());
+}

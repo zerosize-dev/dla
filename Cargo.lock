@@ -428,6 +428,7 @@ dependencies = [
  "dla-backends",
  "dla-census",
  "dla-core",
+ "dla-parsers",
  "dla-probe",
  "dla-report",
  "dla-sample",
@@ -464,6 +465,11 @@ dependencies = [
 [[package]]
 name = "dla-parsers"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "dla-probe"
@@ -493,6 +499,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tungstenite",
  "windows-sys",

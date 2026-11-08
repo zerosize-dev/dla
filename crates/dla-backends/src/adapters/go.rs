@@ -84,7 +84,17 @@ fn per_module(
     job: &Job,
     one: &dyn Fn(&std::path::Path) -> ModuleRun,
 ) -> Outcome {
-    let dirs = module_dirs(job.project());
+    let dirs: Vec<_> = module_dirs(job.project())
+        .into_iter()
+        .filter(|d| {
+            let rel = d
+                .strip_prefix(job.project())
+                .ok()
+                .map(dla_core::paths::to_slash)
+                .unwrap_or_default();
+            job.may_contain(&rel)
+        })
+        .collect();
     if dirs.is_empty() {
         return Outcome::blocked(
             "no go.mod under the project: go tools cannot load packages",

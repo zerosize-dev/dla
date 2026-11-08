@@ -11,6 +11,7 @@ use crate::{
     error::Error,
     finding::FindingState,
     ledger::Ledger,
+    slice::{self, SliceSummary},
     state::{RunState, RunStatus},
 };
 
@@ -25,6 +26,8 @@ pub struct RunView {
     pub coverage: Option<CoverageManifest>,
     /// The standard checklist with the latest answers.
     pub checklist: Vec<ChecklistEntry>,
+    /// The slice files present in the run directory (empty for a view built in memory).
+    pub slices: Vec<SliceSummary>,
 }
 
 impl RunView {
@@ -36,15 +39,32 @@ impl RunView {
             ledger,
             coverage,
             checklist,
+            slices: Vec::new(),
         }
     }
 
-    /// Loads `state.json`, replays `ledger.jsonl` and reads `coverage.json` if present.
+    /// The same view with the slice files found next to the ledger.
+    pub fn with_slices(mut self, slices: Vec<SliceSummary>) -> Self {
+        self.slices = slices;
+        self
+    }
+
+    /// Loads `state.json`, replays `ledger.jsonl`, reads `coverage.json` if present and
+    /// summarises the worker slices next to the ledger.
     pub fn load(run_dir: &Path) -> Result<Self, Error> {
         let state = RunState::load(run_dir)?;
         let ledger = Ledger::load(run_dir)?;
         let coverage = CoverageManifest::load(run_dir)?;
-        Ok(Self::new(state, ledger, coverage))
+        let slices = slice::summaries(run_dir)?;
+        Ok(Self::new(state, ledger, coverage).with_slices(slices))
+    }
+
+    /// Slices that hold lines the main ledger has not merged yet.
+    pub fn unmerged_slices(&self) -> Vec<&SliceSummary> {
+        self.slices
+            .iter()
+            .filter(|s| s.lines > self.ledger.merged_lines(&s.worker))
+            .collect()
     }
 }
 
@@ -153,12 +173,17 @@ pub struct ReportStatus {
 const RESOLVE_FINDING: &str = "--as unresolved --reason time_budget --remedy \"<text>\"";
 
 /// Applies the gate: COMPLETE iff nothing blocks. An `unresolved` finding with a
-/// valid reason does not block.
+/// valid reason does not block. A finding merged into another worker's (`finding_merged`)
+/// is neither enumerated nor dispositioned: its twin carries it.
 pub fn status(view: &RunView) -> ReportStatus {
     let mut blocking = Vec::new();
     let mut counts = StatusCounts::default();
 
     for f in view.ledger.findings() {
+        // A duplicate merged into another worker's finding is counted there.
+        if view.ledger.merged_into(&f.id).is_some() {
+            continue;
+        }
         counts.enumerated += 1;
         counts.by_state.bump(f.state);
         if f.state.is_dispositioned() {

@@ -4,7 +4,8 @@
 //! findings, the append-only [`Ledger`] with its replay validation, the finding
 //! [state machine](machine), [run state](state), the [coverage manifest](coverage),
 //! the intake [checklist](checklist), [schema versioning](version), the
-//! completeness gate ([`status`]) and [value redaction](redact). The M3 contracts are
+//! completeness gate ([`status`]), [value redaction](redact), and the M4 [worker
+//! slices](slice), their [merge](merge) and the [verification](verify) record. The M3 contracts are
 //! the [`series`] file, the [`trend`] report, the [`harness`] manifest and dump record,
 //! and the [`discriminator`] result convention. The M2 stage
 //! contracts live here too: [`detectors`] tables, the [`probe`] report,
@@ -31,18 +32,22 @@ pub mod harness;
 pub mod ids;
 pub mod ledger;
 pub mod machine;
+pub mod merge;
 pub mod paths;
 pub mod probe;
+pub mod proc;
 pub mod record;
 pub mod redact;
 pub mod runtime;
 pub mod schema;
 pub mod series;
+pub mod slice;
 pub mod state;
 pub mod static_hit;
 mod strict;
 pub mod toolctx;
 pub mod trend;
+pub mod verify;
 pub mod version;
 pub mod view;
 pub mod workload;
@@ -50,8 +55,10 @@ pub mod workload;
 /// Schema version written to `state.json` and `coverage.json`.
 pub const SCHEMA_VERSION: u32 = 1;
 /// Schema version written to every new ledger line. Version 1 lines (M0 to M2) still
-/// replay, under the M0 rules; version 2 lines replay under the M3 rules.
-pub const LEDGER_SCHEMA_VERSION: u32 = 2;
+/// replay, under the M0 rules; version 2 lines replay under the M3 rules; version 3
+/// lines (M4) replay under the M3 rules plus the artifact-path rules, and may carry a
+/// `worker` and the slice, merge and verification records.
+pub const LEDGER_SCHEMA_VERSION: u32 = 3;
 /// Bound on the serialized size of an evidence `result`.
 pub const MAX_RESULT_BYTES: usize = 2048;
 /// Bound on the size of CLI stdout.
@@ -68,7 +75,10 @@ pub use finding::{Finding, FindingState, Origin, UNCLASSIFIED, UnresolvedReason}
 pub use harness::{HarnessDump, HarnessManifest};
 pub use ids::{EvidenceId, FindingId, OpenItemId};
 pub use ledger::{Annotation, Ledger, NewFinding, OpenItemState};
-pub use record::{FindingAnnotation, LedgerLine, Record, Resolution};
+pub use record::{
+    FindingAnnotation, FindingMerged, LedgerLine, Record, Resolution, SliceDone, SliceMerged,
+    SliceStarted, Verification,
+};
 pub use series::SeriesFile;
 pub use state::{RunState, RunStatus, Stage};
 pub use trend::TrendReport;

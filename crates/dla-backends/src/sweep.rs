@@ -58,6 +58,12 @@ fn timeout_for(backend: &str, env: &ToolEnv) -> Duration {
     Duration::from_secs(secs)
 }
 
+/// File name of a backend's raw output under `sweep/`: `<lang>-<backend>.json`, so
+/// backends shared by runtimes (`dla`, `codeql`) and concurrent workers never share a file.
+pub fn raw_file(lang: Runtime, backend: &str) -> String {
+    format!("{}-{backend}.json", lang.as_str())
+}
+
 fn short(s: &str) -> String {
     let one: String = s.lines().next().unwrap_or("").chars().take(100).collect();
     one
@@ -85,6 +91,8 @@ struct Done {
     evidence: Option<String>,
     added: u64,
     skipped: u64,
+    /// Hits dropped because their file lies outside the run's scope.
+    dropped: u64,
 }
 
 fn bounded_result(
@@ -119,6 +127,7 @@ struct Sink<'a> {
     ledger: &'a mut dla_core::Ledger,
     writer: &'a mut CandidateWriter,
     dir: &'a Path,
+    scope: Option<&'a dla_core::state::Scope>,
 }
 
 fn record_ran(
@@ -147,7 +156,13 @@ fn record_ran(
             .collect(),
     );
     let unlisted = before.saturating_sub(hits.len());
-    let raw_name = format!("{backend}.json");
+    let in_scope = hits.len();
+    let hits: Vec<StaticHit> = hits
+        .into_iter()
+        .filter(|h| sink.scope.is_none_or(|s| s.includes(&h.file)))
+        .collect();
+    let dropped = u64::try_from(in_scope - hits.len()).unwrap_or(u64::MAX);
+    let raw_name = raw_file(lang, backend);
     let doc = json!({
         "backend": backend,
         "lang": lang.as_str(),
@@ -175,6 +190,7 @@ fn record_ran(
             evidence: None,
             added: 0,
             skipped: 0,
+            dropped,
         });
     }
     if unlisted > 0 {
@@ -182,12 +198,14 @@ fn record_ran(
             "{unlisted} hit(s) for rules not listed in the detector table were dropped"
         ));
     }
-    let mut spec = EvidenceSpec::new(
-        EvidenceKind::StaticHit,
-        backend,
-        &version,
-        bounded_result(lang, listed.len(), &hits, exit, load_errors),
-    );
+    let mut result = bounded_result(lang, listed.len(), &hits, exit, load_errors);
+    if dropped > 0 {
+        result["out_of_scope_hits"] = json!(dropped);
+        limitations.push(format!(
+            "{dropped} hit(s) in files outside the run's scope were dropped"
+        ));
+    }
+    let mut spec = EvidenceSpec::new(EvidenceKind::StaticHit, backend, &version, result);
     spec.raw = Some(artifact);
     spec.coverage = EvidenceCoverage {
         status: if limitations.is_empty() && load_errors == 0 {
@@ -235,6 +253,7 @@ fn record_ran(
         evidence: Some(ev.to_string()),
         added,
         skipped,
+        dropped,
     })
 }
 
@@ -259,12 +278,15 @@ pub fn sweep(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
 
 /// [`sweep`] with an explicit tool environment (tests inject fake tools).
 pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOutcome, Refusal> {
+    ctx.require_time("sweep")?;
     let data = ctx.data_files_dir()?;
+    let scope = ctx.scope()?;
     let table = load_table(&data, lang)?;
     let tmp = ctx.tmp_dir()?;
     let sweep_dir = ctx.stage_dir("sweep")?;
     let mut ledger = ctx.ledger()?;
-    let mut writer = CandidateWriter::new(&ledger);
+    let mut writer = CandidateWriter::for_ctx(ctx, &ledger)?;
+    let mut dropped_hits = 0u64;
 
     let mut order: Vec<String> = table
         .backends()
@@ -294,6 +316,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                 env,
                 scratch,
                 timeout: timeout_for(backend, env),
+                scope: scope.clone(),
             };
             adapters::run(backend, &job)
         };
@@ -305,20 +328,23 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                 evidence: None,
                 added: 0,
                 skipped: 0,
+                dropped: 0,
             },
             Outcome::Blocked { reason, raw } => {
                 let doc = json!({
                     "backend": backend, "lang": lang.as_str(), "status": "blocked",
                     "reason": reason, "capture": raw,
                 });
-                write_raw(&sweep_dir.join(format!("{backend}.json")), &doc)?;
-                artifacts.push(ctx.pointer(&format!("sweep/{backend}.json")));
+                let raw_name = raw_file(lang, backend);
+                write_raw(&sweep_dir.join(&raw_name), &doc)?;
+                artifacts.push(ctx.pointer(&format!("sweep/{raw_name}")));
                 Done {
                     coverage: BackendCoverage::blocked(&reason),
                     summary: json!({"status": "blocked", "reason": short(&reason)}),
                     evidence: None,
                     added: 0,
                     skipped: 0,
+                    dropped: 0,
                 }
             }
             Outcome::Ran(ran) => {
@@ -326,12 +352,14 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                     ledger: &mut ledger,
                     writer: &mut writer,
                     dir: &sweep_dir,
+                    scope: scope.as_ref(),
                 };
                 let d = record_ran(ctx, lang, backend, &rules, *ran, &mut sink)?;
-                artifacts.push(ctx.pointer(&format!("sweep/{backend}.json")));
+                artifacts.push(ctx.pointer(&format!("sweep/{}", raw_file(lang, backend))));
                 d
             }
         };
+        dropped_hits += done.dropped;
         added += done.added;
         skipped += done.skipped;
         if let Some(e) = done.evidence {
@@ -341,6 +369,19 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
         coverage.push((backend.clone(), done.coverage));
     }
 
+    let inside = |rel: &str| scope.as_ref().is_none_or(|s| s.includes(rel));
+    let out_of_scope = if scope.is_some() {
+        dla_census::walk::count_out_of_scope(&ctx.project, lang, &inside)
+    } else {
+        0
+    };
+    dla_census::record_out_of_scope(ctx, lang, out_of_scope)?;
+    if out_of_scope > 0 {
+        summary.insert("out_of_scope".into(), json!(out_of_scope));
+    }
+    if dropped_hits > 0 {
+        summary.insert("out_of_scope_hits".into(), json!(dropped_hits));
+    }
     CoverageManifest::update(&ctx.run_dir, |m| {
         for (b, c) in coverage {
             m.set_backend(lang.as_str(), &b, c);

@@ -86,6 +86,11 @@
           "description": "The iteration count passed to the workload.",
           "type": "string",
           "const": "n"
+        },
+        {
+          "description": "The position of a heap dump in a series ordered by capture time.",
+          "type": "string",
+          "const": "dump"
         }
       ]
     },
@@ -423,6 +428,11 @@
           "description": "A derived runtime-accounted versus unexplained split.",
           "type": "string",
           "const": "gap"
+        },
+        {
+          "description": "Holder sizes read from a series of heap dumps of one process.",
+          "type": "string",
+          "const": "dump"
         }
       ]
     },

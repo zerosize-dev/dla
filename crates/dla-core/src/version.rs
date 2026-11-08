@@ -5,9 +5,9 @@
 //! table of `n -> n+1` functions, or refused plainly when no path exists. The
 //! tables are empty because no document has needed a migration yet.
 //!
-//! Ledger lines are the exception to migration: versions 1 and 2 are both current.
+//! Ledger lines are the exception to migration: versions 1, 2 and 3 are all current.
 //! Each line keeps its version, because the version selects the rule set the line
-//! is replayed under (1: M0 rules, 2: M3 rules).
+//! is replayed under (1: M0 rules, 2: M3 rules, 3: M3 rules plus the artifact rules).
 
 use serde_json::Value;
 

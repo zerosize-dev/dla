@@ -214,27 +214,10 @@ struct ExecResult {
     spawn_error: Option<String>,
 }
 
-/// Kills the process group of `pid` (and, failing that, the process). `kill -s KILL --`:
-/// dash rejects `kill -KILL -- -pgid`.
+/// Kills the process group of `pid` (`dla_core::proc`: `kill -s KILL -- -pgid`, or
+/// `taskkill /T /F` on Windows).
 fn kill_group(pid: u32) {
-    #[cfg(unix)]
-    {
-        let _ = Command::new("sh")
-            .args(["-c", &format!("kill -s KILL -- -{pid} 2>/dev/null")])
-            .stdin(Stdio::null())
-            .status();
-    }
-    #[cfg(windows)]
-    {
-        let _ = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
-    #[cfg(not(any(unix, windows)))]
-    let _ = pid;
+    let _ = dla_core::proc::kill_group(pid, "KILL");
 }
 
 /// Spawns, registers, samples and waits for one process; kills its group at the timeout.
@@ -1398,6 +1381,7 @@ fn clip(s: &str, max: usize) -> String {
 /// `dla harness run <id>`: [`run_points`] plus one `workload` evidence (authority test)
 /// whose result names the harness.
 pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, Refusal> {
+    ctx.require_time("harness run")?;
     let manifest = ctx.harness(id)?;
     let out = run_points(ctx, &manifest, opts)?;
 

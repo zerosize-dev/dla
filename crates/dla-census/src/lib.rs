@@ -66,8 +66,12 @@ pub const TOOL: &str = "dla-census";
 /// For the JVM, class files under the project are read when present and tree-sitter is
 /// the fallback.
 pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
-    let files = walk::source_files(&ctx.project, lang);
-    let found = enumerate(ctx, lang, &files);
+    let scope = ctx.scope()?;
+    let inside = |rel: &str| scope.as_ref().is_none_or(|s| s.includes(rel));
+    let (files, out_of_scope) = walk::source_files_in(&ctx.project, lang, &inside);
+    let mut found = enumerate(ctx, lang, &files);
+    // Holders read from class files of a source that lies outside the scope.
+    found.raws.retain(|r| inside(&r.file));
     let usages = usage::find(&found.raws, &files);
     let entries: Vec<CensusEntry> = found
         .raws
@@ -131,7 +135,7 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
     ];
     let evidence: EvidenceId = ctx.add_evidence(&mut ledger, spec)?;
 
-    let mut writer = CandidateWriter::new(&ledger);
+    let mut writer = CandidateWriter::for_ctx(ctx, &ledger)?;
     let mut annotated = 0u64;
     for e in &entries {
         let id = writer.add(
@@ -162,6 +166,7 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
     }
 
     let enumerated = u64::try_from(entries.len()).unwrap_or(u64::MAX);
+    record_out_of_scope(ctx, lang, out_of_scope)?;
     CoverageManifest::update(&ctx.run_dir, |m| {
         m.set_backend(
             lang.as_str(),
@@ -176,16 +181,44 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
         candidates: writer.added(),
         skipped_duplicates: writer.skipped(),
         artifacts: vec![ctx.pointer(&raw_name)],
-        summary: json!({
-            "lang": lang.as_str(),
-            "source": found.source,
-            "holders": enumerated,
-            "by_holder": by_holder,
-            "annotated": annotated,
-            "files": files.iter().filter(|f| !f.is_test).count(),
-            "class_files": found.classes,
-        }),
+        summary: with_out_of_scope(
+            json!({
+                "lang": lang.as_str(),
+                "source": found.source,
+                "holders": enumerated,
+                "by_holder": by_holder,
+                "annotated": annotated,
+                "files": files.iter().filter(|f| !f.is_test).count(),
+                "class_files": found.classes,
+            }),
+            out_of_scope,
+        ),
     })
+}
+
+/// Records in `coverage.json` that `n` source files of `runtime` lie outside the scope.
+/// Every stage sees the same files, so the larger count wins instead of the counts
+/// adding up (a second stage or a re-run never double counts).
+pub fn record_out_of_scope(ctx: &ToolCtx, runtime: Runtime, n: u64) -> Result<(), Refusal> {
+    if n == 0 {
+        return Ok(());
+    }
+    CoverageManifest::update(&ctx.run_dir, |m| {
+        let w = m.worker_mut(runtime.as_str());
+        w.out_of_scope = w.out_of_scope.max(n);
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_refusal())
+}
+
+/// Adds `out_of_scope` to a summary object when it is non-zero.
+pub fn with_out_of_scope(mut v: Value, n: u64) -> Value {
+    if n > 0
+        && let Value::Object(m) = &mut v
+    {
+        m.insert("out_of_scope".into(), json!(n));
+    }
+    v
 }
 
 fn count_by(it: impl Iterator<Item = String>) -> BTreeMap<String, u64> {

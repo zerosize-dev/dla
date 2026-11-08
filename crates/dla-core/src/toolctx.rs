@@ -30,18 +30,26 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Ledger, NewFinding, Origin, Refusal, RunState,
+    CoverageManifest, Ledger, NewFinding, Origin, Refusal, RunState,
     consent::format_tiers,
     error::{Error, codes},
     evidence::{Authority, EvidenceCoverage, EvidenceKind, NewEvidence, Source, Tool, Unknown},
     finding::{Holder, Region, check_site},
+    fsutil::reserve_numbered,
     harness::{HARNESS_DIR, HarnessManifest},
     ids::{EvidenceId, FindingId},
     paths,
     series::{SERIES_DIR, next_number},
-    state::{DLA_DIR, ProcessRecord, now_utc},
+    state::{DLA_DIR, ProcessRecord, Scope, now_utc},
     trend::TREND_DIR,
 };
+
+/// Directory of alloc-test reports (`alloc/A<n>.json`).
+pub const ALLOC_DIR: &str = "alloc";
+/// Directory of attach results (`attach/P<n>/`).
+pub const ATTACH_DIR: &str = "attach";
+/// Directory of verifier bundles (`bundle/<finding>/`).
+pub const BUNDLE_DIR: &str = "bundle";
 
 /// Where a stage runs and what it may do.
 #[derive(Debug, Clone)]
@@ -131,28 +139,61 @@ impl ToolCtx {
         ))
     }
 
-    /// The ID the next series gets: `S<n>`, the highest `series/S<n>.json` plus one.
+    /// Reserves `<prefix><n>` in `dir` (see [`reserve_numbered`]); when the filesystem
+    /// refuses, falls back to the next unreserved number so callers keep their
+    /// infallible signature (their own write then reports the real I/O error).
+    fn reserve(dir: &Path, prefix: char, suffix: &str, dirs: bool) -> String {
+        let n = reserve_numbered(dir, prefix, suffix, dirs)
+            .map_or_else(|_| next_number(dir, prefix, suffix, dirs), |(n, _)| n);
+        format!("{prefix}{n}")
+    }
+
+    /// The ID the next series gets: `S<n>`. The id is reserved: `series/S<n>.json`
+    /// exists (empty) when this returns, and a concurrent caller gets the next number.
+    /// An empty file counts as absent for readers ([`crate::fsutil::is_written`]).
     pub fn next_series_id(&self) -> String {
-        format!(
-            "S{}",
-            next_number(&self.run_dir.join(SERIES_DIR), 'S', ".json", false)
-        )
+        Self::reserve(&self.run_dir.join(SERIES_DIR), 'S', ".json", false)
     }
 
-    /// The ID the next trend report gets: `T<n>`, the highest `trend/T<n>.json` plus one.
+    /// The ID the next trend report gets: `T<n>`; `trend/T<n>.json` is reserved.
     pub fn next_trend_id(&self) -> String {
-        format!(
-            "T{}",
-            next_number(&self.run_dir.join(TREND_DIR), 'T', ".json", false)
-        )
+        Self::reserve(&self.run_dir.join(TREND_DIR), 'T', ".json", false)
     }
 
-    /// The ID the next harness gets: `H<n>`, the highest `harness/H<n>` directory plus one.
+    /// The ID the next harness gets: `H<n>`; the directory `harness/H<n>` is reserved.
     pub fn next_harness_id(&self) -> String {
-        format!(
-            "H{}",
-            next_number(&self.run_dir.join(HARNESS_DIR), 'H', "", true)
-        )
+        Self::reserve(&self.run_dir.join(HARNESS_DIR), 'H', "", true)
+    }
+
+    /// The ID the next alloc-test report gets: `A<n>`; `alloc/A<n>.json` is reserved.
+    pub fn next_alloc_id(&self) -> String {
+        Self::reserve(&self.run_dir.join(ALLOC_DIR), 'A', ".json", false)
+    }
+
+    /// The ID the next attach gets: `P<n>`; the directory `attach/P<n>` is reserved.
+    pub fn next_attach_id(&self) -> String {
+        Self::reserve(&self.run_dir.join(ATTACH_DIR), 'P', "", true)
+    }
+
+    /// Reserves and returns the directory for a finding's bundle: `bundle/<name>`,
+    /// or `bundle/<name>.2`, `.3`, ... when earlier bundles of the same finding exist.
+    /// `name` is the finding id with `/` replaced by `_`.
+    pub fn next_bundle_dir(&self, name: &str) -> Result<PathBuf, Refusal> {
+        let base = self.run_dir.join(BUNDLE_DIR);
+        fs::create_dir_all(&base).map_err(|e| Error::io(&base, e).to_refusal())?;
+        let mut n = 1u32;
+        loop {
+            let path = if n == 1 {
+                base.join(name)
+            } else {
+                base.join(format!("{name}.{n}"))
+            };
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                Err(e) => return Err(Error::io(&path, e).to_refusal()),
+            }
+        }
     }
 
     /// The manifest of harness `id`.
@@ -179,38 +220,39 @@ impl ToolCtx {
         }
     }
 
-    /// Records a process DLA started in `state.json`'s `processes`. The state is read
-    /// again right before the atomic write, so a concurrent change to another field
-    /// is not lost.
-    pub fn register_process(&self, record: ProcessRecord) -> Result<(), Refusal> {
-        let mut state = RunState::load(&self.run_dir).map_err(|e| e.to_refusal())?;
-        state.processes.push(record);
-        state.save(&self.run_dir).map_err(|e| e.to_refusal())
+    /// Records a process in `state.json`'s `processes`, under the run lock. A record
+    /// without a `worker` gets this context's worker.
+    pub fn register_process(&self, mut record: ProcessRecord) -> Result<(), Refusal> {
+        if record.worker.is_none() {
+            record.worker.clone_from(&self.worker);
+        }
+        RunState::update(&self.run_dir, |state| {
+            state.processes.push(record);
+            Ok(())
+        })
+        .map_err(|e| e.to_refusal())
     }
 
     /// Marks the registered process `pid` (with `start_time`, when both sides have one)
-    /// as stopped now. Returns whether a running record matched. Re-reads the state
-    /// right before the atomic write.
+    /// as stopped now. Returns whether a running record matched. Runs under the run
+    /// lock.
     pub fn mark_process_stopped(
         &self,
         pid: u32,
         start_time: Option<&str>,
     ) -> Result<bool, Refusal> {
-        let mut state = RunState::load(&self.run_dir).map_err(|e| e.to_refusal())?;
-        let hit = state.processes.iter_mut().rev().find(|p| {
-            p.pid == pid
-                && p.stopped_at.is_none()
-                && match (start_time, p.start_time.as_deref()) {
-                    (Some(a), Some(b)) => a == b,
-                    _ => true,
-                }
-        });
-        let Some(p) = hit else {
-            return Ok(false);
-        };
-        p.stopped_at = Some(now_utc());
-        state.save(&self.run_dir).map_err(|e| e.to_refusal())?;
-        Ok(true)
+        RunState::update(&self.run_dir, |state| {
+            let hit = state.processes.iter_mut().rev().find(|p| {
+                p.pid == pid
+                    && p.stopped_at.is_none()
+                    && match (start_time, p.start_time.as_deref()) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => true,
+                    }
+            });
+            Ok(hit.map(|p| p.stopped_at = Some(now_utc())).is_some())
+        })
+        .map_err(|e| e.to_refusal())
     }
 
     /// Replays the run's ledger.
@@ -218,16 +260,60 @@ impl ToolCtx {
         Ledger::load_for(&self.run_dir, self.worker.as_deref()).map_err(|e| e.to_refusal())
     }
 
-    /// Whether a project-relative path (`/` separators) is inside the run's scope.
-    // M4 skeleton: implemented by the run-state work (reads `state.json` scope).
-    pub fn in_scope(&self, _rel: &str) -> bool {
-        true
+    /// The run's scope from `state.json`; `None` when the run has none (everything is
+    /// in scope). Loop callers read it once and call [`Scope::includes`].
+    pub fn scope(&self) -> Result<Option<Scope>, Refusal> {
+        Ok(RunState::load(&self.run_dir)
+            .map_err(|e| e.to_refusal())?
+            .scope)
     }
 
-    /// Refuses with code `time-budget` when the worker's deadline (worker mode) or the
-    /// run's deadline has passed. `what` names the step for the message.
-    // M4 skeleton: implemented by the run-state work.
-    pub fn require_time(&self, _what: &str) -> Result<(), Refusal> {
+    /// Whether a project-relative path (`/` separators) is inside the run's scope.
+    /// A run without a scope, or one whose state cannot be read, includes everything.
+    pub fn in_scope(&self, rel: &str) -> bool {
+        match self.scope() {
+            Ok(Some(scope)) => scope.includes(rel),
+            _ => true,
+        }
+    }
+
+    /// Adds `count` to the number of source files of `runtime` skipped because they
+    /// lie outside the scope (`coverage.json`, under the run lock).
+    pub fn add_out_of_scope(&self, runtime: &str, count: u64) -> Result<(), Refusal> {
+        if count == 0 {
+            return Ok(());
+        }
+        CoverageManifest::update(&self.run_dir, |m| {
+            let w = m.worker_mut(runtime);
+            w.out_of_scope = w.out_of_scope.saturating_add(count);
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_refusal())
+    }
+
+    /// Refuses with code `time-budget` when the worker's deadline (worker mode, from the
+    /// registry; an unregistered worker has only the run's) or the run's deadline has
+    /// passed. `what` names the step for the message. The fix records the open finding
+    /// as unresolved for lack of time.
+    pub fn require_time(&self, what: &str) -> Result<(), Refusal> {
+        let state = RunState::load(&self.run_dir).map_err(|e| e.to_refusal())?;
+        let now = now_utc();
+        let mut limits = Vec::new();
+        if let Some(w) = self.worker.as_deref().and_then(|w| state.worker(w)) {
+            limits.push((format!("worker {}", w.name), w.deadline));
+        }
+        limits.push(("run".to_owned(), state.budget.deadline));
+        for (who, deadline) in limits {
+            if now > deadline {
+                let when = deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                return Err(Refusal::new(
+                    codes::TIME_BUDGET,
+                    format!("{what} cannot start: the {who} deadline {when} has passed"),
+                    format!("time before the {who} deadline {when}"),
+                    "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -344,6 +430,8 @@ pub struct CandidateWriter {
     seen: HashSet<(String, String)>,
     added: u64,
     skipped: u64,
+    scope: Option<Scope>,
+    out_of_scope: u64,
 }
 
 impl CandidateWriter {
@@ -357,7 +445,22 @@ impl CandidateWriter {
             seen,
             added: 0,
             skipped: 0,
+            scope: None,
+            out_of_scope: 0,
         }
+    }
+
+    /// Like [`CandidateWriter::new`], restricted to the run's scope: a candidate whose
+    /// site file is outside it is skipped and counted, never added.
+    pub fn for_ctx(ctx: &ToolCtx, ledger: &Ledger) -> Result<Self, Refusal> {
+        Ok(Self::new(ledger).with_scope(ctx.scope()?))
+    }
+
+    /// Restricts the writer to `scope` (`None`: no restriction).
+    #[must_use]
+    pub fn with_scope(mut self, scope: Option<Scope>) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// Adds `c` unless `(origin, site)` exists. Returns the new ID, or `None` for a
@@ -371,6 +474,13 @@ impl CandidateWriter {
                 "report this as a dla bug",
             )
         })?;
+        if let Some(scope) = &self.scope
+            && let Some((file, _)) = c.site.rsplit_once(':')
+            && !scope.includes(file)
+        {
+            self.out_of_scope += 1;
+            return Ok(None);
+        }
         let key = (c.origin.clone(), c.site.clone());
         if self.seen.contains(&key) {
             self.skipped += 1;
@@ -408,6 +518,11 @@ impl CandidateWriter {
     pub fn skipped(&self) -> u64 {
         self.skipped
     }
+
+    /// Candidates skipped so far because their site file is outside the scope.
+    pub fn out_of_scope(&self) -> u64 {
+        self.out_of_scope
+    }
 }
 
 /// What a stage reports; the CLI prints it as the command's JSON object (bounded).
@@ -439,7 +554,7 @@ pub fn not_implemented(what: &str) -> Refusal {
 mod tests {
     use super::*;
     use crate::{
-        EvidenceKind,
+        CoverageManifest, EvidenceKind,
         evidence::{Authority, Unknown},
         state::{Consent, ConsentGiver, now_utc},
     };
@@ -532,7 +647,8 @@ mod tests {
         fs::write(ctx.run_dir.join("harness/H11"), "a file, not a harness").unwrap();
         assert_eq!(ctx.next_series_id(), "S4");
         assert_eq!(ctx.next_trend_id(), "T8");
-        assert_eq!(ctx.next_harness_id(), "H11");
+        // H11 is taken by a file, so the reservation moves on.
+        assert_eq!(ctx.next_harness_id(), "H12");
     }
 
     #[test]
@@ -671,5 +787,168 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(e.code, codes::INVALID_SITE);
+    }
+
+    fn scope(kind: crate::state::ScopeKind, path: &str, excluded: &[&str]) -> Scope {
+        Scope {
+            kind,
+            path: path.into(),
+            excluded: excluded.iter().map(|e| (*e).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn scope_matching_is_by_component() {
+        use crate::state::ScopeKind::{Module, Repository, Service};
+        let repo = scope(Repository, ".", &["vendor", "src/gen/"]);
+        let module = scope(Module, "services/api", &["services/api/target"]);
+        let svc = scope(Service, "./svc/", &[]);
+        let table: &[(&Scope, &str, bool)] = &[
+            (&repo, "a.py", true),
+            (&repo, "src/main/A.java", true),
+            (&repo, "vendor/x.go", false),
+            (&repo, "vendor", false),
+            (&repo, "vendors/x.go", true),
+            (&repo, "src/gen/x.rs", false),
+            (&repo, "src/generated/x.rs", true),
+            (&repo, "./a.py", true),
+            (&repo, "../a.py", false),
+            (&repo, "a/../b.py", false),
+            (&repo, "/etc/passwd", false),
+            (&repo, "a\\b.py", true),
+            (&module, "services/api/src/A.java", true),
+            (&module, "services/api", true),
+            (&module, "services/apis/A.java", false),
+            (&module, "services/api/target/x.class", false),
+            (&module, "services/other/A.java", false),
+            (&module, "services", false),
+            (&module, "a.py", false),
+            (&svc, "svc/a.go", true),
+            (&svc, "svcx/a.go", false),
+        ];
+        for (sc, path, want) in table {
+            assert_eq!(sc.includes(path), *want, "{:?} {path}", sc.path);
+        }
+        assert!(module.may_contain("services"));
+        assert!(module.may_contain("services/api/src"));
+        assert!(!module.may_contain("services/other"));
+        assert!(!module.may_contain("services/api/target"));
+        assert!(repo.may_contain("src"));
+        assert!(!repo.may_contain("vendor"));
+    }
+
+    #[test]
+    fn candidates_outside_the_scope_are_counted_not_added() {
+        let (_d, ctx) = run(None);
+        RunState::update(&ctx.run_dir, |s| {
+            s.scope = Some(scope(crate::state::ScopeKind::Module, "svc", &["svc/gen"]));
+            Ok(())
+        })
+        .unwrap();
+        assert!(ctx.in_scope("svc/a.py"));
+        assert!(!ctx.in_scope("other/a.py"));
+        let mut ledger = ctx.ledger().unwrap();
+        let ev = ctx
+            .add_evidence(
+                &mut ledger,
+                EvidenceSpec::new(EvidenceKind::StaticHit, "ruff", "0.1", json!({"hits": 2})),
+            )
+            .unwrap();
+        let mut w = CandidateWriter::for_ctx(&ctx, &ledger).unwrap();
+        let cand = |site: &str| Candidate {
+            origin: "detector:ruff/B019".into(),
+            evidence: vec![ev.clone()],
+            site: site.into(),
+            ..Candidate::default()
+        };
+        assert!(w.add(&mut ledger, cand("other/a.py:3")).unwrap().is_none());
+        assert!(
+            w.add(&mut ledger, cand("svc/gen/a.py:3"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(w.add(&mut ledger, cand("svc/a.py:3")).unwrap().is_some());
+        assert_eq!((w.added(), w.skipped(), w.out_of_scope()), (1, 0, 2));
+        // An unscoped writer ignores the scope.
+        let mut plain = CandidateWriter::new(&ledger);
+        assert!(
+            plain
+                .add(&mut ledger, cand("other/a.py:3"))
+                .unwrap()
+                .is_some()
+        );
+        ctx.add_out_of_scope("python", 2).unwrap();
+        ctx.add_out_of_scope("python", 3).unwrap();
+        let cov = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+        assert_eq!(cov.workers["python"].out_of_scope, 5);
+    }
+
+    #[test]
+    fn require_time_names_the_deadline_and_the_fix() {
+        let (_d, mut ctx) = run(None);
+        ctx.require_time("sampling").unwrap();
+        let past = now_utc() - chrono::TimeDelta::try_seconds(60).unwrap();
+        // A run whose deadline passed.
+        RunState::update(&ctx.run_dir, |s| {
+            s.budget.deadline = past;
+            Ok(())
+        })
+        .unwrap();
+        let e = ctx.require_time("sampling").unwrap_err();
+        assert_eq!(e.code, codes::TIME_BUDGET);
+        assert!(e.message.contains("sampling") && e.message.contains("run deadline"));
+        assert!(
+            e.message
+                .contains(&past.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        );
+        assert_eq!(
+            e.fix,
+            "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\""
+        );
+        // A worker past its own deadline while the run still has time.
+        let future = now_utc() + chrono::TimeDelta::try_seconds(600).unwrap();
+        RunState::update(&ctx.run_dir, |s| {
+            s.budget.deadline = future;
+            s.workers.push(crate::state::WorkerEntry {
+                name: "jvm".into(),
+                runtime: "jvm".into(),
+                share_secs: 1,
+                deadline: past,
+                started_at: None,
+                status: crate::state::WorkerStatus::Registered,
+                slice: "ledger.jvm.jsonl".into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+        ctx.require_time("sampling").unwrap();
+        ctx.worker = Some("jvm".into());
+        let e = ctx.require_time("alloc-test").unwrap_err();
+        assert!(e.message.contains("worker jvm deadline"), "{}", e.message);
+        // An unregistered worker only has the run's deadline.
+        ctx.worker = Some("go".into());
+        ctx.require_time("alloc-test").unwrap();
+    }
+
+    #[test]
+    fn registered_processes_carry_the_worker() {
+        let (_d, mut ctx) = run(None);
+        ctx.worker = Some("rust".into());
+        let rec = |worker: Option<&str>| ProcessRecord {
+            pid: 7,
+            start_time: None,
+            kind: crate::state::ProcessKind::Harness,
+            command: "x".into(),
+            started_at: now_utc(),
+            stopped_at: None,
+            role: crate::state::ProcessRole::Started,
+            worker: worker.map(str::to_owned),
+            cleanup: Vec::new(),
+        };
+        ctx.register_process(rec(None)).unwrap();
+        ctx.register_process(rec(Some("jvm"))).unwrap();
+        let st = RunState::load(&ctx.run_dir).unwrap();
+        assert_eq!(st.processes[0].worker.as_deref(), Some("rust"));
+        assert_eq!(st.processes[1].worker.as_deref(), Some("jvm"));
     }
 }

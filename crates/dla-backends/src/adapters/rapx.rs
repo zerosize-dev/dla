@@ -108,7 +108,10 @@ pub fn run(job: &Job) -> Outcome {
         base(Cmd::new(&cargo).args(["+nightly", "rapx", "--version"]))
             .env("PATH", path_with(&rapx, job)),
     );
-    let crates = crate_dirs(job.project());
+    let crates: Vec<String> = crate_dirs(job.project())
+        .into_iter()
+        .filter(|c| job.may_contain(c))
+        .collect();
     if crates.is_empty() {
         return Outcome::Ran(Box::new(Ran {
             version,

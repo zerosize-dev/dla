@@ -193,9 +193,10 @@ fn hits_become_candidates_with_evidence_raw_file_and_coverage() {
         ]
     );
 
-    let raw: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(f.ctx.run_dir.join("sweep/ruff.json")).unwrap())
-            .unwrap();
+    let raw: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(f.ctx.run_dir.join("sweep/python-ruff.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(raw["status"], "ran");
     assert_eq!(raw["version"], "9.9.9");
     assert_eq!(raw["hits"].as_array().unwrap().len(), 2);
@@ -215,6 +216,51 @@ fn hits_become_candidates_with_evidence_raw_file_and_coverage() {
 
     // The tool never wrote into the project outside .dla.
     assert_eq!(tree(&f.project), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn module_scope_drops_hits_outside_it_and_counts_the_files() {
+    let f = fixture(
+        TABLE,
+        &[
+            ("pkg/a.py", "x = 1\n"),
+            ("pkg/b.py", "y = 2\n"),
+            ("other/c.py", "z = 3\n"),
+        ],
+    );
+    fake_tool(&f, "ruff", FAKE_RUFF);
+    RunState::update(&f.ctx.run_dir, |s| {
+        s.scope = Some(dla_core::state::Scope {
+            kind: dla_core::state::ScopeKind::Module,
+            path: "pkg".into(),
+            excluded: vec!["pkg/b.py".into()],
+        });
+        Ok(())
+    })
+    .unwrap();
+    let out = sweep_with(&f.ctx, Runtime::Python, &env(&f)).unwrap();
+    // The fake tool reports pkg/a.py (in scope) and pkg/b.py (excluded).
+    assert_eq!(out.candidates, 1, "{out:?}");
+    assert_eq!(out.summary["out_of_scope"], 2);
+    assert_eq!(out.summary["out_of_scope_hits"], 1);
+    let ledger = f.ctx.ledger().unwrap();
+    let sites: Vec<_> = ledger.findings().filter_map(|x| x.site.clone()).collect();
+    assert_eq!(sites, ["pkg/a.py:7"]);
+    let cov = CoverageManifest::load(&f.ctx.run_dir).unwrap().unwrap();
+    assert_eq!(cov.workers["python"].out_of_scope, 2);
+}
+
+#[test]
+fn two_languages_never_share_a_raw_file() {
+    assert_eq!(
+        dla_backends::sweep::raw_file(Runtime::Jvm, "dla"),
+        "jvm-dla.json"
+    );
+    assert_ne!(
+        dla_backends::sweep::raw_file(Runtime::Jvm, "codeql"),
+        dla_backends::sweep::raw_file(Runtime::Python, "codeql")
+    );
 }
 
 #[cfg(unix)]
@@ -252,7 +298,7 @@ fn a_failing_tool_is_blocked_with_its_output_kept() {
             .unwrap()
             .contains("boom: config error")
     );
-    let raw = fs::read_to_string(f.ctx.run_dir.join("sweep/ruff.json")).unwrap();
+    let raw = fs::read_to_string(f.ctx.run_dir.join("sweep/python-ruff.json")).unwrap();
     assert!(raw.contains("boom: config error"));
     assert_eq!(out.evidence.len(), 1, "only the dla backend ran");
 }

@@ -223,3 +223,56 @@ fn an_empty_project_probes_cleanly() {
     let out = run_with(&ctx, &ProbeOptions::default(), None, Some(&pv)).unwrap();
     assert_eq!(out.summary["runtimes"], serde_json::json!([]));
 }
+
+#[test]
+fn a_worker_probes_only_its_runtime_into_its_own_file() {
+    let (_d, mut ctx) = setup(
+        None,
+        &[("go.mod", "module m\n\ngo 1.22\n"), ("app.py", "x = 1\n")],
+    );
+    let (_e, pv) = empty_dirs();
+    // The core's run-level probe.
+    run_with(&ctx, &ProbeOptions::default(), None, Some(&pv)).unwrap();
+    let core = fs::read(report_path(&ctx.run_dir)).unwrap();
+
+    ctx.worker = Some("go".into());
+    let opts = ProbeOptions {
+        runtime: Some(Runtime::Go),
+        ..ProbeOptions::default()
+    };
+    let out = run_with(&ctx, &opts, None, Some(&pv)).unwrap();
+    assert_eq!(out.artifacts, [".dla/r1/probe/go.json"]);
+    assert_eq!(fs::read(report_path(&ctx.run_dir)).unwrap(), core);
+    let own: ProbeReport =
+        serde_json::from_slice(&fs::read(ctx.run_dir.join("probe/go.json")).unwrap()).unwrap();
+    let rts: Vec<_> = own.runtimes.iter().map(|r| r.runtime).collect();
+    assert_eq!(rts, vec![Runtime::Go]);
+    assert_eq!(
+        report_path_for(&ctx.run_dir, Some("go")),
+        ctx.run_dir.join("probe/go.json")
+    );
+    assert_eq!(
+        report_path_for(&ctx.run_dir, Some("python")),
+        report_path(&ctx.run_dir)
+    );
+}
+
+#[test]
+fn build_after_the_deadline_refuses_with_the_time_budget_code() {
+    let (_d, ctx) = setup(Some(vec![1]), &[("go.mod", "go 1.22\n")]);
+    RunState::update(&ctx.run_dir, |s| {
+        s.budget.deadline = now_utc() - chrono::Duration::seconds(5);
+        Ok(())
+    })
+    .unwrap();
+    let e = run(
+        &ctx,
+        &ProbeOptions {
+            build: true,
+            ..ProbeOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(e.code, codes::TIME_BUDGET);
+    assert!(!ctx.run_dir.join("probe").exists());
+}

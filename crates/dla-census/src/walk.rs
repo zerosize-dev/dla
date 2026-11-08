@@ -102,11 +102,40 @@ pub fn is_test_path(rel: &str) -> bool {
 /// All source files of a runtime under `root`, read into memory. Unreadable and
 /// oversized files are skipped.
 pub fn source_files(root: &Path, runtime: Runtime) -> Vec<SourceFile> {
+    source_files_in(root, runtime, &|_| true).0
+}
+
+/// Number of non-test source files of `runtime` under `root` that `in_scope` rejects
+/// (names only; nothing is read).
+pub fn count_out_of_scope(root: &Path, runtime: Runtime, in_scope: &dyn Fn(&str) -> bool) -> u64 {
+    let rels = list_files(root, false, &|rel| {
+        Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime)
+    });
+    rels.iter()
+        .filter(|r| !in_scope(r) && !is_test_path(r))
+        .count() as u64
+}
+
+/// Like [`source_files`], restricted by `in_scope` (project-relative path -> inside the
+/// run's scope). Returns the files read and the number of non-test source files of the
+/// runtime that were skipped because they lie outside the scope.
+pub fn source_files_in(
+    root: &Path,
+    runtime: Runtime,
+    in_scope: &dyn Fn(&str) -> bool,
+) -> (Vec<SourceFile>, u64) {
     let rels = list_files(root, false, &|rel| {
         Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime)
     });
     let mut out = Vec::new();
+    let mut skipped = 0u64;
     for rel in rels {
+        if !in_scope(&rel) {
+            if !is_test_path(&rel) {
+                skipped += 1;
+            }
+            continue;
+        }
         let path = root.join(&rel);
         let Ok(meta) = fs::metadata(&path) else {
             continue;
@@ -127,7 +156,7 @@ pub fn source_files(root: &Path, runtime: Runtime) -> Vec<SourceFile> {
             lang,
         });
     }
-    out
+    (out, skipped)
 }
 
 #[cfg(test)]

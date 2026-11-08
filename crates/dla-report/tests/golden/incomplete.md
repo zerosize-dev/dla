@@ -4,6 +4,10 @@ Run: `20260101-000000-abcd`
 
 Status: INCOMPLETE (4 open)
 
+Entry: repository
+
+Scope: repository; excluded: none; out of scope: none
+
 Findings: 2 enumerated, 0 dispositioned; confirmed 0, strong 0, refuted 0, suspected 0, unresolved 0
 
 Residual: heap 0.5 MB/h unattributed of 10 total (threshold 1); off-heap 6 MB/h unattributed of 8 total (threshold 1) ABOVE THRESHOLD, see O1

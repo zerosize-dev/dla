@@ -113,6 +113,8 @@ pub mod codes {
     pub const ANNOTATION_CONFLICT: &str = "annotation-conflict";
     /// A series file is invalid.
     pub const INVALID_SERIES: &str = "invalid-series";
+    /// The run's or the worker's time budget has passed.
+    pub const TIME_BUDGET: &str = "time-budget";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

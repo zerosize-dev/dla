@@ -1,8 +1,9 @@
 //! Validated identifier newtypes.
 //!
 //! Evidence `E<n>`, finding `F<n>`, sibling hypothesis `F<n>.n<k>`, open item `O<n>`.
-//! A worker slice prefix `<worker>/` (lowercase letters, digits, `-`) is accepted
-//! everywhere; this crate never generates one.
+//! A worker slice prefix `<worker>/` (a valid worker name, see [`valid_worker_name`]) is
+//! accepted everywhere; a ledger opened in worker mode allocates IDs with its prefix
+//! (`jvm/E3`, `jvm/F2.n1`).
 
 use std::{borrow::Cow, fmt, str::FromStr};
 
@@ -21,16 +22,20 @@ pub struct IdParseError {
     pub expected: &'static str,
 }
 
+/// Whether `name` is a valid worker name: lowercase ASCII letters, digits and `-`,
+/// starting with a letter, at most 32 bytes (runtime names such as `jvm` or `rust`).
+pub fn valid_worker_name(name: &str) -> bool {
+    name.len() <= 32
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 fn split_prefix(s: &str) -> Option<(Option<String>, &str)> {
     match s.split_once('/') {
         None => Some((None, s)),
-        Some((prefix, rest)) => {
-            let ok = !prefix.is_empty()
-                && prefix
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
-            ok.then(|| (Some(prefix.to_owned()), rest))
-        }
+        Some((prefix, rest)) => valid_worker_name(prefix).then(|| (Some(prefix.to_owned()), rest)),
     }
 }
 
@@ -91,6 +96,21 @@ impl EvidenceId {
             n: n.max(1),
         }
     }
+    /// `<prefix>/E<n>` for a worker slice (`prefix` is not validated here; parsing
+    /// refuses an invalid one). `None` gives the unprefixed ID.
+    pub fn with_prefix(prefix: Option<&str>, n: u32) -> Self {
+        Self {
+            prefix: prefix.map(str::to_owned),
+            n: n.max(1),
+        }
+    }
+    /// The same ID under another prefix (`None` removes it).
+    pub fn reprefixed(&self, prefix: Option<&str>) -> Self {
+        Self {
+            prefix: prefix.map(str::to_owned),
+            n: self.n,
+        }
+    }
     /// The worker prefix, if any.
     pub fn prefix(&self) -> Option<&str> {
         self.prefix.as_deref()
@@ -138,6 +158,21 @@ impl OpenItemId {
         Self {
             prefix: None,
             n: n.max(1),
+        }
+    }
+    /// `<prefix>/O<n>` for a worker slice (`prefix` is not validated here; parsing
+    /// refuses an invalid one). `None` gives the unprefixed ID.
+    pub fn with_prefix(prefix: Option<&str>, n: u32) -> Self {
+        Self {
+            prefix: prefix.map(str::to_owned),
+            n: n.max(1),
+        }
+    }
+    /// The same ID under another prefix (`None` removes it).
+    pub fn reprefixed(&self, prefix: Option<&str>) -> Self {
+        Self {
+            prefix: prefix.map(str::to_owned),
+            n: self.n,
         }
     }
     /// The worker prefix, if any.
@@ -190,6 +225,22 @@ impl FindingId {
             prefix: None,
             n: n.max(1),
             sibling: None,
+        }
+    }
+    /// `<prefix>/F<n>` for a worker slice; `None` gives the unprefixed ID.
+    pub fn with_prefix(prefix: Option<&str>, n: u32) -> Self {
+        Self {
+            prefix: prefix.map(str::to_owned),
+            n: n.max(1),
+            sibling: None,
+        }
+    }
+    /// The same ID under another prefix (`None` removes it); a sibling stays a sibling.
+    pub fn reprefixed(&self, prefix: Option<&str>) -> Self {
+        Self {
+            prefix: prefix.map(str::to_owned),
+            n: self.n,
+            sibling: self.sibling,
         }
     }
     /// The sibling ID `F<n>.n<k>` under this finding (keeps the prefix).

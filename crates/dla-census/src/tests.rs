@@ -174,3 +174,48 @@ fn candidates_carry_no_archetype_tag() {
             .all(|f| f.suggested_archetype.is_none())
     );
 }
+
+/// Sets the run's scope in `state.json`.
+fn set_scope(ctx: &ToolCtx, kind: dla_core::state::ScopeKind, path: &str, excluded: &[&str]) {
+    RunState::update(&ctx.run_dir, |s| {
+        s.scope = Some(dla_core::state::Scope {
+            kind,
+            path: path.into(),
+            excluded: excluded.iter().map(|e| (*e).to_owned()).collect(),
+        });
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn module_scope_skips_other_modules_and_excluded_dirs_and_counts_them() {
+    let reg = "_L = {}\n\ndef sub(t, l):\n    _L.setdefault(t, []).append(l)\n";
+    let (_d, ctx) = project(&[
+        ("svc/a/reg.py", reg),
+        ("svc/a/gen/reg.py", reg),
+        ("other/reg.py", reg),
+        ("other/two.py", reg),
+    ]);
+    set_scope(
+        &ctx,
+        dla_core::state::ScopeKind::Module,
+        "svc/a",
+        &["svc/a/gen"],
+    );
+    let out = census(&ctx, Runtime::Python).unwrap();
+    assert_eq!(out.candidates, 1);
+    assert_eq!(out.summary["out_of_scope"], 3);
+    let ledger = ctx.ledger().unwrap();
+    let sites: Vec<_> = ledger.findings().filter_map(|f| f.site.clone()).collect();
+    assert_eq!(sites, ["svc/a/reg.py:1"]);
+    let cov = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+    assert_eq!(cov.workers["python"].out_of_scope, 3);
+}
+
+#[test]
+fn no_scope_reports_no_out_of_scope_field() {
+    let (_d, ctx) = project(&[("a.py", "_L = {}\n")]);
+    let out = census(&ctx, Runtime::Python).unwrap();
+    assert!(out.summary.get("out_of_scope").is_none());
+}

@@ -116,7 +116,13 @@ fn is_test_path(rel: &str) -> bool {
         || stem.ends_with("test") && name.ends_with(".kt")
 }
 
-fn collect(dir: &Path, root: &Path, langs: &[Lang], out: &mut Vec<SrcFile>) {
+fn collect(
+    dir: &Path,
+    root: &Path,
+    langs: &[Lang],
+    inside: &dyn Fn(&str) -> bool,
+    out: &mut Vec<SrcFile>,
+) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -130,7 +136,7 @@ fn collect(dir: &Path, root: &Path, langs: &[Lang], out: &mut Vec<SrcFile>) {
             if SKIP_DIRS.contains(&name.as_str()) {
                 continue;
             }
-            collect(&path, root, langs, out);
+            collect(&path, root, langs, inside, out);
         } else if ft.is_file() {
             let Some(lang) = Lang::from_path(&path) else {
                 continue;
@@ -143,7 +149,7 @@ fn collect(dir: &Path, root: &Path, langs: &[Lang], out: &mut Vec<SrcFile>) {
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            if is_test_path(&rel) {
+            if is_test_path(&rel) || !inside(&rel) {
                 continue;
             }
             if e.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
@@ -170,10 +176,13 @@ fn collect(dir: &Path, root: &Path, langs: &[Lang], out: &mut Vec<SrcFile>) {
 /// and never repeat a `(rule, file, line)`.
 pub fn run(ctx: &ToolCtx, rt: Runtime) -> Result<Vec<StaticHit>, Refusal> {
     let mut files = Vec::new();
+    let scope = ctx.scope()?;
+    let inside = |rel: &str| scope.as_ref().is_none_or(|s| s.includes(rel));
     collect(
         &ctx.project,
         &ctx.project,
         &Lang::of_runtime(rt),
+        &inside,
         &mut files,
     );
     Ok(analyze(&files, rt))
@@ -322,7 +331,13 @@ mod tests {
         std::fs::write(root.join("node_modules/x/b.js"), code).unwrap();
         let files = {
             let mut v = Vec::new();
-            collect(root, root, &Lang::of_runtime(Runtime::Node), &mut v);
+            collect(
+                root,
+                root,
+                &Lang::of_runtime(Runtime::Node),
+                &|_| true,
+                &mut v,
+            );
             v
         };
         assert_eq!(files.len(), 1);

@@ -4,6 +4,10 @@ Run: `20260101-000000-abcd`
 
 Status: COMPLETE
 
+Entry: repository
+
+Scope: repository; excluded: none; out of scope: none
+
 Findings: 3 enumerated, 3 dispositioned; confirmed 1, strong 0, refuted 2, suspected 0, unresolved 0
 
 Residual: not measured

@@ -38,7 +38,9 @@ pub fn render_markdown(view: &RunView) -> String {
     if !st.complete {
         open_items(&mut out, &st);
     }
+    workers(&mut out, view);
     findings(&mut out, view);
+    merged_duplicates(&mut out, view);
     ruled_out(&mut out, view);
     blind_spots(&mut out, view);
     checklist(&mut out, view);
@@ -124,6 +126,8 @@ fn header(out: &mut String, view: &RunView, st: &dla_core::ReportStatus) {
     } else {
         let _ = writeln!(out, "Status: INCOMPLETE ({} open)\n", st.blocking.len());
     }
+    let _ = writeln!(out, "Entry: {}\n", entry_line(view));
+    let _ = writeln!(out, "Scope: {}\n", scope_line(view));
     let s = &c.by_state;
     let _ = writeln!(
         out,
@@ -138,6 +142,63 @@ fn header(out: &mut String, view: &RunView, st: &dla_core::ReportStatus) {
     );
     let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
     let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
+}
+
+/// The entry path, with the artifacts of an artifact run.
+fn entry_line(view: &RunView) -> String {
+    let st = &view.state;
+    if st.artifacts.is_empty() {
+        return st.entry.to_string();
+    }
+    format!(
+        "{} ({})",
+        st.entry,
+        st.artifacts
+            .iter()
+            .map(|a| code(a))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// The scope kind and path, the excluded paths, and the source files left out of each
+/// runtime because they lie outside the scope (from the coverage manifest).
+fn scope_line(view: &RunView) -> String {
+    let (kind, path, excluded) = match &view.state.scope {
+        Some(sc) => (
+            sc.kind.to_string(),
+            sc.path.as_str(),
+            sc.excluded.as_slice(),
+        ),
+        None => ("repository".to_owned(), ".", &[][..]),
+    };
+    let head = if path.is_empty() || path == "." {
+        kind
+    } else {
+        format!("{kind} {}", code(path))
+    };
+    let excluded = if excluded.is_empty() {
+        "none".to_owned()
+    } else {
+        excluded
+            .iter()
+            .map(|e| code(e))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let out_of_scope: Vec<String> = view
+        .coverage
+        .iter()
+        .flat_map(|c| c.workers.iter())
+        .filter(|(_, w)| w.out_of_scope > 0)
+        .map(|(name, w)| format!("{} {}", inline(name), plural_n(w.out_of_scope, "file")))
+        .collect();
+    let out_of_scope = if out_of_scope.is_empty() {
+        "none".to_owned()
+    } else {
+        out_of_scope.join(", ")
+    };
+    format!("{head}; excluded: {excluded}; out of scope: {out_of_scope}")
 }
 
 /// The iterations run and entry points exercised per worker, or `not measured` when the
@@ -253,7 +314,7 @@ fn findings(out: &mut String, view: &RunView) {
     let mut list: Vec<&Finding> = view
         .ledger
         .findings()
-        .filter(|f| f.state != FindingState::Refuted)
+        .filter(|f| f.state != FindingState::Refuted && view.ledger.merged_into(&f.id).is_none())
         .collect();
     list.sort_by_key(|f| rank(f.state));
     if list.is_empty() {
@@ -452,6 +513,14 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
             let _ = writeln!(out, "- Annotation: {}", inline(n));
         }
     }
+    if let Some(v) = view.ledger.verifications(&f.id).last() {
+        let _ = writeln!(out, "- Verified: {}", verified_text(f, v));
+    }
+    let dups = view.ledger.duplicates_of(&f.id);
+    if !dups.is_empty() {
+        let d: Vec<String> = dups.iter().map(ToString::to_string).collect();
+        let _ = writeln!(out, "- Merged duplicates: {}", d.join(", "));
+    }
     if let Some(r) = f.repair_class {
         let _ = writeln!(out, "- Repair class: {r}");
     }
@@ -491,13 +560,132 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     out.push('\n');
 }
 
+/// `agrees (...)` or the disagreement, naming both values.
+fn verified_text(f: &Finding, v: &dla_core::Verification) -> String {
+    let bundle: String = v.bundle.chars().take(12).collect();
+    let site = v.site.as_deref().map_or_else(|| "none".to_owned(), code);
+    if v.agrees_site && v.agrees_holder {
+        return format!(
+            "agrees (verifier site {site}, holder {}, label {}; bundle {bundle})",
+            v.holder,
+            inline(&v.label)
+        );
+    }
+    let mut parts = Vec::new();
+    if !v.agrees_site {
+        parts.push(format!(
+            "site: finding {} vs verifier {site}",
+            f.site.as_deref().map_or_else(|| "none".to_owned(), code)
+        ));
+    }
+    if !v.agrees_holder {
+        parts.push(format!(
+            "holder: finding {} vs verifier {}",
+            f.holder.map_or("none", |h| h.as_str()),
+            v.holder
+        ));
+    }
+    format!("DISAGREES ({}; bundle {bundle})", parts.join("; "))
+}
+
+/// The Workers section: per worker its status, the slice lines merged, whether it
+/// finished and whether a torn final line was dropped; then the slices with lines the
+/// main ledger has not merged. Omitted for a run without workers.
+fn workers(out: &mut String, view: &RunView) {
+    let mut names: BTreeSet<&str> = view.state.workers.iter().map(|w| w.name.as_str()).collect();
+    names.extend(view.ledger.slices().map(|(w, _)| w));
+    names.extend(view.slices.iter().map(|s| s.worker.as_str()));
+    if names.is_empty() {
+        return;
+    }
+    out.push_str("## Workers\n\n");
+    for w in &names {
+        let entry = view.state.worker(w);
+        let info = view.ledger.slice_info(w);
+        let file = view.slices.iter().find(|s| s.worker == *w);
+        let status = entry.map_or("unregistered".to_owned(), |e| e.status.to_string());
+        let runtime = entry
+            .map(|e| e.runtime.clone())
+            .or_else(|| {
+                info.and_then(|i| i.started.as_ref())
+                    .map(|s| s.runtime.clone())
+            })
+            .unwrap_or_else(|| (*w).to_owned());
+        let merged = view.ledger.merged_lines(w);
+        let lines = match file {
+            Some(f) if f.lines > merged => format!("{merged} of {} lines merged", f.lines),
+            _ => plural_n(merged, "line") + " merged",
+        };
+        let done = info.is_some_and(|i| i.done.is_some()) || file.is_some_and(|f| f.done);
+        let torn = info
+            .and_then(|i| i.merged.as_ref())
+            .is_some_and(|m| m.torn_tail)
+            || file.is_some_and(|f| f.torn_tail);
+        let _ = writeln!(
+            out,
+            "- **{}** ({}): status {status}; {lines}; slice {}; torn tail: {}",
+            inline(w),
+            inline(&runtime),
+            if done { "done" } else { "not done" },
+            if torn {
+                "yes, final line dropped"
+            } else {
+                "no"
+            }
+        );
+    }
+    out.push('\n');
+    let unmerged = view.unmerged_slices();
+    if !unmerged.is_empty() {
+        out.push_str("### Unmerged slices\n\n");
+        for s in unmerged {
+            let _ = writeln!(
+                out,
+                "- **{}**: {} in ledger.{}.jsonl, {} merged. Fix: {}",
+                inline(&s.worker),
+                plural_n(s.lines, "line"),
+                inline(&s.worker),
+                view.ledger.merged_lines(&s.worker),
+                code("dla ledger merge")
+            );
+        }
+        out.push('\n');
+    }
+}
+
+/// Findings folded into another worker's finding with the same site and holder.
+fn merged_duplicates(out: &mut String, view: &RunView) {
+    let mut rows: Vec<String> = Vec::new();
+    for f in view.ledger.findings() {
+        if let Some(c) = view.ledger.merged_into(&f.id) {
+            rows.push(format!(
+                "- **{}** merged into **{c}** (same site and holder; its evidence {} is kept on {c})",
+                f.id,
+                if f.supports.is_empty() {
+                    DASH.to_owned()
+                } else {
+                    ids(&f.supports)
+                }
+            ));
+        }
+    }
+    if rows.is_empty() {
+        return;
+    }
+    out.push_str("## Merged duplicates\n\n");
+    for r in rows {
+        let _ = writeln!(out, "{r}");
+    }
+    out.push('\n');
+}
+
 fn ruled_out(out: &mut String, view: &RunView) {
     out.push_str("## Ruled out\n\n");
     let mut any = false;
     for f in view
         .ledger
         .findings()
-        .filter(|f| f.state == FindingState::Refuted)
+        .filter(|f| f.state == FindingState::Refuted && view.ledger.merged_into(&f.id).is_none())
     {
         any = true;
         let disc: Vec<EvidenceId> = f

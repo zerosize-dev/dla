@@ -11,6 +11,9 @@ use std::{
     process::Command,
 };
 
+use dla_census::parse::Lang;
+use dla_core::{runtime::Runtime, state::Scope};
+
 use crate::model::SKIP_DIRS;
 
 /// Most files copied into a scratch tree.
@@ -27,6 +30,10 @@ pub struct CopyReport {
     pub skipped: usize,
     /// One manifest gap per reason something was not copied.
     pub gaps: Vec<String>,
+    /// Files left out because they lie outside the run's scope.
+    pub out_of_scope: usize,
+    /// Non-test source files among them, by runtime.
+    pub out_of_scope_sources: BTreeMap<Runtime, u64>,
 }
 
 /// Project files per `git ls-files` (tracked, plus untracked files that are not ignored),
@@ -154,6 +161,16 @@ fn copy_symlink(project: &Path, dest: &Path, src: &Path, to: &Path) -> Result<()
 
 /// Copies the project into `dest` (created). The `.dla` directory is never copied.
 pub fn copy_project(project: &Path, dest: &Path) -> std::io::Result<CopyReport> {
+    copy_project_scoped(project, dest, None)
+}
+
+/// Like [`copy_project`], restricted to the run's `scope`: only files inside it are
+/// copied, plus the files at the project root (the build files a module needs).
+pub fn copy_project_scoped(
+    project: &Path,
+    dest: &Path,
+    scope: Option<&Scope>,
+) -> std::io::Result<CopyReport> {
     fs::create_dir_all(dest)?;
     let (files, from_git, left_out) = match git_files(project) {
         Some(f) => (f, true, Vec::new()),
@@ -174,6 +191,22 @@ pub fn copy_project(project: &Path, dest: &Path) -> std::io::Result<CopyReport> 
     for rel in files {
         if is_dla_path(&rel) {
             continue;
+        }
+        if let Some(scope) = scope {
+            let slash = dla_core::paths::to_slash(&rel);
+            let at_root = rel.components().count() == 1;
+            if !at_root && !scope.includes(&slash) {
+                report.out_of_scope += 1;
+                if let Some(lang) = Lang::from_path(&rel)
+                    && !dla_census::walk::is_test_path(&slash)
+                {
+                    *report
+                        .out_of_scope_sources
+                        .entry(lang.runtime())
+                        .or_default() += 1;
+                }
+                continue;
+            }
         }
         if report.files >= MAX_FILES {
             skip(&mut report, format!("over the {MAX_FILES}-file cap"));
@@ -211,6 +244,12 @@ pub fn copy_project(project: &Path, dest: &Path) -> std::io::Result<CopyReport> 
             .gaps
             .push(format!("scratch copy: {n} path(s) not copied ({why})"));
     }
+    if report.out_of_scope > 0 {
+        report.gaps.push(format!(
+            "scratch copy: {} file(s) outside the run's scope not copied (only the scope and the files at the project root are)",
+            report.out_of_scope
+        ));
+    }
     if !left_out.is_empty() {
         report.gaps.push(format!(
             "scratch copy outside git: top-level build-output director{} not copied: {}",
@@ -246,6 +285,39 @@ mod tests {
         assert!(dest.join("src/b.rs").is_file());
         assert!(!dest.join("target").exists() && !dest.join(".dla").exists());
         assert!(r.gaps.iter().any(|g| g.contains("target")), "{:?}", r.gaps);
+    }
+
+    #[test]
+    fn scoped_copy_keeps_the_scope_and_root_files_only() {
+        use dla_core::state::ScopeKind;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        for f in [
+            "pom.xml",
+            "svc/a/A.java",
+            "svc/a/gen/G.java",
+            "svc/b/B.java",
+            "svc/b/b.py",
+            "svc/b/BTest.java",
+        ] {
+            let path = p.join(f);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        }
+        let scope = Scope {
+            kind: ScopeKind::Module,
+            path: "svc/a".into(),
+            excluded: vec!["svc/a/gen".into()],
+        };
+        let dest = d.path().join("w");
+        let r = copy_project_scoped(&p, &dest, Some(&scope)).unwrap();
+        assert!(dest.join("pom.xml").is_file() && dest.join("svc/a/A.java").is_file());
+        assert!(!dest.join("svc/b").exists() && !dest.join("svc/a/gen").exists());
+        assert_eq!(r.files, 2, "{r:?}");
+        assert_eq!(r.out_of_scope, 4);
+        assert_eq!(r.out_of_scope_sources[&Runtime::Jvm], 2);
+        assert_eq!(r.out_of_scope_sources[&Runtime::Python], 1);
+        assert!(r.gaps.iter().any(|g| g.contains("outside the run's scope")));
     }
 
     #[test]

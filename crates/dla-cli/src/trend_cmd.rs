@@ -21,7 +21,7 @@ use dla_core::{
     finding::Polarity,
     fsutil::{to_pretty_json, write_atomic},
     paths::to_slash,
-    series::{ColumnKind, KeyMode, SeriesFile, SeriesSourceKind, numbered},
+    series::{ColumnKind, KeyMode, SeriesFile, numbered},
     toolctx::{EvidenceSpec, ToolCtx},
     trend::{ColumnTrend, TREND_DIR, TrendReport, finding_region, finding_shape},
 };
@@ -116,6 +116,8 @@ fn existing_series(run_dir: &Path) -> Vec<String> {
     };
     let mut ids: Vec<(u32, String)> = rd
         .filter_map(Result::ok)
+        // An empty file is an id reserved by a writer that has not finished.
+        .filter(|e| dla_core::fsutil::is_written(&e.path()))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let id = name.strip_suffix(".json")?.to_owned();
@@ -216,11 +218,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     report.save(&tc.run_dir)?;
     let raw = format!("{TREND_DIR}/{trend_id}.json");
     let source = series_source(&tc, &main)?;
-    let authority = if main.series.source.kind == SeriesSourceKind::Sample {
-        Authority::Live
-    } else {
-        Authority::Test
-    };
+    let authority = crate::gap_cmd::series_authority(&main.series);
 
     let (gauges, counters) = summary::by_kind(&cols);
     let mut evidence: Vec<(EvidenceKind, EvidenceId)> = Vec::new();

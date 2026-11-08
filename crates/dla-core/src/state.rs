@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     SCHEMA_VERSION,
     error::Error,
-    fsutil::{load_versioned, to_pretty_json, write_atomic},
+    fsutil::{load_versioned, to_pretty_json, with_run_lock, write_atomic},
     version::Artifact,
 };
 
@@ -372,15 +372,20 @@ impl RunState {
 
     /// Read-modify-write of `state.json`: loads the current state, applies `f` and
     /// saves it, returning `f`'s value. Every writer goes through this.
-    // M4 skeleton: the run-dir lock (`run.lock`) is added by the run-state work.
+    ///
+    /// The whole load-modify-save runs under the exclusive lock on
+    /// `<run_dir>/run.lock` ([`with_run_lock`]), so concurrent workers never lose an
+    /// update. `f` must not call `update` itself. When `f` fails nothing is saved.
     pub fn update<T>(
         run_dir: &Path,
         f: impl FnOnce(&mut RunState) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let mut state = Self::load(run_dir)?;
-        let out = f(&mut state)?;
-        state.save(run_dir)?;
-        Ok(out)
+        with_run_lock(run_dir, || {
+            let mut state = Self::load(run_dir)?;
+            let out = f(&mut state)?;
+            state.save(run_dir)?;
+            Ok(out)
+        })
     }
 
     /// The registered worker named `name`.
@@ -389,11 +394,63 @@ impl RunState {
     }
 }
 
+/// The components of a project-relative `/`-separated path: `None` when it is
+/// absolute or climbs out with `..`; `.` and empty parts are dropped.
+fn components(path: &str) -> Option<Vec<&str>> {
+    let path = path.trim();
+    if path.starts_with('/') || path.starts_with('\\') || path.as_bytes().get(1) == Some(&b':') {
+        return None;
+    }
+    let mut out = Vec::new();
+    for part in path.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => return None,
+            p => out.push(p),
+        }
+    }
+    Some(out)
+}
+
+fn is_prefix(prefix: &[&str], of: &[&str]) -> bool {
+    of.len() >= prefix.len() && of[..prefix.len()] == *prefix
+}
+
 impl Scope {
-    /// Whether a project-relative path (`/` separators) is inside the scope.
-    // M4 skeleton: real matching is added by the run-state work.
-    pub fn includes(&self, _rel_path: &str) -> bool {
-        true
+    /// The scope's own root as components (empty for a repository scope).
+    fn root(&self) -> Vec<&str> {
+        match self.kind {
+            ScopeKind::Repository => Vec::new(),
+            ScopeKind::Module | ScopeKind::Service => components(&self.path).unwrap_or_default(),
+        }
+    }
+
+    fn excluded_hit(&self, rel: &[&str]) -> bool {
+        self.excluded
+            .iter()
+            .any(|e| components(e).is_some_and(|ex| !ex.is_empty() && is_prefix(&ex, rel)))
+    }
+
+    /// Whether a project-relative path (`/` separators) is inside the scope: for a
+    /// `repository` scope everything except the excluded paths; for a `module` or
+    /// `service` scope what lies under `path`, minus the excluded paths. Matching is
+    /// by path component (`src/app` does not include `src/application`); a path with
+    /// `..` or an absolute path is never inside.
+    pub fn includes(&self, rel_path: &str) -> bool {
+        let Some(rel) = components(rel_path) else {
+            return false;
+        };
+        is_prefix(&self.root(), &rel) && !self.excluded_hit(&rel)
+    }
+
+    /// Whether a walk should descend into the project-relative directory `rel_dir`:
+    /// it is inside the scope, or an ancestor of the scope's path, and not excluded.
+    pub fn may_contain(&self, rel_dir: &str) -> bool {
+        let Some(rel) = components(rel_dir) else {
+            return false;
+        };
+        let root = self.root();
+        (is_prefix(&root, &rel) || is_prefix(&rel, &root)) && !self.excluded_hit(&rel)
     }
 }
 

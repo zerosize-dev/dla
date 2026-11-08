@@ -241,7 +241,8 @@ pub fn run(job: &Job) -> Outcome {
         .arg("--no-config-lookup")
         .arg("-c")
         .arg(&cfg)
-        .args(["-f", "json", "--no-warn-ignored", "."])
+        .args(["-f", "json", "--no-warn-ignored"])
+        .arg(job.target())
         .timeout(job.timeout);
     let out = exec::run(&cmd);
     let rec = run_record(&cmd, &out);

@@ -142,7 +142,10 @@ fn tool_exit_ok(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)]) 
 // ---------------------------------------------------------------------------------------
 
 fn load_workloads(ctx: &ToolCtx) -> Result<Option<WorkloadReport>, Refusal> {
-    let path = ctx.run_dir.join("workload/workloads.json");
+    let path = ctx
+        .run_dir
+        .join("workload")
+        .join(crate::report_file(ctx.worker.as_deref()));
     let Ok(text) = fs::read_to_string(&path) else {
         return Ok(None);
     };
@@ -181,6 +184,7 @@ fn candidates_text(report: &WorkloadReport, rt: Runtime) -> String {
 /// Picks the workload: the named one, else the best-ranked main or script of `rt` with an
 /// iteration argument (or any main or script when `need_iter` is false).
 fn choose_workload(
+    ctx: &ToolCtx,
     report: Option<&WorkloadReport>,
     opts: &GenOptions,
     need_iter: bool,
@@ -194,7 +198,7 @@ fn choose_workload(
         return Err(refuse(
             codes::MISSING_EVIDENCE,
             "no workload discovery result in this run",
-            "workload/workloads.json",
+            format!("workload/{}", crate::report_file(ctx.worker.as_deref())),
             format!("dla workload discover --lang {lang}"),
         ));
     };
@@ -277,7 +281,7 @@ struct Detectors {
 fn detectors(ctx: &ToolCtx, rt: Runtime) -> Detectors {
     let mut d = Detectors::default();
     // Only the libraries are read: a probe report of another shape must not lose them.
-    let libraries: Vec<LibraryProbe> = fs::read_to_string(ctx.run_dir.join("probe/probe.json"))
+    let libraries: Vec<LibraryProbe> = fs::read_to_string(crate::probe_path(ctx))
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|doc| doc.get("libraries").cloned())
@@ -891,7 +895,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         ));
     }
     let report = load_workloads(ctx)?;
-    let workload = choose_workload(report.as_ref(), opts, !opts.driver)?;
+    let workload = choose_workload(ctx, report.as_ref(), opts, !opts.driver)?;
     let iter_arg = opts
         .iter_arg
         .clone()
@@ -960,7 +964,12 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
     }
 
-    let copied = scratch::copy_project(&ctx.project, &work).map_err(|e| io_refusal(&work, e))?;
+    let scope = ctx.scope()?;
+    let copied = scratch::copy_project_scoped(&ctx.project, &work, scope.as_ref())
+        .map_err(|e| io_refusal(&work, e))?;
+    for (r, n) in &copied.out_of_scope_sources {
+        dla_census::record_out_of_scope(ctx, *r, *n)?;
+    }
     write_agent(rt, opts.driver, &agent)?;
 
     let det = detectors(ctx, rt);
@@ -1145,7 +1154,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         "gaps": manifest.gaps.len(),
         "files": copied.files,
     });
+    let skipped_sources: u64 = copied.out_of_scope_sources.values().sum();
     if let Value::Object(m) = &mut result {
+        if skipped_sources > 0 {
+            m.insert("out_of_scope".into(), json!(skipped_sources));
+        }
         m.retain(|_, v| !v.is_null());
     }
     let mut ledger = ctx.ledger()?;

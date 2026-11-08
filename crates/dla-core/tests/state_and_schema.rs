@@ -195,7 +195,7 @@ fn result_size_constants() {
     assert_eq!(dla_core::MAX_RESULT_BYTES, 2048);
     assert_eq!(dla_core::MAX_OUTPUT_BYTES, 2048);
     assert_eq!(dla_core::SCHEMA_VERSION, 1);
-    assert_eq!(dla_core::LEDGER_SCHEMA_VERSION, 2);
+    assert_eq!(dla_core::LEDGER_SCHEMA_VERSION, 3);
 }
 
 #[test]
@@ -227,4 +227,20 @@ fn evidence_kind_classes() {
     }
     assert_eq!("retention-path".parse::<K>().unwrap(), K::RetentionPath);
     assert!("nope".parse::<K>().is_err());
+}
+
+#[test]
+fn old_state_files_read_as_repository_without_workers() {
+    use dla_core::state::{EntryPath, RunState, now_utc};
+    let dir = tempfile::tempdir().unwrap();
+    let st = RunState::init("/p", Some("s"), 60, None, now_utc()).unwrap();
+    let mut doc = serde_json::to_value(&st).unwrap();
+    let o = doc.as_object_mut().unwrap();
+    for k in ["entry", "artifacts", "workers"] {
+        o.remove(k);
+    }
+    std::fs::write(dir.path().join("state.json"), doc.to_string()).unwrap();
+    let loaded = RunState::load(dir.path()).unwrap();
+    assert_eq!(loaded.entry, EntryPath::Repository);
+    assert!(loaded.artifacts.is_empty() && loaded.workers.is_empty());
 }

@@ -69,8 +69,13 @@ pub fn ruff(job: &Job) -> Outcome {
             ".dla",
             "--output-format",
             "sarif",
-            ".",
         ])
+        .args(
+            job.excluded()
+                .into_iter()
+                .flat_map(|e| ["--extend-exclude".to_owned(), e]),
+        )
+        .arg(job.target())
         .timeout(job.timeout);
     let out = exec::run(&cmd);
     let rec = run_record(&cmd, &out);
@@ -177,7 +182,7 @@ pub fn pylint(job: &Job) -> Outcome {
             "--jobs=1",
         ])
         .arg(format!("--ignore={ignore}"))
-        .arg(".")
+        .arg(job.target())
         .timeout(job.timeout);
     let out = exec::run(&cmd);
     let rec = run_record(&cmd, &out);

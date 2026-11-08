@@ -868,14 +868,14 @@ fn a_ledger_written_by_the_api_replays_from_disk() {
     }
     let (f, _) = confirmed_leak(&mut l);
     let text = std::fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap();
-    assert!(text.lines().all(|t| t.contains("\"schema_version\":2")));
+    assert!(text.lines().all(|t| t.contains("\"schema_version\":3")));
     let again = Ledger::load(dir.path()).unwrap();
     assert_eq!(again.finding(&f).unwrap(), l.finding(&f).unwrap());
     assert_eq!(again.finding(&f).unwrap().shape, Some(Shape::Steady));
 }
 
 #[test]
-fn a_version_one_ledger_stays_valid_and_new_lines_are_version_two() {
+fn a_version_one_ledger_stays_valid_and_new_lines_are_version_three() {
     let dir = tempfile::tempdir().unwrap();
     let v1 = [
         line(1, EVIDENCE_BODY),
@@ -892,7 +892,7 @@ fn a_version_one_ledger_stays_valid_and_new_lines_are_version_two() {
     std::fs::write(dir.path().join("ledger.jsonl"), &v1).unwrap();
     let mut l = Ledger::load(dir.path()).unwrap();
     assert_eq!(l.finding(&fid(1)).unwrap().state, S::UnderTest);
-    // A v2 line appended now is judged by the M3 rules: no harness, no confirm.
+    // A v3 line appended now is judged by the M3 rules (plus the artifact rules): no harness, no confirm.
     let r = refusal(mv(&mut l, &fid(1), S::Confirmed, &[]));
     assert_eq!(r.code, codes::GROWTH_GATE_FAILED);
     l.open_item_add("still open", None, "test").unwrap();
@@ -901,6 +901,6 @@ fn a_version_one_ledger_stays_valid_and_new_lines_are_version_two() {
         .lines()
         .map(|t| serde_json::from_str::<serde_json::Value>(t).unwrap()["schema_version"].clone())
         .collect();
-    assert_eq!(versions, [1, 1, 1, 2]);
+    assert_eq!(versions, [1, 1, 1, 3]);
     Ledger::load(dir.path()).unwrap();
 }

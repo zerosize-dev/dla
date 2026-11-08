@@ -88,31 +88,34 @@ pub fn run(ctx: &Ctx, project: &Path, a: ConsentArgs) -> Res<Value> {
         .map(consent::parse_ceiling)
         .transpose()
         .map_err(Failure::from)?;
-    let mut st = RunState::load(&ctx.run_dir)?;
-    if st.status != RunStatus::Active {
-        return Err(Failure::from(Refusal::new(
-            core_codes::RUN_NOT_ACTIVE,
-            format!(
-                "run {} is {}, so it cannot take consent",
-                st.run_id, st.status
-            ),
-            "an active run",
-            "dla run init",
-        )));
-    }
-    if let Some(existing) = &st.consent {
-        return Err(consent::already_given(existing).into());
-    }
-    let given = consent::build(tiers, a.raw_values, a.given_by, ceiling, state::now_utc())
-        .map_err(Failure::from)?;
-    let mut ledger = Ledger::load(&ctx.run_dir)?;
-    let seq = append_evidence(&mut ledger, project, &given)?;
-    let evidence = evidence_id(&ledger, seq);
-    st.consent = Some(given.clone());
-    st.save(&ctx.run_dir)?;
+    // Check, append the evidence and record the consent in one locked update, so two
+    // concurrent consents cannot both succeed.
+    let (run_id, given, seq, evidence) = RunState::update(&ctx.run_dir, |st| {
+        if st.status != RunStatus::Active {
+            return Err(Refusal::new(
+                core_codes::RUN_NOT_ACTIVE,
+                format!(
+                    "run {} is {}, so it cannot take consent",
+                    st.run_id, st.status
+                ),
+                "an active run",
+                "dla run init",
+            )
+            .into());
+        }
+        if let Some(existing) = &st.consent {
+            return Err(consent::already_given(existing).into());
+        }
+        let given = consent::build(tiers, a.raw_values, a.given_by, ceiling, state::now_utc())?;
+        let mut ledger = Ledger::load(&ctx.run_dir)?;
+        let seq = append_evidence(&mut ledger, project, &given)?;
+        let evidence = evidence_id(&ledger, seq);
+        st.consent = Some(given.clone());
+        Ok((st.run_id.clone(), given, seq, evidence))
+    })?;
     Ok(json!({
         "ok": true,
-        "run_id": st.run_id,
+        "run_id": run_id,
         "tiers": given.tiers,
         "raw_values": given.raw_values,
         "given_by": given.given_by.as_str(),

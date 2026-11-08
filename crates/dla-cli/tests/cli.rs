@@ -653,7 +653,7 @@ fn newer_schema_in_a_ledger_line_exits_3() {
     let dir = fixture_project();
     append_line(
         &fixture_ledger(&dir),
-        r#"{"schema_version":3,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
+        r#"{"schema_version":4,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
     );
     let o = run(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
     assert_eq!(o.code, 3, "{}", o.stdout);
@@ -2021,7 +2021,7 @@ fn annotate_conflicts_are_refused_and_the_same_value_is_accepted() {
 }
 
 #[test]
-fn new_ledger_lines_are_version_two_and_old_ones_still_replay() {
+fn new_ledger_lines_are_version_three_and_old_ones_still_replay() {
     let dir = fixture_project();
     // The hand-written run is entirely version 1.
     let o = ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
@@ -2040,7 +2040,7 @@ fn new_ledger_lines_are_version_two_and_old_ones_still_replay() {
     );
     let text = fs::read_to_string(fixture_ledger(&dir)).unwrap();
     let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
-    assert_eq!(last["schema_version"], 2);
+    assert_eq!(last["schema_version"], 3);
     assert!(
         text.lines()
             .next()

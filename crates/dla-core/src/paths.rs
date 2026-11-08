@@ -91,6 +91,28 @@ pub fn data_files_dir(flag: Option<&Path>) -> Result<PathBuf, Refusal> {
     resolve_data_files_dir(flag, &real_env, exe.as_deref())
 }
 
+/// The plugin root with explicit inputs (testable form of [`plugin_root`]):
+/// `$DLA_PLUGIN_ROOT`, else the git checkout enclosing `exe`.
+pub fn resolve_plugin_root(
+    env: &dyn Fn(&str) -> Option<String>,
+    exe: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(root) = env_nonempty(env, ENV_PLUGIN_ROOT) {
+        return Some(root);
+    }
+    exe?.ancestors()
+        .skip(1)
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+/// The plugin root for this process: `$DLA_PLUGIN_ROOT`, else the checkout the
+/// executable lives in; `None` when neither is known.
+pub fn plugin_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok();
+    resolve_plugin_root(&real_env, exe.as_deref())
+}
+
 /// `$DLA_DATA_DIR/tools`; `None` when `$DLA_DATA_DIR` is unset or empty.
 pub fn resolve_tools_dir(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
     env_nonempty(env, ENV_DATA_DIR).map(|d| d.join(TOOLS_SUBDIR))
@@ -206,5 +228,29 @@ mod tests {
         let file = root.join("src").join("lib").join("a.rs");
         assert_eq!(rel_slash(root, &file).as_deref(), Some("src/lib/a.rs"));
         assert_eq!(rel_slash(root, Path::new("other/a.rs")), None);
+    }
+}
+
+#[cfg(test)]
+mod root_tests {
+    use super::*;
+
+    #[test]
+    fn plugin_root_prefers_the_environment_then_the_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path().join("co");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::create_dir_all(checkout.join("target/debug")).unwrap();
+        let exe = checkout.join("target/debug/dla");
+        let none = |_: &str| None;
+        assert_eq!(resolve_plugin_root(&none, Some(&exe)), Some(checkout));
+        let set = |n: &str| (n == ENV_PLUGIN_ROOT).then(|| "/opt/dla".to_owned());
+        assert_eq!(
+            resolve_plugin_root(&set, Some(&exe)),
+            Some(PathBuf::from("/opt/dla"))
+        );
+        let empty = |_: &str| Some("  ".to_owned());
+        assert_eq!(resolve_plugin_root(&empty, Some(Path::new("/x/dla"))), None);
+        assert_eq!(resolve_plugin_root(&none, None), None);
     }
 }

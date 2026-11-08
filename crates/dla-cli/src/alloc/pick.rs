@@ -41,6 +41,8 @@ pub fn latest_trend(run_dir: &Path, harness: &str) -> Option<TrendReport> {
     let mut ids: Vec<(u32, String)> = fs::read_dir(run_dir.join(TREND_DIR))
         .ok()?
         .filter_map(Result::ok)
+        // An empty file is an id reserved by a writer that has not finished.
+        .filter(|e| dla_core::fsutil::is_written(&e.path()))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let id = name.strip_suffix(".json")?.to_owned();

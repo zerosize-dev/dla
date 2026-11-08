@@ -6,6 +6,7 @@ use std::{
 };
 
 use clap::Args;
+use dla_core::runtime::Runtime;
 use serde_json::{Value, json};
 
 use crate::{ctx::Ctx, fail::Res, stage};
@@ -27,6 +28,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: ProbeArgs) -> R
     let opts = dla_probe::ProbeOptions {
         build: a.build,
         build_timeout: Duration::from_secs(a.build_timeout.max(1)),
+        // A worker probes only its own runtime and writes probe/<worker>.json.
+        runtime: ctx
+            .worker
+            .as_deref()
+            .and_then(|w| w.parse::<Runtime>().ok()),
         ..dla_probe::ProbeOptions::default()
     };
     stage::finish(

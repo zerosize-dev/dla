@@ -7,7 +7,13 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use dla_core::{detectors::Detector, runtime::Runtime, static_hit::StaticHit, toolctx::ToolCtx};
+use dla_core::{
+    detectors::Detector,
+    runtime::Runtime,
+    state::{Scope, ScopeKind},
+    static_hit::StaticHit,
+    toolctx::ToolCtx,
+};
 use regex::Regex;
 use serde_json::{Value, json};
 
@@ -38,6 +44,8 @@ pub struct Job<'a> {
     pub scratch: PathBuf,
     /// Hard limit for the main tool run.
     pub timeout: Duration,
+    /// The run's scope (`None`: everything is in scope).
+    pub scope: Option<Scope>,
 }
 
 impl Job<'_> {
@@ -54,6 +62,53 @@ impl Job<'_> {
     /// True when the table lists `rule`.
     pub fn wants(&self, rule: &str) -> bool {
         self.rules.iter().any(|d| d.rule == rule)
+    }
+
+    /// Whether a project-relative path (`/` separators) is inside the run's scope.
+    pub fn in_scope(&self, rel: &str) -> bool {
+        self.scope.as_ref().is_none_or(|s| s.includes(rel))
+    }
+
+    /// Whether a walk or a build unit rooted at the project-relative directory `rel_dir`
+    /// (`""` is the project root) can hold in-scope files.
+    pub fn may_contain(&self, rel_dir: &str) -> bool {
+        self.scope.as_ref().is_none_or(|s| s.may_contain(rel_dir))
+    }
+
+    /// The directory a tool that takes an input directory is pointed at, relative to the
+    /// project: `.` for the repository scope, the scope path for a module or service
+    /// when that directory exists.
+    pub fn target(&self) -> String {
+        match &self.scope {
+            Some(s) if s.kind != ScopeKind::Repository => {
+                let p = s.path.trim().trim_matches('/').trim_start_matches("./");
+                if !p.is_empty() && p != "." && !p.contains("..") && self.project().join(p).is_dir()
+                {
+                    return p.to_owned();
+                }
+                ".".to_owned()
+            }
+            _ => ".".to_owned(),
+        }
+    }
+
+    /// Excluded paths of the scope that exist as project-relative `/` paths.
+    pub fn excluded(&self) -> Vec<String> {
+        self.scope
+            .as_ref()
+            .map(|s| {
+                s.excluded
+                    .iter()
+                    .map(|e| {
+                        e.trim()
+                            .trim_matches('/')
+                            .trim_start_matches("./")
+                            .to_owned()
+                    })
+                    .filter(|e| !e.is_empty() && !e.contains(".."))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Maps tool paths onto project-relative paths.
@@ -97,7 +152,7 @@ pub struct Ran {
     pub limitations: Vec<String>,
     /// A note stored in coverage (`not applicable` reasons).
     pub note: Option<String>,
-    /// Everything captured, for `sweep/<backend>.json`.
+    /// Everything captured, for `sweep/<lang>-<backend>.json`.
     pub raw: Value,
 }
 

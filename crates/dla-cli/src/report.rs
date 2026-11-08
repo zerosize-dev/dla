@@ -27,13 +27,15 @@ pub fn run(ctx: &Ctx) -> Res<Rendered> {
     let sha256 = hex::encode(Sha256::digest(markdown.as_bytes()));
     write_atomic(&ctx.run_dir.join(REPORT_FILE), markdown.as_bytes())?;
     let path = ctx.pointer(REPORT_FILE);
-    let mut state: RunState = view.state;
-    state.report = Some(ReportRef {
+    let report = ReportRef {
         path: path.clone(),
         sha256: sha256.clone(),
         rendered_at: now_utc(),
-    });
-    state.save(&ctx.run_dir)?;
+    };
+    RunState::update(&ctx.run_dir, |s| {
+        s.report = Some(report);
+        Ok(())
+    })?;
     Ok(Rendered {
         markdown,
         sha256,

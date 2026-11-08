@@ -22,7 +22,7 @@ use dla_core::{
     fsutil::{to_pretty_json, write_atomic},
     harness::{HarnessManifest, HarnessMode},
     runtime::Runtime,
-    series::{ColumnKind, ColumnScope, KeyMode, SeriesFile, SeriesSourceKind, Unit, next_number},
+    series::{ColumnKind, ColumnScope, KeyMode, SeriesFile, SeriesSourceKind, Unit},
     toolctx::{EvidenceSpec, ToolCtx},
     trend::{ColumnTrend, GrowthSummary, TREND_SCHEMA_VERSION, TrendReport},
 };
@@ -362,6 +362,8 @@ fn complete_series(run_dir: &Path, m: &HarnessManifest, mode: KeyMode) -> Option
     let mut ids: Vec<(u32, String)> = fs::read_dir(&dir)
         .ok()?
         .flatten()
+        // An empty file is an id reserved by a writer that has not finished.
+        .filter(|e| dla_core::fsutil::is_written(&e.path()))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let id = name.strip_suffix(".json")?.to_owned();
@@ -471,6 +473,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         return Err(bad_harness_id(&a.harness));
     }
     let tc = stage::tool_ctx(project, ctx, data);
+    tc.require_time("alloc-test")?;
     let manifest = tc.harness(&a.harness).map_err(|mut r| {
         r.fix = format!(
             "dla harness gen --lang <lang> then dla alloc-test {}   (was: {})",
@@ -604,8 +607,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
 
     // Files: the new trend and the full result.
     let trend = trend_of(&tc, &ledger, &series, previous.as_ref())?;
-    let n = next_number(&tc.run_dir.join(ALLOC_DIR), 'A', ".json", false);
-    let alloc_id = format!("A{n}");
+    let alloc_id = tc.next_alloc_id();
     let raw_rel = format!("{ALLOC_DIR}/{alloc_id}.json");
     let full = json!({
         "id": alloc_id,

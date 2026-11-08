@@ -1,11 +1,18 @@
 [package]
 name = "dla-parsers"
-description = "DLA parsers (future)"
+description = "DLA parsers: gzip and HPROF heap dumps"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -2,7 +2,13 @@
 //!
 //! [`Ledger`] is the only writer. Every mutating method validates against the
 //! replayed state first, appends exactly one line in append mode, and returns the
-//! new [`LedgerLine`]. The file is never rewritten or truncated.
+//! new [`LedgerLine`]. The main ledger is never rewritten or truncated.
+//!
+//! In worker mode ([`Ledger::load_for`]) the same type holds the main ledger (read only)
+//! plus one worker's slice `ledger.<worker>.jsonl`; writes go to the slice, IDs carry the
+//! `<worker>/` prefix, and the only repair ever made to a file is cutting a half-written
+//! final slice line left by a killed process. `dla ledger merge` (see [`crate::merge`])
+//! copies slices into the main ledger.
 
 use std::{
     collections::BTreeMap,
@@ -10,6 +16,8 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
+
+use chrono::{DateTime, Utc};
 
 use crate::{
     LEDGER_SCHEMA_VERSION,
@@ -21,12 +29,14 @@ use crate::{
         RepairClass, Shape, UNCLASSIFIED, check_site, claims_nonleak, nonleak_id,
     },
     ids::{EvidenceId, FindingId, OpenItemId},
-    machine::{self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, TransitionContext},
+    machine::{self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, M4Rules, TransitionContext},
     record::{
-        FindingAnnotation, LedgerLine, OpenItem, OpenItemResolved, Record, Resolution, Transition,
+        FindingAnnotation, FindingMerged, LedgerLine, OpenItem, OpenItemResolved, Record,
+        Resolution, SliceDone, SliceMerged, SliceStarted, Transition, Verification,
     },
-    state::{LEDGER_FILE, now_utc},
-    strict,
+    slice::{self, TornTail, codes as m4},
+    state::{EntryPath, LEDGER_FILE, RunState, WorkerStatus, now_utc},
+    strict, verify,
     version::{Artifact, UpgradeError, upgrade},
 };
 
@@ -100,14 +110,51 @@ impl NewFinding {
     }
 }
 
+/// What the ledger knows about one worker's slice: its first and last records and the
+/// latest merge of it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SliceRecord {
+    /// The `slice_started` record.
+    pub started: Option<SliceStarted>,
+    /// The `slice_done` record, once the worker finished.
+    pub done: Option<SliceDone>,
+    /// The latest `slice_merged` record.
+    pub merged: Option<SliceMerged>,
+}
+
 /// Everything derived from replaying the lines.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct Index {
     evidence: BTreeMap<EvidenceId, EvidenceRecord>,
     findings: BTreeMap<FindingId, Finding>,
     open_items: BTreeMap<OpenItemId, OpenItemState>,
     answers: BTreeMap<String, ChecklistAnswer>,
     annotations: BTreeMap<FindingId, Annotation>,
+    /// The run's entry path (the artifact rules apply to `artifact`).
+    entry: EntryPath,
+    /// Set while a worker's slice is replayed or appended: the worker's own scope.
+    slice_worker: Option<String>,
+    slices: BTreeMap<String, SliceRecord>,
+    /// Duplicate finding -> canonical finding (`finding_merged`).
+    merged_into: BTreeMap<FindingId, FindingId>,
+    verifications: BTreeMap<FindingId, Vec<Verification>>,
+}
+
+impl Index {
+    fn new(entry: EntryPath) -> Self {
+        Self {
+            evidence: BTreeMap::new(),
+            findings: BTreeMap::new(),
+            open_items: BTreeMap::new(),
+            answers: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            entry,
+            slice_worker: None,
+            slices: BTreeMap::new(),
+            merged_into: BTreeMap::new(),
+            verifications: BTreeMap::new(),
+        }
+    }
 }
 
 /// Everything recorded about a finding's writers and removers, merged over all
@@ -151,6 +198,42 @@ impl FindingLookup for Index {
 
 fn empty(s: &Option<String>) -> bool {
     s.as_deref().is_none_or(|t| t.trim().is_empty())
+}
+
+fn core_only(what: &str) -> Refusal {
+    Refusal::new(
+        m4::CORE_ONLY,
+        format!("{what} is written by the core, not by a worker"),
+        "the core (no --worker)",
+        "run the same command without --worker (and without DLA_WORKER)",
+    )
+}
+
+fn bad_worker(name: &str) -> Refusal {
+    Refusal::new(
+        m4::BAD_WORKER,
+        format!("{name:?} is not a worker name"),
+        "a worker name: lowercase letters, digits and -, starting with a letter (a runtime name such as jvm)",
+        "dla run dispatch --workers jvm,rust",
+    )
+}
+
+/// The `type` tag of a record, for messages.
+fn record_name(r: &Record) -> &'static str {
+    match r {
+        Record::Evidence(_) => "evidence",
+        Record::FindingAdded { .. } => "finding_added",
+        Record::Transition(_) => "transition",
+        Record::OpenItem(_) => "open_item",
+        Record::OpenItemResolved(_) => "open_item_resolved",
+        Record::ChecklistAnswer(_) => "checklist_answer",
+        Record::FindingAnnotated(_) => "finding_annotated",
+        Record::SliceStarted(_) => "slice_started",
+        Record::SliceDone(_) => "slice_done",
+        Record::SliceMerged(_) => "slice_merged",
+        Record::FindingMerged(_) => "finding_merged",
+        Record::Verification(_) => "verification",
+    }
 }
 
 impl Index {
@@ -198,6 +281,9 @@ impl Index {
     /// `version` is the schema version of the line that carries it: version 1 lines
     /// replay under the M0 rules, later ones under the M3 rules.
     fn check(&self, record: &Record, version: u32) -> Result<(), Refusal> {
+        if let Some(w) = &self.slice_worker {
+            self.check_slice_scope(record, w)?;
+        }
         match record {
             Record::Evidence(e) => {
                 if self.evidence.contains_key(&e.evidence_id) {
@@ -236,12 +322,273 @@ impl Index {
             }
             Record::OpenItemResolved(r) => self.check_open_item_resolved(r),
             Record::ChecklistAnswer(a) => self.check_answer(a),
-            Record::FindingAnnotated(a) => self.check_annotation(a),
+            Record::FindingAnnotated(a) => self.check_annotation(a, version),
+            Record::SliceStarted(s) => self.check_slice_started(s),
+            Record::SliceDone(d) => self.check_slice_done(d),
+            Record::SliceMerged(m) => self.check_slice_merged(m),
+            Record::FindingMerged(m) => self.check_finding_merged(m),
+            Record::Verification(v) => self.check_verification(v),
         }
     }
 
-    fn check_annotation(&self, a: &FindingAnnotation) -> Result<(), Refusal> {
+    /// Rules for a record appended to (or replayed from) worker `w`'s slice: it begins
+    /// with `slice_started`, is closed by `slice_done`, creates only IDs with the
+    /// worker's prefix, changes only the worker's own findings and open items, and
+    /// leaves merge records and verification to the core.
+    fn check_slice_scope(&self, record: &Record, w: &str) -> Result<(), Refusal> {
+        let own = |prefix: Option<&str>| prefix == Some(w);
+        let bad_prefix = |what: &str, id: &dyn std::fmt::Display| {
+            Refusal::new(
+                m4::BAD_PREFIX,
+                format!("worker {w} allocated {what} {id} without its own prefix {w}/"),
+                format!("an ID prefixed {w}/"),
+                format!("let the ledger allocate the ID (dla --worker {w} ledger add ...)"),
+            )
+        };
+        let foreign = |what: &str, id: &dyn std::fmt::Display| {
+            Refusal::new(
+                m4::FOREIGN_ITEM,
+                format!(
+                    "worker {w} may only change its own {what}s ({w}/...), not {id}: that one belongs to the main ledger or another worker"
+                ),
+                format!("a {what} of {w}"),
+                format!(
+                    "record your own hypothesis instead: dla --worker {w} ledger add --origin hypothesis --evidence <id> ..."
+                ),
+            )
+        };
+        let state = self.slices.get(w);
+        if state.is_some_and(|s| s.done.is_some()) {
+            return Err(Refusal::new(
+                m4::SLICE_CLOSED,
+                format!("slice of {w} is closed by slice_done; it takes no more records"),
+                "an open slice",
+                "tell the core to run `dla run dispatch` again, or record the item in the main ledger after `dla ledger merge`",
+            ));
+        }
+        if !matches!(record, Record::SliceStarted(_)) && state.is_none_or(|s| s.started.is_none()) {
+            return Err(Refusal::new(
+                m4::SLICE_STATE,
+                format!("slice of {w} does not begin with slice_started"),
+                "a slice_started record as the first line",
+                format!("dla --worker {w} ledger add ... (the first write starts the slice)"),
+            ));
+        }
+        match record {
+            Record::Evidence(e) if !own(e.evidence_id.prefix()) => {
+                Err(bad_prefix("evidence", &e.evidence_id))
+            }
+            Record::FindingAdded { finding } if !own(finding.id.prefix()) => {
+                Err(bad_prefix("finding", &finding.id))
+            }
+            Record::OpenItem(o) if !own(o.id.prefix()) => Err(bad_prefix("open item", &o.id)),
+            Record::Transition(t) if !own(t.finding.prefix()) => {
+                Err(foreign("finding", &t.finding))
+            }
+            Record::FindingAnnotated(a) if !own(a.finding.prefix()) => {
+                Err(foreign("finding", &a.finding))
+            }
+            Record::OpenItemResolved(r) if !own(r.id.prefix()) => Err(foreign("open item", &r.id)),
+            Record::SliceStarted(s) if s.worker != w => Err(Refusal::new(
+                m4::SLICE_STATE,
+                format!("slice of {w} starts with a record for worker {}", s.worker),
+                format!("worker {w}"),
+                format!("dla --worker {w} ledger add ..."),
+            )),
+            Record::SliceDone(d) if d.worker != w => Err(Refusal::new(
+                m4::SLICE_STATE,
+                format!("slice of {w} is closed by a record for worker {}", d.worker),
+                format!("worker {w}"),
+                format!("dla --worker {w} ledger done"),
+            )),
+            Record::SliceMerged(_) | Record::FindingMerged(_) | Record::Verification(_) => {
+                Err(Refusal::new(
+                    m4::CORE_ONLY,
+                    format!(
+                        "a worker slice cannot hold {}: the core writes it",
+                        record_name(record)
+                    ),
+                    "the core (no --worker)",
+                    "dla ledger merge   or   dla ledger verify <F> ...   (without --worker)",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn check_slice_started(&self, s: &SliceStarted) -> Result<(), Refusal> {
+        if !crate::ids::valid_worker_name(&s.worker) {
+            return Err(bad_worker(&s.worker));
+        }
+        if s.runtime.trim().is_empty() {
+            return Err(Refusal::new(
+                codes::EMPTY_FIELD,
+                format!("slice_started of {} has no runtime", s.worker),
+                "runtime",
+                "dla run dispatch --workers <runtimes>",
+            ));
+        }
+        if self
+            .slices
+            .get(&s.worker)
+            .is_some_and(|r| r.started.is_some())
+        {
+            return Err(Refusal::new(
+                m4::SLICE_STATE,
+                format!("slice of {} already started", s.worker),
+                "a single slice_started per worker",
+                "dla ledger merge   (a worker has one slice)",
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_slice_done(&self, d: &SliceDone) -> Result<(), Refusal> {
+        let Some(r) = self.slices.get(&d.worker).filter(|r| r.started.is_some()) else {
+            return Err(Refusal::new(
+                m4::SLICE_STATE,
+                format!("slice_done for {} without a slice_started", d.worker),
+                "a started slice",
+                format!("dla --worker {} ledger add ...", d.worker),
+            ));
+        };
+        if r.done.is_some() {
+            return Err(Refusal::new(
+                m4::SLICE_STATE,
+                format!("slice of {} is already done", d.worker),
+                "a slice that is not done",
+                "dla ledger merge",
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_slice_merged(&self, m: &SliceMerged) -> Result<(), Refusal> {
+        let fix = "dla ledger merge";
+        let Some(r) = self.slices.get(&m.worker).filter(|r| r.started.is_some()) else {
+            return Err(Refusal::new(
+                m4::MERGE_STATE,
+                format!("slice_merged for {} without its slice_started", m.worker),
+                "the slice's lines merged first",
+                fix,
+            ));
+        };
+        let before = r.merged.as_ref().map_or(0, |m| m.lines);
+        if m.lines <= before {
+            return Err(Refusal::new(
+                m4::MERGE_STATE,
+                format!(
+                    "slice_merged for {} says {} lines but {before} are merged already",
+                    m.worker, m.lines
+                ),
+                "a larger line count than the last merge",
+                fix,
+            ));
+        }
+        if !verify::is_sha256(&m.sha256) {
+            return Err(Refusal::new(
+                m4::MERGE_STATE,
+                format!("slice_merged for {} has no valid sha256", m.worker),
+                "a lowercase hex SHA-256",
+                fix,
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_finding_merged(&self, m: &FindingMerged) -> Result<(), Refusal> {
+        let fix = "dla ledger merge";
+        let bad = |why: String| {
+            Refusal::new(
+                m4::MERGE_STATE,
+                why,
+                "two distinct top-level findings of different workers",
+                fix,
+            )
+        };
+        self.require_finding(&m.canonical, "finding_merged")?;
+        self.require_finding(&m.duplicate, "finding_merged")?;
+        if m.canonical == m.duplicate {
+            return Err(bad(format!("{} cannot be merged into itself", m.canonical)));
+        }
+        if m.canonical.is_sibling() || m.duplicate.is_sibling() {
+            return Err(bad(format!(
+                "{} and {} must be top-level findings, not sibling hypotheses",
+                m.canonical, m.duplicate
+            )));
+        }
+        match (m.canonical.prefix(), m.duplicate.prefix()) {
+            (Some(a), Some(b)) if a != b => {}
+            _ => {
+                return Err(bad(format!(
+                    "{} and {} must belong to different workers",
+                    m.canonical, m.duplicate
+                )));
+            }
+        }
+        if self.merged_into.contains_key(&m.duplicate) {
+            return Err(bad(format!(
+                "{} is already merged into another finding",
+                m.duplicate
+            )));
+        }
+        if self.merged_into.contains_key(&m.canonical) {
+            return Err(bad(format!(
+                "{} is itself a duplicate; merge into its canonical finding",
+                m.canonical
+            )));
+        }
+        Ok(())
+    }
+
+    fn check_verification(&self, v: &Verification) -> Result<(), Refusal> {
+        let fix = format!(
+            "dla ledger verify {} --site <file:line|none> --holder <holder> --mechanism \"<text>\" --bundle <sha256 printed by dla bundle>",
+            v.finding
+        );
+        let bad = |missing: &str, why: String| {
+            Refusal::new(m4::BAD_VERIFICATION, why, missing.to_owned(), fix.clone())
+        };
+        self.require_finding(&v.finding, "verification")?;
+        if v.mechanism.trim().is_empty() {
+            return Err(bad(
+                "--mechanism",
+                format!("verification of {} has no mechanism", v.finding),
+            ));
+        }
+        if v.label.trim().is_empty() || v.label.chars().any(char::is_whitespace) {
+            return Err(bad(
+                "--label an archetype ID or UNCLASSIFIED",
+                format!("verification of {} has label {:?}", v.finding, v.label),
+            ));
+        }
+        if !verify::is_sha256(&v.bundle) {
+            return Err(bad(
+                "--bundle, the sha256 `dla bundle` printed",
+                format!("verification of {} has no valid bundle sha256", v.finding),
+            ));
+        }
+        if let Some(site) = &v.site
+            && let Err(m) = check_site(site)
+        {
+            return Err(bad("--site file:line or none", m));
+        }
+        Ok(())
+    }
+
+    fn check_annotation(&self, a: &FindingAnnotation, version: u32) -> Result<(), Refusal> {
         self.require_finding(&a.finding, "annotation")?;
+        if version >= 3 && self.entry == EntryPath::Artifact && a.site.is_some() {
+            return Err(Refusal::new(
+                m4::SITE_FORBIDDEN,
+                format!(
+                    "{} cannot get a site on an artifact run: a dump holds no source lines, and a confirmed artifact finding must have no site",
+                    a.finding
+                ),
+                "an annotation without --site",
+                format!("dla ledger annotate {} --owner <class.field>", a.finding),
+            ));
+        }
         for site in a.writers.iter().chain(&a.removers).chain(&a.site) {
             check_site(site).map_err(|m| {
                 Refusal::new(
@@ -337,6 +684,16 @@ impl Index {
                 format!("finding {id} already exists"),
                 "a fresh finding ID",
                 "let the ledger allocate the ID",
+            ));
+        }
+        if version >= 3 && self.entry == EntryPath::Artifact && f.site.is_some() {
+            return Err(Refusal::new(
+                m4::SITE_FORBIDDEN,
+                format!(
+                    "{id} names a site on an artifact run: a dump holds no source lines, and a confirmed artifact finding must have no site"
+                ),
+                "a finding without --site, identified by its owner",
+                "dla ledger add --origin growth-series --evidence <id> --owner <class.field> --holder <holder>",
             ));
         }
         if f.state != FindingState::Candidate {
@@ -478,11 +835,12 @@ impl Index {
             evidence: &t.evidence,
             lookup: self,
             findings: self,
+            entry: self.entry,
         };
-        if version >= 2 {
-            machine::check_transition(&M3Rules, &ctx)
-        } else {
-            machine::check_transition(&M0Rules, &ctx)
+        match version {
+            0..=1 => machine::check_transition(&M0Rules, &ctx),
+            2 => machine::check_transition(&M3Rules, &ctx),
+            _ => machine::check_transition(&M4Rules, &ctx),
         }
     }
 
@@ -688,17 +1046,86 @@ impl Index {
                     slot.notes.push(n.clone());
                 }
             }
+            Record::SliceStarted(s) => {
+                self.slices.entry(s.worker.clone()).or_default().started = Some(s.clone());
+            }
+            Record::SliceDone(d) => {
+                self.slices.entry(d.worker.clone()).or_default().done = Some(d.clone());
+            }
+            Record::SliceMerged(m) => {
+                self.slices.entry(m.worker.clone()).or_default().merged = Some(m.clone());
+            }
+            Record::FindingMerged(m) => {
+                let extra: Vec<EvidenceId> = self
+                    .findings
+                    .get(&m.duplicate)
+                    .map(|d| d.supports.clone())
+                    .unwrap_or_default();
+                if let Some(c) = self.findings.get_mut(&m.canonical) {
+                    for e in extra {
+                        if !c.supports.contains(&e) {
+                            c.supports.push(e);
+                        }
+                    }
+                }
+                self.merged_into
+                    .insert(m.duplicate.clone(), m.canonical.clone());
+            }
+            Record::Verification(v) => {
+                self.verifications
+                    .entry(v.finding.clone())
+                    .or_default()
+                    .push(v.clone());
+            }
         }
     }
 }
 
 /// A replayed ledger, optionally bound to a file for appending.
+///
+/// In worker mode (see [`Ledger::load_for`]) it holds the main ledger (read only) plus
+/// the worker's slice; [`Ledger::lines`] then returns the slice's own lines, which
+/// have their own `seq`, and every write goes to the slice.
 #[derive(Debug, Clone)]
 pub struct Ledger {
     path: Option<PathBuf>,
     lines: Vec<LedgerLine>,
     index: Index,
     ends_with_newline: bool,
+    slice: Option<SliceMode>,
+    torn_tail: Option<TornTail>,
+}
+
+/// What a ledger opened for a worker adds to a plain one.
+#[derive(Debug, Clone)]
+struct SliceMode {
+    worker: String,
+    run_dir: Option<PathBuf>,
+    /// Lines of the main ledger replayed under the slice.
+    base_len: u64,
+    /// Bytes of the slice file that hold complete lines.
+    valid_bytes: u64,
+    /// A torn fragment follows them and the next write cuts it off.
+    torn_pending: bool,
+}
+
+/// A record on its way into the file.
+struct Pending {
+    record: Record,
+    ts: Option<DateTime<Utc>>,
+    worker: Option<String>,
+    version: u32,
+}
+
+impl Pending {
+    fn new(record: Record) -> Self {
+        Self {
+            record,
+            ts: None,
+            worker: None,
+            version: LEDGER_SCHEMA_VERSION,
+        }
+    }
 }
 
 fn replay_err(path: Option<&Path>, line: u64, malformed: bool, refusal: Refusal) -> Error {
@@ -710,13 +1137,20 @@ fn replay_err(path: Option<&Path>, line: u64, malformed: bool, refusal: Refusal)
     }))
 }
 
+/// The entry path recorded in `state.json`; `repository` when there is none.
+fn entry_of(run_dir: &Path) -> EntryPath {
+    RunState::load(run_dir).map_or(EntryPath::Repository, |s| s.entry)
+}
+
 impl Ledger {
-    fn empty(path: Option<PathBuf>) -> Self {
+    fn empty(path: Option<PathBuf>, entry: EntryPath) -> Self {
         Self {
             path,
             lines: Vec::new(),
-            index: Index::default(),
+            index: Index::new(entry),
             ends_with_newline: true,
+            slice: None,
+            torn_tail: None,
         }
     }
 
@@ -726,6 +1160,7 @@ impl Ledger {
     }
 
     /// Creates an empty ledger file in `run_dir` (which must exist). Fails if one exists.
+    /// The entry path is `repository` until [`Ledger::set_entry`] says otherwise.
     pub fn create(run_dir: &Path) -> Result<Self, Error> {
         let path = Self::path_in(run_dir);
         OpenOptions::new()
@@ -733,36 +1168,136 @@ impl Ledger {
             .create_new(true)
             .open(&path)
             .map_err(|e| Error::io(&path, e))?;
-        Ok(Self::empty(Some(path)))
+        Ok(Self::empty(Some(path), entry_of(run_dir)))
     }
 
-    /// Replays `<run_dir>/ledger.jsonl`, validating every line.
+    /// Replays `<run_dir>/ledger.jsonl`, validating every line. The entry path comes
+    /// from `state.json` (`repository` when there is none).
     pub fn load(run_dir: &Path) -> Result<Self, Error> {
         let path = Self::path_in(run_dir);
         let text = fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
-        Self::replay(&text, Some(path))
+        Self::replay(&text, Some(path), entry_of(run_dir))
     }
 
     /// Opens the main ledger (`worker` is `None`) or, in worker mode, the worker's
     /// slice `ledger.<worker>.jsonl` replayed on top of the main ledger; appends then go
     /// to the slice and new IDs carry the `<worker>/` prefix.
-    // M4 skeleton: slice routing is implemented by the ledger work.
+    ///
+    /// The main ledger is replayed read only and strictly, up to the `base_seq` the
+    /// slice recorded when it started, so a slice line cannot cite a main ID created
+    /// later. A slice whose final line was torn by a kill loses that line (see
+    /// [`Ledger::torn_tail`]); every other defect in a slice is an error. The first
+    /// write starts the slice with a `slice_started` record and marks the worker's
+    /// entry in `state.json` `running`.
     pub fn load_for(run_dir: &Path, worker: Option<&str>) -> Result<Self, Error> {
-        let _ = worker;
-        Self::load(run_dir)
+        let Some(w) = worker else {
+            return Self::load(run_dir);
+        };
+        if !crate::ids::valid_worker_name(w) {
+            return Err(bad_worker(w).into());
+        }
+        let sp = slice::slice_path(run_dir, w);
+        let text = match fs::read_to_string(&sp) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(Error::io(&sp, e)),
+        };
+        Self::load_slice_from(run_dir, w, &text)
+    }
+
+    /// Like [`Ledger::load_for`] for slice text already in memory (the merge reads the
+    /// file once and replays that snapshot).
+    pub fn load_slice_from(run_dir: &Path, worker: &str, slice_text: &str) -> Result<Self, Error> {
+        if !crate::ids::valid_worker_name(worker) {
+            return Err(bad_worker(worker).into());
+        }
+        let main_path = Self::path_in(run_dir);
+        let main_text = fs::read_to_string(&main_path).map_err(|e| Error::io(&main_path, e))?;
+        let sp = slice::slice_path(run_dir, worker);
+        let cut = slice::split(slice_text);
+        let base_seq = cut
+            .lines
+            .first()
+            .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("slice_started"))
+            .and_then(|v| v.get("base_seq").and_then(|b| b.as_u64()));
+        let main_lines: Vec<&str> = main_text.lines().collect();
+        let limit = base_seq.map(|b| usize::try_from(b).unwrap_or(usize::MAX));
+        let mut main = Self::empty(Some(main_path.clone()), entry_of(run_dir));
+        main.replay_lines(&main_lines, Some(&main_path), limit)?;
+        let base_len = main.lines.len() as u64;
+        if let Some(b) = base_seq
+            && b > base_len
+        {
+            return Err(replay_err(
+                Some(&sp),
+                1,
+                false,
+                Refusal::new(
+                    m4::SLICE_STATE,
+                    format!(
+                        "slice of {worker} says the main ledger had {b} lines when it started, but it has {base_len}"
+                    ),
+                    "the main ledger the slice was started against",
+                    "restore ledger.jsonl, or start a new run with `dla run init`",
+                ),
+            ));
+        }
+        let mut ledger = Self {
+            path: Some(sp.clone()),
+            lines: Vec::new(),
+            index: main.index,
+            ends_with_newline: slice_text.is_empty()
+                || slice_text.ends_with('\n')
+                || cut.torn.is_some(),
+            slice: Some(SliceMode {
+                worker: worker.to_owned(),
+                run_dir: Some(run_dir.to_path_buf()),
+                base_len,
+                valid_bytes: cut.valid_bytes() as u64,
+                torn_pending: cut.torn.is_some(),
+            }),
+            torn_tail: cut.torn.clone(),
+        };
+        ledger.index.slice_worker = Some(worker.to_owned());
+        ledger.replay_lines(&cut.lines, Some(&sp), None)?;
+        Ok(ledger)
     }
 
     /// Replays ledger text that is not bound to a file (for tests and renderers).
-    /// Mutating methods on the result only change memory.
+    /// Mutating methods on the result only change memory. The entry path is
+    /// `repository`; see [`Ledger::from_text_for`].
     pub fn from_text(text: &str) -> Result<Self, Error> {
-        Self::replay(text, None)
+        Self::replay(text, None, EntryPath::Repository)
     }
 
-    fn replay(text: &str, path: Option<PathBuf>) -> Result<Self, Error> {
-        let mut ledger = Self::empty(path.clone());
+    /// Like [`Ledger::from_text`] for a run with the given entry path.
+    pub fn from_text_for(text: &str, entry: EntryPath) -> Result<Self, Error> {
+        Self::replay(text, None, entry)
+    }
+
+    /// Sets the entry path the artifact rules look at (see [`Ledger::create`]).
+    pub fn set_entry(&mut self, entry: EntryPath) {
+        self.index.entry = entry;
+    }
+
+    fn replay(text: &str, path: Option<PathBuf>, entry: EntryPath) -> Result<Self, Error> {
+        let mut ledger = Self::empty(path.clone(), entry);
         ledger.ends_with_newline = text.is_empty() || text.ends_with('\n');
-        let p = path.as_deref();
-        for (i, raw) in text.lines().enumerate() {
+        let lines: Vec<&str> = text.lines().collect();
+        ledger.replay_lines(&lines, path.as_deref(), None)?;
+        Ok(ledger)
+    }
+
+    /// Replays `lines` (at most `limit` of them) on top of what is already replayed.
+    fn replay_lines(
+        &mut self,
+        lines: &[&str],
+        p: Option<&Path>,
+        limit: Option<usize>,
+    ) -> Result<(), Error> {
+        let take = limit.map_or(lines.len(), |l| l.min(lines.len()));
+        for (i, raw) in lines[..take].iter().enumerate() {
             let n = (i + 1) as u64;
             if raw.trim().is_empty() {
                 return Err(replay_err(
@@ -815,7 +1350,7 @@ impl Ledger {
                     )));
                 }
             }
-            let expected = ledger.next_seq();
+            let expected = self.next_seq();
             if line.seq != expected {
                 return Err(replay_err(
                     p,
@@ -832,14 +1367,29 @@ impl Ledger {
                     ),
                 ));
             }
-            ledger
-                .index
+            self.index
                 .check(&line.record, line.schema_version)
-                .map_err(|r| replay_err(p, n, false, r))?;
-            ledger.index.commit(&line.record, line.schema_version);
-            ledger.lines.push(line);
+                .map_err(|mut r| {
+                    if let Some(sm) = &self.slice
+                        && matches!(
+                            r.code.as_str(),
+                            codes::UNKNOWN_EVIDENCE
+                                | codes::UNKNOWN_FINDING
+                                | codes::UNKNOWN_PARENT
+                                | codes::UNKNOWN_OPEN_ITEM
+                        )
+                    {
+                        r.message = format!(
+                            "{} (slice of {} may cite main-ledger items only up to line {})",
+                            r.message, sm.worker, sm.base_len
+                        );
+                    }
+                    replay_err(p, n, false, r)
+                })?;
+            self.index.commit(&line.record, line.schema_version);
+            self.lines.push(line);
         }
-        Ok(ledger)
+        Ok(())
     }
 
     fn next_seq(&self) -> u64 {
@@ -848,13 +1398,62 @@ impl Ledger {
 
     // ----- read access -----
 
-    /// The ledger file, when bound to one.
+    /// The file appends go to (the slice in worker mode), when bound to one.
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
-    /// Every line in order.
+    /// Every line of the file in order (the slice's own lines in worker mode).
     pub fn lines(&self) -> &[LedgerLine] {
         &self.lines
+    }
+    /// The worker whose slice this ledger appends to; `None` for the main ledger.
+    pub fn worker(&self) -> Option<&str> {
+        self.slice.as_ref().map(|s| s.worker.as_str())
+    }
+    /// Lines of the main ledger replayed under a slice (its `base_seq`); 0 in core mode.
+    pub fn base_len(&self) -> u64 {
+        self.slice.as_ref().map_or(0, |s| s.base_len)
+    }
+    /// The torn final line dropped when the slice was replayed, if any.
+    pub fn torn_tail(&self) -> Option<&TornTail> {
+        self.torn_tail.as_ref()
+    }
+    /// The run's entry path as the rules see it.
+    pub fn entry(&self) -> EntryPath {
+        self.index.entry
+    }
+    /// What the ledger records about `worker`'s slice, when it has any record of it.
+    pub fn slice_info(&self, worker: &str) -> Option<&SliceRecord> {
+        self.index.slices.get(worker)
+    }
+    /// Every slice the ledger records, by worker.
+    pub fn slices(&self) -> impl Iterator<Item = (&str, &SliceRecord)> {
+        self.index.slices.iter().map(|(w, r)| (w.as_str(), r))
+    }
+    /// Slice lines of `worker` already merged into this ledger.
+    pub fn merged_lines(&self, worker: &str) -> u64 {
+        self.index
+            .slices
+            .get(worker)
+            .and_then(|r| r.merged.as_ref())
+            .map_or(0, |m| m.lines)
+    }
+    /// The finding `id` was merged into as a duplicate, if it is one.
+    pub fn merged_into(&self, id: &FindingId) -> Option<&FindingId> {
+        self.index.merged_into.get(id)
+    }
+    /// The duplicates merged into `canonical`, in ID order.
+    pub fn duplicates_of(&self, canonical: &FindingId) -> Vec<&FindingId> {
+        self.index
+            .merged_into
+            .iter()
+            .filter(|(_, c)| *c == canonical)
+            .map(|(d, _)| d)
+            .collect()
+    }
+    /// The verifications recorded for `id`, oldest first.
+    pub fn verifications(&self, id: &FindingId) -> &[Verification] {
+        self.index.verifications.get(id).map_or(&[], Vec::as_slice)
     }
     /// All evidence, ordered by ID.
     pub fn evidence(&self) -> impl Iterator<Item = &EvidenceRecord> {
@@ -900,7 +1499,61 @@ impl Ledger {
             .collect()
     }
 
-    // ----- ID allocation: next n = max existing + 1 -----
+    // ----- IDs -----
+
+    /// The prefix new IDs carry: the worker's name in worker mode.
+    fn prefix(&self) -> Option<&str> {
+        self.slice.as_ref().map(|s| s.worker.as_str())
+    }
+
+    /// In worker mode, maps an ID typed without a prefix to the worker's own (`F3` to
+    /// `jvm/F3`) when that exists, or when no main-ledger `F3` exists to mean instead.
+    /// Prefixed IDs, and every ID in core mode, are returned unchanged.
+    pub fn own_finding_id(&self, id: &FindingId) -> FindingId {
+        match self.prefix() {
+            Some(w) if id.prefix().is_none() => {
+                let own = id.reprefixed(Some(w));
+                if self.index.findings.contains_key(&own) || !self.index.findings.contains_key(id) {
+                    own
+                } else {
+                    id.clone()
+                }
+            }
+            _ => id.clone(),
+        }
+    }
+    /// Like [`Ledger::own_finding_id`] for evidence.
+    pub fn own_evidence_id(&self, id: &EvidenceId) -> EvidenceId {
+        match self.prefix() {
+            Some(w) if id.prefix().is_none() => {
+                let own = id.reprefixed(Some(w));
+                if self.index.evidence.contains_key(&own) || !self.index.evidence.contains_key(id) {
+                    own
+                } else {
+                    id.clone()
+                }
+            }
+            _ => id.clone(),
+        }
+    }
+    /// Like [`Ledger::own_finding_id`] for open items.
+    pub fn own_open_item_id(&self, id: &OpenItemId) -> OpenItemId {
+        match self.prefix() {
+            Some(w) if id.prefix().is_none() => {
+                let own = id.reprefixed(Some(w));
+                if self.index.open_items.contains_key(&own)
+                    || !self.index.open_items.contains_key(id)
+                {
+                    own
+                } else {
+                    id.clone()
+                }
+            }
+            _ => id.clone(),
+        }
+    }
+
+    // ----- ID allocation: next n = max existing + 1, among IDs with this ledger's prefix -----
 
     /// The ID the next evidence record will get.
     pub fn next_evidence_id(&self) -> EvidenceId {
@@ -908,11 +1561,11 @@ impl Ledger {
             .index
             .evidence
             .keys()
-            .filter(|e| e.prefix().is_none())
+            .filter(|e| e.prefix() == self.prefix())
             .map(EvidenceId::number)
             .max()
             .unwrap_or(0);
-        EvidenceId::new(max + 1)
+        EvidenceId::with_prefix(self.prefix(), max + 1)
     }
     /// The ID the next top-level finding will get.
     pub fn next_finding_id(&self) -> FindingId {
@@ -920,11 +1573,11 @@ impl Ledger {
             .index
             .findings
             .keys()
-            .filter(|f| f.prefix().is_none())
+            .filter(|f| f.prefix() == self.prefix())
             .map(FindingId::number)
             .max()
             .unwrap_or(0);
-        FindingId::new(max + 1)
+        FindingId::with_prefix(self.prefix(), max + 1)
     }
     /// The ID the next sibling of `parent` will get (`F<n>.n<k>`).
     pub fn next_sibling_id(&self, parent: &FindingId) -> FindingId {
@@ -944,45 +1597,151 @@ impl Ledger {
             .index
             .open_items
             .keys()
-            .filter(|o| o.prefix().is_none())
+            .filter(|o| o.prefix() == self.prefix())
             .map(OpenItemId::number)
             .max()
             .unwrap_or(0);
-        OpenItemId::new(max + 1)
+        OpenItemId::with_prefix(self.prefix(), max + 1)
     }
 
     // ----- writers -----
 
-    fn append(&mut self, record: Record) -> Result<LedgerLine, Error> {
-        self.index.check(&record, LEDGER_SCHEMA_VERSION)?;
-        let line = LedgerLine {
-            schema_version: LEDGER_SCHEMA_VERSION,
-            seq: self.next_seq(),
-            ts: now_utc(),
-            record,
+    /// Marks the worker's entry in `state.json` `running` (when it is `registered`).
+    fn mark_running(&self) -> Result<(), Error> {
+        let Some(sm) = &self.slice else {
+            return Ok(());
         };
+        let Some(dir) = &sm.run_dir else {
+            return Ok(());
+        };
+        if !dir.join(crate::state::STATE_FILE).is_file() {
+            return Ok(());
+        }
+        RunState::update(dir, |s| {
+            if let Some(w) = s.workers.iter_mut().find(|w| w.name == sm.worker)
+                && w.status == WorkerStatus::Registered
+            {
+                w.status = WorkerStatus::Running;
+                w.started_at = Some(now_utc());
+            }
+            Ok(())
+        })
+    }
+
+    /// The `slice_started` record for this worker, from its registry entry when it has
+    /// one (else the runtime is the worker name and the deadline the run's).
+    fn slice_started(&self) -> Record {
+        let (worker, base_seq, run_dir) = self
+            .slice
+            .as_ref()
+            .map(|s| (s.worker.clone(), s.base_len, s.run_dir.clone()))
+            .unwrap_or_default();
+        let state = run_dir.as_deref().and_then(|d| RunState::load(d).ok());
+        let entry = state.as_ref().and_then(|s| s.worker(&worker));
+        Record::SliceStarted(SliceStarted {
+            runtime: entry.map_or_else(|| worker.clone(), |w| w.runtime.clone()),
+            deadline: entry
+                .map(|w| w.deadline)
+                .or_else(|| state.as_ref().map(|s| s.budget.deadline))
+                .unwrap_or_else(now_utc),
+            worker,
+            base_seq,
+        })
+    }
+
+    /// Validates `pending` against the replayed state, appends it to the file in one
+    /// write and applies it. Nothing is written or applied when any record is refused.
+    fn append_all(&mut self, pending: Vec<Pending>) -> Result<Vec<LedgerLine>, Error> {
+        let mut trial = (pending.len() > 1).then(|| self.index.clone());
+        let first_seq = self.next_seq();
+        let mut new_lines = Vec::with_capacity(pending.len());
+        for (seq, p) in (first_seq..).zip(pending) {
+            let idx = trial.as_ref().unwrap_or(&self.index);
+            idx.check(&p.record, p.version)?;
+            let line = LedgerLine {
+                schema_version: p.version,
+                seq,
+                ts: p.ts.unwrap_or_else(now_utc),
+                worker: p.worker,
+                record: p.record,
+            };
+            if let Some(t) = trial.as_mut() {
+                t.commit(&line.record, line.schema_version);
+            }
+            new_lines.push(line);
+        }
         if let Some(path) = &self.path {
+            let cut_torn = self
+                .slice
+                .as_ref()
+                .filter(|s| s.torn_pending)
+                .map(|s| s.valid_bytes);
             let mut text = String::new();
-            if !self.ends_with_newline {
+            if cut_torn.is_none() && !self.ends_with_newline {
                 text.push('\n');
             }
-            text.push_str(&serde_json::to_string(&line).map_err(|e| Error::Malformed {
-                path: path.clone(),
-                message: e.to_string(),
-            })?);
-            text.push('\n');
+            let mut added = 0u64;
+            for line in &new_lines {
+                let json = serde_json::to_string(line).map_err(|e| Error::Malformed {
+                    path: path.clone(),
+                    message: e.to_string(),
+                })?;
+                added += json.len() as u64 + 1;
+                text.push_str(&json);
+                text.push('\n');
+            }
+            if let Some(keep) = cut_torn {
+                // Drop the half-written fragment a killed process left; it was never a line.
+                let f = OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .map_err(|e| Error::io(path, e))?;
+                f.set_len(keep).map_err(|e| Error::io(path, e))?;
+            }
             let mut f = OpenOptions::new()
                 .append(true)
+                .create(self.slice.is_some())
                 .open(path)
                 .map_err(|e| Error::io(path, e))?;
             f.write_all(text.as_bytes())
                 .and_then(|()| f.sync_data())
                 .map_err(|e| Error::io(path, e))?;
             self.ends_with_newline = true;
+            if let Some(sm) = &mut self.slice {
+                sm.torn_pending = false;
+                sm.valid_bytes += added;
+            }
         }
-        self.index.commit(&line.record, line.schema_version);
-        self.lines.push(line.clone());
-        Ok(line)
+        match trial {
+            Some(t) => self.index = t,
+            None => {
+                for l in &new_lines {
+                    self.index.commit(&l.record, l.schema_version);
+                }
+            }
+        }
+        self.lines.extend(new_lines.iter().cloned());
+        Ok(new_lines)
+    }
+
+    fn append(&mut self, record: Record) -> Result<LedgerLine, Error> {
+        let first_of_slice = self.slice.is_some() && self.lines.is_empty();
+        let mut batch = Vec::new();
+        if first_of_slice {
+            batch.push(Pending::new(self.slice_started()));
+        }
+        batch.push(Pending::new(record));
+        if first_of_slice {
+            // Refuse before touching the registry or the file.
+            let mut trial = self.index.clone();
+            for p in &batch {
+                trial.check(&p.record, p.version)?;
+                trial.commit(&p.record, p.version);
+            }
+            self.mark_running()?;
+        }
+        let mut written = self.append_all(batch)?;
+        Ok(written.pop().expect("a batch of at least one record"))
     }
 
     /// Appends an evidence record with a freshly allocated ID.
@@ -992,7 +1751,28 @@ impl Ledger {
     }
 
     /// Appends a finding in state `candidate`, allocating `F<n>` or `F<n>.n<k>`.
-    pub fn add_finding(&mut self, new: NewFinding) -> Result<LedgerLine, Error> {
+    pub fn add_finding(&mut self, mut new: NewFinding) -> Result<LedgerLine, Error> {
+        new.supports = new
+            .supports
+            .iter()
+            .map(|e| self.own_evidence_id(e))
+            .collect();
+        new.sibling_of = new.sibling_of.as_ref().map(|p| self.own_finding_id(p));
+        if let (Some(w), Some(parent)) = (self.worker(), &new.sibling_of)
+            && parent.prefix() != Some(w)
+        {
+            return Err(Refusal::new(
+                m4::FOREIGN_ITEM,
+                format!(
+                    "worker {w} cannot add a sibling to {parent}: that finding belongs to the main ledger or another worker"
+                ),
+                format!("a finding of {w} as --sibling-of"),
+                format!(
+                    "dla --worker {w} ledger add --origin hypothesis --evidence <id> --hypothesis <cause> --refute-if <result>   (a finding of your own)"
+                ),
+            )
+            .into());
+        }
         if let Some(a) = &new.archetype
             && a != UNCLASSIFIED
         {
@@ -1056,6 +1836,8 @@ impl Ledger {
         evidence: Vec<EvidenceId>,
         by: &str,
     ) -> Result<LedgerLine, Error> {
+        let finding = &self.own_finding_id(finding);
+        let evidence: Vec<EvidenceId> = evidence.iter().map(|e| self.own_evidence_id(e)).collect();
         let from = self
             .index
             .require_finding(finding, "transition")
@@ -1079,6 +1861,7 @@ impl Ledger {
         finding: Option<FindingId>,
         opened_by: &str,
     ) -> Result<LedgerLine, Error> {
+        let finding = finding.map(|f| self.own_finding_id(&f));
         self.append(Record::OpenItem(OpenItem {
             id: self.next_open_item_id(),
             text: text.to_owned(),
@@ -1093,14 +1876,23 @@ impl Ledger {
         id: &OpenItemId,
         resolution: Resolution,
     ) -> Result<LedgerLine, Error> {
+        let resolution = match resolution {
+            Resolution::Hypothesis(f) => Resolution::Hypothesis(self.own_finding_id(&f)),
+            other => other,
+        };
         self.append(Record::OpenItemResolved(OpenItemResolved {
-            id: id.clone(),
+            id: self.own_open_item_id(id),
             resolution,
         }))
     }
 
     /// Records the answer to a checklist item (the latest answer wins).
-    pub fn answer_checklist(&mut self, answer: ChecklistAnswer) -> Result<LedgerLine, Error> {
+    pub fn answer_checklist(&mut self, mut answer: ChecklistAnswer) -> Result<LedgerLine, Error> {
+        answer.evidence = answer
+            .evidence
+            .iter()
+            .map(|e| self.own_evidence_id(e))
+            .collect();
         self.append(Record::ChecklistAnswer(answer))
     }
 
@@ -1125,8 +1917,141 @@ impl Ledger {
     /// Appends a full annotation: writers, removers, a note, and the holder, owner,
     /// region and site of a finding that has none yet. A value that differs from one the finding
     /// already has is refused with `annotation-conflict`; the same value is accepted.
-    pub fn annotate_record(&mut self, annotation: FindingAnnotation) -> Result<LedgerLine, Error> {
+    pub fn annotate_record(
+        &mut self,
+        mut annotation: FindingAnnotation,
+    ) -> Result<LedgerLine, Error> {
+        annotation.finding = self.own_finding_id(&annotation.finding);
         self.append(Record::FindingAnnotated(annotation))
+    }
+
+    // ----- worker slices, merge and verification -----
+
+    /// Ends the worker's slice with `slice_done`, listing the slice's own findings that
+    /// are not dispositioned and its open items that are not resolved, and marks the
+    /// worker `done` in `state.json`. Refused in core mode.
+    pub fn finish_slice(&mut self) -> Result<LedgerLine, Error> {
+        let Some(w) = self.worker().map(str::to_owned) else {
+            return Err(Refusal::new(
+                m4::WORKER_ONLY,
+                "`ledger done` ends a worker's slice; this is the core ledger",
+                "worker mode (--worker <name>)",
+                "dla --worker <name> ledger done",
+            )
+            .into());
+        };
+        let mut open: Vec<String> = self
+            .index
+            .findings
+            .values()
+            .filter(|f| f.id.prefix() == Some(w.as_str()) && !f.state.is_dispositioned())
+            .map(|f| f.id.to_string())
+            .collect();
+        open.extend(
+            self.index
+                .open_items
+                .values()
+                .filter(|o| o.item.id.prefix() == Some(w.as_str()) && o.resolution.is_none())
+                .map(|o| o.item.id.to_string()),
+        );
+        let line = self.append(Record::SliceDone(SliceDone {
+            worker: w.clone(),
+            open,
+        }))?;
+        if let Some(dir) = self.slice.as_ref().and_then(|s| s.run_dir.clone())
+            && dir.join(crate::state::STATE_FILE).is_file()
+        {
+            RunState::update(&dir, |s| {
+                if let Some(e) = s.workers.iter_mut().find(|e| e.name == w) {
+                    e.status = WorkerStatus::Done;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(line)
+    }
+
+    /// Core mode: appends `lines` of `worker`'s slice verbatim (the original timestamp
+    /// and schema version, a new `seq`, the `worker` field set), then the
+    /// `slice_merged` record. All or nothing: a line the merged ledger would refuse
+    /// leaves the file untouched.
+    pub fn append_merged(
+        &mut self,
+        worker: &str,
+        lines: &[LedgerLine],
+        merged: SliceMerged,
+    ) -> Result<Vec<LedgerLine>, Error> {
+        if self.slice.is_some() {
+            return Err(core_only("merge").into());
+        }
+        let mut batch: Vec<Pending> = lines
+            .iter()
+            .map(|l| Pending {
+                record: l.record.clone(),
+                ts: Some(l.ts),
+                worker: Some(worker.to_owned()),
+                version: l.schema_version,
+            })
+            .collect();
+        batch.push(Pending::new(Record::SliceMerged(merged)));
+        self.append_all(batch)
+    }
+
+    /// Core mode: records that `duplicate` is the same finding as `canonical`.
+    pub fn merge_findings(
+        &mut self,
+        canonical: &FindingId,
+        duplicate: &FindingId,
+    ) -> Result<LedgerLine, Error> {
+        if self.slice.is_some() {
+            return Err(core_only("finding_merged").into());
+        }
+        self.append(Record::FindingMerged(FindingMerged {
+            canonical: canonical.clone(),
+            duplicate: duplicate.clone(),
+        }))
+    }
+
+    /// Core mode: records what a verifier concluded about `finding` from its bundle.
+    /// The agreement with the finding's site (same file, within 3 lines, or both none)
+    /// and holder is computed here; a disagreement also opens an open item naming both
+    /// values. Returns the verification line and the open item line, if any.
+    pub fn verify(
+        &mut self,
+        finding: &FindingId,
+        site: Option<String>,
+        holder: crate::finding::Holder,
+        mechanism: &str,
+        label: &str,
+        bundle: &str,
+    ) -> Result<(LedgerLine, Option<LedgerLine>), Error> {
+        if self.slice.is_some() {
+            return Err(core_only("verification").into());
+        }
+        let f = self
+            .index
+            .require_finding(finding, "verification")
+            .map_err(Error::Refused)?;
+        let v = verify::record(
+            f,
+            site,
+            holder,
+            mechanism.to_owned(),
+            label.to_owned(),
+            bundle.to_owned(),
+        );
+        let mut batch = vec![Pending::new(Record::Verification(v.clone()))];
+        if !(v.agrees_site && v.agrees_holder) {
+            batch.push(Pending::new(Record::OpenItem(OpenItem {
+                id: self.next_open_item_id(),
+                text: verify::disagreement_text(f, &v),
+                finding: Some(finding.clone()),
+                opened_by: "dla ledger verify".to_owned(),
+            })));
+        }
+        let mut written = self.append_all(batch)?;
+        let item = (written.len() > 1).then(|| written.remove(1));
+        Ok((written.remove(0), item))
     }
 
     /// The warning to print after confirming `id`: set when no passing growth column the

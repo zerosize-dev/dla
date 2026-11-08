@@ -5,8 +5,11 @@
 //! evidence rules attached to edges. [`M0Rules`] checks the graph plus the reason,
 //! remedy, static and discriminator rules; [`M3Rules`] adds the dynamic rules (a
 //! harness, a non-leak sibling, the growth gate, a site, a holder, refuted
-//! alternatives and the direction of discriminators). Ledger lines written with
-//! schema version 1 replay under [`M0Rules`], version 2 under [`M3Rules`].
+//! alternatives and the direction of discriminators); [`M4Rules`] adds the artifact-path
+//! rules (a dump-confirmed finding needs an owner instead of a site, and a dump's
+//! retention path can stand in for static evidence). Ledger lines written with schema
+//! version 1 replay under [`M0Rules`], version 2 under [`M3Rules`], version 3 under
+//! [`M4Rules`].
 
 use crate::{
     discriminator::{Favors, favors_of, finding_of},
@@ -15,6 +18,8 @@ use crate::{
     finding::{Finding, FindingState, Polarity, Region, Shape, UnresolvedReason},
     harness::harness_id_of,
     ids::{EvidenceId, FindingId},
+    slice::codes as m4_codes,
+    state::EntryPath,
     trend::{GrowthSummary, finding_region, finding_shape},
 };
 
@@ -70,6 +75,8 @@ pub struct TransitionContext<'a> {
     pub lookup: &'a dyn EvidenceLookup,
     /// Finding index (families and polarity).
     pub findings: &'a dyn FindingLookup,
+    /// The run's entry path (only [`M4Rules`] looks at it).
+    pub entry: EntryPath,
 }
 
 /// Evidence rules attached to edges of the graph.
@@ -201,114 +208,139 @@ pub struct M0Rules;
 
 impl TransitionRules for M0Rules {
     fn check(&self, ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
-        let id = &ctx.finding.id;
-        for e in ctx.evidence {
-            if ctx.lookup.evidence(e).is_none() {
-                let known: Vec<String> = ctx
-                    .lookup
-                    .evidence_ids()
-                    .iter()
-                    .map(|k| k.to_string())
-                    .collect();
-                return Err(Refusal::new(
-                    codes::UNKNOWN_EVIDENCE,
-                    format!("transition of {id} cites {e}, which is not in the ledger"),
-                    format!("evidence {e}"),
-                    format!(
-                        "cite an existing evidence ID (existing evidence: {})",
-                        if known.is_empty() {
-                            "none".to_owned()
-                        } else {
-                            known.join(", ")
-                        }
-                    ),
-                ));
-            }
-        }
-        let to = ctx.to;
-        if to.needs_reason() {
-            if ctx.reason.is_none() {
-                return Err(Refusal::new(
-                    codes::REASON_REQUIRED,
-                    format!("{id} cannot become {to} without a reason"),
-                    format!(
-                        "--reason, one of: {}",
-                        UnresolvedReason::ALL
-                            .iter()
-                            .map(|r| r.as_str())
-                            .collect::<Vec<_>>()
-                            .join("|")
-                    ),
-                    resolve_fix(id, to),
-                ));
-            }
-            if ctx.remedy.is_none_or(|r| r.trim().is_empty()) {
-                return Err(Refusal::new(
-                    codes::REMEDY_REQUIRED,
-                    format!("{id} cannot become {to} without a remedy"),
-                    "--remedy, the step that would resolve it",
-                    resolve_fix(id, to),
-                ));
-            }
-        } else if ctx.reason.is_some() || ctx.remedy.is_some() {
+        check_m0(ctx, false)
+    }
+}
+
+/// True for a retention-class record read from a dump: on an artifact run this is the
+/// only static-like evidence there can be.
+fn is_dump_retention(e: &EvidenceRecord) -> bool {
+    e.kind.class() == EvidenceClass::Retention && e.authority == Authority::Dump
+}
+
+/// The M0 checks. With `dump_retention` set, retention-class evidence of authority dump
+/// also counts as the static evidence of `suspected_static_only` (the artifact path),
+/// provided the reason is `not_exercised`.
+fn check_m0(ctx: &TransitionContext<'_>, dump_retention: bool) -> Result<(), Refusal> {
+    let id = &ctx.finding.id;
+    for e in ctx.evidence {
+        if ctx.lookup.evidence(e).is_none() {
+            let known: Vec<String> = ctx
+                .lookup
+                .evidence_ids()
+                .iter()
+                .map(|k| k.to_string())
+                .collect();
             return Err(Refusal::new(
-                codes::UNEXPECTED_REASON,
+                codes::UNKNOWN_EVIDENCE,
+                format!("transition of {id} cites {e}, which is not in the ledger"),
+                format!("evidence {e}"),
                 format!(
-                    "a reason or remedy only applies to unresolved and suspected_static_only, not {to}"
+                    "cite an existing evidence ID (existing evidence: {})",
+                    if known.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        known.join(", ")
+                    }
                 ),
-                "no --reason and no --remedy",
-                format!("repeat the move for {id} without --reason and --remedy"),
             ));
         }
-        match to {
-            FindingState::SuspectedStaticOnly => {
-                let has_static = ctx
-                    .finding
+    }
+    let to = ctx.to;
+    if to.needs_reason() {
+        if ctx.reason.is_none() {
+            return Err(Refusal::new(
+                codes::REASON_REQUIRED,
+                format!("{id} cannot become {to} without a reason"),
+                format!(
+                    "--reason, one of: {}",
+                    UnresolvedReason::ALL
+                        .iter()
+                        .map(|r| r.as_str())
+                        .collect::<Vec<_>>()
+                        .join("|")
+                ),
+                resolve_fix(id, to),
+            ));
+        }
+        if ctx.remedy.is_none_or(|r| r.trim().is_empty()) {
+            return Err(Refusal::new(
+                codes::REMEDY_REQUIRED,
+                format!("{id} cannot become {to} without a remedy"),
+                "--remedy, the step that would resolve it",
+                resolve_fix(id, to),
+            ));
+        }
+    } else if ctx.reason.is_some() || ctx.remedy.is_some() {
+        return Err(Refusal::new(
+            codes::UNEXPECTED_REASON,
+            format!(
+                "a reason or remedy only applies to unresolved and suspected_static_only, not {to}"
+            ),
+            "no --reason and no --remedy",
+            format!("repeat the move for {id} without --reason and --remedy"),
+        ));
+    }
+    match to {
+        FindingState::SuspectedStaticOnly => {
+            let records = || {
+                ctx.finding
                     .supports
                     .iter()
                     .chain(ctx.evidence)
                     .filter_map(|e| ctx.lookup.evidence(e))
-                    .any(|e| e.kind.class() == EvidenceClass::Static);
-                if !has_static {
-                    return Err(Refusal::new(
-                        codes::STATIC_EVIDENCE_REQUIRED,
-                        format!(
-                            "{id} cites no static-class evidence (kind static-hit or census-holder), so it cannot be suspected_static_only; run-config and other context records do not count"
-                        ),
-                        "an evidence record of kind static-hit or census-holder",
-                        format!(
-                            "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static-hit or census-holder id>"
-                        ),
-                    ));
-                }
+            };
+            let has_static = records().any(|e| e.kind.class() == EvidenceClass::Static);
+            let has_dump = dump_retention && records().any(is_dump_retention);
+            if !has_static && has_dump && ctx.reason != Some(UnresolvedReason::NotExercised) {
+                return Err(Refusal::new(
+                    codes::INVALID_VALUE,
+                    format!(
+                        "{id} rests on a dump's retention path alone, which is suspected_static_only only with reason not_exercised (the dumps are too few or too short to show growth)"
+                    ),
+                    "--reason not_exercised",
+                    format!(
+                        "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<capture more heap dumps of the same process>\" --evidence <retention-path id>"
+                    ),
+                ));
             }
-            FindingState::Refuted => {
-                let has_disc = ctx
-                    .finding
-                    .contradicts
-                    .iter()
-                    .chain(ctx.evidence)
-                    .filter_map(|e| ctx.lookup.evidence(e))
-                    .any(|e| e.kind == EvidenceKind::Discriminator);
-                if !has_disc {
-                    return Err(Refusal::new(
-                        codes::DISCRIMINATOR_REQUIRED,
-                        format!(
-                            "{id} cannot be refuted without discriminator evidence in contradicts"
-                        ),
-                        "an evidence record of kind discriminator",
-                        format!("dla ledger refute {id} --evidence <discriminator evidence id>"),
-                    ));
-                }
+            if !has_static && !has_dump {
+                return Err(Refusal::new(
+                    codes::STATIC_EVIDENCE_REQUIRED,
+                    format!(
+                        "{id} cites no static-class evidence (kind static-hit or census-holder), so it cannot be suspected_static_only; run-config and other context records do not count"
+                    ),
+                    "an evidence record of kind static-hit or census-holder",
+                    format!(
+                        "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static-hit or census-holder id>"
+                    ),
+                ));
             }
-            // `under_test` and `confirmed` are judged by [`M3Rules`]; `strong` needs an
-            // independent second evidence class (retention or intervention) and
-            // arrives with M6. M0 enforces the graph only.
-            FindingState::UnderTest | FindingState::Confirmed | FindingState::Strong => {}
-            FindingState::Unresolved | FindingState::Candidate => {}
         }
-        Ok(())
+        FindingState::Refuted => {
+            let has_disc = ctx
+                .finding
+                .contradicts
+                .iter()
+                .chain(ctx.evidence)
+                .filter_map(|e| ctx.lookup.evidence(e))
+                .any(|e| e.kind == EvidenceKind::Discriminator);
+            if !has_disc {
+                return Err(Refusal::new(
+                    codes::DISCRIMINATOR_REQUIRED,
+                    format!("{id} cannot be refuted without discriminator evidence in contradicts"),
+                    "an evidence record of kind discriminator",
+                    format!("dla ledger refute {id} --evidence <discriminator evidence id>"),
+                ));
+            }
+        }
+        // `under_test` and `confirmed` are judged by [`M3Rules`]; `strong` needs an
+        // independent second evidence class (retention or intervention) and
+        // arrives with M6. M0 enforces the graph only.
+        FindingState::UnderTest | FindingState::Confirmed | FindingState::Strong => {}
+        FindingState::Unresolved | FindingState::Candidate => {}
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -430,16 +462,40 @@ pub struct M3Rules;
 
 impl TransitionRules for M3Rules {
     fn check(&self, ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
-        M0Rules.check(ctx)?;
-        match ctx.to {
-            FindingState::UnderTest => under_test(ctx),
-            FindingState::Confirmed => match ctx.finding.polarity() {
-                Polarity::Leak => confirm_leak(ctx),
-                Polarity::NonLeak => confirm_nonleak(ctx),
-            },
-            FindingState::Refuted => refute(ctx),
-            _ => Ok(()),
-        }
+        check_m3(ctx, false)
+    }
+}
+
+/// The rule set of milestone 4: [`M3Rules`] plus the artifact path. On a run whose entry
+/// is `artifact`:
+///
+/// * `confirmed`, leak-side: an `owner` stands in for the `site` when every cited
+///   passing growth record has authority `dump` (the holder and a refuted N-* sibling
+///   stay required), and the finding must have no site (a dump says nothing about
+///   source lines).
+/// * `suspected_static_only`: a retention-class record of authority `dump` is the
+///   static evidence (reason `not_exercised`).
+///
+/// On any other entry path it judges exactly as [`M3Rules`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct M4Rules;
+
+impl TransitionRules for M4Rules {
+    fn check(&self, ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+        check_m3(ctx, ctx.entry == EntryPath::Artifact)
+    }
+}
+
+fn check_m3(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refusal> {
+    check_m0(ctx, artifact)?;
+    match ctx.to {
+        FindingState::UnderTest => under_test(ctx, artifact),
+        FindingState::Confirmed => match ctx.finding.polarity() {
+            Polarity::Leak => confirm_leak(ctx, artifact),
+            Polarity::NonLeak => confirm_nonleak(ctx),
+        },
+        FindingState::Refuted => refute(ctx),
+        _ => Ok(()),
     }
 }
 
@@ -452,20 +508,38 @@ fn judged<'a, 'b>(ctx: &'b TransitionContext<'a>) -> impl Iterator<Item = &'b Ev
         .filter_map(|e| ctx.lookup.evidence(e))
 }
 
-fn under_test(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+fn under_test(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refusal> {
     let id = &ctx.finding.id;
     let has_harness =
         judged(ctx).any(|e| e.kind == EvidenceKind::Workload && harness_id_of(&e.result).is_some());
-    if !has_harness {
+    // An artifact run has no harness: the dump series is what puts a finding under test.
+    let has_dump_series = artifact
+        && judged(ctx).any(|e| {
+            matches!(
+                e.kind,
+                EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+            ) && e.authority == Authority::Dump
+        });
+    if !has_harness && !has_dump_series {
         return Err(Refusal::new(
             codes::HARNESS_REQUIRED,
             format!(
                 "{id} cannot go under test without a harness: no cited workload evidence names one (a record from `dla harness gen` or `dla harness run`; `dla workload discover` does not count)"
             ),
-            "a workload evidence record written by dla harness gen or dla harness run",
-            format!(
-                "dla harness gen --lang <lang> [--workload <id>]   then   dla ledger test {id} --evidence <harness evidence id>"
-            ),
+            if artifact {
+                "a growth-series record read from heap dumps (authority dump), or a harness record"
+            } else {
+                "a workload evidence record written by dla harness gen or dla harness run"
+            },
+            if artifact {
+                format!(
+                    "dla summarize heap-graph <dump>... (three or more dumps of one process)   then   dla ledger test {id} --evidence <growth-series id>"
+                )
+            } else {
+                format!(
+                    "dla harness gen --lang <lang> [--workload <id>]   then   dla ledger test {id} --evidence <harness evidence id>"
+                )
+            },
         ));
     }
     if ctx.finding.polarity() == Polarity::Leak {
@@ -504,7 +578,19 @@ fn series_hint(ctx: &TransitionContext<'_>) -> String {
         .unwrap_or_else(|| "<series>".to_owned())
 }
 
-fn confirm_leak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+/// True when an artifact-run confirmation may rest on an owner: the finding has one and
+/// every passing growth record the move judges was read from a dump.
+fn owner_stands_in_for_site(ctx: &TransitionContext<'_>) -> bool {
+    ctx.finding
+        .owner
+        .as_deref()
+        .is_some_and(|o| !o.trim().is_empty())
+        && judged(ctx)
+            .filter(|e| is_passing_growth(e))
+            .all(|e| e.authority == Authority::Dump)
+}
+
+fn confirm_leak(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refusal> {
     let id = &ctx.finding.id;
     if !judged(ctx).any(is_passing_growth) {
         return Err(Refusal::new(
@@ -519,12 +605,35 @@ fn confirm_leak(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
             ),
         ));
     }
-    if ctx.finding.site.is_none() {
+    if artifact && let Some(site) = &ctx.finding.site {
+        return Err(Refusal::new(
+            m4_codes::SITE_FORBIDDEN,
+            format!(
+                "{id} cannot be confirmed on an artifact run while it names a site ({site}): a dump holds no source lines, so a site would be a source-mapping claim the evidence cannot make"
+            ),
+            "a finding without a site, identified by its owner",
+            "dla ledger add --origin growth-series --evidence <series id> --owner <class.field> --holder <holder>   (a new finding without --site, then confirm that one)",
+        ));
+    }
+    if ctx.finding.site.is_none() && !(artifact && owner_stands_in_for_site(ctx)) {
+        let (missing, fix) = if artifact {
+            (
+                "a site, or on an artifact run an owner with every cited growth record read from a dump",
+                format!(
+                    "dla ledger annotate {id} --owner <class.field>   (growth evidence must have authority dump)"
+                ),
+            )
+        } else {
+            (
+                "a site on the finding",
+                format!("dla ledger annotate {id} --site <file:line>"),
+            )
+        };
         return Err(Refusal::new(
             codes::SITE_REQUIRED,
             format!("{id} cannot be confirmed without a site (file:line)"),
-            "a site on the finding",
-            format!("dla ledger annotate {id} --site <file:line>"),
+            missing,
+            fix,
         ));
     }
     if ctx.finding.holder.is_none() {

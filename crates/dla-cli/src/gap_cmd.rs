@@ -50,12 +50,13 @@ pub struct GapArgs {
     residual: bool,
 }
 
-/// Evidence authority of a series: live for a sampled process, test otherwise.
+/// Evidence authority of a series: live for a sampled process, dump for a series of
+/// heap dumps, test otherwise.
 pub(crate) fn series_authority(s: &SeriesFile) -> Authority {
-    if s.source.kind == SeriesSourceKind::Sample {
-        Authority::Live
-    } else {
-        Authority::Test
+    match s.source.kind {
+        SeriesSourceKind::Sample => Authority::Live,
+        SeriesSourceKind::Dump => Authority::Dump,
+        _ => Authority::Test,
     }
 }
 
@@ -66,6 +67,8 @@ fn series_ids(run_dir: &Path) -> Vec<(u32, String)> {
     };
     let mut ids: Vec<(u32, String)> = rd
         .filter_map(Result::ok)
+        // An empty file is an id reserved by a writer that has not finished.
+        .filter(|e| dla_core::fsutil::is_written(&e.path()))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let id = name.strip_suffix(".json")?.to_owned();

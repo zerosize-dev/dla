@@ -7,7 +7,7 @@ use std::{
 };
 
 use dla_census::parse::{Lang, parse, tree_sitter::Node};
-use dla_core::{runtime::Runtime, workload::WorkloadKind};
+use dla_core::{runtime::Runtime, state::Scope, workload::WorkloadKind};
 
 /// Directories that never hold project sources.
 pub const SKIP_DIRS: &[&str] = &[
@@ -72,7 +72,13 @@ pub struct Scan {
     root: std::path::PathBuf,
     /// Every non-skipped file, `/` separated.
     pub all: BTreeSet<String>,
+    /// Parsed source files inside the run's scope.
     pub infos: BTreeMap<String, FileInfo>,
+    /// The run's scope; files outside it are listed in `all` (build files above the
+    /// scope are still needed to find a module's root) but never parsed.
+    pub scope: Option<Scope>,
+    /// Non-test source files outside the scope that were not parsed, by runtime.
+    pub out_of_scope: BTreeMap<Runtime, u64>,
 }
 
 pub fn dir_of(rel: &str) -> &str {
@@ -113,6 +119,16 @@ pub fn stem(rel: &str) -> &str {
 
 impl Scan {
     pub fn new(project: &Path) -> Scan {
+        Scan::scoped(project, None)
+    }
+
+    /// Whether `rel` is inside the scope (everything when there is none).
+    pub fn includes(&self, rel: &str) -> bool {
+        self.scope.as_ref().is_none_or(|s| s.includes(rel))
+    }
+
+    /// Scans `project`, parsing only the source files inside `scope`.
+    pub fn scoped(project: &Path, scope: Option<Scope>) -> Scan {
         let mut all = BTreeSet::new();
         let mut stack = vec![project.to_path_buf()];
         while let Some(dir) = stack.pop() {
@@ -133,10 +149,17 @@ impl Scan {
             }
         }
         let mut infos = BTreeMap::new();
+        let mut out_of_scope: BTreeMap<Runtime, u64> = BTreeMap::new();
         for rel in &all {
             let Some(lang) = Lang::from_path(Path::new(rel)) else {
                 continue;
             };
+            if scope.as_ref().is_some_and(|s| !s.includes(rel)) {
+                if !dla_census::walk::is_test_path(rel) {
+                    *out_of_scope.entry(lang.runtime()).or_default() += 1;
+                }
+                continue;
+            }
             let p = project.join(rel);
             if fs::metadata(&p).map_or(true, |m| m.len() > MAX_FILE_BYTES) {
                 continue;
@@ -150,6 +173,8 @@ impl Scan {
             root: project.to_path_buf(),
             all,
             infos,
+            scope,
+            out_of_scope,
         }
     }
 
