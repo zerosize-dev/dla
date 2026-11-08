@@ -4,7 +4,7 @@
 use std::{
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// Largest response body accepted.
@@ -46,18 +46,49 @@ pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, St
     Err(last)
 }
 
-/// `GET path` from `host:port`.
-pub fn get(host: &str, port: u16, path: &str, timeout: Duration) -> Result<Response, String> {
-    let mut stream = connect(host, port, timeout)?;
+/// Sets both socket timeouts to the smaller of `timeout` and the time left until `deadline`.
+/// Returns false when the deadline has passed.
+pub fn arm(stream: &TcpStream, timeout: Duration, deadline: Instant) -> bool {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return false;
+    }
+    let t = left.min(timeout);
+    let _ = stream.set_read_timeout(Some(t));
+    let _ = stream.set_write_timeout(Some(t));
+    true
+}
+
+/// `GET path` from `host:port`. `timeout` bounds each socket operation; `deadline` bounds the
+/// whole exchange, so a peer that sends one byte at a time cannot hold the caller.
+pub fn get(
+    host: &str,
+    port: u16,
+    path: &str,
+    timeout: Duration,
+    deadline: Instant,
+) -> Result<Response, String> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(format!("no time left to reach {host}:{port}"));
+    }
+    let mut stream = connect(host, port, timeout.min(left))?;
+    let expired = || format!("reading {host}:{port}{path} took longer than the allowed time");
     let request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nAccept: */*\r\nUser-Agent: dla-sample\r\n\r\n"
     );
+    if !arm(&stream, timeout, deadline) {
+        return Err(expired());
+    }
     stream
         .write_all(request.as_bytes())
         .map_err(|e| format!("request to {host}:{port} failed: {e}"))?;
     let mut raw = Vec::new();
     let mut chunk = [0u8; 16 * 1024];
     loop {
+        if !arm(&stream, timeout, deadline) {
+            return Err(expired());
+        }
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
@@ -223,8 +254,40 @@ mod tests {
             s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
                 .unwrap();
         });
-        let r = get("127.0.0.1", port, "/x?y=1", Duration::from_secs(5)).unwrap();
+        let t = Duration::from_secs(5);
+        let r = get("127.0.0.1", port, "/x?y=1", t, Instant::now() + t).unwrap();
         assert_eq!(r.text(), "ok");
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn a_dripping_peer_hits_the_overall_deadline() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let h = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n");
+            // One byte every 100 ms: every read is well inside the per-read timeout.
+            for _ in 0..100 {
+                if s.write_all(b"x").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let started = Instant::now();
+        let e = get(
+            "127.0.0.1",
+            port,
+            "/",
+            Duration::from_secs(5),
+            Instant::now() + Duration::from_millis(600),
+        )
+        .unwrap_err();
+        assert!(e.contains("longer than the allowed"), "{e}");
+        assert!(started.elapsed() < Duration::from_secs(3));
         h.join().unwrap();
     }
 }

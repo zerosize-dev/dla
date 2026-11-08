@@ -231,7 +231,12 @@ cargo build -p dla-cli -p dla-bench
 Options: `--only <text>` (fixtures whose id contains it), `--archetypes
 on|off`, `--parallel <N>` (fixtures at the same time, default 2; a harness run
 takes 10 to 90 s), `--json <file>`, `--log-dir <dir>` (default: `<json>.logs`),
-`--keep-work` (keep the scratch copies), `--dla-bin`, `--repo-root`.
+`--keep-work` (keep the scratch copies), `--dla-bin`, `--repo-root`,
+`--command-timeout <seconds>` (default 900: a `dla` command that runs longer is
+killed with its whole process group, the fixture fails with a message naming the
+command, and the rest of that fixture is skipped, so one stuck fixture cannot
+hold a worker until the job timeout). Each fixture's run is created with
+`--budget 2h`.
 
 The policy, per fixture:
 
@@ -266,19 +271,38 @@ re-read (a test before the confirmation, a refuted N-* sibling, cited growth
 evidence with gate pass, site and holder set); the unexplained growth share is
 computable when a residual row exists. The command prints one row per fixture
 (runtime, harness ran, series, passed columns, confirmed, refuted, claim,
-rule-out, leaks, result) and totals, then `ok: N fixture(s) pass`; it exits 1
+rule-out, leaks, result) and totals, then `ok: N fixture(s) pass, M expected failure(s)`; it exits 1
 on a failure. The log directory holds, per fixture, every `dla` command with
 its JSON output (`NNN-<command>.log`), `row.json` (the row with the policy's
 decisions) and the run files (`ledger.jsonl`, `report.md`, `series/`, `trend/`,
 `alloc/`, `harness/H*/harness.json`).
 
-`dla-bench run` also copies `series/`, `trend/`, `alloc/` and
+`dla-bench run` also copies `series/S*.json`, `trend/T*.json`, `alloc/A*.json` and
 `harness/H*/harness.json` and `run-*.json` of the child's dla run next to its
-`ledger.jsonl` (never `work/`, `agent/`, `out/` or `logs/`).
+`ledger.jsonl` (never `work/`, `agent/`, `out/` or `logs/`). The run directory is
+writable by the sandboxed model, so the copy never follows a symbolic link, copies
+only regular files with those names, and stops at 6 directory levels, 2000
+entries and 64 MiB; whatever it left out is listed in `collect-skipped.txt` next
+to the copied files and logged to stderr.
 
 CI runs the command in the `dynamic` job with all four toolchains installed.
 The `static` job covers the `--archetypes off` path, so `dynamic` does not
 repeat it.
+
+### Expected failures
+
+The policy is mechanical: it cannot read the code to choose which edge of a
+reference cycle to weaken. A fixture whose failure follows from that is listed in
+`EXPECTED_FAILURES` (`bench/runner/src/dynamic_cmd.rs`): the fixture id, the
+exact failure text and the reason. A listed fixture that fails with exactly the
+listed text is reported as `xfail: <reason>` in the table and in the JSON
+(`xfail`, `expected_failures`) and is not counted as a failure. The run fails when
+a listed fixture passes (remove the entry) or fails with any other text or with an
+additional failure (a regression must not hide behind the entry).
+
+| fixture | failure | reason |
+| --- | --- | --- |
+| `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
 
 ## Isolation and cost
 

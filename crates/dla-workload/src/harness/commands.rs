@@ -307,9 +307,23 @@ fn run_spec(piece: &str, cwd: &str, template: Option<&str>) -> CommandSpec {
     spec
 }
 
+/// Sets `key` in `spec.env`. A value the command already carries inline
+/// (`PYTHONPATH=src python3 ...`) is combined with the injected one, never replaced:
+/// `PYTHONPATH`, `LD_PRELOAD` and `DYLD_INSERT_LIBRARIES` get the injected value first
+/// (path separator), `JAVA_TOOL_OPTIONS` and `NODE_OPTIONS` get it last (space).
 fn set_env(spec: &mut CommandSpec, key: &str, value: String) {
     if let Some(e) = spec.env.iter_mut().find(|(k, _)| k == key) {
-        e.1 = value;
+        let old = std::mem::take(&mut e.1);
+        e.1 = if old.is_empty() {
+            value
+        } else {
+            match key {
+                "PYTHONPATH" => format!("{value}{}{old}", path_sep()),
+                "LD_PRELOAD" | "DYLD_INSERT_LIBRARIES" => format!("{value}:{old}"),
+                "JAVA_TOOL_OPTIONS" | "NODE_OPTIONS" => format!("{old} {value}"),
+                _ => value,
+            }
+        };
     } else {
         spec.env.push((key.to_owned(), value));
     }
@@ -645,6 +659,35 @@ fn attach_shim(run: &mut CommandSpec, layout: &Layout, gaps: &mut Vec<String>) -
     AgentKind::AllocShim
 }
 
+/// Basename of the program `piece` starts when it is a native executable (ELF or Mach-O)
+/// found in the scratch copy; `None` for shells, scripts and anything not found.
+fn native_executable(work: &Path, cwd: &str, piece: &str) -> Option<String> {
+    let words: Vec<String> = piece.split_whitespace().map(str::to_owned).collect();
+    let (_, rest) = split_env(words);
+    let tok = rest.first()?;
+    if matches!(
+        tok.as_str(),
+        "sh" | "bash" | "dash" | "zsh" | "exec" | "env" | "make"
+    ) {
+        return None;
+    }
+    let tok = tok.trim_matches(|c| c == '"' || c == '\'');
+    let base = tok.rsplit('/').next().unwrap_or(tok);
+    if base.is_empty() || base.ends_with(".sh") {
+        return None;
+    }
+    let path = work.join(cwd).join(tok);
+    let mut head = [0u8; 4];
+    let mut f = std::fs::File::open(&path).ok()?;
+    std::io::Read::read_exact(&mut f, &mut head).ok()?;
+    let elf = head == [0x7f, b'E', b'L', b'F'];
+    let macho = matches!(
+        u32::from_le_bytes(head),
+        0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe | 0xcafe_babe | 0xbeba_feca
+    );
+    (elf || macho).then(|| base.to_owned())
+}
+
 fn plan_native(w: &Workload, iter_arg: Option<&str>, layout: &Layout) -> Plan {
     let pieces = split_chain(&w.command);
     let (last, before) = pieces
@@ -653,14 +696,12 @@ fn plan_native(w: &Workload, iter_arg: Option<&str>, layout: &Layout) -> Plan {
     let mut run = run_spec(last, &w.cwd, iter_arg);
     let mut gaps = Vec::new();
     let agent = attach_shim(&mut run, layout, &mut gaps);
-    if agent == AgentKind::AllocShim && run.argv.first().map(String::as_str) == Some("sh") {
-        // A shell wrapper must not be measured; only the program it starts.
-        if let Some(prog) = last
-            .split_whitespace()
-            .find(|t| !t.contains('=') && *t != "sh" && *t != "exec")
-        {
-            let base = prog.rsplit('/').next().unwrap_or(prog);
-            set_env(&mut run, "DLA_SHIM_ONLY", base.to_owned());
+    if agent == AgentKind::AllocShim {
+        // Narrow the shim to the program itself only when the command starts a real
+        // executable of the scratch copy. A shell, a script or anything else leaves the
+        // shim loaded in every process; `select_measured` drops the shell's record.
+        if let Some(base) = native_executable(&layout.work, &w.cwd, last) {
+            set_env(&mut run, "DLA_SHIM_ONLY", base);
         }
     }
     Plan {
@@ -1140,5 +1181,81 @@ mod tests {
         let p = plan(&cm, Some("-n {n}"), &layout(), &Switches::default(), None).unwrap();
         assert_eq!(p.build.unwrap().argv[..2], ["sh", "-c"]);
         assert_eq!(p.run.argv, ["./build/app", "-n", "{n}"]);
+    }
+
+    fn plan_of(rt: Runtime, cmd: &str, layout: &Layout) -> Plan {
+        plan(
+            &wl(rt, cmd),
+            Some("--iterations {n}"),
+            layout,
+            &Switches::default(),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn inline_assignments_are_combined_with_the_injection_not_replaced() {
+        let sep = path_sep();
+        let p = plan_of(
+            Runtime::Python,
+            "PYTHONPATH=src python3 -m pkg.main",
+            &layout(),
+        );
+        assert_eq!(
+            env(&p.run, "PYTHONPATH"),
+            Some(format!("/r/harness/H1/agent{sep}src").as_str())
+        );
+        let p = plan_of(
+            Runtime::Node,
+            "NODE_OPTIONS=--max-old-space-size=64 node app.js",
+            &layout(),
+        );
+        let node = env(&p.run, "NODE_OPTIONS").unwrap();
+        assert!(node.starts_with("--max-old-space-size=64 "), "{node}");
+        assert!(node.contains("dla-preload"), "{node}");
+        let mut spec = CommandSpec {
+            argv: vec![],
+            cwd: ".".into(),
+            env: vec![
+                ("JAVA_TOOL_OPTIONS".into(), "-Xmx64m".into()),
+                ("LD_PRELOAD".into(), "libmine.so".into()),
+            ],
+        };
+        set_env(&mut spec, "JAVA_TOOL_OPTIONS", "-javaagent:a.jar".into());
+        set_env(&mut spec, "LD_PRELOAD", "/agent/shim.so".into());
+        assert_eq!(
+            env(&spec, "JAVA_TOOL_OPTIONS"),
+            Some("-Xmx64m -javaagent:a.jar")
+        );
+        assert_eq!(env(&spec, "LD_PRELOAD"), Some("/agent/shim.so:libmine.so"));
+    }
+
+    #[test]
+    fn shim_only_is_set_for_a_real_executable_not_a_script() {
+        if cfg!(windows) {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let l = Layout {
+            work: d.path().join("work"),
+            agent: d.path().join("agent"),
+            driver: d.path().join("driver"),
+        };
+        std::fs::create_dir_all(&l.work).unwrap();
+        std::fs::write(l.work.join("run.sh"), "#!/bin/sh\nexec ./prog\n").unwrap();
+        std::fs::write(l.work.join("prog"), b"\x7fELF\x02\x01\x01\0rest").unwrap();
+        for cmd in [
+            "sh ./run.sh",
+            "bash run.sh",
+            "./run.sh",
+            "make && sh ./run.sh",
+        ] {
+            let p = plan_of(Runtime::Native, cmd, &l);
+            assert_eq!(p.agent, AgentKind::AllocShim, "{cmd}");
+            assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), None, "{cmd}");
+        }
+        let p = plan_of(Runtime::Native, "make && ./prog", &l);
+        assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), Some("prog"));
     }
 }

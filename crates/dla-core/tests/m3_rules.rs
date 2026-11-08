@@ -447,15 +447,13 @@ fn confirm_derives_shape_and_region_from_the_tied_column() {
 }
 
 #[test]
-fn the_first_passing_column_is_used_when_none_is_tied_and_a_warning_is_printed() {
+fn nothing_is_derived_from_an_untied_column_and_a_warning_is_printed() {
     let (mut l, f, _) = ready();
-    // The only passing column belongs to F9 at b.go:2 (plateau, off-heap).
+    // The only passing column belongs to F9 at b.go:2 (plateau, off-heap): it says
+    // nothing about F1, so confirm is allowed (warning only) but derives nothing.
     go(&mut l, &f, S::Confirmed, &[E_GROWTH_OTHER]);
     let fin = l.finding(&f).unwrap();
-    assert_eq!(
-        (fin.shape, fin.region),
-        (Some(Shape::Plateau), Some(Region::OffHeap))
-    );
+    assert_eq!((fin.shape, fin.region), (None, None));
     let w = l.confirm_warning(&f).expect("a warning");
     assert!(w.contains("F1") && w.contains("tied"), "{w}");
 }

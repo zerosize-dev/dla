@@ -634,3 +634,43 @@ fn a_workload_below_the_project_root_keeps_its_cwd() {
     );
     assert!(ctx.run_dir.join("harness/H1/work/svc/load.js").is_file());
 }
+
+#[test]
+fn a_non_git_project_keeps_nested_build_packages_and_reports_what_it_skipped() {
+    let (_d, ctx) = prepare("python-report-memo", Runtime::Python);
+    let p = &ctx.project;
+    fs::create_dir_all(p.join("reports/build")).unwrap();
+    fs::write(p.join("reports/build/gen.py"), "X = 1\n").unwrap();
+    fs::create_dir_all(p.join("build")).unwrap();
+    fs::write(p.join("build/out.o"), "o").unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("reports/build/gen.py", p.join("alias.py")).unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", p.join("host.txt")).unwrap();
+    }
+    generate(&ctx, &opts(Runtime::Python)).unwrap();
+    let work = ctx.run_dir.join("harness/H1/work");
+    assert!(work.join("reports/build/gen.py").is_file());
+    assert!(!work.join("build").exists());
+    let m = ctx.harness("H1").unwrap();
+    assert!(
+        m.gaps
+            .iter()
+            .any(|g| g.contains("build-output") && g.contains("build")),
+        "{:?}",
+        m.gaps
+    );
+    #[cfg(unix)]
+    {
+        assert_eq!(
+            fs::read_to_string(work.join("alias.py")).unwrap(),
+            "X = 1\n"
+        );
+        assert!(!work.join("host.txt").exists());
+        assert!(
+            m.gaps.iter().any(|g| g.contains("outside the project")),
+            "{:?}",
+            m.gaps
+        );
+    }
+}

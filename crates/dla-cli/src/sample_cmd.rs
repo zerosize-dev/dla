@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use clap::Args;
@@ -101,12 +101,43 @@ fn registered<'a>(state: &'a RunState, pid: u32, start: Option<&str>) -> Option<
     state.processes.iter().rev().find(|p| {
         p.pid == pid
             && p.stopped_at.is_none()
+            // The pid alone proves nothing (pids are reused): both start times must be known
+            // and agree.
             && match (p.start_time.as_deref(), start) {
-                (Some(a), Some(b)) => a == b,
-                // No start time on one side: the pid is all there is to compare.
-                _ => true,
+                (Some(a), Some(b)) => same_start(a, b),
+                _ => false,
             }
     })
+}
+
+/// Whether two process start times (RFC 3339) are the same instant within 2 s. The Linux
+/// figure is derived from the boot time, which a clock step can move by a second.
+fn same_start(a: &str, b: &str) -> bool {
+    match (
+        chrono::DateTime::parse_from_rfc3339(a),
+        chrono::DateTime::parse_from_rfc3339(b),
+    ) {
+        (Ok(x), Ok(y)) => (x - y).num_milliseconds().abs() <= 2000,
+        _ => a == b,
+    }
+}
+
+/// How the sampled process is named in the series and the effects statement: without raw-value
+/// consent only the executable's base name and the argument count (a command line can hold
+/// secrets), with it the full line.
+fn describe_command(args: &[String], raw_values: bool) -> String {
+    let Some(first) = args.first() else {
+        return String::new();
+    };
+    if raw_values {
+        return args.join(" ");
+    }
+    let n = args.len() - 1;
+    format!(
+        "{} ({n} argument{})",
+        proc::exe_name(first),
+        if n == 1 { "" } else { "s" }
+    )
 }
 
 fn clip(s: &str, max: usize) -> String {
@@ -343,6 +374,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
         )
     })?;
 
+    let started = Instant::now();
     let tc = stage::tool_ctx(project, ctx, data);
     let state = RunState::load(&tc.run_dir)?;
     let start_time = dla_sample::os::process_start_time(pid);
@@ -385,7 +417,8 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
     };
 
     let args = proc::command_line(pid).unwrap_or_default();
-    let command = args.join(" ");
+    let raw_values = state.consent.as_ref().is_some_and(|c| c.raw_values);
+    let command = describe_command(&args, raw_values);
     let specs = match counters {
         CountersSpec::None => Vec::new(),
         CountersSpec::Auto => auto_specs(&args),
@@ -405,6 +438,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
         args: args.clone(),
         roots,
         scratch: tc.tmp_dir()?,
+        deadline: started + duration,
     };
     let mut backends = Vec::new();
     let mut failed: Vec<(BackendSpec, dla_sample::BackendError)> = Vec::new();
@@ -418,6 +452,8 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
         }
     }
 
+    // Opening the backends counts against --duration.
+    let duration = duration.saturating_sub(started.elapsed()).max(interval);
     let out = run_session(
         SessionConfig {
             pid,
@@ -704,6 +740,53 @@ mod tests {
                 .iter()
                 .any(|l| l.starts_with("dropped 7 grouped columns"))
         );
+    }
+
+    #[test]
+    fn registry_match_needs_known_start_times_within_two_seconds() {
+        assert!(same_start("2026-01-01T00:00:10Z", "2026-01-01T00:00:11Z"));
+        assert!(same_start("2026-01-01T00:00:10Z", "2026-01-01T00:00:08Z"));
+        assert!(!same_start("2026-01-01T00:00:10Z", "2026-01-01T00:00:13Z"));
+        assert!(same_start("odd", "odd"));
+        assert!(!same_start("odd", "2026-01-01T00:00:10Z"));
+    }
+
+    #[test]
+    fn registry_pid_alone_is_tier_two() {
+        use dla_core::state::{ProcessKind, ProcessRecord};
+        let rec = |start: Option<&str>| ProcessRecord {
+            pid: 77,
+            start_time: start.map(str::to_owned),
+            kind: ProcessKind::Profiler,
+            command: "x".into(),
+            started_at: chrono::Utc::now(),
+            stopped_at: None,
+        };
+        let mut state = RunState::init("/p", None, 60, None, chrono::Utc::now()).unwrap();
+        state.processes.push(rec(Some("2026-01-01T00:00:10Z")));
+        assert!(registered(&state, 77, Some("2026-01-01T00:00:11Z")).is_some());
+        assert!(registered(&state, 77, None).is_none(), "live start unknown");
+        assert!(registered(&state, 77, Some("2026-01-01T00:05:00Z")).is_none());
+        state.processes[0] = rec(None);
+        assert!(registered(&state, 77, Some("2026-01-01T00:00:11Z")).is_none());
+        assert!(registered(&state, 77, None).is_none());
+    }
+
+    #[test]
+    fn command_lines_are_redacted_without_raw_value_consent() {
+        let args: Vec<String> = ["/usr/bin/java", "--password=hunter2", "-Dsecret=x"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let d = describe_command(&args, false);
+        assert_eq!(d, "java (2 arguments)");
+        assert!(!d.contains("hunter2"));
+        assert_eq!(
+            describe_command(&args, true),
+            "/usr/bin/java --password=hunter2 -Dsecret=x"
+        );
+        assert_eq!(describe_command(&args[..1], false), "java (0 arguments)");
+        assert_eq!(describe_command(&[], false), "");
     }
 
     #[test]

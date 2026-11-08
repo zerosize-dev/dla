@@ -71,9 +71,13 @@ pub struct Plateau {
 /// An `(x, y)` point.
 pub type Point = (f64, f64);
 
-/// Splits post-warm-up points into the first `iterations` (main) and the rest (extra).
-pub fn split(points: &[Point], iterations: usize) -> (&[Point], &[Point]) {
-    points.split_at(iterations.min(points.len()))
+/// Splits post-warm-up points by `x`: the main window is every point up to `main_end_x`
+/// (the x of the last main point of the series), the extra window the points after it.
+/// Splitting by x, not by count, keeps the windows right when a column has missing readings
+/// or exists only in part of the run.
+pub fn split(points: &[Point], main_end_x: f64) -> (&[Point], &[Point]) {
+    let k = points.partition_point(|p| p.0 <= main_end_x);
+    points.split_at(k)
 }
 
 fn mean_abs(points: &[(f64, f64)]) -> f64 {
@@ -89,9 +93,11 @@ fn sen_slope(points: &[(f64, f64)]) -> Option<f64> {
         .flatten()
 }
 
-/// The plateau test. `reference` is the level a byte column's rise is measured against when
-/// that is larger than the column itself (the process's resident memory): a rise under 1% of
-/// it is drift, not growth. Gauges: growth continues when the extra slope is at least half the
+/// The plateau test. `reference` is the level a process (`os.*`) column's rise is measured
+/// against when that is larger than the column itself (the process's resident memory; zero
+/// for every other column, which is judged against its own level only): a rise under 1% of
+/// it is drift, not growth, except that a verdict resting only on that floor while the main
+/// window grows with confidence (Sen interval above 0) is inconclusive. Gauges: growth continues when the extra slope is at least half the
 /// main slope and the extra rise exceeds three noise units; a plateau when the rise is
 /// within that. Counters: every delta over the extra window (starting from the last main
 /// point) at least one means growth; no net increase means a plateau.
@@ -153,8 +159,16 @@ pub fn plateau(
     let limit = NOISE_MULTIPLE * nz.max(1e-9 * scale);
     let keeps = main_slope.is_none_or(|m| sen.slope >= KEEP_SLOPE * m);
     let material = rise > MATERIAL * mean_abs(extra).max(reference);
+    // The floor alone decides when the rise is clearly above the noise and keeps the main
+    // slope but is small against the level. If the main window's Sen interval excludes 0
+    // the column is growing with confidence, so a verdict resting only on the floor would
+    // be a guess: inconclusive rather than plateau.
+    let floor_only = rise > limit && keeps && !material;
+    let main_grows = theil_sen(main, 0.05).is_some_and(|s| s.lo > 0.0);
     let verdict = if rise > limit && keeps && material {
         PlateauVerdict::Continues
+    } else if floor_only && main_grows {
+        PlateauVerdict::Inconclusive
     } else if rise <= limit || !material {
         PlateauVerdict::Plateau
     } else {
@@ -340,7 +354,8 @@ pub fn gc(pre: &[(f64, f64)], post: &[(f64, f64)], reference: f64) -> Option<Gc>
 /// A purge that released the growth, or a pre-GC twin that carries it, favors a non-leak
 /// cause (the memory is allocator or collector headroom). Otherwise a plateau favors
 /// non-leak, growth that continues favors leak, and when the plateau test could not
-/// decide a purge that kept the growth favors leak.
+/// decide a purge that kept the growth favors leak. A plateau together with a retained
+/// purge is a contradiction and is inconclusive.
 pub fn combine(
     plateau: PlateauVerdict,
     purge: Option<&Purge>,
@@ -369,6 +384,10 @@ pub fn combine(
         return (Favors::NonLeak, seen);
     }
     match plateau {
+        // A plateau never overrides a purge that kept the growth: the two disagree.
+        PlateauVerdict::Plateau if purge.is_some_and(|p| p.verdict == PurgeVerdict::Retained) => {
+            (Favors::Inconclusive, Vec::new())
+        }
         PlateauVerdict::Plateau => (
             Favors::NonLeak,
             vec!["N-WARM".to_owned(), "N-HWM".to_owned()],
@@ -515,8 +534,13 @@ mod tests {
     #[test]
     fn plateau_and_retained_growth_decide_the_rest() {
         let kept = purge("trim", Some(100.0), Some(99.0), Some(20.0));
+        // A plateau never overrides a purge that kept the growth: they disagree.
         assert_eq!(
-            combine(PlateauVerdict::Plateau, Some(&kept), None).0,
+            combine(PlateauVerdict::Plateau, Some(&kept), None),
+            (Favors::Inconclusive, Vec::new())
+        );
+        assert_eq!(
+            combine(PlateauVerdict::Plateau, None, None).0,
             Favors::NonLeak
         );
         assert_eq!(
@@ -547,8 +571,46 @@ mod tests {
     fn a_smooth_drift_far_below_one_percent_of_the_level_is_not_growth() {
         let main = pts(&[3000000., 3000100., 3000200., 3000300.], 1000.0);
         let drift = pts(&[3000400., 3000500., 3000601., 3000700., 3000800.], 5000.0);
+        // The main window grows with confidence, so the floor alone cannot call a plateau.
         let p = plateau(&main, &drift, false, 0.0);
+        assert_eq!(p.verdict, PlateauVerdict::Inconclusive, "{p:?}");
+        // With a main window that does not grow with confidence the floor still applies.
+        let still = pts(&[3000000., 3000300., 3000100., 3000200.], 1000.0);
+        let p = plateau(&still, &drift, false, 0.0);
         assert_eq!(p.verdict, PlateauVerdict::Plateau, "{p:?}");
+    }
+
+    #[test]
+    fn a_precise_leak_under_one_percent_of_rss_is_not_a_plateau() {
+        // 500 MB process, a probe leaking 30 KB per step: clean, significant growth that
+        // the RSS-relative floor used to call a plateau. With no reference (a non-os
+        // column) it continues.
+        let main = pts(&[1e6, 1.03e6, 1.06e6, 1.09e6, 1.12e6], 1000.0);
+        let extra = pts(&[1.15e6, 1.18e6, 1.21e6, 1.24e6, 1.27e6], 6000.0);
+        assert_eq!(
+            plateau(&main, &extra, false, 0.0).verdict,
+            PlateauVerdict::Continues
+        );
+        // Even if a reference is supplied, the floor alone must not yield a plateau.
+        assert_eq!(
+            plateau(&main, &extra, false, 500e6).verdict,
+            PlateauVerdict::Inconclusive
+        );
+    }
+
+    #[test]
+    fn windows_split_by_x_not_by_count() {
+        let all = pts(&[1., 2., 3., 4., 5., 6.], 1000.0);
+        let (m, e) = split(&all, 4000.0);
+        assert_eq!((m.len(), e.len()), (4, 2));
+        // A column that only exists in the extra part has no main points.
+        let late = &all[4..];
+        let (m, e) = split(late, 4000.0);
+        assert_eq!((m.len(), e.len()), (0, 2));
+        // A missing main reading does not move the boundary.
+        let gap: Vec<_> = all.iter().copied().filter(|p| p.0 != 2000.0).collect();
+        let (m, e) = split(&gap, 4000.0);
+        assert_eq!((m.len(), e.len()), (3, 2));
     }
 
     #[test]
@@ -573,7 +635,7 @@ mod tests {
         );
         assert_eq!(
             plateau(&main, &creep, false, 50e6).verdict,
-            PlateauVerdict::Plateau
+            PlateauVerdict::Inconclusive
         );
     }
 

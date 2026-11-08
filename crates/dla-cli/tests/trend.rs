@@ -354,6 +354,58 @@ fn a_non_leak_ends_refuted_by_the_keys_discriminator() {
 }
 
 #[test]
+fn a_finding_with_no_tied_column_is_inconclusive_and_the_discriminator_is_not_bound() {
+    let pr = project();
+    let p = pr.dir.path();
+    // Only os.rss was sampled; F1's probe column never was. os.rss is quiet in both
+    // series, which used to refute F1.
+    write_series(
+        &pr,
+        "S1",
+        "fresh",
+        &[("os.rss", "gauge", "process", None, flat(1e7))],
+    );
+    write_series(
+        &pr,
+        "S2",
+        "repeated",
+        &[("os.rss", "gauge", "process", None, flat(1e7))],
+    );
+    ok(
+        p,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "census",
+            "--evidence",
+            "E1",
+            "--site",
+            "src/cache.go:6",
+        ],
+    );
+    let k = ok(p, &["trend", "S1", "--against", "S2", "--finding", "F1"]);
+    assert_eq!(k["keys"]["favors"], "inconclusive");
+    assert_eq!(k["keys"]["compared"], 0);
+    assert!(k["keys"]["finding"].is_null(), "{k}");
+    let next = k["next"].as_array().unwrap();
+    assert!(
+        next.iter()
+            .all(|n| !n.as_str().unwrap().contains("ledger refute")),
+        "{next:?}"
+    );
+    let ledger = fs::read_to_string(pr.run_dir.join("ledger.jsonl")).unwrap();
+    let rec: Value = ledger
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|l| l["kind"] == "discriminator")
+        .unwrap();
+    assert!(rec["result"].get("finding").is_none(), "{rec}");
+    let lim = rec["limitations"].to_string();
+    assert!(lim.contains("no column of the series is tied"), "{lim}");
+}
+
+#[test]
 fn refusals_name_the_missing_item_and_the_fix() {
     let pr = project();
     let p = pr.dir.path();

@@ -1,7 +1,11 @@
 //! Runtime counter backends: what `--counters` can name, how `auto` chooses, and the
 //! [`Backend`] trait the sampling [`session`](crate::session) drives.
 
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use crate::{gopprof, jcmd, node, proc, pyremote};
 
@@ -194,6 +198,9 @@ pub struct OpenCtx {
     pub roots: Vec<String>,
     /// A writable scratch directory (the Python backend keeps its script and stats here).
     pub scratch: PathBuf,
+    /// When opening must be finished (the end of `--duration`, counted from the start of the
+    /// command). Network backends bound their handshakes by it.
+    pub deadline: Instant,
 }
 
 /// Opens the backend `spec` names against the process in `ctx`.
@@ -260,6 +267,7 @@ mod tests {
             args: vec![],
             roots: vec![],
             scratch: std::env::temp_dir(),
+            deadline: Instant::now() + Duration::from_secs(5),
         };
         let e = open_backend(&BackendSpec::Tokio, &ctx).err().unwrap();
         assert_eq!(

@@ -375,14 +375,15 @@ fn passing_columns(
 
 /// The shape and region a confirmation derives from the finding's cited growth
 /// evidence: the first passing column that is tied to the finding (by its `finding`,
-/// by an equal site or by `candidates`), else the first passing column. Nothing is
-/// derived for a non-leak finding, nor for a value the finding already has.
+/// by an equal site or by `candidates`). A passing column that is not tied to the
+/// finding says nothing about it, so nothing is derived from it. Nothing is derived for
+/// a non-leak finding, nor for a value the finding already has.
 pub fn derive_attributes(finding: &Finding, lookup: &dyn EvidenceLookup) -> DerivedAttributes {
     if finding.polarity() != Polarity::Leak {
         return DerivedAttributes::default();
     }
-    let (tied, other) = passing_columns(finding, lookup);
-    let Some(col) = tied.first().or(other.first()) else {
+    let (tied, _) = passing_columns(finding, lookup);
+    let Some(col) = tied.first() else {
         return DerivedAttributes::default();
     };
     DerivedAttributes {

@@ -11,6 +11,7 @@
 //! inspector on port 9229 (Unix only).
 
 use std::{
+    io::{self, Read, Write},
     net::TcpStream,
     thread,
     time::{Duration, Instant},
@@ -126,8 +127,46 @@ pub fn debugger_path(list_body: &str) -> Option<String> {
     Some(path.to_owned())
 }
 
+/// A socket whose every read and write is bounded by one absolute deadline, so a peer that
+/// drips bytes cannot stretch the websocket handshake or a reply past it.
+struct DeadlineStream {
+    inner: TcpStream,
+    deadline: Instant,
+}
+
+impl DeadlineStream {
+    fn arm(&self) -> io::Result<()> {
+        if http::arm(&self.inner, IO_TIMEOUT, self.deadline) {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the inspector did not answer in time",
+            ))
+        }
+    }
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.inner.read(buf)
+    }
+}
+
+impl Write for DeadlineStream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 struct NodeInspect {
-    ws: WebSocket<TcpStream>,
+    ws: WebSocket<DeadlineStream>,
     pid: u32,
     next_id: u64,
 }
@@ -140,14 +179,33 @@ impl std::fmt::Debug for NodeInspect {
     }
 }
 
-fn connect(host: &str, port: u16, timeout: Duration) -> Result<WebSocket<TcpStream>, String> {
-    let list = http::get(host, port, "/json/list", timeout)?;
+/// The earlier of `limit` and [`IO_TIMEOUT`] from now.
+fn io_deadline(limit: Instant) -> Instant {
+    limit.min(Instant::now() + IO_TIMEOUT)
+}
+
+fn connect(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+    limit: Instant,
+) -> Result<WebSocket<DeadlineStream>, String> {
+    let list = http::get(host, port, "/json/list", timeout, io_deadline(limit))?;
     if list.status != 200 {
         return Err(format!("{host}:{port} /json/list answered {}", list.status));
     }
     let path = debugger_path(&list.text())
         .ok_or_else(|| format!("{host}:{port} lists no inspectable target"))?;
-    let stream = http::connect(host, port, IO_TIMEOUT)?;
+    let deadline = io_deadline(limit);
+    let stream = http::connect(
+        host,
+        port,
+        IO_TIMEOUT.min(deadline.saturating_duration_since(Instant::now())),
+    )?;
+    let stream = DeadlineStream {
+        inner: stream,
+        deadline,
+    };
     let url = format!("ws://{host}:{port}{path}");
     let (ws, _) = tungstenite::client(url, stream)
         .map_err(|e| format!("websocket handshake with {host}:{port} failed: {e}"))?;
@@ -155,9 +213,11 @@ fn connect(host: &str, port: u16, timeout: Duration) -> Result<WebSocket<TcpStre
 }
 
 impl NodeInspect {
-    fn evaluate(&mut self) -> Result<(Reading, Option<u32>), String> {
+    /// Evaluates [`EXPRESSION`]; the whole exchange must end by `deadline`.
+    fn evaluate(&mut self, deadline: Instant) -> Result<(Reading, Option<u32>), String> {
         self.next_id += 1;
         let id = self.next_id;
+        self.ws.get_mut().deadline = deadline;
         let request = json!({
             "id": id,
             "method": "Runtime.evaluate",
@@ -166,7 +226,6 @@ impl NodeInspect {
         self.ws
             .send(Message::text(request.to_string()))
             .map_err(|e| format!("sending to the inspector failed: {e}"))?;
-        let deadline = Instant::now() + IO_TIMEOUT;
         loop {
             if Instant::now() > deadline {
                 return Err("the inspector did not answer in time (is the process paused?)".into());
@@ -187,14 +246,14 @@ impl NodeInspect {
     }
 
     /// Connects to `host:port` and checks it is the inspector of `pid`.
-    fn attach(host: &str, port: u16, pid: u32) -> Result<Self, String> {
-        let ws = connect(host, port, PROBE_TIMEOUT)?;
+    fn attach(host: &str, port: u16, pid: u32, limit: Instant) -> Result<Self, String> {
+        let ws = connect(host, port, PROBE_TIMEOUT, limit)?;
         let mut me = Self {
             ws,
             pid,
             next_id: 0,
         };
-        let (_, seen) = me.evaluate()?;
+        let (_, seen) = me.evaluate(io_deadline(limit))?;
         match seen {
             Some(p) if p != pid => Err(format!(
                 "the inspector on {host}:{port} belongs to process {p}, not {pid}"
@@ -216,7 +275,7 @@ pub fn open(port: Option<u16>, ctx: &OpenCtx) -> Result<Box<dyn Backend>, Backen
     let mut errors: Vec<String> = Vec::new();
     let try_ports = |ports: &[u16], errors: &mut Vec<String>| -> Option<NodeInspect> {
         for &p in ports {
-            match NodeInspect::attach(&host, p, pid) {
+            match NodeInspect::attach(&host, p, pid, ctx.deadline) {
                 Ok(n) => return Some(n),
                 Err(e) => errors.push(e),
             }
@@ -242,7 +301,7 @@ pub fn open(port: Option<u16>, ctx: &OpenCtx) -> Result<Box<dyn Backend>, Backen
         proc::signal_usr1(pid).map_err(|e| {
             BackendError::blocked(format!("node-inspect: SIGUSR1 to {pid} failed: {e}"))
         })?;
-        let deadline = Instant::now() + SIGNAL_WAIT;
+        let deadline = (Instant::now() + SIGNAL_WAIT).min(ctx.deadline);
         while Instant::now() < deadline {
             let mut candidates = vec![DEFAULT_PORT];
             candidates.extend(proc::listening_ports(pid));
@@ -279,7 +338,7 @@ impl Backend for NodeInspect {
     }
 
     fn poll(&mut self) -> Result<Reading, BackendError> {
-        self.evaluate()
+        self.evaluate(Instant::now() + IO_TIMEOUT)
             .map(|(r, _)| r)
             .map_err(|e| BackendError::blocked(format!("node-inspect: {e}")))
     }
@@ -353,6 +412,36 @@ mod tests {
                 .unwrap_err()
                 .contains("not found")
         );
+    }
+
+    #[test]
+    fn a_dripping_inspector_hits_the_deadline() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let h = thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            for _ in 0..100 {
+                if s.write_all(b"x").is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let mut s = DeadlineStream {
+            inner: TcpStream::connect(("127.0.0.1", port)).unwrap(),
+            deadline: Instant::now() + Duration::from_millis(500),
+        };
+        let started = Instant::now();
+        let mut b = [0u8; 1];
+        let err = loop {
+            if let Err(e) = s.read(&mut b) {
+                break e;
+            }
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        drop(s);
+        h.join().unwrap();
     }
 
     #[test]

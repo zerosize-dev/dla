@@ -13,6 +13,7 @@ use dla_core::{
     coverage::{BackendStatus, CoverageManifest, ResidualRow},
     discriminator::favors_of,
     evidence::CoverageStatus,
+    finding::Polarity,
     machine::is_passing_growth,
     status,
     trend::{GrowthSummary, PassedColumn},
@@ -98,7 +99,9 @@ fn sites(list: &[String]) -> String {
 /// and strong findings; any other state without an archetype is plainly UNCLASSIFIED.
 fn label(f: &Finding) -> String {
     if f.archetype == UNCLASSIFIED {
-        if matches!(f.state, FindingState::Confirmed | FindingState::Strong) {
+        if matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+            && f.polarity() == Polarity::Leak
+        {
             NOVEL_LABEL.to_owned()
         } else {
             UNCLASSIFIED.to_owned()
@@ -273,13 +276,17 @@ fn num(x: f64) -> String {
 }
 
 /// `<column> <slope> <unit>/<axis> (<shape>, gate pass, <evidence>)` for a confirmed or
-/// strong finding: the passing column of its growth evidence that is tied to it (by
-/// `finding`, equal site or `candidates`), else the first passing column.
+/// strong leak-side finding: the passing column of its growth evidence that is tied to it
+/// (by `finding`, equal site or `candidates`). When the cited evidence has passing columns
+/// but none is tied, the line says so and names them rather than presenting another
+/// holder's column as this finding's growth. A non-leak finding has none.
 fn growth_line(view: &RunView, f: &Finding) -> Option<String> {
-    if !matches!(f.state, FindingState::Confirmed | FindingState::Strong) {
+    if !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        || f.polarity() != Polarity::Leak
+    {
         return None;
     }
-    let mut fallback: Option<(PassedColumn, GrowthSummary, EvidenceId)> = None;
+    let mut untied: Option<(Vec<String>, EvidenceId)> = None;
     let mut bare: Option<EvidenceId> = None;
     for e in f
         .supports
@@ -298,20 +305,57 @@ fn growth_line(view: &RunView, f: &Finding) -> Option<String> {
         {
             return Some(growth_text(c, &summary, &e.evidence_id));
         }
-        if fallback.is_none()
-            && let Some(c) = summary.passed.first()
-        {
-            fallback = Some((c.clone(), summary.clone(), e.evidence_id.clone()));
+        if untied.is_none() && !summary.passed.is_empty() {
+            let names = summary.passed.iter().map(|c| c.column.clone()).collect();
+            untied = Some((names, e.evidence_id.clone()));
         }
         if summary.passed.is_empty() {
             bare.get_or_insert_with(|| e.evidence_id.clone());
         }
     }
-    match (fallback, bare) {
-        (Some((c, s, id)), _) => Some(growth_text(&c, &s, &id)),
+    match (untied, bare) {
+        (Some((names, id)), _) => {
+            let list = names
+                .iter()
+                .take(5)
+                .map(|n| code(n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = names.len().saturating_sub(5);
+            let more = if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            };
+            Some(format!(
+                "not tied to this finding (passing columns of {id}: {list}{more})"
+            ))
+        }
         (None, Some(id)) => Some(format!("gate pass, {id}")),
         (None, None) => None,
     }
+}
+
+/// `Explained by <N-ID> (discriminator E<n>)` for a confirmed non-leak finding.
+fn explained_by(view: &RunView, f: &Finding) -> Option<String> {
+    if !matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        || f.polarity() != Polarity::NonLeak
+    {
+        return None;
+    }
+    let h = f.hypothesis.as_deref()?;
+    // The hypothesis reads `N-WARM: <text>`; name only the id.
+    let h = h.split(':').next().unwrap_or(h).trim();
+    let d = f
+        .supports
+        .iter()
+        .filter_map(|id| view.ledger.evidence_by_id(id))
+        .find(|e| e.kind == dla_core::EvidenceKind::Discriminator)?;
+    Some(format!(
+        "Explained by {} (discriminator {})",
+        inline(h),
+        d.evidence_id
+    ))
 }
 
 fn growth_text(c: &PassedColumn, s: &GrowthSummary, id: &EvidenceId) -> String {
@@ -371,6 +415,9 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     let _ = writeln!(out, "- State: {}", f.state_label());
     if let Some(g) = growth_line(view, f) {
         let _ = writeln!(out, "- Growth: {g}");
+    }
+    if let Some(x) = explained_by(view, f) {
+        let _ = writeln!(out, "- {x}");
     }
     let cl = classes(view, f);
     if !cl.is_empty() {

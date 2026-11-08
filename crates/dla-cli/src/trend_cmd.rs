@@ -384,7 +384,9 @@ fn keys_test(
 
     let mut result = DiscriminatorResult::new("keys", decision.favors);
     result.supports.clone_from(&decision.supports);
-    result.finding.clone_from(&a.finding);
+    if !decision.untied {
+        result.finding.clone_from(&a.finding);
+    }
     result.extra.insert("series".into(), json!(main.series.id));
     result
         .extra
@@ -427,6 +429,12 @@ fn keys_test(
             main.series.id, other.series.id
         ),
     ];
+    if decision.untied {
+        spec.limitations.push(
+            "no column of the series is tied to the finding, so the comparison is not bound to it"
+                .to_owned(),
+        );
+    }
     let evidence = tc.add_evidence(ledger, spec)?;
     let (cols, cut) = decision.columns_json(6);
     Ok(Keys {
@@ -435,7 +443,7 @@ fn keys_test(
         summary: json!({
             "favors": decision.favors,
             "supports": decision.supports,
-            "finding": a.finding,
+            "finding": if decision.untied { None } else { a.finding.clone() },
             "against": other.series.id,
             "compared": decision.columns.len(),
             "columns": cols,

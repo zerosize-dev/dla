@@ -164,6 +164,8 @@ pub struct VariantSpec {
     pub archetypes_off: bool,
 }
 
+/// Copies a directory tree of trusted files. Symbolic links are never followed: they are
+/// skipped, so a link cannot pull files from outside the tree.
 pub fn copy_tree(src: &Path, dst: &Path) -> Res<()> {
     fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
     let rd = fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))?;
@@ -171,13 +173,98 @@ pub fn copy_tree(src: &Path, dst: &Path) -> Res<()> {
         let entry = entry.map_err(|e| format!("{}: {e}", src.display()))?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        if from.is_dir() {
+        let ft = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", from.display()))?;
+        if ft.is_dir() {
             copy_tree(&from, &to)?;
-        } else {
+        } else if ft.is_file() {
             fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
         }
     }
     Ok(())
+}
+
+/// Deepest directory nesting copied out of a run directory.
+const COLLECT_MAX_DEPTH: usize = 6;
+/// Most entries (files and directories) looked at while collecting one run.
+const COLLECT_MAX_ENTRIES: usize = 2_000;
+/// Most bytes copied out of one run directory.
+const COLLECT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Copies files out of a run directory that the sandboxed model could write to. Never follows
+/// a symbolic link, copies only regular files with an expected name, and stops at fixed depth,
+/// entry and byte limits. Whatever is left out is recorded in `skipped`.
+#[derive(Default)]
+struct Collector {
+    entries: usize,
+    bytes: u64,
+    skipped: Vec<String>,
+}
+
+impl Collector {
+    fn skip(&mut self, path: &Path, why: &str) {
+        if self.skipped.len() < 50 {
+            self.skipped.push(format!("{}: {why}", path.display()));
+        } else if self.skipped.len() == 50 {
+            self.skipped.push("further skips not listed".to_owned());
+        }
+    }
+
+    /// Whether `path` is a real directory (not a link to one).
+    fn is_real_dir(path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
+    }
+
+    fn copy_file(&mut self, from: &Path, to: &Path) {
+        let Ok(meta) = fs::symlink_metadata(from) else {
+            return;
+        };
+        if !meta.file_type().is_file() {
+            if meta.file_type().is_symlink() {
+                self.skip(from, "symbolic link");
+            }
+            return;
+        }
+        if self.bytes.saturating_add(meta.len()) > COLLECT_MAX_BYTES {
+            self.skip(from, "byte limit reached");
+            return;
+        }
+        if fs::copy(from, to).is_ok() {
+            self.bytes += meta.len();
+        }
+    }
+
+    /// Copies the files of `src` named `<prefix>*.json`, recursing into real directories.
+    fn copy_dir(&mut self, src: &Path, dst: &Path, prefix: char, depth: usize) {
+        if depth > COLLECT_MAX_DEPTH {
+            self.skip(src, "depth limit reached");
+            return;
+        }
+        let Ok(rd) = fs::read_dir(src) else { return };
+        let _ = fs::create_dir_all(dst);
+        for entry in rd.flatten() {
+            self.entries += 1;
+            if self.entries > COLLECT_MAX_ENTRIES {
+                self.skip(src, "entry limit reached");
+                return;
+            }
+            let Ok(ft) = entry.file_type() else { continue };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let from = entry.path();
+            if ft.is_symlink() {
+                self.skip(&from, "symbolic link");
+            } else if ft.is_dir() {
+                self.copy_dir(&from, &dst.join(&name), prefix, depth + 1);
+            } else if ft.is_file() {
+                if name.starts_with(prefix) && name.ends_with(".json") {
+                    self.copy_file(&from, &dst.join(&name));
+                } else {
+                    self.skip(&from, "unexpected file name");
+                }
+            }
+        }
+    }
 }
 
 /// Removes a top-level `hooks:` key (and its indented body) from the YAML
@@ -894,7 +981,8 @@ fn run_dir_of(ctx: &Ctx, t: &Task) -> PathBuf {
 }
 
 fn copy_if_exists(from: &Path, to: &Path) {
-    if from.is_file() {
+    // `symlink_metadata`: a link in an agent-writable directory is not followed.
+    if fs::symlink_metadata(from).is_ok_and(|m| m.file_type().is_file()) {
         let _ = fs::copy(from, to);
     }
 }
@@ -914,41 +1002,73 @@ fn collect_dla_files(project: &Path, out_dir: &Path) {
     collect_run_files(&project.join(".dla").join(id), out_dir);
 }
 
+/// Name of the file in the output directory that lists what collection left out.
+const COLLECT_LOG: &str = "collect-skipped.txt";
+
 /// Copies the files of a dla run directory that grading and inspection read:
 /// the ledger, state, report and coverage, the M3 series, trends and alloc-test
-/// results, and the harness manifests and run records of `harness/H*` (never
-/// `work/`, `agent/`, `out/` or `logs/`). Directories left by an earlier
-/// attempt are replaced.
+/// results (`S*.json`, `T*.json`, `A*.json`), and the `harness.json` and `run-*.json`
+/// files of `harness/H*` (never `work/`, `agent/`, `out/` or `logs/`). Directories
+/// left by an earlier attempt are replaced.
+///
+/// The run directory is writable by the sandboxed model, so nothing is followed through a
+/// symbolic link, only regular files are copied, and depth, entry count and bytes are
+/// capped. What was skipped is logged to stderr and written to `collect-skipped.txt`.
 pub fn collect_run_files(run: &Path, out_dir: &Path) {
     for f in ["ledger.jsonl", "state.json", "report.md", "coverage.json"] {
         copy_if_exists(&run.join(f), &out_dir.join(f));
     }
-    for d in ["series", "trend", "alloc"] {
+    let mut c = Collector::default();
+    for (d, prefix) in [("series", 'S'), ("trend", 'T'), ("alloc", 'A')] {
         let _ = fs::remove_dir_all(out_dir.join(d));
-        if run.join(d).is_dir() {
-            let _ = copy_tree(&run.join(d), &out_dir.join(d));
+        let from = run.join(d);
+        if Collector::is_real_dir(&from) {
+            c.copy_dir(&from, &out_dir.join(d), prefix, 0);
+        } else if fs::symlink_metadata(&from).is_ok() {
+            c.skip(&from, "not a directory");
         }
     }
     let _ = fs::remove_dir_all(out_dir.join("harness"));
-    let Ok(rd) = fs::read_dir(run.join("harness")) else {
-        return;
-    };
-    for h in rd.flatten() {
-        let name = h.file_name().to_string_lossy().into_owned();
-        if !name.starts_with('H') || !h.path().is_dir() {
-            continue;
-        }
-        let dest = out_dir.join("harness").join(&name);
-        let _ = fs::create_dir_all(&dest);
-        copy_if_exists(&h.path().join("harness.json"), &dest.join("harness.json"));
-        if let Ok(files) = fs::read_dir(h.path()) {
-            for f in files.flatten() {
-                let fname = f.file_name().to_string_lossy().into_owned();
-                if fname.starts_with("run-") && fname.ends_with(".json") {
-                    copy_if_exists(&f.path(), &dest.join(&fname));
+    let harness = run.join("harness");
+    if Collector::is_real_dir(&harness)
+        && let Ok(rd) = fs::read_dir(&harness)
+    {
+        for h in rd.flatten() {
+            let name = h.file_name().to_string_lossy().into_owned();
+            if !name.starts_with('H') || !Collector::is_real_dir(&h.path()) {
+                continue;
+            }
+            c.entries += 1;
+            if c.entries > COLLECT_MAX_ENTRIES {
+                c.skip(&harness, "entry limit reached");
+                break;
+            }
+            let dest = out_dir.join("harness").join(&name);
+            let _ = fs::create_dir_all(&dest);
+            c.copy_file(&h.path().join("harness.json"), &dest.join("harness.json"));
+            if let Ok(files) = fs::read_dir(h.path()) {
+                for f in files.flatten() {
+                    c.entries += 1;
+                    if c.entries > COLLECT_MAX_ENTRIES {
+                        c.skip(&h.path(), "entry limit reached");
+                        break;
+                    }
+                    let fname = f.file_name().to_string_lossy().into_owned();
+                    if fname.starts_with("run-") && fname.ends_with(".json") {
+                        c.copy_file(&f.path(), &dest.join(&fname));
+                    }
                 }
             }
         }
+    }
+    let _ = fs::remove_file(out_dir.join(COLLECT_LOG));
+    if !c.skipped.is_empty() {
+        eprintln!(
+            "collect: left out {} item(s) of {} (see {COLLECT_LOG})",
+            c.skipped.len(),
+            run.display()
+        );
+        let _ = fs::write(out_dir.join(COLLECT_LOG), c.skipped.join("\n") + "\n");
     }
 }
 
@@ -1373,6 +1493,79 @@ fn absolute(p: &Path) -> Res<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn collecting_a_run_never_follows_links_and_copies_only_expected_files() {
+        use std::os::unix::fs::symlink;
+        let t = tempfile::tempdir().unwrap();
+        let (run, out, secret) = (
+            t.path().join("run"),
+            t.path().join("out"),
+            t.path().join("host"),
+        );
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(secret.join("S9.json"), "host secret").unwrap();
+        fs::create_dir_all(run.join("series")).unwrap();
+        fs::create_dir_all(run.join("harness/H1")).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        fs::write(run.join("series/S1.json"), "{}").unwrap();
+        fs::write(run.join("series/notes.txt"), "x").unwrap();
+        fs::write(run.join("harness/H1/harness.json"), "{}").unwrap();
+        fs::write(run.join("harness/H1/run-1.json"), "{}").unwrap();
+        // A link to a host directory, a link to a host file, and a loop.
+        symlink(&secret, run.join("series/dir")).unwrap();
+        symlink(secret.join("S9.json"), run.join("series/S2.json")).unwrap();
+        symlink(&run, run.join("series/loop")).unwrap();
+        symlink(&secret, run.join("alloc")).unwrap();
+        symlink(secret.join("S9.json"), run.join("harness/H1/run-2.json")).unwrap();
+        symlink(secret.join("S9.json"), run.join("ledger.jsonl")).unwrap();
+        collect_run_files(&run, &out);
+        assert!(out.join("series/S1.json").is_file());
+        assert!(!out.join("series/notes.txt").exists());
+        assert!(!out.join("series/dir").exists() && !out.join("series/S2.json").exists());
+        assert!(!out.join("series/loop").exists());
+        assert!(!out.join("alloc").exists());
+        assert!(!out.join("ledger.jsonl").exists());
+        assert!(out.join("harness/H1/harness.json").is_file());
+        assert!(out.join("harness/H1/run-1.json").is_file());
+        assert!(!out.join("harness/H1/run-2.json").exists());
+        let log = fs::read_to_string(out.join(COLLECT_LOG)).unwrap();
+        assert!(
+            log.contains("symbolic link") && log.contains("unexpected file name"),
+            "{log}"
+        );
+        // Nothing from the host directory was copied anywhere.
+        let mut stack = vec![out.clone()];
+        while let Some(d) = stack.pop() {
+            for e in fs::read_dir(&d).unwrap().flatten() {
+                if e.file_type().unwrap().is_dir() {
+                    stack.push(e.path());
+                } else {
+                    assert_ne!(
+                        fs::read_to_string(e.path()).unwrap_or_default(),
+                        "host secret"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn collecting_a_run_caps_entries() {
+        let t = tempfile::tempdir().unwrap();
+        let (run, out) = (t.path().join("run"), t.path().join("out"));
+        fs::create_dir_all(run.join("series")).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        for i in 0..(COLLECT_MAX_ENTRIES + 20) {
+            fs::write(run.join(format!("series/S{i}.json")), "{}").unwrap();
+        }
+        collect_run_files(&run, &out);
+        let n = fs::read_dir(out.join("series")).unwrap().count();
+        assert!(n <= COLLECT_MAX_ENTRIES, "{n}");
+        let log = fs::read_to_string(out.join(COLLECT_LOG)).unwrap();
+        assert!(log.contains("entry limit reached"));
+    }
 
     #[test]
     fn denying_the_shared_claude_temp_dir_is_refused() {

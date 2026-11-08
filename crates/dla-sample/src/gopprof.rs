@@ -7,7 +7,10 @@
 //! `go.goroutines@<file:line>` per creation site. HeapAlloc includes garbage that has not
 //! been collected yet, so none of these are after-GC figures.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use crate::{
     backend::{Backend, BackendError, OpenCtx, Reading},
@@ -77,7 +80,10 @@ pub fn parse_goroutines(text: &str) -> Goroutines {
             after_created_by = true;
         } else if after_created_by && line.starts_with('\t') {
             after_created_by = false;
-            if let Some(site) = line.split_whitespace().next() {
+            // `<path>:<line> +0x<pc>`; the path may hold spaces (Windows user directories).
+            let t = line.trim();
+            let site = t.rsplit_once(" +0x").map_or(t, |(s, _)| s).trim();
+            if !site.is_empty() {
                 *g.by_site.entry(site.to_owned()).or_insert(0) += 1;
             }
         } else {
@@ -137,18 +143,21 @@ pub fn open(url: &str, ctx: &OpenCtx) -> Result<Box<dyn Backend>, BackendError> 
         roots: ctx.roots.clone(),
         interval: ctx.interval,
     };
-    b.get_text("/debug/pprof/heap?debug=1").map_err(|e| {
-        BackendError::blocked(format!(
-            "go-pprof: {e}; import net/http/pprof in the target and serve it on that address"
-        ))
-    })?;
+    b.get_text("/debug/pprof/heap?debug=1", ctx.deadline)
+        .map_err(|e| {
+            BackendError::blocked(format!(
+                "go-pprof: {e}; import net/http/pprof in the target and serve it on that address"
+            ))
+        })?;
     Ok(Box::new(b))
 }
 
 impl GoPprof {
-    fn get_text(&self, path: &str) -> Result<String, String> {
+    /// GETs `path`, giving up after [`TIMEOUT`] in all or at `limit`, whichever is first.
+    fn get_text(&self, path: &str, limit: Instant) -> Result<String, String> {
         let full = format!("{}{path}", self.base.prefix);
-        let r = http::get(&self.base.host, self.base.port, &full, TIMEOUT)?;
+        let deadline = limit.min(Instant::now() + TIMEOUT);
+        let r = http::get(&self.base.host, self.base.port, &full, TIMEOUT, deadline)?;
         if r.status != 200 {
             return Err(format!(
                 "GET {full} on {}:{} answered {}",
@@ -174,7 +183,7 @@ impl Backend for GoPprof {
 
     fn poll(&mut self) -> Result<Reading, BackendError> {
         let heap = self
-            .get_text("/debug/pprof/heap?debug=1")
+            .get_text("/debug/pprof/heap?debug=1", Instant::now() + TIMEOUT)
             .map_err(|e| BackendError::blocked(format!("go-pprof: {e}")))?;
         let mut reading = Reading {
             values: parse_memstats(&heap),
@@ -185,7 +194,7 @@ impl Backend for GoPprof {
                 "go-pprof: heap?debug=1 has no runtime.MemStats block",
             ));
         }
-        match self.get_text("/debug/pprof/goroutine?debug=2") {
+        match self.get_text("/debug/pprof/goroutine?debug=2", Instant::now() + TIMEOUT) {
             Ok(text) => {
                 let g = parse_goroutines(&text);
                 reading
@@ -239,6 +248,19 @@ mod tests {
             1
         );
         assert_eq!(g.by_site.len(), 3);
+    }
+
+    #[test]
+    fn creation_sites_keep_spaces_in_the_path() {
+        let dump = "goroutine 5 [sleep]:\nmain.leak(...)\n\tC:/Users/John Smith/proj/main.go:12\ncreated by main.main in goroutine 1\n\tC:/Users/John Smith/proj/main.go:22 +0x3f\n\ngoroutine 6 [sleep]:\ncreated by main.main\n\t/Users/x/My Projects/a.go:7\n";
+        let g = parse_goroutines(dump);
+        assert_eq!(g.by_site["C:/Users/John Smith/proj/main.go:22"], 1);
+        assert_eq!(g.by_site["/Users/x/My Projects/a.go:7"], 1);
+        let roots = vec!["C:/Users/John Smith/proj".to_owned()];
+        assert_eq!(
+            relative_site("C:/Users/John Smith/proj/main.go:22", &roots),
+            "main.go:22"
+        );
     }
 
     #[test]

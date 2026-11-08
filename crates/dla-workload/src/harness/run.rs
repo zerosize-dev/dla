@@ -26,10 +26,12 @@
 //! `{n}`, `{label}`, `{mode}`, `{out}` and `{cov}` in argv and env values are replaced.
 
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     fs::{self, File},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -48,7 +50,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::{
-    COV, LOGS, OUT, PROBES,
+    AGENT, COV, DRIVER, LOGS, OUT, PROBES,
     build::{PointInput, SeriesParams, build_series},
     cover::{self, CoverageOutcome},
     dumps::{self, DumpFile, Rec},
@@ -212,12 +214,13 @@ struct ExecResult {
     spawn_error: Option<String>,
 }
 
-/// Kills the process group of `pid` (and, failing that, the process).
+/// Kills the process group of `pid` (and, failing that, the process). `kill -s KILL --`:
+/// dash rejects `kill -KILL -- -pgid`.
 fn kill_group(pid: u32) {
     #[cfg(unix)]
     {
         let _ = Command::new("sh")
-            .args(["-c", &format!("kill -KILL -- -{pid} 2>/dev/null")])
+            .args(["-c", &format!("kill -s KILL -- -{pid} 2>/dev/null")])
             .stdin(Stdio::null())
             .status();
     }
@@ -264,7 +267,7 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         cmd.process_group(0);
     }
     let started = Instant::now();
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             res.spawn_error = Some(format!("cannot start {program}: {e}"));
@@ -274,6 +277,15 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
     let pid = child.id();
     res.pid = Some(pid);
     let start_time = os::process_start_time(pid);
+    let mut guard = ChildGuard {
+        ctx,
+        child,
+        pid,
+        start_time: start_time.clone(),
+        registered: false,
+        done: false,
+    };
+    live_add(pid, start_time.clone());
     ctx.register_process(ProcessRecord {
         pid,
         start_time: start_time.clone(),
@@ -282,6 +294,7 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         started_at: now_utc(),
         stopped_at: None,
     })?;
+    guard.registered = true;
     let sampler = spec
         .sample
         .then(|| {
@@ -296,7 +309,7 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         })
         .flatten();
     loop {
-        match child.try_wait() {
+        match guard.child.try_wait() {
             Ok(Some(status)) => {
                 res.code = status.code();
                 break;
@@ -304,8 +317,8 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
             Ok(None) => {
                 if started.elapsed() >= spec.timeout {
                     kill_group(pid);
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    let _ = guard.child.kill();
+                    let _ = guard.child.wait();
                     res.timed_out = true;
                     break;
                 }
@@ -314,8 +327,8 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
             Err(e) => {
                 res.spawn_error = Some(format!("waiting for {program} failed: {e}"));
                 kill_group(pid);
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = guard.child.kill();
+                let _ = guard.child.wait();
                 break;
             }
         }
@@ -324,8 +337,146 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
     // Anything the process left running in its group goes with it.
     kill_group(pid);
     res.sampler = sampler.map(Sampler::stop);
-    ctx.mark_process_stopped(pid, start_time.as_deref())?;
+    guard.finish()?;
     Ok(res)
+}
+
+/// Owns a spawned measured process: unless [`ChildGuard::finish`] ran, dropping it (an
+/// early `?` return, a panic) kills the process group and marks the record stopped.
+struct ChildGuard<'a> {
+    ctx: &'a ToolCtx,
+    child: Child,
+    pid: u32,
+    start_time: Option<String>,
+    registered: bool,
+    done: bool,
+}
+
+impl ChildGuard<'_> {
+    /// Marks the record stopped; the process has ended.
+    fn finish(&mut self) -> Result<(), Refusal> {
+        self.done = true;
+        live_remove(self.pid);
+        if self.registered {
+            self.ctx
+                .mark_process_stopped(self.pid, self.start_time.as_deref())?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ChildGuard<'_> {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        kill_group(self.pid);
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        live_remove(self.pid);
+        if self.registered {
+            let _ = self
+                .ctx
+                .mark_process_stopped(self.pid, self.start_time.as_deref());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Signals
+
+/// Processes of this run that are alive: `(pid, start_time)`.
+type Live = Arc<Mutex<Vec<(u32, Option<String>)>>>;
+
+thread_local! {
+    /// The live list of the run executing on this thread.
+    static LIVE: RefCell<Option<Live>> = const { RefCell::new(None) };
+}
+
+fn live_add(pid: u32, start_time: Option<String>) {
+    LIVE.with(|l| {
+        if let Some(live) = l.borrow().as_ref()
+            && let Ok(mut v) = live.lock()
+        {
+            v.push((pid, start_time));
+        }
+    });
+}
+
+fn live_remove(pid: u32) {
+    LIVE.with(|l| {
+        if let Some(live) = l.borrow().as_ref()
+            && let Ok(mut v) = live.lock()
+        {
+            v.retain(|(p, _)| *p != pid);
+        }
+    });
+}
+
+/// For the duration of a run: SIGINT and SIGTERM kill the process groups of the run's
+/// measured processes, mark them stopped in `state.json` and end `dla` with a non-zero
+/// status (128 + the signal number).
+struct SignalGuard {
+    #[cfg(unix)]
+    handle: Option<signal_hook::iterator::Handle>,
+    #[cfg(unix)]
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl SignalGuard {
+    fn install(ctx: &ToolCtx) -> Self {
+        let live: Live = Arc::new(Mutex::new(Vec::new()));
+        LIVE.with(|l| *l.borrow_mut() = Some(Arc::clone(&live)));
+        #[cfg(unix)]
+        {
+            use signal_hook::{
+                consts::{SIGINT, SIGTERM},
+                iterator::Signals,
+            };
+            let Ok(mut signals) = Signals::new([SIGINT, SIGTERM]) else {
+                return Self {
+                    handle: None,
+                    thread: None,
+                };
+            };
+            let handle = signals.handle();
+            let ctx = ctx.clone();
+            let thread = thread::spawn(move || {
+                if let Some(sig) = signals.forever().next() {
+                    let procs = live.lock().map(|v| v.clone()).unwrap_or_default();
+                    for (pid, start) in &procs {
+                        kill_group(*pid);
+                        let _ = ctx.mark_process_stopped(*pid, start.as_deref());
+                    }
+                    std::process::exit(128 + sig);
+                }
+            });
+            Self {
+                handle: Some(handle),
+                thread: Some(thread),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (ctx, live);
+            Self {}
+        }
+    }
+}
+
+impl Drop for SignalGuard {
+    fn drop(&mut self) {
+        LIVE.with(|l| *l.borrow_mut() = None);
+        #[cfg(unix)]
+        {
+            if let Some(h) = self.handle.take() {
+                h.close();
+            }
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -390,6 +541,45 @@ fn cwd_of(paths: &Paths, spec: &CommandSpec) -> PathBuf {
 // ---------------------------------------------------------------------------------------
 // Build
 
+/// FNV-1a content hash of the files under `dir` (names and bytes, sorted); 0 when absent.
+fn hash_dir(dir: &Path) -> u64 {
+    fn feed(h: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *h ^= u64::from(*b);
+            *h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                if e.file_name() != "__pycache__" {
+                    stack.push(e.path());
+                }
+            } else if ft.is_file() {
+                files.push(e.path());
+            }
+        }
+    }
+    files.sort();
+    for f in files {
+        let rel = f
+            .strip_prefix(dir)
+            .unwrap_or(&f)
+            .to_string_lossy()
+            .into_owned();
+        feed(&mut h, rel.as_bytes());
+        feed(&mut h, &[0]);
+        feed(&mut h, &fs::read(&f).unwrap_or_default());
+        feed(&mut h, &[0xff]);
+    }
+    h
+}
+
 /// Runs the build step once. A failed build is the refusal `harness-failed`.
 fn build_once(
     ctx: &ToolCtx,
@@ -401,7 +591,14 @@ fn build_once(
         return Ok(());
     };
     let marker = paths.hdir.join(BUILD_MARKER);
-    let fingerprint = serde_json::to_string(build).unwrap_or_default();
+    // The build step may only copy the driver into the scratch copy, so the fingerprint
+    // covers the content of the driver and agent files too: an edited driver rebuilds.
+    let fingerprint = format!(
+        "{}\ndriver={:016x} agent={:016x}",
+        serde_json::to_string(build).unwrap_or_default(),
+        hash_dir(&paths.hdir.join(DRIVER)),
+        hash_dir(&paths.hdir.join(AGENT)),
+    );
     if fs::read_to_string(&marker).is_ok_and(|m| m == fingerprint) {
         return Ok(());
     }
@@ -590,6 +787,8 @@ struct ModeRun {
     processes: u32,
     logs: Vec<String>,
     exits: Vec<(String, Option<i32>)>,
+    /// Processes that exited with a non-zero code.
+    failed_exits: u32,
     /// Labels whose log is scanned for detector lines.
     scan_logs: Vec<(String, PathBuf)>,
 }
@@ -655,6 +854,15 @@ fn run_command_mode(
                 timeout.as_secs()
             ));
             break;
+        }
+        if let Some(c) = res.code.filter(|c| *c != 0) {
+            // A crashed point (the agent's exit hook still writes a record) is not a
+            // measurement of the workload.
+            run.failed_exits += 1;
+            run.limitations.push(format!(
+                "point {label} (n={n}) exited with code {c}; it is dropped (log {log_rel})"
+            ));
+            continue;
         }
         let file = dumps::read_dumps(&dump);
         if file.bad_lines > 0 {
@@ -760,6 +968,7 @@ fn run_driver_mode(
     run.logs.push(log_rel.clone());
     run.scan_logs.push((label.clone(), spec.log.clone()));
     run.exits.push((label.clone(), res.code));
+    run.failed_exits = u32::from(res.code.is_some_and(|c| c != 0));
     if let Some(e) = &res.spawn_error {
         run.limitations.push(format!("driver {label}: {e}"));
         return Ok(run);
@@ -919,6 +1128,7 @@ pub fn run_points(
         gaps: manifest.gaps.clone(),
         ..RunOutput::default()
     };
+    let _signals = SignalGuard::install(ctx);
     build_once(ctx, manifest, &paths, &mut out)?;
 
     let secs = opts.timeout_secs.unwrap_or(manifest.timeout_secs);
@@ -955,6 +1165,7 @@ pub fn run_points(
     let mut usable_modes = 0;
     let mut max_post_units = 0u64;
     let mut first_log = None;
+    let mut harness_failed: Option<Refusal> = None;
     for mode in modes {
         let run = if command_mode {
             run_command_mode(ctx, manifest, opts, &paths, mode, timeout)?
@@ -968,6 +1179,40 @@ pub fn run_points(
         scan_logs.extend(run.scan_logs.iter().cloned());
         dump_cov.extend(run.dump_cov.iter().cloned());
         hits.extend(run.detectors.iter().cloned());
+        if run.processes > 0 && run.failed_exits == run.processes {
+            let logs = run.logs.join(", ");
+            let codes = run
+                .exits
+                .iter()
+                .map(|(l, c)| {
+                    format!(
+                        "{l}: {}",
+                        c.map_or_else(|| "signal".to_owned(), |c| c.to_string())
+                    )
+                })
+                .take(4)
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.limitations.extend(run.limitations.iter().cloned());
+            out.limitations.push(format!(
+                "every measured process of mode {} exited with a non-zero code ({codes}); no series was written for it",
+                mode.as_str()
+            ));
+            harness_failed.get_or_insert_with(|| {
+                failed(
+                    format!(
+                        "every measured process of mode {} exited with a non-zero code ({codes}): the harness itself failed, so no series was written",
+                        mode.as_str()
+                    ),
+                    format!("a harness that runs to completion; see the logs {logs}"),
+                    format!(
+                        "read the logs, fix the harness or its hooks, then dla harness run {}",
+                        manifest.id
+                    ),
+                )
+            });
+            continue;
+        }
         let mut limitations = run.limitations.clone();
         if run.points.is_empty() {
             out.limitations.extend(limitations);
@@ -1083,6 +1328,16 @@ pub fn run_points(
     out.detectors = dedupe_detectors(hits);
 
     if usable_modes == 0 {
+        if let Some(r) = harness_failed {
+            cover::record(
+                ctx,
+                manifest.runtime,
+                &CoverageOutcome::Failed {
+                    reason: crate::NO_HARNESS,
+                },
+            )?;
+            return Err(r);
+        }
         cover::record(
             ctx,
             manifest.runtime,

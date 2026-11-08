@@ -240,12 +240,8 @@ fn samples_a_plain_process_into_a_series_with_evidence() {
     let series = p.series("S1");
     assert_eq!(series["source"]["kind"], "sample");
     assert_eq!(series["source"]["pid"], s.pid());
-    assert!(
-        series["source"]["command"]
-            .as_str()
-            .unwrap()
-            .contains("sleep 120")
-    );
+    // No raw-value consent: the base name and the argument count only.
+    assert_eq!(series["source"]["command"], "sleep (1 argument)");
     assert_eq!(series["axis"], "seconds");
     assert_eq!(series["warmup"], 0);
     let cols = columns(&series);
@@ -289,6 +285,55 @@ fn samples_a_plain_process_into_a_series_with_evidence() {
     // A second sample gets the next ID.
     let v2 = p.sample(s.pid(), &["--duration", "300ms", "--counters", "none"]);
     assert_eq!(v2["series"], "S2");
+}
+
+#[test]
+fn the_full_command_line_needs_raw_value_consent() {
+    // `$0` carries the secret into the command line; the `; true` keeps the shell from exec'ing.
+    let secret_holder = || {
+        Guard(
+            Proc::new("sh")
+                .args(["-c", "sleep 120; true", "--token=s3cr3t-value"])
+                .spawn()
+                .unwrap(),
+        )
+    };
+    let dump = |p: &Project, v: &Value| -> String {
+        let series = fs::read_to_string(p.run_dir.join("series/S1.json")).unwrap();
+        format!("{v}{series}{}", p.ledger().len())
+    };
+    let quick = ["--duration", "300ms", "--counters", "none"];
+
+    let p = project();
+    let s = secret_holder();
+    let v = p.sample(s.pid(), &quick);
+    assert!(!dump(&p, &v).contains("s3cr3t"), "{v}");
+    assert_eq!(p.series("S1")["source"]["command"], "sh (3 arguments)");
+    assert!(
+        v["effects"]["target"]
+            .as_str()
+            .unwrap()
+            .contains("sh (3 arguments)")
+    );
+    let ledger = fs::read_to_string(p.run_dir.join("ledger.jsonl")).unwrap();
+    assert!(!ledger.contains("s3cr3t"));
+
+    // With raw-value consent the full line is kept.
+    let p = project_with(None);
+    ok(p.path(), &["consent", "--tiers", "1-4", "--raw-values"]);
+    let s = secret_holder();
+    let v = p.sample(s.pid(), &quick);
+    let command = p.series("S1")["source"]["command"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(command.contains("--token=s3cr3t-value"), "{command}");
+    assert!(
+        v["effects"]["target"]
+            .as_str()
+            .unwrap()
+            .contains("sleep 120")
+    );
 }
 
 #[test]
@@ -882,7 +927,9 @@ fn explicit_node_inspect_signals_a_node_without_an_inspector() {
     let work = tempfile::tempdir().unwrap();
     let n = node(work.path(), &[]);
     let p = project();
-    let v = p.sample(n.pid(), &["--duration", "2s", "--counters", "node-inspect"]);
+    // Opening the inspector after SIGUSR1 counts against --duration; under a loaded test
+    // run it can take a few seconds, so leave room for at least one reading.
+    let v = p.sample(n.pid(), &["--duration", "8s", "--counters", "node-inspect"]);
     assert_eq!(v["backends"]["node-inspect"], "ran", "{v}");
     assert!(
         v["effects"]["effects"]

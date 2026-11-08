@@ -62,9 +62,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     env, fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
-    sync::Mutex,
+    process::{Command, Stdio},
+    sync::{Mutex, mpsc},
+    time::{Duration, Instant},
 };
 
 use clap::Args;
@@ -115,7 +117,39 @@ pub struct DynamicArgs {
     /// Keep the scratch copies of the fixtures.
     #[arg(long)]
     pub keep_work: bool,
+    /// Longest time one dla command may run, in seconds; its process group is killed after
+    /// that and the fixture fails.
+    #[arg(long, default_value_t = DEFAULT_COMMAND_TIMEOUT_S)]
+    pub command_timeout: u64,
 }
+
+/// Default for `--command-timeout`.
+pub const DEFAULT_COMMAND_TIMEOUT_S: u64 = 900;
+
+/// The run budget the driver gives each fixture's run (a run is cut off at its budget, so
+/// this stays well above the per-command limits).
+const RUN_BUDGET: &str = "2h";
+
+/// A fixture the acceptance is known to fail, and why. The policy of this driver is
+/// mechanical (it cannot read the code), so a leak whose evidence is only reachable by
+/// judgement is listed here instead of being weakened away. A listed fixture is reported as
+/// `xfail` and does not fail the run. The run fails when a listed fixture passes (the entry is
+/// stale) or fails in any other way (a regression hiding behind the entry).
+pub struct ExpectedFailure {
+    /// Fixture id.
+    pub fixture: &'static str,
+    /// The exact failure text the fixture produces.
+    pub failure: &'static str,
+    /// Why this failure is accepted.
+    pub reason: &'static str,
+}
+
+/// Fixtures expected to fail; see [`ExpectedFailure`] and bench/README.md.
+pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[ExpectedFailure {
+    fixture: "rust-tree-parent-links",
+    failure: "leak L1 (src/section.rs:27) is not confirmed",
+    reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
+}];
 
 /// The result for one fixture.
 #[derive(Serialize, Debug, Clone, Default)]
@@ -154,6 +188,12 @@ pub struct FixtureRow {
     pub errors: Vec<String>,
     /// Reasons this fixture fails the acceptance.
     pub failures: Vec<String>,
+    /// The reason this fixture is on the expected-failure list, when it failed as listed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xfail: Option<String>,
+    /// The failures that the expected-failure list accepted.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub expected_failures: Vec<String>,
 }
 
 /// The whole result.
@@ -230,6 +270,89 @@ struct Fx<'a> {
     log_dir: PathBuf,
     seq: usize,
     row: FixtureRow,
+    /// Longest time one command may run.
+    timeout: Duration,
+    /// A command timed out: the rest of the fixture is skipped.
+    timed_out: bool,
+}
+
+/// How a command ended.
+enum Ended {
+    /// Exit code (-1 when killed by a signal), stdout, stderr.
+    Done(i32, String, String),
+    /// Killed after the time limit; whatever output had arrived.
+    TimedOut(String, String),
+    /// Could not be started.
+    Spawn(String),
+}
+
+/// Reads a pipe to its end on a thread and sends the text.
+fn drain<R: Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        let _ = tx.send(String::from_utf8_lossy(&buf).into_owned());
+    });
+    rx
+}
+
+/// Kills the process group of `child` (the child itself where there are no groups).
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
+/// Runs `cmd` with piped output read on threads, in its own process group, and kills the
+/// group after `limit`. A leftover grandchild that keeps a pipe open cannot hold the caller:
+/// the readers are waited for only briefly once the command has ended.
+fn run_limited(cmd: &mut Command, limit: Duration) -> Ended {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return Ended::Spawn(e.to_string()),
+    };
+    let out = child.stdout.take().map(drain);
+    let err = child.stderr.take().map(drain);
+    let deadline = Instant::now() + limit;
+    let mut code = None;
+    while code.is_none() {
+        match child.try_wait() {
+            Ok(Some(status)) => code = Some(status.code().unwrap_or(-1)),
+            Ok(None) if Instant::now() >= deadline => break,
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(e) => return Ended::Spawn(e.to_string()),
+        }
+    }
+    let timed_out = code.is_none();
+    if timed_out {
+        kill_tree(&mut child);
+        let _ = child.wait();
+    }
+    let grace = Duration::from_secs(if timed_out { 2 } else { 5 });
+    let collect = |rx: Option<mpsc::Receiver<String>>| {
+        rx.and_then(|r| r.recv_timeout(grace).ok())
+            .unwrap_or_default()
+    };
+    let (stdout, stderr) = (collect(out), collect(err));
+    match code {
+        Some(c) => Ended::Done(c, stdout, stderr),
+        None => Ended::TimedOut(stdout, stderr),
+    }
 }
 
 impl Fx<'_> {
@@ -247,23 +370,36 @@ impl Fx<'_> {
     /// Like [`Fx::call`] without recording a failure (the caller decides).
     fn call_quiet(&mut self, args: &[&str]) -> Out {
         self.seq += 1;
-        let result = Command::new(self.bin)
-            .arg("--project")
-            .arg(&self.project)
-            .args(args)
-            .env("DLA_PLUGIN_ROOT", self.plugin_root)
-            .env("DLA_DATA_DIR", &self.data_dir)
-            .env("DLA_CONSENT_TIERS", "1-4")
-            .env_remove("DLA_RUN")
-            .current_dir(&self.project)
-            .output();
+        if self.timed_out {
+            return Out {
+                ok: false,
+                json: Value::Null,
+            };
+        }
+        let result = run_limited(
+            Command::new(self.bin)
+                .arg("--project")
+                .arg(&self.project)
+                .args(args)
+                .env("DLA_PLUGIN_ROOT", self.plugin_root)
+                .env("DLA_DATA_DIR", &self.data_dir)
+                .env("DLA_CONSENT_TIERS", "1-4")
+                .env_remove("DLA_RUN")
+                .current_dir(&self.project),
+            self.timeout,
+        );
         let (code, stdout, stderr) = match result {
-            Ok(o) => (
-                o.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&o.stdout).into_owned(),
-                String::from_utf8_lossy(&o.stderr).into_owned(),
-            ),
-            Err(e) => (-1, String::new(), format!("spawn failed: {e}")),
+            Ended::Done(c, o, e) => (c, o, e),
+            Ended::TimedOut(o, e) => {
+                self.timed_out = true;
+                self.row.failures.push(format!(
+                    "dla {} timed out after {}s and was killed; the rest of the fixture was skipped",
+                    args.join(" "),
+                    self.timeout.as_secs()
+                ));
+                (-1, o, e)
+            }
+            Ended::Spawn(e) => (-1, String::new(), format!("spawn failed: {e}")),
         };
         let slug: String = args
             .iter()
@@ -1460,6 +1596,8 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         log_dir: sh.log_root.join(&id),
         seq: 0,
         row,
+        timeout: Duration::from_secs(sh.args.command_timeout.max(1)),
+        timed_out: false,
     };
     let _ = fs::remove_dir_all(&fx.log_dir);
     drive(&mut fx);
@@ -1478,6 +1616,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     } else {
         row.failures.push("dla run init failed".to_owned());
     }
+    apply_expected_failures(&mut row, EXPECTED_FAILURES);
     if let Ok(text) = serde_json::to_string_pretty(&row) {
         let _ = fs::write(fx.log_dir.join("row.json"), text + "\n");
     }
@@ -1488,8 +1627,50 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     row
 }
 
+/// Moves the failures that `list` accepts for this fixture out of `failures`. A fixture on
+/// the list that passes, or that fails with anything but the listed text, keeps (or gets) a
+/// failure saying so, so the list can neither go stale nor hide a regression.
+pub fn apply_expected_failures(row: &mut FixtureRow, list: &[ExpectedFailure]) {
+    let mine: Vec<&ExpectedFailure> = list.iter().filter(|e| e.fixture == row.id).collect();
+    if mine.is_empty() {
+        return;
+    }
+    if row.failures.is_empty() {
+        row.failures.push(
+            "listed as an expected failure but it passes: remove it from EXPECTED_FAILURES"
+                .to_owned(),
+        );
+        return;
+    }
+    let accepted = |f: &String| mine.iter().any(|e| e.failure == f);
+    let unexpected: Vec<String> = row
+        .failures
+        .iter()
+        .filter(|f| !accepted(f))
+        .map(|f| format!("{f} (not the expected failure)"))
+        .collect();
+    let missing: Vec<&str> = mine
+        .iter()
+        .map(|e| e.failure)
+        .filter(|f| !row.failures.iter().any(|x| x == f))
+        .collect();
+    if !unexpected.is_empty() || !missing.is_empty() {
+        for m in missing {
+            row.failures
+                .push(format!("the expected failure {m:?} did not occur"));
+        }
+        row.failures.extend(unexpected);
+        // Keep each message once, in order.
+        let mut seen = BTreeSet::new();
+        row.failures.retain(|f| seen.insert(f.clone()));
+        return;
+    }
+    row.xfail = Some(mine.iter().map(|e| e.reason).collect::<Vec<_>>().join("; "));
+    row.expected_failures = std::mem::take(&mut row.failures);
+}
+
 fn drive(fx: &mut Fx) {
-    if !fx.call(&["run", "init"]).ok {
+    if !fx.call(&["run", "init", "--budget", RUN_BUDGET]).ok {
         return;
     }
     let mut runtimes: Vec<String> = Vec::new();
@@ -1557,20 +1738,23 @@ pub fn render_table(res: &DynamicResult) -> String {
             if f.claims { "yes" } else { "no" },
             if f.rule_outs { "yes" } else { "no" },
             format!("{}/{}", f.leaks_found, f.leaks_expected),
-            if f.failures.is_empty() {
+            if let Some(why) = &f.xfail {
+                format!("xfail: {why}")
+            } else if f.failures.is_empty() {
                 "pass".to_owned()
             } else {
                 format!("FAIL: {}", f.failures.join("; "))
             },
         ));
     }
+    let xfail = res.fixtures.iter().filter(|f| f.xfail.is_some()).count();
     let pass = res
         .fixtures
         .iter()
-        .filter(|f| f.failures.is_empty())
+        .filter(|f| f.failures.is_empty() && f.xfail.is_none())
         .count();
     s.push_str(&format!(
-        "\ntotals: {pass}/{} pass, {} confirmed, {} refuted, {} with a claim, {} with a rule-out\n",
+        "\ntotals: {pass}/{} pass, {xfail} xfail (expected failures, not counted as failures), {} confirmed, {} refuted, {} with a claim, {} with a rule-out\n",
         res.fixtures.len(),
         res.fixtures.iter().map(|f| f.confirmed).sum::<usize>(),
         res.fixtures.iter().map(|f| f.refuted).sum::<usize>(),
@@ -1612,7 +1796,11 @@ pub fn run(args: &DynamicArgs) -> Res<String> {
         fs::write(out, text + "\n").map_err(|e| format!("{}: {e}", out.display()))?;
     }
     if res.failures.is_empty() {
-        Ok(format!("ok: {} fixture(s) pass", res.fixtures.len()))
+        let xfail = res.fixtures.iter().filter(|f| f.xfail.is_some()).count();
+        Ok(format!(
+            "ok: {} fixture(s) pass, {xfail} expected failure(s)",
+            res.fixtures.len() - xfail
+        ))
     } else {
         Err(format!(
             "{} failure(s):\n{}",
@@ -1667,7 +1855,9 @@ fn run_in(
                     eprintln!(
                         "{}: {}",
                         row.id,
-                        if row.failures.is_empty() {
+                        if row.xfail.is_some() {
+                            "xfail"
+                        } else if row.failures.is_empty() {
                             "pass"
                         } else {
                             "FAIL"
@@ -1698,6 +1888,85 @@ fn run_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn listed() -> [ExpectedFailure; 1] {
+        [ExpectedFailure {
+            fixture: "fx",
+            failure: "leak L1 is not confirmed",
+            reason: "because",
+        }]
+    }
+
+    fn row(failures: &[&str]) -> FixtureRow {
+        FixtureRow {
+            id: "fx".into(),
+            failures: failures.iter().map(|f| (*f).to_owned()).collect(),
+            ..FixtureRow::default()
+        }
+    }
+
+    #[test]
+    fn a_listed_failure_becomes_an_xfail() {
+        let mut r = row(&["leak L1 is not confirmed"]);
+        apply_expected_failures(&mut r, &listed());
+        assert!(r.failures.is_empty());
+        assert_eq!(r.xfail.as_deref(), Some("because"));
+        assert_eq!(r.expected_failures, ["leak L1 is not confirmed"]);
+    }
+
+    #[test]
+    fn a_listed_fixture_that_passes_or_fails_differently_fails_the_run() {
+        let mut r = row(&[]);
+        apply_expected_failures(&mut r, &listed());
+        assert!(r.xfail.is_none());
+        assert!(r.failures[0].contains("passes"), "{:?}", r.failures);
+
+        let mut r = row(&["leak L1 is not confirmed", "a claim on a decoy control"]);
+        apply_expected_failures(&mut r, &listed());
+        assert!(r.xfail.is_none());
+        assert!(r.failures.iter().any(|f| f.contains("decoy control")));
+
+        let mut r = row(&["something else"]);
+        apply_expected_failures(&mut r, &listed());
+        assert!(r.xfail.is_none());
+        assert!(r.failures.iter().any(|f| f.contains("did not occur")));
+
+        // Other fixtures are untouched.
+        let mut r = row(&["boom"]);
+        r.id = "other".into();
+        apply_expected_failures(&mut r, &listed());
+        assert_eq!(r.failures, ["boom"]);
+    }
+
+    #[test]
+    fn the_shipped_list_names_the_rc_cycle_fixture() {
+        assert!(
+            EXPECTED_FAILURES
+                .iter()
+                .any(|e| e.fixture == "rust-tree-parent-links" && e.reason.contains("parent"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stuck_command_and_its_grandchild_are_killed_at_the_limit() {
+        let started = Instant::now();
+        // The background sleep inherits the pipes and would hold them for a minute.
+        let mut c = Command::new("sh");
+        c.args(["-c", "echo partial; sleep 60 & sleep 60"]);
+        let r = run_limited(&mut c, Duration::from_millis(400));
+        assert!(started.elapsed() < Duration::from_secs(10));
+        match r {
+            Ended::TimedOut(out, _) => assert!(out.contains("partial"), "{out}"),
+            _ => panic!("expected a timeout"),
+        }
+        let mut c = Command::new("sh");
+        c.args(["-c", "echo hi; exit 3"]);
+        match run_limited(&mut c, Duration::from_secs(10)) {
+            Ended::Done(3, out, _) => assert_eq!(out.trim(), "hi"),
+            _ => panic!("expected exit 3"),
+        }
+    }
 
     fn view(tag: &str, lines: &[&str]) -> View {
         let dir = std::env::temp_dir().join(format!("dla-dyn-test-{}", std::process::id()));

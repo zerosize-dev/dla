@@ -958,3 +958,296 @@ fn a_wrapper_script_that_runs_javac_and_tests_still_yields_the_main_jvm_record()
     // Own-process figures: the sh wrapper and javac are not summed into os.rss.
     assert!(ratio(&series, "os.rss") < 4.0);
 }
+
+// ---------------------------------------------------------------------------------------
+// Review fixes
+
+fn run_failure_series(fx: &Fx) -> usize {
+    fs::read_dir(fx.ctx.run_dir.join("series")).map_or(0, |d| d.flatten().count())
+}
+
+#[test]
+fn an_edited_driver_is_copied_again_and_a_changed_driver_rebuilds() {
+    if !have(&["sh"]) {
+        return;
+    }
+    let fx = fixture("", &[], &[1]);
+    let driver_dir = fx.hdir.join("driver");
+    fs::create_dir_all(&driver_dir).unwrap();
+    let src = driver_dir.join("d.sh");
+    fs::write(&src, "#!/bin/sh\necho first >&2\nexit 3\n").unwrap();
+    // The way `dla harness gen` writes the build of a driver-mode harness: a copy of the
+    // driver into the scratch project.
+    let mut m = manifest(Runtime::Native, &["sh", "./d.sh"], vec![], 10);
+    m.mode = HarnessMode::Driver;
+    m.key_modes = vec![KeyMode::Fresh];
+    m.build = Some(spec(&[
+        "sh",
+        "-c",
+        &format!(
+            "cp -f '{}' '{}'",
+            src.display(),
+            fx.work.join("d.sh").display()
+        ),
+    ]));
+    write_manifest(&fx, &m);
+    let err = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap_err();
+    assert_eq!(err.code, "harness-failed", "{err:?}");
+    assert!(
+        fs::read_to_string(fx.work.join("d.sh"))
+            .unwrap()
+            .contains("first")
+    );
+    // The model fixes the driver; the second run must use it.
+    fs::write(&src, "#!/bin/sh\necho second >&2\nexit 0\n").unwrap();
+    let _ = run_points(&fx.ctx, &m, &RunOptions::default());
+    assert!(
+        fs::read_to_string(fx.work.join("d.sh"))
+            .unwrap()
+            .contains("second"),
+        "the edited driver was not picked up"
+    );
+    let log = fs::read_to_string(fx.hdir.join("logs/p1-fresh.log")).unwrap();
+    assert!(log.contains("second"), "{log}");
+}
+
+#[test]
+fn a_run_where_every_process_crashed_is_refused_and_writes_no_series() {
+    if !have(&["python3"]) {
+        return;
+    }
+    // The Python agent's exit hook writes a record even when the program crashes.
+    let fx = fixture("python-report-memo", &["python"], &[1]);
+    let mut m = manifest(
+        Runtime::Python,
+        &["python3", "-c", "import no_such_module_dla"],
+        vec![(s("PYTHONPATH"), fx.agent.to_string_lossy().into_owned())],
+        250,
+    );
+    m.iterations = 3;
+    write_manifest(&fx, &m);
+    let err = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap_err();
+    assert_eq!(err.code, "harness-failed", "{err:?}");
+    assert!(err.message.contains("non-zero"), "{err:?}");
+    assert!(err.missing.contains("logs/p1-native.log"), "{err:?}");
+    assert_eq!(run_failure_series(&fx), 0);
+}
+
+#[test]
+fn a_mix_of_failed_and_successful_points_keeps_the_successful_ones() {
+    if !have(&["sh"]) {
+        return;
+    }
+    let fx = fixture("", &[], &[1]);
+    let mut m = manifest(
+        Runtime::Native,
+        &["sh", "-c", "sleep 0.2; test {n} -ne 30"],
+        vec![],
+        10,
+    );
+    m.iterations = 3;
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let series = load(&fx, &out, 0);
+    let xs: Vec<f64> = series.points.iter().map(|p| p.x).collect();
+    assert_eq!(xs, [10.0, 20.0, 40.0]);
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("p3-native") && l.contains("dropped")),
+        "{:?}",
+        series.limitations
+    );
+}
+
+#[test]
+fn inline_pythonpath_in_the_command_survives_the_agent_injection() {
+    if !have(&["python3"]) {
+        return;
+    }
+    use dla_core::workload::{Workload, WorkloadKind};
+    use dla_workload::harness::commands::{Layout, Switches, plan};
+    let fx = fixture("", &["python"], &[1]);
+    fs::create_dir_all(fx.work.join("src/pkg")).unwrap();
+    fs::write(fx.work.join("src/pkg/__init__.py"), "").unwrap();
+    fs::write(
+        fx.work.join("src/helper.py"),
+        "def size(n):\n    return n\n",
+    )
+    .unwrap();
+    fs::write(
+        fx.work.join("src/pkg/main.py"),
+        "import sys\nimport helper\nprint(helper.size(int(sys.argv[1])))\n",
+    )
+    .unwrap();
+    let w = Workload {
+        id: "x".into(),
+        kind: WorkloadKind::Main,
+        runtime: Runtime::Python,
+        command: "PYTHONPATH=src python3 -m pkg.main".into(),
+        cwd: ".".into(),
+        file: "src/pkg/main.py".into(),
+        entry_points: Vec::new(),
+        not_exercisable: None,
+        rank: 0,
+        iteration_arg: None,
+        iteration_default: None,
+    };
+    let layout = Layout {
+        work: fx.work.clone(),
+        agent: fx.agent.clone(),
+        driver: fx.hdir.join("driver"),
+    };
+    let p = plan(&w, Some("{n}"), &layout, &Switches::default(), None).unwrap();
+    let mut m = manifest(Runtime::Python, &[], vec![], 250);
+    m.run = p.run;
+    m.iterations = 2;
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    assert!(
+        out.exits.iter().all(|(_, c)| *c == Some(0)),
+        "{:?}",
+        out.exits
+    );
+    let log = fs::read_to_string(fx.hdir.join("logs/p1-native.log")).unwrap();
+    assert_eq!(log.trim(), "250");
+}
+
+#[test]
+fn a_native_command_through_a_shell_script_still_gives_shim_dumps() {
+    if !have(&["cc", "make", "addr2line", "sh"]) {
+        return;
+    }
+    use dla_core::workload::{Workload, WorkloadKind};
+    use dla_workload::harness::commands::{Layout, Switches, plan};
+    let fx = fixture("native-frame-decoder", &["native"], &[1]);
+    let lib = fx.agent.join("libdlashim.so");
+    assert!(
+        Command::new("cc")
+            .args(["-std=gnu11", "-O2", "-g", "-fPIC", "-shared", "-o"])
+            .arg(&lib)
+            .arg(fx.agent.join("dla_alloc_shim.c"))
+            .args(["-ldl", "-lpthread"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::write(
+        fx.work.join("run.sh"),
+        "#!/bin/sh\nexec ./framedec --iterations \"$1\"\n",
+    )
+    .unwrap();
+    let w = Workload {
+        id: "x".into(),
+        kind: WorkloadKind::Script,
+        runtime: Runtime::Native,
+        command: "make && sh ./run.sh".into(),
+        cwd: ".".into(),
+        file: "run.sh".into(),
+        entry_points: Vec::new(),
+        not_exercisable: None,
+        rank: 0,
+        iteration_arg: None,
+        iteration_default: None,
+    };
+    let layout = Layout {
+        work: fx.work.clone(),
+        agent: fx.agent.clone(),
+        driver: fx.hdir.join("driver"),
+    };
+    let p = plan(&w, Some("{n}"), &layout, &Switches::default(), None).unwrap();
+    assert!(p.run.env.iter().all(|(k, _)| k != "DLA_SHIM_ONLY"));
+    let mut m = manifest(Runtime::Native, &[], vec![], 1000);
+    m.run = p.run;
+    // The test points the preload at the library it just built.
+    m.run.env.retain(|(k, _)| k != "LD_PRELOAD");
+    m.run
+        .env
+        .push((s("LD_PRELOAD"), lib.to_string_lossy().into_owned()));
+    m.build = p.build;
+    m.agent = AgentKind::AllocShim;
+    m.iterations = 2;
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let series = load(&fx, &out, 0);
+    assert!(
+        series.column_index("native.peak_bytes").is_some(),
+        "no shim figures: {:?}",
+        series.limitations
+    );
+}
+
+/// Child half of [`sigterm_kills_the_workload_and_marks_the_record_stopped`]: runs a long
+/// harness in this very process, which the parent test signals.
+#[test]
+fn sigterm_child_runs_a_long_harness() {
+    let Ok(dir) = std::env::var("DLA_TEST_SIGTERM_RUN") else {
+        return;
+    };
+    let run_dir = PathBuf::from(dir);
+    let project = run_dir.parent().unwrap().parent().unwrap().to_path_buf();
+    let ctx = ToolCtx {
+        project,
+        run_dir,
+        run_id: "r1".into(),
+        source_commit: "abc".into(),
+        data_flag: None,
+    };
+    let m = ctx.harness("H1").unwrap();
+    let _ = run_points(&ctx, &m, &RunOptions::default());
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_kills_the_workload_and_marks_the_record_stopped() {
+    if !have(&["sh"]) {
+        return;
+    }
+    let fx = fixture("", &[], &[1]);
+    let mut m = manifest(Runtime::Native, &["sh", "-c", "sleep 300"], vec![], 10);
+    m.timeout_secs = 600;
+    write_manifest(&fx, &m);
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "sigterm_child_runs_a_long_harness",
+            "--nocapture",
+        ])
+        .env("DLA_TEST_SIGTERM_RUN", &fx.ctx.run_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Wait for the workload to be registered.
+    let started = std::time::Instant::now();
+    let pid = loop {
+        let st = RunState::load(&fx.ctx.run_dir).unwrap();
+        if let Some(p) = st.processes.first() {
+            break p.pid;
+        }
+        assert!(started.elapsed().as_secs() < 60, "workload never started");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    // Let the handler thread be installed long before (it is, at the start of the run).
+    assert!(
+        Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let o = child.wait_with_output().unwrap();
+    let status = o.status;
+    eprintln!("child: {status:?} {}", String::from_utf8_lossy(&o.stderr));
+    assert!(!status.success(), "dla must exit non-zero when signalled");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!dla_sample::os::is_alive(pid), "the workload survived");
+    let st = RunState::load(&fx.ctx.run_dir).unwrap();
+    assert!(
+        st.processes.iter().all(|p| p.stopped_at.is_some()),
+        "{:?}",
+        st.processes
+    );
+}

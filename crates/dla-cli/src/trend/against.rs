@@ -48,8 +48,15 @@ fn grows(c: &ColumnTrend) -> bool {
     c.gate == GateVerdict::Pass
 }
 
+/// A column the gate judged: a short series fails the gate only for lack of points, which
+/// says nothing about growth.
+fn judged(c: &ColumnTrend) -> bool {
+    !c.gate_failed.iter().any(|r| r.starts_with("n <"))
+}
+
 fn quiet(c: &ColumnTrend) -> bool {
     c.gate == GateVerdict::Fail
+        && judged(c)
         && matches!(
             c.shape,
             TrendShape::Flat | TrendShape::Plateau | TrendShape::Declining | TrendShape::Spike
@@ -98,12 +105,16 @@ pub struct Decision {
     pub supports: Vec<String>,
     /// The compared columns.
     pub columns: Vec<Compared>,
+    /// A finding was given but none of the series' columns is tied to it, so nothing was
+    /// compared and the discriminator must not be bound to the finding.
+    pub untied: bool,
 }
 
 /// Compares the columns of `fresh` and `repeated` that share a name and kind. Container
 /// columns and pairs with no points on either side are left out. When `finding` is
 /// given and some compared column is tied to it (by `finding`, `candidates` or equal
-/// `site` to `site`), only the tied columns count.
+/// `site` to `site`), only the tied columns count; when none is tied the result is
+/// inconclusive and `untied` is set.
 pub fn compare(
     fresh: &[ColumnTrend],
     repeated: &[ColumnTrend],
@@ -129,9 +140,15 @@ pub fn compare(
                 || c.candidates.contains(id)
                 || site.is_some() && c.site.as_deref() == site
         };
-        if pairs.iter().any(|(a, _)| tied(a)) {
-            pairs.retain(|(a, _)| tied(a));
+        if !pairs.iter().any(|(a, _)| tied(a)) {
+            return Decision {
+                favors: Favors::Inconclusive,
+                supports: vec![],
+                columns: vec![],
+                untied: true,
+            };
         }
+        pairs.retain(|(a, _)| tied(a));
     }
     let columns: Vec<Compared> = pairs
         .iter()
@@ -161,6 +178,7 @@ pub fn compare(
         favors,
         supports,
         columns,
+        untied: false,
     }
 }
 
@@ -307,9 +325,20 @@ mod tests {
         let tied = compare(&a, &b, Some((&f1, None)));
         assert_eq!(tied.favors, Favors::NonLeak);
         assert_eq!(tied.columns.len(), 1);
-        // A finding no column is tied to compares everything.
+        // A finding no column is tied to is inconclusive, never judged from other columns.
         let f9 = FindingId::new(9);
-        assert_eq!(compare(&a, &b, Some((&f9, None))).favors, Favors::Leak);
+        let d9 = compare(&a, &b, Some((&f9, None)));
+        assert_eq!(d9.favors, Favors::Inconclusive);
+        assert!(d9.untied && d9.columns.is_empty());
+    }
+
+    #[test]
+    fn short_series_are_not_quiet() {
+        // Fewer than min_points: the gate fails only for "n <", so it is inconclusive.
+        let short = [100.0, 101.0, 99.0, 100.0, 100.0];
+        let d = decide(&short, &short);
+        assert_eq!(d.favors, Favors::Inconclusive);
+        assert_eq!(d.columns[0].verdict, Verdict::Inconclusive);
     }
 
     #[test]
@@ -330,6 +359,7 @@ mod tests {
         let d = Decision {
             favors: Favors::Leak,
             supports: vec![],
+            untied: false,
             columns: (0..20)
                 .map(|i| Compared {
                     column: format!("c{i}"),

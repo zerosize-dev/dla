@@ -286,3 +286,17 @@ fn unsorted_x_is_sorted_by_analyze() {
     let a = analyze(&p, None, false, &GateThresholds::default());
     assert_eq!(a.shape, TrendShape::Steady);
 }
+
+#[test]
+fn noise_free_tiny_rise_on_a_large_level_fails_the_gate_like_the_shape_says() {
+    // Exactly linear (noise 0), rise 11 on a level of 1e12: classify floors the tolerance
+    // at 1e-9 * max|y|, and the gate must use the same floor.
+    let a = run(&series(12, |i| 1e12 + i as f64));
+    assert_eq!(a.noise, 0.0);
+    assert_eq!(a.shape, TrendShape::Flat);
+    assert_eq!(a.gate, GateVerdict::Fail, "{:?}", a.gate_failed);
+    assert!(a.gate_failed.iter().any(|r| r.starts_with("rise <=")));
+    // A rise well above the floor still passes.
+    let b = run(&series(12, |i| 1e12 + 1e5 * i as f64));
+    assert_eq!(b.gate, GateVerdict::Pass, "{:?}", b.gate_failed);
+}

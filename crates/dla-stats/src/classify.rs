@@ -175,7 +175,7 @@ fn gauge_gate(n: usize, f: Option<&Fit>, th: &GateThresholds) -> Vec<String> {
     if decaying {
         why.push("decaying half-split".to_string());
     }
-    if f.rise <= th.noise_multiple * f.noise {
+    if f.rise <= f.tol {
         why.push(format!("rise <= {} * noise", th.noise_multiple));
     }
     why

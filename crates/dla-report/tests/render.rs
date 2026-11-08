@@ -328,3 +328,90 @@ fn annotations_list_writers_and_removers_under_the_finding() {
     let f3 = f3.split("\n## ").next().unwrap();
     assert!(!f3.contains("Writers:") && !f3.contains("Removers:"));
 }
+
+/// Builds a view from fixture text, renumbering `seq` so edited fixtures stay gap-free.
+fn view_of_text(text: &str) -> RunView {
+    let text: String = text
+        .lines()
+        .enumerate()
+        .map(|(i, l)| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            v["seq"] = json!(i + 1);
+            format!("{v}\n")
+        })
+        .collect();
+    let text = text.as_str();
+    RunView::new(
+        state("20260101-000000-abcd"),
+        Ledger::from_text(text).unwrap(),
+        None,
+    )
+}
+
+fn dynamic_text() -> String {
+    std::fs::read_to_string(format!(
+        "{}/tests/fixtures/dynamic.jsonl",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+#[test]
+fn an_untied_passing_column_is_not_shown_as_the_findings_growth() {
+    let text = dynamic_text().replace(r#""site":"src/bus.go:12","finding":"F1","#, "");
+    let md = render_markdown(&view_of_text(&text));
+    assert!(
+        md.contains(
+            "- Growth: not tied to this finding (passing columns of E3: `os.rss`, `probe:Registry.listeners`)\n"
+        ),
+        "{md}"
+    );
+    assert!(!md.contains("bytes/n (steady"), "{md}");
+}
+
+#[test]
+fn a_confirmed_non_leak_sibling_is_explained_not_novel_and_has_no_growth_line() {
+    // The leak root F1 is refuted by E5 (non-leak, bound to F1) and its N-WARM sibling is
+    // confirmed by the same discriminator.
+    let text = dynamic_text().replace(
+        r#""favors":"non-leak","supports":["N-WARM","N-HWM"],"finding":"F2""#,
+        r#""favors":"non-leak","supports":["N-WARM","N-HWM"],"finding":"F1""#,
+    );
+    let mut lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let tr = |finding: &str, from: &str, to: &str, ev: &str| {
+        json!({"schema_version":2,"seq":0,"ts":"2026-01-01T00:00:00Z","type":"transition",
+            "finding":finding,"from":from,"to":to,"evidence":[ev],"by":"test"})
+    };
+    lines.retain(|v| {
+        v["type"] != "transition"
+            || !["F1", "F1.n1", "F2"].contains(&v["finding"].as_str().unwrap())
+    });
+    let at = lines
+        .iter()
+        .position(|v| v["type"] == "checklist_answer")
+        .unwrap();
+    let new = [
+        tr("F1", "candidate", "under_test", "E2"),
+        tr("F1.n1", "candidate", "under_test", "E2"),
+        tr("F1", "under_test", "refuted", "E5"),
+        tr("F1.n1", "under_test", "confirmed", "E5"),
+    ];
+    lines.splice(at..at, new);
+    let text: String = lines.iter().map(|v| format!("{v}\n")).collect();
+    let md = render_markdown(&view_of_text(&text));
+    let section = md
+        .split("### F1.n1")
+        .nth(1)
+        .and_then(|s| s.split("\n### ").next())
+        .unwrap_or_default();
+    assert!(!section.is_empty(), "{md}");
+    assert!(
+        section.contains("- Explained by N-WARM (discriminator E5)\n"),
+        "{section}"
+    );
+    assert!(!section.contains("Novel mechanism"), "{section}");
+    assert!(!section.contains("- Growth:"), "{section}");
+}

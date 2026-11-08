@@ -964,7 +964,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     write_agent(rt, opts.driver, &agent)?;
 
     let det = detectors(ctx, rt);
-    let mut gaps: Vec<String> = Vec::new();
+    let mut gaps: Vec<String> = copied.gaps.clone();
     if let Some(w) = &workload
         && let Some(reason) = &w.not_exercisable
     {

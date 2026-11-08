@@ -42,7 +42,7 @@ prints the workload's stdout; keep it in the harness log.
   `values_pre_gc`: `go.heap_objects`, `go.total`, `go.goroutines`, `os.rss` before the collections.
 - `groups["go.goroutines"]`: the goroutine profile (`pprof.Lookup("goroutine").WriteTo(w, 2)`)
   parsed in-process and counted by the `created by` file:line, relative to `DLA_PROJECT`
-  (standard-library sites as `$GOROOT/src/...`, other paths unchanged). Goroutines created by
+  (standard-library sites as `$GOROOT/src/...`, other paths unchanged; a path with spaces is kept whole, the site being the line up to the last ` +0x<pc>`). Goroutines created by
   `testing.*`, `runtime.*` and the harness ticker are left out; goroutines without a creator (main)
   are not grouped.
 - `purge`: `DLA_PURGE=free-os-memory` records `go.released`, `go.total`, `go.heap_objects`, `os.rss`,

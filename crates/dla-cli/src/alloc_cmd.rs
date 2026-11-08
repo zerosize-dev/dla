@@ -186,10 +186,13 @@ fn warm_end(series: &SeriesFile, idx: usize) -> Option<f64> {
         .find_map(|p| p.values.get(idx).copied().flatten())
 }
 
-/// The level a byte column's rise is judged against besides its own: the process's
-/// resident memory. Zero for other units or when `os.rss` was not sampled.
+/// The level a process column's rise is judged against besides its own: the process's
+/// resident memory. Zero for every column that is not an `os.*` byte column (a probe or
+/// heap column is measured precisely and is judged against its own level only), or when
+/// `os.rss` was not sampled.
 fn reference_level(series: &SeriesFile, idx: usize) -> f64 {
-    if series.columns[idx].unit != Unit::Bytes {
+    let col = &series.columns[idx];
+    if col.unit != Unit::Bytes || !col.name.starts_with("os.") {
         return 0.0;
     }
     let Some(rss) = series.column_index("os.rss") else {
@@ -202,17 +205,40 @@ fn reference_level(series: &SeriesFile, idx: usize) -> f64 {
     pts.iter().map(|p| p.1.abs()).sum::<f64>() / pts.len() as f64
 }
 
+/// The x of the last main-window point: the `iterations`-th point after the warm-up, or the
+/// last point when the series is shorter.
+fn main_end_x(series: &SeriesFile, iterations: usize) -> f64 {
+    let end = series.warmup as usize + iterations;
+    series
+        .points
+        .get(end.saturating_sub(1))
+        .or_else(|| series.points.last())
+        .map_or(f64::INFINITY, |p| p.x)
+}
+
 fn test_column(
     series: &SeriesFile,
     name: &str,
     voting: bool,
     iterations: usize,
     event: Option<&PurgeEvent>,
+    limitations: &mut Vec<String>,
 ) -> Option<ColumnResult> {
     let idx = series.column_index(name)?;
     let counter = series.columns[idx].kind == ColumnKind::Counter;
     let points = series.post_warmup(idx);
-    let (main, extra) = judge::split(&points, iterations);
+    let (main, extra) = judge::split(&points, main_end_x(series, iterations));
+    if main.len() < iterations {
+        limitations.push(format!(
+            "column {name} has {} of {iterations} main-window readings (missing values); its plateau test used what exists",
+            main.len()
+        ));
+    }
+    if extra.is_empty() {
+        limitations.push(format!(
+            "column {name} has no extra-window readings: its plateau test was not run"
+        ));
+    }
     let reference = reference_level(series, idx);
     let plateau = judge::plateau(main, extra, counter, reference);
     let purge = event.map(|e| {
@@ -397,6 +423,13 @@ fn join_series(prev: &SeriesFile, extra: &SeriesFile) -> SeriesFile {
         prev.id, extra.id
     ));
     limitations.dedup();
+    if columns.len() > dla_core::series::MAX_COLUMNS {
+        limitations.push(format!(
+            "{} columns beyond the {} the series allows were dropped",
+            columns.len() - dla_core::series::MAX_COLUMNS,
+            dla_core::series::MAX_COLUMNS
+        ));
+    }
     columns.truncate(dla_core::series::MAX_COLUMNS);
     SeriesFile {
         schema_version: extra.schema_version,
@@ -543,6 +576,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
                 picked.voting.contains(n),
                 iterations,
                 event.as_ref(),
+                &mut limitations,
             )
         })
         .collect();
@@ -821,4 +855,135 @@ fn next_commands(
     }
     next.truncate(MAX_NEXT);
     next
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dla_core::series::{
+        Axis, Column, ColumnScope, Point, SeriesRegion, SeriesSource, SeriesSourceKind,
+    };
+
+    fn col(name: &str) -> Column {
+        Column {
+            name: name.to_owned(),
+            unit: Unit::Bytes,
+            kind: ColumnKind::Gauge,
+            region: SeriesRegion::Process,
+            baseline: false,
+            after_gc: false,
+            scope: ColumnScope::Process,
+            site: None,
+            finding: None,
+            source: "test".to_owned(),
+        }
+    }
+
+    /// Warm-up 2, 6 main and 6 extra points at x = 1000, 2000, ...; `rss` grows slowly on
+    /// a 500 MB level, `probe` grows 30 KB per step with `probe_gaps` readings missing.
+    fn series(probe_gaps: &[usize]) -> SeriesFile {
+        let points = (0..14)
+            .map(|i| Point {
+                x: 1000.0 * (i as f64 + 1.0),
+                t_ms: i as u64,
+                values: vec![
+                    Some(500e6 + 1000.0 * i as f64),
+                    (!probe_gaps.contains(&i)).then_some(1e6 + 30_000.0 * i as f64),
+                ],
+            })
+            .collect();
+        SeriesFile {
+            schema_version: 1,
+            id: "S1".to_owned(),
+            source: SeriesSource::new(SeriesSourceKind::AllocTest),
+            axis: Axis::N,
+            warmup: 2,
+            columns: vec![col("os.rss"), col("probe:Leak")],
+            points,
+            events: vec![],
+            limitations: vec![],
+        }
+    }
+
+    #[test]
+    fn only_process_columns_use_the_rss_reference() {
+        let s = series(&[]);
+        assert!(reference_level(&s, 0) > 4e8);
+        assert_eq!(reference_level(&s, 1), 0.0);
+    }
+
+    #[test]
+    fn a_precise_probe_leak_far_below_one_percent_of_rss_favors_leak() {
+        let s = series(&[]);
+        let mut lim = Vec::new();
+        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        assert_eq!(
+            r.plateau.verdict,
+            PlateauVerdict::Continues,
+            "{:?}",
+            r.plateau
+        );
+        assert_eq!(r.favors, Favors::Leak);
+        assert!(lim.is_empty(), "{lim:?}");
+    }
+
+    #[test]
+    fn a_missing_main_reading_does_not_shift_the_windows() {
+        // Point index 3 is in the main window (indexes 2..8): one main reading is missing.
+        let s = series(&[3]);
+        let mut lim = Vec::new();
+        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Continues);
+        assert!(
+            lim.iter().any(|l| l.contains("5 of 6 main-window")),
+            "{lim:?}"
+        );
+    }
+
+    #[test]
+    fn a_column_that_exists_only_in_the_extra_part_is_not_called_main() {
+        let mut s = series(&[]);
+        for p in s.points.iter_mut().take(8) {
+            p.values[1] = None;
+        }
+        let mut lim = Vec::new();
+        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        // Six extra points exist and are judged as the extra window (no main slope).
+        assert_ne!(r.plateau.verdict, PlateauVerdict::NotRun);
+        assert!(
+            lim.iter().any(|l| l.contains("0 of 6 main-window")),
+            "{lim:?}"
+        );
+        // No extra points at all.
+        let mut s = series(&[]);
+        for p in s.points.iter_mut().skip(8) {
+            p.values[1] = None;
+        }
+        let mut lim = Vec::new();
+        let r = test_column(&s, "probe:Leak", true, 6, None, &mut lim).unwrap();
+        assert_eq!(r.plateau.verdict, PlateauVerdict::NotRun);
+        assert!(lim.iter().any(|l| l.contains("no extra-window")), "{lim:?}");
+    }
+
+    #[test]
+    fn join_names_the_columns_it_drops() {
+        let prev = series(&[]);
+        let mut extra = series(&[]);
+        extra.id = "S2".to_owned();
+        extra
+            .columns
+            .extend((0..70).map(|i| col(&format!("extra{i}"))));
+        for p in &mut extra.points {
+            p.values.resize(extra.columns.len(), Some(1.0));
+        }
+        let j = join_series(&prev, &extra);
+        assert_eq!(j.columns.len(), dla_core::series::MAX_COLUMNS);
+        assert!(
+            j.limitations
+                .iter()
+                .any(|l| l.starts_with("8 columns beyond")),
+            "{:?}",
+            j.limitations
+        );
+    }
 }
