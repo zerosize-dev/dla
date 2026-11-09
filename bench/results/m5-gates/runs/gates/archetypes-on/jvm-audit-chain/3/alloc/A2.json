@@ -1,0 +1,102 @@
+{
+  "basis": "the primary column of the region of F2",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 8449000.0,
+        "pre_rise": 10780000.0,
+        "verdict": "none"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 3860000.0,
+        "extra_slope": 496.7,
+        "main_slope": 512.9,
+        "noise": 25890.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -3127000.0,
+        "extra_slope": -402.5,
+        "main_slope": 10.76,
+        "noise": 16990000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 89010000.0,
+        "before": 94040000.0,
+        "drop": 5030000.0,
+        "growth": 24310000.0,
+        "kind": "trim-native-heap",
+        "verdict": "partial"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 157200.0,
+        "extra_slope": 20.23,
+        "main_slope": 163.3,
+        "noise": 20190000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 98030000.0,
+        "before": 98030000.0,
+        "drop": 0.0,
+        "growth": 28300000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F2",
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "cgroup.*: /proc/21/cgroup unreadable (No such file or directory (os error 2))",
+    "os.fds: /proc/21/fd unreadable (No such file or directory (os error 2))",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S5",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "jvm.heap_used",
+  "purge": "trim-native-heap",
+  "series": "S6",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T3"
+}

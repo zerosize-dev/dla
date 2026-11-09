@@ -1,0 +1,124 @@
+{
+  "basis": "every column that passed the gate in the latest trend of the harness, and os.rss",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "node.external.pre_gc",
+      "plateau": {
+        "extra_rise": 18920000.0,
+        "extra_slope": 6144.0,
+        "main_slope": 6144.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 133800.0,
+        "pre_rise": 35970000.0,
+        "verdict": "headroom"
+      },
+      "name": "node.heap_used",
+      "plateau": {
+        "extra_rise": -4391.0,
+        "extra_slope": -1.426,
+        "main_slope": 52.63,
+        "noise": 6375.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 4984000.0,
+        "before": 53430000.0,
+        "drop": 48450000.0,
+        "growth": 48640000.0,
+        "kind": "gc",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 37660000.0,
+        "extra_slope": 12230.0,
+        "main_slope": 19230.0,
+        "noise": 601100.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 176100000.0,
+        "before": 176000000.0,
+        "drop": -131100.0,
+        "growth": 107600000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 37530000.0,
+        "extra_slope": 12180.0,
+        "main_slope": 19350.0,
+        "noise": 808800.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "inconclusive",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S3",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "gc",
+  "series": "S4",
+  "supports": [],
+  "trend": "T2"
+}

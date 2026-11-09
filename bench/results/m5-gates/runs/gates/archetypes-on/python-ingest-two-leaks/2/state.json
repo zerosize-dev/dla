@@ -1,0 +1,408 @@
+{
+  "schema_version": 1,
+  "run_id": "20261109-202424-6e7f",
+  "session_id": "925c0657-22ed-49d0-b6fb-248c1c901bb4",
+  "project_root": "/root/.cache/dla-bench/m5-gates/gates/archetypes-on/python-ingest-two-leaks/2/project",
+  "created_at": "2026-11-09T20:24:24Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-09T20:24:24Z"
+  },
+  "budget": {
+    "seconds": 1200,
+    "started_at": "2026-11-09T20:24:24Z",
+    "deadline": "2026-11-09T20:44:24Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-09T20:24:50Z",
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 440",
+      "started_at": "2026-11-09T20:24:51Z",
+      "stopped_at": "2026-11-09T20:24:53Z",
+      "role": "started"
+    },
+    {
+      "pid": 13,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 880",
+      "started_at": "2026-11-09T20:24:53Z",
+      "stopped_at": "2026-11-09T20:24:53Z",
+      "role": "started"
+    },
+    {
+      "pid": 16,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 1320",
+      "started_at": "2026-11-09T20:24:53Z",
+      "stopped_at": "2026-11-09T20:24:53Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 1760",
+      "started_at": "2026-11-09T20:24:53Z",
+      "stopped_at": "2026-11-09T20:24:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 2200",
+      "started_at": "2026-11-09T20:24:57Z",
+      "stopped_at": "2026-11-09T20:24:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 2640",
+      "started_at": "2026-11-09T20:24:58Z",
+      "stopped_at": "2026-11-09T20:25:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 28,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 3080",
+      "started_at": "2026-11-09T20:25:03Z",
+      "stopped_at": "2026-11-09T20:25:04Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 3520",
+      "started_at": "2026-11-09T20:25:04Z",
+      "stopped_at": "2026-11-09T20:25:05Z",
+      "role": "started"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 3960",
+      "started_at": "2026-11-09T20:25:05Z",
+      "stopped_at": "2026-11-09T20:25:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 37,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-09T20:25:13Z",
+      "stopped_at": "2026-11-09T20:25:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 29,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4400",
+      "started_at": "2026-11-09T20:25:26Z",
+      "stopped_at": "2026-11-09T20:25:28Z",
+      "role": "started"
+    },
+    {
+      "pid": 32,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4840",
+      "started_at": "2026-11-09T20:25:28Z",
+      "stopped_at": "2026-11-09T20:25:30Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "start_time": "2026-11-09T20:25:26Z",
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5280",
+      "started_at": "2026-11-09T20:25:30Z",
+      "stopped_at": "2026-11-09T20:25:32Z",
+      "role": "started"
+    },
+    {
+      "pid": 39,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5720",
+      "started_at": "2026-11-09T20:25:32Z",
+      "stopped_at": "2026-11-09T20:25:33Z",
+      "role": "started"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6160",
+      "started_at": "2026-11-09T20:25:33Z",
+      "stopped_at": "2026-11-09T20:25:36Z",
+      "role": "started"
+    },
+    {
+      "pid": 45,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6600",
+      "started_at": "2026-11-09T20:25:36Z",
+      "stopped_at": "2026-11-09T20:25:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 48,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7040",
+      "started_at": "2026-11-09T20:25:38Z",
+      "stopped_at": "2026-11-09T20:25:41Z",
+      "role": "started"
+    },
+    {
+      "pid": 51,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7480",
+      "started_at": "2026-11-09T20:25:41Z",
+      "stopped_at": "2026-11-09T20:25:43Z",
+      "role": "started"
+    },
+    {
+      "pid": 55,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-09T20:25:43Z",
+      "stopped_at": "2026-11-09T20:25:44Z",
+      "role": "started"
+    },
+    {
+      "pid": 64,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4400",
+      "started_at": "2026-11-09T20:25:44Z",
+      "stopped_at": "2026-11-09T20:25:45Z",
+      "role": "started"
+    },
+    {
+      "pid": 67,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4840",
+      "started_at": "2026-11-09T20:25:45Z",
+      "stopped_at": "2026-11-09T20:25:47Z",
+      "role": "started"
+    },
+    {
+      "pid": 70,
+      "start_time": "2026-11-09T20:25:43Z",
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5280",
+      "started_at": "2026-11-09T20:25:47Z",
+      "stopped_at": "2026-11-09T20:25:49Z",
+      "role": "started"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5720",
+      "started_at": "2026-11-09T20:25:49Z",
+      "stopped_at": "2026-11-09T20:25:51Z",
+      "role": "started"
+    },
+    {
+      "pid": 77,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6160",
+      "started_at": "2026-11-09T20:25:51Z",
+      "stopped_at": "2026-11-09T20:25:53Z",
+      "role": "started"
+    },
+    {
+      "pid": 80,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6600",
+      "started_at": "2026-11-09T20:25:53Z",
+      "stopped_at": "2026-11-09T20:25:55Z",
+      "role": "started"
+    },
+    {
+      "pid": 83,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7040",
+      "started_at": "2026-11-09T20:25:55Z",
+      "stopped_at": "2026-11-09T20:25:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 86,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7480",
+      "started_at": "2026-11-09T20:25:58Z",
+      "stopped_at": "2026-11-09T20:26:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 90,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-09T20:26:01Z",
+      "stopped_at": "2026-11-09T20:26:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-09T20:26:18Z",
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4400",
+      "started_at": "2026-11-09T20:26:19Z",
+      "stopped_at": "2026-11-09T20:26:20Z",
+      "role": "started"
+    },
+    {
+      "pid": 13,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4840",
+      "started_at": "2026-11-09T20:26:20Z",
+      "stopped_at": "2026-11-09T20:26:22Z",
+      "role": "started"
+    },
+    {
+      "pid": 16,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5280",
+      "started_at": "2026-11-09T20:26:22Z",
+      "stopped_at": "2026-11-09T20:26:24Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5720",
+      "started_at": "2026-11-09T20:26:24Z",
+      "stopped_at": "2026-11-09T20:26:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6160",
+      "started_at": "2026-11-09T20:26:26Z",
+      "stopped_at": "2026-11-09T20:26:28Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6600",
+      "started_at": "2026-11-09T20:26:28Z",
+      "stopped_at": "2026-11-09T20:26:31Z",
+      "role": "started"
+    },
+    {
+      "pid": 28,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7040",
+      "started_at": "2026-11-09T20:26:31Z",
+      "stopped_at": "2026-11-09T20:26:33Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7480",
+      "started_at": "2026-11-09T20:26:33Z",
+      "stopped_at": "2026-11-09T20:26:36Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-09T20:26:36Z",
+      "stopped_at": "2026-11-09T20:26:36Z",
+      "role": "started"
+    },
+    {
+      "pid": 44,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4400",
+      "started_at": "2026-11-09T20:26:36Z",
+      "stopped_at": "2026-11-09T20:26:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 47,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 4840",
+      "started_at": "2026-11-09T20:26:38Z",
+      "stopped_at": "2026-11-09T20:26:40Z",
+      "role": "started"
+    },
+    {
+      "pid": 50,
+      "start_time": "2026-11-09T20:26:36Z",
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5280",
+      "started_at": "2026-11-09T20:26:40Z",
+      "stopped_at": "2026-11-09T20:26:42Z",
+      "role": "started"
+    },
+    {
+      "pid": 54,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 5720",
+      "started_at": "2026-11-09T20:26:42Z",
+      "stopped_at": "2026-11-09T20:26:44Z",
+      "role": "started"
+    },
+    {
+      "pid": 57,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6160",
+      "started_at": "2026-11-09T20:26:44Z",
+      "stopped_at": "2026-11-09T20:26:46Z",
+      "role": "started"
+    },
+    {
+      "pid": 60,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 6600",
+      "started_at": "2026-11-09T20:26:46Z",
+      "stopped_at": "2026-11-09T20:26:49Z",
+      "role": "started"
+    },
+    {
+      "pid": 63,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7040",
+      "started_at": "2026-11-09T20:26:49Z",
+      "stopped_at": "2026-11-09T20:26:51Z",
+      "role": "started"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations 7480",
+      "started_at": "2026-11-09T20:26:51Z",
+      "stopped_at": "2026-11-09T20:26:54Z",
+      "role": "started"
+    },
+    {
+      "pid": 70,
+      "kind": "harness",
+      "command": "python3 -m ingest.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-09T20:26:54Z",
+      "stopped_at": "2026-11-09T20:26:54Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "9b4ae05df630a90280f17741eb532d64",
+  "report": {
+    "path": ".dla/20261109-202424-6e7f/report.md",
+    "sha256": "b2ddac975d9da05f411bc021ab081bea0b924485f0b6f94325a86ac685f96559",
+    "rendered_at": "2026-11-09T20:27:11Z"
+  },
+  "entry": "repository"
+}

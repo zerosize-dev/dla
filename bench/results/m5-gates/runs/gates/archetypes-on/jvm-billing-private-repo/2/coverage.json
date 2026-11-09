@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 1,
+          "dispositioned": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "spotbugs": {
+          "status": "blocked",
+          "reason": "no class files: run dla probe --build",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/main/java/billing/ChargeListener.java::ChargeListener.onExpired",
+          "src/main/java/billing/ChargeListener.java::ChargeListener.onPosted",
+          "src/main/java/billing/ChargeListener.java::ChargeListener.onRejected",
+          "src/main/java/billing/ChargeService.java::ChargeService.charge",
+          "src/main/java/billing/ChargeService.java::ChargeService.inFlight",
+          "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.declined",
+          "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.delayed",
+          "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.paid",
+          "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.paidCount",
+          "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.summary",
+          "src/main/java/billing/InFlightCharges.java::InFlightCharges.complete",
+          "src/main/java/billing/InFlightCharges.java::InFlightCharges.count",
+          "src/main/java/billing/InFlightCharges.java::InFlightCharges.oldestAgeMillis",
+          "src/main/java/billing/InFlightCharges.java::InFlightCharges.register",
+          "src/main/java/billing/PendingCharge.java::PendingCharge.ageMillis"
+        ],
+        "exercised": [],
+        "not_exercisable": [
+          {
+            "entry": "src/main/java/billing/ChargeListener.java::ChargeListener.onExpired",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/ChargeListener.java::ChargeListener.onPosted",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/ChargeListener.java::ChargeListener.onRejected",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/ChargeService.java::ChargeService.charge",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/ChargeService.java::ChargeService.inFlight",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.declined",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.delayed",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.paid",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.paidCount",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/CustomerNotifier.java::CustomerNotifier.summary",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/InFlightCharges.java::InFlightCharges.complete",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/InFlightCharges.java::InFlightCharges.count",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/InFlightCharges.java::InFlightCharges.oldestAgeMillis",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/InFlightCharges.java::InFlightCharges.register",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/main/java/billing/PendingCharge.java::PendingCharge.ageMillis",
+            "reason": "build_fails"
+          }
+        ]
+      }
+    }
+  },
+  "residual": [],
+  "blind_spots": []
+}

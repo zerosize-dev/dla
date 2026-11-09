@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "node": {
+      "runtime": "node",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 13,
+          "dispositioned": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "eslint": {
+          "status": "ran",
+          "reason": "rxjs-x rules need rxjs to resolve from the project's node_modules for type information",
+          "version": "10.14.0",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "harness-alloc": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0
+        },
+        "harness-nonheap": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0
+        },
+        "node-heapprofile": {
+          "status": "ran",
+          "enumerated": 129,
+          "dispositioned": 0
+        },
+        "node-resources": {
+          "status": "ran",
+          "enumerated": 1,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "load.js::makeRandom",
+          "load.js::parseArgs",
+          "load.js::runWorkload",
+          "load.js::script",
+          "src/frames.js::Decoder.push",
+          "src/frames.js::encode",
+          "src/gateway.js::Gateway.accept",
+          "src/gateway.js::Gateway.release",
+          "src/gateway.js::Gateway.size",
+          "src/gateway.js::Gateway.snapshot",
+          "src/heartbeat.js::startHeartbeat",
+          "src/loopback.js::LoopbackSocket.clientHangUp",
+          "src/loopback.js::LoopbackSocket.clientSend",
+          "src/loopback.js::LoopbackSocket.destroy",
+          "src/loopback.js::LoopbackSocket.write",
+          "src/metrics.js::Metrics.get",
+          "src/metrics.js::Metrics.inc",
+          "src/metrics.js::Metrics.observe",
+          "src/metrics.js::Metrics.snapshot",
+          "src/router.js::Router.dispatch",
+          "src/router.js::Router.publish",
+          "src/router.js::Router.subscribe",
+          "src/router.js::Router.unsubscribe",
+          "src/session.js::Session.close",
+          "src/session.js::Session.describe",
+          "src/session.js::Session.idleFor",
+          "src/session.js::Session.receive",
+          "src/session.js::Session.remember",
+          "src/session.js::Session.send",
+          "src/session.js::Session.sendRaw"
+        ],
+        "exercised": [
+          "load.js::makeRandom",
+          "load.js::parseArgs",
+          "load.js::runWorkload",
+          "load.js::script",
+          "src/frames.js::Decoder.push",
+          "src/frames.js::encode",
+          "src/gateway.js::Gateway.accept",
+          "src/gateway.js::Gateway.release",
+          "src/gateway.js::Gateway.snapshot",
+          "src/heartbeat.js::startHeartbeat",
+          "src/loopback.js::LoopbackSocket.clientHangUp",
+          "src/loopback.js::LoopbackSocket.clientSend",
+          "src/loopback.js::LoopbackSocket.destroy",
+          "src/loopback.js::LoopbackSocket.write",
+          "src/metrics.js::Metrics.inc",
+          "src/metrics.js::Metrics.snapshot",
+          "src/router.js::Router.dispatch",
+          "src/router.js::Router.publish",
+          "src/router.js::Router.subscribe",
+          "src/router.js::Router.unsubscribe",
+          "src/session.js::Session.close",
+          "src/session.js::Session.receive",
+          "src/session.js::Session.remember",
+          "src/session.js::Session.send",
+          "src/session.js::Session.sendRaw"
+        ],
+        "not_exercisable": [
+          {
+            "entry": "src/metrics.js::Metrics.observe",
+            "reason": "no_harness"
+          },
+          {
+            "entry": "src/session.js::Session.describe",
+            "reason": "no_harness"
+          }
+        ]
+      },
+      "iterations": 7040
+    }
+  },
+  "residual": [],
+  "blind_spots": []
+}

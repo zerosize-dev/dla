@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "node",
+  "mode": "command",
+  "workload": "node:script:package.json:load",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "node",
+      "load.js",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "NODE_OPTIONS",
+        "--require /root/.cache/dla-bench/m5-gates/gates/archetypes-on/node-retry-scheduler/1/project/.dla/20261109-194424-b5c9/harness/H1/agent/dla-preload.js"
+      ],
+      [
+        "NODE_V8_COVERAGE",
+        "{cov}"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "target": {
+        "kind": "node-module",
+        "file": "src/pending.js"
+      }
+    },
+    {
+      "id": "P2",
+      "target": {
+        "kind": "node-module",
+        "file": "src/scheduler.js"
+      }
+    }
+  ],
+  "agent": "node-preload",
+  "detectors": [
+    "MaxListenersExceededWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p1-native/capture/9/alloc-1.heapprofile",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 29604,
+      "ms": 26,
+      "captured_at": "2026-11-09T19:44:46Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p1-native/capture/9/heap-1.heapsnapshot",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 9512089,
+      "ms": 172,
+      "captured_at": "2026-11-09T19:44:47Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-native/capture/9/resources.json",
+      "label": "p1-native",
+      "seq": 5,
+      "x": 440.0,
+      "role": "active resources by type and creation site",
+      "bytes": 365,
+      "ms": 0,
+      "captured_at": "2026-11-09T19:44:47Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-native/capture/9/scripts.json",
+      "label": "p1-native",
+      "seq": 6,
+      "x": 440.0,
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "bytes": 1457,
+      "ms": 0,
+      "captured_at": "2026-11-09T19:44:47Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p4-native/capture/34/alloc-1.heapprofile",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 1760.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 60783,
+      "ms": 34,
+      "captured_at": "2026-11-09T19:44:47Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p4-native/capture/34/heap-1.heapsnapshot",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 1760.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 19810579,
+      "ms": 361,
+      "captured_at": "2026-11-09T19:44:48Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p4-native/capture/34/resources.json",
+      "label": "p4-native",
+      "seq": 5,
+      "x": 1760.0,
+      "role": "active resources by type and creation site",
+      "bytes": 367,
+      "ms": 0,
+      "captured_at": "2026-11-09T19:44:48Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p4-native/capture/34/scripts.json",
+      "label": "p4-native",
+      "seq": 6,
+      "x": 1760.0,
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "bytes": 1458,
+      "ms": 0,
+      "captured_at": "2026-11-09T19:44:48Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p6-native/capture/50/alloc-1.heapprofile",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 2640.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 83794,
+      "ms": 48,
+      "captured_at": "2026-11-09T19:44:48Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p6-native/capture/50/heap-1.heapsnapshot",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 2640.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 26691373,
+      "ms": 487,
+      "captured_at": "2026-11-09T19:44:49Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p6-native/capture/50/resources.json",
+      "label": "p6-native",
+      "seq": 5,
+      "x": 2640.0,
+      "role": "active resources by type and creation site",
+      "bytes": 367,
+      "ms": 0,
+      "captured_at": "2026-11-09T19:44:49Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p6-native/capture/50/scripts.json",
+      "label": "p6-native",
+      "seq": 6,
+      "x": 2640.0,
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "bytes": 1458,
+      "ms": 0,
+      "captured_at": "2026-11-09T19:44:49Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p9-native/capture/74/alloc-1.heapprofile",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 112194,
+      "ms": 52,
+      "captured_at": "2026-11-09T19:44:50Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p9-native/capture/74/heap-1.heapsnapshot",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 36961417,
+      "ms": 651,
+      "captured_at": "2026-11-09T19:44:50Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p9-native/capture/74/resources.json",
+      "label": "p9-native",
+      "seq": 5,
+      "x": 3960.0,
+      "role": "active resources by type and creation site",
+      "bytes": 368,
+      "ms": 1,
+      "captured_at": "2026-11-09T19:44:50Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p9-native/capture/74/scripts.json",
+      "label": "p9-native",
+      "seq": 6,
+      "x": 3960.0,
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "bytes": 1458,
+      "ms": 0,
+      "captured_at": "2026-11-09T19:44:50Z"
+    }
+  ]
+}

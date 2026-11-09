@@ -1,0 +1,146 @@
+{
+  "basis": "every column that passed the gate in the latest trend of the harness, and os.rss",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 36020000.0,
+        "extra_slope": 11690.0,
+        "main_slope": 20740.0,
+        "noise": 2487000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 176500000.0,
+        "before": 176400000.0,
+        "drop": -114700.0,
+        "growth": 105300000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss_anon",
+      "plateau": {
+        "extra_rise": 36000000.0,
+        "extra_slope": 11690.0,
+        "main_slope": 20630.0,
+        "noise": 2403000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "node.external.pre_gc",
+      "plateau": {
+        "extra_rise": 18920000.0,
+        "extra_slope": 6144.0,
+        "main_slope": 6144.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 116700.0,
+        "pre_rise": 34480000.0,
+        "verdict": "headroom"
+      },
+      "name": "node.heap_used",
+      "plateau": {
+        "extra_rise": 19470.0,
+        "extra_slope": 6.323,
+        "main_slope": 79.04,
+        "noise": 18360.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 5000000.0,
+        "before": 44620000.0,
+        "drop": 39620000.0,
+        "growth": 39430000.0,
+        "kind": "gc",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 30030000.0,
+        "extra_slope": 9751.0,
+        "main_slope": 21280.0,
+        "noise": 3738000.0,
+        "verdict": "inconclusive"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "inconclusive",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S4",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "gc",
+  "series": "S5",
+  "supports": [],
+  "trend": "T2"
+}

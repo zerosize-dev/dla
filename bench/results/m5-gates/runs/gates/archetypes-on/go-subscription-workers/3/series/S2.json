@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "id": "S2",
+  "source": {
+    "kind": "dump",
+    "runtime": "go",
+    "command": "dla summarize non-heap"
+  },
+  "axis": "dump",
+  "warmup": 0,
+  "columns": [
+    {
+      "name": "group:goroutine/created:example.com/notifyd/internal/notify.newSubscription",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "site": "internal/notify/subscription.go:33",
+      "finding": "F2",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "group:goroutine/wait:select",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "metric:goroutine/total",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "group:goroutine/created:testing.(*T).Run",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "group:goroutine/wait:chan receive",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "group:goroutine/wait:running",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "metric:goroutine/leaked",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    }
+  ],
+  "points": [
+    {
+      "x": 1.0,
+      "t_ms": 0,
+      "values": [
+        440.0,
+        440.0,
+        442.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "x": 2.0,
+      "t_ms": 0,
+      "values": [
+        1760.0,
+        1760.0,
+        1762.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "x": 3.0,
+      "t_ms": 0,
+      "values": [
+        2640.0,
+        2640.0,
+        2642.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "x": 4.0,
+      "t_ms": 0,
+      "values": [
+        3960.0,
+        3960.0,
+        3962.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "x is the snapshot number in capture order; t_ms is the time since the first capture where the inputs record one",
+    "each point comes from a separate snapshot of one process; a figure absent from a snapshot has no value at that point"
+  ]
+}

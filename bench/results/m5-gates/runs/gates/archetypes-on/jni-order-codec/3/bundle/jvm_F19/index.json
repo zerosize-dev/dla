@@ -1,0 +1,384 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E10-C1.json",
+      "id": "jvm/E10",
+      "kind": "alloc-stack",
+      "result": {
+        "boundary": {
+          "kind": "jni",
+          "library": "codec"
+        },
+        "declared_at": "kotlin/shop/Native.kt:9",
+        "export": "Java_shop_codec_Native_open",
+        "harness": "H1",
+        "heap": {
+          "column": "jvm.heap_used",
+          "gated": true,
+          "lo": 1427.539,
+          "n": 8,
+          "p": 0.000025,
+          "slope": 1455.498
+        },
+        "managed": {
+          "column": "os.rss_anon",
+          "gated": true,
+          "lo": 6350.645,
+          "n": 8,
+          "p": 0.000025,
+          "slope": 7130.546
+        },
+        "method": "shop.codec.Native.open",
+        "native": {
+          "column": "native.live_bytes@native/src/lib.rs:40",
+          "gated": true,
+          "lo": 3072.892,
+          "n": 8,
+          "p": 0.000025,
+          "slope": 3074.0
+        },
+        "ratio": 0.431,
+        "series": "S1",
+        "signal": {
+          "class": "alloc-shim",
+          "source_sha256": "478c5518504f44d49ed33633c66f3e18bf90d0ba689669d75fd0bb1b8cb8ee13",
+          "tool": "dla-correlate"
+        },
+        "site": "native/src/lib.rs:40",
+        "stack": [
+          "native/src/lib.rs:40 in Java_shop_codec_Native_open",
+          "shop.codec.Native.open (kotlin/shop/Native.kt:9)"
+        ],
+        "tolerance": {
+          "max_ratio": 1.25,
+          "min_share": 0.2
+        }
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E20-A2.json",
+      "id": "jvm/E20",
+      "kind": "discriminator",
+      "result": {
+        "column": "native.live_blocks@native/src/lib.rs:40",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "native.live_blocks@native/src/lib.rs:40",
+            "plateau": {
+              "extra_rise": 2220.0,
+              "extra_slope": 0.125,
+              "main_slope": 0.125,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes@native/src/lib.rs:40",
+            "plateau": {
+              "extra_rise": 47770000.0,
+              "extra_slope": 3074.0,
+              "main_slope": 3074.0,
+              "noise": 9115.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 70580000.0,
+              "extra_slope": 4542.0,
+              "main_slope": 7119.0,
+              "noise": 1365000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 297400000.0,
+              "before": 304100000.0,
+              "drop": 6750000.0,
+              "growth": 193200000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "inconclusive",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 45320000.0,
+              "extra_slope": 2916.0,
+              "main_slope": 6873.0,
+              "noise": 969100.0,
+              "verdict": "inconclusive"
+            },
+            "purge": {
+              "after": 303900000.0,
+              "before": 304100000.0,
+              "drop": 208900.0,
+              "growth": -55910000.0,
+              "kind": "trim-native-heap",
+              "verdict": "no-growth"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.peak_bytes",
+            "plateau": {
+              "extra_rise": 63550000.0,
+              "extra_slope": 4090.0,
+              "main_slope": 3229.0,
+              "noise": 4411000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "finding": "jvm/F19",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S7",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T3"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E21-T4.json",
+      "id": "jvm/E21",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 22,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "jvm/F19"
+            ],
+            "column": "native.live_bytes@native/src/lib.rs:40",
+            "lo": 3073.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "native/src/lib.rs:40",
+            "slope": 3074.0,
+            "unit": "bytes"
+          },
+          {
+            "candidates": [
+              "jvm/F3",
+              "jvm/F1"
+            ],
+            "column": "probe:shop.codec.Audit.trail.bytes",
+            "finding": "jvm/F3",
+            "lo": 1434.0,
+            "p": 0.0000248,
+            "ratio": 1.004,
+            "region": "heap",
+            "shape": "steady",
+            "site": "kotlin/shop/Audit.kt:9",
+            "slope": 1437.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "jvm.heap_used",
+            "lo": 1428.0,
+            "p": 0.0000248,
+            "ratio": 0.9823,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1455.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "jvm.heap_used.pre_gc",
+            "lo": 1749.0,
+            "p": 0.0000248,
+            "ratio": 0.8597,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2574.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss",
+            "lo": 6445.0,
+            "p": 0.0000248,
+            "ratio": 0.7074,
+            "region": "process",
+            "shape": "steady",
+            "slope": 7119.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss_anon",
+            "lo": 6351.0,
+            "p": 0.0000248,
+            "ratio": 0.6997,
+            "region": "process",
+            "shape": "steady",
+            "slope": 7131.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "native.live_bytes",
+            "lo": 2186.0,
+            "p": 0.0001984,
+            "ratio": 0.6708,
+            "region": "heap",
+            "shape": "stair",
+            "slope": 3277.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "jvm.heap_committed",
+            "lo": 3542.0,
+            "p": 0.0008681,
+            "ratio": 0.625,
+            "region": "heap",
+            "shape": "stair",
+            "slope": 4959.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "native.peak_bytes",
+            "lo": 2418.0,
+            "p": 0.0008681,
+            "ratio": 1.008,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 3229.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.vm_hwm",
+            "lo": 3569.0,
+            "p": 0.002753,
+            "ratio": 0.6808,
+            "region": "process",
+            "shape": "stair",
+            "slope": 6873.0,
+            "unit": "bytes"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 12,
+          "insufficient": 6,
+          "plateau": 3,
+          "stair": 4,
+          "steady": 7
+        },
+        "trend": "T4",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E22-T4.json",
+      "id": "jvm/E22",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 28,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "jvm/F19"
+            ],
+            "column": "native.live_blocks@native/src/lib.rs:40",
+            "lo": 0.125,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "native/src/lib.rs:40",
+            "slope": 0.125,
+            "unit": "count"
+          },
+          {
+            "candidates": [
+              "jvm/F3",
+              "jvm/F1"
+            ],
+            "column": "probe:shop.codec.Audit.trail",
+            "finding": "jvm/F3",
+            "lo": 2.625,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "kotlin/shop/Audit.kt:9",
+            "slope": 2.625,
+            "unit": "count"
+          },
+          {
+            "candidates": [
+              "jvm/F3",
+              "jvm/F1"
+            ],
+            "column": "probe:shop.codec.Audit.trail.size",
+            "finding": "jvm/F3",
+            "lo": 0.8749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "kotlin/shop/Audit.kt:9",
+            "slope": 0.875,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:shop.codec.Entry.count",
+            "lo": 0.8749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 24,
+          "insufficient": 1,
+          "stair": 1,
+          "steady": 6
+        },
+        "trend": "T4",
+        "workload": "jvm:main:build.sh:run"
+      }
+    }
+  ],
+  "excerpt": "excerpt.txt",
+  "finding": "jvm/F19",
+  "site": "native/src/lib.rs:40"
+}

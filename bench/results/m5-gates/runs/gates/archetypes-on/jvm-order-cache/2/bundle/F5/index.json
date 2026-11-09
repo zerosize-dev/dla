@@ -1,0 +1,281 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 16,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "F5",
+              "F1"
+            ],
+            "column": "probe:shop.OrderCache.ORDERS_BY_ID.bytes",
+            "finding": "F5",
+            "lo": 490.1,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/shop/OrderCache.java:8",
+            "slope": 490.2,
+            "unit": "bytes"
+          },
+          {
+            "column": "jvm.heap_used",
+            "lo": 496.2,
+            "p": 0.0001984,
+            "ratio": 1.257,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 511.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "jvm.heap_used.pre_gc",
+            "lo": 495.5,
+            "p": 0.0001984,
+            "ratio": 1.3,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 511.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss_anon",
+            "lo": 148.5,
+            "p": 0.007068,
+            "ratio": 1.153,
+            "region": "process",
+            "shape": "stair",
+            "slope": 855.8,
+            "unit": "bytes"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 10,
+          "insufficient": 3,
+          "stair": 4,
+          "steady": 3
+        },
+        "trend": "T1",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E12-T1.json",
+      "id": "E12",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 20,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "F5",
+              "F1"
+            ],
+            "column": "probe:shop.OrderCache.ORDERS_BY_ID",
+            "finding": "F5",
+            "lo": 6.749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/shop/OrderCache.java:8",
+            "slope": 6.75,
+            "unit": "count"
+          },
+          {
+            "candidates": [
+              "F5",
+              "F1"
+            ],
+            "column": "probe:shop.OrderCache.ORDERS_BY_ID.size",
+            "finding": "F5",
+            "lo": 0.8748,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/shop/OrderCache.java:8",
+            "slope": 0.875,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:byte[].count",
+            "lo": 1.747,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.75,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.Object[].count",
+            "lo": 0.7495,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.75,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.String.count",
+            "lo": 1.747,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.75,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.util.HashMap$Node.count",
+            "lo": 0.8748,
+            "p": 0.0000248,
+            "ratio": 0.9997,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.8751,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.util.ImmutableCollections$ListN.count",
+            "lo": 0.7499,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.75,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:shop.Order$Line.count",
+            "lo": 3.25,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 3.25,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:shop.Order.count",
+            "lo": 0.8748,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 19,
+          "steady": 10
+        },
+        "trend": "T1",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E18-S4.json",
+      "id": "E18",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 31,
+        "gate": "pass",
+        "n": 4,
+        "n_values": [
+          1110.0,
+          4440.0,
+          6660.0,
+          9990.0
+        ],
+        "passed": [
+          {
+            "candidates": [
+              "F5"
+            ],
+            "column": "holder:static:shop.OrderCache.ORDERS_BY_ID",
+            "finding": "F5",
+            "last_over_first": 1.01,
+            "owner": "shop.OrderCache.ORDERS_BY_ID",
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1487923,
+            "tie": {
+              "key": "shop.OrderCache.ORDERS_BY_ID",
+              "rule": "holder"
+            },
+            "unit": "bytes"
+          }
+        ],
+        "reasons": [],
+        "series": "S4",
+        "series_kind": "per-point",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "bc7b774c412e44fc0f6354e61e631ad6a2ed0901eea5af71610fc979b0c41dd2",
+          "tool": "dla-hprof"
+        }
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E19-S4.json",
+      "id": "E19",
+      "kind": "discriminator",
+      "result": {
+        "bytes": [
+          559432,
+          2235984,
+          3337896,
+          5023200
+        ],
+        "column": "holder:static:shop.OrderCache.ORDERS_BY_ID",
+        "counts": [
+          11249,
+          44958,
+          67440,
+          101159
+        ],
+        "dumps": 4,
+        "favors": "leak",
+        "finding": "F5",
+        "reason": "retained bytes and count grew over every interval",
+        "series": "S4",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "bc7b774c412e44fc0f6354e61e631ad6a2ed0901eea5af71610fc979b0c41dd2",
+          "tool": "dla-hprof"
+        },
+        "supports": [
+          "leak"
+        ],
+        "test": "dump-plateau"
+      }
+    }
+  ],
+  "excerpt": "excerpt.txt",
+  "finding": "F5",
+  "site": "src/shop/OrderCache.java:8"
+}

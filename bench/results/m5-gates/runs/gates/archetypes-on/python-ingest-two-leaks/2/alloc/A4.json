@@ -1,0 +1,101 @@
+{
+  "basis": "the primary column of the region of F5",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 17680000.0,
+        "pre_rise": 17680000.0,
+        "verdict": "none"
+      },
+      "name": "py.traced",
+      "plateau": {
+        "extra_rise": 8254000.0,
+        "extra_slope": 2680.0,
+        "main_slope": 2682.0,
+        "noise": 3150.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 16670000.0,
+        "extra_slope": 5411.0,
+        "main_slope": 5535.0,
+        "noise": 750100.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59600000.0,
+        "before": 58970000.0,
+        "drop": -630800.0,
+        "growth": 35770000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 16670000.0,
+        "extra_slope": 5411.0,
+        "main_slope": 5535.0,
+        "noise": 750100.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 59600000.0,
+        "before": 58970000.0,
+        "drop": -630800.0,
+        "growth": 11250000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F5",
+  "harness": "H1",
+  "id": "A4",
+  "iterations": 8,
+  "limitations": [
+    "p1-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p4-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p6-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p9-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)",
+    "points 1 to 9 come from S1; the extra points from S9",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "py.traced",
+  "purge": "trim",
+  "series": "S10",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T5"
+}

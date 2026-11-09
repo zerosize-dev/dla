@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "jvm",
+  "mode": "command",
+  "workload": "jvm:main:build.sh:run",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "sh",
+      "./build.sh",
+      "run",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "JAVA_TOOL_OPTIONS",
+        "-javaagent:/root/.cache/dla-bench/m5-gates/gates/archetypes-on/jvm-order-cache/3/project/.dla/20261109-205357-9b7b/harness/H1/agent/dla-agent.jar -XX:NativeMemoryTracking=summary"
+      ]
+    ]
+  },
+  "iter_arg": "{n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 1110,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F2",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.Catalog",
+        "field": "PRODUCTS"
+      },
+      "site": "src/shop/Catalog.java:9"
+    },
+    {
+      "id": "P2",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.Main",
+        "field": "CUSTOMERS"
+      },
+      "site": "src/shop/Main.java:5"
+    },
+    {
+      "id": "P3",
+      "finding": "F5",
+      "target": {
+        "kind": "jvm-static",
+        "class": "shop.OrderCache",
+        "field": "ORDERS_BY_ID"
+      },
+      "site": "src/shop/OrderCache.java:8"
+    },
+    {
+      "id": "P4",
+      "finding": "F2",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.Catalog"
+      },
+      "site": "src/shop/Catalog.java:9"
+    },
+    {
+      "id": "P5",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.Main"
+      },
+      "site": "src/shop/Main.java:5"
+    },
+    {
+      "id": "P6",
+      "finding": "F4",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.Order"
+      },
+      "site": "src/shop/Order.java:6"
+    },
+    {
+      "id": "P7",
+      "finding": "F5",
+      "target": {
+        "kind": "jvm-class",
+        "class": "shop.OrderCache"
+      },
+      "site": "src/shop/OrderCache.java:8"
+    }
+  ],
+  "agent": "jvm-agent",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p1-native/capture/86/heap-1.hprof",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 1110.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 6908301,
+      "ms": 20,
+      "captured_at": "2026-11-09T20:54:25Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-native/capture/86/histogram-1.txt",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 1110.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 11,
+      "captured_at": "2026-11-09T20:54:25Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p2-native/capture/183/histogram-1.txt",
+      "label": "p2-native",
+      "seq": 1,
+      "x": 2220.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 14,
+      "captured_at": "2026-11-09T20:54:28Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p3-native/capture/280/histogram-1.txt",
+      "label": "p3-native",
+      "seq": 1,
+      "x": 3330.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 25,
+      "captured_at": "2026-11-09T20:54:31Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p4-native/capture/377/heap-1.hprof",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 4440.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 9133790,
+      "ms": 27,
+      "captured_at": "2026-11-09T20:54:33Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p4-native/capture/377/histogram-1.txt",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 4440.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 21,
+      "captured_at": "2026-11-09T20:54:33Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p5-native/capture/474/histogram-1.txt",
+      "label": "p5-native",
+      "seq": 1,
+      "x": 5550.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 29,
+      "captured_at": "2026-11-09T20:54:36Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p6-native/capture/571/heap-1.hprof",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 6660.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 10588367,
+      "ms": 40,
+      "captured_at": "2026-11-09T20:54:38Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p6-native/capture/571/histogram-1.txt",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 6660.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 12,
+      "captured_at": "2026-11-09T20:54:38Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p7-native/capture/668/histogram-1.txt",
+      "label": "p7-native",
+      "seq": 1,
+      "x": 7770.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 14,
+      "captured_at": "2026-11-09T20:54:41Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p8-native/capture/765/histogram-1.txt",
+      "label": "p8-native",
+      "seq": 1,
+      "x": 8880.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 26,
+      "captured_at": "2026-11-09T20:54:43Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p9-native/capture/862/heap-1.hprof",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 9990.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 12880176,
+      "ms": 59,
+      "captured_at": "2026-11-09T20:54:46Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p9-native/capture/862/histogram-1.txt",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 9990.0,
+      "role": "class histogram",
+      "bytes": 75182,
+      "ms": 29,
+      "captured_at": "2026-11-09T20:54:46Z"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "fixture": "node-socket-heartbeat",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 69.444,
+  "usage": {
+    "input_tokens": 30,
+    "output_tokens": 3414,
+    "cache_read_input_tokens": 591350,
+    "cache_creation_input_tokens": 44733
+  },
+  "cost_usd": 0.27226700000000004,
+  "num_turns": 16,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-09T20:23:54Z",
+  "error": null
+}

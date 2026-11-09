@@ -1,0 +1,399 @@
+{
+  "schema_version": 1,
+  "id": "S1",
+  "source": {
+    "kind": "harness",
+    "harness": "H1",
+    "workload": "go:main:.:./cmd/notifyd",
+    "mode": "native",
+    "runtime": "go",
+    "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/{label}.out -coverpkg=./... ./cmd/notifyd"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "os.rss",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "os.rss_anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "os.rss_file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "os.rss_shmem",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "os.swap",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "os.vm_data",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "os.vm_hwm",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "os.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.goroutines",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": true,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.heap_live",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": true,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.heap_objects",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": true,
+      "after_gc": true,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.released",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": true,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.stacks",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "non-heap",
+      "baseline": true,
+      "after_gc": true,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.total",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": true,
+      "after_gc": true,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.goroutines.pre_gc",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.heap_objects.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    },
+    {
+      "name": "go.total.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-harness"
+    }
+  ],
+  "points": [
+    {
+      "x": 440.0,
+      "t_ms": 4,
+      "values": [
+        7839744.0,
+        4452352.0,
+        3387392.0,
+        0.0,
+        0.0,
+        47042560.0,
+        7839744.0,
+        6.0,
+        2.0,
+        154312.0,
+        153976.0,
+        4538368.0,
+        393216.0,
+        13194504.0,
+        2.0,
+        2305336.0,
+        8082696.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 8,
+      "values": [
+        7471104.0,
+        4083712.0,
+        3387392.0,
+        0.0,
+        0.0,
+        47042560.0,
+        8896512.0,
+        6.0,
+        2.0,
+        156272.0,
+        155984.0,
+        4751360.0,
+        425984.0,
+        13194504.0,
+        2.0,
+        1649504.0,
+        12866824.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 11,
+      "values": [
+        5951488.0,
+        2564096.0,
+        3387392.0,
+        0.0,
+        0.0,
+        47042560.0,
+        9551872.0,
+        6.0,
+        2.0,
+        157008.0,
+        156672.0,
+        6701056.0,
+        425984.0,
+        13194504.0,
+        2.0,
+        417432.0,
+        13194504.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 22,
+      "values": [
+        9379840.0,
+        5992448.0,
+        3387392.0,
+        0.0,
+        0.0,
+        47042560.0,
+        9551872.0,
+        6.0,
+        2.0,
+        157448.0,
+        157160.0,
+        3358720.0,
+        425984.0,
+        13194504.0,
+        2.0,
+        2700456.0,
+        13194504.0
+      ]
+    },
+    {
+      "x": 2200.0,
+      "t_ms": 21,
+      "values": [
+        8704000.0,
+        5316608.0,
+        3387392.0,
+        0.0,
+        0.0,
+        47042560.0,
+        10141696.0,
+        6.0,
+        2.0,
+        157920.0,
+        157632.0,
+        3940352.0,
+        425984.0,
+        13194504.0,
+        2.0,
+        1607112.0,
+        13194504.0
+      ]
+    },
+    {
+      "x": 2640.0,
+      "t_ms": 30,
+      "values": [
+        7618560.0,
+        4296704.0,
+        3321856.0,
+        0.0,
+        0.0,
+        47042560.0,
+        9920512.0,
+        7.0,
+        2.0,
+        159152.0,
+        158776.0,
+        5259264.0,
+        491520.0,
+        13194504.0,
+        2.0,
+        827232.0,
+        13194504.0
+      ]
+    },
+    {
+      "x": 3080.0,
+      "t_ms": 24,
+      "values": [
+        8736768.0,
+        5349376.0,
+        3387392.0,
+        0.0,
+        0.0,
+        47042560.0,
+        9748480.0,
+        6.0,
+        2.0,
+        158848.0,
+        158112.0,
+        4063232.0,
+        425984.0,
+        13194504.0,
+        2.0,
+        2934416.0,
+        13194504.0
+      ]
+    },
+    {
+      "x": 3520.0,
+      "t_ms": 30,
+      "values": [
+        7536640.0,
+        4083712.0,
+        3452928.0,
+        0.0,
+        0.0,
+        47304704.0,
+        10031104.0,
+        6.0,
+        2.0,
+        158448.0,
+        158160.0,
+        5316608.0,
+        425984.0,
+        13456648.0,
+        2.0,
+        1600952.0,
+        13456648.0
+      ]
+    },
+    {
+      "x": 3960.0,
+      "t_ms": 39,
+      "values": [
+        6799360.0,
+        3411968.0,
+        3387392.0,
+        0.0,
+        0.0,
+        47042560.0,
+        10338304.0,
+        6.0,
+        2.0,
+        157688.0,
+        157400.0,
+        5636096.0,
+        425984.0,
+        13194504.0,
+        2.0,
+        315856.0,
+        13194504.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in"
+  ]
+}

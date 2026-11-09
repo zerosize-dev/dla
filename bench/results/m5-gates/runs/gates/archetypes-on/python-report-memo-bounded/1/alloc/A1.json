@@ -1,0 +1,107 @@
+{
+  "basis": "no column passed the gate in the latest trend of the harness: the runtime heap (py.traced) decides, os.rss is reported",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 2242.0,
+        "pre_rise": 6903.0,
+        "verdict": "headroom"
+      },
+      "name": "py.traced",
+      "plateau": {
+        "extra_rise": 1096.0,
+        "extra_slope": 0.3558,
+        "main_slope": 0.5852,
+        "noise": 214.6,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -16730.0,
+        "extra_slope": -5.43,
+        "main_slope": 46.55,
+        "noise": 44030.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 24880000.0,
+        "before": 24340000.0,
+        "drop": -540700.0,
+        "growth": -16380.0,
+        "kind": "trim",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -64990.0,
+        "extra_slope": -21.1,
+        "main_slope": 46.55,
+        "noise": 73680.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 24880000.0,
+        "before": 24340000.0,
+        "drop": -540700.0,
+        "growth": -27460000.0,
+        "kind": "trim",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "p1-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p4-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p6-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p9-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "trim",
+  "series": "S3",
+  "supports": [
+    "N-HEADROOM",
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T2"
+}

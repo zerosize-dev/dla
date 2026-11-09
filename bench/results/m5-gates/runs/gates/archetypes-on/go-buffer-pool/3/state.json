@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "run_id": "20261109-203558-e63f",
+  "session_id": "e466d16a-1164-4287-bacc-0b9017817105",
+  "project_root": "/root/.cache/dla-bench/m5-gates/gates/archetypes-on/go-buffer-pool/3/project",
+  "created_at": "2026-11-09T20:35:58Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-09T20:35:58Z"
+  },
+  "budget": {
+    "seconds": 1200,
+    "started_at": "2026-11-09T20:35:58Z",
+    "deadline": "2026-11-09T20:55:58Z"
+  },
+  "processes": [
+    {
+      "pid": 11,
+      "kind": "harness",
+      "command": "sh -c cp -f /root/.cache/dla-bench/m5-gates/gates/archetypes-on/go-buffer-pool/3/project/.dla/20261109-203558-e63f/harness/H1/driver/zz_dla_driver_test.go /root/.cache/dla-bench/m5-gates/gates/archetypes-on/go-buffer-pool/3/project/.dla/20261109-203558-e63f/harness/H1/work/internal/workload/zz_dla_driver_test.go && go test -vet=off -count=1 -run '^$' ./internal/workload",
+      "started_at": "2026-11-09T20:36:33Z",
+      "stopped_at": "2026-11-09T20:36:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 1006,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:36:38Z",
+      "stopped_at": "2026-11-09T20:36:48Z",
+      "role": "started"
+    },
+    {
+      "pid": 1076,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:36:48Z",
+      "stopped_at": "2026-11-09T20:36:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 12,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:37:04Z",
+      "stopped_at": "2026-11-09T20:37:15Z",
+      "role": "started"
+    },
+    {
+      "pid": 11,
+      "start_time": "2026-11-09T20:37:20Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:37:21Z",
+      "stopped_at": "2026-11-09T20:37:34Z",
+      "role": "started"
+    },
+    {
+      "pid": 74,
+      "start_time": "2026-11-09T20:37:34Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:37:34Z",
+      "stopped_at": "2026-11-09T20:37:47Z",
+      "role": "started"
+    },
+    {
+      "pid": 145,
+      "start_time": "2026-11-09T20:37:47Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:37:47Z",
+      "stopped_at": "2026-11-09T20:38:02Z",
+      "role": "started"
+    },
+    {
+      "pid": 220,
+      "start_time": "2026-11-09T20:38:01Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:38:02Z",
+      "stopped_at": "2026-11-09T20:38:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 293,
+      "start_time": "2026-11-09T20:38:16Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-09T20:38:16Z",
+      "stopped_at": "2026-11-09T20:38:28Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "4ad569d990ce42d1fdb6fd5787f2b86d",
+  "report": {
+    "path": ".dla/20261109-203558-e63f/report.md",
+    "sha256": "e1bd8fe0d1100cc747f69f83eab25da566069140ba02e6286f68b704de4abea0",
+    "rendered_at": "2026-11-09T20:38:38Z"
+  },
+  "entry": "repository"
+}

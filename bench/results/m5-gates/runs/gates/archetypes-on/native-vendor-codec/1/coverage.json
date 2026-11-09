@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "native": {
+      "runtime": "native",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 10,
+          "dispositioned": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/ring.c::ring_count",
+          "src/ring.c::ring_create",
+          "src/ring.c::ring_destroy",
+          "src/ring.c::ring_get",
+          "src/ring.c::ring_put",
+          "src/session.c::session_close",
+          "src/session.c::session_feed",
+          "src/session.c::session_open",
+          "src/sink.c::sink_close",
+          "src/sink.c::sink_init",
+          "src/sink.c::sink_push",
+          "src/sink.c::sink_replay"
+        ],
+        "exercised": [],
+        "not_exercisable": [
+          {
+            "entry": "src/ring.c::ring_count",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/ring.c::ring_create",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/ring.c::ring_destroy",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/ring.c::ring_get",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/ring.c::ring_put",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/session.c::session_close",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/session.c::session_feed",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/session.c::session_open",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/sink.c::sink_close",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/sink.c::sink_init",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/sink.c::sink_push",
+            "reason": "build_fails"
+          },
+          {
+            "entry": "src/sink.c::sink_replay",
+            "reason": "build_fails"
+          }
+        ]
+      }
+    }
+  },
+  "residual": [],
+  "blind_spots": []
+}

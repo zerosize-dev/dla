@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "run_id": "20261109-203540-ecfc",
+  "session_id": "ec1c3a29-d2ec-4909-8e86-b59f65a7540a",
+  "project_root": "/root/.cache/dla-bench/m5-gates/gates/archetypes-on/symptom-no-target/2/project",
+  "created_at": "2026-11-09T20:35:40Z",
+  "dla_version": "0.1.0",
+  "stage": "intake",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-09T20:35:40Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-09T20:35:40Z",
+    "deadline": "2026-11-09T21:35:40Z"
+  },
+  "processes": [],
+  "redaction_salt": "71599c168c9ac327c3cc196f1ffdf09f",
+  "report": {
+    "path": ".dla/20261109-203540-ecfc/report.md",
+    "sha256": "227db246f68a26eedf55b96f5e29ac2a4f79d054edd27615cc32f4267f40f09a",
+    "rendered_at": "2026-11-09T20:35:40Z"
+  },
+  "entry": "symptom"
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "dla-hprof": {
+          "status": "ran",
+          "enumerated": 184590,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [],
+        "exercised": [],
+        "not_exercisable": []
+      }
+    }
+  },
+  "residual": [],
+  "blind_spots": []
+}

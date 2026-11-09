@@ -1,0 +1,99 @@
+{
+  "basis": "the primary column of the region of F5",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 8442000.0,
+        "pre_rise": 10410000.0,
+        "verdict": "none"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 3861000.0,
+        "extra_slope": 496.9,
+        "main_slope": 512.9,
+        "noise": 24150.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 24790000.0,
+        "extra_slope": 3190.0,
+        "main_slope": 10.76,
+        "noise": 38560000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 140000000.0,
+        "before": 146500000.0,
+        "drop": 6418000.0,
+        "growth": 76720000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 14930000.0,
+        "extra_slope": 1921.0,
+        "main_slope": 163.3,
+        "noise": 36800000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 146000000.0,
+        "before": 146500000.0,
+        "drop": 426000.0,
+        "growth": 76720000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F5",
+  "harness": "H1",
+  "id": "A5",
+  "iterations": 8,
+  "limitations": [
+    "cgroup.*: /proc/21/cgroup unreadable (No such file or directory (os error 2))",
+    "os.fds: /proc/21/fd unreadable (No such file or directory (os error 2))",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S11",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "jvm.heap_used",
+  "purge": "trim-native-heap",
+  "series": "S12",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T6"
+}

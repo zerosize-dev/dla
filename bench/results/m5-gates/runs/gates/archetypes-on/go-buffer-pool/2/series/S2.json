@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "id": "S2",
+  "source": {
+    "kind": "gap",
+    "harness": "H1",
+    "workload": "go:main:.:./cmd/invoiced",
+    "mode": "native",
+    "runtime": "go",
+    "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/{label}.out -coverpkg=./... ./cmd/invoiced",
+    "derived_from": "S1"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "gap.accounted",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    },
+    {
+      "name": "gap.unexplained",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    }
+  ],
+  "points": [
+    {
+      "x": 440.0,
+      "t_ms": 747,
+      "values": [
+        9811208.0,
+        117496.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 1253,
+      "values": [
+        9499912.0,
+        -226568.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 1965,
+      "values": [
+        9188616.0,
+        -279816.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 3135,
+      "values": [
+        9876744.0,
+        404216.0
+      ]
+    },
+    {
+      "x": 2200.0,
+      "t_ms": 3128,
+      "values": [
+        9934088.0,
+        -283912.0
+      ]
+    },
+    {
+      "x": 2640.0,
+      "t_ms": 4751,
+      "values": [
+        10065160.0,
+        125688.0
+      ]
+    },
+    {
+      "x": 3080.0,
+      "t_ms": 4736,
+      "values": [
+        7034120.0,
+        -271624.0
+      ]
+    },
+    {
+      "x": 3520.0,
+      "t_ms": 5676,
+      "values": [
+        10745096.0,
+        15096.0
+      ]
+    },
+    {
+      "x": 3960.0,
+      "t_ms": 8656,
+      "values": [
+        10458376.0,
+        441080.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "gap.unexplained is negative at 4 point(s): the accounted figure exceeds os.rss (reserved but untouched memory)"
+  ]
+}

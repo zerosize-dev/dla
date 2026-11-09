@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 4,
+          "dispositioned": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "harness-heap": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0
+        },
+        "harness-histogram": {
+          "status": "ran",
+          "enumerated": 9,
+          "dispositioned": 0
+        },
+        "jcmd-class-histogram": {
+          "status": "ran",
+          "enumerated": 732,
+          "dispositioned": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "spotbugs": {
+          "status": "ran",
+          "reason": "no auxiliary classpath: library calls are not modelled",
+          "version": "unknown",
+          "enumerated": 0,
+          "dispositioned": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/shop/Catalog.java::Catalog.at",
+          "src/shop/Catalog.java::Catalog.size",
+          "src/shop/Order.java::Line.total",
+          "src/shop/Order.java::Order.itemCount",
+          "src/shop/Order.java::Order.totalCents",
+          "src/shop/OrderCache.java::OrderCache.find",
+          "src/shop/OrderCache.java::OrderCache.invalidateAll",
+          "src/shop/OrderCache.java::OrderCache.removeEldestEntry",
+          "src/shop/OrderCache.java::OrderCache.size",
+          "src/shop/OrderCache.java::OrderCache.store",
+          "src/shop/OrderRequest.java::OrderRequest.orderId",
+          "src/shop/OrderService.java::OrderService.place",
+          "src/shop/OrderService.java::OrderService.placed",
+          "src/shop/OrderService.java::OrderService.replayed",
+          "src/shop/PricingService.java::PricingService.price"
+        ],
+        "exercised": [
+          "src/shop/Catalog.java::Catalog.at",
+          "src/shop/Catalog.java::Catalog.size",
+          "src/shop/Order.java::Line.total",
+          "src/shop/Order.java::Order.itemCount",
+          "src/shop/Order.java::Order.totalCents",
+          "src/shop/OrderCache.java::OrderCache.find",
+          "src/shop/OrderCache.java::OrderCache.invalidateAll",
+          "src/shop/OrderCache.java::OrderCache.removeEldestEntry",
+          "src/shop/OrderCache.java::OrderCache.size",
+          "src/shop/OrderCache.java::OrderCache.store",
+          "src/shop/OrderRequest.java::OrderRequest.orderId",
+          "src/shop/OrderService.java::OrderService.place",
+          "src/shop/OrderService.java::OrderService.placed",
+          "src/shop/OrderService.java::OrderService.replayed",
+          "src/shop/PricingService.java::PricingService.price"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 8880
+    }
+  },
+  "residual": [],
+  "blind_spots": []
+}

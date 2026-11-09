@@ -1,0 +1,103 @@
+{
+  "basis": "no column passed the gate in the latest trend of the harness: the runtime heap (jvm.heap_used) decides, os.rss is reported",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": -2.424,
+        "pre_rise": 165.0,
+        "verdict": "none"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 443.3,
+        "extra_slope": 0.05706,
+        "main_slope": 0.6955,
+        "noise": 2021.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 1842000.0,
+        "extra_slope": 237.1,
+        "main_slope": 413.0,
+        "noise": 1465000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 69680000.0,
+        "before": 70320000.0,
+        "drop": 639000.0,
+        "growth": 6160000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 4197000.0,
+        "extra_slope": 540.1,
+        "main_slope": 413.0,
+        "noise": 194700.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 73450000.0,
+        "before": 73450000.0,
+        "drop": 0.0,
+        "growth": 9298000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "cgroup.*: /proc/21/cgroup unreadable (No such file or directory (os error 2))",
+    "os.fds: /proc/21/fd unreadable (No such file or directory (os error 2))",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": null,
+  "purge": "trim-native-heap",
+  "series": "S3",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T2"
+}

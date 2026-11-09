@@ -1,0 +1,674 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "ablation": "gates",
+      "archetypes": "on",
+      "metrics": {
+        "leak_recall": {
+          "num": 39,
+          "den": 39,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 13,
+              "den": 13,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 13,
+              "den": 13,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 13,
+              "den": 13,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "archetype_free_recall": {
+          "num": 9,
+          "den": 9,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 3,
+              "den": 3,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 3,
+              "den": 3,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 3,
+              "den": 3,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "flagged_recall": {
+          "num": 39,
+          "den": 39,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 13,
+              "den": 13,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 13,
+              "den": 13,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 13,
+              "den": 13,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "second_leak_recall": {
+          "num": 6,
+          "den": 6,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 2,
+              "den": 2,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 2,
+              "den": 2,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 2,
+              "den": 2,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "grounded_attribution": {
+          "num": 33,
+          "den": 39,
+          "value": 0.846154,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 11,
+              "den": 13,
+              "value": 0.846154
+            },
+            {
+              "run": 2,
+              "num": 11,
+              "den": 13,
+              "value": 0.846154
+            },
+            {
+              "run": 3,
+              "num": 11,
+              "den": 13,
+              "value": 0.846154
+            }
+          ],
+          "mean": 0.846154,
+          "stdev": 0.0
+        },
+        "label_accuracy": {
+          "num": 0,
+          "den": 30,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 10,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 10,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 10,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "forced_fit_rate": {
+          "num": 0,
+          "den": 9,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "overclaim_rate": {
+          "num": 0,
+          "den": 12,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 4,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 4,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 4,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "false_confirmation_rate": {
+          "num": 0,
+          "den": 30,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 10,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 10,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 10,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "non_leak_precision": {
+          "num": 12,
+          "den": 12,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "trap_miss_rate": {
+          "num": 0,
+          "den": 18,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 6,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 6,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 6,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "trap_false_alarm_rate": {
+          "num": 0,
+          "den": 18,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 6,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 6,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 6,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "source_overclaim_rate": {
+          "num": 0,
+          "den": 9,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        }
+      },
+      "unexplained_growth_share": {
+        "value": 1.0,
+        "runs": 2
+      },
+      "usage": {
+        "runs": 75,
+        "incomplete": 0,
+        "errored": 0,
+        "sources": {
+          "ledger": 70,
+          "findings": 0,
+          "none": 5
+        },
+        "input_tokens": {
+          "sum": 1938,
+          "mean": 25.84
+        },
+        "output_tokens": {
+          "sum": 243049,
+          "mean": 3240.653333
+        },
+        "cache_read_input_tokens": {
+          "sum": 36085199,
+          "mean": 481135.986667
+        },
+        "cache_creation_input_tokens": {
+          "sum": 2898891,
+          "mean": 38651.88
+        },
+        "wall_seconds": {
+          "sum": 13726.774,
+          "mean": 183.023653,
+          "max": 1318.589
+        },
+        "cost_usd": {
+          "sum": 18.664726,
+          "mean": 0.248863
+        }
+      },
+      "fixtures": {
+        "go-buffer-pool": {
+          "category": "non-leak",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "go-subscription-workers": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "go-subscription-workers-closed": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "jni-order-codec": {
+          "category": "multi-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            },
+            "L2": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          },
+          "worker_provenance": {
+            "L1": {
+              "jvm": 3
+            },
+            "L2": {
+              "jvm": 3
+            }
+          }
+        },
+        "jvm-audit-chain": {
+          "category": "archetype-free",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "jvm-billing-private-repo": {
+          "category": "impossible",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 0,
+              "flagged": 3,
+              "grounded": 0
+            }
+          }
+        },
+        "jvm-order-cache": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "jvm-order-cache-bounded": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "jvm-rfq-dump-series": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "jvm-rfq-dump-series-capped": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 1,
+          "leaks": {}
+        },
+        "jvm-rfq-single-dump": {
+          "category": "impossible",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 0,
+          "leaks": {}
+        },
+        "native-frame-decoder": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "native-glyph-cache": {
+          "category": "non-leak",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "native-vendor-codec": {
+          "category": "impossible",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 0,
+              "flagged": 3,
+              "grounded": 0
+            }
+          }
+        },
+        "node-retry-scheduler": {
+          "category": "archetype-free",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 0
+            }
+          }
+        },
+        "node-socket-heartbeat": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 0
+            }
+          }
+        },
+        "node-socket-heartbeat-cleared": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 2,
+          "leaks": {}
+        },
+        "python-graph-churn": {
+          "category": "non-leak",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "python-ingest-two-leaks": {
+          "category": "multi-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            },
+            "L2": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "python-report-memo": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "python-report-memo-bounded": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "rust-batch-buffers": {
+          "category": "non-leak",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "rust-tree-parent-links": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 3,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          }
+        },
+        "rust-tree-parent-links-weak": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {}
+        },
+        "symptom-no-target": {
+          "category": "impossible",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 0,
+          "leaks": {}
+        }
+      }
+    }
+  ]
+}

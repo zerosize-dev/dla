@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "id": "S2",
+  "source": {
+    "kind": "dump",
+    "runtime": "go",
+    "command": "dla summarize non-heap"
+  },
+  "axis": "dump",
+  "warmup": 0,
+  "columns": [
+    {
+      "name": "group:goroutine/created:testing.(*T).Run",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "group:goroutine/wait:chan receive",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "group:goroutine/wait:running",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "metric:goroutine/leaked",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    },
+    {
+      "name": "metric:goroutine/total",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "go-goroutine"
+    }
+  ],
+  "points": [
+    {
+      "x": 1.0,
+      "t_ms": 0,
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        2.0
+      ]
+    },
+    {
+      "x": 2.0,
+      "t_ms": 0,
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        2.0
+      ]
+    },
+    {
+      "x": 3.0,
+      "t_ms": 0,
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        2.0
+      ]
+    },
+    {
+      "x": 4.0,
+      "t_ms": 0,
+      "values": [
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        2.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "x is the snapshot number in capture order; t_ms is the time since the first capture where the inputs record one",
+    "each point comes from a separate snapshot of one process; a figure absent from a snapshot has no value at that point"
+  ]
+}

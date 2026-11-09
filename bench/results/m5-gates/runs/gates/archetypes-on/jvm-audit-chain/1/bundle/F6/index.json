@@ -1,0 +1,168 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 20,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "F6",
+              "F1",
+              "F7",
+              "F8"
+            ],
+            "column": "probe:gateway.RequestContext.latest",
+            "finding": "F6",
+            "lo": 3.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/gateway/RequestContext.java:5",
+            "slope": 3.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:byte[].count",
+            "lo": 1.996,
+            "p": 0.0000248,
+            "ratio": 0.9933,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.002,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:gateway.RequestContext.count",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.String.count",
+            "lo": 0.9961,
+            "p": 0.0000248,
+            "ratio": 0.9867,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.002,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 20,
+          "steady": 4
+        },
+        "trend": "T1",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E12-A1.json",
+      "id": "E12",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:gateway.RequestContext.latest",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:gateway.RequestContext.latest",
+            "plateau": {
+              "extra_rise": 26640.0,
+              "extra_slope": 3.0,
+              "main_slope": 3.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:gateway.RequestContext.latest.bytes",
+            "plateau": {
+              "extra_rise": 3864000.0,
+              "extra_slope": 497.3,
+              "main_slope": 497.3,
+              "noise": 5.93,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "inconclusive",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 9044000.0,
+              "extra_slope": 1164.0,
+              "main_slope": 5430.0,
+              "noise": 22350000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 92850000.0,
+              "before": 95590000.0,
+              "drop": 2740000.0,
+              "growth": 23250000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "inconclusive",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 13580000.0,
+              "extra_slope": 1748.0,
+              "main_slope": 3981.0,
+              "noise": 28100000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 99750000.0,
+              "before": 99750000.0,
+              "drop": 0.0,
+              "growth": 27410000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "finding": "F6",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": "excerpt.txt",
+  "finding": "F6",
+  "site": "src/gateway/RequestContext.java:5"
+}
