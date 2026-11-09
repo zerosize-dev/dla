@@ -506,9 +506,11 @@ run` starts, the runner makes sure `go1.27.0` is in the host module cache
 warning, and the children then see the coverage row `go/goroutineleak` as
 missing). Each child's private module cache gets the unpacked toolchain and its
 download-cache entry (small files copied, the archive linked), so
-`GOTOOLCHAIN=go1.27.0` switches offline with `GOPROXY=off`. The children keep
-`GOTOOLCHAIN=local` for the project build; `dla` sets the switch itself for the
-leak pass. Checked by hand: with only those links in a fresh module cache,
+`GOTOOLCHAIN=go1.27.0` switches offline with `GOPROXY=off`. The children run with
+`GOTOOLCHAIN=auto` (with the proxy off nothing is downloaded, and a project that asks
+for no newer Go builds with the local one); `dla` sets the switch itself for the leak
+pass. Until the M5 gates run the children had `GOTOOLCHAIN=local`, which `dla`
+respects as a ban on switching, so that run has the leak profile blocked. Checked by hand: with only those links in a fresh module cache,
 `GOTOOLCHAIN=go1.27.0 GOPROXY=off go version` prints go1.27.0.
 
 ### Expected failures

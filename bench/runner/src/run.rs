@@ -628,7 +628,11 @@ pub fn cache_env(cache: &Path, rustup_home: &Path) -> Vec<(String, String)> {
         ("GOTMPDIR".to_owned(), at("go-tmp")),
         ("GOFLAGS".to_owned(), "-modcacherw".to_owned()),
         ("GOPROXY".to_owned(), "off".to_owned()),
-        ("GOTOOLCHAIN".to_owned(), "local".to_owned()),
+        // `auto`, not `local`: with the proxy off nothing is downloaded and a project that
+        // asks for no newer Go builds with the local one, while `dla`'s goroutine leak pass may
+        // switch to the go1.27 toolchain linked into the module cache (`local` forbids that
+        // switch, and `dla` respects it: the M5 gates run had the leak profile blocked).
+        ("GOTOOLCHAIN".to_owned(), "auto".to_owned()),
         (
             "MAVEN_OPTS".to_owned(),
             format!("-Dmaven.repo.local={}", at("m2")),
