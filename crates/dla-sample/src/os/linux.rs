@@ -121,7 +121,11 @@ fn smaps_rollup(pid: u32, out: &mut OsSample) {
 
 fn fds(pid: u32, out: &mut OsSample) {
     match fs::read_dir(proc_path(pid, "fd")) {
-        Ok(dir) => out.put("os.fds", dir.filter(Result::is_ok).count() as u64),
+        Ok(dir) => {
+            let entries: Vec<_> = dir.filter_map(Result::ok).collect();
+            out.put("os.fds", entries.len() as u64);
+            super::fd::record(out, pid, entries.iter().map(|e| fs::read_link(e.path())));
+        }
         Err(e) => out.limit(format!("os.fds: /proc/{pid}/fd unreadable ({e})")),
     }
 }

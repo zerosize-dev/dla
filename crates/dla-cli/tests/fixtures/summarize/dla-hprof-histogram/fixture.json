@@ -1,0 +1,8 @@
+{
+ "op": "type-histogram-diff",
+ "generate": "hprof",
+ "secrets": [
+  "S3CR3T-9"
+ ],
+ "note": "three dumps built by the test (tests/common hprof builder) with growing app.Holder.ITEMS; the string held by a root is replaced by the planted secret"
+}

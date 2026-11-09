@@ -17,6 +17,11 @@ public final class DlaAgent {
                 return;
             }
             DlaDump.setInstrumentation(inst);
+            if (DlaCapture.enabled()) {
+                java.util.List<String> lim = new java.util.ArrayList<>();
+                DlaCapture.start(lim);
+                DlaDump.addLimitations(lim);
+            }
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 try {
                     // A driver that wrote checkpoints owns its own final record.

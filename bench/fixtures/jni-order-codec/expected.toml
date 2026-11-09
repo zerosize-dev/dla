@@ -16,7 +16,7 @@ limit. Find out what is holding the memory.
 id = "L1"
 site = "native/src/lib.rs:43"
 lines = [43, 43]
-alt_sites = ["kotlin/shop/Encoder.kt:12-15", "native/src/lib.rs:19"]
+alt_sites = ["kotlin/shop/Encoder.kt:12-15", "native/src/lib.rs:19", "native/src/lib.rs:40"]
 holder = "native-handle/global-ref"
 region = "off-heap"
 cause = "L-HANDLE"
@@ -33,3 +33,4 @@ region = "heap"
 cause = "L-COLLECT"
 share = 0.32
 confirmable = true
+dump_backed = true

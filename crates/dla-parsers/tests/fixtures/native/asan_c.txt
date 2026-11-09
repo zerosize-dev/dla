@@ -1,0 +1,29 @@
+
+=================================================================
+==1733==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 15360 byte(s) in 30 object(s) allocated from:
+    #0 0x7f48036fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x555f82b4c38e in drop_ptr /work/leak.c:16
+    #2 0x555f82b4c421 in main /work/leak.c:23
+    #3 0x7f480322a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7f480322a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x555f82b4c244 in _start (/work/leak_asan+0x1244) (BuildId: 962a4e6711d3bbf1987f78b6bd330045658ad24d)
+
+Direct leak of 1008 byte(s) in 1 object(s) allocated from:
+    #0 0x7f48036fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x555f82b4c321 in add_session /work/leak.c:11
+    #2 0x555f82b4c41c in main /work/leak.c:23
+    #3 0x7f480322a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7f480322a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x555f82b4c244 in _start (/work/leak_asan+0x1244) (BuildId: 962a4e6711d3bbf1987f78b6bd330045658ad24d)
+
+Indirect leak of 29232 byte(s) in 29 object(s) allocated from:
+    #0 0x7f48036fd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x555f82b4c321 in add_session /work/leak.c:11
+    #2 0x555f82b4c41c in main /work/leak.c:23
+    #3 0x7f480322a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7f480322a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x555f82b4c244 in _start (/work/leak_asan+0x1244) (BuildId: 962a4e6711d3bbf1987f78b6bd330045658ad24d)
+
+SUMMARY: AddressSanitizer: 45600 byte(s) leaked in 60 allocation(s).

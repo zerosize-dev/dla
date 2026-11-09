@@ -1,0 +1,28 @@
+Debuggee command was: ./leak 3000
+finished reading file, now analyzing data:
+
+MEMORY LEAKS
+3.02M leaked over 3000 calls from
+  add_session
+    at /work/leak.c:11
+    in /work/leak
+  main
+    at /work/leak.c:23
+    in /work/leak
+
+1.54M leaked over 3000 calls from
+  drop_ptr
+    at /work/leak.c:16
+    in /work/leak
+  main
+    at /work/leak.c:23
+    in /work/leak
+
+
+
+total runtime: 0.11s.
+calls to allocation functions: 7001 (64229/s)
+temporary memory allocations: 1000 (9174/s)
+peak heap memory consumption: 4.63M
+peak RSS (including heaptrack overhead): 40.68M
+total memory leaked: 4.56M

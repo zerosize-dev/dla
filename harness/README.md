@@ -45,6 +45,9 @@ or the last checkpoint. Absent optional sections are simply left out.
 | `DLA_PROJECT` | scratch project root; used to select project classes/functions for coverage |
 | `DLA_TICK_MS` | optional period of light `tick` records (no forced collection, no probes) |
 | `DLA_ITER` | iteration count `n` of a command-mode run; copied into `x` of the exit record |
+| `DLA_CAPTURE` | JVM only: comma list of raw captures to write next to the records: `histogram` (full class histogram text), `heap` (HPROF dump), `jfr` (flight recording with old-object samples and paths to GC roots), `nonheap` (thread dump as JSON, class loader statistics, native memory summary and its change since a baseline). Unset: none |
+| `DLA_CAPTURE_DIR` | directory the captures go to (`<dir>/<pid>/<file>`); required with `DLA_CAPTURE` |
+| `DLA_CAPTURE_DUMPS` | JVM driver: how many of the rounds take a heap dump (default 4: the end of the warm-up, the last round and evenly spaced rounds between) |
 
 Driver-only variables (read by `DlaHarness` and `dla_harness.py`; the defaults are baked into the
 file at generation time, so the variables are optional overrides):
@@ -56,6 +59,16 @@ file at generation time, so the variables are optional overrides):
 | `DLA_WARMUP` | number of leading warm-up rounds (they also write checkpoints; the series marks them) |
 | `DLA_ROUNDS` | measured rounds after the warm-up (`dla harness run` sets it to `--iterations` plus `--extra`); the driver runs `DLA_WARMUP + DLA_ROUNDS` rounds in total |
 | `DLA_REPEAT` | size of the repeated key space |
+
+Captures (`DLA_CAPTURE`) are listed in a `captures` array of the record that triggered them:
+`{"kind":"heap","file":"heap-2.hprof","role":"heap dump (HPROF)","bytes":123,"ms":45}` (or
+`"error"` when the capture failed). A driver takes the histogram at every checkpoint, heap dumps at
+the selected rounds, and the flight recording and non-heap reports at the last round. A
+command-mode process takes whatever `DLA_CAPTURE` names at exit (`dla harness run` names the heavy
+kinds for a few points only). The flight recording is written by the JVM itself when it exits, so
+it is not in the list; `dla harness run` lists the file by its size. The files are listed in the
+harness manifest (`captures`) and in `harness/H<n>/captures.json` with the `dla summarize`
+commands that read them.
 
 `x` of a driver checkpoint is the number of units completed. When a driver wrote checkpoints, the
 agent in the same process writes no `exit` record.

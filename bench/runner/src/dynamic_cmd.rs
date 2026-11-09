@@ -76,13 +76,15 @@ use serde_json::Value;
 use crate::{
     Res,
     fixture::{fixture_dirs, load_expected},
-    grade::{Source, State, findings_from_ledger, grade_findings},
-    model::{Category, Entry},
+    grade::{Finding, Source, State, findings_from_ledger, grade_findings, site_matches},
+    model::{Category, Entry, Expected},
     run::{Archetypes, apply_archetypes_off, collect_run_files, copy_tree},
 };
 
 #[path = "dynamic/artifact.rs"]
 mod artifact;
+#[path = "dynamic/without.rs"]
+pub mod without;
 #[path = "dynamic/workers.rs"]
 mod workers;
 
@@ -128,7 +130,22 @@ pub struct DynamicArgs {
     /// that and the fixture fails.
     #[arg(long, default_value_t = DEFAULT_COMMAND_TIMEOUT_S)]
     pub command_timeout: u64,
+    /// Hide these tools (comma separated) from every dla call: PATH becomes a directory of
+    /// links to every other executable, and the tool-home variables (JAVA_HOME and the
+    /// like) are unset. Each run must still complete, and the coverage row of a hidden
+    /// backend must read `missing`.
+    #[arg(long, value_delimiter = ',')]
+    pub without: Vec<String>,
+    /// Check `dump_backed` leaks: the chosen confirmed finding must cite retention or
+    /// allocation evidence with dump or live authority. Off by default until the policy
+    /// runs the summarize steps that produce that evidence.
+    #[arg(long, default_value_t = CHECK_DUMP_BACKED)]
+    pub check_dump_backed: bool,
 }
+
+/// Default of `--check-dump-backed`. Switch it on once the policy adds the summarize steps
+/// (heap-graph, histogram, alloc-stack) to the fixed run.
+pub const CHECK_DUMP_BACKED: bool = false;
 
 /// Default for `--command-timeout`.
 pub const DEFAULT_COMMAND_TIMEOUT_S: u64 = 900;
@@ -163,7 +180,21 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
         failure: "leak L1 (native/src/lib.rs:43) is not confirmed",
         reason: "no Rust workload: the native code runs only under the JVM, so the rust worker finds no main workload with an iteration argument (harness gen: workload-required) and ends with its census candidates suspected_static_only; inside the JVM harness the native frames show only as os.rss growth, which no probe column ties to a finding",
     },
+    ExpectedFailure {
+        fixture: "node-retry-scheduler",
+        failure: "leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global",
+        reason: "the leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, scheduler.js:15), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root, and the fixed policy cannot read the code to choose the root",
+    },
+    ExpectedFailure {
+        fixture: "node-socket-heartbeat",
+        failure: "leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table",
+        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The timer census does not know which table keeps the timer reachable",
+    },
 ];
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
 
 /// The result for one fixture.
 #[derive(Serialize, Debug, Clone, Default)]
@@ -198,6 +229,9 @@ pub struct FixtureRow {
     pub unexplained_growth_share: Option<f64>,
     /// The entry path of the fixture (`repository`, `artifact` or `symptom`).
     pub entry: String,
+    /// Coverage rows of hidden tools seen in a `--without` run.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub hidden_backend_rows: usize,
     /// Workers of a multi-runtime fixture and what the merge took from each.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub workers: Vec<WorkerRow>,
@@ -312,6 +346,8 @@ struct Fx<'a> {
     timed_out: bool,
     /// The worker the commands run as (`--worker <name>`), in worker mode.
     worker: Option<String>,
+    /// The `PATH` directory of `--without` runs; the tool-home variables are unset with it.
+    path_dir: Option<PathBuf>,
 }
 
 /// How a command ended.
@@ -415,6 +451,12 @@ impl Fx<'_> {
             };
         }
         let mut cmd = Command::new(self.bin);
+        if let Some(dir) = &self.path_dir {
+            cmd.env("PATH", dir);
+            for var in without::TOOL_HOME_VARS {
+                cmd.env_remove(var);
+            }
+        }
         cmd.arg("--project").arg(&self.project);
         if let Some(w) = &self.worker {
             cmd.args(["--worker", w]);
@@ -1427,6 +1469,57 @@ fn check_m3_rules(view: &View, entry: Entry) -> Vec<String> {
     bad
 }
 
+/// Evidence kinds that show what retains or allocates the memory.
+const DUMP_KINDS: [&str; 3] = ["retention-path", "histogram-diff", "alloc-stack"];
+
+/// The `dump_backed` rule: for every confirmable leak that the expected file marks, the chosen
+/// confirmed finding (the first confirmed leak-side finding that names the leak) cites evidence
+/// of a retention or allocation kind with `dump` or `live` authority, in its supports or in
+/// the evidence of its confirming transition. A leak that no finding names is not reported
+/// here (the grading failure covers it).
+fn check_dump_backed(view: &View, expected: &Expected) -> Vec<String> {
+    let mut bad = Vec::new();
+    for leak in expected
+        .leak
+        .iter()
+        .filter(|l| l.dump_backed && l.confirmable)
+    {
+        let chosen = view.findings.iter().find(|f| {
+            f.state == "confirmed" && !f.is_nonleak() && f.parent.is_none() && {
+                let probe = Finding {
+                    state: State::Confirmed,
+                    site: f.site.clone(),
+                    owner: f.owner.clone(),
+                    worker: None,
+                    holder: f.holder.clone(),
+                    label: None,
+                    hypothesis: false,
+                    discriminator: false,
+                };
+                site_matches(&probe, leak)
+            }
+        });
+        let Some(f) = chosen else { continue };
+        let mut cited = f
+            .supports
+            .iter()
+            .chain(f.confirmed.iter().flat_map(|(_, c)| c));
+        let backed = cited.any(|id| {
+            view.evidence.get(id).is_some_and(|e| {
+                DUMP_KINDS.contains(&e.kind.as_str())
+                    && matches!(e.authority.as_str(), "dump" | "live")
+            })
+        });
+        if !backed {
+            bad.push(format!(
+                "leak {} is marked dump_backed but {} cites no retention-path, histogram-diff or alloc-stack evidence with dump or live authority",
+                leak.id, f.id
+            ));
+        }
+    }
+    bad
+}
+
 /// Residual over total of the residual evidence; `Err` when a row cannot be computed.
 fn residual_share(view: &View) -> Result<Option<f64>, String> {
     let mut residual = 0.0;
@@ -1491,11 +1584,16 @@ fn grade_row(row: &mut FixtureRow, fixtures: &Path, ledger: &Path) {
         Category::ArchetypeLeak | Category::ArchetypeFree | Category::MultiLeak => {
             if expected.dynamic_confirmation {
                 for (l, o) in &confirmable {
+                    let at = l.site.as_deref().or(l.owner.as_deref()).unwrap_or("");
                     if !o.found {
+                        row.failures
+                            .push(format!("leak {} ({at}) is not confirmed", l.id));
+                    } else if o.chosen_holder.as_deref() != Some(l.holder.as_str()) {
                         row.failures.push(format!(
-                            "leak {} ({}) is not confirmed",
+                            "leak {} ({at}) is confirmed with holder {}, expected {}",
                             l.id,
-                            l.site.as_deref().or(l.owner.as_deref()).unwrap_or("")
+                            o.chosen_holder.as_deref().unwrap_or("none"),
+                            l.holder.as_str()
                         ));
                     }
                 }
@@ -1654,6 +1752,8 @@ struct Shared<'a> {
     plugin_root: &'a Path,
     work: &'a Path,
     log_root: &'a Path,
+    /// The `PATH` directory of a `--without` run.
+    path_dir: Option<&'a Path>,
 }
 
 fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
@@ -1711,6 +1811,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         timeout: Duration::from_secs(sh.args.command_timeout.max(1)),
         timed_out: false,
         worker: None,
+        path_dir: sh.path_dir.map(Path::to_path_buf),
     };
     let _ = fs::remove_dir_all(&fx.log_dir);
     drive(&mut fx);
@@ -1721,15 +1822,29 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         for m in check_m3_rules(&view, expected.entry) {
             row.failures.push(format!("M3 rule: {m}"));
         }
+        if sh.args.check_dump_backed {
+            for m in check_dump_backed(&view, &expected) {
+                row.failures.push(format!("dump check: {m}"));
+            }
+        }
         match residual_share(&view) {
             Ok(s) => row.unexplained_growth_share = s,
             Err(e) => row.failures.push(e),
+        }
+        if !sh.args.without.is_empty() {
+            let (bad, seen) = without::check_coverage(&run_dir, &sh.args.without);
+            row.hidden_backend_rows = seen;
+            row.failures.extend(bad);
         }
         collect_run_files(&run_dir, &fx.log_dir);
     } else {
         row.failures.push("dla run init failed".to_owned());
     }
-    apply_expected_failures(&mut row, EXPECTED_FAILURES);
+    if sh.args.without.is_empty() {
+        apply_expected_failures(&mut row, EXPECTED_FAILURES);
+    } else {
+        accept_hidden_tool_gaps(&mut row);
+    }
     if let Ok(text) = serde_json::to_string_pretty(&row) {
         let _ = fs::write(fx.log_dir.join("row.json"), text + "\n");
     }
@@ -1738,6 +1853,26 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         let _ = fs::remove_dir_all(sh.work.join("data").join(&id));
     }
     row
+}
+
+/// In a `--without` run a leak may stay unconfirmed because its backend is hidden. Such a
+/// failure is reported as an expected one; every other failure (a crash, a timeout, a coverage
+/// row that does not read `missing`) stays a failure.
+fn accept_hidden_tool_gaps(row: &mut FixtureRow) {
+    let gap = |f: &String| {
+        f.starts_with("leak ")
+            && (f.ends_with("is not confirmed") || f.contains("is confirmed with holder"))
+    };
+    let (gaps, rest): (Vec<String>, Vec<String>) = std::mem::take(&mut row.failures)
+        .into_iter()
+        .partition(|f| gap(f));
+    row.failures = rest;
+    if !gaps.is_empty() && row.failures.is_empty() {
+        row.xfail = Some("a tool is hidden by --without".to_owned());
+        row.expected_failures = gaps;
+    } else {
+        row.failures.extend(gaps);
+    }
 }
 
 /// Moves the failures that `list` accepts for this fixture out of `failures`. A fixture on
@@ -1962,6 +2097,25 @@ fn run_in(
         apply_archetypes_off(&plugin_root)?;
     }
     fs::create_dir_all(log_root).map_err(|e| format!("{}: {e}", log_root.display()))?;
+    let path_dir = if args.without.is_empty() {
+        None
+    } else {
+        if let Some(bad) = args
+            .without
+            .iter()
+            .find(|t| t.is_empty() || t.contains(['/', '\\']))
+        {
+            return Err(format!("--without: {bad:?} is not a tool name"));
+        }
+        let dir = without::path_dir_of(work);
+        let path = env::var_os("PATH").unwrap_or_default();
+        let n = without::build_path_dir(&args.without, &path, &dir)?;
+        eprintln!(
+            "--without {}: PATH holds {n} executable(s)",
+            args.without.join(",")
+        );
+        Some(dir)
+    };
     let dirs: Vec<PathBuf> = fixture_dirs(&args.fixtures)?
         .into_iter()
         .filter(|d| {
@@ -1980,6 +2134,7 @@ fn run_in(
         plugin_root: &plugin_root,
         work,
         log_root,
+        path_dir: path_dir.as_deref(),
     };
     let queue: Mutex<VecDeque<PathBuf>> = Mutex::new(dirs.into());
     let done: Mutex<Vec<FixtureRow>> = Mutex::new(Vec::new());
@@ -2094,6 +2249,21 @@ mod tests {
             .collect();
         assert_eq!(jni.len(), 1);
         assert!(jni[0].contains("native/src/lib.rs:43"));
+    }
+
+    #[test]
+    fn the_readme_table_matches_the_shipped_list() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../README.md");
+        let readme = fs::read_to_string(path).unwrap();
+        let rows: Vec<&str> = readme
+            .lines()
+            .filter(|l| l.starts_with("| `") && l.contains("` | `leak "))
+            .collect();
+        assert_eq!(rows.len(), EXPECTED_FAILURES.len(), "{rows:?}");
+        for e in EXPECTED_FAILURES {
+            let want = format!("| `{}` | `{}` |", e.fixture, e.failure);
+            assert!(rows.iter().any(|r| r.starts_with(&want)), "{want}");
+        }
     }
 
     #[cfg(unix)]
@@ -2286,5 +2456,123 @@ mod tests {
             trend_evidence(&v, &ids, &col("n", "gauge")).as_deref(),
             Some("E1")
         );
+    }
+
+    const EXPECTED: &str = r#"schema_version = 1
+id = "fx"
+runtime = "python"
+category = "archetype-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "p"
+
+[[leak]]
+id = "L1"
+site = "a.py:1"
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+"#;
+
+    fn expected(extra: &str) -> Expected {
+        toml::from_str(&format!("{EXPECTED}{extra}")).unwrap()
+    }
+
+    fn confirmed_view(tag: &str, ev: &str, supports_ev: bool) -> View {
+        let add = if supports_ev {
+            r#"{"type":"finding_added","finding":{"id":"F1","origin":"census","site":"a.py:1","holder":"static/global","supports":["E2"]}}"#
+        } else {
+            ADD
+        };
+        view(
+            tag,
+            &[
+                EV_PASS,
+                ev,
+                add,
+                r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
+            ],
+        )
+    }
+
+    #[test]
+    fn dump_backed_leaks_need_retention_or_allocation_evidence() {
+        let exp = expected("dump_backed = true\n");
+        let none = confirmed_view("dump-none", EV_PASS, false);
+        let bad = check_dump_backed(&none, &exp);
+        assert_eq!(bad.len(), 1, "{bad:?}");
+        assert!(bad[0].contains("L1") && bad[0].contains("F1"), "{bad:?}");
+        for (kind, auth, ok) in [
+            ("retention-path", "dump", true),
+            ("alloc-stack", "live", true),
+            ("histogram-diff", "dump", true),
+            ("alloc-stack", "test", false),
+            ("growth-series", "dump", false),
+        ] {
+            let ev = format!(
+                r#"{{"type":"evidence","evidence_id":"E2","authority":"{auth}","kind":"{kind}","result":{{}}}}"#
+            );
+            let v = confirmed_view(&format!("dump-{kind}-{auth}"), &ev, true);
+            assert_eq!(check_dump_backed(&v, &exp).is_empty(), ok, "{kind} {auth}");
+        }
+    }
+
+    #[test]
+    fn the_dump_check_ignores_unmarked_leaks_and_unconfirmed_ones() {
+        let v = confirmed_view("dump-unmarked", EV_PASS, false);
+        assert!(check_dump_backed(&v, &expected("")).is_empty());
+        let open = view("dump-open", &[EV_PASS, ADD]);
+        assert!(check_dump_backed(&open, &expected("dump_backed = true\n")).is_empty());
+    }
+
+    #[test]
+    fn the_holder_of_a_confirmed_leak_is_checked() {
+        let t = std::env::temp_dir().join(format!("dla-dyn-holder-{}", std::process::id()));
+        let fx = t.join("fx");
+        fs::create_dir_all(&fx).unwrap();
+        fs::write(fx.join("expected.toml"), EXPECTED).unwrap();
+        let ledger = |holder: &str| {
+            let text = [
+                format!(
+                    r#"{{"type":"finding_added","finding":{{"id":"F1","origin":"census","site":"a.py:1","holder":"{holder}"}}}}"#
+                ),
+                r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":[]}"#.to_owned(),
+            ]
+            .join("\n");
+            let p = t.join(format!("{}.jsonl", holder.replace('/', "-")));
+            fs::write(&p, text).unwrap();
+            p
+        };
+        let mut good = FixtureRow {
+            id: "fx".into(),
+            ..FixtureRow::default()
+        };
+        grade_row(&mut good, &t, &ledger("static/global"));
+        assert!(good.failures.is_empty(), "{:?}", good.failures);
+        let mut bad = FixtureRow {
+            id: "fx".into(),
+            ..FixtureRow::default()
+        };
+        grade_row(&mut bad, &t, &ledger("container-field"));
+        assert_eq!(
+            bad.failures,
+            ["leak L1 (a.py:1) is confirmed with holder container-field, expected static/global"]
+        );
+        let _ = fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn a_hidden_tool_gap_is_accepted_only_when_nothing_else_failed() {
+        let mut r = row(&["leak L1 (a.py:1) is not confirmed"]);
+        accept_hidden_tool_gaps(&mut r);
+        assert!(r.failures.is_empty() && r.xfail.is_some());
+        let mut r = row(&[
+            "leak L1 (a.py:1) is not confirmed",
+            "hidden tool jcmd: boom",
+        ]);
+        accept_hidden_tool_gaps(&mut r);
+        assert_eq!(r.failures.len(), 2);
+        assert!(r.xfail.is_none());
     }
 }

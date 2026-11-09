@@ -558,6 +558,8 @@ fn jvm_manifest(ctx: &ToolCtx) -> HarnessManifest {
         tools: Vec::new(),
         gaps: Vec::new(),
         timeout_secs: 300,
+        ffi: None,
+        captures: vec![],
     }
     .tap(|_| {
         let _ = ctx;

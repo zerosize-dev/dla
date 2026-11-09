@@ -1,0 +1,29 @@
+
+=================================================================
+==1726==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 15360 byte(s) in 30 object(s) allocated from:
+    #0 0x7f682e418132 in malloc ../../../../src/libsanitizer/lsan/lsan_interceptors.cpp:75
+    #1 0x557f321a92ad in drop_ptr /work/leak.c:16
+    #2 0x557f321a9320 in main /work/leak.c:23
+    #3 0x7f682e02a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7f682e02a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x557f321a9184 in _start (/work/leak_lsan+0x1184) (BuildId: 8f53b20ab9c34b238bb33006941f62342f9ac0fd)
+
+Direct leak of 1008 byte(s) in 1 object(s) allocated from:
+    #0 0x7f682e418132 in malloc ../../../../src/libsanitizer/lsan/lsan_interceptors.cpp:75
+    #1 0x557f321a9261 in add_session /work/leak.c:11
+    #2 0x557f321a931b in main /work/leak.c:23
+    #3 0x7f682e02a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7f682e02a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x557f321a9184 in _start (/work/leak_lsan+0x1184) (BuildId: 8f53b20ab9c34b238bb33006941f62342f9ac0fd)
+
+Indirect leak of 29232 byte(s) in 29 object(s) allocated from:
+    #0 0x7f682e418132 in malloc ../../../../src/libsanitizer/lsan/lsan_interceptors.cpp:75
+    #1 0x557f321a9261 in add_session /work/leak.c:11
+    #2 0x557f321a931b in main /work/leak.c:23
+    #3 0x7f682e02a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7f682e02a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x557f321a9184 in _start (/work/leak_lsan+0x1184) (BuildId: 8f53b20ab9c34b238bb33006941f62342f9ac0fd)
+
+SUMMARY: LeakSanitizer: 45600 byte(s) leaked in 60 allocation(s).

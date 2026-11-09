@@ -1,0 +1,4 @@
+_dl_start_user;_dl_init::call_init (dl-init.c);_dl_init (dl-init.c);call_init (dl-init.c);0x7fc4a90b738e; 0
+main (leak.c);add_session (leak.c); 3024000
+main (leak.c);drop_ptr (leak.c); 1536000
+main (leak.c); 0

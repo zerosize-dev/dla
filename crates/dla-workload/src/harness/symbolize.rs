@@ -29,6 +29,9 @@ pub struct SiteTotals {
 pub struct Sites {
     /// `file:line` (project-relative, `/` separators) to its totals.
     pub by_site: BTreeMap<String, SiteTotals>,
+    /// The function the project frame of each site is in (`Java_shop_codec_Native_open`),
+    /// from the largest stack of the site.
+    pub functions: BTreeMap<String, String>,
     /// Live bytes in stacks with no project frame (library-internal or unresolved).
     pub unattributed_bytes: f64,
     /// Why some stacks could not be attributed.
@@ -94,14 +97,16 @@ fn parse_stacks(raw_sites: &Value) -> Vec<Stack> {
         .collect()
 }
 
-/// One resolved frame: the innermost-first inline frames of an address.
-type Resolved = Vec<(String, u32)>;
+/// One resolved frame: the innermost-first inline frames of an address, as
+/// `(file, line, function)`.
+type Resolved = Vec<(String, u32, String)>;
 
 /// Parses `addr2line -a -f -C -i` output into one list of `(file, line)` per requested
 /// address, in request order.
 fn parse_addr2line(out: &str, count: usize) -> Vec<Resolved> {
     let mut groups: Vec<Resolved> = Vec::new();
     let mut pending_fn = false;
+    let mut func = String::new();
     for line in out.lines() {
         let t = line.trim_end();
         if t.starts_with("0x") && t[2..].bytes().all(|b| b.is_ascii_hexdigit()) && !pending_fn {
@@ -113,6 +118,7 @@ fn parse_addr2line(out: &str, count: usize) -> Vec<Resolved> {
         };
         if !pending_fn {
             pending_fn = true; // function name line
+            func = t.to_owned();
             continue;
         }
         pending_fn = false;
@@ -123,7 +129,7 @@ fn parse_addr2line(out: &str, count: usize) -> Vec<Resolved> {
             && file != "??"
             && ln > 0
         {
-            group.push((file.to_owned(), ln));
+            group.push((file.to_owned(), ln, func.clone()));
         }
     }
     groups.resize(count, Vec::new());
@@ -252,21 +258,29 @@ pub fn symbolize(
         );
     }
     let mut cache: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut biggest: BTreeMap<String, f64> = BTreeMap::new();
     for s in &stacks {
         let site = s.frames.iter().find_map(|f| {
             resolved
                 .get(&(f.module, f.offset))?
                 .iter()
-                .find_map(|(file, line)| {
+                .find_map(|(file, line, func)| {
                     let rel = cache
                         .entry(file.clone())
                         .or_insert_with(|| project_relative(&work, file))
                         .clone()?;
-                    Some(format!("{rel}:{line}"))
+                    Some((format!("{rel}:{line}"), func.clone()))
                 })
         });
         match site {
-            Some(site) => {
+            Some((site, func)) => {
+                if !func.is_empty()
+                    && func != "??"
+                    && biggest.get(&site).is_none_or(|b| s.bytes > *b)
+                {
+                    biggest.insert(site.clone(), s.bytes);
+                    sites.functions.insert(site.clone(), func);
+                }
                 let t = sites.by_site.entry(site).or_default();
                 t.bytes += s.bytes;
                 t.blocks += s.blocks;
@@ -294,7 +308,10 @@ mod tests {
         let g = parse_addr2line(out, 3);
         assert_eq!(
             g[0],
-            vec![("/w/src/a.c".to_owned(), 5), ("/w/src/a.c".to_owned(), 9)]
+            vec![
+                ("/w/src/a.c".to_owned(), 5, "inner".to_owned()),
+                ("/w/src/a.c".to_owned(), 9, "outer".to_owned())
+            ]
         );
         assert!(g[1].is_empty() && g[2].is_empty());
     }

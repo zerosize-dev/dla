@@ -1,8 +1,11 @@
 //! JVM census from class files: static fields, singletons, instance collection
 //! fields, `<clinit>` registrations and call sites, mapped back to source lines with
-//! the `LineNumberTable` and `SourceFile` attribute.
+//! the `LineNumberTable` and `SourceFile` attribute. Kotlin coroutine continuation
+//! classes are read through their `DebugMetadata` annotation: each spilled `L$n` field
+//! becomes a `coroutine-capture` holder named after the source variable, at the line of
+//! its suspension point.
 
-use std::{collections::HashSet, fs, path::Path};
+use std::{borrow::Cow, collections::HashSet, fs, path::Path};
 
 use dla_core::finding::{Holder, Region};
 use regex::Regex;
@@ -108,6 +111,105 @@ fn dotted(internal: &str) -> String {
     internal.replace('/', ".")
 }
 
+/// Marks that start the generated part of a proxy class name. This list repeats the one
+/// in `dla_parsers::jvm::deproxy` (this crate does not depend on dla-parsers); keep the
+/// two in step.
+const PROXY_MARKERS: [&str; 12] = [
+    "$$SpringCGLIB$$",
+    "$$EnhancerBySpringCGLIB$$",
+    "$$FastClassBySpringCGLIB$$",
+    "$$EnhancerByCGLIB$$",
+    "$$FastClassByCGLIB$$",
+    "$$EnhancerByMockitoWithCGLIB$$",
+    "$HibernateProxy$",
+    "$ByteBuddy$",
+    "$MockitoMock$",
+    "_$$_jvst",
+    "_$$_javassist",
+    "$$Lambda",
+];
+
+/// A class name (dotted or internal form) with the generated proxy or lambda suffix
+/// removed: `a.B$$SpringCGLIB$$0` gives `a.B`. Other names are returned as they are.
+pub fn deproxy_name(name: &str) -> Cow<'_, str> {
+    let cut = PROXY_MARKERS
+        .iter()
+        .filter_map(|m| name.find(m))
+        .filter(|&p| p > 0)
+        .min();
+    match cut {
+        Some(p) => Cow::Owned(name[..p].to_owned()),
+        None => Cow::Borrowed(name),
+    }
+}
+
+/// Internal name of the annotation the Kotlin compiler puts on coroutine continuations.
+pub const DEBUG_METADATA: &str = "kotlin/coroutines/jvm/internal/DebugMetadata";
+
+/// One variable a coroutine continuation keeps in a spilled field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capture {
+    /// The continuation class, dotted (`shop.LeakyKt$handle$1`).
+    pub class: String,
+    /// The spilled field (`L$0`).
+    pub field: String,
+    /// The source variable (`session`).
+    pub variable: String,
+    /// The suspend function (`handle`) and the class that declares it (`shop.LeakyKt`).
+    pub method: String,
+    /// Dotted class of the suspend function.
+    pub declaring_class: String,
+    /// Source file name as the compiler recorded it (`Leaky.kt`).
+    pub file: String,
+    /// Source line of the suspension point the variable is live at, when known.
+    pub line: Option<u32>,
+}
+
+/// The captures listed by a continuation class's `DebugMetadata`: `s` names the spilled
+/// fields, `n` the variables, `i` maps each to an index into `l`, the suspension point
+/// lines. Empty for any other class.
+pub fn coroutine_captures(c: &ClassFile) -> Vec<Capture> {
+    let Some(a) = c.annotation(DEBUG_METADATA) else {
+        return Vec::new();
+    };
+    let spilled = a.strs("s");
+    let names = a.strs("n");
+    let points = a.ints("i");
+    let lines = a.ints("l");
+    let file = a
+        .str("f")
+        .filter(|f| !f.is_empty())
+        .map(str::to_owned)
+        .or_else(|| c.source_file.clone())
+        .unwrap_or_default();
+    let class = dotted(&c.name);
+    let mut out = Vec::new();
+    for (k, field) in spilled.iter().enumerate() {
+        let Some(variable) = names.get(k).filter(|n| !n.is_empty()) else {
+            continue;
+        };
+        if field.is_empty() {
+            continue;
+        }
+        let line = points
+            .get(k)
+            .and_then(|&ix| usize::try_from(ix).ok())
+            .and_then(|ix| lines.get(ix))
+            .and_then(|&l| u32::try_from(l).ok())
+            .filter(|&l| l > 0);
+        out.push(Capture {
+            class: class.clone(),
+            field: field.clone(),
+            variable: variable.clone(),
+            method: a.str("m").unwrap_or_default().to_owned(),
+            declaring_class: a.str("c").unwrap_or_default().to_owned(),
+            file: file.clone(),
+            line,
+        });
+    }
+    out
+}
+
 /// The result of reading class files: holders and the source files they cover.
 pub struct FromClasses {
     /// Holders found.
@@ -165,7 +267,22 @@ pub fn holders(root: &Path, sources: &[SourceFile]) -> FromClasses {
 }
 
 fn class_holders(c: &ClassFile, file: &str, text: &str, info: &ProjectInfo, out: &mut Vec<Raw>) {
-    let class_dotted = dotted(&c.name);
+    // Owners name the user class, not a generated proxy of it.
+    let class_dotted = deproxy_name(&dotted(&c.name)).into_owned();
+    for cap in coroutine_captures(c) {
+        let line = cap.line.unwrap_or(1);
+        out.push(
+            Raw::new(
+                "coroutine-capture",
+                Holder::ClosureContinuation,
+                Region::Heap,
+                file,
+                line,
+                format!("{}.{}", cap.class, cap.field),
+            )
+            .tracking(&cap.variable, Scope::Lines(line, line), false),
+        );
+    }
     let own_desc = format!("L{};", c.name);
     let singleton = c.access & ACC_ENUM != 0
         || c.fields

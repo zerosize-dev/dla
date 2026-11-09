@@ -5,7 +5,7 @@
 //!
 //! | Platform | Columns |
 //! |---|---|
-//! | Linux | `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`, `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.pss`, `os.pss_anon`, `os.private_dirty`, `os.fds`, `os.threads`, and `cgroup.current`, `cgroup.anon`, `cgroup.file` (container scope) |
+//! | Linux | `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`, `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.pss`, `os.pss_anon`, `os.private_dirty`, `os.fds`, `os.threads`, `fd.<kind>` (descriptors by kind: `fd.socket`, `fd.pipe`, `fd.file`, `fd.deleted`, `fd.dev`, `fd.eventfd`, `fd.eventpoll`, `fd.timerfd`, plus `fd.inotify`, `fd.memfd` and so on when present), and `cgroup.current`, `cgroup.anon`, `cgroup.file` (container scope) |
 //! | macOS | `os.rss` (resident size), `os.phys_footprint`, `os.threads`, `os.fds` |
 //! | Windows | `os.rss` (working set), `os.vm_hwm` (peak working set), `os.private`, `os.pagefile`, `os.handles`, `os.threads` |
 //!
@@ -21,6 +21,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 mod time;
+
+#[cfg(target_os = "linux")]
+mod fd;
 
 #[cfg(target_os = "linux")]
 mod linux;

@@ -22,7 +22,7 @@ use std::{
 pub use analyze::pretty_class;
 pub use summary::{
     Accumulation, ClassStat, Counts, HeaderInfo, HeapSummary, Holder, HolderKind, SIZE_NOTES,
-    Stats, name_hash,
+    Stats, ViaHolder, name_hash,
 };
 
 use crate::inflate::{GzipError, gunzip, is_gzip};

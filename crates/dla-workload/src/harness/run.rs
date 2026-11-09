@@ -40,7 +40,7 @@ use dla_core::{
     Refusal,
     error::Error,
     evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind},
-    harness::{CommandSpec, DumpCoverage, HarnessManifest, HarnessMode},
+    harness::{CaptureFile, CommandSpec, DumpCoverage, HarnessManifest, HarnessMode},
     series::{Axis, KeyMode, SeriesSourceKind},
     state::{ProcessKind, ProcessRecord, now_utc},
     toolctx::{EvidenceSpec, StageOutcome, ToolCtx},
@@ -49,9 +49,12 @@ use dla_sample::os::{self, OsSample, Sampler, SamplerConfig, SamplerOutput};
 use regex::Regex;
 use serde_json::{Value, json};
 
+mod tool;
+
 use super::{
     AGENT, COV, DRIVER, LOGS, OUT, PROBES,
     build::{PointInput, SeriesParams, build_series},
+    capture::{self, AgentNotes, CaptureSet, NativeTool},
     cover::{self, CoverageOutcome},
     dumps::{self, DumpFile, Rec},
     harness_dir,
@@ -89,6 +92,14 @@ pub struct RunOptions {
     pub first_point: u32,
     /// Per-process timeout in seconds, overriding the manifest.
     pub timeout_secs: Option<u64>,
+    /// Raw captures of the JVM agent (`--capture`); empty means none.
+    pub capture: CaptureSet,
+    /// Heap dumps a driver takes and command-mode points that take heavy captures
+    /// (default [`capture::DEFAULT_DUMPS`]).
+    pub capture_dumps: Option<u32>,
+    /// Run the points under this tool instead of measuring them (`--tool`): no series is
+    /// written, the tool's output is.
+    pub tool: Option<NativeTool>,
 }
 
 impl Default for RunOptions {
@@ -101,8 +112,53 @@ impl Default for RunOptions {
             source_kind: SeriesSourceKind::Harness,
             first_point: 1,
             timeout_secs: None,
+            capture: CaptureSet::default(),
+            capture_dumps: None,
+            tool: None,
         }
     }
+}
+
+/// A native allocation site tied to the managed method that calls into it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FfiSite {
+    /// `native/src/lib.rs:40`.
+    pub site: String,
+    /// The exported symbol the site is in (`Java_shop_codec_Native_open`).
+    pub export: String,
+    /// The managed method (`shop.codec.Native.open`).
+    pub managed: String,
+    /// Where that method is declared (`kotlin/shop/Native.kt:7`).
+    pub declared_at: Option<String>,
+    /// Live bytes at the site in the last point.
+    pub live_bytes: f64,
+}
+
+/// The sites of the last point that sit in a JNI export of the manifest's boundary, largest
+/// first.
+fn ffi_sites(manifest: &HarnessManifest, points: &[PointInput]) -> Vec<FfiSite> {
+    let (Some(ffi), Some(sites)) = (
+        manifest.ffi.as_ref(),
+        points.iter().rev().find_map(|p| p.sites.as_ref()),
+    ) else {
+        return Vec::new();
+    };
+    let mut out: Vec<FfiSite> = sites
+        .functions
+        .iter()
+        .filter_map(|(site, func)| {
+            let m = ffi.methods.iter().find(|m| m.export == *func)?;
+            Some(FfiSite {
+                site: site.clone(),
+                export: m.export.clone(),
+                managed: m.managed.clone(),
+                declared_at: m.declared_at.clone(),
+                live_bytes: sites.by_site.get(site).map_or(0.0, |t| t.bytes),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.live_bytes.total_cmp(&a.live_bytes));
+    out
 }
 
 /// What one execution produced.
@@ -130,6 +186,13 @@ pub struct RunOutput {
     pub exits: Vec<(String, Option<i32>)>,
     /// Post-warm-up units measured (post-warm-up points times step).
     pub units: u64,
+    /// Files `--capture` or `--tool` left in the harness `out/` directory.
+    pub captures: Vec<CaptureFile>,
+    /// The tool the points ran under, when `--tool` was given.
+    pub tool: Option<NativeTool>,
+    /// Native allocation sites in the JNI exports of the project (JVM harness with a
+    /// native library).
+    pub ffi_sites: Vec<FfiSite>,
 }
 
 fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<String>) -> Refusal {
@@ -199,6 +262,9 @@ struct ExecSpec<'a> {
     cwd: PathBuf,
     env: Vec<(String, String)>,
     log: PathBuf,
+    /// Standard error goes here instead of `log` (a command whose standard output is a
+    /// report that must stay clean).
+    stderr_log: Option<PathBuf>,
     timeout: Duration,
     sample: bool,
     command: &'a str,
@@ -231,7 +297,10 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         fs::create_dir_all(dir).map_err(|e| io_refusal(dir, e))?;
     }
     let log = File::create(&spec.log).map_err(|e| io_refusal(&spec.log, e))?;
-    let log2 = log.try_clone().map_err(|e| io_refusal(&spec.log, e))?;
+    let log2 = match &spec.stderr_log {
+        Some(p) => File::create(p).map_err(|e| io_refusal(p, e))?,
+        None => log.try_clone().map_err(|e| io_refusal(&spec.log, e))?,
+    };
     let program_path = if program.contains(['/', '\\']) && Path::new(program).is_relative() {
         spec.cwd.join(program)
     } else {
@@ -602,6 +671,7 @@ fn build_once(
             cwd: cwd_of(paths, build),
             env: merged_env(&build.env, &tokens),
             log: log.clone(),
+            stderr_log: None,
             timeout: Duration::from_secs(BUILD_TIMEOUT_SECS),
             sample: false,
             command: &command,
@@ -658,11 +728,19 @@ struct PointEnv<'a> {
     purge: Option<&'a str>,
     /// Driver rounds after the warm-up.
     rounds: u32,
+    /// `--capture` kinds, with whether this point takes the heavy ones.
+    capture: Option<(CaptureSet, bool)>,
+    /// Heap dumps a driver takes.
+    dumps: u32,
 }
 
 impl PointEnv<'_> {
     fn dump_path(&self) -> PathBuf {
         self.paths.out.join(&self.label).join("dump.jsonl")
+    }
+
+    fn capture_dir(&self) -> PathBuf {
+        self.paths.out.join(&self.label).join(capture::DIR)
     }
 
     fn exec_spec<'a>(
@@ -700,6 +778,17 @@ impl PointEnv<'_> {
         if let Some(p) = self.purge {
             set("DLA_PURGE", p.to_owned());
         }
+        if let Some((kinds, full)) = self.capture {
+            let v = kinds.env_value(full);
+            if !v.is_empty() {
+                set(dla_core::harness::ENV_CAPTURE, v);
+                set(
+                    dla_core::harness::ENV_CAPTURE_DIR,
+                    self.capture_dir().to_string_lossy().into_owned(),
+                );
+                set(dla_core::harness::ENV_CAPTURE_DUMPS, self.dumps.to_string());
+            }
+        }
         if m.mode == HarnessMode::Driver {
             set("DLA_KEY_MODE", self.mode.as_str().to_owned());
             set("DLA_STEP", m.step.to_string());
@@ -717,6 +806,7 @@ impl PointEnv<'_> {
             cwd: cwd_of(self.paths, &m.run),
             env,
             log: self.paths.logs.join(format!("{}.log", self.label)),
+            stderr_log: None,
             timeout,
             sample: true,
             command,
@@ -777,6 +867,47 @@ struct ModeRun {
     failed_exits: u32,
     /// Labels whose log is scanned for detector lines.
     scan_logs: Vec<(String, PathBuf)>,
+    /// Capture files of the points.
+    captures: Vec<CaptureFile>,
+}
+
+/// Whether this run asks the JVM agent for raw captures.
+fn capture_active(manifest: &HarnessManifest, opts: &RunOptions) -> bool {
+    !opts.capture.is_empty() && manifest.runtime == dla_core::runtime::Runtime::Jvm
+}
+
+/// Lists the capture files of the point `pe` after its process ended, using what the agent
+/// said about them, and notes the captures that failed.
+fn gather_captures(
+    ctx: &ToolCtx,
+    paths: &Paths,
+    pe: &PointEnv<'_>,
+    pid: Option<u32>,
+    file: &DumpFile,
+    x: Option<f64>,
+    run: &mut ModeRun,
+) {
+    let mut notes = AgentNotes::default();
+    for r in file
+        .records
+        .iter()
+        .filter(|r| pid.is_none() || r.dump.pid == pid)
+    {
+        if let Some(c) = &r.dump.captures {
+            notes.records.push((r.dump.x, c.clone()));
+        }
+    }
+    let label_dir = paths.out.join(&pe.label);
+    let rel = paths.rel(ctx, &label_dir);
+    let files = capture::gather(&label_dir, &rel, &pe.label, pid, &notes, x);
+    for (kind, error) in notes.errors() {
+        run.limitations.push(format!(
+            "{}: {kind} capture failed: {}",
+            pe.label,
+            clip(&error, 160)
+        ));
+    }
+    run.captures.extend(files);
 }
 
 fn exit_note(label: &str, res: &ExecResult) -> Option<String> {
@@ -799,6 +930,9 @@ fn run_command_mode(
     let total = manifest.warmup + iterations + opts.extra;
     let mut run = ModeRun::default();
     let mut kept_warm = 0;
+    let capturing = capture_active(manifest, opts);
+    let dumps = opts.capture_dumps.unwrap_or(capture::DEFAULT_DUMPS);
+    let heavy = capture::select_points(total, manifest.warmup, dumps);
     for k in opts.first_point.max(1)..=total {
         let n = manifest.step.saturating_mul(u64::from(k));
         let label = format!("p{k}-{}", mode.as_str());
@@ -811,12 +945,17 @@ fn run_command_mode(
             n,
             purge: if last { opts.purge.as_deref() } else { None },
             rounds: 0,
+            capture: capturing.then_some((opts.capture, heavy.contains(&k))),
+            dumps,
         };
         let dump = pe.dump_path();
         if let Some(d) = dump.parent() {
             fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
         }
         let _ = fs::remove_file(&dump);
+        if capturing {
+            let _ = fs::remove_dir_all(pe.capture_dir());
+        }
         let command = subst(
             &manifest.run.argv.join(" "),
             &[("n", n.to_string()), ("label", label.clone())],
@@ -828,6 +967,12 @@ fn run_command_mode(
         run.logs.push(log_rel.clone());
         run.scan_logs.push((label.clone(), spec.log.clone()));
         run.exits.push((label.clone(), res.code));
+        let early_file = dumps::read_dumps(&dump);
+        if capturing {
+            let pid =
+                dumps::select_measured(&early_file, manifest.runtime, Some(n)).and_then(|s| s.pid);
+            gather_captures(ctx, paths, &pe, pid, &early_file, Some(n as f64), &mut run);
+        }
         if let Some(e) = &res.spawn_error {
             run.limitations.push(format!(
                 "point {label} (n={n}): {e}; later points were not run"
@@ -850,7 +995,7 @@ fn run_command_mode(
             ));
             continue;
         }
-        let file = dumps::read_dumps(&dump);
+        let file = early_file;
         if file.bad_lines > 0 {
             run.limitations.push(format!(
                 "{label}: {} unreadable dump lines were skipped",
@@ -866,7 +1011,7 @@ fn run_command_mode(
             Some(sel) => {
                 run.limitations
                     .extend(sel.limitations.iter().map(|l| format!("{label}: {l}")));
-                let rec = sel.rec.clone();
+                let rec = dumps::merge_shim(sel.rec, &file);
                 let sites = sites_of(&rec, paths);
                 (Some(rec), sites)
             }
@@ -929,6 +1074,8 @@ fn run_driver_mode(
     let rounds = opts.iterations.unwrap_or(manifest.iterations) + opts.extra;
     let total_rounds = manifest.warmup + rounds;
     let label = format!("p1-{}", mode.as_str());
+    let capturing = capture_active(manifest, opts);
+    let dumps_wanted = opts.capture_dumps.unwrap_or(capture::DEFAULT_DUMPS);
     let pe = PointEnv {
         manifest,
         paths,
@@ -937,12 +1084,17 @@ fn run_driver_mode(
         n: manifest.step.saturating_mul(u64::from(total_rounds)),
         purge: opts.purge.as_deref(),
         rounds,
+        capture: capturing.then_some((opts.capture, true)),
+        dumps: dumps_wanted,
     };
     let dump = pe.dump_path();
     if let Some(d) = dump.parent() {
         fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
     }
     let _ = fs::remove_file(&dump);
+    if capturing {
+        let _ = fs::remove_dir_all(pe.capture_dir());
+    }
     let command = manifest.run.argv.join(" ");
     let spec = pe.exec_spec(timeout, &command, &[]);
     let res = exec(ctx, &spec)?;
@@ -977,8 +1129,11 @@ fn run_driver_mode(
             file.bad_lines
         ));
     }
-    let (cps, _pid, notes) = dumps::select_checkpoints(&file, manifest.runtime);
+    let (cps, pid, notes) = dumps::select_checkpoints(&file, manifest.runtime);
     run.limitations.extend(notes);
+    if capturing {
+        gather_captures(ctx, paths, &pe, pid, &file, None, &mut run);
+    }
     if cps.is_empty() {
         run.limitations.push(format!(
             "driver {label} wrote no checkpoint record (log {log_rel}): did the hooks run?"
@@ -993,6 +1148,15 @@ fn run_driver_mode(
     }
     let last = cps.len() - 1;
     for (i, rec) in cps.into_iter().enumerate() {
+        // The allocator shim of a JVM that calls a native library reports once, at exit:
+        // its figures belong to the last round.
+        let merged;
+        let rec: &Rec = if i == last {
+            merged = dumps::merge_shim(rec, &file);
+            &merged
+        } else {
+            rec
+        };
         let t_ms = rec.dump.t_ms;
         let (os_last, os_peak) = os_at(res.sampler.as_ref(), t_ms);
         let x = rec
@@ -1116,6 +1280,23 @@ pub fn run_points(
     };
     let _signals = SignalGuard::install(ctx);
     build_once(ctx, manifest, &paths, &mut out)?;
+    if let Some(tool) = opts.tool {
+        tool::run_tool_points(ctx, manifest, opts, &paths, tool, &mut out)?;
+        return Ok(out);
+    }
+    if capture_active(manifest, opts) && opts.capture.heap && manifest.mode == HarnessMode::Command
+    {
+        out.limitations.push(
+            "command-mode heap dumps come from separate processes: dla summarize heap-graph compares dumps of one process only, so use a driver (dla harness gen --driver) for a dump series"
+                .to_owned(),
+        );
+    }
+    if !opts.capture.is_empty() && manifest.runtime != dla_core::runtime::Runtime::Jvm {
+        out.limitations.push(format!(
+            "--capture is available for jvm harnesses; {} writes no capture files (use --tool for rust and native code)",
+            manifest.runtime.as_str()
+        ));
+    }
 
     let secs = opts.timeout_secs.unwrap_or(manifest.timeout_secs);
     let timeout = Duration::from_secs(if secs == 0 {
@@ -1161,6 +1342,7 @@ pub fn run_points(
         out.processes += run.processes;
         out.logs.extend(run.logs.iter().cloned());
         out.exits.extend(run.exits.iter().cloned());
+        out.captures.extend(run.captures.iter().cloned());
         first_log = first_log.or_else(|| run.logs.first().cloned());
         scan_logs.extend(run.scan_logs.iter().cloned());
         dump_cov.extend(run.dump_cov.iter().cloned());
@@ -1211,6 +1393,22 @@ pub fn run_points(
                 "points without a dump record carry the sampler's last reading before exit (100 ms interval) for os.* columns"
                     .to_owned(),
             );
+        }
+        let sites_ffi = ffi_sites(manifest, &run.points);
+        for f in sites_ffi.iter().take(3) {
+            limitations.push(format!(
+                "native.live_bytes@{} is {}, the native method {}{} ({} B live at the last point)",
+                f.site,
+                f.export,
+                f.managed,
+                f.declared_at
+                    .as_ref()
+                    .map_or_else(String::new, |d| format!(" declared at {d}")),
+                f.live_bytes as u64
+            ));
+        }
+        if !sites_ffi.is_empty() {
+            out.ffi_sites = sites_ffi;
         }
         let params = SeriesParams {
             id: ctx.next_series_id(),
@@ -1265,6 +1463,8 @@ pub fn run_points(
             n,
             purge: None,
             rounds: 0,
+            capture: None,
+            dumps: 0,
         };
         let dump = pe.dump_path();
         if let Some(d) = dump.parent() {
@@ -1351,6 +1551,9 @@ pub fn run_points(
         ));
     }
 
+    if capture_active(manifest, opts) {
+        record_capture_coverage(ctx, manifest, opts, &mut out)?;
+    }
     let cov_limits = cover::record(
         ctx,
         manifest.runtime,
@@ -1365,6 +1568,91 @@ pub fn run_points(
     out.limitations.extend(cov_limits);
     out.units = max_post_units;
     Ok(out)
+}
+
+/// One coverage row per requested capture kind: `ran` with the number of files, or `blocked`
+/// when the agent wrote none (the reason is among the run's limitations).
+fn record_capture_coverage(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    opts: &RunOptions,
+    out: &mut RunOutput,
+) -> Result<(), Refusal> {
+    use dla_core::{
+        coverage::{BackendCoverage, CoverageManifest},
+        harness::CaptureKind,
+    };
+    let rows = [
+        (opts.capture.heap, "heap", CaptureKind::Heap),
+        (opts.capture.histogram, "histogram", CaptureKind::Histogram),
+        (opts.capture.jfr, "jfr", CaptureKind::Jfr),
+        (opts.capture.nonheap, "nonheap", CaptureKind::NonHeap),
+    ];
+    let mut blocked = Vec::new();
+    CoverageManifest::update(&ctx.run_dir, |m| {
+        for (on, name, kind) in rows {
+            if !on {
+                continue;
+            }
+            let n = out.captures.iter().filter(|c| c.kind == kind).count() as u64;
+            let cov = if n > 0 {
+                BackendCoverage::ran(None, n)
+            } else {
+                blocked.push(name);
+                BackendCoverage::blocked(format!(
+                    "the jvm agent wrote no {name} file (see the run's limitations)"
+                ))
+            };
+            m.note_backend(manifest.runtime.as_str(), &format!("harness-{name}"), cov);
+        }
+    })
+    .map_err(|e| e.to_refusal())?;
+    for name in blocked {
+        out.limitations
+            .push(format!("--capture {name}: no file was written"));
+    }
+    Ok(())
+}
+
+fn ffi_site_json(f: &FfiSite) -> Value {
+    json!({
+        "site": f.site,
+        "method": f.managed,
+        "live_bytes": f.live_bytes as u64,
+    })
+}
+
+/// Bytes and milliseconds of the captures, in total and by kind as `[files, bytes, ms]`
+/// (bounded: one entry per kind).
+fn capture_cost(out: &RunOutput) -> Value {
+    let mut by_kind: BTreeMap<&str, (u64, u64, u64)> = BTreeMap::new();
+    for c in &out.captures {
+        let e = by_kind.entry(c.kind.as_str()).or_default();
+        e.0 += 1;
+        e.1 += c.bytes;
+        e.2 += c.ms.unwrap_or(0);
+    }
+    let kinds: serde_json::Map<String, Value> = by_kind
+        .iter()
+        .map(|(k, (n, b, ms))| ((*k).to_owned(), json!([n, b, ms])))
+        .collect();
+    json!({
+        "files": out.captures.len(),
+        "bytes": out.captures.iter().map(|c| c.bytes).sum::<u64>(),
+        "ms": out.captures.iter().filter_map(|c| c.ms).sum::<u64>(),
+        "kinds": kinds,
+    })
+}
+
+/// The full capture report written next to the manifest.
+fn capture_report(out: &RunOutput, commands: &[String]) -> Value {
+    json!({
+        "tool": out.tool.map(NativeTool::as_str),
+        "cost": capture_cost(out),
+        "files": out.captures,
+        "summarize": commands,
+        "limitations": out.limitations,
+    })
 }
 
 /// Cuts text to `max` characters.
@@ -1382,8 +1670,24 @@ fn clip(s: &str, max: usize) -> String {
 /// whose result names the harness.
 pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, Refusal> {
     ctx.require_time("harness run")?;
-    let manifest = ctx.harness(id)?;
+    let mut manifest = ctx.harness(id)?;
     let out = run_points(ctx, &manifest, opts)?;
+    let captured = !opts.capture.is_empty() || opts.tool.is_some();
+    let commands = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), false);
+    let compact = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), true);
+    if captured {
+        // The manifest lists what the latest capturing run left in out/.
+        manifest.captures.clone_from(&out.captures);
+        manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
+        let list = capture_report(&out, &commands);
+        let path = ctx
+            .run_dir
+            .join("harness")
+            .join(&manifest.id)
+            .join("captures.json");
+        let text = serde_json::to_string_pretty(&list).unwrap_or_default() + "\n";
+        fs::write(&path, text).map_err(|e| io_refusal(&path, e))?;
+    }
 
     // Full result in a file; the evidence carries a bounded summary of it.
     let full = json!({
@@ -1400,8 +1704,16 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
         "gaps": out.gaps,
         "limitations": out.limitations,
         "logs": out.logs,
+        "tool": out.tool.map(NativeTool::as_str),
+        "captures": out.captures,
+        "ffi_sites": out.ffi_sites.iter().map(ffi_site_json).collect::<Vec<_>>(),
     });
-    let first = out.series.first().cloned().unwrap_or_default();
+    let first = out
+        .series
+        .first()
+        .cloned()
+        .or_else(|| out.tool.map(|t| t.as_str().to_owned()))
+        .unwrap_or_default();
     let raw_rel = format!("harness/{}/run-{first}.json", manifest.id);
     let raw_path = ctx.run_dir.join(&raw_rel);
     let text = serde_json::to_string_pretty(&full).unwrap_or_default() + "\n";
@@ -1436,6 +1748,21 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
         result["step"] = json!(manifest.step);
     } else {
         result["units"] = json!(out.units);
+    }
+    if captured {
+        result["capture"] = capture_cost(&out);
+        if let Some(t) = out.tool {
+            result["tool"] = json!(t.as_str());
+        }
+    }
+    if !out.ffi_sites.is_empty() {
+        result["ffi"] = json!(
+            out.ffi_sites
+                .iter()
+                .take(2)
+                .map(ffi_site_json)
+                .collect::<Vec<_>>()
+        );
     }
     // Keep the evidence under its size bound whatever the run said.
     while serde_json::to_vec(&result).map_or(0, |v| v.len()) > 1900 {
@@ -1489,19 +1816,61 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
         .map(|s| ctx.pointer(&format!("series/{s}.json")))
         .collect();
     artifacts.push(ctx.pointer(&raw_rel));
-    let next = out
-        .series
-        .first()
-        .map_or_else(String::new, |s| format!("dla trend {s}"));
+    let mut summary = json!({
+        "harness": manifest.id,
+        "series": out.series,
+        "points": out.points,
+    });
+    if out.tool.is_some()
+        && let Value::Object(m) = &mut summary
+    {
+        m.remove("points");
+        m.remove("series");
+    }
+    if !out.ffi_sites.is_empty() {
+        summary["ffi"] = json!(
+            out.ffi_sites
+                .iter()
+                .take(2)
+                .map(ffi_site_json)
+                .collect::<Vec<_>>()
+        );
+    }
+    if captured {
+        artifacts.push(ctx.pointer(&format!("harness/{}/captures.json", manifest.id)));
+        summary["capture"] = capture_cost(&out);
+        if let Some(t) = out.tool {
+            summary["tool"] = json!(t.as_str());
+        }
+        // The CLI output is bounded at 2048 bytes and the envelope around the summary takes
+        // about 800: the commands get what is left, whole or not at all.
+        let used = summary.to_string().len();
+        let budget = capture::SUMMARY_BUDGET.saturating_sub(used + 40);
+        let (shown, left) = capture::fit(&compact, budget);
+        if !shown.is_empty() {
+            summary["summarize"] = json!(shown);
+        }
+        if left > 0 {
+            summary["more_commands"] = json!(format!(
+                "{left} more in harness/{}/captures.json",
+                manifest.id
+            ));
+        }
+    }
+    let next = out.series.first().map_or_else(
+        || {
+            commands
+                .first()
+                .map(|_| "run the dla summarize commands listed".to_owned())
+                .unwrap_or_default()
+        },
+        |s| format!("dla trend {s}"),
+    );
+    summary["next"] = json!(next);
     Ok(StageOutcome {
         evidence: vec![ev.to_string()],
         artifacts,
-        summary: json!({
-            "harness": manifest.id,
-            "series": out.series,
-            "points": out.points,
-            "next": next,
-        }),
+        summary,
         ..StageOutcome::default()
     })
 }
@@ -1555,6 +1924,61 @@ mod tests {
         let again = dedupe_detectors([hits.clone(), hits].concat());
         assert_eq!(again.len(), 2);
         assert_eq!(again[0]["count"], 2);
+    }
+
+    #[test]
+    fn native_sites_in_jni_exports_are_tied_to_the_managed_method() {
+        use dla_core::harness::{FfiHarness, FfiMethod};
+        let mut m = super::tests_support::manifest();
+        m.runtime = dla_core::runtime::Runtime::Jvm;
+        m.ffi = Some(FfiHarness {
+            kind: "jni".into(),
+            library: Some("codec".into()),
+            native_dir: Some("native".into()),
+            methods: vec![FfiMethod {
+                export: "Java_shop_codec_Native_open".into(),
+                managed: "shop.codec.Native.open".into(),
+                declared_at: Some("kotlin/shop/Native.kt:9".into()),
+            }],
+        });
+        let mut sites = Sites::default();
+        sites.by_site.insert(
+            "native/src/lib.rs:40".into(),
+            crate::harness::symbolize::SiteTotals {
+                bytes: 900.0,
+                blocks: 3.0,
+            },
+        );
+        sites.by_site.insert(
+            "native/src/lib.rs:43".into(),
+            crate::harness::symbolize::SiteTotals {
+                bytes: 50.0,
+                blocks: 1.0,
+            },
+        );
+        sites.functions.insert(
+            "native/src/lib.rs:40".into(),
+            "Java_shop_codec_Native_open".into(),
+        );
+        sites.functions.insert(
+            "native/src/lib.rs:43".into(),
+            "Java_shop_codec_Native_other".into(),
+        );
+        let points = vec![PointInput {
+            sites: Some(sites),
+            ..PointInput::default()
+        }];
+        let found = ffi_sites(&m, &points);
+        assert_eq!(found.len(), 1, "only the exports of the boundary count");
+        assert_eq!(found[0].site, "native/src/lib.rs:40");
+        assert_eq!(found[0].managed, "shop.codec.Native.open");
+        assert_eq!(
+            found[0].declared_at.as_deref(),
+            Some("kotlin/shop/Native.kt:9")
+        );
+        // No boundary, no sites.
+        m.ffi = None;
+        assert!(ffi_sites(&m, &points).is_empty());
     }
 
     #[test]
@@ -1612,6 +2036,8 @@ mod tests_support {
             tools: vec![],
             gaps: vec![],
             timeout_secs: 30,
+            ffi: None,
+            captures: vec![],
         }
     }
 }

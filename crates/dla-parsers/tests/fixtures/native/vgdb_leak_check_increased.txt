@@ -1,0 +1,12 @@
+sending command leak_check full reachable increased to pid 22816
+==22816== 1,088 (+704) bytes in 17 (+11) blocks are still reachable in loss record 1 of 1
+==22816==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==22816==    by 0x1091F1: main (grow.c:9)
+==22816== 
+==22816== LEAK SUMMARY:
+==22816==    definitely lost: 0 (+0) bytes in 0 (+0) blocks
+==22816==    indirectly lost: 0 (+0) bytes in 0 (+0) blocks
+==22816==      possibly lost: 0 (+0) bytes in 0 (+0) blocks
+==22816==    still reachable: 1,088 (+704) bytes in 17 (+11) blocks
+==22816==         suppressed: 0 (+0) bytes in 0 (+0) blocks
+==22816== 

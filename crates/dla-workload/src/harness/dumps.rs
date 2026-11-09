@@ -264,7 +264,13 @@ pub fn select_measured(file: &DumpFile, runtime: Runtime, n: Option<u64>) -> Opt
     let mut cands: Vec<(Option<u32>, &Rec, bool, bool)> = groups
         .iter()
         .map(|(pid, recs)| {
-            let exit = recs.iter().rev().find(|r| r.dump.phase == DumpPhase::Exit);
+            // A shim loaded into a managed runtime writes its own exit record after the
+            // runtime's: the runtime's record is the measured one, the shim's is merged in.
+            let exit = recs
+                .iter()
+                .rev()
+                .find(|r| r.dump.phase == DumpPhase::Exit && runtime_matches(r, runtime))
+                .or_else(|| recs.iter().rev().find(|r| r.dump.phase == DumpPhase::Exit));
             let pick = exit
                 .or_else(|| {
                     recs.iter()
@@ -354,6 +360,52 @@ pub fn select_checkpoints(
     (cps, pid, notes)
 }
 
+/// True when the record was written by the allocator shim (`runtime` `native`).
+fn is_shim(rec: &Rec) -> bool {
+    rec.dump
+        .runtime
+        .as_deref()
+        .is_some_and(|r| r.eq_ignore_ascii_case("native"))
+}
+
+/// The exit record of the allocator shim in the same process as `rec`, when `rec` comes
+/// from a managed runtime that the shim was preloaded into (a JVM that calls a native
+/// library, spec 3 "FFI into a JVM").
+pub fn shim_record<'a>(rec: &Rec, file: &'a DumpFile) -> Option<&'a Rec> {
+    if is_shim(rec) || rec.dump.pid.is_none() {
+        return None;
+    }
+    file.records
+        .iter()
+        .rev()
+        .find(|r| r.dump.pid == rec.dump.pid && is_shim(r) && r.dump.phase == DumpPhase::Exit)
+}
+
+/// `rec` with the shim's `native.*` and `fd.*` values, allocation stacks, modules and
+/// limitations merged in. Returns `rec` unchanged when the process has no shim record.
+pub fn merge_shim(rec: &Rec, file: &DumpFile) -> Rec {
+    let Some(shim) = shim_record(rec, file) else {
+        return rec.clone();
+    };
+    let mut out = rec.clone();
+    let values = out.dump.values.get_or_insert_with(BTreeMap::new);
+    for (k, v) in shim.dump.values.iter().flatten() {
+        if k.starts_with("native.") || k.starts_with("fd.") {
+            values.insert(k.clone(), *v);
+        }
+    }
+    out.raw_sites.clone_from(&shim.raw_sites);
+    out.modules.clone_from(&shim.modules);
+    out.dump.shim.clone_from(&shim.dump.shim);
+    let lim = out.dump.limitations.get_or_insert_with(Vec::new);
+    for l in shim.dump.limitations.iter().flatten() {
+        if !lim.contains(l) {
+            lim.push(format!("allocator shim: {l}"));
+        }
+    }
+    out
+}
+
 /// Collects the `limitations` strings of a record.
 pub fn record_limitations(rec: &Rec) -> &[String] {
     rec.dump.limitations.as_deref().unwrap_or(&[])
@@ -399,6 +451,38 @@ mod tests {
         assert!(r.dump.values.as_ref().unwrap().get("bad").is_none());
         assert!(r.raw_sites.is_some() && r.modules.is_some());
         assert!(r.dump.raw_sites.is_none());
+    }
+
+    #[test]
+    fn a_shim_loaded_into_a_jvm_is_merged_into_the_jvm_record() {
+        let f = file(&[
+            json!({"dla_harness":1,"phase":"exit","pid":7,"runtime":"jvm","argv":["java","Main","500"],
+                "values":{"jvm.heap_used":100,"os.rss":9}}),
+            json!({"dla_harness":1,"phase":"exit","pid":7,"runtime":"native","argv":["java","Main","500"],
+                "values":{"native.live_bytes":42,"native.live_blocks":3,"os.rss":8,"fd.socket":2},
+                "raw_sites":{"k":{"live_bytes":42,"live_blocks":3,"frames":[]}},
+                "modules":[{"path":"/x","bias":0}],"limitations":["sampled"]}),
+        ]);
+        let sel = select_measured(&f, Runtime::Jvm, Some(500)).unwrap();
+        assert_eq!(sel.rec.dump.runtime.as_deref(), Some("jvm"));
+        let m = merge_shim(sel.rec, &f);
+        assert_eq!(m.value("jvm.heap_used"), Some(100.0));
+        assert_eq!(m.value("native.live_bytes"), Some(42.0));
+        assert_eq!(m.value("fd.socket"), Some(2.0));
+        assert_eq!(
+            m.value("os.rss"),
+            Some(9.0),
+            "the runtime's own os figures stay"
+        );
+        assert!(m.raw_sites.is_some() && m.modules.is_some());
+        assert_eq!(
+            m.dump.limitations.as_ref().unwrap()[0],
+            "allocator shim: sampled"
+        );
+        // Without a shim record nothing changes.
+        let only_jvm = file(&[json!({"dla_harness":1,"phase":"exit","pid":7,"runtime":"jvm"})]);
+        let r = &only_jvm.records[0];
+        assert_eq!(merge_shim(r, &only_jvm).dump, r.dump);
     }
 
     #[test]

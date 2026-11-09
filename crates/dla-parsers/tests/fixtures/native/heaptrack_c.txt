@@ -1,0 +1,113 @@
+Debuggee command was: ./leak 3000
+finished reading file, now analyzing data:
+
+MOST CALLS TO ALLOCATION FUNCTIONS
+3000 calls to allocation functions with 3.02M peak consumption from
+add_session
+  at /work/leak.c:11
+  in /work/leak
+3000 calls with 3.02M peak consumption from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+3000 calls to allocation functions with 1.54M peak consumption from
+drop_ptr
+  at /work/leak.c:16
+  in /work/leak
+3000 calls with 1.54M peak consumption from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+1000 calls to allocation functions with 0B peak consumption from
+main
+  at /work/leak.c:26
+  in /work/leak
+1000 calls with 0B peak consumption from:
+
+1 calls to allocation functions with 73.73K peak consumption from
+0x7fc4a90b738e
+  in /lib/x86_64-linux-gnu/libstdc++.so.6
+1 calls with 73.73K peak consumption from:
+    call_init
+      at ./elf/dl-init.c:74
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init::call_init
+      at ./elf/dl-init.c:120
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init
+      at ./elf/./elf/dl-init.c:121
+    _dl_start_user
+      in /lib64/ld-linux-x86-64.so.2
+
+
+PEAK MEMORY CONSUMERS
+3.02M peak memory consumed over 3000 calls from
+add_session
+  at /work/leak.c:11
+  in /work/leak
+3.02M consumed over 3000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+1.54M peak memory consumed over 3000 calls from
+drop_ptr
+  at /work/leak.c:16
+  in /work/leak
+1.54M consumed over 3000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+73.73K peak memory consumed over 1 calls from
+0x7fc4a90b738e
+  in /lib/x86_64-linux-gnu/libstdc++.so.6
+73.73K consumed over 1 calls from:
+    call_init
+      at ./elf/dl-init.c:74
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init::call_init
+      at ./elf/dl-init.c:120
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init
+      at ./elf/./elf/dl-init.c:121
+    _dl_start_user
+      in /lib64/ld-linux-x86-64.so.2
+
+
+MEMORY LEAKS
+3.02M leaked over 3000 calls from
+add_session
+  at /work/leak.c:11
+  in /work/leak
+3.02M leaked over 3000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+1.54M leaked over 3000 calls from
+drop_ptr
+  at /work/leak.c:16
+  in /work/leak
+1.54M leaked over 3000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+
+MOST TEMPORARY ALLOCATIONS
+1000 temporary allocations of 1000 allocations in total (100.00%) from
+main
+  at /work/leak.c:26
+  in /work/leak
+1000 temporary allocations of 1000 allocations in total (100.00%) from:
+
+
+total runtime: 0.11s.
+calls to allocation functions: 7001 (64229/s)
+temporary memory allocations: 1000 (9174/s)
+peak heap memory consumption: 4.63M
+peak RSS (including heaptrack overhead): 40.68M
+total memory leaked: 4.56M

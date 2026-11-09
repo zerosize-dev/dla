@@ -12,10 +12,13 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use dla_core::{RunState, error::codes as core_codes};
+use dla_core::{
+    CoverageManifest, RunState, coverage::BackendCoverage, error::codes as core_codes,
+    toolctx::ToolCtx,
+};
 use dla_sample::attach::{
-    self, Backend, Cleanup, DiskFigures, MemoryAvailable, Request, free_disk, inspect_target,
-    preflight, read_memory_available, resolve, tier_for,
+    self, AttachError, Backend, Cleanup, DiskFigures, ErrorKind, MemoryAvailable, Request,
+    free_disk, inspect_target, preflight, read_memory_available, resolve, tier_for,
 };
 use serde_json::{Value, json};
 
@@ -58,6 +61,37 @@ fn env_bytes(name: &str) -> Option<u64> {
 /// The command text stored in the registry: unique per attach, no raw command line.
 fn record_command(id: &str, backend: Backend, op: attach::Op) -> String {
     format!("attach {id}: {} {}", backend.name(), op.name())
+}
+
+/// The coverage worker key (the runtime) of an attach backend.
+fn coverage_worker(b: Backend) -> &'static str {
+    match b {
+        Backend::Jcmd => "jvm",
+        Backend::NodeInspector => "node",
+        Backend::Memray => "python",
+        Backend::Heaptrack => "rust",
+        Backend::Goref => "go",
+    }
+}
+
+/// Writes the backend's coverage row: `ran`, `missing` (with the fix as the install
+/// hint) or `blocked`. A failure to write it never hides the attach result.
+fn note_coverage(tc: &ToolCtx, backend: Backend, cov: BackendCoverage) {
+    let worker = coverage_worker(backend);
+    let r = CoverageManifest::update(&tc.run_dir, |m| {
+        m.note_backend(worker, backend.name(), cov);
+    });
+    if let Err(e) = r {
+        eprintln!("dla attach: coverage.json not updated: {e}");
+    }
+}
+
+/// The coverage row for an attach error.
+fn error_coverage(e: &AttachError) -> BackendCoverage {
+    match e.kind {
+        ErrorKind::ToolMissing => BackendCoverage::missing(e.message.clone(), e.fix.clone()),
+        ErrorKind::NotReady | ErrorKind::Failed => BackendCoverage::blocked(e.message.clone()),
+    }
 }
 
 /// Runs `dla attach`.
@@ -124,7 +158,13 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AttachArgs) -> 
         dump_root: dump_root.clone(),
         tool_dirs: tc.tools_dir().into_iter().collect(),
     };
-    let plan = attach::plan(&req).map_err(parts::refusal)?;
+    let plan = match attach::plan(&req) {
+        Ok(p) => p,
+        Err(e) => {
+            note_coverage(&tc, backend, error_coverage(&e));
+            return Err(parts::refusal(e));
+        }
+    };
 
     // Preflight and its gate.
     let disk = DiskFigures {
@@ -202,6 +242,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AttachArgs) -> 
     let done = match &fin.result {
         Ok(d) => d,
         Err(e) => {
+            note_coverage(&tc, backend, error_coverage(e));
             let mut f = parts::refusal(e.clone());
             let pending: Vec<String> = fin
                 .cleanup_left
@@ -238,6 +279,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AttachArgs) -> 
         left: &left,
     };
     let evidence = parts::evidence::add(&tc, &pre.tool, &ev_parts, &target, &pre_rel)?;
+    note_coverage(
+        &tc,
+        backend,
+        BackendCoverage::ran(None, u64::try_from(files.len()).unwrap_or(u64::MAX)),
+    );
 
     let mut out = json!({
         "ok": true,

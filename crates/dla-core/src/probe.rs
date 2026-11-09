@@ -118,6 +118,48 @@ pub struct LibraryProbe {
     pub harness_flags: Vec<String>,
 }
 
+/// A JNI function exported by native code and the managed method it implements.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct BoundaryMethod {
+    /// The exported symbol (`Java_shop_codec_Native_open`).
+    pub export: String,
+    /// The managed method it implements (`shop.codec.Native.open`), from the JNI name.
+    pub managed: String,
+    /// Where the Java `native` or Kotlin `external` declaration is (`kotlin/shop/Native.kt:7`),
+    /// when one was found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_at: Option<String>,
+    /// Where the export is defined in the native sources (`native/src/lib.rs:38`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defined_at: Option<String>,
+}
+
+/// A foreign-function boundary between two runtimes found in the sources.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct FfiBoundary {
+    /// Kind of boundary: `jni`.
+    pub kind: String,
+    /// Runtime on the managed side.
+    pub managed: Runtime,
+    /// Runtime on the native side.
+    pub native: Runtime,
+    /// Library name from `System.loadLibrary("codec")`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    /// Project-relative files that load the library.
+    #[serde(default)]
+    pub loaded_by: Vec<String>,
+    /// Project-relative directory of the native crate or the C sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_dir: Option<String>,
+    /// True when the native side is a Rust crate with `crate-type = ["cdylib"]`.
+    #[serde(default)]
+    pub cdylib: bool,
+    /// Exported JNI functions and the managed methods they implement.
+    #[serde(default)]
+    pub methods: Vec<BoundaryMethod>,
+}
+
 /// One build attempt (`dla probe --build`).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct BuildProbe {
@@ -163,4 +205,7 @@ pub struct ProbeReport {
     /// Build attempts (empty without `--build`).
     #[serde(default)]
     pub builds: Vec<BuildProbe>,
+    /// Foreign-function boundaries between runtimes (JNI).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundaries: Vec<FfiBoundary>,
 }

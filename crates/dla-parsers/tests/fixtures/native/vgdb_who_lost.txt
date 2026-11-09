@@ -1,0 +1,2 @@
+sending command who_points_at 0x4A7B3B0 to pid 18835
+==18835== Searching for pointers to 0x4a7b3b0

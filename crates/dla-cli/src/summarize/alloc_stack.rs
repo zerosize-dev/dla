@@ -1,0 +1,677 @@
+//! `alloc-stack-diff`: allocation stacks across one or more captures.
+//!
+//! An adapter turns its inputs into [`ProfileCapture`]s (`dla_parsers::model::AllocProfile`);
+//! [`run_diff`] groups the stacks by their frames, diffs the first capture against the
+//! last, writes the `alloc-stack` evidence and, when the profiles carry live bytes and
+//! there are three or more of them, a series and a `growth-series` evidence.
+//!
+//! Allocation churn is not retention: a profile that only counts bytes allocated gives
+//! the evidence (`live: false`) and never a passing growth column. A stack's live bytes
+//! growing at every step is a column, tied to the finding that lists the stack's project
+//! frame among its writers or sites, or whose owner is the stack's root path.
+
+use std::collections::BTreeMap;
+
+use dla_core::{
+    FindingId, NewFinding, Origin,
+    attribution::normalize,
+    error::codes as core_codes,
+    evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal},
+    finding::{Holder, Region},
+    record::FindingAnnotation,
+    runtime::Runtime,
+    series::{SeriesRegion, SeriesSourceKind, Unit},
+    toolctx::EvidenceSpec,
+};
+use dla_parsers::model::{AllocProfile, Frame};
+use serde_json::{Map, Value, json};
+
+use super::{
+    AdapterOut, CandidateRow, Ctx, Opts, Recorded, emit, growth,
+    rule::{self, Observed},
+    tie,
+};
+use crate::fail::{Failure, Res};
+
+/// Frames that make a stack's key.
+const KEY_FRAMES: usize = 8;
+/// Stacks followed in the series.
+const TRACKED: usize = 32;
+/// Stacks kept in the raw file.
+const RAW_GROUPS: usize = 200;
+/// Longest function name shown.
+const NAME_CLIP: usize = 72;
+
+/// One profile and where it came from.
+#[derive(Debug, Clone)]
+pub struct ProfileCapture {
+    /// The input file.
+    pub label: String,
+    /// The parsed profile.
+    pub profile: AllocProfile,
+    /// SHA-256 of the input file.
+    pub sha256: String,
+}
+
+/// What made the profiles.
+pub struct ProfileOrigin {
+    /// Tool name for the evidence and the signal.
+    pub tool: &'static str,
+    /// Tool class for the signal.
+    pub class: &'static str,
+    /// Authority of a file from a live process or a test run; artifact runs override it.
+    pub authority: Authority,
+    /// Runtime of the measured process.
+    pub runtime: Option<Runtime>,
+    /// Region the stacks' memory is in.
+    pub region: SeriesRegion,
+    /// Order captures by their own timestamps when all have one.
+    pub order_by_time: bool,
+    /// Extra limitation lines.
+    pub limitations: Vec<String>,
+}
+
+struct Stack {
+    key: String,
+    frames: Vec<Frame>,
+    root_path: Vec<String>,
+    kind: Option<String>,
+    live_bytes: Vec<Option<u64>>,
+    live_blocks: Vec<Option<u64>>,
+    total_bytes: Vec<Option<u64>>,
+    /// `file:line` of the first frame in the project.
+    site: Option<String>,
+    /// `Class.method` of the first frame in the project, else of the first frame.
+    label: String,
+}
+
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n).collect();
+        t.push_str("...");
+        t
+    }
+}
+
+fn frame_key(f: &Frame) -> String {
+    match (&f.file, f.line) {
+        (Some(file), Some(l)) => format!("{}@{file}:{l}", f.function),
+        _ => f.function.clone(),
+    }
+}
+
+/// The owner a root path names: the last entry that reads as `static <Class>.<field>` or
+/// `<Class>.<field>`.
+fn root_owner(path: &[String]) -> Option<String> {
+    path.iter().rev().find_map(|e| {
+        let e = e.trim();
+        let e = e.strip_prefix("static ").unwrap_or(e);
+        let e = e.strip_prefix("static:").unwrap_or(e);
+        normalize(&format!("static:{e}"))
+    })
+}
+
+fn not_enough() -> Failure {
+    Failure::refuse(
+        "not-enough-captures",
+        "no allocation profile in the input".to_owned(),
+        "1 or more allocation profiles (2 or more for a diff)",
+        "dla summarize alloc-stack-diff <profile> [<later profile> ...]",
+    )
+}
+
+/// Runs the diff (or, for one profile, the leak-at-exit view).
+pub fn run_diff(
+    ctx: &Ctx<'_>,
+    opts: &Opts,
+    mut captures: Vec<ProfileCapture>,
+    origin: &ProfileOrigin,
+) -> Res<AdapterOut> {
+    let tc = ctx.tc;
+    let n = captures.len();
+    if n == 0 {
+        return Err(not_enough());
+    }
+    let timed = captures.iter().all(|c| c.profile.timestamp_ms.is_some());
+    let ordered_by = if n == 1 {
+        "single"
+    } else if origin.order_by_time && timed {
+        captures.sort_by_key(|c| c.profile.timestamp_ms);
+        "timestamp"
+    } else {
+        "argument"
+    };
+    let sampled = captures.iter().any(|c| c.profile.sampled);
+    let has_live = captures
+        .iter()
+        .any(|c| c.profile.groups.iter().any(|g| g.live_bytes > 0));
+
+    // ---- group by stack
+    let red = &ctx.redactor;
+    let mut stacks: BTreeMap<String, Stack> = BTreeMap::new();
+    for (ci, c) in captures.iter().enumerate() {
+        for g in &c.profile.groups {
+            let key = g
+                .frames
+                .iter()
+                .take(KEY_FRAMES)
+                .map(frame_key)
+                .collect::<Vec<_>>()
+                .join(" < ");
+            let s = stacks.entry(key.clone()).or_insert_with(|| {
+                let project_frame = if ctx.artifact_run {
+                    None
+                } else {
+                    g.frames.iter().find_map(|f| {
+                        ctx.resolver()
+                            .frame_site(&f.function, f.file.as_deref(), f.line)
+                            .map(|site| (f, site))
+                    })
+                };
+                let label_frame = project_frame.as_ref().map(|(f, _)| *f).or(g.frames.first());
+                Stack {
+                    key,
+                    frames: g.frames.iter().take(KEY_FRAMES).cloned().collect(),
+                    root_path: g.root_path.clone(),
+                    kind: g.kind.clone(),
+                    live_bytes: vec![None; n],
+                    live_blocks: vec![None; n],
+                    total_bytes: vec![None; n],
+                    site: project_frame.map(|(_, s)| s),
+                    label: label_frame.map_or_else(
+                        || "(no frames)".to_owned(),
+                        |f| clip(&red.name(&f.function), NAME_CLIP),
+                    ),
+                }
+            });
+            let add = |slot: &mut Option<u64>, v: u64| *slot = Some(slot.unwrap_or(0) + v);
+            add(&mut s.live_bytes[ci], g.live_bytes);
+            add(&mut s.live_blocks[ci], g.live_blocks);
+            if let Some(t) = g.total_bytes {
+                add(&mut s.total_bytes[ci], t);
+            }
+        }
+    }
+    let delta = |v: &[Option<u64>]| -> i128 {
+        let first = v.first().copied().flatten().unwrap_or(0);
+        let last = v.last().copied().flatten().unwrap_or(0);
+        if n == 1 {
+            i128::from(last)
+        } else {
+            i128::from(last) - i128::from(first)
+        }
+    };
+    let mut ranked: Vec<&Stack> = stacks.values().collect();
+    ranked.sort_by(|a, b| {
+        let by = |s: &Stack| {
+            if has_live {
+                delta(&s.live_bytes)
+            } else {
+                delta(&s.total_bytes)
+            }
+        };
+        by(b).cmp(&by(a)).then_with(|| a.key.cmp(&b.key))
+    });
+
+    // ---- raw file
+    let (aid, arel) = emit::next_alloc(tc)?;
+    let groups_raw: Vec<Value> = {
+        let mut by_peak: Vec<&Stack> = stacks.values().collect();
+        by_peak.sort_by_key(|s| {
+            (
+                std::cmp::Reverse(
+                    s.live_bytes
+                        .iter()
+                        .chain(&s.total_bytes)
+                        .flatten()
+                        .max()
+                        .copied()
+                        .unwrap_or(0),
+                ),
+                s.key.clone(),
+            )
+        });
+        by_peak
+            .into_iter()
+            .take(RAW_GROUPS)
+            .map(|s| {
+                json!({
+                    "label": s.label,
+                    "site": s.site,
+                    "frames": s.frames.iter().map(|f| json!({
+                        "function": red.name(&f.function),
+                        "file": f.file.as_deref().map(|x| red.name(x)),
+                        "line": f.line,
+                    })).collect::<Vec<_>>(),
+                    "root_path": s.root_path.iter().map(|r| red.name(r)).collect::<Vec<_>>(),
+                    "kind": s.kind,
+                    "live_bytes": s.live_bytes,
+                    "live_blocks": s.live_blocks,
+                    "total_bytes": s.total_bytes,
+                })
+            })
+            .collect()
+    };
+    let raw_value = json!({
+        "id": aid,
+        "tool": origin.tool,
+        "mode": if n == 1 { "single" } else { "diff" },
+        "ordered_by": ordered_by,
+        "live": has_live,
+        "sampled": sampled,
+        "captures": captures.iter().map(|c| json!({
+            "label": c.label,
+            "timestamp_ms": c.profile.timestamp_ms,
+            "source": c.profile.source,
+            "groups": c.profile.groups.len(),
+            "sha256": c.sha256,
+        })).collect::<Vec<_>>(),
+        "stacks": groups_raw,
+        "redaction": red.mode(),
+    });
+    let raw = emit::write_raw(tc, &arel, &raw_value)?;
+
+    // ---- the alloc-stack evidence
+    let shas: Vec<&str> = captures.iter().map(|c| c.sha256.as_str()).collect();
+    let signal = Signal::new(origin.tool, origin.class, &emit::combined_sha(&shas));
+    let authority = ctx.authority(origin.authority);
+    let top_row = |s: &Stack, short: bool| -> Value {
+        let mut v = json!({"at": clip(&s.label, if short { 40 } else { NAME_CLIP })});
+        if let Some(site) = &s.site {
+            v["site"] = json!(site);
+        }
+        if has_live {
+            v["d_bytes"] = json!(delta(&s.live_bytes));
+            v["d_blocks"] = json!(delta(&s.live_blocks));
+        } else {
+            v["alloc_bytes"] = json!(delta(&s.total_bytes));
+        }
+        if let Some(r) = s.root_path.first() {
+            v["root"] = json!(clip(&red.name(r), 48));
+        }
+        v
+    };
+    let mut base = Map::new();
+    base.insert("mode".into(), json!(if n == 1 { "single" } else { "diff" }));
+    base.insert("captures".into(), json!(n));
+    base.insert("live".into(), json!(has_live));
+    base.insert("sampled".into(), json!(sampled));
+    base.insert("stacks".into(), json!(stacks.len()));
+    let mut list = emit::Bounded::new(base, "top", emit::RESULT_BUDGET - 120);
+    for s in ranked.iter().take(8) {
+        let d = if has_live {
+            delta(&s.live_bytes)
+        } else {
+            delta(&s.total_bytes)
+        };
+        if d <= 0 {
+            break;
+        }
+        list.push(top_row(s, false));
+    }
+    let mut spec = EvidenceSpec::new(
+        EvidenceKind::AllocStack,
+        origin.tool,
+        env!("CARGO_PKG_VERSION"),
+        list.finish(),
+    );
+    spec.authority = authority;
+    spec.source = Some(tc.artifact_source(&arel)?);
+    spec.coverage = EvidenceCoverage {
+        status: CoverageStatus::Complete,
+        examined: Some(stacks.len() as u64),
+        total: None,
+    };
+    spec.limitations = origin.limitations.clone();
+    if !has_live {
+        spec.limitations.push(
+            "the profile records bytes allocated, not bytes still live: allocation churn is not retention, so it never yields a growth column".into(),
+        );
+    }
+    if sampled {
+        spec.limitations
+            .push("the profile is sampled: counts and bytes are estimates".into());
+    }
+    let mut ledger_ref = ctx.ledger()?;
+    let ledger = &mut *ledger_ref;
+    let stack_ev: Recorded = ctx.record(ledger, spec, &signal, &raw)?;
+
+    let mut out = AdapterOut {
+        raw: Some(raw.clone()),
+        enumerated: stacks.len() as u64,
+        ..AdapterOut::default()
+    };
+    let mut body = Map::new();
+    body.insert("mode".into(), json!(if n == 1 { "single" } else { "diff" }));
+    body.insert("captures".into(), json!(n));
+    body.insert("ordered_by".into(), json!(ordered_by));
+    body.insert("live".into(), json!(has_live));
+    body.insert("sampled".into(), json!(sampled));
+    body.insert(
+        "top".into(),
+        json!(
+            ranked
+                .iter()
+                .take(opts.top.clamp(1, 5))
+                .filter(|s| {
+                    if has_live {
+                        delta(&s.live_bytes) > 0
+                    } else {
+                        delta(&s.total_bytes) > 0
+                    }
+                })
+                .map(|s| top_row(s, true))
+                .collect::<Vec<_>>()
+        ),
+    );
+    body.insert("redaction".into(), json!(red.mode()));
+    let stack_ev_id = stack_ev.id.clone();
+    out.evidence.push(stack_ev);
+
+    if let Some(f) = &opts.finding
+        && ledger.finding(f).is_none()
+    {
+        return Err(Failure::from(dla_core::Refusal::new(
+            core_codes::UNKNOWN_FINDING,
+            format!("no finding {f} in the ledger"),
+            "an existing finding",
+            "dla ledger show",
+        )));
+    }
+
+    if n < rule::MIN_DUMPS || !has_live {
+        body.insert("series".into(), Value::Null);
+        body.insert("gate".into(), json!("fail"));
+        let why = if !has_live {
+            "the profile has no live bytes (allocation only)"
+        } else {
+            "captures < 3"
+        };
+        body.insert("reasons".into(), json!([why]));
+        body.insert(
+            "needed".into(),
+            json!(if has_live {
+                "2 more profiles of the same process after more traffic (3 confirm growth); rerun with all profiles"
+            } else {
+                "a profile of live (still allocated) bytes: JFR OldObjectSample, heaptrack leaked, valgrind still-reachable or dhat end-of-run"
+            }),
+        );
+        // The stacks still name writers: a finding already at a stack's site learns it.
+        learn_writers(ctx, ledger, &ranked, opts.top.max(1))?;
+        out.body = body;
+        return Ok(out);
+    }
+
+    // ---- series and growth
+    let monotone = |s: &Stack| {
+        rule::gate(&Observed {
+            bytes: s.live_bytes.clone(),
+            counts: if s.live_blocks.iter().flatten().any(|b| *b > 0) {
+                s.live_blocks.clone()
+            } else {
+                s.live_bytes.clone()
+            },
+        })
+        .is_ok()
+    };
+    let mut picked: Vec<&Stack> = ranked.iter().copied().filter(|s| monotone(s)).collect();
+    for s in &ranked {
+        if picked.len() >= TRACKED {
+            break;
+        }
+        if !picked.iter().any(|p| std::ptr::eq(*p, *s)) {
+            picked.push(s);
+        }
+    }
+    picked.truncate(TRACKED);
+    let mut tracks: Vec<growth::Track> = Vec::new();
+    let mut new_candidates: Vec<CandidateRow> = Vec::new();
+    for s in &picked {
+        let owner = root_owner(&s.root_path);
+        let mut matches: Vec<FindingId> = Vec::new();
+        if let Some(f) = owner
+            .as_deref()
+            .and_then(|o| tie::finding_by_owner(ledger, o))
+        {
+            matches.push(f);
+        }
+        if let Some(site) = &s.site {
+            for f in tie::findings_at_site(ledger, site) {
+                if !matches.contains(&f) {
+                    matches.push(f);
+                }
+            }
+        }
+        // A passing stack that names an owner no finding has: a candidate, on a run with
+        // source and a declaration the resolver finds.
+        if matches.is_empty()
+            && monotone(s)
+            && let Some(o) = owner.as_deref()
+            && !ctx.artifact_run
+            && let Some(r) = ctx.resolver().resolve(o)
+            && tc.in_scope(r.site.rsplit_once(':').map_or(r.site.as_str(), |(f, _)| f))
+        {
+            let mut nf = NewFinding::new(
+                Origin::parse("growth-series").map_err(dla_core::Refusal::from)?,
+                vec![stack_ev_id.clone()],
+            );
+            nf.holder = Some(r.holder.unwrap_or(Holder::StaticGlobal));
+            nf.owner = Some(o.to_owned());
+            nf.region = Some(r.region.unwrap_or(match origin.region {
+                SeriesRegion::Heap => Region::Heap,
+                _ => Region::OffHeap,
+            }));
+            nf.site = Some(r.site.clone());
+            let line = ledger.add_finding(nf).map_err(|e| e.to_refusal())?;
+            if let dla_core::Record::FindingAdded { finding } = line.record {
+                new_candidates.push(CandidateRow {
+                    finding: finding.id.clone(),
+                    owner: Some(o.to_owned()),
+                    holder: finding.holder,
+                    site: Some(r.site.clone()),
+                    region: finding.region,
+                    origin: "growth-series".into(),
+                    added: true,
+                    via: Some(r.via.as_str()),
+                });
+                matches.push(finding.id);
+            }
+        }
+        let (finding, candidates) = match matches.as_slice() {
+            [one] => (Some(one.clone()), vec![one.clone()]),
+            _ => (None, matches),
+        };
+        tracks.push(growth::Track {
+            name: format!("stack:{}", s.label),
+            unit: Unit::Bytes,
+            values: s.live_bytes.clone(),
+            counts: s
+                .live_blocks
+                .iter()
+                .any(|b| b.is_some_and(|b| b > 0))
+                .then(|| s.live_blocks.clone()),
+            site: s.site.clone().filter(|_| finding.is_some()),
+            finding,
+            candidates,
+            region: origin.region,
+        });
+    }
+    // Two stacks can share a label: make the column names unique.
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for t in &mut tracks {
+        let k = seen.entry(t.name.clone()).or_insert(0);
+        *k += 1;
+        if *k > 1 {
+            t.name = format!("{}#{k}", t.name);
+        }
+    }
+    let mut tie_note: Option<&str> = None;
+    if let Some(f) = &opts.finding {
+        let passing: Vec<usize> = picked
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| monotone(s))
+            .map(|(i, _)| i)
+            .collect();
+        let matched: Vec<usize> = passing
+            .iter()
+            .copied()
+            .filter(|&i| tracks[i].candidates.contains(f))
+            .collect();
+        let to_tie: Vec<usize> = if matched.is_empty() {
+            passing.iter().copied().take(1).collect()
+        } else {
+            matched
+        };
+        if let Some(&first) = to_tie.first() {
+            if !tracks[first].candidates.contains(f) {
+                tie_note = Some("tied by --finding");
+            }
+            for i in to_tie {
+                tracks[i].finding = Some(f.clone());
+                if !tracks[i].candidates.contains(f) {
+                    tracks[i].candidates.push(f.clone());
+                }
+            }
+        }
+    }
+    let t0 = captures[0].profile.timestamp_ms.unwrap_or(0);
+    let t_ms: Vec<u64> = captures
+        .iter()
+        .map(|c| c.profile.timestamp_ms.unwrap_or(t0).saturating_sub(t0))
+        .collect();
+    let sites: Vec<(String, Option<String>, Vec<FindingId>)> = tracks
+        .iter()
+        .zip(&picked)
+        .map(|(t, s)| (t.name.clone(), s.site.clone(), t.candidates.clone()))
+        .collect();
+    let g = growth::write(
+        ctx,
+        ledger,
+        growth::Plan {
+            t_ms,
+            tracks,
+            signal,
+            tool: origin.tool,
+            authority,
+            command: "dla summarize alloc-stack-diff".into(),
+            source_kind: SeriesSourceKind::Dump,
+            runtime: origin.runtime,
+            limitations: origin.limitations.clone(),
+            what: "capture",
+        },
+    )?;
+    // The allocation site of a tied, passing stack is a writer of the finding, and its
+    // site when the census had none.
+    let mut tied_ids: Vec<FindingId> = Vec::new();
+    for (name, site, cands) in &sites {
+        if !g.passed.contains(name) {
+            continue;
+        }
+        for f in cands {
+            if !tied_ids.contains(f) {
+                tied_ids.push(f.clone());
+            }
+            if let Some(site) = site {
+                add_writer(ctx, ledger, f, site)?;
+            }
+        }
+    }
+    for f in &tied_ids {
+        if new_candidates.iter().any(|c| &c.finding == f) {
+            continue;
+        }
+        let fnd = ledger.finding(f);
+        out.candidates.push(CandidateRow {
+            finding: f.clone(),
+            owner: fnd.and_then(|x| x.owner.clone()),
+            holder: fnd.and_then(|x| x.holder),
+            site: fnd.and_then(|x| x.site.clone()),
+            region: fnd.and_then(|x| x.region),
+            origin: "growth-series".into(),
+            added: false,
+            via: None,
+        });
+    }
+    out.candidates.extend(new_candidates);
+    if let Value::Object(m) = g.json.clone() {
+        body.extend(m);
+    }
+    body.insert("tied".into(), json!(tied_ids));
+    body.insert(
+        "candidates".into(),
+        json!(
+            out.candidates
+                .iter()
+                .filter(|c| c.added)
+                .map(CandidateRow::to_json)
+                .collect::<Vec<_>>()
+        ),
+    );
+    if let Some(note) = tie_note {
+        body.insert("tie".into(), json!(note));
+    }
+    let needed = if !g.pass {
+        "no stack's live bytes grow at every step: take another profile after more traffic and rerun with all profiles".to_owned()
+    } else if tied_ids.is_empty() {
+        "the growing stacks name no finding: give --finding <F>, or run dla census so a holder at the stack's site exists".to_owned()
+    } else {
+        format!(
+            "a refuted non-leak sibling and a holder, then dla ledger confirm {} --evidence {}",
+            tied_ids[0], g.evidence.id
+        )
+    };
+    body.insert("needed".into(), json!(needed));
+    out.evidence.push(g.evidence);
+    out.body = body;
+    Ok(out)
+}
+
+/// A finding already at the stack's site learns the site as a writer when the stack is
+/// among the top ones; nothing is added to the ledger otherwise.
+fn learn_writers(
+    ctx: &Ctx<'_>,
+    ledger: &mut dla_core::Ledger,
+    ranked: &[&Stack],
+    top: usize,
+) -> Res<()> {
+    for s in ranked.iter().take(top) {
+        let Some(site) = &s.site else { continue };
+        let at = tie::findings_at_site(ledger, site);
+        if let [f] = at.as_slice() {
+            add_writer(ctx, ledger, f, site)?;
+        }
+    }
+    Ok(())
+}
+
+/// Records `site` as a writer of `f` (once), and as the finding's site when it has none
+/// and the run has source.
+fn add_writer(ctx: &Ctx<'_>, ledger: &mut dla_core::Ledger, f: &FindingId, site: &str) -> Res<()> {
+    let has_site = ledger.finding(f).is_some_and(|x| x.site.is_some());
+    let known = ledger
+        .annotation(f)
+        .is_some_and(|a| a.writers.iter().any(|w| w == site))
+        || ledger
+            .finding(f)
+            .is_some_and(|x| x.site.as_deref() == Some(site));
+    if known && has_site {
+        return Ok(());
+    }
+    let mut a = FindingAnnotation::new(f.clone());
+    if !known {
+        a.writers.push(site.to_owned());
+    }
+    if !has_site && !ctx.artifact_run {
+        a.site = Some(site.to_owned());
+    }
+    if a.writers.is_empty() && a.site.is_none() {
+        return Ok(());
+    }
+    ledger
+        .annotate_record(a)
+        .map_err(|e| Failure::from(e.to_refusal()))?;
+    Ok(())
+}

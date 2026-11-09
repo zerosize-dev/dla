@@ -501,6 +501,16 @@ class RecallMetricsTest(EnvCase):
         self.assertEqual((m["leak_recall"]["num"], m["leak_recall"]["den"]), (1, 1))
         self.assertEqual((m["flagged_recall"]["num"], m["flagged_recall"]["den"]), (1, 1))
 
+    def test_dump_backed_is_accepted_and_ignored(self):
+        plain = leak_toml("L1", "a.py:1")
+        self.env.fixture("t", "archetype-leak", plain)
+        self.env.fixture("u", "archetype-leak", plain + "dump_backed = true\n")
+        self.env.run("t", findings=[jf("a.py:1", "static/global")])
+        self.env.run("u", findings=[jf("a.py:1", "static/global")])
+        m = self.env.group()["metrics"]
+        self.assertEqual((m["leak_recall"]["num"], m["leak_recall"]["den"]), (2, 2))
+        self.assertEqual((m["grounded_attribution"]["num"], m["grounded_attribution"]["den"]), (2, 2))
+
     def test_archetype_free_recall(self):
         body = (leak_toml("L1", "a.py:1", cause="UNCLASSIFIED")
                 + leak_toml("L2", "a.py:2", cause="L-COLLECT"))

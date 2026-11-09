@@ -31,8 +31,20 @@ fn owner_of(key: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-/// Adds a leak-side finding for an owner with the given evidence; returns its id.
-fn add_owner_finding(fx: &mut Fx, owner: &str, evidence: &str) -> Option<String> {
+/// The finding holder a holder key stands for, by the root kind in front of the colon (the
+/// same classification `dla summarize heap-graph` makes for its candidates).
+fn holder_of(key: &str) -> &'static str {
+    match key.split_once(':').map(|(kind, _)| kind) {
+        Some("static") => "static/global",
+        Some("jni-global") => "native-handle/global-ref",
+        Some("thread") => "blocked-stack",
+        _ => "container-field",
+    }
+}
+
+/// Adds a leak-side finding for the holder `key` (owner from the key) with the given
+/// evidence; returns its id.
+fn add_owner_finding(fx: &mut Fx, key: &str, owner: &str, evidence: &str) -> Option<String> {
     let out = fx.call(&[
         "ledger",
         "add",
@@ -41,7 +53,7 @@ fn add_owner_finding(fx: &mut Fx, owner: &str, evidence: &str) -> Option<String>
         "--owner",
         owner,
         "--holder",
-        "static/global",
+        holder_of(key),
         "--region",
         "heap",
         "--evidence",
@@ -197,7 +209,7 @@ pub(super) fn drive(fx: &mut Fx) {
         });
         if let Some((key, ev)) = top
             && let Some(owner) = owner_of(&key)
-            && let Some(f) = add_owner_finding(fx, &owner, &ev)
+            && let Some(f) = add_owner_finding(fx, &key, &owner, &ev)
         {
             let ok = fx
                 .call(&[
@@ -237,7 +249,7 @@ pub(super) fn drive(fx: &mut Fx) {
         };
         let Some(owner) = owner_of(key) else { continue };
         let ev = growth.clone().unwrap_or_else(|| dev.to_owned());
-        let Some(f) = add_owner_finding(fx, &owner, &ev) else {
+        let Some(f) = add_owner_finding(fx, key, &owner, &ev) else {
             continue;
         };
         let r = fx.call(&["ledger", "refute", &f, "--evidence", dev]);
@@ -289,4 +301,18 @@ pub(super) fn drive_symptom(fx: &mut Fx) {
         }
     ));
     finish(fx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_holder_follows_the_root_kind_of_the_key() {
+        assert_eq!(holder_of("static:a.B.c"), "static/global");
+        assert_eq!(holder_of("jni-global:a.B"), "native-handle/global-ref");
+        assert_eq!(holder_of("thread:main"), "blocked-stack");
+        assert_eq!(holder_of("instance:a.B.c"), "container-field");
+        assert_eq!(holder_of("nokind"), "container-field");
+    }
 }

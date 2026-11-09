@@ -26,6 +26,7 @@ mod run;
 mod sample_cmd;
 mod schema_cmd;
 mod stage;
+mod summarize;
 mod summarize_cmd;
 mod sweep_cmd;
 mod trend_cmd;
@@ -111,9 +112,8 @@ enum Command {
     Bundle(bundle_cmd::BundleArgs),
     /// Attach a tool to a process DLA did not start (histogram, heap dump, profile).
     Attach(attach_cmd::AttachArgs),
-    /// Summarize captured artifacts (heap dumps) into evidence.
-    #[command(subcommand)]
-    Summarize(summarize_cmd::SummarizeCmd),
+    /// Summarize captured files (heap dumps, histograms, allocation profiles, non-heap snapshots) into bounded evidence.
+    Summarize(summarize_cmd::SummarizeArgs),
 }
 
 /// What a command prints on success.
@@ -178,7 +178,7 @@ fn dispatch(cli: Cli) -> Res<Output> {
             attach_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
         }
         Command::Summarize(c) => {
-            summarize_cmd::run(&ctx()?, &project_root(project)?, data, c).map(Output::Json)
+            summarize_cmd::run(ctx, &project_root(project)?, data, c).map(Output::Json)
         }
     }
 }

@@ -10,15 +10,18 @@
 //! | `work/` | gen | the scratch copy of the project; build outputs land here |
 //! | `agent/` | gen | per-runtime agent files: `dla-agent.jar`, `sitecustomize.py`, `dla-preload.js`, `libdlashim.so`, Go test files to drop into `work/` |
 //! | `driver/` | gen | driver-mode template instance the model edits |
-//! | `out/<label>/` | run | dump records (`<pid>.jsonl`) of one measured process, label `p<k>-<mode>` |
+//! | `out/<label>/` | run | dump records (`dump.jsonl`) of one measured process, label `p<k>-<mode>` |
+//! | `out/<label>/capture/<pid>/` | run | `--capture` files of the JVM agent: heap dumps, class histograms, flight recording, non-heap reports |
+//! | `out/<label>/<tool>/` | run | `--tool` files: `valgrind.xml`, `heaptrack.txt`, `heaptrack-diff.txt` |
 //! | `logs/` | run | build and run stdout/stderr |
 //! | `cov/` | run | coverage data |
 //!
 //! Generation lives in [`gen`] (with [`probes`], [`commands`], [`templates`] and
-//! [`scratch`]); execution in [`run`] (with [`dumps`], [`build`], [`symbolize`] and
-//! [`cover`]).
+//! [`scratch`]); execution in [`run`] (with [`dumps`], [`build`], [`symbolize`],
+//! [`capture`] and [`cover`]).
 
 pub mod build;
+pub mod capture;
 pub mod commands;
 pub mod cover;
 pub mod dumps;

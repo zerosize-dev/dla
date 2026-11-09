@@ -1,0 +1,5 @@
+sending command who_points_at 0x4A7B040 to pid 18835
+==18835== Searching for pointers to 0x4a7b040
+==18835== *0x1ffeffe310 points at 0x4a7b040
+ Address 0x1ffeffe310 is on thread 1's stack
+ in frame #3, created by main (hold.c:10)

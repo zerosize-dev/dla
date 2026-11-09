@@ -67,6 +67,13 @@ public final class DlaDump {
         }
     }
 
+    private static final List<String> EARLY = new ArrayList<>();
+
+    /** Notes made before the first record (premain); they join the first record's limitations. */
+    public static synchronized void addLimitations(List<String> notes) {
+        EARLY.addAll(notes);
+    }
+
     /** Remembers the instrumentation handle (used for loaded-class coverage and class lookup). */
     public static void setInstrumentation(Instrumentation i) {
         inst = i;
@@ -117,7 +124,8 @@ public final class DlaDump {
         if (out == null) {
             return;
         }
-        List<String> limitations = new ArrayList<>();
+        List<String> limitations = new ArrayList<>(EARLY);
+        EARLY.clear();
         Map<String, Object> rec = new LinkedHashMap<>();
         try {
             build(rec, limitations, phase, x, last);
@@ -189,6 +197,12 @@ public final class DlaDump {
             }
         }
         lim.add("jvm probe bytes are a shallow estimate assuming compressed oops");
+        if (DlaCapture.enabled()) {
+            List<Object> caps = DlaCapture.capture(phase, last, lim);
+            if (!caps.isEmpty()) {
+                rec.put("captures", caps);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ values

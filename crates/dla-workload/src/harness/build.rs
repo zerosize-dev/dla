@@ -224,7 +224,17 @@ pub fn build_series(
             let d = &rec.dump;
             for (name, v) in d.values.iter().flatten() {
                 if let Some(v) = v {
-                    t.set(name, i, *v, src);
+                    // A shim preloaded into a managed runtime (a JVM calling a native
+                    // library) supplies the native.* and fd.* figures of the record.
+                    let from = if runtime != Runtime::Rust
+                        && runtime != Runtime::Native
+                        && (name.starts_with("native.") || name.starts_with("fd."))
+                    {
+                        "shim"
+                    } else {
+                        src
+                    };
+                    t.set(name, i, *v, from);
                 }
             }
             for (name, v) in d.values_pre_gc.iter().flatten() {
@@ -328,7 +338,8 @@ pub fn build_series(
             );
         }
         for (name, v) in &p.os_last {
-            let wanted = name.starts_with("cgroup.") || (name.starts_with("os.") && sampler_os);
+            let wanted = name.starts_with("cgroup.")
+                || ((name.starts_with("os.") || name.starts_with("fd.")) && sampler_os);
             if wanted && t.cols.get(name).is_none_or(|a| a.vals[i].is_none()) {
                 t.set(name, i, *v, "os-sampler");
             }
@@ -534,6 +545,8 @@ mod tests {
             tools: vec![],
             gaps: vec![],
             timeout_secs: 60,
+            ffi: None,
+            captures: vec![],
         }
     }
 

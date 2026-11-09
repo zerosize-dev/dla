@@ -297,3 +297,130 @@ impl EvidenceRecord {
         ))
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// Two signals
+// ---------------------------------------------------------------------------------------
+
+/// Tool classes of a [`Signal`]: what kind of observation a tool makes. Two tools of one
+/// class (a second parser reading the same dump) make one signal, not two.
+pub mod tool_class {
+    /// A reader of a heap dump file.
+    pub const DUMP_PARSER: &str = "dump-parser";
+    /// A class or type histogram text or JSON from a live process or a harness.
+    pub const HISTOGRAM: &str = "histogram";
+    /// A sampling or tracing allocation profiler.
+    pub const ALLOC_PROFILER: &str = "alloc-profiler";
+    /// A leak checker that scans memory at exit (valgrind, LSan).
+    pub const LEAK_CHECKER: &str = "leak-checker";
+    /// Counters read from the runtime or the OS (threads, fds, native memory).
+    pub const RUNTIME_COUNTER: &str = "runtime-counter";
+    /// Stack groups from the allocator shim.
+    pub const ALLOC_SHIM: &str = "alloc-shim";
+}
+
+/// Which observation a piece of evidence rests on: the tool, its class and the source
+/// file(s). Carried in the evidence `result` as `signal`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct Signal {
+    /// Tool name, e.g. `dla-hprof`.
+    pub tool: String,
+    /// Tool class, see [`tool_class`].
+    pub class: String,
+    /// SHA-256 of the source: the input file, or for several inputs the hash of their
+    /// sorted hashes.
+    pub source_sha256: String,
+}
+
+impl Signal {
+    /// A signal from its parts.
+    pub fn new(tool: &str, class: &str, source_sha256: &str) -> Self {
+        Self {
+            tool: tool.to_owned(),
+            class: class.to_owned(),
+            source_sha256: source_sha256.to_owned(),
+        }
+    }
+
+    /// The signal in a bounded `result`'s `signal` key, if it has a valid one.
+    pub fn of_result(result: &Value) -> Option<Self> {
+        serde_json::from_value(result.get("signal")?.clone()).ok()
+    }
+
+    /// The signal of a record.
+    pub fn of(record: &EvidenceRecord) -> Option<Self> {
+        Self::of_result(&record.result)
+    }
+
+    /// The JSON form stored under `signal`.
+    pub fn to_value(&self) -> Value {
+        serde_json::json!({
+            "tool": self.tool,
+            "class": self.class,
+            "source_sha256": self.source_sha256,
+        })
+    }
+}
+
+/// True when `a` and `b` are two independent signals: the tool, the tool class and the
+/// source all differ. The DLA HPROF reader and another dump parser on one dump are one
+/// signal (same class, same source). Recorded only: what counts as `strong` is decided
+/// elsewhere.
+pub fn independent(a: &Signal, b: &Signal) -> bool {
+    a.tool != b.tool && a.class != b.class && a.source_sha256 != b.source_sha256
+}
+
+/// [`independent`] over two records; false when either carries no signal.
+pub fn records_independent(a: &EvidenceRecord, b: &EvidenceRecord) -> bool {
+    match (Signal::of(a), Signal::of(b)) {
+        (Some(x), Some(y)) => independent(&x, &y),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    fn s(tool: &str, class: &str, src: &str) -> Signal {
+        Signal::new(tool, class, src)
+    }
+
+    #[test]
+    fn two_parsers_on_one_dump_are_one_signal() {
+        let a = s("dla-hprof", tool_class::DUMP_PARSER, "aa");
+        let b = s("mat", tool_class::DUMP_PARSER, "aa");
+        assert!(!independent(&a, &b));
+    }
+
+    #[test]
+    fn same_tool_class_on_other_sources_is_one_signal() {
+        let a = s("dla-hprof", tool_class::DUMP_PARSER, "aa");
+        let b = s("mat", tool_class::DUMP_PARSER, "bb");
+        assert!(!independent(&a, &b));
+    }
+
+    #[test]
+    fn a_dump_and_a_histogram_of_other_files_are_independent() {
+        let a = s("dla-hprof", tool_class::DUMP_PARSER, "aa");
+        let b = s("jcmd-class-histogram", tool_class::HISTOGRAM, "bb");
+        assert!(independent(&a, &b));
+        assert!(independent(&b, &a));
+    }
+
+    #[test]
+    fn same_tool_is_never_independent() {
+        let a = s("jfr", tool_class::ALLOC_PROFILER, "aa");
+        let b = s("jfr", tool_class::RUNTIME_COUNTER, "bb");
+        assert!(!independent(&a, &b));
+    }
+
+    #[test]
+    fn signal_round_trips_through_a_result() {
+        let sig = s("dla-hprof", tool_class::DUMP_PARSER, "ab12");
+        let result = serde_json::json!({"x": 1, "signal": sig.to_value()});
+        assert_eq!(Signal::of_result(&result), Some(sig));
+        assert_eq!(Signal::of_result(&serde_json::json!({"signal": 3})), None);
+        assert_eq!(Signal::of_result(&serde_json::json!({})), None);
+    }
+}

@@ -18,6 +18,7 @@
 #[macro_use]
 mod macros;
 
+pub mod attribution;
 pub mod census;
 pub mod checklist;
 pub mod consent;

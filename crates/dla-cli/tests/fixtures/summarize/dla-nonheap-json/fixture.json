@@ -1,0 +1,12 @@
+{
+ "op": "non-heap",
+ "inputs": [
+  "snap1.json",
+  "snap2.json",
+  "snap3.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "three non-heap snapshots in the parsed model format; thread count grows, a group key carries a planted env value"
+}

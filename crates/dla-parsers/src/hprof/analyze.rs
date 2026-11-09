@@ -2,7 +2,7 @@
 //! then edges, dominators, retained sizes and holders.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs::File,
     io::{self, Read, Seek},
     path::Path,
@@ -16,9 +16,10 @@ use super::{
     reader::{ClassDump, RawHeader, Rd, Visitor, read_header, scan, type_size},
     summary::{
         Accumulation, ClassStat, Counts, HeaderInfo, HeapSummary, Holder, HolderKind, SIZE_NOTES,
-        Stats, name_hash,
+        Stats, ViaHolder, name_hash,
     },
 };
+use crate::jvm::deproxy;
 
 /// Limits of one analysis.
 pub(crate) struct Params {
@@ -39,6 +40,14 @@ const DETAILED: usize = 60;
 const MAX_PATH: usize = 12;
 const FAN_OUT: u32 = 16;
 const MAX_INSTANCE_BYTES: u32 = 64 << 20;
+/// Via holders reported at most.
+const MAX_VIA: usize = 5;
+/// Members of a shared set sampled for the path search.
+const VIA_SAMPLES: usize = 4;
+/// A set must retain at least this many bytes (and 1% of the heap) to get a via holder.
+const VIA_MIN_BYTES: u64 = 64 << 10;
+/// Parent marker of a search seed.
+const SEED: u32 = NONE - 1;
 
 const PRIM_NAMES: [&str; 8] = [
     "boolean", "char", "float", "double", "byte", "short", "int", "long",
@@ -899,11 +908,13 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
             gc_roots_by_kind,
             top_classes: Vec::new(),
             holders: Vec::new(),
+            via_holders: Vec::new(),
             notes,
             truncated: true,
             warnings,
             stats,
             tracked: Vec::new(),
+            histogram: Vec::new(),
             class_hashes,
             app_class_hashes,
         });
@@ -1184,6 +1195,9 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
     let mut heavy = vec![NONE; nn];
     let root = an.g.root();
     let mut reachable = 0u64;
+    // Objects whose immediate dominator is the super root (shared by several roots) or a
+    // thread or JNI global, by (dominator, class).
+    let mut shared: HashMap<(u32, u32), SharedGroup> = HashMap::new();
     for &v in &dom.post {
         if (v as usize) < n {
             reachable += 1;
@@ -1194,6 +1208,19 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
         let par = dom.idom[v as usize];
         if par == NONE {
             continue;
+        }
+        if (v as usize) < n
+            && an.kinds[v as usize] != K_CLASS
+            && (par == root || (par as usize) >= n)
+        {
+            let e = shared.entry((par, an.ty[v as usize])).or_default();
+            e.count += 1;
+            e.retained += ret[v as usize];
+            e.objects += u64::from(cnt[v as usize]);
+            if e.n < VIA_SAMPLES {
+                e.samples[e.n] = v;
+                e.n += 1;
+            }
         }
         kidc[par as usize] += 1;
         let h = heavy[par as usize];
@@ -1228,6 +1255,7 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
             .cmp(&a.shallow)
             .then_with(|| a.class.cmp(&b.class))
     });
+    let histogram = top.clone();
     top.truncate(TOP_CLASSES);
 
     // ---- holders
@@ -1288,6 +1316,7 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
     }
     let merged: Vec<Holder> = merged.into_iter().map(|(h, _)| h).collect();
     let holders: Vec<Holder> = merged.iter().take(TOP_HOLDERS).cloned().collect();
+    let via_holders = an.via_holders(shared);
 
     if !truncated {
         notes.push("the dominator iteration converged".into());
@@ -1299,38 +1328,49 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
         gc_roots_by_kind,
         top_classes: top,
         holders,
+        via_holders,
         notes,
         truncated,
         warnings,
         stats,
         tracked: merged,
+        histogram,
         class_hashes,
         app_class_hashes,
     })
 }
 
 impl Analysis<'_> {
+    /// The holder key; class names have proxy and lambda suffixes removed so keys join
+    /// across backends and dumps.
     fn holder_key(&mut self, c: &Cand) -> String {
         match c.src {
             Src::Static { class, name } => {
                 format!(
                     "static:{}.{}",
-                    self.class_names[class as usize],
+                    deproxy::normalize(&self.class_names[class as usize]),
                     self.strs.get(name)
                 )
             }
-            Src::Syn(i) => self.syns[i].key.clone(),
+            Src::Syn(i) => {
+                let s = &self.syns[i];
+                if s.kind == HolderKind::JniGlobal {
+                    format!("jni-global:{}", deproxy::normalize(&s.owner_class))
+                } else {
+                    s.key.clone()
+                }
+            }
             Src::Other(kind) => format!(
                 "instance:{}>{}",
                 root_kind_name(kind),
-                self.ty_name(self.ty[c.node as usize])
+                deproxy::normalize(&self.ty_name(self.ty[c.node as usize]))
             ),
         }
     }
 
     fn make_holder(&mut self, c: &Cand) -> Holder {
         let key = self.holder_key(c);
-        let (kind, owner_class, field, context) = match c.src {
+        let (kind, raw_owner, field, context) = match c.src {
             Src::Static { class, name } => (
                 HolderKind::Static,
                 self.class_names[class as usize].clone(),
@@ -1353,10 +1393,18 @@ impl Analysis<'_> {
                 Vec::new(),
             ),
         };
+        let (owner_class, raw_owner_class) = if kind == HolderKind::Thread {
+            (raw_owner, None)
+        } else {
+            let norm = deproxy::normalize(&raw_owner).into_owned();
+            let raw = (norm != raw_owner).then_some(raw_owner);
+            (norm, raw)
+        };
         Holder {
             key,
             kind,
             owner_class,
+            raw_owner_class,
             field,
             retained: c.retained,
             dominated_count: u64::from(self.cnt[c.node as usize]),
@@ -1407,5 +1455,257 @@ impl Analysis<'_> {
             children: u64::from(self.kidc[cur as usize]),
         });
         (path, acc)
+    }
+}
+
+/// Objects dominated directly by the super root or a thread or JNI global.
+#[derive(Default)]
+struct SharedGroup {
+    count: u64,
+    retained: u64,
+    objects: u64,
+    samples: [u32; VIA_SAMPLES],
+    n: usize,
+}
+
+impl Analysis<'_> {
+    /// The via holders of the largest shared sets (see [`ViaHolder`]).
+    fn via_holders(&mut self, shared: HashMap<(u32, u32), SharedGroup>) -> Vec<ViaHolder> {
+        let total = self.ret[self.g.root() as usize];
+        let min = (total / 100).max(VIA_MIN_BYTES);
+        let mut groups: Vec<((u32, u32), SharedGroup)> = shared
+            .into_iter()
+            .filter(|(_, g)| g.retained >= min)
+            .collect();
+        groups.sort_by(|a, b| b.1.retained.cmp(&a.1.retained).then(a.0.cmp(&b.0)));
+        groups.truncate(MAX_VIA);
+        if groups.is_empty() {
+            return Vec::new();
+        }
+        let parent = self.shortest_paths(&groups);
+        let mut out: Vec<ViaHolder> = Vec::new();
+        for ((par, ty), g) in &groups {
+            // Sample paths vote for a via key; the most common wins, earliest on ties.
+            let mut votes: Vec<(String, usize, ViaFound, Vec<u32>)> = Vec::new();
+            for &t in &g.samples[..g.n] {
+                if parent[t as usize] == NONE {
+                    continue;
+                }
+                let chain = chain_to(&parent, t);
+                let Some(found) = self.via_on(&chain) else {
+                    continue;
+                };
+                match votes.iter_mut().find(|v| v.0 == found.key) {
+                    Some(v) => v.1 += 1,
+                    None => votes.push((found.key.clone(), 1, found, chain)),
+                }
+            }
+            let mut best: Option<usize> = None;
+            for (i, v) in votes.iter().enumerate() {
+                if best.is_none_or(|b| v.1 > votes[b].1) {
+                    best = Some(i);
+                }
+            }
+            let Some(best) = best else { continue };
+            let (key, _, found, chain) = votes.swap_remove(best);
+            if let Some(o) = out.iter_mut().find(|o| o.key == key) {
+                o.retained += g.retained;
+                o.dominated_count += g.objects;
+                continue;
+            }
+            let path = self.render_path(&chain);
+            let dominator = if *par == self.g.root() {
+                "root".to_owned()
+            } else {
+                self.syns[*par as usize - self.g.n].key.clone()
+            };
+            out.push(ViaHolder {
+                key,
+                kind: found.kind,
+                owner_class: found.owner,
+                raw_owner_class: found.raw_owner,
+                field: found.field,
+                dominator,
+                retained: g.retained,
+                dominated_count: g.objects,
+                accumulation: Accumulation {
+                    class: self.ty_name(*ty),
+                    children: g.count,
+                },
+                path,
+            });
+        }
+        out
+    }
+
+    /// Breadth-first parents over the strong graph, seeded in tiers so that the path to a
+    /// member starts at a static field of an application class if there is one, else at a
+    /// static field of any class, else at a thread, JNI or other root. Class objects only
+    /// lead to their static field targets (not to loaders or superclasses). Stops after
+    /// the tier that reaches a sample of every group.
+    fn shortest_paths(&self, groups: &[((u32, u32), SharedGroup)]) -> Vec<u32> {
+        let n = self.g.n;
+        let mut parent = vec![NONE; self.g.nodes()];
+        let mut st: Vec<(u32, u32)> = self.statics_out.iter().map(|&(c, _, t)| (c, t)).collect();
+        st.sort_unstable();
+        let (mut app, mut other_cls, mut tail) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..n as u32 {
+            if self.kinds[i as usize] == K_CLASS {
+                let c = self.ty[i as usize] as usize;
+                if c < self.classes.len() && self.classes[c].loader_id != 0 {
+                    app.push(i);
+                } else {
+                    other_cls.push(i);
+                }
+            }
+        }
+        for &r in &self.g.root_succ {
+            if (r as usize) >= n || self.kinds[r as usize] != K_CLASS {
+                tail.push(r);
+            }
+        }
+        let mut queue: Vec<u32> = Vec::new();
+        let mut head = 0;
+        for seeds in [app, other_cls, tail] {
+            for s in seeds {
+                if parent[s as usize] == NONE {
+                    parent[s as usize] = SEED;
+                    queue.push(s);
+                }
+            }
+            while head < queue.len() {
+                let v = queue[head];
+                head += 1;
+                if (v as usize) < n && self.kinds[v as usize] == K_CLASS {
+                    let c = self.ty[v as usize];
+                    let lo = st.partition_point(|&(a, _)| a < c);
+                    for &(a, w) in &st[lo..] {
+                        if a != c {
+                            break;
+                        }
+                        if parent[w as usize] == NONE {
+                            parent[w as usize] = v;
+                            queue.push(w);
+                        }
+                    }
+                } else {
+                    for &w in self.g.succ(v) {
+                        if parent[w as usize] == NONE {
+                            parent[w as usize] = v;
+                            queue.push(w);
+                        }
+                    }
+                }
+            }
+            let done = groups
+                .iter()
+                .all(|(_, g)| g.samples[..g.n].iter().any(|&t| parent[t as usize] != NONE));
+            if done {
+                break;
+            }
+        }
+        parent
+    }
+
+    /// The first static field edge on the path, or else the first instance field edge.
+    fn via_on(&mut self, chain: &[u32]) -> Option<ViaFound> {
+        for w in chain.windows(2) {
+            let (p, c) = (w[0], w[1]);
+            if (p as usize) >= self.g.n {
+                continue;
+            }
+            match self.kinds[p as usize] {
+                K_CLASS => {
+                    let cidx = self.ty[p as usize];
+                    let name = self
+                        .statics_out
+                        .iter()
+                        .find(|&&(ci, _, t)| ci == cidx && t == c)
+                        .map(|&(_, name, _)| name)?;
+                    let raw = self.ty_name(cidx);
+                    let field = self.strs.get(name);
+                    return Some(ViaFound::new(HolderKind::Static, "static", raw, field));
+                }
+                K_INST => {
+                    let child_id = self.ids[c as usize];
+                    let Some((cidx, data)) = self.read_instance(p) else {
+                        continue;
+                    };
+                    for s in self.shape().slots(cidx) {
+                        if s.ty == 2 && self.id_at(&data, s.off) == child_id {
+                            let raw = self.class_names[s.decl as usize].clone();
+                            let field = self.strs.get(s.name);
+                            return Some(ViaFound::new(HolderKind::Instance, "field", raw, field));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Root, then `label -> class` per edge; the middle is elided past [`MAX_PATH`].
+    fn render_path(&mut self, chain: &[u32]) -> Vec<String> {
+        let Some(&first) = chain.first() else {
+            return Vec::new();
+        };
+        let head = if (first as usize) >= self.g.n {
+            format!("root {}", self.syns[first as usize - self.g.n].key)
+        } else if self.kinds[first as usize] == K_CLASS {
+            format!("root {}", self.node_class(first))
+        } else {
+            format!("root instance {}", self.node_class(first))
+        };
+        let mut edges: Vec<String> = Vec::new();
+        for w in chain.windows(2) {
+            let label = self.edge_label(w[0], w[1]);
+            edges.push(format!("{label} -> {}", self.node_class(w[1])));
+        }
+        let mut out = vec![head];
+        if edges.len() + 1 > MAX_PATH {
+            let keep_head = MAX_PATH / 2 - 1;
+            let keep_tail = MAX_PATH - 2 - keep_head;
+            let skipped = edges.len() - keep_head - keep_tail;
+            out.extend(edges[..keep_head].iter().cloned());
+            out.push(format!("... {skipped} more"));
+            out.extend(edges[edges.len() - keep_tail..].iter().cloned());
+        } else {
+            out.extend(edges);
+        }
+        out
+    }
+}
+
+/// The nodes from a search seed down to `t`.
+fn chain_to(parent: &[u32], t: u32) -> Vec<u32> {
+    let mut chain = vec![t];
+    let mut cur = t;
+    while parent[cur as usize] != SEED && parent[cur as usize] != NONE && chain.len() < 4096 {
+        cur = parent[cur as usize];
+        chain.push(cur);
+    }
+    chain.reverse();
+    chain
+}
+
+struct ViaFound {
+    key: String,
+    kind: HolderKind,
+    owner: String,
+    raw_owner: Option<String>,
+    field: String,
+}
+
+impl ViaFound {
+    fn new(kind: HolderKind, prefix: &str, raw: String, field: String) -> Self {
+        let owner = deproxy::normalize(&raw).into_owned();
+        Self {
+            key: format!("{prefix}:{owner}.{field}"),
+            kind,
+            raw_owner: (owner != raw).then_some(raw),
+            owner,
+            field,
+        }
     }
 }

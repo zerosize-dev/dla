@@ -23,8 +23,8 @@ use dla_core::{
     FindingId, Refusal,
     error::{Error, codes},
     evidence::EvidenceKind,
-    harness::{CommandSpec, HarnessManifest, HarnessMode},
-    probe::LibraryProbe,
+    harness::{CommandSpec, FfiHarness, FfiMethod, HarnessManifest, HarnessMode},
+    probe::{FfiBoundary, LibraryProbe},
     runtime::Runtime,
     series::KeyMode,
     toolctx::{EvidenceSpec, StageOutcome, ToolCtx},
@@ -336,6 +336,7 @@ fn compile_jvm_agent(agent: &Path) -> Result<(), Refusal> {
     let src = agent.join("src");
     write(&src.join("DlaAgent.java"), templates::JVM_AGENT)?;
     write(&src.join("DlaDump.java"), templates::JVM_DUMP)?;
+    write(&src.join("DlaCapture.java"), templates::JVM_CAPTURE)?;
     write(&agent.join("MANIFEST.MF"), templates::JVM_MANIFEST)?;
     let classes = agent.join("classes");
     fs::create_dir_all(&classes).map_err(|e| io_refusal(&classes, e))?;
@@ -355,6 +356,7 @@ fn compile_jvm_agent(agent: &Path) -> Result<(), Refusal> {
             "classes",
             "src/DlaAgent.java",
             "src/DlaDump.java",
+            "src/DlaCapture.java",
         ],
         agent,
     )
@@ -420,6 +422,68 @@ fn compile_shim(agent: &Path) -> Result<(), Refusal> {
             "check `cc --version`; the shim needs a C11 compiler with dlsym",
         )
     })
+}
+
+/// The JNI boundary `dla probe` recorded in the probe report (`boundaries`), if any.
+fn jni_boundary(ctx: &ToolCtx) -> Option<FfiBoundary> {
+    let doc: Value =
+        serde_json::from_str(&fs::read_to_string(crate::probe_path(ctx)).ok()?).ok()?;
+    let all: Vec<FfiBoundary> = serde_json::from_value(doc.get("boundaries")?.clone()).ok()?;
+    all.into_iter()
+        .find(|b| b.kind == "jni" && b.managed == Runtime::Jvm)
+}
+
+/// Prepares the JVM harness to measure the native side of a JNI boundary: builds the
+/// allocator shim and works out where the built library will be. `Err` is a gap note (the
+/// harness still works without the native columns).
+fn ffi_setup(
+    b: &FfiBoundary,
+    agent: &Path,
+    work: &Path,
+) -> Result<(FfiHarness, commands::FfiSwitch), String> {
+    if !cfg!(target_os = "linux") {
+        return Err(
+            "the project calls a native library through JNI, but the allocator shim is preloaded on Linux only: native growth shows as os.rss only"
+                .to_owned(),
+        );
+    }
+    compile_shim(agent).map_err(|r| {
+        format!(
+            "the project calls a native library through JNI, but the allocator shim could not be built ({}): native growth shows as os.rss only",
+            r.message
+        )
+    })?;
+    let mut lib_dirs = Vec::new();
+    if b.cdylib
+        && let Some(dir) = &b.native_dir
+    {
+        let abs = if dir == "." {
+            work.to_path_buf()
+        } else {
+            work.join(dir)
+        };
+        lib_dirs.push(
+            abs.join("target")
+                .join("release")
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    let harness = FfiHarness {
+        kind: b.kind.clone(),
+        library: b.library.clone(),
+        native_dir: b.native_dir.clone(),
+        methods: b
+            .methods
+            .iter()
+            .map(|m| FfiMethod {
+                export: m.export.clone(),
+                managed: m.managed.clone(),
+                declared_at: m.declared_at.clone(),
+            })
+            .collect(),
+    };
+    Ok((harness, commands::FfiSwitch { lib_dirs }))
 }
 
 /// Writes the agent files of `rt` into `agent` (compiling what needs it).
@@ -998,10 +1062,28 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         agent: agent.clone(),
         driver: driver.clone(),
     };
+    let mut ffi_info: Option<FfiHarness> = None;
+    let mut ffi_switch: Option<commands::FfiSwitch> = None;
+    if rt == Runtime::Jvm
+        && let Some(b) = jni_boundary(ctx)
+    {
+        match ffi_setup(&b, &agent, &work) {
+            Ok((h, sw)) => {
+                gaps.push(format!(
+                    "note: JNI library {} is measured: the allocator shim is preloaded into java (DLA_SHIM_ONLY=java) and the cdylib is built with line tables, so native stack groups resolve to source lines",
+                    h.library.as_deref().unwrap_or("?")
+                ));
+                ffi_info = Some(h);
+                ffi_switch = Some(sw);
+            }
+            Err(gap) => gaps.push(gap),
+        }
+    }
     let switches = commands::Switches {
         jvm_options: det.jvm_options.clone(),
         env: det.env.clone(),
         jfr: false,
+        ffi: ffi_switch,
     };
 
     let mut tools: Vec<String> = Vec::new();
@@ -1133,6 +1215,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         tools,
         gaps: gaps.clone(),
         timeout_secs: TIMEOUT_SECS,
+        ffi: ffi_info.clone(),
+        captures: vec![],
     };
     manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
 
@@ -1153,6 +1237,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         "tools": manifest.tools,
         "gaps": manifest.gaps.len(),
         "files": copied.files,
+        "ffi": ffi_info.as_ref().map(|f| format!("{}:{}", f.kind, f.library.as_deref().unwrap_or("?"))),
     });
     let skipped_sources: u64 = copied.out_of_scope_sources.values().sum();
     if let Value::Object(m) = &mut result {

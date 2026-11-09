@@ -522,6 +522,11 @@ DLA_EXPORT void *ENTRY(realloc)(void *old, size_t n)
 
 static int aligned_common(void **out, size_t align, size_t n)
 {
+    /* aligned_alloc and memalign accept alignments below sizeof(void *) (C++ new with a
+     * small align_val_t does this), posix_memalign does not: a larger power of two is
+     * as good. */
+    if (align != 0 && (align & (align - 1)) == 0 && align < sizeof(void *))
+        align = sizeof(void *);
     if (!ready()) {
         *out = arena_alloc(n + align);
         if (*out == NULL)
@@ -702,6 +707,117 @@ static void put_kv_i(const char *key, int64_t v, int *first)
 }
 
 /* ---------------------------------------------------------------------------------------- */
+/* file descriptor kinds                                                                     */
+
+/* The kinds follow the sampler's fd.<kind> columns (crates/dla-sample/src/os/fd.rs):
+ * socket, pipe, file, deleted, dev, eventfd, eventpoll, timerfd (always reported), plus any
+ * other kind that has a descriptor (memfd, inotify, ..., other). */
+#define FD_KIND_LEN 32
+#define FD_KINDS 24
+
+typedef struct {
+    char name[FD_KIND_LEN];
+    int64_t n;
+} fdk_t;
+
+static fdk_t fd_kinds[FD_KINDS];
+static int n_fd_kinds;
+static int fd_kinds_valid;
+static const char *const fd_base_kinds[] = {"socket", "pipe", "file", "deleted", "dev", "eventfd", "eventpoll", "timerfd"};
+
+static void fd_kinds_reset(void)
+{
+    n_fd_kinds = 0;
+    for (size_t i = 0; i < sizeof fd_base_kinds / sizeof fd_base_kinds[0]; i++) {
+        snprintf(fd_kinds[n_fd_kinds].name, FD_KIND_LEN, "%s", fd_base_kinds[i]);
+        fd_kinds[n_fd_kinds++].n = 0;
+    }
+}
+
+static void fd_kind_add(const char *kind)
+{
+    for (int i = 0; i < n_fd_kinds; i++) {
+        if (strcmp(fd_kinds[i].name, kind) == 0) {
+            fd_kinds[i].n++;
+            return;
+        }
+    }
+    if (n_fd_kinds < FD_KINDS) {
+        snprintf(fd_kinds[n_fd_kinds].name, FD_KIND_LEN, "%s", kind);
+        fd_kinds[n_fd_kinds++].n = 1;
+    } else {
+        fd_kinds[FD_KINDS - 1].n++; /* the last slot collects the overflow */
+    }
+}
+
+static int has_suffix(const char *s, const char *suffix)
+{
+    size_t a = strlen(s), b = strlen(suffix);
+    return a >= b && strcmp(s + a - b, suffix) == 0;
+}
+
+/* Kind of one /proc/self/fd link target. */
+static void fd_classify(const char *t, char *kind)
+{
+    while (*t == ' ')
+        t++;
+    if (strncmp(t, "anon_inode:", 11) == 0) {
+        const char *in = t + 11;
+        size_t k = 0;
+        while (*in == '[')
+            in++;
+        for (; *in && k + 1 < FD_KIND_LEN; in++) {
+            char c = *in;
+            if (c == ']')
+                continue;
+            if (c >= 'A' && c <= 'Z')
+                c = (char)(c - 'A' + 'a');
+            kind[k++] = ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') ? c : '_';
+        }
+        kind[k] = 0;
+        size_t lo = 0;
+        while (kind[lo] == '_')
+            lo++;
+        size_t hi = strlen(kind);
+        while (hi > lo && kind[hi - 1] == '_')
+            hi--;
+        memmove(kind, kind + lo, hi - lo);
+        kind[hi - lo] = 0;
+        if (kind[0] == 0)
+            snprintf(kind, FD_KIND_LEN, "anon_inode");
+        return;
+    }
+    const char *k;
+    if (strncmp(t, "socket:[", 8) == 0)
+        k = "socket";
+    else if (strncmp(t, "pipe:[", 6) == 0)
+        k = "pipe";
+    else if (strncmp(t, "/memfd:", 7) == 0)
+        k = "memfd";
+    else if (has_suffix(t, " (deleted)"))
+        k = "deleted";
+    else if (strncmp(t, "/dev/", 5) == 0)
+        k = "dev";
+    else if (t[0] == '/')
+        k = "file";
+    else
+        k = "other";
+    snprintf(kind, FD_KIND_LEN, "%s", k);
+}
+
+static void put_fd_kinds(int *first)
+{
+    if (!fd_kinds_valid)
+        return;
+    for (int i = 0; i < n_fd_kinds; i++) {
+        char key[FD_KIND_LEN + 4];
+        snprintf(key, sizeof key, "fd.%.31s", fd_kinds[i].name);
+        if (i < (int)(sizeof fd_base_kinds / sizeof fd_base_kinds[0]) || fd_kinds[i].n > 0)
+            put_kv_i(key, fd_kinds[i].n, first);
+    }
+}
+
+/* ---------------------------------------------------------------------------------------- */
 /* OS values                                                                                 */
 
 typedef struct {
@@ -763,11 +879,28 @@ static void read_os(osv_t *o, int with_fds)
         in_shim = 1; /* opendir allocates; keep it out of the books */
         DIR *d = opendir("/proc/self/fd");
         if (d != NULL) {
+            int self = dirfd(d);
             int64_t count = 0;
-            while (readdir(d) != NULL)
+            fd_kinds_reset();
+            struct dirent *de;
+            while ((de = readdir(d)) != NULL) {
+                if (de->d_name[0] == '.')
+                    continue;
+                if (atoi(de->d_name) == self)
+                    continue; /* the directory's own descriptor */
+                char target[512];
+                ssize_t n = readlinkat(self, de->d_name, target, sizeof target - 1);
+                if (n < 0)
+                    continue; /* closed while the directory was read */
+                target[n] = 0;
                 count++;
+                char kind[FD_KIND_LEN];
+                fd_classify(target, kind);
+                fd_kind_add(kind);
+            }
             closedir(d);
-            o->fds = count > 3 ? count - 3 : 0; /* ".", ".." and the directory's own fd */
+            o->fds = count;
+            fd_kinds_valid = 1;
         }
         in_shim = saved;
     }
@@ -1029,6 +1162,7 @@ static void dump_record(int from_signal)
     put_kv_i("native.live_blocks", lk, &first);
     put_kv_i("native.peak_bytes", pk, &first);
     put_os_members(&os, &first);
+    put_fd_kinds(&first);
     PUTL("}");
     if (have_purge) {
         PUTL(",\"purge\":{\"kind\":");

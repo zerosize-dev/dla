@@ -302,7 +302,8 @@ The policy, per fixture (repository entry, one runtime):
    `suspected_static_only` (`not_exercised`) when it has static evidence, else
    `unresolved`; then `report`.
 
-At most eight alloc-tests run per fixture. Checks: every confirmable leak of a
+At most eight alloc-tests run per fixture. Checks (the holder of each confirmed leak
+must equal the expected holder, besides the list below): every confirmable leak of a
 leak fixture with `dynamic_confirmation = true` is confirmed; decoy controls,
 non-leak and impossible fixtures carry no claim; non-leak fixtures have at least
 one rule-out; every confirmed finding satisfies the M3 rules when the ledger is
@@ -378,6 +379,52 @@ intake.target --status unresolved --reason env_unavailable --remedy "<what is
 needed>"`, no stage, `report`. An impossible fixture whose ledger holds no
 finding at all passes the no-claim check.
 
+### Holder check
+
+`grade_row` compares the holder of the chosen finding of every confirmable leak
+(`LeakOutcome.chosen_holder`, the same one the grounded-attribution metric uses)
+with the leak's `holder`. A leak that is confirmed with another holder fails the
+fixture: `leak L1 (<site>) is confirmed with holder <h>, expected <h>`. The
+artifact path takes the holder of the findings it records itself from the root
+kind of the holder key (`static` is `static/global`, `jni-global` is
+`native-handle/global-ref`, `thread` is `blocked-stack`, anything else is
+`container-field`) and no longer writes `static/global` for all of them.
+`expected.toml` has no alternative holders, so the check is exact.
+
+### `--check-dump-backed`
+
+A leak with `dump_backed = true` in `expected.toml` (see FIXTURES.md) must be
+confirmed by a finding that cites evidence of kind `retention-path`,
+`histogram-diff` or `alloc-stack` with authority `dump` or `live`, in its
+supports or in the evidence of its confirming transition. The check is
+implemented and unit-tested, and it is **off by default** (`CHECK_DUMP_BACKED`
+in `dynamic_cmd.rs`, flag `--check-dump-backed`): the fixed policy does not yet
+run the summarize steps that produce this evidence, so switching it on today
+fails the marked fixtures. Marked: `jvm-audit-chain` L1, `jvm-order-cache` L1,
+`jni-order-codec` L2, `rust-tree-parent-links` L1 and `native-frame-decoder` L1
+(the one native fixture with a confirmable leak, which runs under valgrind;
+`native-glyph-cache` and `native-vendor-codec` have no confirmable leak).
+The graders ignore the field and the grading metrics are unchanged.
+
+### `--without <tool>[,<tool>...]`
+
+Hides tools from every `dla` call of the run. The driver builds
+`<work>/bin-without/`, a directory of links to every executable on the current
+`PATH` except the named tools (matched on the file name; the first `PATH`
+entry wins for a name), runs each `dla` call with that as `PATH`, and unsets the
+tool-home variables that would bring a tool back (`JAVA_HOME`, `JDK_HOME`,
+`JRE_HOME`, `GRAALVM_HOME`, `GOROOT`, `ASYNC_PROFILER_HOME`, `ASPROF_HOME`,
+`MAT_HOME`, `NODE_HOME`). A run with hidden tools must still complete, and every
+coverage row (`coverage.json`) named like a hidden tool must read `missing`;
+the number of such rows is `hidden_backend_rows` in the fixture row. A leak that
+stays unconfirmed or gets another holder because its backend is hidden is
+reported as an expected failure of that run (`xfail: a tool is hidden by
+--without`) and the strict list below is not applied. Any other failure stays a
+failure. Backends are matched by their coverage name, which equals the tool
+name (`jcmd`, `jfr`, `valgrind`, `heaptrack`, `memray`). Hiding `jstack` or
+`jmap` alone does not turn the `jcmd` row to `missing`; name `jcmd` for that.
+Tested with fake tools in `bench/runner/tests/without.rs`.
+
 ### Expected failures
 
 The policy is mechanical: it cannot read the code to choose which edge of a
@@ -393,12 +440,17 @@ additional failure (a regression must not hide behind the entry).
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
 | `jni-order-codec` | `leak L1 (native/src/lib.rs:43) is not confirmed` | No Rust workload: the native code runs only under the JVM, so the rust worker finds no main workload with an iteration argument (`harness gen`: `workload-required`) and its census candidates end `suspected_static_only`; in the JVM harness the native frames show only as `os.rss` growth, which no probe column ties to a finding. |
-| `jni-order-codec` | `leak L2 (kotlin/shop/Audit.kt:12) is not confirmed` | The census holder of the Kotlin `object` is `shop.codec.Audit.INSTANCE` (a flat probe column) while the passing probe column is `shop.codec.Audit.trail`, which `dla trend` ties to no finding; `alloc-test --finding` judges the INSTANCE column, favors non-leak, and the policy refutes the candidate. |
+| `node-retry-scheduler` | `leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global` | The leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, `scheduler.js:15`), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root. |
+| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census classifies the `setInterval` timer at `heartbeat.js:15` as `blocked-stack` (non-heap) and the policy takes the holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). |
 
 `jni-order-codec` still meets the milestone's acceptance for multi-runtime
 runs (two workers, one merged ledger with both slices, merged coverage): the
-driver fails the fixture if that is not so, and the two listed failures concern
-only leak confirmation.
+driver fails the fixture if that is not so, and the listed failure concerns
+only leak confirmation. The Kotlin leak L2 (`Audit.kt:12`) has been confirmed
+since M4 (probe columns tie to the finding with that owner) and is no longer on
+the list. L1 is reachable once the native shim runs inside the JVM harness; its
+allocation stack names `native/src/lib.rs:40`, which is now one of its alternative
+sites.
 
 ## Isolation and cost
 

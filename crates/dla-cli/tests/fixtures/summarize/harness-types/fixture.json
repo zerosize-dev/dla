@@ -1,0 +1,10 @@
+{
+ "op": "type-histogram-diff",
+ "inputs": [
+  "4242.jsonl"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "one harness dump file with four checkpoints carrying types; a generated class name carries a planted key"
+}

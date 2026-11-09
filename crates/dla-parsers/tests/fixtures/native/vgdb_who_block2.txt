@@ -1,0 +1,7 @@
+sending command who_points_at 0x4A7B2B0 to pid 18835
+==18835== Searching for pointers to 0x4a7b2b0
+==18835== *0x4a7b330 points at 0x4a7b2b0
+ Address 0x4a7b330 is 0 bytes inside a block of size 64 alloc'd
+==18835==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==18835==    by 0x1091E9: mk (hold.c:9)
+==18835==    by 0x109230: main (hold.c:13)

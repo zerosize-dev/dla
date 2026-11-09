@@ -24,6 +24,8 @@
 //!
 //! * `scan`: the file walk, runtime detection, declared versions, test runners and
 //!   libraries with their harness flags;
+//! * `ffi`: foreign-function boundaries (a JNI library loaded by JVM sources and the native
+//!   code that exports it), written to the report's `boundaries`;
 //! * `registry`: the backend registry (binary names, install hints) and tool lookup on
 //!   PATH and in the tools directory;
 //! * `privilege`: uid, ptrace scope, container hints, macOS SIP;
@@ -32,6 +34,7 @@
 
 mod build;
 mod exec;
+mod ffi;
 mod privilege;
 mod registry;
 mod scan;
@@ -145,6 +148,7 @@ pub fn run_with(
         test_runners: found.test_runners,
         libraries: found.libraries,
         builds,
+        boundaries: ffi::detect(&tree),
     };
 
     let report_name = report_file(ctx.worker.as_deref());
@@ -241,6 +245,7 @@ fn summarize(r: &ProbeReport) -> Summary {
         "libraries": libs,
         "harness_flags": flags,
         "builds": builds,
+        "boundaries": r.boundaries.iter().map(|b| format!("{}:{}", b.kind, b.library.as_deref().unwrap_or("?"))).collect::<Vec<_>>(),
         "privilege": {
             "root": r.privilege.root,
             "ptrace_scope": r.privilege.ptrace_scope,

@@ -46,8 +46,12 @@ One JSON line, `phase:"exit"`, `runtime:"native"`, written by the destructor (an
 
 - `values`: `native.live_bytes`, `native.live_blocks`, `native.peak_bytes` (requested sizes of live
   blocks, peak of live bytes) and `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`,
-  `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.threads`, `os.fds` (bytes; unreadable keys left out). The
-  values are read before any purge.
+  `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.threads`, `os.fds` (bytes; unreadable keys left out), and
+  the descriptors by kind as `fd.socket`, `fd.pipe`, `fd.file`, `fd.deleted`, `fd.dev`, `fd.eventfd`,
+  `fd.eventpoll`, `fd.timerfd` (always present, 0 when none) plus `fd.memfd`, `fd.inotify`,
+  `fd.other` and so on when a descriptor of that kind is open (the same classification as the
+  sampler's `fd.<kind>` columns; Linux only, not in a SIGTERM dump). The values are read before
+  any purge.
 - `purge` (only when `DLA_PURGE` is set): `{kind, before:{os.*}, after:{os.*}, detail}`.
 - `raw_sites`: `{ "<stack key>": {live_bytes, live_blocks, allocs, frames:[{a, m, o}]} }`, the
   largest 1024 stacks by live bytes. `frames` are the first 8 return addresses outside the shim
@@ -123,3 +127,15 @@ last round and records `purge.before/after`. Env overrides: `DLA_KEY_MODE`, `DLA
 | `DLA-HOOK unit` | `static void unit(unsigned long i, unsigned long key)` | one unit of the workload for `key` |
 
 The stubs print a message and `abort()` until replaced.
+
+## Inside a JVM (JNI)
+
+When `dla probe` finds a JNI boundary (JVM sources that call `System.loadLibrary` and a Rust
+cdylib or C file that exports `Java_` functions), `dla harness gen --lang jvm` preloads this shim
+into the JVM with `DLA_SHIM_ONLY=java`, builds the cdylib with
+`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` and sets `-Djava.library.path`. The JVM agent writes
+the `exit` record of the `jvm` runtime and the shim writes its own after it, in the same process;
+`dla harness run` merges the shim's `native.*` and `fd.*` values, stacks and modules into the JVM
+record. The stack of a native allocation has only the frames of the library (the JVM's JIT frames
+have no module), so the site is the library's line (`native/src/lib.rs:40`), and the function name
+that `addr2line` prints (`Java_shop_codec_Native_open`) names the managed method.

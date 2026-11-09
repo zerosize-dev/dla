@@ -4,6 +4,13 @@
   "description": "The full probe report.",
   "type": "object",
   "properties": {
+    "boundaries": {
+      "description": "Foreign-function boundaries between runtimes (JNI).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FfiBoundary"
+      }
+    },
     "builds": {
       "description": "Build attempts (empty without `--build`).",
       "type": "array",
@@ -65,6 +72,38 @@
     "privilege"
   ],
   "$defs": {
+    "BoundaryMethod": {
+      "description": "A JNI function exported by native code and the managed method it implements.",
+      "type": "object",
+      "properties": {
+        "declared_at": {
+          "description": "Where the Java `native` or Kotlin `external` declaration is (`kotlin/shop/Native.kt:7`),\nwhen one was found.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defined_at": {
+          "description": "Where the export is defined in the native sources (`native/src/lib.rs:38`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "export": {
+          "description": "The exported symbol (`Java_shop_codec_Native_open`).",
+          "type": "string"
+        },
+        "managed": {
+          "description": "The managed method it implements (`shop.codec.Native.open`), from the JNI name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "export",
+        "managed"
+      ]
+    },
     "BuildProbe": {
       "description": "One build attempt (`dla probe --build`).",
       "type": "object",
@@ -135,6 +174,64 @@
           "type": "string",
           "const": "skipped"
         }
+      ]
+    },
+    "FfiBoundary": {
+      "description": "A foreign-function boundary between two runtimes found in the sources.",
+      "type": "object",
+      "properties": {
+        "cdylib": {
+          "description": "True when the native side is a Rust crate with `crate-type = [\"cdylib\"]`.",
+          "type": "boolean",
+          "default": false
+        },
+        "kind": {
+          "description": "Kind of boundary: `jni`.",
+          "type": "string"
+        },
+        "library": {
+          "description": "Library name from `System.loadLibrary(\"codec\")`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "loaded_by": {
+          "description": "Project-relative files that load the library.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "managed": {
+          "description": "Runtime on the managed side.",
+          "$ref": "#/$defs/Runtime"
+        },
+        "methods": {
+          "description": "Exported JNI functions and the managed methods they implement.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BoundaryMethod"
+          }
+        },
+        "native": {
+          "description": "Runtime on the native side.",
+          "$ref": "#/$defs/Runtime"
+        },
+        "native_dir": {
+          "description": "Project-relative directory of the native crate or the C sources.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "managed",
+        "native"
       ]
     },
     "LibraryProbe": {

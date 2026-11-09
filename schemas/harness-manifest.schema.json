@@ -19,6 +19,13 @@
         }
       ]
     },
+    "captures": {
+      "description": "Files written by `dla harness run --capture` or `--tool`, replaced by each run.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CaptureFile"
+      }
+    },
     "detectors": {
       "description": "Library detector flags switched on.",
       "type": "array",
@@ -26,6 +33,17 @@
       "items": {
         "type": "string"
       }
+    },
+    "ffi": {
+      "description": "The allocator shim is loaded into the JVM because the project calls a native library\n(a JNI boundary found by `dla probe`).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FfiHarness"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "gaps": {
       "description": "Gaps, for example \"pytest-memray not installed: standard-library driver used\".",
@@ -203,6 +221,107 @@
         }
       ]
     },
+    "CaptureFile": {
+      "description": "One file `dla harness run --capture` or `--tool` left in the harness `out/` directory.",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Size in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "captured_at": {
+          "description": "When the file was written (UTC, RFC 3339).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "What the file is.",
+          "$ref": "#/$defs/CaptureKind"
+        },
+        "label": {
+          "description": "The measured point (`p3-native`, `p1-fresh`).",
+          "type": "string"
+        },
+        "ms": {
+          "description": "Time the capture took in the measured process, in milliseconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "path": {
+          "description": "Run-relative path, for example `harness/H1/out/p1-fresh/capture/812/heap-2.hprof`.",
+          "type": "string"
+        },
+        "role": {
+          "description": "What this file is, in a few words (`threads.json`, `nmt summary`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "description": "Sequence number within the kind and label (1-based).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "x": {
+          "description": "Position on the axis (units completed or `n`), when known.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "kind",
+        "path",
+        "label",
+        "seq",
+        "bytes",
+        "captured_at"
+      ]
+    },
+    "CaptureKind": {
+      "description": "What `dla harness run --capture` writes next to the series.",
+      "oneOf": [
+        {
+          "description": "Heap dump (HPROF) of the measured process.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Full class histogram text.",
+          "type": "string",
+          "const": "histogram"
+        },
+        {
+          "description": "Flight recording with old-object samples and paths to GC roots.",
+          "type": "string",
+          "const": "jfr"
+        },
+        {
+          "description": "Thread dump, class loader statistics and native memory summary.",
+          "type": "string",
+          "const": "nonheap"
+        },
+        {
+          "description": "Valgrind memcheck XML (`--tool valgrind`).",
+          "type": "string",
+          "const": "valgrind"
+        },
+        {
+          "description": "Heaptrack data and its printed report (`--tool heaptrack`).",
+          "type": "string",
+          "const": "heaptrack"
+        }
+      ]
+    },
     "CommandSpec": {
       "description": "A command to run in the scratch copy.",
       "type": "object",
@@ -240,6 +359,66 @@
       "required": [
         "argv",
         "cwd"
+      ]
+    },
+    "FfiHarness": {
+      "description": "The foreign-function boundary a JVM harness measures.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "`jni`.",
+          "type": "string"
+        },
+        "library": {
+          "description": "The native library (`codec` for `System.loadLibrary(\"codec\")`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "methods": {
+          "description": "The exported JNI functions and the managed methods they implement.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FfiMethod"
+          }
+        },
+        "native_dir": {
+          "description": "Project-relative directory of the native crate.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "FfiMethod": {
+      "description": "One JNI function and the managed method it implements.",
+      "type": "object",
+      "properties": {
+        "declared_at": {
+          "description": "Where the `native` or `external` declaration is (`kotlin/shop/Native.kt:7`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "export": {
+          "description": "The exported symbol (`Java_shop_codec_Native_open`).",
+          "type": "string"
+        },
+        "managed": {
+          "description": "The managed method (`shop.codec.Native.open`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "export",
+        "managed"
       ]
     },
     "FindingId": {

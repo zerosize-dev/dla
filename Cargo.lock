@@ -496,6 +496,7 @@ dependencies = [
 name = "dla-sample"
 version = "0.1.0"
 dependencies = [
+ "dla-parsers",
  "libc",
  "serde",
  "serde_json",

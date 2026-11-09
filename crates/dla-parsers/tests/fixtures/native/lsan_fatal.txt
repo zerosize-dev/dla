@@ -1,0 +1,2 @@
+==2210==LeakSanitizer has encountered a fatal error.
+==2210==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)

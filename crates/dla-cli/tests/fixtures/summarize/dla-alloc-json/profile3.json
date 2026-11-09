@@ -1,0 +1,66 @@
+{
+ "source": "dhat",
+ "timestamp_ms": 1800000090000,
+ "sampled": false,
+ "groups": [
+  {
+   "frames": [
+    {
+     "function": "alloc::vec::Vec::push",
+     "file": "/rustc/lib.rs",
+     "line": 1,
+     "module": null
+    },
+    {
+     "function": "shop::trail::record",
+     "file": "src/trail.rs",
+     "line": 40,
+     "module": null
+    },
+    {
+     "function": "shop::main",
+     "file": "src/main.rs",
+     "line": 12,
+     "module": null
+    }
+   ],
+   "live_bytes": 7300,
+   "live_blocks": 61,
+   "total_bytes": 21900,
+   "root_path": [
+    "static shop.codec.Audit.trail"
+   ],
+   "kind": "still-reachable"
+  },
+  {
+   "frames": [
+    {
+     "function": "shop::cache::fill",
+     "file": "src/cache.rs",
+     "line": 9,
+     "module": null
+    }
+   ],
+   "live_bytes": 900,
+   "live_blocks": 3,
+   "total_bytes": 50000,
+   "root_path": [],
+   "kind": null
+  },
+  {
+   "frames": [
+    {
+     "function": "shop::Svc::call(token=AKIAIOSFODNN7EXAMPLE1)",
+     "file": "src/svc.rs",
+     "line": 3,
+     "module": null
+    }
+   ],
+   "live_bytes": 64,
+   "live_blocks": 1,
+   "total_bytes": 64,
+   "root_path": [],
+   "kind": null
+  }
+ ]
+}

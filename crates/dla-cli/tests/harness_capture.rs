@@ -1,0 +1,538 @@
+//! `dla harness run --capture` and `--tool` through the binary on copies of the benchmark
+//! fixtures: raw captures of a JVM driver (heap dumps that pass the heap-graph gate), the
+//! JNI boundary of `jni-order-codec` (native stack groups resolved to `lib.rs:40`), and the
+//! native tools (valgrind, heaptrack) with their missing-tool refusal.
+//!
+//! Each test skips, printing the reason, when a tool it needs is not installed.
+#![cfg(unix)]
+
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use assert_cmd::Command;
+use serde_json::Value;
+
+fn fixtures_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/fixtures")
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for e in fs::read_dir(from).unwrap().flatten() {
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if e.file_type().unwrap().is_dir() {
+            copy_dir(&src, &dst);
+        } else {
+            fs::copy(&src, &dst).unwrap();
+        }
+    }
+}
+
+fn on_path(tool: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).is_file()))
+}
+
+/// True (after printing why) when one of `tools` is missing.
+fn skip_without(tools: &[&str]) -> bool {
+    for t in tools {
+        if !on_path(t) {
+            eprintln!("skipping: {t} is not on PATH");
+            return true;
+        }
+    }
+    false
+}
+
+struct Out {
+    code: i32,
+    json: Value,
+    text: String,
+}
+
+fn dla_env(project: &Path, args: &[&str], path: Option<&std::ffi::OsStr>) -> Out {
+    let mut c = Command::cargo_bin("dla").unwrap();
+    c.arg("--project").arg(project);
+    for var in [
+        "DLA_RUN",
+        "DLA_DEFAULT_BUDGET",
+        "DLA_CONSENT_TIERS",
+        "DLA_CONSENT_RAW_VALUES",
+        "CLAUDE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "DLA_DATA_DIR",
+    ] {
+        c.env_remove(var);
+    }
+    if let Some(p) = path {
+        c.env("PATH", p);
+    }
+    let o = c.args(args).output().unwrap();
+    let text = String::from_utf8(o.stdout).unwrap();
+    assert!(
+        text.len() <= dla_core::MAX_OUTPUT_BYTES,
+        "output over the bound: {} bytes: {text}",
+        text.len()
+    );
+    Out {
+        code: o.status.code().unwrap(),
+        json: serde_json::from_str(&text).unwrap_or(Value::Null),
+        text,
+    }
+}
+
+fn dla(project: &Path, args: &[&str]) -> Out {
+    dla_env(project, args, None)
+}
+
+fn ok(project: &Path, args: &[&str]) -> Value {
+    let o = dla(project, args);
+    assert_eq!(o.code, 0, "{args:?}: {}", o.text);
+    assert_eq!(o.json["ok"], true, "{}", o.text);
+    o.json
+}
+
+/// A project copy of `fixture` with a run, consent for tiers 1 and 2, and discovery for
+/// `lang` done.
+fn prepared(fixture: &str, lang: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    copy_dir(&fixtures_root().join(fixture).join("project"), &project);
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(&project, &["consent", "--tiers", "1-2"]);
+    ok(&project, &["census", "--lang", lang]);
+    ok(&project, &["workload", "discover", "--lang", lang]);
+    (dir, project, run_dir)
+}
+
+fn manifest(run_dir: &Path, id: &str) -> Value {
+    let p = run_dir.join("harness").join(id).join("harness.json");
+    serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap()
+}
+
+/// The manifest's capture files of `kind`, in sequence order, as project-relative paths.
+fn capture_paths(m: &Value, run_dir: &Path, project: &Path, kind: &str) -> Vec<String> {
+    let mut files: Vec<(u64, String)> = m["captures"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|c| c["kind"] == kind)
+        .map(|c| {
+            let abs = run_dir.join(c["path"].as_str().unwrap());
+            assert!(abs.is_file(), "{} is listed but missing", abs.display());
+            assert_eq!(
+                fs::metadata(&abs).unwrap().len(),
+                c["bytes"].as_u64().unwrap()
+            );
+            assert!(c["captured_at"].as_str().unwrap().ends_with('Z'));
+            let rel = abs
+                .strip_prefix(project)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            (c["seq"].as_u64().unwrap(), rel)
+        })
+        .collect();
+    files.sort();
+    files.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Fills the two hooks of a generated JVM driver.
+fn fill_hooks(driver: &Path, fields: &str, setup: &str, unit: &str) {
+    let text = fs::read_to_string(driver).unwrap();
+    let text = text
+        .replace(
+            "        throw new UnsupportedOperationException(\"DLA-HOOK setup has not been filled in\");",
+            setup,
+        )
+        .replace(
+            "        throw new UnsupportedOperationException(\"DLA-HOOK unit has not been filled in\");",
+            unit,
+        )
+        .replace("    private DlaLoop() {}", &format!("    private DlaLoop() {{}}\n\n{fields}"));
+    assert!(!text.contains("has not been filled in"));
+    fs::write(driver, text).unwrap();
+}
+
+#[test]
+fn jvm_driver_captures_dumps_that_pass_the_heap_graph_gate() {
+    if skip_without(&["java", "javac", "jar"]) {
+        return;
+    }
+    let (_d, project, run_dir) = prepared("jvm-audit-chain", "jvm");
+    let gen_out = ok(
+        &project,
+        &[
+            "harness",
+            "gen",
+            "--lang",
+            "jvm",
+            "--driver",
+            "--package",
+            "gateway",
+        ],
+    );
+    let edit = gen_out["summary"]["edit"].as_str().unwrap();
+    fill_hooks(
+        &project.join(edit),
+        "    static Gateway gateway;\n    static long clock;",
+        "        gateway = new Gateway(new Handlers(new Ledger(64, 500_000)), line -> { });",
+        r#"        clock += 1_000 + (key % 7) * 100;
+        String path = key % 3 == 0 ? "/balance" : key % 3 == 1 ? "/statement" : "/transfer";
+        String payload = Ledger.account(key % 64);
+        if (path.equals("/transfer")) {
+            payload = payload + "," + Ledger.account((key * 5 + 1) % 64) + "," + (100 + key % 900);
+        }
+        StringBuilder body = new StringBuilder(payload);
+        while (body.length() < 384) {
+            body.append(' ');
+        }
+        gateway.handle("client-" + (key % 12), path, body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8), clock);"#,
+    );
+    let run = ok(
+        &project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--mode",
+            "fresh",
+            "--capture",
+            "heap,histogram,jfr,nonheap",
+        ],
+    );
+    let s = &run["summary"];
+    // Costs are in the output.
+    assert!(s["capture"]["files"].as_u64().unwrap() >= 10, "{s}");
+    assert!(s["capture"]["bytes"].as_u64().unwrap() > 1_000_000);
+    let heap = &s["capture"]["kinds"]["heap"];
+    assert!(
+        heap[0].as_u64().unwrap() >= 3,
+        "three or more dumps: {heap}"
+    );
+    assert!(
+        heap[2].as_u64().unwrap() < 60_000,
+        "the dump time is milliseconds: {heap}"
+    );
+    // The commands that read the files are printed (or listed in captures.json).
+    let shown = s["summarize"].as_array().map_or(0, Vec::len);
+    let more = s["more_commands"].is_string();
+    assert!(shown >= 1 && (shown >= 3 || more), "{s}");
+    assert!(
+        s["summarize"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("dla summarize heap-graph ")
+    );
+    let listed: Value = serde_json::from_str(
+        &fs::read_to_string(run_dir.join("harness/H1/captures.json")).unwrap(),
+    )
+    .unwrap();
+    let ops: Vec<&str> = listed["summarize"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap().split_whitespace().nth(2).unwrap())
+        .collect();
+    for op in [
+        "heap-graph",
+        "type-histogram-diff",
+        "alloc-stack-diff",
+        "non-heap",
+    ] {
+        assert!(ops.contains(&op), "{op} is missing from {ops:?}");
+    }
+    // The manifest lists every file with its size and time.
+    let m = manifest(&run_dir, "H1");
+    let heaps = capture_paths(&m, &run_dir, &project, "heap");
+    assert!(heaps.len() >= 3, "{heaps:?}");
+    let histograms = capture_paths(&m, &run_dir, &project, "histogram");
+    assert!(
+        histograms.len() >= 9,
+        "one histogram per round: {}",
+        histograms.len()
+    );
+    assert_eq!(capture_paths(&m, &run_dir, &project, "jfr").len(), 1);
+    assert!(capture_paths(&m, &run_dir, &project, "nonheap").len() >= 3);
+    // The gate passes on the dumps of the one process, with the right holder.
+    let mut args = vec!["summarize", "heap-graph"];
+    args.extend(heaps.iter().take(3).map(String::as_str));
+    let g = ok(&project, &args);
+    assert_eq!(g["gate"], "pass", "{g}");
+    assert_eq!(g["passed"][0], "static:gateway.RequestContext.latest");
+    // The histogram diff reads the text files.
+    let mut args = vec!["summarize", "type-histogram-diff"];
+    args.extend(histograms.iter().take(3).map(String::as_str));
+    let h = dla(&project, &args);
+    assert_eq!(h.code, 0, "{}", h.text);
+    // The series is the usual one.
+    assert_eq!(s["series"][0], "S1");
+    // Coverage rows say what ran.
+    let cov: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("coverage.json")).unwrap()).unwrap();
+    assert_eq!(
+        cov["workers"]["jvm"]["backends"]["harness-heap"]["status"],
+        "ran"
+    );
+}
+
+#[test]
+fn jvm_command_mode_dumps_at_exit_of_the_selected_points_only() {
+    if skip_without(&["java", "javac", "jar", "sh"]) {
+        return;
+    }
+    let (_d, project, run_dir) = prepared("jvm-audit-chain", "jvm");
+    ok(&project, &["harness", "gen", "--lang", "jvm"]);
+    let run = ok(
+        &project,
+        &[
+            "harness",
+            "run",
+            "H1",
+            "--capture",
+            "heap,histogram",
+            "--dumps",
+            "3",
+        ],
+    );
+    assert_eq!(run["summary"]["capture"]["kinds"]["heap"][0], 3, "{run}");
+    let m = manifest(&run_dir, "H1");
+    // Histograms at every point, dumps at three; the unit-test JVM of build.sh left nothing.
+    assert_eq!(capture_paths(&m, &run_dir, &project, "histogram").len(), 9);
+    let heaps = capture_paths(&m, &run_dir, &project, "heap");
+    assert_eq!(heaps.len(), 3);
+    let pids: std::collections::BTreeSet<&str> = m["captures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["label"] == "p1-native")
+        .map(|c| c["path"].as_str().unwrap().rsplit('/').nth(1).unwrap())
+        .collect();
+    assert_eq!(pids.len(), 1, "one process per point is kept: {pids:?}");
+}
+
+#[test]
+fn a_jni_library_gets_the_shim_and_its_native_stack_resolves_to_the_rust_line() {
+    if skip_without(&["java", "javac", "jar", "cargo", "cc", "addr2line", "sh"]) {
+        return;
+    }
+    let m2 = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".m2/repository/org/jetbrains/kotlin/kotlin-compiler-embeddable");
+    if !m2.is_dir() && !on_path("kotlinc") {
+        eprintln!("skipping: no Kotlin compiler (kotlinc, or the embeddable compiler in ~/.m2)");
+        return;
+    }
+    let (_d, project, run_dir) = prepared("jni-order-codec", "jvm");
+    let probe = ok(&project, &["probe"]);
+    assert_eq!(probe["summary"]["boundaries"][0], "jni:codec");
+    let gen_out = ok(&project, &["harness", "gen", "--lang", "jvm"]);
+    assert_eq!(gen_out["summary"]["ffi"], "jni:codec");
+    let m = manifest(&run_dir, "H1");
+    assert_eq!(m["ffi"]["library"], "codec");
+    let run_env = m["run"]["env"].as_array().unwrap();
+    let env = |k: &str| {
+        run_env
+            .iter()
+            .find(|p| p[0] == k)
+            .map(|p| p[1].as_str().unwrap())
+    };
+    assert_eq!(env("DLA_SHIM_ONLY"), Some("java"));
+    assert!(env("LD_PRELOAD").unwrap().ends_with("libdlashim.so"));
+    assert_eq!(env("CARGO_PROFILE_RELEASE_DEBUG"), Some("line-tables-only"));
+    let run = ok(
+        &project,
+        &["harness", "run", "H1", "--capture", "histogram"],
+    );
+    // The leaking native frame, tied to the managed method.
+    let ffi = &run["summary"]["ffi"][0];
+    assert_eq!(ffi["site"], "native/src/lib.rs:40", "{run}");
+    assert_eq!(ffi["method"], "shop.codec.Native.open");
+    assert!(ffi["live_bytes"].as_u64().unwrap() > 1_000_000);
+    // The series carries the native columns `dla trend` reads.
+    let series: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("series/S1.json")).unwrap()).unwrap();
+    let names: Vec<&str> = series["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    for want in [
+        "native.live_bytes",
+        "native.live_bytes@native/src/lib.rs:40",
+        "fd.socket",
+        "fd.file",
+    ] {
+        assert!(names.contains(&want), "no column {want} in {names:?}");
+    }
+    let col = series["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|c| c["name"] == "native.live_bytes@native/src/lib.rs:40")
+        .unwrap();
+    assert_eq!(series["columns"][col]["site"], "native/src/lib.rs:40");
+    let total = series["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "native.live_bytes")
+        .unwrap();
+    assert_eq!(
+        total["source"], "shim",
+        "the figure comes from the shim, not the JVM agent"
+    );
+    let vals: Vec<f64> = series["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["values"][col].as_f64())
+        .collect();
+    assert!(vals.len() >= 8 && vals.last() > vals.first(), "{vals:?}");
+    let t = ok(&project, &["trend", "S1"]);
+    let passed = t["passed"].as_array().unwrap();
+    assert!(
+        passed
+            .iter()
+            .any(|p| p["column"] == "native.live_bytes@native/src/lib.rs:40"),
+        "{t}"
+    );
+}
+
+#[test]
+fn a_capture_kind_that_does_not_exist_is_a_usage_error() {
+    let (_d, project, _run) = prepared("jvm-audit-chain", "jvm");
+    let o = dla(&project, &["harness", "run", "H1", "--capture", "bogus"]);
+    assert_ne!(o.code, 0);
+    assert!(
+        o.text.contains("bogus") || o.json["error"].is_object(),
+        "{}",
+        o.text
+    );
+}
+
+#[test]
+fn a_missing_tool_is_a_refusal_with_the_install_command_and_a_coverage_row() {
+    if skip_without(&["cc", "make"]) {
+        return;
+    }
+    let (_d, project, run_dir) = prepared("native-frame-decoder", "native");
+    ok(&project, &["harness", "gen", "--lang", "native"]);
+    // Build and measure once, so the build is done and the tool lookup is the next step.
+    ok(&project, &["harness", "run", "H1", "--iterations", "2"]);
+    let empty = tempfile::tempdir().unwrap();
+    for (tool, hint) in [
+        ("valgrind", "apt-get install valgrind"),
+        ("heaptrack", "apt-get install heaptrack"),
+    ] {
+        let o = dla_env(
+            &project,
+            &["harness", "run", "H1", "--tool", tool],
+            Some(empty.path().as_os_str()),
+        );
+        assert_eq!(o.code, 2, "{}", o.text);
+        let e = &o.json["error"];
+        assert_eq!(e["code"], "tool-missing", "{}", o.text);
+        assert!(e["missing"].as_str().unwrap().contains(tool));
+        assert!(e["fix"].as_str().unwrap().contains(hint), "{}", o.text);
+        let cov: Value =
+            serde_json::from_str(&fs::read_to_string(run_dir.join("coverage.json")).unwrap())
+                .unwrap();
+        let row = &cov["workers"]["native"]["backends"][tool];
+        assert_eq!(row["status"], "missing", "{cov}");
+        assert!(row["install_hint"].as_str().unwrap().contains(hint));
+    }
+}
+
+#[test]
+fn valgrind_and_heaptrack_leave_reports_for_the_summarizers() {
+    if skip_without(&["cc", "make", "valgrind", "heaptrack", "heaptrack_print"]) {
+        return;
+    }
+    let (_d, project, run_dir) = prepared("native-frame-decoder", "native");
+    ok(&project, &["harness", "gen", "--lang", "native"]);
+    let vg = ok(&project, &["harness", "run", "H1", "--tool", "valgrind"]);
+    assert_eq!(vg["summary"]["tool"], "valgrind");
+    assert!(
+        vg["summary"]["summarize"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("dla summarize heap-graph ")
+    );
+    assert!(
+        vg["summary"]["capture"]["kinds"]["valgrind"][0]
+            .as_u64()
+            .unwrap()
+            >= 2
+    );
+    let m = manifest(&run_dir, "H1");
+    let xmls = capture_paths(&m, &run_dir, &project, "valgrind");
+    assert!(xmls.len() >= 2);
+    let xml = fs::read_to_string(project.join(&xmls[0])).unwrap();
+    assert!(
+        xml.contains("<valgrindoutput>") && xml.contains("Leak_"),
+        "{xml}"
+    );
+    assert!(xml.contains("decoder.c"), "frames carry file names");
+    let ht = ok(&project, &["harness", "run", "H1", "--tool", "heaptrack"]);
+    assert_eq!(ht["summary"]["tool"], "heaptrack");
+    let m = manifest(&run_dir, "H1");
+    let reports = capture_paths(&m, &run_dir, &project, "heaptrack");
+    assert!(reports.len() >= 3, "{reports:?}");
+    let diff = reports
+        .iter()
+        .find(|p| p.ends_with("heaptrack-diff.txt"))
+        .unwrap();
+    let text = fs::read_to_string(project.join(diff)).unwrap();
+    assert!(
+        text.contains("MEMORY LEAKS") && text.contains("src/decoder.c:29"),
+        "{text}"
+    );
+    // No series was written by a tool run.
+    assert!(vg["summary"]["series"].is_null());
+    let cov: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("coverage.json")).unwrap()).unwrap();
+    assert_eq!(
+        cov["workers"]["native"]["backends"]["valgrind"]["status"],
+        "ran"
+    );
+    assert_eq!(
+        cov["workers"]["native"]["backends"]["heaptrack"]["status"],
+        "ran"
+    );
+}
+
+#[test]
+fn a_tool_on_a_driver_harness_is_refused_with_the_fix() {
+    if skip_without(&["java", "javac", "jar"]) {
+        return;
+    }
+    let (_d, project, _run) = prepared("jvm-audit-chain", "jvm");
+    ok(
+        &project,
+        &[
+            "harness",
+            "gen",
+            "--lang",
+            "jvm",
+            "--driver",
+            "--package",
+            "gateway",
+        ],
+    );
+    let o = dla(&project, &["harness", "run", "H1", "--tool", "valgrind"]);
+    assert_eq!(o.code, 2, "{}", o.text);
+    assert_eq!(o.json["error"]["code"], "invalid-value");
+    assert!(
+        o.json["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("dla harness gen")
+    );
+}

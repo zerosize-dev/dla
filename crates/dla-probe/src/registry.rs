@@ -134,6 +134,227 @@ pub const BACKENDS: &[Backend] = &[
     },
 ];
 
+/// A dynamic tool `dla summarize` and `dla attach` may run: a profiler, a dump tool or a
+/// leak checker. These are not static analyzers, so they are not in [`BACKENDS`] and not
+/// in the detector contract.
+#[derive(Debug)]
+pub struct DynamicTool {
+    /// Name used in `coverage.json` and `dla summarize --list`.
+    pub name: &'static str,
+    /// Executable names, in order of preference.
+    pub binaries: &'static [&'static str],
+    /// True for JDK tools, which are also looked for in `$JAVA_HOME/bin`.
+    pub jdk: bool,
+    /// Arguments that print the version; `None` when the tool has no such flag.
+    pub version_args: Option<&'static [&'static str]>,
+    /// Runtimes that use it.
+    pub runtimes: &'static [Runtime],
+    /// How to get it.
+    pub install_hint: &'static str,
+    /// True for a tool no cut-1 adapter runs yet (listed so coverage can name it).
+    pub placeholder: bool,
+}
+
+/// Every dynamic tool DLA knows.
+pub const DYNAMIC_TOOLS: &[DynamicTool] = &[
+    DynamicTool {
+        name: "jcmd",
+        binaries: &["jcmd"],
+        jdk: true,
+        version_args: Some(&["-version"]),
+        runtimes: &[Runtime::Jvm],
+        install_hint: "install a JDK and set JAVA_HOME (jcmd lives in $JAVA_HOME/bin), or put jcmd on PATH",
+        placeholder: false,
+    },
+    DynamicTool {
+        name: "jfr",
+        binaries: &["jfr"],
+        jdk: true,
+        version_args: Some(&["version"]),
+        runtimes: &[Runtime::Jvm],
+        install_hint: "install a JDK 11 or newer and set JAVA_HOME (jfr lives in $JAVA_HOME/bin), or put jfr on PATH",
+        placeholder: false,
+    },
+    DynamicTool {
+        name: "heaptrack",
+        binaries: &["heaptrack"],
+        jdk: false,
+        version_args: Some(&["--version"]),
+        runtimes: &[Runtime::Rust],
+        install_hint: "install heaptrack (Linux): apt-get install heaptrack, or put it in $DLA_DATA_DIR/tools/bin",
+        placeholder: false,
+    },
+    DynamicTool {
+        name: "heaptrack_print",
+        binaries: &["heaptrack_print"],
+        jdk: false,
+        version_args: Some(&["--version"]),
+        runtimes: &[Runtime::Rust],
+        install_hint: "install heaptrack (Linux): apt-get install heaptrack, or put heaptrack_print in $DLA_DATA_DIR/tools/bin",
+        placeholder: false,
+    },
+    DynamicTool {
+        name: "valgrind",
+        binaries: &["valgrind"],
+        jdk: false,
+        version_args: Some(&["--version"]),
+        runtimes: &[Runtime::Rust],
+        install_hint: "install valgrind (Linux): apt-get install valgrind, or put it in $DLA_DATA_DIR/tools/bin",
+        placeholder: false,
+    },
+    DynamicTool {
+        name: "vgdb",
+        binaries: &["vgdb"],
+        jdk: false,
+        version_args: Some(&["--version"]),
+        runtimes: &[Runtime::Rust],
+        install_hint: "install valgrind (Linux), which ships vgdb: apt-get install valgrind",
+        placeholder: false,
+    },
+    DynamicTool {
+        name: "node",
+        binaries: &["node"],
+        jdk: false,
+        version_args: Some(&["--version"]),
+        runtimes: &[Runtime::Node],
+        install_hint: "install Node.js 18 or newer",
+        placeholder: true,
+    },
+    DynamicTool {
+        name: "go",
+        binaries: &["go"],
+        jdk: false,
+        version_args: Some(&["version"]),
+        runtimes: &[Runtime::Go],
+        install_hint: "install the Go toolchain",
+        placeholder: true,
+    },
+    DynamicTool {
+        name: "memray",
+        binaries: &["memray"],
+        jdk: false,
+        version_args: Some(&["--version"]),
+        runtimes: &[Runtime::Python],
+        install_hint: "pip install memray (Linux and macOS)",
+        placeholder: true,
+    },
+    DynamicTool {
+        name: "bpftrace",
+        binaries: &["bpftrace"],
+        jdk: false,
+        version_args: Some(&["--version"]),
+        runtimes: &[Runtime::Rust, Runtime::Go, Runtime::Python],
+        install_hint: "install bpftrace (Linux; needs root, tracefs and BTF): apt-get install bpftrace",
+        placeholder: true,
+    },
+];
+
+/// Finds a dynamic tool by name.
+pub fn dynamic_tool(name: &str) -> Option<&'static DynamicTool> {
+    DYNAMIC_TOOLS.iter().find(|t| t.name == name)
+}
+
+/// Looks for a dynamic tool: the installed tools tree first (as for analyzers), then
+/// `$JAVA_HOME/bin` for JDK tools, then `path_var`. `java_home` is passed in so a caller
+/// (and a test) decides which environment it asks about.
+pub fn locate_dynamic(
+    tool: &DynamicTool,
+    tools: Option<&Path>,
+    java_home: Option<&std::ffi::OsStr>,
+    path_var: Option<&std::ffi::OsStr>,
+) -> Option<Found> {
+    for bin in tool.binaries {
+        if let Some(t) = tools {
+            for d in tool_bin_dirs(t) {
+                if let Some(c) = candidates(&d, bin).into_iter().find(|c| is_executable(c)) {
+                    return Some(Found {
+                        path: c,
+                        source: "tools-dir",
+                    });
+                }
+            }
+        }
+        if tool.jdk
+            && let Some(home) = java_home.filter(|h| !h.is_empty())
+        {
+            let d = Path::new(home).join("bin");
+            if let Some(c) = candidates(&d, bin).into_iter().find(|c| is_executable(c)) {
+                return Some(Found {
+                    path: c,
+                    source: "java-home",
+                });
+            }
+        }
+        if let Some(f) = locate(bin, None, path_var) {
+            return Some(f);
+        }
+    }
+    None
+}
+
+/// Resolution of a dynamic tool: where it is and, when asked, its version.
+#[derive(Debug, Clone)]
+pub struct DynamicResolved {
+    /// Where it was found.
+    pub found: Option<Found>,
+    /// First informative line of its version output.
+    pub version: Option<String>,
+}
+
+/// Finds `tool` and, when `with_version`, asks it for its version (bounded by `timeout`).
+pub fn resolve_dynamic(
+    tool: &DynamicTool,
+    tools: Option<&Path>,
+    java_home: Option<&std::ffi::OsStr>,
+    path_var: Option<&std::ffi::OsStr>,
+    with_version: bool,
+    timeout: Duration,
+) -> DynamicResolved {
+    let found = locate_dynamic(tool, tools, java_home, path_var);
+    let mut version = None;
+    if with_version && let (Some(f), Some(args)) = (&found, tool.version_args) {
+        let o = exec::run(&f.path, args, None, &[], timeout);
+        if o.success {
+            version = version_line(&o.text);
+        }
+    }
+    DynamicResolved { found, version }
+}
+
+impl Backend {
+    /// Every dynamic tool (see [`DynamicTool`]).
+    pub fn dynamic_tools() -> &'static [DynamicTool] {
+        DYNAMIC_TOOLS
+    }
+
+    /// A dynamic tool by name.
+    pub fn dynamic(name: &str) -> Option<&'static DynamicTool> {
+        dynamic_tool(name)
+    }
+
+    /// Where `tool` is on this machine: the tools tree, `$JAVA_HOME/bin`, then PATH.
+    pub fn locate_dynamic(
+        tool: &DynamicTool,
+        tools: Option<&Path>,
+        java_home: Option<&std::ffi::OsStr>,
+        path_var: Option<&std::ffi::OsStr>,
+    ) -> Option<Found> {
+        locate_dynamic(tool, tools, java_home, path_var)
+    }
+
+    /// [`resolve_dynamic`].
+    pub fn resolve_dynamic(
+        tool: &DynamicTool,
+        tools: Option<&Path>,
+        java_home: Option<&std::ffi::OsStr>,
+        path_var: Option<&std::ffi::OsStr>,
+        with_version: bool,
+        timeout: Duration,
+    ) -> DynamicResolved {
+        resolve_dynamic(tool, tools, java_home, path_var, with_version, timeout)
+    }
+}
+
 impl Backend {
     /// The install hint recorded when the backend is missing.
     pub fn install_hint(&self) -> String {
@@ -468,6 +689,49 @@ mod tests {
         let ep = BACKENDS.iter().find(|b| b.name == "errorprone").unwrap();
         let r = resolve(ep, None, Some(&pv), Duration::from_secs(2));
         assert_eq!(r.version.as_deref(), Some("2.40.0"));
+    }
+
+    #[test]
+    fn dynamic_tools_are_found_in_java_home_the_tools_dir_and_path() {
+        let t = tempfile::tempdir().unwrap();
+        let jh = t.path().join("jdk");
+        exe(&jh.join("bin"), "jcmd", "#!/bin/sh\necho 'jcmd 21'\n");
+        let tools = t.path().join("tools");
+        exe(
+            &tools.join("bin"),
+            "valgrind",
+            "#!/bin/sh\necho 'valgrind-3.22'\n",
+        );
+        let pbin = t.path().join("pbin");
+        exe(
+            &pbin,
+            "heaptrack_print",
+            "#!/bin/sh\necho 'heaptrack 1.5'\n",
+        );
+        let pv = std::ffi::OsString::from(pbin.as_os_str());
+        let jh_os = std::ffi::OsString::from(jh.as_os_str());
+        let d = |n: &str| dynamic_tool(n).unwrap();
+        let f = locate_dynamic(d("jcmd"), None, Some(&jh_os), Some(&pv)).unwrap();
+        assert_eq!(f.source, "java-home");
+        let f = locate_dynamic(d("valgrind"), Some(&tools), None, Some(&pv)).unwrap();
+        assert_eq!(f.source, "tools-dir");
+        let r = resolve_dynamic(
+            d("heaptrack_print"),
+            None,
+            None,
+            Some(&pv),
+            true,
+            Duration::from_secs(5),
+        );
+        assert_eq!(r.found.unwrap().source, "path");
+        assert_eq!(r.version.as_deref(), Some("heaptrack 1.5"));
+        // Not a JDK tool: JAVA_HOME is not consulted for valgrind.
+        exe(&jh.join("bin"), "valgrind", "#!/bin/sh\n");
+        assert!(locate_dynamic(d("valgrind"), None, Some(&jh_os), None).is_none());
+        // Nothing anywhere: missing.
+        let empty = std::ffi::OsString::new();
+        assert!(locate_dynamic(d("jfr"), None, None, Some(&empty)).is_none());
+        assert!(DYNAMIC_TOOLS.iter().any(|t| t.name == "vgdb"));
     }
 
     #[test]

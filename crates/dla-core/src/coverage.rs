@@ -238,6 +238,28 @@ impl CoverageManifest {
             .insert(backend.to_owned(), cov);
     }
 
+    /// Records what a backend did, without downgrading: a `ran` entry that enumerated
+    /// something stays when a later call reports the backend `missing` or `blocked`
+    /// (another operation of the same backend may have run); every other combination
+    /// replaces the entry. A `ran` entry keeps the larger `enumerated`.
+    pub fn note_backend(&mut self, worker: &str, backend: &str, cov: BackendCoverage) {
+        let w = self.worker_mut(worker);
+        match w.backends.get_mut(backend) {
+            Some(old) if old.status == BackendStatus::Ran && old.enumerated > 0 => {
+                if cov.status == BackendStatus::Ran {
+                    old.enumerated = old.enumerated.max(cov.enumerated);
+                    if cov.version.is_some() {
+                        old.version = cov.version;
+                    }
+                }
+            }
+            Some(old) => *old = cov,
+            None => {
+                w.backends.insert(backend.to_owned(), cov);
+            }
+        }
+    }
+
     /// Replaces the entry-point lists of a worker.
     pub fn set_entry_points(&mut self, worker: &str, entry_points: EntryPoints) {
         self.worker_mut(worker).entry_points = entry_points;
@@ -304,6 +326,38 @@ impl CoverageManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn note_backend_never_downgrades_a_backend_that_ran() {
+        let mut m = CoverageManifest::new(None);
+        m.note_backend("jvm", "jcmd", BackendCoverage::ran(Some("21".into()), 4));
+        m.note_backend(
+            "jvm",
+            "jcmd",
+            BackendCoverage::missing("gone", "install a JDK"),
+        );
+        assert_eq!(m.workers["jvm"].backends["jcmd"].status, BackendStatus::Ran);
+        m.note_backend("jvm", "jcmd", BackendCoverage::ran(None, 9));
+        assert_eq!(m.workers["jvm"].backends["jcmd"].enumerated, 9);
+        assert_eq!(
+            m.workers["jvm"].backends["jcmd"].version.as_deref(),
+            Some("21")
+        );
+        // A missing entry is replaced by a later run, and a ran-nothing entry by a gap.
+        m.note_backend(
+            "jvm",
+            "jfr",
+            BackendCoverage::missing("no jfr", "install a JDK"),
+        );
+        m.note_backend("jvm", "jfr", BackendCoverage::ran(None, 1));
+        assert_eq!(m.workers["jvm"].backends["jfr"].status, BackendStatus::Ran);
+        m.note_backend("jvm", "x", BackendCoverage::ran(None, 0));
+        m.note_backend("jvm", "x", BackendCoverage::blocked("why"));
+        assert_eq!(
+            m.workers["jvm"].backends["x"].status,
+            BackendStatus::Blocked
+        );
+    }
 
     #[test]
     fn update_creates_then_merges_workers_and_backends() {

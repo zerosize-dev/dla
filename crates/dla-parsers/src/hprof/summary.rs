@@ -111,6 +111,10 @@ pub struct Holder {
     /// Static field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    /// The class name as the dump has it, when `owner_class` (and `key`) were normalized
+    /// from a generated proxy or lambda class name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_owner_class: Option<String>,
     /// Approximate retained bytes.
     pub retained: u64,
     /// Objects dominated (itself included).
@@ -124,6 +128,40 @@ pub struct Holder {
     /// Top stack frames of a thread (context only, never a site).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<String>,
+}
+
+/// A field that keeps a set of objects alive although no root field dominates them.
+///
+/// The set is dominated by the super root (the objects hang from two or more roots, as
+/// when a coroutine job tree and a static map both reach the same continuations) or by a
+/// thread or JNI global. The field is found on the shortest strong path from a GC root
+/// to a sample of the set: paths from static fields of application classes first, then
+/// static fields of other classes, then thread, JNI and other roots.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ViaHolder {
+    /// `static:<class>.<field>` (same form as [`Holder::key`]) or
+    /// `field:<declaring class>.<field>` for an instance field.
+    pub key: String,
+    /// [`HolderKind::Static`] or [`HolderKind::Instance`].
+    pub kind: HolderKind,
+    /// Class declaring the field, proxy and lambda suffixes removed.
+    pub owner_class: String,
+    /// The class name as the dump has it, when `owner_class` differs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_owner_class: Option<String>,
+    /// Field name.
+    pub field: String,
+    /// What dominates the set: `root`, `thread:<name>` or `jni-global:<class>`.
+    pub dominator: String,
+    /// Approximate retained bytes of the set.
+    pub retained: u64,
+    /// Objects dominated by the set's members (members included).
+    pub dominated_count: u64,
+    /// The accumulation class of the set: its class and how many members it has.
+    pub accumulation: Accumulation,
+    /// Root, then the edges down to a member, elided in the middle when long.
+    #[serde(default)]
+    pub path: Vec<String>,
 }
 
 /// Run statistics (not deterministic).
@@ -163,6 +201,10 @@ pub struct HeapSummary {
     pub top_classes: Vec<ClassStat>,
     /// The 20 holders with the most retained bytes.
     pub holders: Vec<Holder>,
+    /// Fields that keep memory alive when the dominator is a thread, a JNI global or the
+    /// super root (see [`ViaHolder`]), largest first; at most 5.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_holders: Vec<ViaHolder>,
     /// How to read the byte figures.
     pub notes: Vec<String>,
     /// True when a cap stopped the analysis early: figures are partial.
@@ -175,6 +217,11 @@ pub struct HeapSummary {
     /// across dumps; not written to the summary file.
     #[serde(skip)]
     pub tracked: Vec<Holder>,
+    /// Every class with live instances, most shallow bytes first (the same figures as
+    /// `top_classes`, untruncated); not written to the summary file. See
+    /// [`HeapSummary::to_histogram`].
+    #[serde(skip)]
+    pub histogram: Vec<ClassStat>,
     /// Sorted hashes of the loaded class names, to compare class sets across dumps; not
     /// written to the summary file.
     #[serde(skip)]
@@ -194,4 +241,25 @@ pub fn name_hash(s: &str) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
+}
+
+impl HeapSummary {
+    /// The full class table as a provider-neutral histogram (source `hprof`). Byte figures
+    /// are the approximate shallow sizes of [`SIZE_NOTES`]; class names are as in
+    /// `top_classes` (`byte[]`, `java.util.HashMap$Node`).
+    pub fn to_histogram(&self) -> crate::model::Histogram {
+        crate::model::Histogram {
+            source: "hprof".to_owned(),
+            timestamp_ms: Some(self.header.timestamp_ms),
+            rows: self
+                .histogram
+                .iter()
+                .map(|c| crate::model::HistogramRow {
+                    name: c.class.clone(),
+                    count: c.count,
+                    bytes: c.shallow,
+                })
+                .collect(),
+        }
+    }
 }

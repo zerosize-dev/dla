@@ -1,0 +1,4 @@
+sending command who_points_at 0x4A7B0C0 to pid 18835
+==18835== Searching for pointers to 0x4a7b0c0
+==18835== *0x10c070 points at 0x4a7b0c0
+ Address 0x10c070 is 16 bytes inside data symbol "cache"

@@ -21,3 +21,4 @@ region = "off-heap"
 cause = "L-HANDLE"
 share = 1.0
 confirmable = true
+dump_backed = true

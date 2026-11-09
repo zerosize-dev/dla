@@ -734,6 +734,27 @@ fn confirmable_defaults_to_true() {
 }
 
 #[test]
+fn dump_backed_defaults_to_false_and_does_not_change_the_grade() {
+    let e = exp(TRAP);
+    assert!(!e.leak[0].dump_backed);
+    let marked = exp(&TRAP.replace(
+        "cause = \"L-COLLECT\"",
+        "cause = \"L-COLLECT\"\ndump_backed = true",
+    ));
+    assert!(marked.leak[0].dump_backed);
+    let findings = [at(
+        State::Confirmed,
+        "src/cache.py:10",
+        "static/global",
+        None,
+    )];
+    let a = grade_findings(&e, Source::Ledger, &findings);
+    let b = grade_findings(&marked, Source::Ledger, &findings);
+    assert_eq!(a.leaks, b.leaks);
+    assert_eq!(a.claim, b.claim);
+}
+
+#[test]
 fn second_leak_recall_counts_only_the_leak_set() {
     let e = exp(r#"
 schema_version = 1

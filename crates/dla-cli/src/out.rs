@@ -41,6 +41,28 @@ fn size(v: &Value) -> usize {
     serde_json::to_string(v).map_or(usize::MAX, |s| s.len())
 }
 
+/// Top-level keys that carry pointers and verdicts. They are never dropped, and their
+/// values are cut only as a last step (hashes and paths stay whole): `ok` and `evidence`
+/// say what happened, `raw`, `summaries`, `artifacts` and `files` say where the full
+/// output is.
+const PROTECTED: [&str; 8] = [
+    "ok",
+    "evidence",
+    "raw",
+    "summaries",
+    "artifacts",
+    "files",
+    "id",
+    "run_id",
+];
+
+/// Longest string kept whole in a protected value.
+const PROTECTED_STR: usize = 160;
+
+fn protected_copy(v: &Value, max_str: usize, max_arr: usize) -> Value {
+    shrink(v, max_str, max_arr, &mut false)
+}
+
 /// Returns `v` unchanged if it fits, else a truncated copy with `"truncated": true`.
 pub fn bound(v: Value) -> Value {
     if size(&v) <= LIMIT {
@@ -49,28 +71,44 @@ pub fn bound(v: Value) -> Value {
     for (max_str, max_arr) in LEVELS {
         let mut changed = false;
         let mut s = shrink(&v, max_str, max_arr, &mut changed);
-        if let Value::Object(o) = &mut s {
+        // The pointers keep their strings whole at every level (an array of evidence ids
+        // may still be cut).
+        if let (Value::Object(o), Value::Object(orig)) = (&mut s, &v) {
+            for k in PROTECTED {
+                if let Some(x) = orig.get(k) {
+                    o.insert(
+                        k.to_owned(),
+                        protected_copy(x, PROTECTED_STR.max(max_str), max_arr.max(32)),
+                    );
+                }
+            }
             o.insert("truncated".to_owned(), Value::Bool(true));
         }
         if size(&s) <= LIMIT {
             return s;
         }
     }
-    // Last resort: keep only the identifying keys.
-    let mut keep = Map::new();
-    if let Value::Object(o) = &v {
-        for k in ["ok", "id", "run_id", "record"] {
-            if let Some(x) = o.get(k) {
-                keep.insert(k.to_owned(), shrink(x, 60, 1, &mut false));
+    // Last resort: keep only the pointers and the verdict, whole while they fit.
+    for (max_str, max_arr) in [(PROTECTED_STR, 32), (100, 16), (60, 8), (60, 4)] {
+        let mut keep = Map::new();
+        if let Value::Object(o) = &v {
+            for k in PROTECTED.iter().chain(&["record", "command"]) {
+                if let Some(x) = o.get(*k) {
+                    keep.insert((*k).to_owned(), protected_copy(x, max_str, max_arr));
+                }
+            }
+            if let Some(Value::Object(e)) = o.get("error") {
+                let code = e.get("code").cloned().unwrap_or(Value::Null);
+                keep.insert("error".to_owned(), json!({ "code": code }));
             }
         }
-        if let Some(Value::Object(e)) = o.get("error") {
-            let code = e.get("code").cloned().unwrap_or(Value::Null);
-            keep.insert("error".to_owned(), json!({ "code": code }));
+        keep.insert("truncated".to_owned(), Value::Bool(true));
+        let s = Value::Object(keep);
+        if size(&s) <= LIMIT {
+            return s;
         }
     }
-    keep.insert("truncated".to_owned(), Value::Bool(true));
-    Value::Object(keep)
+    json!({"truncated": true})
 }
 
 #[cfg(test)]
@@ -109,5 +147,45 @@ mod tests {
         assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
         assert_eq!(b["id"], "F1");
         assert_eq!(b["truncated"], true);
+    }
+
+    #[test]
+    fn the_last_resort_keeps_raw_evidence_ok_and_the_pointers() {
+        let mut o = Map::new();
+        o.insert("ok".into(), json!(true));
+        o.insert("evidence".into(), json!(["E1", "E2", "E3"]));
+        let sha = "a".repeat(64);
+        o.insert(
+            "raw".into(),
+            json!({"path": "summaries/x-12345678.json", "sha256": sha}),
+        );
+        o.insert("summaries".into(), json!(".dla/r1/summaries/"));
+        o.insert("artifacts".into(), json!([".dla/r1/histograms/H1.json"]));
+        o.insert("files".into(), json!(["a", "b"]));
+        for i in 0..400 {
+            o.insert(format!("key{i}"), json!(i));
+        }
+        let b = bound(Value::Object(o));
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["truncated"], true);
+        assert_eq!(b["ok"], true);
+        assert_eq!(b["evidence"], json!(["E1", "E2", "E3"]));
+        assert_eq!(b["raw"]["sha256"], "a".repeat(64));
+        assert_eq!(b["summaries"], ".dla/r1/summaries/");
+        assert!(b["artifacts"].is_array() && b["files"].is_array());
+    }
+
+    #[test]
+    fn shrinking_a_long_value_keeps_the_raw_hash_whole() {
+        let v = json!({
+            "ok": true,
+            "raw": {"path": "summaries/x.json", "sha256": "b".repeat(64)},
+            "evidence": ["E1"],
+            "rows": vec!["a long text ".repeat(20); 40],
+        });
+        let b = bound(v);
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["raw"]["sha256"], "b".repeat(64));
+        assert_eq!(b["evidence"], json!(["E1"]));
     }
 }

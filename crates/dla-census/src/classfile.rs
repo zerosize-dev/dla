@@ -2,8 +2,13 @@
 //! attribute's instructions that matter to the census (`new`, `invoke*`, `putstatic`,
 //! `putfield`) and the `LineNumberTable`, plus `SourceFile`.
 //!
+//! It also decodes the class-level `RuntimeVisibleAnnotations` attribute (annotation
+//! types and their constant, string and array elements), which carries the Kotlin
+//! `DebugMetadata` of coroutine continuation classes.
+//!
 //! It reads the format of JVMS chapter 4 and nothing else. Anything malformed ends in
-//! an `Err` and the caller falls back to source parsing.
+//! an `Err` and the caller falls back to source parsing. A malformed annotation attribute
+//! alone is not an error: the class is read without annotations.
 
 use std::collections::HashMap;
 
@@ -35,6 +40,85 @@ pub struct ClassFile {
     pub fields: Vec<Field>,
     /// Methods.
     pub methods: Vec<Method>,
+    /// Class-level `RuntimeVisibleAnnotations`.
+    pub annotations: Vec<Annotation>,
+}
+
+/// A class-level annotation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Annotation {
+    /// Internal name of the annotation type (`kotlin/coroutines/jvm/internal/DebugMetadata`).
+    pub type_name: String,
+    /// `(element name, value)` pairs in file order.
+    pub elements: Vec<(String, ElementValue)>,
+}
+
+/// An annotation element value; kinds the census does not use are `Other`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ElementValue {
+    /// A `String` constant.
+    Str(String),
+    /// A `byte`, `char`, `int`, `short` or `boolean` constant.
+    Int(i64),
+    /// An array of values.
+    Array(Vec<ElementValue>),
+    /// A long, float, double, enum, class or nested annotation value.
+    Other,
+}
+
+impl Annotation {
+    /// The value of element `name`.
+    pub fn get(&self, name: &str) -> Option<&ElementValue> {
+        self.elements
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
+    }
+
+    /// A string element.
+    pub fn str(&self, name: &str) -> Option<&str> {
+        match self.get(name)? {
+            ElementValue::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// An int array element (a single int counts as one entry); empty when absent.
+    pub fn ints(&self, name: &str) -> Vec<i64> {
+        match self.get(name) {
+            Some(ElementValue::Int(i)) => vec![*i],
+            Some(ElementValue::Array(a)) => a
+                .iter()
+                .filter_map(|v| match v {
+                    ElementValue::Int(i) => Some(*i),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// A string array element (a single string counts as one entry); empty when absent.
+    pub fn strs(&self, name: &str) -> Vec<String> {
+        match self.get(name) {
+            Some(ElementValue::Str(s)) => vec![s.clone()],
+            Some(ElementValue::Array(a)) => a
+                .iter()
+                .filter_map(|v| match v {
+                    ElementValue::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+impl ClassFile {
+    /// The class-level annotation of type `internal` (`a/b/Name`).
+    pub fn annotation(&self, internal: &str) -> Option<&Annotation> {
+        self.annotations.iter().find(|a| a.type_name == internal)
+    }
 }
 
 /// A field.
@@ -132,6 +216,7 @@ impl<'a> Reader<'a> {
 enum Cp {
     None,
     Utf8(String),
+    Int(i32),
     Class(u16),
     Ref(u16, u16),
     NameType(u16, u16),
@@ -145,6 +230,12 @@ impl Pool {
         match self.0.get(usize::from(i)) {
             Some(Cp::Utf8(s)) => Ok(s),
             _ => Err(ClassError("bad utf8 index")),
+        }
+    }
+    fn int(&self, i: u16) -> Result<i32, ClassError> {
+        match self.0.get(usize::from(i)) {
+            Some(Cp::Int(v)) => Ok(*v),
+            _ => Err(ClassError("bad integer index")),
         }
     }
     fn class(&self, i: u16) -> Result<&str, ClassError> {
@@ -192,7 +283,8 @@ pub fn parse(bytes: &[u8]) -> Result<ClassFile, ClassError> {
                 let n = usize::from(r.u2()?);
                 Cp::Utf8(mutf8(r.take(n)?))
             }
-            3 | 4 => {
+            3 => Cp::Int(r.u4()? as i32),
+            4 => {
                 r.take(4)?;
                 Cp::Other
             }
@@ -285,9 +377,78 @@ pub fn parse(bytes: &[u8]) -> Result<ClassFile, ClassError> {
                 pool.utf8(u16::from_be_bytes([body[0], body[1]]))?
                     .to_owned(),
             );
+        } else if an == "RuntimeVisibleAnnotations" {
+            cf.annotations = parse_annotations(body, &pool).unwrap_or_default();
         }
     }
     Ok(cf)
+}
+
+/// Deepest nesting of arrays and annotations read; deeper values are a malformed class.
+const MAX_ANNOTATION_DEPTH: u32 = 8;
+
+fn parse_annotations(body: &[u8], pool: &Pool) -> Result<Vec<Annotation>, ClassError> {
+    let mut r = Reader { b: body, p: 0 };
+    let n = r.u2()?;
+    let mut out = Vec::new();
+    for _ in 0..n {
+        out.push(parse_annotation(&mut r, pool, 0)?);
+    }
+    Ok(out)
+}
+
+fn parse_annotation(r: &mut Reader<'_>, pool: &Pool, depth: u32) -> Result<Annotation, ClassError> {
+    if depth > MAX_ANNOTATION_DEPTH {
+        return Err(ClassError("annotation nested too deeply"));
+    }
+    let desc = pool.utf8(r.u2()?)?;
+    let type_name = desc
+        .strip_prefix('L')
+        .and_then(|d| d.strip_suffix(';'))
+        .unwrap_or(desc)
+        .to_owned();
+    let pairs = r.u2()?;
+    let mut elements = Vec::new();
+    for _ in 0..pairs {
+        let name = pool.utf8(r.u2()?)?.to_owned();
+        elements.push((name, parse_element(r, pool, depth)?));
+    }
+    Ok(Annotation {
+        type_name,
+        elements,
+    })
+}
+
+fn parse_element(r: &mut Reader<'_>, pool: &Pool, depth: u32) -> Result<ElementValue, ClassError> {
+    if depth > MAX_ANNOTATION_DEPTH {
+        return Err(ClassError("annotation nested too deeply"));
+    }
+    Ok(match r.u1()? {
+        b'B' | b'C' | b'I' | b'S' | b'Z' => ElementValue::Int(i64::from(pool.int(r.u2()?)?)),
+        b's' => ElementValue::Str(pool.utf8(r.u2()?)?.to_owned()),
+        b'J' | b'D' | b'F' | b'c' => {
+            r.u2()?;
+            ElementValue::Other
+        }
+        b'e' => {
+            r.u2()?;
+            r.u2()?;
+            ElementValue::Other
+        }
+        b'@' => {
+            parse_annotation(r, pool, depth + 1)?;
+            ElementValue::Other
+        }
+        b'[' => {
+            let n = r.u2()?;
+            let mut v = Vec::new();
+            for _ in 0..n {
+                v.push(parse_element(r, pool, depth + 1)?);
+            }
+            ElementValue::Array(v)
+        }
+        _ => return Err(ClassError("unknown annotation element tag")),
+    })
 }
 
 fn parse_code(body: &[u8], pool: &Pool, m: &mut Method) -> Result<(), ClassError> {

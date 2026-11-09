@@ -210,6 +210,10 @@
           "type": "boolean",
           "default": true
         },
+        "dump_backed": {
+          "description": "True when the confirmation must rest on a heap dump or an allocation profile: the\nchosen confirmed finding cites retention or allocation evidence with dump or live\nauthority. Checked by `dla-bench dynamic` only; the graders ignore it.",
+          "type": "boolean"
+        },
         "holder": {
           "description": "What holds the memory.",
           "$ref": "#/$defs/Holder"

@@ -163,6 +163,8 @@ fn manifest(
         tools: vec![],
         gaps: vec![],
         timeout_secs: 120,
+        ffi: None,
+        captures: vec![],
     }
 }
 
@@ -232,6 +234,7 @@ fn build_jvm_agent(fx: &Fx) -> PathBuf {
             .arg(&classes)
             .arg(fx.agent.join("DlaAgent.java"))
             .arg(fx.agent.join("DlaDump.java"))
+            .arg(fx.agent.join("DlaCapture.java"))
             .env_remove("JAVA_TOOL_OPTIONS")
             .status()
             .unwrap()
@@ -1273,4 +1276,190 @@ fn sigterm_kills_the_workload_and_marks_the_record_stopped() {
         "{:?}",
         st.processes
     );
+}
+
+// The shim is preloaded with `LD_PRELOAD`: Linux only.
+#[cfg(target_os = "linux")]
+#[test]
+fn shim_reports_descriptors_by_kind_and_serves_small_alignments() {
+    if !have(&["cc"]) {
+        return;
+    }
+    let fx = fixture("", &["native"], &[1]);
+    let lib = fx.agent.join("libdlashim.so");
+    let st = Command::new("cc")
+        .args([
+            "-std=gnu11",
+            "-O2",
+            "-g",
+            "-fPIC",
+            "-shared",
+            "-fno-optimize-sibling-calls",
+            "-o",
+        ])
+        .arg(&lib)
+        .arg(fx.agent.join("dla_alloc_shim.c"))
+        .args(["-ldl", "-lpthread"])
+        .status()
+        .unwrap();
+    assert!(st.success());
+    // A program with one descriptor of each kind, and an aligned_alloc below the pointer size
+    // (the C++ runtime does this; posix_memalign alone rejects it).
+    let src = fx.work.join("fds.c");
+    fs::write(
+        &src,
+        r#"#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/eventfd.h>
+#include <sys/epoll.h>
+int main(void) {
+    int p[2], s[2];
+    if (pipe(p) || socketpair(AF_UNIX, SOCK_STREAM, 0, s)) return 2;
+    eventfd(0, 0);
+    epoll_create1(0);
+    open("/etc/hostname", O_RDONLY);
+    open("/dev/null", O_RDONLY);
+    char t[] = "/tmp/dlafdXXXXXX";
+    int u = mkstemp(t);
+    if (u < 0) return 3;
+    unlink(t);
+    void *a = aligned_alloc(4, 64);
+    if (a == NULL) return 4;
+    free(a);
+    return 0;
+}
+"#,
+    )
+    .unwrap();
+    let exe = fx.work.join("fds");
+    assert!(
+        Command::new("cc")
+            .arg("-o")
+            .arg(&exe)
+            .arg(&src)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let out = fx.work.join("dump.jsonl");
+    let st = Command::new(&exe)
+        .env("LD_PRELOAD", &lib)
+        .env("DLA_HARNESS_OUT", &out)
+        .status()
+        .unwrap();
+    assert_eq!(
+        st.code(),
+        Some(0),
+        "aligned_alloc(4, 64) must succeed under the shim"
+    );
+    let line = fs::read_to_string(&out).unwrap();
+    let rec: serde_json::Value = serde_json::from_str(line.lines().last().unwrap()).unwrap();
+    let v = &rec["values"];
+    for (kind, min) in [
+        ("fd.socket", 2.0),
+        ("fd.pipe", 2.0),
+        ("fd.file", 1.0),
+        ("fd.deleted", 1.0),
+        ("fd.dev", 1.0),
+        ("fd.eventfd", 1.0),
+        ("fd.eventpoll", 1.0),
+        ("fd.timerfd", 0.0),
+    ] {
+        let got = v[kind]
+            .as_f64()
+            .unwrap_or_else(|| panic!("no {kind} in {v}"));
+        assert!(got >= min, "{kind} = {got}, want at least {min}: {v}");
+    }
+    // The kinds add up to os.fds.
+    let sum: f64 = v
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k.starts_with("fd."))
+        .map(|(_, x)| x.as_f64().unwrap())
+        .sum();
+    assert_eq!(sum, v["os.fds"].as_f64().unwrap(), "{v}");
+}
+
+#[test]
+fn jvm_agent_writes_the_requested_captures_and_lists_them() {
+    if !have(&["java", "javac", "jar"]) {
+        return;
+    }
+    let fx = fixture("", &["jvm"], &[1]);
+    let jar = build_jvm_agent(&fx);
+    fs::create_dir_all(fx.work.join("app")).unwrap();
+    fs::write(
+        fx.work.join("app/Leak.java"),
+        "import java.util.*;\npublic class Leak {\n    static final Map<String, byte[]> CACHE = new HashMap<>();\n    public static void main(String[] a) throws Exception {\n        int n = Integer.parseInt(a[0]);\n        for (int i = 0; i < n; i++) CACHE.put(\"k\" + i, new byte[1024]);\n        System.out.println(CACHE.size());\n    }\n}\n",
+    )
+    .unwrap();
+    assert!(
+        Command::new("javac")
+            .args(["-d", "out", "app/Leak.java"])
+            .current_dir(&fx.work)
+            .env_remove("JAVA_TOOL_OPTIONS")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut m = manifest(
+        Runtime::Jvm,
+        &["java", "-cp", "out", "Leak", "{n}"],
+        vec![(
+            s("JAVA_TOOL_OPTIONS"),
+            format!(
+                "-javaagent:{} -XX:NativeMemoryTracking=summary",
+                jar.display()
+            ),
+        )],
+        3000,
+    );
+    m.agent = AgentKind::JvmAgent;
+    write_manifest(&fx, &m);
+    let opts = RunOptions {
+        iterations: Some(3),
+        capture: "heap,histogram,jfr,nonheap".parse().unwrap(),
+        capture_dumps: Some(2),
+        ..RunOptions::default()
+    };
+    let out = run_points(&fx.ctx, &m, &opts).unwrap();
+    use dla_core::harness::CaptureKind::{Heap, Histogram, Jfr, NonHeap};
+    let count = |k| out.captures.iter().filter(|c| c.kind == k).count();
+    // Four points: histograms at each, the heavy kinds at two (the end of the warm-up and
+    // the last).
+    assert_eq!(count(Histogram), 4, "{:?}", out.limitations);
+    assert_eq!(count(Heap), 2);
+    assert_eq!(count(Jfr), 2);
+    assert_eq!(count(NonHeap), 8);
+    for c in &out.captures {
+        let abs = fx.ctx.run_dir.join(&c.path);
+        assert_eq!(fs::metadata(&abs).unwrap().len(), c.bytes, "{}", c.path);
+        assert!(c.bytes > 0 && c.captured_at.ends_with('Z'));
+    }
+    let heap = out.captures.iter().find(|c| c.kind == Heap).unwrap();
+    assert!(heap.ms.is_some(), "the agent reports what the dump cost");
+    assert!(heap.bytes > 1_000_000);
+    // The text histogram is what jcmd prints.
+    let hist = out.captures.iter().find(|c| c.kind == Histogram).unwrap();
+    let text = fs::read_to_string(fx.ctx.run_dir.join(&hist.path)).unwrap();
+    assert!(
+        text.contains("#instances") && text.contains("java.lang.String"),
+        "{}",
+        &text[..text.len().min(300)]
+    );
+    // Without the option nothing is written.
+    let plain = run_points(
+        &fx.ctx,
+        &m,
+        &RunOptions {
+            iterations: Some(1),
+            ..RunOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(plain.captures.is_empty());
 }

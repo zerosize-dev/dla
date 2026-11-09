@@ -212,6 +212,10 @@ pub const NON_LEAK_CAUSES: [&str; 8] = [
     "UNCLASSIFIED",
 ];
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// One expected leak.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -251,6 +255,11 @@ pub struct Leak {
     /// False when only static evidence is obtainable.
     #[serde(default = "yes")]
     pub confirmable: bool,
+    /// True when the confirmation must rest on a heap dump or an allocation profile: the
+    /// chosen confirmed finding cites retention or allocation evidence with dump or live
+    /// authority. Checked by `dla-bench dynamic` only; the graders ignore it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dump_backed: bool,
 }
 
 /// One expected non-leak.

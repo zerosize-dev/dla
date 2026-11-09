@@ -1,0 +1,368 @@
+Debuggee command was: ./rleak_plain 500
+finished reading file, now analyzing data:
+
+MOST CALLS TO ALLOCATION FUNCTIONS
+507 calls to allocation functions with 1.05M peak consumption from
+_RNvNtCsgFX3jaOk65H_5alloc5alloc5alloc
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:130
+  in /work/rleak_plain
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global18alloc_impl_runtime
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:302
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global10alloc_impl
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:424
+_RNvXs1_NtCsgFX3jaOk65H_5alloc5allocNtB5_6GlobalNtNtCskADBYZwJmSU_4core5alloc9Allocator8allocate
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:541
+_RINvNtNtCs3BTM885nGDo_9hashbrown5alloc5inner8do_allocNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/alloc.rs:18
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner17new_uninitializedNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:1576
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner22fallible_with_capacityNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:1634
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner14prepare_resizeNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2696
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner12resize_innerNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2898
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner20reserve_rehash_innerNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2784
+_RINvMs6_NtCs3BTM885nGDo_9hashbrown3rawINtB6_8RawTableTyINtNtCsgFX3jaOk65H_5alloc3vec3VechEEE14reserve_rehashNCINvNtB8_3map11make_hasheryBR_NtNtNtCs8ZKwes1zzDd_3std4hash6random11RandomStateE0ECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:962
+498 calls with 1.02M peak consumption from:
+    _RNvCsinJrbhJGnG5_5rleak4main
+      at src/main.rs:22
+      in /work/rleak_plain
+    _RNvYFEuINtNtNtCskADBYZwJmSU_4core3ops8function6FnOnceuE9call_onceCsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250
+      in /work/rleak_plain
+    _RINvNtNtCs8ZKwes1zzDd_3std3sys9backtrace28___rust_begin_short_backtraceFEuuECsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:166
+    _RNCINvNtCs8ZKwes1zzDd_3std2rt10lang_startuE0CsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:206
+      in /work/rleak_plain
+    _RNvXs0_NtNtNtCskADBYZwJmSU_4core3ops8function5implsRDINtB7_2FnuEp6OutputlNtNtNtBb_5panic11unwind_safe13RefUnwindSafeNtNtBb_6marker4SyncEL_INtB7_6FnOnceuE9call_onceCs8ZKwes1zzDd_3std
+      at library/core/src/ops/function.rs:287
+      in /work/rleak_plain
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtB13_5panic11unwind_safe13RefUnwindSafeNtNtB13_6marker4SyncEL_lEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindlRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBU_5panic11unwind_safe13RefUnwindSafeNtNtBU_6marker4SyncEL_EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBP_5panic11unwind_safe13RefUnwindSafeNtNtBP_6marker4SyncEL_lEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNCNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal0B5_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:175
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callNCNvNtB6_2rt19lang_start_internal0iEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindiNCNvNtB4_2rt19lang_start_internal0EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindNCNvNtB4_2rt19lang_start_internal0iEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171
+    main
+      in /work/rleak_plain
+  and 9 from 1 other places
+
+5 calls to allocation functions with 548B peak consumption from
+_RNvNtCsgFX3jaOk65H_5alloc5alloc5alloc
+  at library/alloc/src/alloc.rs:130
+  in /work/rleak_plain
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global18alloc_impl_runtime
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:302
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global10alloc_impl
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:424
+_RNvXs1_NtCsgFX3jaOk65H_5alloc5allocNtB5_6GlobalNtNtCskADBYZwJmSU_4core5alloc9Allocator8allocate
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:541
+_RNvMs1_NtCsgFX3jaOk65H_5alloc5boxedINtB5_3BoxeE21try_clone_from_ref_inCs8ZKwes1zzDd_3std
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/boxed.rs:886
+_RNvMs1_NtCsgFX3jaOk65H_5alloc5boxedINtB5_3BoxeE17clone_from_ref_inCs8ZKwes1zzDd_3std
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/boxed.rs:845
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5boxedINtB5_3BoxeE14clone_from_refCs8ZKwes1zzDd_3std
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/boxed.rs:798
+_RNvXs3_NtNtCsgFX3jaOk65H_5alloc5boxed7convertINtB7_3BoxeEINtNtCskADBYZwJmSU_4core7convert4FromReE4from
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/boxed/convert.rs:138
+_RNvYNvYINtNtCsgFX3jaOk65H_5alloc5boxed3BoxeEINtNtCskADBYZwJmSU_4core7convert4FromReE4fromINtNtNtBL_3ops8function6FnOnceTB1h_EE9call_onceCs8ZKwes1zzDd_3std
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250
+_RINvMNtCskADBYZwJmSU_4core6optionINtB3_6OptionReE3mapINtNtCsgFX3jaOk65H_5alloc5boxed3BoxeENvYBP_INtNtB5_7convert4FromBI_E4fromECs8ZKwes1zzDd_3std
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/option.rs:1163
+_RNCNvNtNtNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix14stack_overflow11thread_info16set_current_info0Bd_
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/pal/unix/stack_overflow/thread_info.rs:114
+_RNCINvNtNtCs8ZKwes1zzDd_3std6thread7current17with_current_nameNCNvNtNtNtNtNtB8_3sys3pal4unix14stack_overflow11thread_info16set_current_info0INtNtCskADBYZwJmSU_4core6option6OptionINtNtCsgFX3jaOk65H_5alloc5boxed3BoxeEEE0B8_
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/thread/current.rs:234
+_RINvNtNtCs8ZKwes1zzDd_3std6thread7current16try_with_currentNCINvB2_17with_current_nameNCNvNtNtNtNtNtB6_3sys3pal4unix14stack_overflow11thread_info16set_current_info0INtNtCskADBYZwJmSU_4core6option6OptionINtNtCsgFX3jaOk65H_5alloc5boxed3BoxeEEE0B2C_EB6_
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/thread/current.rs:204
+_RINvNtNtCs8ZKwes1zzDd_3std6thread7current17with_current_nameNCNvNtNtNtNtNtB6_3sys3pal4unix14stack_overflow11thread_info16set_current_info0INtNtCskADBYZwJmSU_4core6option6OptionINtNtCsgFX3jaOk65H_5alloc5boxed3BoxeEEEB6_
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/thread/current.rs:216
+_RNvNtNtNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix14stack_overflow11thread_info16set_current_info
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/pal/unix/stack_overflow/thread_info.rs:114
+2 calls with 0B peak consumption from:
+    _RNvCsinJrbhJGnG5_5rleak4main
+      at src/main.rs:20
+      in /work/rleak_plain
+    _RNvYFEuINtNtNtCskADBYZwJmSU_4core3ops8function6FnOnceuE9call_onceCsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250
+      in /work/rleak_plain
+    _RINvNtNtCs8ZKwes1zzDd_3std3sys9backtrace28___rust_begin_short_backtraceFEuuECsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:166
+    _RNCINvNtCs8ZKwes1zzDd_3std2rt10lang_startuE0CsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:206
+      in /work/rleak_plain
+    _RNvXs0_NtNtNtCskADBYZwJmSU_4core3ops8function5implsRDINtB7_2FnuEp6OutputlNtNtNtBb_5panic11unwind_safe13RefUnwindSafeNtNtBb_6marker4SyncEL_INtB7_6FnOnceuE9call_onceCs8ZKwes1zzDd_3std
+      at library/core/src/ops/function.rs:287
+      in /work/rleak_plain
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtB13_5panic11unwind_safe13RefUnwindSafeNtNtB13_6marker4SyncEL_lEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindlRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBU_5panic11unwind_safe13RefUnwindSafeNtNtBU_6marker4SyncEL_EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBP_5panic11unwind_safe13RefUnwindSafeNtNtBP_6marker4SyncEL_lEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNCNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal0B5_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:175
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callNCNvNtB6_2rt19lang_start_internal0iEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindiNCNvNtB4_2rt19lang_start_internal0EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindNCNvNtB4_2rt19lang_start_internal0iEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171
+    main
+      in /work/rleak_plain
+  and 3 from 3 other places
+
+
+PEAK MEMORY CONSUMERS
+1.05M peak memory consumed over 507 calls from
+_RNvNtCsgFX3jaOk65H_5alloc5alloc5alloc
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:130
+  in /work/rleak_plain
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global18alloc_impl_runtime
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:302
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global10alloc_impl
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:424
+_RNvXs1_NtCsgFX3jaOk65H_5alloc5allocNtB5_6GlobalNtNtCskADBYZwJmSU_4core5alloc9Allocator8allocate
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:541
+_RINvNtNtCs3BTM885nGDo_9hashbrown5alloc5inner8do_allocNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/alloc.rs:18
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner17new_uninitializedNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:1576
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner22fallible_with_capacityNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:1634
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner14prepare_resizeNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2696
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner12resize_innerNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2898
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner20reserve_rehash_innerNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2784
+_RINvMs6_NtCs3BTM885nGDo_9hashbrown3rawINtB6_8RawTableTyINtNtCsgFX3jaOk65H_5alloc3vec3VechEEE14reserve_rehashNCINvNtB8_3map11make_hasheryBR_NtNtNtCs8ZKwes1zzDd_3std4hash6random11RandomStateE0ECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:962
+1.02M consumed over 498 calls from:
+    _RNvCsinJrbhJGnG5_5rleak4main
+      at src/main.rs:22
+      in /work/rleak_plain
+    _RNvYFEuINtNtNtCskADBYZwJmSU_4core3ops8function6FnOnceuE9call_onceCsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250
+      in /work/rleak_plain
+    _RINvNtNtCs8ZKwes1zzDd_3std3sys9backtrace28___rust_begin_short_backtraceFEuuECsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:166
+    _RNCINvNtCs8ZKwes1zzDd_3std2rt10lang_startuE0CsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:206
+      in /work/rleak_plain
+    _RNvXs0_NtNtNtCskADBYZwJmSU_4core3ops8function5implsRDINtB7_2FnuEp6OutputlNtNtNtBb_5panic11unwind_safe13RefUnwindSafeNtNtBb_6marker4SyncEL_INtB7_6FnOnceuE9call_onceCs8ZKwes1zzDd_3std
+      at library/core/src/ops/function.rs:287
+      in /work/rleak_plain
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtB13_5panic11unwind_safe13RefUnwindSafeNtNtB13_6marker4SyncEL_lEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindlRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBU_5panic11unwind_safe13RefUnwindSafeNtNtBU_6marker4SyncEL_EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBP_5panic11unwind_safe13RefUnwindSafeNtNtBP_6marker4SyncEL_lEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNCNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal0B5_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:175
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callNCNvNtB6_2rt19lang_start_internal0iEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindiNCNvNtB4_2rt19lang_start_internal0EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindNCNvNtB4_2rt19lang_start_internal0iEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171
+    main
+      in /work/rleak_plain
+  and 33.81K from 1 other places
+
+73.73K peak memory consumed over 1 calls from
+0x7f265beb738e
+  in /lib/x86_64-linux-gnu/libstdc++.so.6
+73.73K consumed over 1 calls from:
+    call_init
+      at ./elf/dl-init.c:74
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init::call_init
+      at ./elf/dl-init.c:120
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init
+      at ./elf/./elf/dl-init.c:121
+    _dl_start_user
+      in /lib64/ld-linux-x86-64.so.2
+
+
+MEMORY LEAKS
+1.05M leaked over 507 calls from
+_RNvNtCsgFX3jaOk65H_5alloc5alloc5alloc
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:130
+  in /work/rleak_plain
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global18alloc_impl_runtime
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:302
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global10alloc_impl
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:424
+_RNvXs1_NtCsgFX3jaOk65H_5alloc5allocNtB5_6GlobalNtNtCskADBYZwJmSU_4core5alloc9Allocator8allocate
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:541
+_RINvNtNtCs3BTM885nGDo_9hashbrown5alloc5inner8do_allocNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/alloc.rs:18
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner17new_uninitializedNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:1576
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner22fallible_with_capacityNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:1634
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner14prepare_resizeNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2696
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner12resize_innerNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2898
+_RINvMsa_NtCs3BTM885nGDo_9hashbrown3rawNtB6_13RawTableInner20reserve_rehash_innerNtNtCsgFX3jaOk65H_5alloc5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:2784
+_RINvMs6_NtCs3BTM885nGDo_9hashbrown3rawINtB6_8RawTableTyINtNtCsgFX3jaOk65H_5alloc3vec3VechEEE14reserve_rehashNCINvNtB8_3map11make_hasheryBR_NtNtNtCs8ZKwes1zzDd_3std4hash6random11RandomStateE0ECsinJrbhJGnG5_5rleak
+  at /rust/deps/hashbrown-0.17.1/src/raw.rs:962
+1.02M leaked over 498 calls from:
+    _RNvCsinJrbhJGnG5_5rleak4main
+      at src/main.rs:22
+      in /work/rleak_plain
+    _RNvYFEuINtNtNtCskADBYZwJmSU_4core3ops8function6FnOnceuE9call_onceCsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250
+      in /work/rleak_plain
+    _RINvNtNtCs8ZKwes1zzDd_3std3sys9backtrace28___rust_begin_short_backtraceFEuuECsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:166
+    _RNCINvNtCs8ZKwes1zzDd_3std2rt10lang_startuE0CsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:206
+      in /work/rleak_plain
+    _RNvXs0_NtNtNtCskADBYZwJmSU_4core3ops8function5implsRDINtB7_2FnuEp6OutputlNtNtNtBb_5panic11unwind_safe13RefUnwindSafeNtNtBb_6marker4SyncEL_INtB7_6FnOnceuE9call_onceCs8ZKwes1zzDd_3std
+      at library/core/src/ops/function.rs:287
+      in /work/rleak_plain
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtB13_5panic11unwind_safe13RefUnwindSafeNtNtB13_6marker4SyncEL_lEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindlRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBU_5panic11unwind_safe13RefUnwindSafeNtNtBU_6marker4SyncEL_EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBP_5panic11unwind_safe13RefUnwindSafeNtNtBP_6marker4SyncEL_lEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNCNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal0B5_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:175
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callNCNvNtB6_2rt19lang_start_internal0iEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindiNCNvNtB4_2rt19lang_start_internal0EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindNCNvNtB4_2rt19lang_start_internal0iEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171
+    main
+      in /work/rleak_plain
+  and 33.81K from 1 other places
+
+4.10K leaked over 2 calls from
+_RNvNtCsgFX3jaOk65H_5alloc5alloc12alloc_zeroed
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:290
+  in /work/rleak_plain
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global18alloc_impl_runtime
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:302
+_RNvMs0_NtCsgFX3jaOk65H_5alloc5allocNtB5_6Global10alloc_impl
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:424
+_RNvXs1_NtCsgFX3jaOk65H_5alloc5allocNtB5_6GlobalNtNtCskADBYZwJmSU_4core5alloc9Allocator15allocate_zeroed
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/alloc.rs:547
+_RNvMs5_NtCsgFX3jaOk65H_5alloc7raw_vecNtB5_11RawVecInner15try_allocate_inCsinJrbhJGnG5_5rleak
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/raw_vec/mod.rs:468
+_RNvMs2_NtCsgFX3jaOk65H_5alloc7raw_vecNtB5_11RawVecInner23with_capacity_zeroed_inCsinJrbhJGnG5_5rleak
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/raw_vec/mod.rs:587
+_RNvMs0_NtCsgFX3jaOk65H_5alloc7raw_vecINtB5_6RawVechE23with_capacity_zeroed_inCsinJrbhJGnG5_5rleak
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/raw_vec/mod.rs:221
+_RINvXs1_NtNtCsgFX3jaOk65H_5alloc3vec14spec_from_elemhNtB6_12SpecFromElem9from_elemNtNtBa_5alloc6GlobalECsinJrbhJGnG5_5rleak
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/vec/spec_from_elem.rs:51
+_RINvNtCsgFX3jaOk65H_5alloc3vec9from_elemhECsinJrbhJGnG5_5rleak
+  at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/alloc/src/vec/mod.rs:3773
+_RNvCsinJrbhJGnG5_5rleak12open_session
+  at /work/rleak/src/main.rs:12
+4.10K leaked over 2 calls from:
+    _RNvCsinJrbhJGnG5_5rleak4main
+      at src/main.rs:22
+      in /work/rleak_plain
+    _RNvYFEuINtNtNtCskADBYZwJmSU_4core3ops8function6FnOnceuE9call_onceCsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250
+      in /work/rleak_plain
+    _RINvNtNtCs8ZKwes1zzDd_3std3sys9backtrace28___rust_begin_short_backtraceFEuuECsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/backtrace.rs:166
+    _RNCINvNtCs8ZKwes1zzDd_3std2rt10lang_startuE0CsinJrbhJGnG5_5rleak
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:206
+      in /work/rleak_plain
+    _RNvXs0_NtNtNtCskADBYZwJmSU_4core3ops8function5implsRDINtB7_2FnuEp6OutputlNtNtNtBb_5panic11unwind_safe13RefUnwindSafeNtNtBb_6marker4SyncEL_INtB7_6FnOnceuE9call_onceCs8ZKwes1zzDd_3std
+      at library/core/src/ops/function.rs:287
+      in /work/rleak_plain
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtB13_5panic11unwind_safe13RefUnwindSafeNtNtB13_6marker4SyncEL_lEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindlRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBU_5panic11unwind_safe13RefUnwindSafeNtNtBU_6marker4SyncEL_EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindRDINtNtNtCskADBYZwJmSU_4core3ops8function2FnuEp6OutputlNtNtNtBP_5panic11unwind_safe13RefUnwindSafeNtNtBP_6marker4SyncEL_lEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNCNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal0B5_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:175
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callNCNvNtB6_2rt19lang_start_internal0iEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindiNCNvNtB4_2rt19lang_start_internal0EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindNCNvNtB4_2rt19lang_start_internal0iEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171
+    main
+      in /work/rleak_plain
+
+
+MOST TEMPORARY ALLOCATIONS
+1 temporary allocations of 1 allocations in total (100.00%) from
+__GI___getdelim
+  at ./libio/iogetdelim.c:107
+  in /lib/x86_64-linux-gnu/libc.so.6
+1 temporary allocations of 1 allocations in total (100.00%) from:
+    __pthread_getattr_np
+      at ./nptl/pthread_getattr_np.c:122
+      in /lib/x86_64-linux-gnu/libc.so.6
+    _RNvNtNtNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix14stack_overflow3imp15get_stack_start
+      at library/std/src/sys/pal/unix/stack_overflow.rs:366
+      in /work/rleak_plain
+    _RNvNtNtNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix14stack_overflow3imp19stack_start_aligned
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/pal/unix/stack_overflow.rs:383
+    _RNvNtNtNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix14stack_overflow3imp24install_main_guard_linux
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/pal/unix/stack_overflow.rs:441
+    _RNvNtNtNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix14stack_overflow3imp18install_main_guard
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/pal/unix/stack_overflow.rs:407
+    _RNvNtNtNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix14stack_overflow3imp4init
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/pal/unix/stack_overflow.rs:161
+    _RNvNtNtNtCs8ZKwes1zzDd_3std3sys3pal4unix4init
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/sys/pal/unix/mod.rs:38
+    _RNvNtCs8ZKwes1zzDd_3std2rt4init
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:118
+    _RNCNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal0B5_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:173
+    _RINvNvNtCs8ZKwes1zzDd_3std9panicking12catch_unwind7do_callNCNvNtB6_2rt19lang_start_internal0iEB6_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:576
+    _RINvNtCs8ZKwes1zzDd_3std9panicking12catch_unwindiNCNvNtB4_2rt19lang_start_internal0EB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:544
+    _RINvNtCs8ZKwes1zzDd_3std5panic12catch_unwindNCNvNtB4_2rt19lang_start_internal0iEB4_
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panic.rs:359
+    _RNvNtCs8ZKwes1zzDd_3std2rt19lang_start_internal
+      at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/rt.rs:171
+    main
+      in /work/rleak_plain
+
+
+total runtime: 0.00s.
+calls to allocation functions: 522 (522000/s)
+temporary memory allocations: 1 (1000/s)
+peak heap memory consumption: 1.13M
+peak RSS (including heaptrack overhead): 5.98M
+total memory leaked: 1.06M

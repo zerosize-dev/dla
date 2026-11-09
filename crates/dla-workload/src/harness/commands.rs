@@ -73,6 +73,15 @@ pub struct Switches {
     pub env: Vec<(String, String)>,
     /// Add `-XX:StartFlightRecording` (driver mode, JVM).
     pub jfr: bool,
+    /// The JVM calls a native library through JNI: preload the allocator shim into it.
+    pub ffi: Option<FfiSwitch>,
+}
+
+/// What a JVM harness needs to measure the native side of a JNI boundary.
+#[derive(Debug, Clone, Default)]
+pub struct FfiSwitch {
+    /// Absolute directories that hold the built native library (`java.library.path`).
+    pub lib_dirs: Vec<String>,
 }
 
 /// Path separator of `PYTHONPATH`, class paths and `PATH`.
@@ -347,8 +356,46 @@ pub fn jvm_options(agent_dir: &Path, sw: &Switches) -> String {
     if sw.jfr {
         opts.push("-XX:StartFlightRecording=filename={out}.jfr,settings=profile".to_owned());
     }
+    if let Some(f) = &sw.ffi
+        && !f.lib_dirs.is_empty()
+    {
+        // A `-D` on the command line of the program wins over this one.
+        opts.push(format!(
+            "-Djava.library.path={}",
+            quote_opt(&f.lib_dirs.join(path_sep()))
+        ));
+    }
     opts.extend(sw.jvm_options.iter().cloned());
     opts.join(" ")
+}
+
+/// Preloads the allocator shim into the JVM of `run` (narrowed to `java` processes) and makes
+/// the Rust cdylib carry line tables, so the native stacks of a JNI library resolve to
+/// project lines. The build step gets the same cargo setting.
+pub fn attach_ffi(
+    run: &mut CommandSpec,
+    build: Option<&mut CommandSpec>,
+    layout: &Layout,
+    gaps: &mut Vec<String>,
+) {
+    if cfg!(windows) {
+        gaps.push("no allocator shim on Windows: native allocations are not attributed".to_owned());
+        return;
+    }
+    set_env(run, preload_var(), abs(&layout.agent.join(shim_file())));
+    set_env(run, "DLA_SHIM_ONLY", "java".to_owned());
+    set_env(
+        run,
+        "CARGO_PROFILE_RELEASE_DEBUG",
+        "line-tables-only".to_owned(),
+    );
+    if let Some(b) = build {
+        set_env(
+            b,
+            "CARGO_PROFILE_RELEASE_DEBUG",
+            "line-tables-only".to_owned(),
+        );
+    }
 }
 
 /// Directory of the first entry of the `-cp` option of a `java` command.
@@ -418,6 +465,10 @@ fn plan_jvm(
         "JAVA_TOOL_OPTIONS",
         jvm_options(&layout.agent, sw),
     );
+    let mut build = build;
+    if sw.ffi.is_some() {
+        attach_ffi(&mut run, build.as_mut(), layout, &mut gaps);
+    }
     Ok(Plan {
         build,
         run,
@@ -794,11 +845,16 @@ pub fn plan_driver(
                 "JAVA_TOOL_OPTIONS",
                 jvm_options(&layout.agent, &sw),
             );
+            let mut build = build;
+            let mut gaps = Vec::new();
+            if sw.ffi.is_some() {
+                attach_ffi(&mut run, Some(&mut build), layout, &mut gaps);
+            }
             Plan {
                 build: Some(build),
                 run,
                 agent: AgentKind::DriverJvm,
-                gaps: Vec::new(),
+                gaps,
                 files: Vec::new(),
             }
         }
@@ -1025,6 +1081,39 @@ mod tests {
         assert!(jto.contains("NativeMemoryTracking=summary"));
         assert_eq!(p.agent, AgentKind::JvmAgent);
         assert!(p.gaps[0].starts_with("note:"));
+    }
+
+    #[test]
+    fn a_jni_boundary_preloads_the_shim_and_builds_with_line_tables() {
+        let w = wl(Runtime::Jvm, "sh ./build.sh && sh ./build.sh run");
+        let sw = Switches {
+            ffi: Some(FfiSwitch {
+                lib_dirs: vec!["/r/harness/H1/work/native/target/release".into()],
+            }),
+            ..Switches::default()
+        };
+        let p = plan(&w, Some("{n}"), &layout(), &sw, None).unwrap();
+        let preload = env(&p.run, preload_var()).unwrap();
+        assert!(preload.ends_with(shim_file()), "{preload}");
+        assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), Some("java"));
+        assert_eq!(
+            env(&p.run, "CARGO_PROFILE_RELEASE_DEBUG"),
+            Some("line-tables-only")
+        );
+        assert_eq!(
+            env(p.build.as_ref().unwrap(), "CARGO_PROFILE_RELEASE_DEBUG"),
+            Some("line-tables-only")
+        );
+        let jto = env(&p.run, "JAVA_TOOL_OPTIONS").unwrap();
+        assert!(jto.contains("-Djava.library.path=/r/harness/H1/work/native/target/release"));
+        // Without the switch none of this appears.
+        let plain = plan(&w, Some("{n}"), &layout(), &Switches::default(), None).unwrap();
+        assert!(env(&plain.run, "DLA_SHIM_ONLY").is_none());
+        assert!(
+            !env(&plain.run, "JAVA_TOOL_OPTIONS")
+                .unwrap()
+                .contains("library.path")
+        );
     }
 
     #[test]

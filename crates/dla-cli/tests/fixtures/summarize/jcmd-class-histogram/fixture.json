@@ -1,0 +1,6 @@
+{
+  "op": "type-histogram-diff",
+  "inputs": ["histo1.txt", "histo2.txt", "histo3.txt"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "note": "three real jcmd GC.class_histogram outputs of a JVM that keeps adding entries, trimmed to the top rows; one generated class name carries a planted key"
+}

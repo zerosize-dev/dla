@@ -1,6 +1,6 @@
 [package]
 name = "dla-parsers"
-description = "DLA parsers: gzip and HPROF heap dumps"
+description = "DLA parsers: gzip, HPROF heap dumps and JVM and native tool formats"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
@@ -9,9 +9,9 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 
 [lints]

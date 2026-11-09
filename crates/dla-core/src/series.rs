@@ -700,6 +700,8 @@ pub fn column_meta(name: &str) -> ColumnMeta {
         "gap.accounted" => meta(Bytes, Gauge, Process, false, false),
         "gap.unexplained" => meta(Bytes, Gauge, OffHeap, false, false),
         _ if name.starts_with("node.active.") => meta(Count, Counter, NonHeap, false, true),
+        // Open file descriptors by kind (`fd.socket`, `fd.pipe`, ...), from /proc or the shim.
+        _ if name.starts_with("fd.") => meta(Count, Counter, NonHeap, true, false),
         _ => meta(Bytes, Gauge, Process, false, false),
     }
 }
@@ -714,6 +716,11 @@ mod catalog_tests {
         assert_eq!(
             (m.kind, m.region, m.baseline),
             (ColumnKind::Counter, SeriesRegion::NonHeap, false)
+        );
+        let m = column_meta("fd.socket");
+        assert_eq!(
+            (m.unit, m.kind, m.region),
+            (Unit::Count, ColumnKind::Counter, SeriesRegion::NonHeap)
         );
         let m = column_meta("py.traced.pre_gc");
         assert_eq!((m.unit, m.after_gc), (Unit::Bytes, false));

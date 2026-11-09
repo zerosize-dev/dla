@@ -1,0 +1,582 @@
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.765 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [35257] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.770 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [59190] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.770 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [59575] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.771 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [73054] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.777 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [93303] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.783 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [123765] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.789 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [130286] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.795 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 40.3 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    byte[2048]
+    payload : com.acme.Session
+    value : java.util.HashMap$Node
+    [29684] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 2048
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    com.acme.Session.<init>(String, int, String) line: 9
+    com.acme.SessionService.open(int) line: 6
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.967 (2026-11-09)
+  objectSize = 512.0 kB
+  objectAge = 40.1 s
+  lastKnownHeapUsage = 5.0 MB
+  object =  [
+    java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = 131072
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.util.HashMap.resize() line: 710
+    java.util.HashMap.putVal(int, Object, Object, boolean, boolean) line: 669
+    java.util.HashMap.put(Object, Object) line: 618
+    com.acme.SessionCache.register(Session) line: 9
+    com.acme.SessionService.open(int) line: 7
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:49.077 (2026-11-09)
+  objectSize = 32 bytes
+  objectAge = 40.0 s
+  lastKnownHeapUsage = 126.0 MB
+  object =  [
+    java.util.HashMap$Node
+    next : java.util.HashMap$Node
+    [63078] : java.util.HashMap$Node[131072]
+    table : java.util.HashMap Size: 60000
+    SESSIONS : java.lang.Class Class Name: com.acme.SessionCache
+    [4] : java.lang.Object[10]
+    elementData : java.util.ArrayList Size: 5
+    classes : jdk.internal.loader.ClassLoaders$AppClassLoader
+  ]
+  arrayElements = N/A
+  root = {
+    description = N/A
+    system = "VM Global"
+    type = "Global Object Handle"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.util.HashMap.newNode(int, Object, Object, HashMap$Node) line: 1909
+    java.util.HashMap.putVal(int, Object, Object, boolean, boolean) line: 648
+    java.util.HashMap.put(Object, Object) line: 618
+    com.acme.SessionCache.register(Session) line: 9
+    com.acme.SessionService.open(int) line: 7
+    com.acme.SessionService$$SpringCGLIB$$0.open(int) line: 4
+    com.acme.Main.main(String[]) line: 18
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:49.795 (2026-11-09)
+  objectSize = 24 bytes
+  objectAge = 39.3 s
+  lastKnownHeapUsage = 126.0 MB
+  object =  [
+    java.lang.String
+    [1259] : java.lang.Object[2126]
+    elements : java.util.ImmutableCollections$SetN Size: 1063
+    langtags : sun.util.locale.provider.DecimalFormatSymbolsProviderImpl
+    decimalFormatSymbolsProvider : sun.util.cldr.CLDRLocaleProviderAdapter
+    val : java.util.concurrent.ConcurrentHashMap$Node
+    [10] : java.util.concurrent.ConcurrentHashMap$Node[16]
+    table : java.util.concurrent.ConcurrentHashMap
+    adapterInstances : java.lang.Class Class Name: sun.util.locale.provider.LocaleProviderAdapter
+  ]
+  arrayElements = N/A
+  root = {
+    description = N/A
+    system = "Class Loader Data"
+    type = "<unknown>"
+  }
+  eventThread = "Attach Listener" (javaThreadId = 42)
+  stackTrace = [
+    java.lang.StringLatin1.newString(byte[], int, int) line: 756
+    java.lang.String.substring(int, int) line: 2828
+    java.lang.String.subSequence(int, int) line: 2861
+    java.util.regex.Pattern.split(CharSequence, int, boolean) line: 1412
+    java.util.regex.Pattern.split(CharSequence, int) line: 1305
+    java.lang.String.split(String, int, boolean) line: 3348
+    java.lang.String.split(String) line: 3436
+    sun.util.cldr.CLDRLocaleProviderAdapter.createLanguageTagSet(String) line: 212
+    sun.util.locale.provider.JRELocaleProviderAdapter.getLanguageTagSet(String) line: 443
+    sun.util.locale.provider.JRELocaleProviderAdapter.lambda$getDecimalFormatSymbolsProvider$4() line: 223
+    java.security.AccessController.doPrivileged(PrivilegedAction) line: 319
+    sun.util.locale.provider.JRELocaleProviderAdapter.getDecimalFormatSymbolsProvider() line: 219
+    sun.util.locale.provider.JRELocaleProviderAdapter.getLocaleServiceProvider(Class) line: 98
+    sun.util.locale.provider.LocaleProviderAdapter.findAdapter(Class, Locale) line: 295
+    sun.util.locale.provider.LocaleProviderAdapter.getAdapter(Class, Locale) line: 264
+    java.text.DecimalFormatSymbols.getInstance(Locale) line: 181
+    java.util.Formatter.getDecimalFormatSymbols(Locale) line: 2032
+    java.util.Formatter.getZero(Locale) line: 2040
+    java.util.Formatter$FormatSpecifier.localizedMagnitude(Formatter, StringBuilder, CharSequence, int, int, int, Locale) line: 4531
+    java.util.Formatter$FormatSpecifier.print(Formatter, long, Locale) line: 3377
+    java.util.Formatter$FormatSpecifier.printInteger(Formatter, Object, Locale) line: 3062
+    java.util.Formatter$FormatSpecifier.print(Formatter, Object, Locale) line: 3021
+    java.util.Formatter.format(Locale, String, Object[]) line: 2791
+    java.io.PrintStream.implFormat(String, Object[]) line: 1367
+    java.io.PrintStream.format(String, Object[]) line: 1346
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(PrintStream) line: 196
+    jdk.internal.vm.ThreadDumper.dumpThreadsToFile(String, boolean, boolean) line: 117
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(String, boolean) line: 85
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:49.801 (2026-11-09)
+  objectSize = 56 bytes
+  objectAge = 39.3 s
+  lastKnownHeapUsage = 126.0 MB
+  object =  [
+    byte[39]
+    value : java.lang.String
+    [668] : java.lang.Object[679]
+  ]
+  arrayElements = 39
+  root = {
+    description = N/A
+    system = "Class Loader Data"
+    type = "<unknown>"
+  }
+  eventThread = "Attach Listener" (javaThreadId = 42)
+  stackTrace = [
+    sun.text.resources.cldr.FormatData_en.getContents() line: 271
+    java.util.ListResourceBundle.loadLookup() line: 193
+    java.util.ListResourceBundle.handleKeySet() line: 166
+    java.util.ResourceBundle.containsKey(String) line: 2308
+    sun.util.locale.provider.LocaleResources.getNumberStrings(ResourceBundle, String) line: 247
+    sun.util.locale.provider.LocaleResources.getDecimalFormatSymbolsData() line: 223
+    java.text.DecimalFormatSymbols.initialize(Locale) line: 818
+    java.text.DecimalFormatSymbols.<init>(Locale) line: 115
+    sun.util.locale.provider.DecimalFormatSymbolsProviderImpl.getInstance(Locale) line: 85
+    java.text.DecimalFormatSymbols.getInstance(Locale) line: 183
+    java.util.Formatter.getDecimalFormatSymbols(Locale) line: 2032
+    java.util.Formatter.getZero(Locale) line: 2040
+    java.util.Formatter$FormatSpecifier.localizedMagnitude(Formatter, StringBuilder, CharSequence, int, int, int, Locale) line: 4531
+    java.util.Formatter$FormatSpecifier.print(Formatter, long, Locale) line: 3377
+    java.util.Formatter$FormatSpecifier.printInteger(Formatter, Object, Locale) line: 3062
+    java.util.Formatter$FormatSpecifier.print(Formatter, Object, Locale) line: 3021
+    java.util.Formatter.format(Locale, String, Object[]) line: 2791
+    java.io.PrintStream.implFormat(String, Object[]) line: 1367
+    java.io.PrintStream.format(String, Object[]) line: 1346
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(PrintStream) line: 196
+    jdk.internal.vm.ThreadDumper.dumpThreadsToFile(String, boolean, boolean) line: 117
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(String, boolean) line: 85
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:49.802 (2026-11-09)
+  objectSize = 32 bytes
+  objectAge = 39.3 s
+  lastKnownHeapUsage = 126.0 MB
+  object =  [
+    java.util.HashMap$Node
+  ]
+  arrayElements = N/A
+  root = N/A
+  eventThread = "Attach Listener" (javaThreadId = 42)
+  stackTrace = [
+    java.util.HashMap.newNode(int, Object, Object, HashMap$Node) line: 1909
+    java.util.HashMap.putVal(int, Object, Object, boolean, boolean) line: 637
+    java.util.HashMap.put(Object, Object) line: 618
+    java.util.ListResourceBundle.loadLookup() line: 202
+    java.util.ListResourceBundle.handleKeySet() line: 166
+    java.util.ResourceBundle.containsKey(String) line: 2308
+    sun.util.locale.provider.LocaleResources.getNumberStrings(ResourceBundle, String) line: 247
+    sun.util.locale.provider.LocaleResources.getDecimalFormatSymbolsData() line: 223
+    java.text.DecimalFormatSymbols.initialize(Locale) line: 818
+    java.text.DecimalFormatSymbols.<init>(Locale) line: 115
+    sun.util.locale.provider.DecimalFormatSymbolsProviderImpl.getInstance(Locale) line: 85
+    java.text.DecimalFormatSymbols.getInstance(Locale) line: 183
+    java.util.Formatter.getDecimalFormatSymbols(Locale) line: 2032
+    java.util.Formatter.getZero(Locale) line: 2040
+    java.util.Formatter$FormatSpecifier.localizedMagnitude(Formatter, StringBuilder, CharSequence, int, int, int, Locale) line: 4531
+    java.util.Formatter$FormatSpecifier.print(Formatter, long, Locale) line: 3377
+    java.util.Formatter$FormatSpecifier.printInteger(Formatter, Object, Locale) line: 3062
+    java.util.Formatter$FormatSpecifier.print(Formatter, Object, Locale) line: 3021
+    java.util.Formatter.format(Locale, String, Object[]) line: 2791
+    java.io.PrintStream.implFormat(String, Object[]) line: 1367
+    java.io.PrintStream.format(String, Object[]) line: 1346
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(PrintStream) line: 196
+    jdk.internal.vm.ThreadDumper.dumpThreadsToFile(String, boolean, boolean) line: 117
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(String, boolean) line: 85
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:49.807 (2026-11-09)
+  objectSize = 24 bytes
+  objectAge = 39.3 s
+  lastKnownHeapUsage = 126.0 MB
+  object =  [
+    java.lang.Object[2]
+    arguments : java.lang.invoke.LambdaForm$Name
+    [4] : java.lang.invoke.LambdaForm$Name[6]
+    names : java.lang.invoke.LambdaForm
+    form : java.lang.invoke.DirectMethodHandle$Interface
+    [4] : java.lang.Object[9]
+  ]
+  arrayElements = 2
+  root = {
+    description = N/A
+    system = "Class Loader Data"
+    type = "<unknown>"
+  }
+  eventThread = "Attach Listener" (javaThreadId = 42)
+  stackTrace = [
+    java.lang.invoke.LambdaForm$Name.<init>(LambdaForm$NamedFunction, Object, Object) line: 1377
+    java.lang.invoke.DirectMethodHandle.makePreparedLambdaForm(MethodType, int) line: 288
+    java.lang.invoke.DirectMethodHandle.preparedLambdaForm(MethodType, int) line: 231
+    java.lang.invoke.DirectMethodHandle.preparedLambdaForm(MemberName, boolean) line: 216
+    java.lang.invoke.DirectMethodHandle.make(byte, Class, MemberName, Class) line: 102
+    java.lang.invoke.MethodHandles$Lookup.getDirectMethodCommon(byte, Class, MemberName, boolean, boolean, MethodHandles$Lookup) line: 4109
+    java.lang.invoke.MethodHandles$Lookup.getDirectMethodNoSecurityManager(byte, Class, MemberName, MethodHandles$Lookup) line: 4065
+    java.lang.invoke.MethodHandles$Lookup.getDirectMethodForConstant(byte, Class, MemberName) line: 4314
+    java.lang.invoke.MethodHandles$Lookup.linkMethodHandleConstant(byte, Class, String, Object) line: 4262
+    java.lang.invoke.MethodHandleNatives.linkMethodHandleConstant(Class, int, Class, String, Object) line: 602
+    java.util.stream.StreamSpliterators$WrappingSpliterator.forEachRemaining(Consumer) line: 310
+    java.util.stream.Streams$ConcatSpliterator.forEachRemaining(Consumer) line: 734
+    java.util.stream.ReferencePipeline$Head.forEach(Consumer) line: 762
+    jdk.internal.vm.ThreadDumper.collect(ThreadContainer, List) line: 302
+    jdk.internal.vm.ThreadDumper.allContainers() line: 296
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(PrintStream) line: 201
+    jdk.internal.vm.ThreadDumper.dumpThreadsToFile(String, boolean, boolean) line: 117
+    jdk.internal.vm.ThreadDumper.dumpThreadsToJson(String, boolean) line: 85
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.568 (2026-11-09)
+  objectSize = 256.0 kB
+  objectAge = 40.5 s
+  lastKnownHeapUsage = 3.0 MB
+  object =  [
+    java.util.concurrent.ConcurrentHashMap$Node[65536]
+    table : java.util.concurrent.ConcurrentHashMap
+    cache : java.lang.Class Class Name: jdk.jfr.internal.StringPool
+  ]
+  arrayElements = 65536
+  root = {
+    description = N/A
+    system = "Class Loader Data"
+    type = "<unknown>"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    java.util.concurrent.ConcurrentHashMap.initTable() line: 2301
+    java.util.concurrent.ConcurrentHashMap.putVal(Object, Object, boolean) line: 1017
+    java.util.concurrent.ConcurrentHashMap.put(Object, Object) line: 1006
+    jdk.jfr.internal.StringPool.storeString(String) line: 93
+    jdk.jfr.internal.StringPool.addString(String) line: 125
+    jdk.jfr.internal.event.EventWriter.putString(String) line: 148
+    jdk.jfr.events.ActiveRecordingEvent.commit(long, long, long, String, String, boolean, long, long, long, long, long)
+    jdk.jfr.internal.PlatformRecorder.writeMetaEvents() line: 485
+    jdk.jfr.internal.PlatformRecorder.start(PlatformRecording) line: 258
+    jdk.jfr.internal.PlatformRecording.start() line: 123
+    jdk.jfr.Recording.start() line: 177
+    jdk.jfr.internal.dcmd.DCmdStart.execute(ArgumentParser) line: 211
+    jdk.jfr.internal.dcmd.AbstractDCmd.execute(String, String, char) line: 87
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 07:25:29.099 (2026-11-09)
+  duration = 97.5 ms
+  allocationTime = 07:24:48.588 (2026-11-09)
+  objectSize = 32 bytes
+  objectAge = 40.5 s
+  lastKnownHeapUsage = 3.0 MB
+  object =  [
+    java.lang.Class[3]
+    ptypes : java.lang.invoke.MethodType
+    symbolicMethodTypeExact : java.lang.invoke.VarHandle$AccessDescriptor
+    [16] : java.lang.Object[19]
+  ]
+  arrayElements = 3
+  root = {
+    description = N/A
+    system = "Class Loader Data"
+    type = "<unknown>"
+  }
+  eventThread = "pool-1-thread-1" (javaThreadId = 26)
+  stackTrace = [
+    java.util.concurrent.FutureTask.run() line: 309
+    java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor$Worker) line: 1144
+    java.util.concurrent.ThreadPoolExecutor$Worker.run() line: 642
+    java.lang.Thread.run() line: 1583
+  ]
+}

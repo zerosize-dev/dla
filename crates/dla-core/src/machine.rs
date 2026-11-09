@@ -540,7 +540,7 @@ fn require_tied_growth(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
             "a passing growth column tied to {id}: its probe, a group column at its site, or a column naming it as a candidate"
         ),
         format!(
-            "dla harness gen --lang <lang> (a probe on {id}'s holder)   then   dla harness run <H>, dla trend <S>, dla ledger confirm {id} --evidence <trend evidence id>   or   dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\""
+            "dla harness gen --lang <lang> (a probe on {id}'s holder)   then   dla harness run <H>, dla trend <S>, dla ledger confirm {id} --evidence <trend evidence id>   or   dla summarize <op> --finding {id} <captures> (3 or more), dla ledger confirm {id} --evidence <its growth evidence id>   or   dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\""
         ),
     ))
 }

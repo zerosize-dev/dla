@@ -8,6 +8,8 @@
 pub const JVM_AGENT: &str = include_str!("../../../../harness/jvm/DlaAgent.java");
 /// JVM dump and probe code shared by the agent and the driver.
 pub const JVM_DUMP: &str = include_str!("../../../../harness/jvm/DlaDump.java");
+/// JVM raw captures (`--capture`): heap dumps, histograms, flight recording, non-heap reports.
+pub const JVM_CAPTURE: &str = include_str!("../../../../harness/jvm/DlaCapture.java");
 /// JVM driver template.
 pub const JVM_DRIVER: &str = include_str!("../../../../harness/jvm/DlaHarness.java");
 /// JVM agent jar manifest.

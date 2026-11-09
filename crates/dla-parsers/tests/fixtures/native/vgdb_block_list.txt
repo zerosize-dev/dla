@@ -1,0 +1,8 @@
+sending command block_list 3 to pid 18835
+==18835== 192 bytes in 3 blocks are still reachable in loss record 3 of 4
+==18835==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==18835==    by 0x1091E9: mk (hold.c:9)
+==18835==    by 0x109230: main (hold.c:13)
+==18835== 0x4A7B230[64]
+==18835== 0x4A7B2B0[64]
+==18835== 0x4A7B330[64]

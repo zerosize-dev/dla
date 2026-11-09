@@ -1,0 +1,4 @@
+sending command who_points_at 0x4A82E10 to pid 1304
+==1304== Searching for pointers to 0x4a82e10
+==1304== *0x10c030 points at 0x4a82e10
+ Address 0x10c030 is 0 bytes inside data symbol "registry"

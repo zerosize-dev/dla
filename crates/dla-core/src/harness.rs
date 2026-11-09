@@ -51,6 +51,12 @@ pub const ENV_PROJECT: &str = "DLA_PROJECT";
 pub const ENV_TICK_MS: &str = "DLA_TICK_MS";
 /// Environment variable with the iteration count of this process.
 pub const ENV_ITER: &str = "DLA_ITER";
+/// Environment variable with the comma-separated capture kinds (`heap,histogram,jfr,nonheap`).
+pub const ENV_CAPTURE: &str = "DLA_CAPTURE";
+/// Environment variable naming the directory capture files are written to.
+pub const ENV_CAPTURE_DIR: &str = "DLA_CAPTURE_DIR";
+/// Environment variable with the number of heap dumps a driver takes (default 4).
+pub const ENV_CAPTURE_DUMPS: &str = "DLA_CAPTURE_DUMPS";
 
 string_enum! {
     /// How the harness drives the workload.
@@ -90,6 +96,50 @@ string_enum! {
         /// Nothing beyond OS sampling.
         None = "none",
     }
+}
+
+string_enum! {
+    /// What `dla harness run --capture` writes next to the series.
+    pub enum CaptureKind {
+        /// Heap dump (HPROF) of the measured process.
+        Heap = "heap",
+        /// Full class histogram text.
+        Histogram = "histogram",
+        /// Flight recording with old-object samples and paths to GC roots.
+        Jfr = "jfr",
+        /// Thread dump, class loader statistics and native memory summary.
+        NonHeap = "nonheap",
+        /// Valgrind memcheck XML (`--tool valgrind`).
+        Valgrind = "valgrind",
+        /// Heaptrack data and its printed report (`--tool heaptrack`).
+        Heaptrack = "heaptrack",
+    }
+}
+
+/// One file `dla harness run --capture` or `--tool` left in the harness `out/` directory.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct CaptureFile {
+    /// What the file is.
+    pub kind: CaptureKind,
+    /// Run-relative path, for example `harness/H1/out/p1-fresh/capture/812/heap-2.hprof`.
+    pub path: String,
+    /// The measured point (`p3-native`, `p1-fresh`).
+    pub label: String,
+    /// Sequence number within the kind and label (1-based).
+    pub seq: u32,
+    /// Position on the axis (units completed or `n`), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    /// What this file is, in a few words (`threads.json`, `nmt summary`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Size in bytes.
+    pub bytes: u64,
+    /// Time the capture took in the measured process, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
+    /// When the file was written (UTC, RFC 3339).
+    pub captured_at: String,
 }
 
 /// A command to run in the scratch copy.
@@ -228,6 +278,41 @@ pub struct HarnessManifest {
     pub gaps: Vec<String>,
     /// Timeout per measured process in seconds (default 300).
     pub timeout_secs: u64,
+    /// The allocator shim is loaded into the JVM because the project calls a native library
+    /// (a JNI boundary found by `dla probe`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ffi: Option<FfiHarness>,
+    /// Files written by `dla harness run --capture` or `--tool`, replaced by each run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<CaptureFile>,
+}
+
+/// The foreign-function boundary a JVM harness measures.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct FfiHarness {
+    /// `jni`.
+    pub kind: String,
+    /// The native library (`codec` for `System.loadLibrary("codec")`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    /// Project-relative directory of the native crate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_dir: Option<String>,
+    /// The exported JNI functions and the managed methods they implement.
+    #[serde(default)]
+    pub methods: Vec<FfiMethod>,
+}
+
+/// One JNI function and the managed method it implements.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct FfiMethod {
+    /// The exported symbol (`Java_shop_codec_Native_open`).
+    pub export: String,
+    /// The managed method (`shop.codec.Native.open`).
+    pub managed: String,
+    /// Where the `native` or `external` declaration is (`kotlin/shop/Native.kt:7`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_at: Option<String>,
 }
 
 impl HarnessManifest {
@@ -448,6 +533,32 @@ pub struct HarnessDump {
     /// Known limits of this dump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limitations: Option<Vec<String>>,
+    /// Files the agent wrote for `DLA_CAPTURE` at this record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captures: Option<Vec<DumpCapture>>,
+}
+
+/// One file an agent wrote next to a dump record (`DLA_CAPTURE`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+pub struct DumpCapture {
+    /// `heap`, `histogram`, `jfr` or `nonheap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// File name inside `DLA_CAPTURE_DIR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// What the file is (`threads.json`, `nmt summary`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Size in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    /// Milliseconds the capture took.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
+    /// Why it was not written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl HarnessDump {
@@ -507,6 +618,8 @@ mod tests {
             tools: vec![],
             gaps: vec!["goleak not available".into()],
             timeout_secs: 300,
+            ffi: None,
+            captures: vec![],
         }
     }
 

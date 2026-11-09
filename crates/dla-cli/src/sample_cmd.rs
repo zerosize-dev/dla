@@ -199,6 +199,7 @@ fn source_label(name: &str) -> &'static str {
     match name {
         "os.pss" | "os.pss_anon" | "os.private_dirty" => "smaps-rollup",
         "os.fds" | "os.handles" => "proc-fd",
+        n if n.starts_with("fd.") => "proc-fd",
         n if n.starts_with("os.") => {
             if cfg!(target_os = "linux") {
                 "proc-status"
@@ -226,7 +227,7 @@ fn ordered_columns(out: &SessionOutput) -> Vec<String> {
     let names: BTreeSet<&String> = out.points.iter().flat_map(|p| p.values.keys()).collect();
     let rank = |n: &str| -> (u8, bool) {
         (
-            if n.starts_with("os.") {
+            if n.starts_with("os.") || n.starts_with("fd.") {
                 0
             } else if n.starts_with("cgroup.") {
                 1
@@ -545,7 +546,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
     }
     // Runtime columns first: they are what the operating-system baseline does not say.
     let mut names: Vec<&str> = series.columns.iter().map(|c| c.name.as_str()).collect();
-    names.sort_by_key(|n| n.starts_with("os.") || n.starts_with("cgroup."));
+    names.sort_by_key(|n| n.starts_with("os.") || n.starts_with("fd.") || n.starts_with("cgroup."));
     let evidence = add_evidence(
         &tc,
         &series,

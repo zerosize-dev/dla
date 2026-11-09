@@ -1,0 +1,7 @@
+sending command who_points_at 0x4A7B330 to pid 18835
+==18835== Searching for pointers to 0x4a7b330
+==18835== *0x10c040 points at 0x4a7b330
+ Address 0x10c040 is 0 bytes inside data symbol "registry"
+==18835== *0x1ffeffe318 points at 0x4a7b330
+ Address 0x1ffeffe318 is on thread 1's stack
+ in frame #3, created by main (hold.c:10)

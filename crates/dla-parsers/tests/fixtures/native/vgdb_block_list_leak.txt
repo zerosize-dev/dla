@@ -1,0 +1,25 @@
+sending command block_list 2 to pid 1304
+==1304== 20,160 bytes in 20 blocks are still reachable in loss record 2 of 2
+==1304==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==1304==    by 0x109261: add_session (leak.c:11)
+==1304==    by 0x10931B: main (leak.c:23)
+==1304== 0x4A7B040[1008]
+==1304== 0x4A7B730[1008]
+==1304== 0x4A7BDA0[1008]
+==1304== 0x4A7C410[1008]
+==1304== 0x4A7CB00[1008]
+==1304== 0x4A7D170[1008]
+==1304== 0x4A7D7E0[1008]
+==1304== 0x4A7DED0[1008]
+==1304== 0x4A7E540[1008]
+==1304== 0x4A7EBB0[1008]
+==1304== 0x4A7F2A0[1008]
+==1304== 0x4A7F910[1008]
+==1304== 0x4A7FF80[1008]
+==1304== 0x4A80670[1008]
+==1304== 0x4A80CE0[1008]
+==1304== 0x4A81350[1008]
+==1304== 0x4A81A40[1008]
+==1304== 0x4A820B0[1008]
+==1304== 0x4A82720[1008]
+==1304== 0x4A82E10[1008]

@@ -20,3 +20,4 @@ region = "heap"
 cause = "L-CYCLE"
 share = 1.0
 confirmable = true
+dump_backed = true

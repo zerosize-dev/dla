@@ -1,0 +1,22 @@
+sending command who_points_at 0x1 to pid 1304
+==1304== Searching for pointers to 0x1
+==1304== *0x4038038 points at 0x1
+ Address 0x4038038 is 56 bytes inside data symbol "_rtld_local"
+==1304== *0x4038a00 points at 0x1
+ Address 0x4038a00 is 2560 bytes inside data symbol "_rtld_local"
+==1304== *0x4038a18 points at 0x1
+ Address 0x4038a18 is 2584 bytes inside data symbol "_rtld_local"
+==1304== *0x4038a40 points at 0x1
+ Address 0x4038a40 is 2624 bytes inside data symbol "_rtld_local"
+==1304== *0x4038a68 points at 0x1
+ Address 0x4038a68 is 2664 bytes inside data symbol "_rtld_local"
+==1304== *0x4039078 points at 0x1
+ Address 0x4039078 is 4216 bytes inside data symbol "_rtld_local"
+==1304== *0x4039088 points at 0x1
+ Address 0x4039088 is 4232 bytes inside data symbol "_rtld_local"
+==1304== *0x40390a8 points at 0x1
+ Address 0x40390a8 is 4264 bytes inside data symbol "_rtld_local"
+==1304== *0x4039128 points at 0x1
+ Address 0x4039128 is 0 bytes inside data symbol "_r_debug"
+==1304== *0x4039230 points at 0x1
+ Address 0x4039230 is 0 bytes inside data symbol "__rtld_tls_init_tp_called"

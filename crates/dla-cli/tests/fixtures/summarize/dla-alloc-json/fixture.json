@@ -1,0 +1,12 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "profile1.json",
+  "profile2.json",
+  "profile3.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "three allocation profiles in the parsed model format; live bytes of one stack grow, a function name carries a planted key"
+}

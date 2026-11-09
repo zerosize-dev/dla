@@ -1,0 +1,105 @@
+Debuggee command was: ./leak 1000
+Debuggee command was: ./leak 3000
+finished reading file, now analyzing data:
+
+MOST CALLS TO ALLOCATION FUNCTIONS
+2000 calls to allocation functions with 2.02M peak consumption from
+add_session
+  at /work/leak.c:11
+  in /work/leak
+2000 calls with 2.02M peak consumption from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+2000 calls to allocation functions with 1.02M peak consumption from
+drop_ptr
+  at /work/leak.c:16
+  in /work/leak
+2000 calls with 1.02M peak consumption from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+666 calls to allocation functions with -64B peak consumption from
+main
+  at /work/leak.c:26
+  in /work/leak
+666 calls with -64B peak consumption from:
+
+
+PEAK MEMORY CONSUMERS
+2.02M peak memory consumed over 2000 calls from
+add_session
+  at /work/leak.c:11
+  in /work/leak
+2.02M consumed over 2000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+1.02M peak memory consumed over 2000 calls from
+drop_ptr
+  at /work/leak.c:16
+  in /work/leak
+1.02M consumed over 2000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+-64B peak memory consumed over 666 calls from
+main
+  at /work/leak.c:26
+  in /work/leak
+-64B consumed over 666 calls from:
+
+
+MEMORY LEAKS
+2.02M leaked over 2000 calls from
+add_session
+  at /work/leak.c:11
+  in /work/leak
+2.02M leaked over 2000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+1.02M leaked over 2000 calls from
+drop_ptr
+  at /work/leak.c:16
+  in /work/leak
+1.02M leaked over 2000 calls from:
+    main
+      at /work/leak.c:23
+      in /work/leak
+
+
+MOST TEMPORARY ALLOCATIONS
+666 temporary allocations of 666 allocations in total (100.00%) from
+main
+  at /work/leak.c:26
+  in /work/leak
+666 temporary allocations of 666 allocations in total (100.00%) from:
+
+-1 temporary allocations of 0 allocations in total (-inf%) from
+0x7fc4a90b738e
+  in /lib/x86_64-linux-gnu/libstdc++.so.6
+-1 temporary allocations of 0 allocations in total (-inf%) from:
+    call_init
+      at ./elf/dl-init.c:74
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init::call_init
+      at ./elf/dl-init.c:120
+      in /lib64/ld-linux-x86-64.so.2
+    _dl_init
+      at ./elf/./elf/dl-init.c:121
+    _dl_start_user
+      in /lib64/ld-linux-x86-64.so.2
+
+
+total runtime: 0.10s.
+calls to allocation functions: 4666 (46198/s)
+temporary memory allocations: 665 (6584/s)
+peak heap memory consumption: 3.04M
+peak RSS (including heaptrack overhead): 0B
+total memory leaked: 3.04M

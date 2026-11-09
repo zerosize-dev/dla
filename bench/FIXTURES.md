@@ -109,6 +109,7 @@ region = "non-heap"
 cause = "L-WORKER"                          # archetype ID, or "UNCLASSIFIED"
 share = 1.0                                 # share of total growth (multi-leak)
 confirmable = true                          # default true; false: only static evidence is obtainable
+dump_backed = false                         # default false; true: see below
 
 [[non_leak]]
 id = "N1"
@@ -136,6 +137,12 @@ Field rules:
   `lines` defaults to `[line, line]` and must contain `line`. Point `site` at
   the line that retains the memory or allocates it without release, and keep
   the range to that statement.
+- `dump_backed` (optional, default false) marks a leak whose confirmation must
+  rest on a heap dump or an allocation profile: the chosen confirmed finding
+  cites evidence of kind `retention-path`, `histogram-diff` or `alloc-stack`
+  with authority `dump` or `live`. Only `dla-bench dynamic` checks it (and only
+  when its dump check is switched on); both graders accept the field and ignore
+  it, and the grading metrics do not change.
 - `alt_sites` (optional) lists other locations a correct diagnosis may cite
   for the same leak, as `path:line` or `path:start-end`; typically the holder
   declaration when `site` is the line that adds to it, or the reverse. Each

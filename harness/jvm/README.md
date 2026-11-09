@@ -4,13 +4,14 @@
 |---|---|
 | `DlaAgent.java` | `premain` agent (package `dla.harness`): registers the exit dump and optional ticks |
 | `DlaDump.java` | dump, probe and walk code plus a tiny JSON reader/writer (package `dla.harness`); shared by the agent and the driver |
+| `DlaCapture.java` | raw captures for `dla summarize` (package `dla.harness`): heap dumps, class histograms, flight recording, non-heap reports |
 | `DlaHarness.java` | loop driver template (package `@@DLA_PACKAGE@@`, class `@@DLA_CLASS@@`) |
 | `MANIFEST.MF` | jar manifest (`Premain-Class: dla.harness.DlaAgent`) |
 
 ## Build (done by dla at gen/run time, JDK 11+)
 
 ```
-javac -d agent/classes DlaAgent.java DlaDump.java
+javac -d agent/classes DlaAgent.java DlaDump.java DlaCapture.java
 jar --create --file dla-agent.jar --manifest MANIFEST.MF -C agent/classes .
 ```
 
@@ -47,6 +48,25 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   and `java.lang.invoke` objects. A class that is not loaded gives `error: "class not loaded: ..."`.
 - `purge`: `trim-native-heap` runs the `systemTrimNativeHeap` diagnostic command and records the
   `os.*` values before and after; `gc` records the values before the forced collection and after.
+
+## Raw captures (`DLA_CAPTURE`)
+
+`dla harness run <H> --capture heap,histogram,jfr,nonheap` sets `DLA_CAPTURE` and `DLA_CAPTURE_DIR`
+(`out/<label>/capture`). `DlaCapture` writes into `<dir>/<pid>/` (the directories of other
+processes, such as the unit-test JVM a build script starts, are deleted after the run):
+
+| File | Written | Source |
+|---|---|---|
+| `histogram-<n>.txt` | every checkpoint (driver) or at exit (command mode) | `DiagnosticCommand` `gcClassHistogram`, the text `jcmd GC.class_histogram` prints (live objects only: it forces a collection) |
+| `heap-<n>.hprof` | the selected checkpoints (driver: `DLA_CAPTURE_DUMPS`, default 4, from the end of the warm-up to the last round) or at exit (command mode, for the points `dla harness run` selects) | `HotSpotDiagnosticMXBean.dumpHeap(file, true)` (live objects, mode 0600) |
+| `recording.jfr` | at JVM exit | a recording started in `premain` before the workload (`settings=profile`, `path-to-gc-roots=true`, `dumponexit=true`): `jdk.OldObjectSample` only covers objects allocated while it runs |
+| `threads.json` | last checkpoint or exit | `Thread.dump_to_file -format=json` (`threadDumpToFile`) |
+| `classloader-stats.txt` | same | `VM.classloader_stats` |
+| `nmt-summary.txt`, `nmt-diff.txt` | same | `VM.native_memory summary` and `summary.diff` against a baseline taken at the end of the warm-up (driver) or at `premain` (command mode); needs `-XX:NativeMemoryTracking=summary`, which the injection always adds |
+
+A dump costs about 20 ms and 10 to 40 MB for the fixtures; each capture's size and time are in the
+`captures` array of the record. Heap dumps from separate processes (command mode) cannot be
+compared as a series by `dla summarize heap-graph`; a driver takes all of them in one process.
 
 ## Driver
 

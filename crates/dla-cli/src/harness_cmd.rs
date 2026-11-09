@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::Subcommand;
 use dla_core::{FindingId, runtime::Runtime, series::KeyMode};
 use dla_workload::harness::{
+    capture::{CaptureSet, NativeTool},
     r#gen::{GenOptions, generate},
     run::{RunOptions, run as run_harness},
 };
@@ -121,6 +122,21 @@ pub struct RunArgs {
     /// jemalloc | empty-cache | none.
     #[arg(long, value_name = "KIND")]
     purge: Option<String>,
+    /// JVM only: also write raw captures the `dla summarize` commands read, a comma list of
+    /// heap (HPROF dumps, 3 or more per run), histogram (class histogram per point), jfr
+    /// (flight recording with old-object samples) and nonheap (thread dump, class loader
+    /// statistics, native memory); `all` for every kind. Default: none.
+    #[arg(long, value_name = "KINDS", value_parser = str::parse::<CaptureSet>)]
+    capture: Option<CaptureSet>,
+    /// Heap dumps per run with --capture heap (driver mode: spread over the rounds;
+    /// command mode: the number of points that dump). Default 4.
+    #[arg(long, value_name = "N", requires = "capture")]
+    dumps: Option<u32>,
+    /// Rust and native command-mode harnesses: run three of the points under valgrind
+    /// (memcheck XML) or heaptrack (heaptrack_print report and a first-to-last diff) instead
+    /// of measuring a series.
+    #[arg(long, value_name = "TOOL", value_parser = str::parse::<NativeTool>, conflicts_with = "capture")]
+    tool: Option<NativeTool>,
 }
 
 /// Runs `dla harness`.
@@ -160,11 +176,21 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 iterations: r.iterations,
                 extra: r.extra,
                 purge: r.purge,
+                capture: r.capture.unwrap_or_default(),
+                capture_dumps: r.dumps,
+                tool: r.tool,
                 ..RunOptions::default()
+            };
+            let signal = if r.tool.is_some() {
+                "one report per point (valgrind XML or a heaptrack_print text), no series"
+            } else if r.capture.is_some_and(|c| !c.is_empty()) {
+                "one series per key mode, plus heap dumps, class histograms, a flight recording and non-heap reports under out/"
+            } else {
+                "one series per key mode: memory, threads, handles and probe sizes per point"
             };
             let effects = json!({
                 "target": format!("the workload of harness {} in its scratch copy under the run directory", r.harness),
-                "expected_signal": "one series per key mode: memory, threads, handles and probe sizes per point",
+                "expected_signal": signal,
                 "stopping": "after the last point, or a point's timeout (the process group is killed)",
                 "effects": "builds and runs project code in the scratch copy with DLA's agent loaded; the project source is not edited",
                 "cleanup": "every process is registered in state.json and stopped; the scratch copy stays for inspection",

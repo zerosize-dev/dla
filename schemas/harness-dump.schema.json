@@ -14,6 +14,16 @@
         "type": "string"
       }
     },
+    "captures": {
+      "description": "Files the agent wrote for `DLA_CAPTURE` at this record.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/DumpCapture"
+      }
+    },
     "coverage": {
       "description": "What was exercised.",
       "anyOf": [
@@ -190,6 +200,58 @@
     "phase"
   ],
   "$defs": {
+    "DumpCapture": {
+      "description": "One file an agent wrote next to a dump record (`DLA_CAPTURE`).",
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "description": "Size in bytes.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error": {
+          "description": "Why it was not written.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "File name inside `DLA_CAPTURE_DIR`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`heap`, `histogram`, `jfr` or `nonheap`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ms": {
+          "description": "Milliseconds the capture took.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "role": {
+          "description": "What the file is (`threads.json`, `nmt summary`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "DumpCoverage": {
       "description": "What the process exercised.",
       "type": "object",

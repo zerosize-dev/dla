@@ -1,0 +1,43 @@
+{
+ "source": "jvm-thread-dump",
+ "timestamp_ms": 1800000030000,
+ "metrics": [
+  {
+   "category": "nmt",
+   "name": "Thread",
+   "value": 5000,
+   "unit": "kb"
+  },
+  {
+   "category": "fd",
+   "name": "open",
+   "value": 20,
+   "unit": "count"
+  }
+ ],
+ "groups": [
+  {
+   "kind": "thread",
+   "key": "WAITING",
+   "count": 10,
+   "site": {
+    "function": "shop.Pool.spawn",
+    "file": "shop/Pool.java",
+    "line": 7,
+    "module": null
+   }
+  },
+  {
+   "kind": "thread",
+   "key": "RUNNABLE",
+   "count": 4,
+   "site": null
+  },
+  {
+   "kind": "env",
+   "key": "API_KEY=AKIAIOSFODNN7EXAMPLE1",
+   "count": 1,
+   "site": null
+  }
+ ]
+}

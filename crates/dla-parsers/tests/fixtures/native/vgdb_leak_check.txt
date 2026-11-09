@@ -1,0 +1,28 @@
+sending command leak_check full reachable any to pid 18835
+==18835== 64 bytes in 1 blocks are still reachable in loss record 1 of 4
+==18835==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==18835==    by 0x1091E9: mk (hold.c:9)
+==18835==    by 0x109208: main (hold.c:11)
+==18835== 
+==18835== 128 bytes in 1 blocks are definitely lost in loss record 2 of 4
+==18835==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==18835==    by 0x1091E9: mk (hold.c:9)
+==18835==    by 0x109261: main (hold.c:14)
+==18835== 
+==18835== 192 bytes in 3 blocks are still reachable in loss record 3 of 4
+==18835==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==18835==    by 0x1091E9: mk (hold.c:9)
+==18835==    by 0x109230: main (hold.c:13)
+==18835== 
+==18835== 300 bytes in 1 blocks are still reachable in loss record 4 of 4
+==18835==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==18835==    by 0x1091E9: mk (hold.c:9)
+==18835==    by 0x109216: main (hold.c:12)
+==18835== 
+==18835== LEAK SUMMARY:
+==18835==    definitely lost: 128 bytes in 1 blocks
+==18835==    indirectly lost: 0 bytes in 0 blocks
+==18835==      possibly lost: 0 bytes in 0 blocks
+==18835==    still reachable: 556 bytes in 5 blocks
+==18835==         suppressed: 0 bytes in 0 blocks
+==18835== 

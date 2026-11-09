@@ -1,0 +1,48 @@
+{"dhatFileVersion":2
+,"mode":"heap","verb":"Allocated"
+,"bklt":true,"bkacc":true
+,"tu":"instrs","Mtu":"Minstr"
+,"tuth":500
+,"cmd":"./leak 40"
+,"pid":17738
+,"te":472252
+,"tg":466374
+,"pps":
+ [{"tb":40320,"tbk":40
+  ,"tl":761646
+  ,"mb":40320,"mbk":40
+  ,"gb":40320,"gbk":40
+  ,"eb":40320,"ebk":40
+  ,"rb":0,"wb":40320
+  ,"acc":[-1008,40]
+  ,"fs":[1,2,3]
+  }
+ ,{"tb":20480,"tbk":40
+  ,"tl":750166
+  ,"mb":20480,"mbk":40
+  ,"gb":20480,"gbk":40
+  ,"eb":20480,"ebk":40
+  ,"rb":0,"wb":0
+  ,"acc":[-512,0]
+  ,"fs":[1,4,5]
+  }
+ ,{"tb":896,"tbk":14
+  ,"tl":532
+  ,"mb":64,"mbk":1
+  ,"gb":64,"gbk":1
+  ,"eb":0,"ebk":0
+  ,"rb":0,"wb":0
+  ,"acc":[-64,0]
+  ,"fs":[1,6]
+  }
+ ]
+,"ftbl":
+ ["[root]"
+ ,"0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_dhat-amd64-linux.so)"
+ ,"0x109261: add_session (leak.c:11)"
+ ,"0x10931B: main (leak.c:23)"
+ ,"0x1092AD: drop_ptr (leak.c:16)"
+ ,"0x109320: main (leak.c:23)"
+ ,"0x1093F7: main (leak.c:26)"
+ ]
+}
