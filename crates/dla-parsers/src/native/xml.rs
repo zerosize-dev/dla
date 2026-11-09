@@ -247,13 +247,16 @@ mod tests {
 
     #[test]
     fn many_bare_ampersands_stay_linear() {
-        let big = "&".repeat(2_000_000);
+        // A quadratic scan of a million bare `&` takes hours; a linear one well under a
+        // second even in a debug build. The bound is loose for slow CI runners (2.2 s for
+        // twice this input on a macOS runner) and still far below the quadratic case.
+        let big = "&".repeat(1_000_000);
         let t = std::time::Instant::now();
         assert_eq!(unescape(&big), big.as_str());
         let mixed = format!("{big};x");
         assert_eq!(unescape(&mixed), mixed.as_str());
         assert!(
-            t.elapsed() < std::time::Duration::from_secs(2),
+            t.elapsed() < std::time::Duration::from_secs(20),
             "{:?}",
             t.elapsed()
         );

@@ -134,7 +134,7 @@ fn nested_backrefs_in_skipped_paths_finish_quickly() {
         let t = std::time::Instant::now();
         let got = demangle(sym);
         assert!(
-            t.elapsed() < std::time::Duration::from_secs(2),
+            t.elapsed() < std::time::Duration::from_secs(10),
             "{:?}",
             t.elapsed()
         );

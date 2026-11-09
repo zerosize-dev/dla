@@ -156,6 +156,6 @@ fn a_hostile_v0_symbol_in_a_frame_does_not_hang() {
     );
     let t = std::time::Instant::now();
     let r = lsan::parse(&text).unwrap();
-    assert!(t.elapsed() < std::time::Duration::from_secs(2));
+    assert!(t.elapsed() < std::time::Duration::from_secs(10));
     assert_eq!(r.profile.groups.len(), 1);
 }
