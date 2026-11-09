@@ -45,19 +45,19 @@ fn a_child_with_a_socket_a_pipe_and_dev_null() {
         Stdio::null(),
     );
     drop(ours);
-    // `sleep` opens nothing else, so the figures are exact once it is running.
+    // `sleep` opens nothing else, but it inherits any descriptor the test runner left open
+    // without close-on-exec (CI runners pass extra pipes), so the figures are lower bounds.
     let mut s = os::sample(child.id()).expect("sample child");
     for _ in 0..50 {
-        if s.values.get("fd.socket") == Some(&1.0) {
+        if s.values.get("fd.socket").is_some_and(|v| *v >= 1.0) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
         s = os::sample(child.id()).expect("sample child");
     }
-    assert_eq!(column(&s, "fd.socket"), 1.0, "{s:?}");
-    assert_eq!(column(&s, "fd.pipe"), 1.0, "{s:?}");
-    assert_eq!(column(&s, "fd.dev"), 1.0, "{s:?}");
-    assert_eq!(column(&s, "fd.eventfd"), 0.0);
+    assert!(column(&s, "fd.socket") >= 1.0, "{s:?}");
+    assert!(column(&s, "fd.pipe") >= 1.0, "{s:?}");
+    assert!(column(&s, "fd.dev") >= 1.0, "{s:?}");
     // The columns add up to os.fds.
     let sum: f64 = s
         .values

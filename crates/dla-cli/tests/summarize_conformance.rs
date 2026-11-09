@@ -1108,8 +1108,10 @@ fn artifact_runs_treat_files_as_dump_authority() {
 // Attach writes coverage rows
 // ---------------------------------------------------------------------------------------
 
+#[cfg(unix)]
 struct Child(std::process::Child, #[allow(dead_code)] tempfile::TempDir);
 
+#[cfg(unix)]
 impl Drop for Child {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -1117,6 +1119,7 @@ impl Drop for Child {
     }
 }
 
+#[cfg(unix)]
 /// A `sleep` process whose executable is called `java`, so a fake `jcmd` can answer for it.
 fn java_sleeper() -> Child {
     use std::os::unix::fs::PermissionsExt;
@@ -1137,6 +1140,7 @@ fn java_sleeper() -> Child {
     Child(child, dir)
 }
 
+#[cfg(unix)]
 const FAKE_JCMD: &str = r#"#!/bin/sh
 pid="$1"; cmd="$2"
 case "$cmd" in
@@ -1147,6 +1151,7 @@ case "$cmd" in
 esac
 "#;
 
+#[cfg(unix)]
 #[test]
 fn attach_writes_a_coverage_row_for_a_run_and_for_a_missing_tool() {
     use std::os::unix::fs::PermissionsExt;
