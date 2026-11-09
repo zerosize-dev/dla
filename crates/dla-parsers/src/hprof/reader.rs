@@ -289,16 +289,31 @@ pub(crate) fn scan<R: Read + Seek, V: Visitor>(
         .map_err(|e| io_err(e, header.body))?;
     let ids = rd.id_size as u64;
     let mut frames_scratch: Vec<u64> = Vec::new();
+    // A segmented dump ends with HEAP_DUMP_END (0x2c). Segments with no end record are a
+    // dump cut short, for example by a kill while the JVM was writing it: a record
+    // boundary can fall at the cut, so the walk alone would not notice.
+    let (mut segments, mut ended) = (false, false);
     loop {
         let start = rd.tell();
-        if start >= rd.file_len() || v.stopped() {
+        if v.stopped() {
             return Ok(());
         }
-        let r = scan_record(rd, v, warnings, ids, &mut frames_scratch);
-        r.map_err(|e| match e {
+        if start >= rd.file_len() {
+            return if segments && !ended {
+                Err(HprofError::Truncated(start))
+            } else {
+                Ok(())
+            };
+        }
+        let tag = scan_record(rd, v, warnings, ids, &mut frames_scratch).map_err(|e| match e {
             ScanErr::Io(e) => io_err(e, rd.tell()),
             ScanErr::Bad(m) => malformed(start, &m),
         })?;
+        match tag {
+            0x1c => segments = true,
+            0x2c => ended = true,
+            _ => {}
+        }
     }
 }
 
@@ -319,7 +334,7 @@ fn scan_record<R: Read + Seek, V: Visitor>(
     warnings: &mut Vec<String>,
     ids: u64,
     frames: &mut Vec<u64>,
-) -> Result<(), ScanErr> {
+) -> Result<u8, ScanErr> {
     let start = rd.tell();
     let tag = rd.u1()?;
     let _time = rd.u4()?;
@@ -371,7 +386,7 @@ fn scan_record<R: Read + Seek, V: Visitor>(
         )));
     }
     rd.seek_to(end)?;
-    Ok(())
+    Ok(tag)
 }
 
 fn heap_records<R: Read + Seek, V: Visitor>(

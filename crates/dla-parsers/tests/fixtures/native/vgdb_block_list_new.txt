@@ -1,0 +1,10 @@
+sending command block_list 2 to pid 20951
+==20951== 4,000 (+4,000) bytes in 4 (+4) blocks are still reachable in new loss record 2 of 2
+==20951==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==20951==    by 0x10918E: newsite (grow5.c:4)
+==20951==    by 0x1091FB: step (grow5.c:7)
+==20951==    by 0x10922A: main (grow5.c:11)
+==20951== 0x4A7B270[1000]
+==20951== 0x4A7B710[1000]
+==20951== 0x4A7BBB0[1000]
+==20951== 0x4A7C050[1000]

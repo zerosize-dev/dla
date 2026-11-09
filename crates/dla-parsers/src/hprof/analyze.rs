@@ -48,6 +48,9 @@ const VIA_SAMPLES: usize = 4;
 const VIA_MIN_BYTES: u64 = 64 << 10;
 /// Parent marker of a search seed.
 const SEED: u32 = NONE - 1;
+/// `via_of` memo: not computed yet, and computed with no field edge on the path.
+const UNSET: u32 = NONE;
+const NOVIA: u32 = NONE - 1;
 
 const PRIM_NAMES: [&str; 8] = [
     "boolean", "char", "float", "double", "byte", "short", "int", "long",
@@ -1198,6 +1201,8 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
     // Objects whose immediate dominator is the super root (shared by several roots) or a
     // thread or JNI global, by (dominator, class).
     let mut shared: HashMap<(u32, u32), SharedGroup> = HashMap::new();
+    // The shared group of every object, by `SharedGroup::idx`.
+    let mut gid = vec![NONE; n];
     for &v in &dom.post {
         if (v as usize) < n {
             reachable += 1;
@@ -1213,7 +1218,14 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
             && an.kinds[v as usize] != K_CLASS
             && (par == root || (par as usize) >= n)
         {
-            let e = shared.entry((par, an.ty[v as usize])).or_default();
+            let next = shared.len() as u32;
+            let e = shared
+                .entry((par, an.ty[v as usize]))
+                .or_insert_with(|| SharedGroup {
+                    idx: next,
+                    ..SharedGroup::default()
+                });
+            gid[v as usize] = e.idx;
             e.count += 1;
             e.retained += ret[v as usize];
             e.objects += u64::from(cnt[v as usize]);
@@ -1316,7 +1328,7 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
     }
     let merged: Vec<Holder> = merged.into_iter().map(|(h, _)| h).collect();
     let holders: Vec<Holder> = merged.iter().take(TOP_HOLDERS).cloned().collect();
-    let via_holders = an.via_holders(shared);
+    let via_holders = an.via_holders(shared, &gid);
 
     if !truncated {
         notes.push("the dominator iteration converged".into());
@@ -1461,6 +1473,8 @@ impl Analysis<'_> {
 /// Objects dominated directly by the super root or a thread or JNI global.
 #[derive(Default)]
 struct SharedGroup {
+    /// Index in creation order, the value of `gid` for its members.
+    idx: u32,
     count: u64,
     retained: u64,
     objects: u64,
@@ -1469,8 +1483,15 @@ struct SharedGroup {
 }
 
 impl Analysis<'_> {
-    /// The via holders of the largest shared sets (see [`ViaHolder`]).
-    fn via_holders(&mut self, shared: HashMap<(u32, u32), SharedGroup>) -> Vec<ViaHolder> {
+    /// The via holders of the largest shared sets (see [`ViaHolder`]). Every member of a
+    /// selected group is attributed to the field its own shortest path starts with, so a
+    /// holder gets only the bytes of the members it reaches. Members the search did not
+    /// reach, or that have no static or instance field edge on their path, are left out.
+    fn via_holders(
+        &mut self,
+        shared: HashMap<(u32, u32), SharedGroup>,
+        gid: &[u32],
+    ) -> Vec<ViaHolder> {
         let total = self.ret[self.g.root() as usize];
         let min = (total / 100).max(VIA_MIN_BYTES);
         let mut groups: Vec<((u32, u32), SharedGroup)> = shared
@@ -1478,75 +1499,156 @@ impl Analysis<'_> {
             .filter(|(_, g)| g.retained >= min)
             .collect();
         groups.sort_by(|a, b| b.1.retained.cmp(&a.1.retained).then(a.0.cmp(&b.0)));
-        groups.truncate(MAX_VIA);
+        // More candidates than output slots: some produce no field, or split.
+        groups.truncate(MAX_VIA * 4);
         if groups.is_empty() {
             return Vec::new();
         }
         let parent = self.shortest_paths(&groups);
-        let mut out: Vec<ViaHolder> = Vec::new();
-        for ((par, ty), g) in &groups {
-            // Sample paths vote for a via key; the most common wins, earliest on ties.
-            let mut votes: Vec<(String, usize, ViaFound, Vec<u32>)> = Vec::new();
-            for &t in &g.samples[..g.n] {
-                if parent[t as usize] == NONE {
-                    continue;
-                }
-                let chain = chain_to(&parent, t);
-                let Some(found) = self.via_on(&chain) else {
-                    continue;
-                };
-                match votes.iter_mut().find(|v| v.0 == found.key) {
-                    Some(v) => v.1 += 1,
-                    None => votes.push((found.key.clone(), 1, found, chain)),
-                }
+        // Static edges (class, target, name), without HotSpot's `<...>` pseudo fields.
+        let mut statics: Vec<(u32, u32, u64)> = Vec::new();
+        for i in 0..self.statics_out.len() {
+            let (c, name, t) = self.statics_out[i];
+            if !self.strs.get(name).starts_with('<') {
+                statics.push((c, t, name));
             }
-            let mut best: Option<usize> = None;
-            for (i, v) in votes.iter().enumerate() {
-                if best.is_none_or(|b| v.1 > votes[b].1) {
-                    best = Some(i);
-                }
-            }
-            let Some(best) = best else { continue };
-            let (key, _, found, chain) = votes.swap_remove(best);
-            if let Some(o) = out.iter_mut().find(|o| o.key == key) {
-                o.retained += g.retained;
-                o.dominated_count += g.objects;
+        }
+        statics.sort_unstable();
+        // Group index to its slot in `groups`.
+        let mut slot_of: HashMap<u32, usize> = HashMap::new();
+        for (i, (_, g)) in groups.iter().enumerate() {
+            slot_of.insert(g.idx, i);
+        }
+        let mut found: Vec<ViaFound> = Vec::new();
+        let mut found_idx: HashMap<String, u32> = HashMap::new();
+        // Per node: the via of its path (an index in `found`), `NOVIA`, or `UNSET`.
+        let mut memo = vec![UNSET; self.g.nodes()];
+        // (slot, via) to (bytes, objects, members, first member).
+        let mut parts: HashMap<(usize, u32), (u64, u64, u64, u32)> = HashMap::new();
+        for v in 0..self.g.n as u32 {
+            let gi = gid[v as usize];
+            if gi == NONE {
                 continue;
             }
-            let path = self.render_path(&chain);
-            let dominator = if *par == self.g.root() {
+            let Some(&slot) = slot_of.get(&gi) else {
+                continue;
+            };
+            if parent[v as usize] == NONE {
+                continue;
+            }
+            let via = self.via_of(v, &parent, &statics, &mut memo, &mut found, &mut found_idx);
+            if via >= NOVIA {
+                continue;
+            }
+            let e = parts.entry((slot, via)).or_insert((0, 0, 0, v));
+            e.0 += self.ret[v as usize];
+            e.1 += u64::from(self.cnt[v as usize]);
+            e.2 += 1;
+        }
+        let mut parts: Vec<_> = parts.into_iter().collect();
+        parts.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        let mut out: Vec<ViaHolder> = Vec::new();
+        for ((slot, via), (retained, objects, members, rep)) in parts {
+            let key = &found[via as usize].key;
+            if let Some(o) = out.iter_mut().find(|o| &o.key == key) {
+                o.retained += retained;
+                o.dominated_count += objects;
+                continue;
+            }
+            let ((par, ty), _) = &groups[slot];
+            let (par, ty) = (*par, *ty);
+            let f = &found[via as usize];
+            let (kind, owner, raw_owner, field, key) = (
+                f.kind,
+                f.owner.clone(),
+                f.raw_owner.clone(),
+                f.field.clone(),
+                f.key.clone(),
+            );
+            let path = self.render_path(&chain_to(&parent, rep));
+            let dominator = if par == self.g.root() {
                 "root".to_owned()
             } else {
-                self.syns[*par as usize - self.g.n].key.clone()
+                self.syns[par as usize - self.g.n].key.clone()
             };
             out.push(ViaHolder {
                 key,
-                kind: found.kind,
-                owner_class: found.owner,
-                raw_owner_class: found.raw_owner,
-                field: found.field,
+                kind,
+                owner_class: owner,
+                raw_owner_class: raw_owner,
+                field,
                 dominator,
-                retained: g.retained,
-                dominated_count: g.objects,
+                retained,
+                dominated_count: objects,
                 accumulation: Accumulation {
-                    class: self.ty_name(*ty),
-                    children: g.count,
+                    class: self.ty_name(ty),
+                    children: members,
                 },
                 path,
             });
         }
+        out.retain(|o| o.retained >= min);
+        out.sort_by(|a, b| b.retained.cmp(&a.retained).then_with(|| a.key.cmp(&b.key)));
+        out.truncate(MAX_VIA);
         out
+    }
+
+    /// The via of node `x`: the first static or instance field edge on its path from the
+    /// search seed, as an index in `found`, or `NOVIA`. Memoized along the path, so every
+    /// node is resolved once.
+    fn via_of(
+        &mut self,
+        x: u32,
+        parent: &[u32],
+        statics: &[(u32, u32, u64)],
+        memo: &mut [u32],
+        found: &mut Vec<ViaFound>,
+        found_idx: &mut HashMap<String, u32>,
+    ) -> u32 {
+        let mut pending: Vec<u32> = Vec::new();
+        let mut cur = x;
+        let mut state = loop {
+            if memo[cur as usize] != UNSET {
+                break memo[cur as usize];
+            }
+            let p = parent[cur as usize];
+            if p == SEED || p == NONE {
+                memo[cur as usize] = NOVIA;
+                break NOVIA;
+            }
+            pending.push(cur);
+            cur = p;
+        };
+        while let Some(y) = pending.pop() {
+            if state == NOVIA
+                && let Some(f) = self.edge_via(parent[y as usize], y, statics)
+            {
+                state = *found_idx.entry(f.key.clone()).or_insert_with(|| {
+                    found.push(f);
+                    found.len() as u32 - 1
+                });
+            }
+            memo[y as usize] = state;
+        }
+        state
     }
 
     /// Breadth-first parents over the strong graph, seeded in tiers so that the path to a
     /// member starts at a static field of an application class if there is one, else at a
-    /// static field of any class, else at a thread, JNI or other root. Class objects only
-    /// lead to their static field targets (not to loaders or superclasses). Stops after
-    /// the tier that reaches a sample of every group.
-    fn shortest_paths(&self, groups: &[((u32, u32), SharedGroup)]) -> Vec<u32> {
+    /// static field of any class, else at a thread, JNI or other root. Only a seed class
+    /// leads to its static field targets; a class object reached on the way is a leaf, as
+    /// are HotSpot's `<...>` pseudo statics. Stops after the tier that reaches a sample
+    /// of every group.
+    fn shortest_paths(&mut self, groups: &[((u32, u32), SharedGroup)]) -> Vec<u32> {
         let n = self.g.n;
         let mut parent = vec![NONE; self.g.nodes()];
-        let mut st: Vec<(u32, u32)> = self.statics_out.iter().map(|&(c, _, t)| (c, t)).collect();
+        let mut st: Vec<(u32, u32)> = Vec::new();
+        for i in 0..self.statics_out.len() {
+            let (c, name, t) = self.statics_out[i];
+            if !self.strs.get(name).starts_with('<') {
+                st.push((c, t));
+            }
+        }
         st.sort_unstable();
         let (mut app, mut other_cls, mut tail) = (Vec::new(), Vec::new(), Vec::new());
         for i in 0..n as u32 {
@@ -1566,9 +1668,13 @@ impl Analysis<'_> {
         }
         let mut queue: Vec<u32> = Vec::new();
         let mut head = 0;
-        for seeds in [app, other_cls, tail] {
+        for (tier, seeds) in [app, other_cls, tail].into_iter().enumerate() {
             for s in seeds {
-                if parent[s as usize] == NONE {
+                // A class object reached earlier as a leaf becomes a seed too.
+                let is_class = (s as usize) < n && self.kinds[s as usize] == K_CLASS;
+                if parent[s as usize] == NONE
+                    || (is_class && tier < 2 && parent[s as usize] != SEED)
+                {
                     parent[s as usize] = SEED;
                     queue.push(s);
                 }
@@ -1577,6 +1683,9 @@ impl Analysis<'_> {
                 let v = queue[head];
                 head += 1;
                 if (v as usize) < n && self.kinds[v as usize] == K_CLASS {
+                    if parent[v as usize] != SEED {
+                        continue;
+                    }
                     let c = self.ty[v as usize];
                     let lo = st.partition_point(|&(a, _)| a < c);
                     for &(a, w) in &st[lo..] {
@@ -1607,42 +1716,38 @@ impl Analysis<'_> {
         parent
     }
 
-    /// The first static field edge on the path, or else the first instance field edge.
-    fn via_on(&mut self, chain: &[u32]) -> Option<ViaFound> {
-        for w in chain.windows(2) {
-            let (p, c) = (w[0], w[1]);
-            if (p as usize) >= self.g.n {
-                continue;
-            }
-            match self.kinds[p as usize] {
-                K_CLASS => {
-                    let cidx = self.ty[p as usize];
-                    let name = self
-                        .statics_out
-                        .iter()
-                        .find(|&&(ci, _, t)| ci == cidx && t == c)
-                        .map(|&(_, name, _)| name)?;
-                    let raw = self.ty_name(cidx);
-                    let field = self.strs.get(name);
-                    return Some(ViaFound::new(HolderKind::Static, "static", raw, field));
+    /// The via of the single edge `p -> c`: a static field of a class, or an instance
+    /// field of an object.
+    fn edge_via(&mut self, p: u32, c: u32, statics: &[(u32, u32, u64)]) -> Option<ViaFound> {
+        if (p as usize) >= self.g.n {
+            return None;
+        }
+        match self.kinds[p as usize] {
+            K_CLASS => {
+                let cidx = self.ty[p as usize];
+                let lo = statics.partition_point(|&(a, t, _)| (a, t) < (cidx, c));
+                let &(a, t, name) = statics.get(lo)?;
+                if (a, t) != (cidx, c) {
+                    return None;
                 }
-                K_INST => {
-                    let child_id = self.ids[c as usize];
-                    let Some((cidx, data)) = self.read_instance(p) else {
-                        continue;
-                    };
-                    for s in self.shape().slots(cidx) {
-                        if s.ty == 2 && self.id_at(&data, s.off) == child_id {
-                            let raw = self.class_names[s.decl as usize].clone();
-                            let field = self.strs.get(s.name);
-                            return Some(ViaFound::new(HolderKind::Instance, "field", raw, field));
-                        }
+                let raw = self.ty_name(cidx);
+                let field = self.strs.get(name);
+                Some(ViaFound::new(HolderKind::Static, "static", raw, field))
+            }
+            K_INST => {
+                let child_id = self.ids[c as usize];
+                let (cidx, data) = self.read_instance(p)?;
+                for s in self.shape().slots(cidx) {
+                    if s.ty == 2 && self.id_at(&data, s.off) == child_id {
+                        let raw = self.class_names[s.decl as usize].clone();
+                        let field = self.strs.get(s.name);
+                        return Some(ViaFound::new(HolderKind::Instance, "field", raw, field));
                     }
                 }
-                _ => {}
+                None
             }
+            _ => None,
         }
-        None
     }
 
     /// Root, then `label -> class` per edge; the middle is elided past [`MAX_PATH`].
@@ -1657,31 +1762,42 @@ impl Analysis<'_> {
         } else {
             format!("root instance {}", self.node_class(first))
         };
-        let mut edges: Vec<String> = Vec::new();
-        for w in chain.windows(2) {
-            let label = self.edge_label(w[0], w[1]);
-            edges.push(format!("{label} -> {}", self.node_class(w[1])));
-        }
+        let n_edges = chain.len() - 1;
         let mut out = vec![head];
-        if edges.len() + 1 > MAX_PATH {
+        // Labels are computed only for the edges that are kept.
+        let edge = |this: &mut Self, i: usize| {
+            let label = this.edge_label(chain[i], chain[i + 1]);
+            format!("{label} -> {}", this.node_class(chain[i + 1]))
+        };
+        if n_edges + 1 > MAX_PATH {
             let keep_head = MAX_PATH / 2 - 1;
             let keep_tail = MAX_PATH - 2 - keep_head;
-            let skipped = edges.len() - keep_head - keep_tail;
-            out.extend(edges[..keep_head].iter().cloned());
+            let skipped = n_edges - keep_head - keep_tail;
+            for i in 0..keep_head {
+                out.push(edge(self, i));
+            }
             out.push(format!("... {skipped} more"));
-            out.extend(edges[edges.len() - keep_tail..].iter().cloned());
+            for i in n_edges - keep_tail..n_edges {
+                out.push(edge(self, i));
+            }
         } else {
-            out.extend(edges);
+            for i in 0..n_edges {
+                out.push(edge(self, i));
+            }
         }
         out
     }
 }
 
-/// The nodes from a search seed down to `t`.
+/// The nodes from a search seed down to `t`. The parents form a BFS forest that ends at
+/// a seed, so the walk needs no cap; the length guard only protects against corruption.
 fn chain_to(parent: &[u32], t: u32) -> Vec<u32> {
     let mut chain = vec![t];
     let mut cur = t;
-    while parent[cur as usize] != SEED && parent[cur as usize] != NONE && chain.len() < 4096 {
+    while parent[cur as usize] != SEED
+        && parent[cur as usize] != NONE
+        && chain.len() <= parent.len()
+    {
         cur = parent[cur as usize];
         chain.push(cur);
     }

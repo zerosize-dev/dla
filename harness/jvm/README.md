@@ -60,7 +60,7 @@ processes, such as the unit-test JVM a build script starts, are deleted after th
 | `histogram-<n>.txt` | every checkpoint (driver) or at exit (command mode) | `DiagnosticCommand` `gcClassHistogram`, the text `jcmd GC.class_histogram` prints (live objects only: it forces a collection) |
 | `heap-<n>.hprof` | the selected checkpoints (driver: `DLA_CAPTURE_DUMPS`, default 4, from the end of the warm-up to the last round) or at exit (command mode, for the points `dla harness run` selects) | `HotSpotDiagnosticMXBean.dumpHeap(file, true)` (live objects, mode 0600) |
 | `recording.jfr` | at JVM exit | a recording started in `premain` before the workload (`settings=profile`, `path-to-gc-roots=true`, `dumponexit=true`): `jdk.OldObjectSample` only covers objects allocated while it runs |
-| `threads.json` | last checkpoint or exit | `Thread.dump_to_file -format=json` (`threadDumpToFile`) |
+| `threads.json` | last checkpoint or exit | `Thread.dump_to_file -format=json` (`threadDumpToFile`); needs JDK 19+, older JDKs record an error and write no file |
 | `classloader-stats.txt` | same | `VM.classloader_stats` |
 | `nmt-summary.txt`, `nmt-diff.txt` | same | `VM.native_memory summary` and `summary.diff` against a baseline taken at the end of the warm-up (driver) or at `premain` (command mode); needs `-XX:NativeMemoryTracking=summary`, which the injection always adds |
 

@@ -125,7 +125,11 @@ public final class DlaDump {
             return;
         }
         List<String> limitations = new ArrayList<>(EARLY);
-        EARLY.clear();
+        // Premain notes (a failed flight recording) must reach a record the harness reads:
+        // ticks are not read, so only a checkpoint or exit record takes them over.
+        if (!phase.equals("tick")) {
+            EARLY.clear();
+        }
         Map<String, Object> rec = new LinkedHashMap<>();
         try {
             build(rec, limitations, phase, x, last);

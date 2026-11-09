@@ -59,8 +59,9 @@ public final class DlaCapture {
 
     private static Path dir() throws Exception {
         if (dir == null) {
-            dir = Path.of(DlaDump.env("DLA_CAPTURE_DIR"), Long.toString(ProcessHandle.current().pid()));
-            Files.createDirectories(dir);
+            Path d = Path.of(DlaDump.env("DLA_CAPTURE_DIR"), Long.toString(ProcessHandle.current().pid()));
+            Files.createDirectories(d);
+            dir = d;
         }
         return dir;
     }
@@ -86,6 +87,15 @@ public final class DlaCapture {
                 // path search; a dump from this agent's hook would race with the recording's
                 // cleanup. The harness lists the file once the process has ended.
                 String file = dir().resolve("recording.jfr").toString();
+                // Keep the recording's chunks inside the capture directory: a killed process
+                // would leave them in the temp directory, outside the run.
+                try {
+                    Path repo = dir().resolve("jfr-repo");
+                    Files.createDirectories(repo);
+                    diag("jfrConfigure", "repositorypath=" + repo);
+                } catch (Throwable t) {
+                    lim.add("flight recording repository could not be set: " + t);
+                }
                 String out = diag("jfrStart", "name=" + RECORDING, "settings=profile", "path-to-gc-roots=true",
                     "dumponexit=true", "filename=" + file);
                 jfrStarted = true;
@@ -234,7 +244,10 @@ public final class DlaCapture {
                 diag("threadDumpToFile", "-format=json", f.toString());
                 out.add(entry("nonheap", "thread dump (json)", f, (System.nanoTime() - t0) / 1_000_000, null));
             } catch (Throwable t) {
-                out.add(entry("nonheap", "thread dump (json)", null, (System.nanoTime() - t0) / 1_000_000, t.toString()));
+                String why = t instanceof javax.management.JMException
+                    ? "Thread.dump_to_file (threadDumpToFile) needs JDK 19 or newer: " + t
+                    : t.toString();
+                out.add(entry("nonheap", "thread dump (json)", null, (System.nanoTime() - t0) / 1_000_000, why));
             }
             text(out, "nonheap", "class loader statistics", "classloader-stats.txt", "vmClassloaderStats",
                 new String[0]);

@@ -221,6 +221,117 @@ fn thread_local_roots_have_no_via_field() {
     assert!(s.tracked.iter().any(|h| h.key == "thread:main"));
 }
 
+/// Sessions with a payload of `bytes`, `n` of them.
+fn sessions(x: &mut Base, n: usize, bytes: usize) -> Vec<u64> {
+    (0..n)
+        .map(|i| {
+            let payload = x.b.byte_array(&vec![(i % 200) as u8; bytes]);
+            x.b.instance(x.cont, &[F::Id(payload)])
+        })
+        .collect()
+}
+
+/// Two statics hold disjoint parts of one shared class; each gets only its own bytes.
+#[test]
+fn via_bytes_are_split_per_field() {
+    let mut x = base("shop.Session");
+    let a = sessions(&mut x, 10, 20_000);
+    let bs = sessions(&mut x, 60, 20_000);
+    let all: Vec<u64> = a.iter().chain(&bs).copied().collect();
+    let arr_a = x.b.obj_array(x.obj_arr, &a);
+    let arr_b = x.b.obj_array(x.obj_arr, &bs);
+    let jobs = x.b.obj_array(x.obj_arr, &all);
+    let cache_a = x.b.declare("shop.CacheA");
+    let cache_b = x.b.declare("shop.CacheB");
+    thread_main(&mut x, jobs);
+    common_classes(&mut x);
+    x.b.class_dump(cache_a, x.obj, x.loader, 0, &[], &[("items", arr_a)]);
+    x.b.class_dump(cache_b, x.obj, x.loader, 0, &[], &[("items", arr_b)]);
+    let dir = tempfile::tempdir().unwrap();
+    let s = run(dir.path(), "split.hprof", &x.b.finish(1));
+    let get = |k: &str| s.via_holders.iter().find(|v| v.key == k);
+    let va = get("static:shop.CacheA.items").unwrap_or_else(|| panic!("{:?}", s.via_holders));
+    let vb = get("static:shop.CacheB.items").unwrap_or_else(|| panic!("{:?}", s.via_holders));
+    assert_eq!(va.accumulation.children, 10);
+    assert_eq!(vb.accumulation.children, 60);
+    assert!(
+        va.retained >= 200_000 && va.retained < 260_000,
+        "{}",
+        va.retained
+    );
+    assert!(
+        vb.retained >= 1_200_000 && vb.retained < 1_400_000,
+        "{}",
+        vb.retained
+    );
+}
+
+/// HotSpot's `<resolved_references>` pseudo static is not a holder.
+#[test]
+fn pseudo_statics_are_not_via_holders() {
+    let mut x = base("shop.Session");
+    let strs: Vec<u64> = (0..100)
+        .map(|i| x.b.java_string(x.string, &format!("{i:0>2000}")))
+        .collect();
+    let refs = x.b.obj_array(x.obj_arr, &strs);
+    let jobs = x.b.obj_array(x.obj_arr, &strs);
+    let owner = x.b.declare("shop.Owner");
+    thread_main(&mut x, jobs);
+    common_classes(&mut x);
+    x.b.class_dump(
+        owner,
+        x.obj,
+        x.loader,
+        0,
+        &[],
+        &[("<resolved_references>", refs)],
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let s = run(dir.path(), "pseudo.hprof", &x.b.finish(1));
+    assert!(
+        s.via_holders.iter().all(|v| !v.key.contains('<')),
+        "{:?}",
+        s.via_holders
+    );
+    assert!(s.via_holders.is_empty(), "{:?}", s.via_holders);
+}
+
+/// A list longer than the old 4096-node walk cap still reports the static that starts it.
+#[test]
+fn long_chain_keeps_the_real_root() {
+    let mut x = base("shop.Session");
+    let node_cls = x.b.declare("shop.Node");
+    let reg_cls = x.b.declare("shop.Registry");
+    let mut next = 0u64;
+    let mut nodes = Vec::new();
+    for i in 0..6000usize {
+        let payload = x.b.byte_array(&[(i % 200) as u8; 100]);
+        next = x.b.instance(node_cls, &[F::Id(next), F::Id(payload)]);
+        nodes.push(next);
+    }
+    for n in &nodes {
+        x.b.root(0x01, *n, 0, 0);
+    }
+    common_classes(&mut x);
+    x.b.class_dump(
+        node_cls,
+        x.obj,
+        0,
+        0,
+        &[("next", T_OBJ), ("payload", T_OBJ)],
+        &[],
+    );
+    x.b.class_dump(reg_cls, x.obj, x.loader, 0, &[], &[("head", next)]);
+    let dir = tempfile::tempdir().unwrap();
+    let s = run(dir.path(), "chain.hprof", &x.b.finish(1));
+    let v = s
+        .via_holders
+        .first()
+        .unwrap_or_else(|| panic!("{:?}", s.via_holders));
+    assert_eq!(v.key, "static:shop.Registry.head", "{:?}", v.path);
+    assert_eq!(v.path[0], "root class shop.Registry");
+}
+
 #[test]
 fn full_histogram_is_exposed() {
     let dir = tempfile::tempdir().unwrap();

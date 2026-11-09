@@ -205,16 +205,25 @@ pub struct PassedColumn {
 
 /// True when the probe column `column` (`probe:<Class>.<field>`, optionally with a
 /// `.size` or `.bytes` suffix) measures the holder named `owner` (`<Class>.<field>`,
-/// possibly package-qualified). The two match when equal or when one is a trailing
-/// run of dotted components of the other.
+/// possibly package-qualified). A probe column matches when the names are equal or one is
+/// a trailing run of dotted components of the other (probes may be named without the
+/// package). A heap-dump column (`holder:<key>[.count]`) always carries the qualified
+/// name, so it matches only the same holder: equal names after
+/// [`crate::attribution::canonical`], never a same-named holder of another package.
 pub fn probe_column_matches_owner(column: &str, owner: &str) -> bool {
-    // A probe column (`probe:<Class>.<field>[.size|.bytes]`), or a heap-dump series
-    // column (`holder:static:<Class>.<field>[.count]`, `holder:<key>[.count]`).
     let name = if let Some(n) = column.strip_prefix("probe:") {
         n
     } else if let Some(n) = column.strip_prefix("holder:") {
         let n = n.strip_suffix(".count").unwrap_or(n);
-        n.strip_prefix("static:").unwrap_or(n)
+        let owner = owner.trim();
+        return !owner.is_empty()
+            && match (
+                crate::attribution::canonical(n),
+                crate::attribution::canonical(owner),
+            ) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
     } else {
         return false;
     };
@@ -376,11 +385,30 @@ mod tests {
         ));
         assert!(probe_column_matches_owner(
             "holder:static:quotes.RfqDesk.OPEN.count",
-            "RfqDesk.OPEN"
+            "quotes.RfqDesk.OPEN"
         ));
         assert!(!probe_column_matches_owner(
             "holder:static:quotes.RfqDesk.RECENT",
             "quotes.RfqDesk.OPEN"
+        ));
+        // A heap-dump column names one qualified holder: a shorter owner, or the same
+        // class name in another package, is not that holder.
+        assert!(!probe_column_matches_owner(
+            "holder:static:quotes.RfqDesk.OPEN.count",
+            "RfqDesk.OPEN"
+        ));
+        assert!(!probe_column_matches_owner(
+            "holder:static:b.Cache.MAP",
+            "Cache.MAP"
+        ));
+        assert!(!probe_column_matches_owner(
+            "holder:static:b.Cache.MAP",
+            "a.Cache.MAP"
+        ));
+        // Kotlin names the census and the JVM spell differently are one holder.
+        assert!(probe_column_matches_owner(
+            "holder:static:shop.Svc.Companion.CACHE",
+            "shop.Svc.CACHE"
         ));
     }
 

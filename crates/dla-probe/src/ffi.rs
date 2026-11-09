@@ -50,7 +50,13 @@ fn line_of(text: &str, byte: usize) -> usize {
 pub fn unmangle(export: &str) -> Option<String> {
     let rest = export.strip_prefix("Java_")?;
     // An overloaded function carries `__<signature>` after the method.
-    let rest = rest.split_once("__").map_or(rest, |(a, _)| a);
+    // A `__` followed by an escape digit (0-3) is the `_` separator plus an escape, as in a
+    // method named `_open` (`Java_a_B__1open`), so it is not the overload separator.
+    let chars: Vec<char> = rest.chars().collect();
+    let cut = (0..chars.len().saturating_sub(1)).find(|&i| {
+        chars[i] == '_' && chars[i + 1] == '_' && !matches!(chars.get(i + 2), Some('0'..='3'))
+    });
+    let rest: String = cut.map_or(rest.to_string(), |i| chars[..i].iter().collect());
     let mut out = String::new();
     let b: Vec<char> = rest.chars().collect();
     let mut i = 0;
@@ -230,10 +236,7 @@ pub fn detect(tree: &Tree) -> Vec<FfiBoundary> {
             dirs.push((e.dir.clone(), e.rust));
         }
     }
-    // A cdylib with no `Java_` export is still the native side of `System.loadLibrary`.
-    if dirs.is_empty() {
-        dirs.extend(cdylibs.iter().map(|d| (d.clone(), true)));
-    }
+    // A cdylib with no `Java_` export is not a JNI boundary: it may be a wasm or PyO3 crate.
     let mut libs: Vec<String> = jvm.loads.iter().map(|(_, l)| l.clone()).collect();
     libs.dedup();
     let mut loaded_by: Vec<String> = jvm.loads.iter().map(|(f, _)| f.clone()).collect();
@@ -307,6 +310,35 @@ mod tests {
         );
         assert_eq!(unmangle("Java_x"), None);
         assert_eq!(unmangle("not_java"), None);
+    }
+
+    #[test]
+    fn jni_names_with_a_leading_underscore_keep_their_method() {
+        for (export, want) in [
+            ("Java_a_B__1open", "a.B._open"),
+            ("Java_a__1impl_C_m", "a._impl.C.m"),
+            ("Java_a_B__1open__I", "a.B._open"),
+            ("Java_a_B_f___3I", "a.B.f"),
+            ("Java_a_B__1open___3I", "a.B._open"),
+        ] {
+            assert_eq!(unmangle(export).as_deref(), Some(want), "{export}");
+        }
+    }
+
+    #[test]
+    fn a_cdylib_without_java_exports_is_not_a_boundary() {
+        let (_d, t) = tree(&[
+            (
+                "src/A.java",
+                "class A { static { System.loadLibrary(\"x\"); } }\n",
+            ),
+            (
+                "w/Cargo.toml",
+                "[package]\nname = \"x\"\n[lib]\ncrate-type = [\"cdylib\"]\n",
+            ),
+            ("w/src/lib.rs", "pub fn f() {}\n"),
+        ]);
+        assert!(detect(&t).is_empty());
     }
 
     #[test]

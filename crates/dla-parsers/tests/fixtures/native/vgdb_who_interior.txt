@@ -1,0 +1,4 @@
+sending command who_points_at 0x4a7b040 56 to pid 24451
+==24451== Searching for pointers pointing in 56 bytes from 0x4a7b040
+==24451== *0x10c020 interior points at 48 bytes inside 0x4a7b040
+ Address 0x10c020 is 0 bytes inside data symbol "registry"

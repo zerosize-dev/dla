@@ -34,7 +34,7 @@ use dla_parsers::hprof::{self, HeapSummary, Holder, HolderKind, Options, Sniff};
 use serde_json::{Map, Value, json};
 
 use super::{
-    Adapter, AdapterOut, CandidateRow, Ctx, Op, Opts, Recorded, compat, emit,
+    Adapter, AdapterOut, CandidateRow, Ctx, Op, Opts, Recorded, compat, emit, growth,
     input::Input,
     rule::{self, Observed},
     tie,
@@ -154,6 +154,16 @@ fn short_path(rel: &str) -> String {
     format!(".../{}/{}", parts.get(1).unwrap_or(&""), parts[0])
 }
 
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n).collect();
+        t.push_str("...");
+        t
+    }
+}
+
 fn top_json(h: &Holder) -> Value {
     json!({"key": h.key, "retained": h.retained, "dominated": h.dominated_count})
 }
@@ -185,6 +195,61 @@ fn owner_of(h: &Holder) -> String {
     }
 }
 
+/// A thread name read from the heap, shaped unless the run has raw-values consent. A name
+/// of plain program-structure characters (`main`, `pool-1-thread-3`) stays; anything
+/// else (a request thread named after its URL, a user) becomes a salted shape, the same
+/// in every dump of the run, so holder keys still join across dumps.
+fn thread_label(name: &str, red: &super::redact::Redactor) -> String {
+    let plain = name.len() <= 40
+        && !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && red.name(name) == name;
+    if plain {
+        name.to_owned()
+    } else {
+        red.value(name)
+    }
+}
+
+/// Replaces thread names in a summary (holder keys, owners, paths, dominators) by
+/// [`thread_label`], before anything is written, keyed or matched.
+fn redact_threads(summary: &mut HeapSummary, red: &super::redact::Redactor) {
+    let mut renamed: Vec<(String, String)> = Vec::new();
+    for h in summary.holders.iter_mut().chain(summary.tracked.iter_mut()) {
+        if h.kind != HolderKind::Thread {
+            continue;
+        }
+        let old = h.owner_class.clone();
+        let new = thread_label(&old, red);
+        if new == old {
+            continue;
+        }
+        h.owner_class = new.clone();
+        h.key = format!("thread:{new}");
+        for p in &mut h.path {
+            *p = p.replace(&old, &new);
+        }
+        if !renamed.iter().any(|(o, _)| *o == old) {
+            renamed.push((old, new));
+        }
+    }
+    for v in &mut summary.via_holders {
+        if let Some(name) = v.dominator.strip_prefix("thread:") {
+            let new = renamed
+                .iter()
+                .find(|(o, _)| o == name)
+                .map_or_else(|| thread_label(name, red), |(_, n)| n.clone());
+            let old = name.to_owned();
+            v.dominator = format!("thread:{new}");
+            for p in &mut v.path {
+                *p = p.replace(&old, &new);
+            }
+        }
+    }
+}
+
 fn limitations(d: &Dump) -> Vec<String> {
     let mut v = vec![d.summary.notes.first().cloned().unwrap_or_default()];
     v.extend(d.summary.warnings.iter().take(2).cloned());
@@ -203,7 +268,8 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
     };
     let mut dumps: Vec<Dump> = Vec::new();
     for i in inputs {
-        let summary = hprof::summarize(&i.abs, &opts).map_err(|e| parse_failure(&i.rel, &e))?;
+        let mut summary = hprof::summarize(&i.abs, &opts).map_err(|e| parse_failure(&i.rel, &e))?;
+        redact_threads(&mut summary, &ctx.redactor);
         let summary_file = format!("summaries/{}", summary_name(&i.rel, &i.sha256));
         dumps.push(Dump {
             rel: i.rel.clone(),
@@ -362,7 +428,9 @@ fn needed(n: usize) -> String {
 }
 
 /// The holder key a `--finding` binds to, after checking the finding exists and names an
-/// owner that matches a holder of the latest dump.
+/// owner that matches a holder of the latest dump. An exact owner wins over a normalized
+/// one, and that over a shorter owner (`Cache.MAP`); a shorter owner binds only when one
+/// holder matches it.
 fn bound_holder(ledger: &Ledger, f: &FindingId, dumps: &[Dump]) -> Res<(FindingId, String)> {
     let Some(finding) = ledger.finding(f) else {
         return Err(Failure::from(dla_core::Refusal::new(
@@ -381,19 +449,41 @@ fn bound_holder(ledger: &Ledger, f: &FindingId, dumps: &[Dump]) -> Res<(FindingI
         ));
     };
     let last = &dumps[dumps.len() - 1].summary;
-    let hit = last.tracked.iter().find(|h| {
-        h.key == owner
-            || owner_of(h) == owner
-            || format!("static:{owner}") == h.key
-            || (h.kind == HolderKind::Static
-                && dla_core::attribution::owners_match(&owner_of(h), &owner))
-    });
-    match hit {
-        Some(h) => Ok((f.clone(), h.key.clone())),
-        // One dump has no series to bind: the finding is only checked to exist and to
-        // have an owner, and the retention-path evidence is still recorded.
-        None if dumps.len() == 1 => Ok((f.clone(), owner)),
-        None => Err(fail(
+    let canon = dla_core::attribution::canonical(&owner);
+    let exact: Vec<&Holder> = last
+        .tracked
+        .iter()
+        .filter(|h| h.key == owner || owner_of(h) == owner || format!("static:{owner}") == h.key)
+        .collect();
+    let normalized: Vec<&Holder> = last
+        .tracked
+        .iter()
+        .filter(|h| {
+            h.kind == HolderKind::Static
+                && canon.is_some()
+                && dla_core::attribution::canonical(&owner_of(h)) == canon
+        })
+        .collect();
+    let suffix: Vec<&Holder> = last
+        .tracked
+        .iter()
+        .filter(|h| {
+            h.kind == HolderKind::Static
+                && dla_core::attribution::owners_match(&owner_of(h), &owner)
+        })
+        .collect();
+    let tier = [exact, normalized, suffix]
+        .into_iter()
+        .find(|t| !t.is_empty())
+        .unwrap_or_default();
+    match tier.as_slice() {
+        [h] => Ok((f.clone(), h.key.clone())),
+        [] if dumps.len() == 1 => {
+            // One dump has no series to bind: the finding is only checked to exist and to
+            // have an owner, and the retention-path evidence is still recorded.
+            Ok((f.clone(), owner))
+        }
+        [] => Err(fail(
             "holder-not-found",
             format!(
                 "no holder of the latest dump matches {f}'s owner {owner:?}; the largest are {}",
@@ -407,14 +497,30 @@ fn bound_holder(ledger: &Ledger, f: &FindingId, dumps: &[Dump]) -> Res<(FindingI
             "a finding whose owner is a holder in these dumps",
             &format!("dla ledger annotate {f} --owner <class.field of a holder>"),
         )),
+        many => Err(fail(
+            "ambiguous-holder",
+            format!(
+                "{f}'s owner {owner:?} matches {} holders of the latest dump: {}",
+                many.len(),
+                many.iter()
+                    .take(4)
+                    .map(|h| h.key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            "a finding whose owner names one holder",
+            &format!("dla ledger annotate {f} --owner <fully qualified class.field>"),
+        )),
     }
 }
 
-/// The finding a passing holder belongs to: by owner, else by the declaration site the
-/// resolver finds.
+/// The finding a passing holder belongs to: by holder identity (the owner), else by the
+/// declaration site the resolver finds when that finding names no other owner.
 struct Tie {
     finding: FindingId,
+    /// The finding's own site, when no other finding has it.
     site: Option<String>,
+    why: tie::TieReason,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -488,6 +594,12 @@ fn series_part(
     // ---- candidates for the passing holders, tied to an existing finding by owner or
     // by the field's declaration site
     let latest_retention = retention[retention.len() - 1].clone();
+    let who = tie::Who::new(tc.worker.as_deref(), Some(dla_core::runtime::Runtime::Jvm));
+    let holder_owners: Vec<String> = keys
+        .iter()
+        .filter_map(|k| latest(k))
+        .map(owner_of)
+        .collect();
     let mut cand_json = Vec::new();
     let mut tie_of: Vec<(String, Tie)> = Vec::new();
     for (key, _) in &passed {
@@ -502,11 +614,16 @@ fn series_part(
             })
         };
         let site = resolved.as_ref().map(|r| r.site.clone());
-        let existing = tie::finding_for(ledger, Some(&owner), site.as_deref());
-        let (fid, fsite, added) = match existing {
-            Some(f) => {
-                let fsite = ledger.finding(&f).and_then(|x| x.site.clone());
-                (f, fsite, false)
+        // The holder `--finding` bound is tied to that finding (its owner matched the
+        // holder under the same rules); any other holder ties by its own identity.
+        let existing = match &bound {
+            Some((f, k)) if k == key => Some((f.clone(), tie::TieReason::holder(&owner))),
+            _ => tie::finding_for_holder(ledger, &who, &owner, site.as_deref(), &holder_owners),
+        };
+        let (fid, fsite, added, why) = match existing {
+            Some((f, why)) => {
+                let fsite = tie::site_of(ledger, &f);
+                (f, fsite, false, why)
             }
             None => {
                 let mut nf = NewFinding::new(
@@ -527,7 +644,12 @@ fn series_part(
                     let _ =
                         ledger.annotate(&finding.id, r.writers.clone(), r.removers.clone(), None);
                 }
-                (finding.id.clone(), site.clone(), true)
+                (
+                    finding.id.clone(),
+                    tie::site_of(ledger, &finding.id),
+                    true,
+                    tie::TieReason::holder(&owner),
+                )
             }
         };
         if added {
@@ -553,6 +675,7 @@ fn series_part(
             Tie {
                 finding: fid,
                 site: fsite,
+                why,
             },
         ));
     }
@@ -630,10 +753,35 @@ fn series_part(
             reasons.push(format!("largest: {k}: {}", why.join("; ")));
         }
     }
-    let passed_json: Vec<Value> = passed
+    // Which passing holders the bounded result shows: the bound one first, then the best
+    // holder of each other tied finding, then the rest by size. What the output names as
+    // tied is only what the result shows.
+    let mut order: Vec<usize> = Vec::new();
+    let mut covered: Vec<&FindingId> = Vec::new();
+    if let Some((f, bk)) = &bound
+        && let Some(i) = passed.iter().position(|(k, _)| k == bk)
+    {
+        order.push(i);
+        covered.push(f);
+    }
+    for (i, (k, _)) in passed.iter().enumerate() {
+        if let Some(t) = tie_for(k)
+            && !covered.contains(&&t.finding)
+        {
+            covered.push(&t.finding);
+            order.push(i);
+        }
+    }
+    for i in 0..passed.len() {
+        if !order.contains(&i) {
+            order.push(i);
+        }
+    }
+    let rows: Vec<Value> = order
         .iter()
         .take(EVIDENCE_PASSED)
-        .map(|(key, g)| {
+        .map(|&i| {
+            let (key, g) = &passed[i];
             let h = latest(key);
             let slope = g.byte_deltas.iter().sum::<u64>() as f64 / g.byte_deltas.len() as f64;
             let mut v = json!({
@@ -642,31 +790,30 @@ fn series_part(
                 "unit": "bytes",
                 "slope": slope.round() as u64,
                 "shape": rule::shape(g),
-                "owner": h.map(owner_of),
+                "owner": h.map(|h| clip(&owner_of(h), 120)),
                 "last_over_first": (g.last_over_first * 100.0).round() / 100.0,
             });
             if let Some(t) = tie_for(key) {
                 v["finding"] = json!(t.finding);
                 v["candidates"] = json!([t.finding]);
+                v["tie"] = t.why.to_json();
                 if let Some(s) = &t.site {
-                    v["site"] = json!(s);
+                    v["site"] = json!(clip(s, 160));
                 }
             }
             v
         })
         .collect();
-    let mut result = json!({
+    let base = json!({
         "series": id,
         "axis": "dump",
         "n": n,
         "gate": if gate_pass { "pass" } else { "fail" },
-        "passed": passed_json,
         "failed": keys.len() - passed.len(),
         "reasons": reasons,
     });
-    if passed.len() > EVIDENCE_PASSED {
-        result["truncated"] = json!(passed.len() - EVIDENCE_PASSED);
-    }
+    let (result, kept) = growth::fit_passed(base, rows, passed.len());
+    let shown: Vec<usize> = order.iter().take(kept).copied().collect();
     let series_rel = format!("series/{id}.json");
     let mut spec = EvidenceSpec::new(
         EvidenceKind::GrowthSeries,
@@ -782,14 +929,17 @@ fn series_part(
     out.insert("growth_evidence".into(), json!(growth_id));
     out.insert(
         "passed".into(),
-        json!(
-            passed
-                .iter()
-                .take(EVIDENCE_PASSED)
-                .map(|(k, _)| k)
-                .collect::<Vec<_>>()
-        ),
+        json!(shown.iter().map(|&i| &passed[i].0).collect::<Vec<_>>()),
     );
+    let mut tied_ids: Vec<&FindingId> = Vec::new();
+    for &i in &shown {
+        if let Some(t) = tie_for(&passed[i].0)
+            && !tied_ids.contains(&&t.finding)
+        {
+            tied_ids.push(&t.finding);
+        }
+    }
+    out.insert("tied".into(), json!(tied_ids));
     out.insert("candidates".into(), json!(cand_json));
     out.insert("discriminators".into(), json!(disc_json));
     let needed_text = if n < rule::MIN_DUMPS {
@@ -798,9 +948,12 @@ fn series_part(
         "growth over every interval: take another dump after more traffic, rerun with all dumps"
             .to_owned()
     } else {
-        format!(
-            "a refuted non-leak sibling and a holder, then dla ledger confirm <finding> --evidence {growth_id}"
-        )
+        match tied_ids.first() {
+            Some(f) => format!(
+                "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {growth_id}"
+            ),
+            None => "no passing holder is tied in the evidence: rerun with fewer holders or --finding <F>".to_owned(),
+        }
     };
     out.insert("needed".into(), json!(needed_text));
     Ok(series_raw)

@@ -118,10 +118,11 @@ fn thread_dump_real() {
     let site = s
         .groups
         .iter()
-        .filter(|g| g.key.starts_with("site:com.acme.Main.lambda"))
+        .filter(|g| g.key.starts_with("frame:com.acme.Main.lambda"))
         .map(|g| g.count)
         .sum::<u64>();
     assert_eq!(site, 16);
+    assert!(s.groups.iter().all(|g| g.site.is_none()));
     assert!(g("state:no-stack").count >= 1);
 }
 

@@ -69,8 +69,45 @@ pub fn is_allocator_frame(frame: &Frame) -> bool {
         "operator new[]",
         "__libc_malloc",
     ];
-    if C_ENTRY.contains(&f) {
+    if C_ENTRY.contains(&f) || f.starts_with("operator new(") || f.starts_with("operator new[](") {
         return true;
+    }
+    // Rust library frames that Valgrind names without a path (`alloc_impl`,
+    // `with_capacity_in<..>`, `UnknownInlinedFun`) are told apart by their source file, or,
+    // when only a bare `alloc.rs` / `mod.rs` is printed, by name (Rust files only).
+    if let Some(file) = frame.file.as_deref() {
+        let in_lib = |dir: &str| file.starts_with(dir) || file.contains(&format!("/{dir}"));
+        if in_lib("library/alloc/") || in_lib("library/core/src/alloc/") {
+            return true;
+        }
+        // Only a bare file name (no directory): a project file such as `src/arena.rs` keeps
+        // its frames.
+        let bare = !file.contains('/') && !file.contains('\\');
+        if bare && file.ends_with(".rs") {
+            let base = f.split('<').next().unwrap_or(f);
+            const RUST_ALLOC: [&str; 12] = [
+                "alloc",
+                "alloc_zeroed",
+                "alloc_impl",
+                "alloc_impl_runtime",
+                "allocate",
+                "allocate_zeroed",
+                "realloc",
+                "realloc_nonnull",
+                "grow_impl",
+                "grow_impl_runtime",
+                "finish_grow",
+                "UnknownInlinedFun",
+            ];
+            if RUST_ALLOC.contains(&base)
+                || base.starts_with("try_allocate_in")
+                || base.starts_with("with_capacity")
+                || base.starts_with("grow_amortized")
+                || base.starts_with("grow_one")
+            {
+                return true;
+            }
+        }
     }
     if f.starts_with("__rust_")
         || f.starts_with("__rdl_")
@@ -88,6 +125,22 @@ pub fn is_allocator_frame(frame: &Frame) -> bool {
     match inner.split_once(" as ") {
         Some((ty, tr)) => owned(ty) || owned(tr),
         None => owned(inner),
+    }
+}
+
+/// Drops the leading frames that are in Valgrind's own preload library (`vgpreload_*.so`).
+/// A stack made only of such frames is left unchanged.
+pub fn drop_preload_frames(frames: &mut Vec<Frame>) {
+    let skip = frames
+        .iter()
+        .take_while(|f| {
+            f.module
+                .as_deref()
+                .is_some_and(|m| m.contains("/vgpreload_"))
+        })
+        .count();
+    if skip < frames.len() {
+        frames.drain(..skip);
     }
 }
 
@@ -168,5 +221,55 @@ mod tests {
         assert!(!is_allocator_frame(&f(
             "std::collections::hash::map::HashMap<K,V>::insert"
         )));
+    }
+
+    #[test]
+    fn cpp_new_and_rust_library_frames_by_shape() {
+        assert!(is_allocator_frame(&f("operator new(unsigned long)")));
+        assert!(is_allocator_frame(&f("operator new[](unsigned long)")));
+        let inlined = Frame {
+            function: "UnknownInlinedFun".into(),
+            file: Some("/rustc/abc/library/alloc/src/alloc.rs".into()),
+            ..Frame::default()
+        };
+        assert!(is_allocator_frame(&inlined));
+        let core_alloc = Frame {
+            function: "layout_array".into(),
+            file: Some("library/core/src/alloc/layout.rs".into()),
+            ..Frame::default()
+        };
+        assert!(is_allocator_frame(&core_alloc));
+        // A C function called `alloc` is project code.
+        let c = Frame {
+            function: "alloc".into(),
+            file: Some("pool.c".into()),
+            ..Frame::default()
+        };
+        assert!(!is_allocator_frame(&c));
+        // A project Rust file with a path is project code, even for allocator-like names.
+        for name in [
+            "alloc",
+            "allocate",
+            "with_capacity",
+            "grow_one",
+            "UnknownInlinedFun",
+        ] {
+            for file in ["src/arena.rs", "crates/x/src/arena.rs", "src\\arena.rs"] {
+                let p = Frame {
+                    function: name.into(),
+                    file: Some(file.into()),
+                    ..Frame::default()
+                };
+                assert!(!is_allocator_frame(&p), "{name} in {file}");
+            }
+        }
+        // A bare name from Valgrind is still trimmed.
+        let bare = Frame {
+            function: "alloc_impl".into(),
+            file: Some("alloc.rs".into()),
+            ..Frame::default()
+        };
+        assert!(is_allocator_frame(&bare));
+        assert!(!is_allocator_frame(&f("operator delete(void*)")));
     }
 }

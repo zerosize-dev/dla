@@ -107,11 +107,46 @@ fn dotted_suffix(long: &str, short: &str) -> bool {
             .is_some_and(|rest| rest.ends_with('.'))
 }
 
+/// [`normalize`], then the Kotlin forms the census and the JVM name differently are made
+/// one: a companion field `Svc.Companion.CACHE` is `Svc.CACHE` (the JVM keeps it as a
+/// static of `Svc`), and a top-level property `pkg.AKt.top` of file `A.kt` is `pkg.top`
+/// (the census names it by package).
+pub fn canonical(key_or_owner: &str) -> Option<String> {
+    let n = normalize(key_or_owner)?;
+    let mut parts: Vec<&str> = n.split('.').collect();
+    let mut i = 0;
+    while i < parts.len() {
+        if parts[i] == "Companion" && i > 0 && i + 1 < parts.len() {
+            parts.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    // `<pkg>.<File>Kt.<prop>`: the facade class sits right before the property, after a
+    // lower-case package.
+    let n = parts.len();
+    if n >= 3
+        && parts[n - 2].len() > 2
+        && parts[n - 2].ends_with("Kt")
+        && parts[n - 2].starts_with(char::is_uppercase)
+        && parts[n - 3].starts_with(char::is_lowercase)
+    {
+        parts.remove(n - 2);
+    }
+    (parts.len() >= 2).then(|| parts.join("."))
+}
+
+/// True when `short` is a proper trailing run of dotted components of `long` (both
+/// canonical): `Audit.trail` of `shop.codec.Audit.trail`.
+pub fn is_shorter_form(long: &str, short: &str) -> bool {
+    long != short && dotted_suffix(long, short)
+}
+
 /// True when the two owners name one field: equal, or one is a trailing run of dotted
 /// components of the other (`Audit.trail` and `shop.codec.Audit.trail`), after
-/// [`normalize`]. A bare field name matches nothing: both need a class part.
+/// [`canonical`]. A bare field name matches nothing: both need a class part.
 pub fn owners_match(a: &str, b: &str) -> bool {
-    let (Some(a), Some(b)) = (normalize(a), normalize(b)) else {
+    let (Some(a), Some(b)) = (canonical(a), canonical(b)) else {
         return false;
     };
     dotted_suffix(&a, &b) || dotted_suffix(&b, &a)
@@ -151,10 +186,10 @@ pub fn census_entries(run_dir: &Path) -> Vec<CensusEntry> {
 /// The census entry for `owner`: an exact owner first, else the only entry that matches
 /// by dotted suffix. Several matches resolve to nothing.
 pub fn find_entry<'e>(entries: &'e [CensusEntry], owner: &str) -> Option<&'e CensusEntry> {
-    let want = normalize(owner)?;
+    let want = canonical(owner)?;
     let exact: Vec<&CensusEntry> = entries
         .iter()
-        .filter(|e| normalize(&e.owner).as_deref() == Some(want.as_str()))
+        .filter(|e| canonical(&e.owner).as_deref() == Some(want.as_str()))
         .collect();
     if exact.len() == 1 {
         return exact.first().copied();
@@ -241,32 +276,60 @@ impl SourceIndex {
         }
     }
 
-    /// The source files that may hold class `fqn` (`pkg.Outer.Inner`; nested classes are
-    /// looked up in the outer class's file). Several files of one name are told apart by
-    /// the package path.
+    /// The source files that hold class `fqn` (`pkg.Outer.Inner`; nested classes are
+    /// looked up in the outer class's file). When the name has a package, a file counts
+    /// only if its path contains `<pkg path>/<Name>.` or its `package` line says so; a
+    /// file of another package with the same simple name is never returned. A Kotlin
+    /// facade class `AKt` is looked up as `A.kt`. A bare class name (no package) matches
+    /// the files of that name.
     pub fn files_of_class(&self, fqn: &str) -> Vec<PathBuf> {
         let Some(top) = top_class(fqn) else {
             return Vec::new();
         };
-        let mut found: Vec<PathBuf> = ["java", "kt"]
-            .iter()
-            .flat_map(|ext| self.files.get(&format!("{}.{ext}", top.name)))
-            .flatten()
-            .cloned()
-            .collect();
-        if found.len() > 1 && !top.pkg_path.is_empty() {
-            let want = format!("{}/{}.", top.pkg_path, top.name);
-            let by_pkg: Vec<PathBuf> = found
-                .iter()
-                .filter(|p| to_slash(p).contains(&want))
-                .cloned()
-                .collect();
-            if !by_pkg.is_empty() {
-                found = by_pkg;
+        let mut names: Vec<&str> = vec![top.name];
+        if let Some(stem) = top.name.strip_suffix("Kt").filter(|s| !s.is_empty()) {
+            names.push(stem);
+        }
+        let mut found: Vec<(PathBuf, &str)> = Vec::new();
+        for name in names {
+            for ext in ["java", "kt"] {
+                if let Some(v) = self.files.get(&format!("{name}.{ext}")) {
+                    found.extend(v.iter().cloned().map(|p| (p, name)));
+                }
             }
         }
+        if top.pkg_path.is_empty() {
+            return found.into_iter().map(|(p, _)| p).collect();
+        }
+        let pkg_dotted = top.pkg_path.replace('/', ".");
         found
+            .into_iter()
+            .filter(|(p, name)| match package_of(p) {
+                Some(pkg) => pkg == pkg_dotted,
+                None => {
+                    let slash = format!("/{}", to_slash(p));
+                    slash.contains(&format!("/{}/{name}.", top.pkg_path))
+                }
+            })
+            .map(|(p, _)| p)
+            .collect()
     }
+}
+
+/// The `package` a Java or Kotlin file declares, read from its first lines.
+fn package_of(path: &Path) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+    let f = fs::File::open(path).ok()?;
+    for line in BufReader::new(f).lines().take(200) {
+        let line = line.ok()?;
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("package ") {
+            let name = rest.trim().trim_end_matches(';').trim();
+            return (!name.is_empty() && !name.contains(char::is_whitespace))
+                .then(|| name.to_owned());
+        }
+    }
+    None
 }
 
 struct TopClass<'a> {

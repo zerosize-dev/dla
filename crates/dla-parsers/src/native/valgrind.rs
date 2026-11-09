@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::ParseError;
-use super::frames::make_frame;
+use super::frames::{drop_preload_frames, make_frame, trim_allocator_frames};
 use super::xml::{self, Node};
 use crate::model::{AllocGroup, AllocProfile, Frame};
 
@@ -105,25 +105,28 @@ fn leak_group(error: &Node, kind: &str) -> AllocGroup {
         .child("stack")
         .map(|s| s.children_named("frame").map(frame).collect())
         .unwrap_or_default();
-    let skip = frames
-        .iter()
-        .take_while(|f| {
-            f.module
-                .as_deref()
-                .is_some_and(|m| m.contains("/vgpreload_"))
-        })
-        .count();
-    if skip < frames.len() {
-        frames.drain(..skip);
-    }
+    drop_preload_frames(&mut frames);
+    let frames = trim_allocator_frames(frames);
     AllocGroup {
         frames,
-        live_bytes: number("leakedbytes"),
+        // `<leakedbytes>` of a lost record counts the blocks it owns; those have their own
+        // indirectly-lost records, so only the direct bytes are live bytes of this stack.
+        live_bytes: what
+            .and_then(|w| w.child_text("text"))
+            .and_then(direct_bytes)
+            .unwrap_or_else(|| number("leakedbytes")),
         live_blocks: number("leakedblocks"),
         total_bytes: None,
         root_path: Vec::new(),
         kind: Some(kind.to_owned()),
     }
+}
+
+/// `N` of `116 (N direct, I indirect) bytes in 1 blocks ...`; commas in numbers are dropped.
+fn direct_bytes(text: &str) -> Option<u64> {
+    let (_, rest) = text.trim().split_once(" (")?;
+    let (direct, _) = rest.split_once(" direct")?;
+    direct.replace(',', "").trim().parse().ok()
 }
 
 fn frame(node: &Node) -> Frame {

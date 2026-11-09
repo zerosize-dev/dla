@@ -80,7 +80,9 @@ pub struct Switches {
 /// What a JVM harness needs to measure the native side of a JNI boundary.
 #[derive(Debug, Clone, Default)]
 pub struct FfiSwitch {
-    /// Absolute directories that hold the built native library (`java.library.path`).
+    /// Absolute directories that may hold the built native library. They are put first on
+    /// `LD_LIBRARY_PATH`, so the JVM keeps its own and the system library directories.
+    /// A directory that does not exist is harmless.
     pub lib_dirs: Vec<String>,
 }
 
@@ -318,7 +320,7 @@ fn run_spec(piece: &str, cwd: &str, template: Option<&str>) -> CommandSpec {
 
 /// Sets `key` in `spec.env`. A value the command already carries inline
 /// (`PYTHONPATH=src python3 ...`) is combined with the injected one, never replaced:
-/// `PYTHONPATH`, `LD_PRELOAD` and `DYLD_INSERT_LIBRARIES` get the injected value first
+/// `PYTHONPATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH` and `DYLD_INSERT_LIBRARIES` get the injected value first
 /// (path separator), `JAVA_TOOL_OPTIONS` and `NODE_OPTIONS` get it last (space).
 fn set_env(spec: &mut CommandSpec, key: &str, value: String) {
     if let Some(e) = spec.env.iter_mut().find(|(k, _)| k == key) {
@@ -328,7 +330,9 @@ fn set_env(spec: &mut CommandSpec, key: &str, value: String) {
         } else {
             match key {
                 "PYTHONPATH" => format!("{value}{}{old}", path_sep()),
-                "LD_PRELOAD" | "DYLD_INSERT_LIBRARIES" => format!("{value}:{old}"),
+                "LD_PRELOAD" | "DYLD_INSERT_LIBRARIES" | "LD_LIBRARY_PATH" => {
+                    format!("{value}:{old}")
+                }
                 "JAVA_TOOL_OPTIONS" | "NODE_OPTIONS" => format!("{old} {value}"),
                 _ => value,
             }
@@ -356,15 +360,6 @@ pub fn jvm_options(agent_dir: &Path, sw: &Switches) -> String {
     if sw.jfr {
         opts.push("-XX:StartFlightRecording=filename={out}.jfr,settings=profile".to_owned());
     }
-    if let Some(f) = &sw.ffi
-        && !f.lib_dirs.is_empty()
-    {
-        // A `-D` on the command line of the program wins over this one.
-        opts.push(format!(
-            "-Djava.library.path={}",
-            quote_opt(&f.lib_dirs.join(path_sep()))
-        ));
-    }
     opts.extend(sw.jvm_options.iter().cloned());
     opts.join(" ")
 }
@@ -376,6 +371,7 @@ pub fn attach_ffi(
     run: &mut CommandSpec,
     build: Option<&mut CommandSpec>,
     layout: &Layout,
+    lib_dirs: &[String],
     gaps: &mut Vec<String>,
 ) {
     if cfg!(windows) {
@@ -384,6 +380,25 @@ pub fn attach_ffi(
     }
     set_env(run, preload_var(), abs(&layout.agent.join(shim_file())));
     set_env(run, "DLA_SHIM_ONLY", "java".to_owned());
+    if !lib_dirs.is_empty() {
+        // Not `-Djava.library.path`: that would replace the JVM's default path. The JVM builds
+        // its default from `LD_LIBRARY_PATH` and keeps the system directories.
+        set_env(run, "LD_LIBRARY_PATH", lib_dirs.join(":"));
+    }
+    // A Gradle daemon is detached and would outlive the run with the shim loaded.
+    let gradle = |a: &String| {
+        matches!(
+            a.rsplit('/').next().unwrap_or(a),
+            "gradle" | "gradlew" | "gradle.bat" | "gradlew.bat"
+        )
+    };
+    if run.argv.iter().any(gradle) {
+        set_env(run, "GRADLE_OPTS", "-Dorg.gradle.daemon=false".to_owned());
+        gaps.push(
+            "note: Gradle runs without its daemon so no instrumented JVM outlives the run"
+                .to_owned(),
+        );
+    }
     set_env(
         run,
         "CARGO_PROFILE_RELEASE_DEBUG",
@@ -466,8 +481,8 @@ fn plan_jvm(
         jvm_options(&layout.agent, sw),
     );
     let mut build = build;
-    if sw.ffi.is_some() {
-        attach_ffi(&mut run, build.as_mut(), layout, &mut gaps);
+    if let Some(f) = &sw.ffi {
+        attach_ffi(&mut run, build.as_mut(), layout, &f.lib_dirs, &mut gaps);
     }
     Ok(Plan {
         build,
@@ -728,15 +743,24 @@ fn native_executable(work: &Path, cwd: &str, piece: &str) -> Option<String> {
         return None;
     }
     let path = work.join(cwd).join(tok);
+    is_native_binary(&path).then(|| base.to_owned())
+}
+
+/// Whether `path` is an ELF or Mach-O executable (by its first four bytes), not a script.
+pub(crate) fn is_native_binary(path: &Path) -> bool {
     let mut head = [0u8; 4];
-    let mut f = std::fs::File::open(&path).ok()?;
-    std::io::Read::read_exact(&mut f, &mut head).ok()?;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    if std::io::Read::read_exact(&mut f, &mut head).is_err() {
+        return false;
+    }
     let elf = head == [0x7f, b'E', b'L', b'F'];
     let macho = matches!(
         u32::from_le_bytes(head),
         0xfeed_face | 0xfeed_facf | 0xcefa_edfe | 0xcffa_edfe | 0xcafe_babe | 0xbeba_feca
     );
-    (elf || macho).then(|| base.to_owned())
+    elf || macho
 }
 
 fn plan_native(w: &Workload, iter_arg: Option<&str>, layout: &Layout) -> Plan {
@@ -847,8 +871,8 @@ pub fn plan_driver(
             );
             let mut build = build;
             let mut gaps = Vec::new();
-            if sw.ffi.is_some() {
-                attach_ffi(&mut run, Some(&mut build), layout, &mut gaps);
+            if let Some(f) = &sw.ffi {
+                attach_ffi(&mut run, Some(&mut build), layout, &f.lib_dirs, &mut gaps);
             }
             Plan {
                 build: Some(build),
@@ -1083,6 +1107,8 @@ mod tests {
         assert!(p.gaps[0].starts_with("note:"));
     }
 
+    // The allocator shim does not exist on Windows (attach_ffi records a gap there).
+    #[cfg(not(windows))]
     #[test]
     fn a_jni_boundary_preloads_the_shim_and_builds_with_line_tables() {
         let w = wl(Runtime::Jvm, "sh ./build.sh && sh ./build.sh run");
@@ -1105,7 +1131,11 @@ mod tests {
             Some("line-tables-only")
         );
         let jto = env(&p.run, "JAVA_TOOL_OPTIONS").unwrap();
-        assert!(jto.contains("-Djava.library.path=/r/harness/H1/work/native/target/release"));
+        assert!(!jto.contains("library.path"), "{jto}");
+        assert_eq!(
+            env(&p.run, "LD_LIBRARY_PATH"),
+            Some("/r/harness/H1/work/native/target/release")
+        );
         // Without the switch none of this appears.
         let plain = plan(&w, Some("{n}"), &layout(), &Switches::default(), None).unwrap();
         assert!(env(&plain.run, "DLA_SHIM_ONLY").is_none());
@@ -1114,6 +1144,39 @@ mod tests {
                 .unwrap()
                 .contains("library.path")
         );
+    }
+
+    // The allocator shim does not exist on Windows (attach_ffi records a gap there).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_jni_boundary_keeps_an_inline_library_path_and_stops_the_gradle_daemon() {
+        let sw = Switches {
+            ffi: Some(FfiSwitch {
+                lib_dirs: vec!["/h/work/native/target/release".into()],
+            }),
+            ..Switches::default()
+        };
+        let w = wl(
+            Runtime::Jvm,
+            "LD_LIBRARY_PATH=native/target/debug java -cp out app.Main",
+        );
+        let p = plan(&w, Some("{n}"), &layout(), &sw, None).unwrap();
+        assert_eq!(
+            env(&p.run, "LD_LIBRARY_PATH"),
+            Some("/h/work/native/target/release:native/target/debug")
+        );
+        assert!(
+            !env(&p.run, "JAVA_TOOL_OPTIONS")
+                .unwrap()
+                .contains("library.path")
+        );
+        let w = wl(Runtime::Jvm, "gradle -q run");
+        let p = plan(&w, Some("{n}"), &layout(), &sw, None).unwrap();
+        assert_eq!(
+            env(&p.run, "GRADLE_OPTS"),
+            Some("-Dorg.gradle.daemon=false")
+        );
+        assert!(p.gaps.iter().any(|g| g.contains("daemon")));
     }
 
     #[test]

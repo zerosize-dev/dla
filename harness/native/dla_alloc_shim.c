@@ -1314,6 +1314,57 @@ static const char *base_name(const char *p)
     return s ? s + 1 : p;
 }
 
+#ifdef __linux__
+/* True when this process is a build-tool JVM (compiler, Gradle, Maven, ...) rather than the
+ * program under test. Looks at the main class or jar only (the first argument that is not a
+ * JVM option), like the JVM agent does, so a class path entry never matches. */
+static int is_tool_jvm(void)
+{
+    static char buf[16384]; /* static: no malloc in the constructor */
+    int fd = open("/proc/self/cmdline", O_RDONLY);
+    if (fd < 0)
+        return 0;
+    ssize_t n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0)
+        return 0;
+    buf[n] = 0;
+    static const char *const takes_value[] = {"-cp", "-classpath", "--class-path", "-p", "--module-path",
+        "--upgrade-module-path", "--add-modules", "--limit-modules", "--patch-module", "--add-reads",
+        "--add-exports", "--add-opens", "--enable-native-access", NULL};
+    const char *head = NULL;
+    ssize_t i = (ssize_t)strlen(buf) + 1; /* skip argv[0] */
+    while (i < n) {
+        const char *a = buf + i;
+        i += (ssize_t)strlen(a) + 1;
+        if (strcmp(a, "-jar") == 0 || strcmp(a, "-m") == 0 || strcmp(a, "--module") == 0) {
+            head = i < n ? buf + i : NULL;
+            break;
+        }
+        if (a[0] == '-') {
+            for (int k = 0; takes_value[k] != NULL; k++)
+                if (strcmp(a, takes_value[k]) == 0) {
+                    i += i < n ? (ssize_t)strlen(buf + i) + 1 : 0;
+                    break;
+                }
+            continue;
+        }
+        head = a;
+        break;
+    }
+    if (head == NULL)
+        return 0;
+    static const char *const tools[] = {"com.sun.tools.", "sun.tools.", "jdk.compiler", "jdk.jartool",
+        "jdk.jshell", "jdk.jdeps", "jdk.javadoc", "jdk.jcmd", "jdk.jlink", "org.apache.maven",
+        "org.codehaus.plexus", "plexus-classworlds", "org.gradle", "GradleWrapperMain", "gradle-launcher",
+        "gradle-wrapper", "org.jetbrains.kotlin", "org.apache.tools.ant", "sbt-launch", NULL};
+    for (int k = 0; tools[k] != NULL; k++)
+        if (strstr(head, tools[k]) != NULL)
+            return 1;
+    return 0;
+}
+#endif
+
 __attribute__((constructor(101))) static void dla_shim_init(void)
 {
     ready(); /* resolve the real allocator while the process is still single-threaded */
@@ -1336,6 +1387,11 @@ __attribute__((constructor(101))) static void dla_shim_init(void)
         const char *eb = base_name(exe_path);
         if (strcmp(eb, only) != 0 && strcmp(base_name(only), eb) != 0)
             return;
+#ifdef __linux__
+        /* A selected `java` also matches the compiler, test and Gradle JVMs of the run. */
+        if (strcmp(eb, "java") == 0 && is_tool_jvm())
+            return;
+#endif
     }
     const char *sm = getenv("DLA_SHIM_SAMPLE");
     if (sm != NULL && sm[0] != 0) {

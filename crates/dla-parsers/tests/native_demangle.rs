@@ -95,3 +95,49 @@ fn hostile_input_is_bounded() {
     let wide = format!("_ZN{}E", "1a".repeat(100_000));
     let _ = demangle(&wide);
 }
+
+/// Base-62 as v0 writes a backref position.
+fn b62(n: usize) -> String {
+    if n == 0 {
+        return "_".into();
+    }
+    const D: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut n = n - 1;
+    let mut digits = Vec::new();
+    while n > 0 {
+        digits.push(D[n % 62]);
+        n /= 62;
+    }
+    if digits.is_empty() {
+        digits.push(b'0');
+    }
+    digits.reverse();
+    format!("{}_", String::from_utf8(digits).unwrap())
+}
+
+/// `levels` nested `I<inner>B<pos of inner>_E` around `C1b`; `start` is where it begins in the
+/// symbol body (after `_R`).
+fn nest(levels: usize, start: usize) -> String {
+    if levels == 0 {
+        return "C1b".into();
+    }
+    format!("I{}B{}E", nest(levels - 1, start + 1), b62(start + 1))
+}
+
+#[test]
+fn nested_backrefs_in_skipped_paths_finish_quickly() {
+    // 60 levels in the instantiating-crate path, and in the impl path of `M`. Following
+    // every backref in the parts that are not printed took exponential time.
+    let krate = format!("_RC1a{}", nest(60, 3));
+    let imp = format!("_RM{}u", nest(60, 1));
+    for (sym, want) in [(&krate, "a"), (&imp, "<()>")] {
+        let t = std::time::Instant::now();
+        let got = demangle(sym);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(got.as_deref(), Some(want));
+    }
+}

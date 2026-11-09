@@ -1,0 +1,15 @@
+sending command leak_check full definiteleak increased to pid 21064
+==21064== 3,380 (+696) (480 (+96) direct, 2,900 (+600) indirect) bytes in 15 (+3) blocks are definitely lost in loss record 4 of 4
+==21064==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==21064==    by 0x109184: leak_tree (tree.c:6)
+==21064==    by 0x1091F6: main (tree.c:13)
+==21064== 
+==21064== LEAK SUMMARY:
+==21064==    definitely lost: 480 (+96) bytes in 15 (+3) blocks
+==21064==    indirectly lost: 2,900 (+600) bytes in 29 (+6) blocks
+==21064==      possibly lost: 0 (+0) bytes in 0 (+0) blocks
+==21064==    still reachable: 100 (+0) bytes in 1 (+0) blocks
+==21064==         suppressed: 0 (+0) bytes in 0 (+0) blocks
+==21064== Reachable blocks (those to which a pointer was found) are not shown.
+==21064== To see them, add 'reachable any' args to leak_check
+==21064== 

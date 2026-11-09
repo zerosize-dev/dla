@@ -1,0 +1,21 @@
+sending command leak_check full reachable increased to pid 14747
+==14747== 192 (+192) bytes in 4 (+4) blocks are still reachable in new loss record 2 of 3
+==14747==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==14747==    by 0x1091D7: step (grow4.c:6)
+==14747==    by 0x109224: run (grow4.c:9)
+==14747==    by 0x109258: main (grow4.c:13)
+==14747== 
+==14747== 4,000 (+4,000) bytes in 4 (+4) blocks are still reachable in new loss record 3 of 3
+==14747==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==14747==    by 0x10918E: newsite (grow4.c:4)
+==14747==    by 0x1091FB: step (grow4.c:7)
+==14747==    by 0x109224: run (grow4.c:9)
+==14747==    by 0x109258: main (grow4.c:13)
+==14747== 
+==14747== LEAK SUMMARY:
+==14747==    definitely lost: 0 (+0) bytes in 0 (+0) blocks
+==14747==    indirectly lost: 0 (+0) bytes in 0 (+0) blocks
+==14747==      possibly lost: 0 (+0) bytes in 0 (+0) blocks
+==14747==    still reachable: 4,384 (+4,192) bytes in 12 (+8) blocks
+==14747==         suppressed: 0 (+0) bytes in 0 (+0) blocks
+==14747== 

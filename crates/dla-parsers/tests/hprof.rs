@@ -247,6 +247,12 @@ fn bad_inputs_are_errors() {
     let cut = &m.dump[..m.dump.len() - 200];
     let e = summarize(&write(dir.path(), "c.hprof", cut), &o).unwrap_err();
     assert!(e.to_string().contains("truncated"), "{e}");
+    // Cut at a record boundary: the heap segments are there, HEAP_DUMP_END (the last
+    // 9 bytes: tag, time, length 0) is not, as when the JVM is killed while writing.
+    assert_eq!(m.dump[m.dump.len() - 9], 0x2c);
+    let cut = &m.dump[..m.dump.len() - 9];
+    let e = summarize(&write(dir.path(), "c2.hprof", cut), &o).unwrap_err();
+    assert!(e.to_string().contains("truncated"), "{e}");
     // A gzip whose payload is not a dump, and a truncated gzip.
     let e = summarize(
         &write(dir.path(), "d.hprof.gz", &stored_gzip(b"hello world")),

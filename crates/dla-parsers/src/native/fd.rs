@@ -109,7 +109,22 @@ pub fn snapshot<'a, I: IntoIterator<Item = &'a str>>(targets: I) -> NonHeapSnaps
 /// lines are skipped.
 pub fn targets_from_listing(text: &str) -> Vec<&str> {
     text.lines()
-        .map(|l| l.rsplit_once(" -> ").map_or(l, |(_, t)| t).trim())
+        .map(|l| {
+            // Split at the first arrow: the part before it is the fd number (and `ls -l`
+            // fields), the target may itself contain ` -> `. A plain target line is kept whole.
+            match l.split_once(" -> ") {
+                Some((head, t))
+                    if head
+                        .split_whitespace()
+                        .next_back()
+                        .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())) =>
+                {
+                    t
+                }
+                _ => l,
+            }
+            .trim()
+        })
         .filter(|l| !l.is_empty())
         .collect()
 }

@@ -1,0 +1,5 @@
+sending command block_list 1050 to pid 5299
+==5299== 1,050 bytes in 1 blocks are still reachable in loss record 1,050 of 1,105
+==5299==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==5299==    by 0x10D723: main (many.c:1054)
+==5299== 0x4B13CA0[1050]

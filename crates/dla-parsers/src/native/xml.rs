@@ -174,7 +174,8 @@ pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
     while let Some(p) = rest.find('&') {
         out.push_str(&rest[..p]);
         rest = &rest[p..];
-        let Some(end) = rest.find(';').filter(|&e| e <= 10) else {
+        // Look only at the first 11 bytes so a run of bare `&` stays linear.
+        let Some(end) = rest.as_bytes().iter().take(11).position(|&b| b == b';') else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -242,5 +243,19 @@ mod tests {
         let d = parse("</x><a><![CDATA[<raw>]]></a></zz>").unwrap();
         assert_eq!(d.root.child("a").unwrap().text, "<raw>");
         assert_eq!(unescape("a&#65;&#x42;&bogus;&"), "aAB&bogus;&");
+    }
+
+    #[test]
+    fn many_bare_ampersands_stay_linear() {
+        let big = "&".repeat(2_000_000);
+        let t = std::time::Instant::now();
+        assert_eq!(unescape(&big), big.as_str());
+        let mixed = format!("{big};x");
+        assert_eq!(unescape(&mixed), mixed.as_str());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            t.elapsed()
+        );
     }
 }

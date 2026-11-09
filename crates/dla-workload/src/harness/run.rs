@@ -878,6 +878,7 @@ fn capture_active(manifest: &HarnessManifest, opts: &RunOptions) -> bool {
 
 /// Lists the capture files of the point `pe` after its process ended, using what the agent
 /// said about them, and notes the captures that failed.
+#[allow(clippy::too_many_arguments)]
 fn gather_captures(
     ctx: &ToolCtx,
     paths: &Paths,
@@ -885,6 +886,7 @@ fn gather_captures(
     pid: Option<u32>,
     file: &DumpFile,
     x: Option<f64>,
+    killed: bool,
     run: &mut ModeRun,
 ) {
     let mut notes = AgentNotes::default();
@@ -899,7 +901,15 @@ fn gather_captures(
     }
     let label_dir = paths.out.join(&pe.label);
     let rel = paths.rel(ctx, &label_dir);
-    let files = capture::gather(&label_dir, &rel, &pe.label, pid, &notes, x);
+    let (files, left_out) = capture::gather(&label_dir, &rel, &pe.label, pid, &notes, x, killed);
+    if !left_out.is_empty() {
+        run.limitations.push(format!(
+            "{}: {} capture file(s) were not listed because the agent did not confirm them (the process was killed or the capture failed): {}",
+            pe.label,
+            left_out.len(),
+            clip(&left_out.join(", "), 160)
+        ));
+    }
     for (kind, error) in notes.errors() {
         run.limitations.push(format!(
             "{}: {kind} capture failed: {}",
@@ -971,7 +981,16 @@ fn run_command_mode(
         if capturing {
             let pid =
                 dumps::select_measured(&early_file, manifest.runtime, Some(n)).and_then(|s| s.pid);
-            gather_captures(ctx, paths, &pe, pid, &early_file, Some(n as f64), &mut run);
+            gather_captures(
+                ctx,
+                paths,
+                &pe,
+                pid,
+                &early_file,
+                Some(n as f64),
+                res.timed_out,
+                &mut run,
+            );
         }
         if let Some(e) = &res.spawn_error {
             run.limitations.push(format!(
@@ -1132,7 +1151,7 @@ fn run_driver_mode(
     let (cps, pid, notes) = dumps::select_checkpoints(&file, manifest.runtime);
     run.limitations.extend(notes);
     if capturing {
-        gather_captures(ctx, paths, &pe, pid, &file, None, &mut run);
+        gather_captures(ctx, paths, &pe, pid, &file, None, res.timed_out, &mut run);
     }
     if cps.is_empty() {
         run.limitations.push(format!(

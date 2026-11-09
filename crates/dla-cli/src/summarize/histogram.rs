@@ -4,15 +4,16 @@
 //! where it came from); [`run_diff`] does the rest: orders them, diffs the first against
 //! the last, finds the types that grow at every step, writes the `histogram-diff`
 //! evidence and, with three or more captures, a series and a `growth-series` evidence.
-//! A type's growth column is tied to the finding whose owner's accumulation class (or
-//! retention path) is that type, per the heap-graph summaries of the run, or to the
-//! finding named by `--finding`.
+//! A type's growth column is tied (see [`tie`]) to the one finding whose holder's
+//! accumulation class is that type, per the heap-graph summaries of the run, or whose
+//! owner declares it as its element type. Generic types tie to nothing, and a type that
+//! matches several findings is reported as ambiguous. `--finding` narrows; it forces
+//! nothing.
 
 use std::collections::BTreeMap;
 
 use dla_core::{
     FindingId,
-    error::codes as core_codes,
     evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal},
     runtime::Runtime,
     series::{SeriesRegion, SeriesSourceKind, Unit},
@@ -357,17 +358,13 @@ pub fn run_diff(
     }
 
     // ---- series and growth: the monotone types first, then the largest
-    if let Some(f) = &opts.finding
-        && ledger.finding(f).is_none()
-    {
-        return Err(Failure::from(dla_core::Refusal::new(
-            core_codes::UNKNOWN_FINDING,
-            format!("no finding {f} in the ledger"),
-            "an existing finding",
-            "dla ledger show",
-        )));
-    }
-    let types = tie::TypeIndex::build(ledger, &tc.run_dir, &tc.project);
+    let types = tie::TypeIndex::build(
+        ledger,
+        &tie::Who::new(tc.worker.as_deref(), Some(Runtime::Jvm)),
+        &tc.run_dir,
+        &tc.project,
+        ctx.artifact_run,
+    );
     let mut picked: Vec<&Row<'_>> = mono.clone();
     for r in &rows {
         if picked.len() >= TRACKED {
@@ -378,68 +375,41 @@ pub fn run_diff(
         }
     }
     picked.truncate(TRACKED);
-    let mut tracks: Vec<growth::Track> = picked
+    let tracks: Vec<growth::Track> = picked
         .iter()
         .map(|r| {
-            let matches = types.findings_for_type(ledger, r.name);
-            let (finding, candidates) = match matches.as_slice() {
-                [one] => (Some(one.clone()), vec![one.clone()]),
-                _ => (None, matches),
-            };
-            growth::Track {
+            let r_tie = tie::resolve(
+                types.findings_for_type(ledger, r.name),
+                opts.finding.as_ref(),
+            );
+            let mut t = growth::Track {
                 name: format!("type:{}", clip(&red.name(r.name), 120)),
                 unit: Unit::Bytes,
                 values: r.bytes.clone(),
                 counts: Some(r.counts.clone()),
                 site: None,
-                finding,
-                candidates,
+                finding: None,
+                candidates: Vec::new(),
                 region: SeriesRegion::Heap,
+                tie: None,
+                ambiguous: r_tie.ambiguous,
+            };
+            if let Some((f, why)) = r_tie.tie {
+                t.tie_to(f, why, None);
             }
+            t
         })
         .collect();
-    // `--finding`: the columns that match it are tied to it; if none of the passing
-    // columns matches, the largest passing column is, by the caller's say.
-    let mut tie_note: Option<&str> = None;
-    if let Some(f) = &opts.finding {
-        let passing: Vec<usize> = picked
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| monotone(r))
-            .map(|(i, _)| i)
-            .collect();
-        let matched: Vec<usize> = passing
-            .iter()
-            .copied()
-            .filter(|&i| tracks[i].candidates.contains(f))
-            .collect();
-        let to_tie: Vec<usize> = if matched.is_empty() {
-            passing.iter().copied().take(1).collect()
-        } else {
-            matched
-        };
-        if !to_tie.is_empty() {
-            if tracks[to_tie[0]].candidates.is_empty() || !tracks[to_tie[0]].candidates.contains(f)
-            {
-                tie_note = Some("tied by --finding");
-            }
-            for i in to_tie {
-                tracks[i].finding = Some(f.clone());
-                if !tracks[i].candidates.contains(f) {
-                    tracks[i].candidates.push(f.clone());
-                }
-            }
-        }
-    }
+    let ambiguous: Vec<(String, Vec<FindingId>)> = tracks
+        .iter()
+        .zip(&picked)
+        .filter(|(t, r)| !t.ambiguous.is_empty() && monotone(r))
+        .map(|(t, _)| (t.name.clone(), t.ambiguous.clone()))
+        .collect();
     let t0 = captures[0].hist.timestamp_ms.unwrap_or(0);
     let t_ms: Vec<u64> = captures
         .iter()
         .map(|c| c.hist.timestamp_ms.unwrap_or(t0).saturating_sub(t0))
-        .collect();
-    let tied: Vec<(String, Vec<FindingId>)> = tracks
-        .iter()
-        .filter(|t| t.finding.is_some() || !t.candidates.is_empty())
-        .map(|t| (t.name.clone(), t.candidates.clone()))
         .collect();
     let g = growth::write(
         ctx,
@@ -455,18 +425,10 @@ pub fn run_diff(
             runtime: origin.runtime,
             limitations: origin.limitations.clone(),
             what: "capture",
+            focus: opts.finding.clone(),
         },
     )?;
-    let mut tied_ids: Vec<FindingId> = Vec::new();
-    for (name, c) in &tied {
-        if g.passed.contains(name) {
-            for f in c {
-                if !tied_ids.contains(f) {
-                    tied_ids.push(f.clone());
-                }
-            }
-        }
-    }
+    let tied_ids = growth::tied_ids(&g, opts.finding.as_ref());
     for f in &tied_ids {
         let fnd = ledger.finding(f);
         out.candidates.push(CandidateRow {
@@ -484,18 +446,28 @@ pub fn run_diff(
         body.extend(m);
     }
     body.insert("tied".into(), json!(tied_ids));
-    if let Some(note) = tie_note {
-        body.insert("tie".into(), json!(note));
+    if let Some(a) = growth::ambiguous_json(&ambiguous) {
+        body.insert("ambiguous".into(), a);
     }
     let needed = if !g.pass {
         "no type grows at every step: take another capture after more traffic and rerun with all captures".to_owned()
-    } else if tied_ids.is_empty() {
-        "the growing types name no finding: give --finding <F> for the holder these types belong to (dla summarize heap-graph on a dump of the same process finds it), or add the finding with an owner".to_owned()
-    } else {
+    } else if let Some(f) = tied_ids.first() {
         format!(
-            "a refuted non-leak sibling and a holder, then dla ledger confirm {} --evidence {}",
-            tied_ids[0], g.evidence.id
+            "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {}",
+            g.evidence.id
         )
+    } else if let Some((ty, ids)) = ambiguous.first() {
+        let names: Vec<String> = ids.iter().map(ToString::to_string).collect();
+        format!(
+            "the growing type {ty} matches several findings ({}) and ties none, even with --finding: a heap-graph holder with that accumulation class, or distinct element types, tells them apart",
+            names.join(", ")
+        )
+    } else if let Some(f) = &opts.finding {
+        format!(
+            "no passing column ties to {f} by holder, site or type: dla summarize heap-graph on 3 or more dumps of the same process records the holder's accumulation class, or annotate {f}'s owner so its declared element type is read"
+        )
+    } else {
+        "no passing type ties to a finding by holder, site or type: dla summarize heap-graph on 3 or more dumps of the same process records each holder's accumulation class; generic types (String, byte[], collections) never tie".to_owned()
     };
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);

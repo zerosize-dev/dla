@@ -5,7 +5,10 @@
 //! `state` key is used when a newer JDK prints one. Groups (kind `thread`):
 //! - `state:<state>`: threads by state,
 //! - `name:<pattern>`: threads by normalized name (`pool-3-thread-7` is `pool-*-thread-*`),
-//! - `site:<Class.method>`: threads by innermost project frame (with `site` set).
+//! - `frame:<Class.method>`: threads by innermost project frame of the current stack.
+//!
+//! The `frame:` groups never set `site`: JDK 21 JSON thread dumps carry no creation
+//! site, and the frame a thread is running in now is not where it was created.
 
 use std::collections::BTreeMap;
 
@@ -56,7 +59,7 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
     let mut total = 0u64;
     let mut by_state: BTreeMap<String, u64> = BTreeMap::new();
     let mut by_name: BTreeMap<String, u64> = BTreeMap::new();
-    let mut by_site: BTreeMap<String, (u64, Frame)> = BTreeMap::new();
+    let mut by_frame: BTreeMap<String, u64> = BTreeMap::new();
     for c in containers {
         let Some(threads) = c.get("threads").and_then(Value::as_array) else {
             continue;
@@ -82,10 +85,7 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
             *by_state.entry(state).or_default() += 1;
             *by_name.entry(normalize_thread_name(name)).or_default() += 1;
             if let Some(f) = site_frame(&stack) {
-                by_site
-                    .entry(f.function.clone())
-                    .and_modify(|e| e.0 += 1)
-                    .or_insert((1, f));
+                *by_frame.entry(f.function).or_default() += 1;
             }
         }
     }
@@ -122,11 +122,8 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
         by_name.into_iter().map(|(k, n)| (k, n, None)).collect(),
     );
     push_kind(
-        "site",
-        by_site
-            .into_iter()
-            .map(|(k, (n, f))| (k, n, Some(f)))
-            .collect(),
+        "frame",
+        by_frame.into_iter().map(|(k, n)| (k, n, None)).collect(),
     );
     if dropped > 0 {
         snap.metrics.push(NonHeapMetric {
@@ -139,31 +136,54 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
     Ok(snap)
 }
 
-/// A coarse state from the innermost frame: `parked`, `sleeping`, `waiting`, `io`,
-/// `running`, or `no-stack` (threads the VM owns print no frames).
+/// A coarse state: `parked`, `sleeping`, `waiting`, `io`, `running`, or `no-stack`
+/// (threads the VM owns print no frames). The leading run of JDK frames (at most
+/// `LEAD_FRAMES`) is scanned and the first recognized marker wins, so a virtual thread
+/// parked through `VirtualThread.park` or a socket wait below `Net.poll` is not `running`.
 fn derive_state(stack: &[Frame]) -> String {
-    let Some(top) = stack.first() else {
+    const LEAD_FRAMES: usize = 6;
+    if stack.is_empty() {
         return "no-stack".into();
-    };
-    let f = top.function.as_str();
-    let s = if f.ends_with("Unsafe.park") || f.contains("LockSupport.park") {
-        "parked"
-    } else if f.contains("Thread.sleep") {
-        "sleeping"
-    } else if f.contains("Object.wait") {
-        "waiting"
-    } else if f.contains("accept0")
-        || f.contains("epollWait")
-        || f.contains("EPoll.wait")
-        || f.contains("SocketDispatcher.read")
-        || f.contains("FileInputStream.read")
-        || f.contains("NioSocketImpl.park")
-    {
-        "io"
-    } else {
-        "running"
-    };
-    s.into()
+    }
+    let lead: Vec<&str> = stack
+        .iter()
+        .take(LEAD_FRAMES)
+        .take_while(|f| f.module.is_some() || is_library_name(&f.function))
+        .map(|f| f.function.as_str())
+        .collect();
+    for f in &lead {
+        let s = if f.ends_with("VirtualThread.parkNanos") {
+            if lead.iter().any(|g| g.ends_with("VirtualThread.sleepNanos")) {
+                "sleeping"
+            } else {
+                "parked"
+            }
+        } else if f.ends_with("Unsafe.park")
+            || f.contains("LockSupport.park")
+            || f.ends_with("VirtualThread.park")
+        {
+            "parked"
+        } else if f.contains("Thread.sleep") {
+            "sleeping"
+        } else if f.contains("Object.wait") {
+            "waiting"
+        } else if f.contains("accept0")
+            || f.ends_with("Net.accept")
+            || f.ends_with("Net.poll")
+            || f.contains("epollWait")
+            || f.contains("EPoll.wait")
+            || f.contains("SocketDispatcher.read")
+            || f.contains("SocketDispatcher.write")
+            || f.contains("FileInputStream.read")
+            || f.contains("NioSocketImpl.park")
+        {
+            "io"
+        } else {
+            continue;
+        };
+        return s.into();
+    }
+    "running".into()
 }
 
 /// The innermost project frame that is not a generated proxy class.
@@ -218,9 +238,29 @@ mod tests {
         assert_eq!(g("state:sleeping").count, 1);
         assert_eq!(g("state:no-stack").count, 1);
         assert_eq!(g("name:pool-*-thread-*").count, 2);
-        let site = g("site:com.acme.Worker.run");
-        assert_eq!(site.count, 2);
-        assert_eq!(site.site.as_ref().unwrap().line, Some(7));
+        let fr = g("frame:com.acme.Worker.run");
+        assert_eq!(fr.count, 2);
+        assert!(
+            s.groups.iter().all(|g| g.site.is_none()),
+            "no creation site"
+        );
+        assert!(!s.groups.iter().any(|g| g.key.starts_with("site:")));
+    }
+
+    #[test]
+    fn virtual_thread_and_socket_states() {
+        let j = r#"{"threadDump":{"threadContainers":[{"threads":[
+          {"name":"","stack":["java.base\/java.lang.VirtualThread.park(VirtualThread.java:596)","java.base\/java.lang.System$2.parkVirtualThread(System.java:2848)","java.base\/java.util.concurrent.locks.LockSupport.park(LockSupport.java:221)","com.acme.W.run(W.java:3)"]},
+          {"name":"vs","stack":["java.base\/java.lang.VirtualThread.parkNanos(VirtualThread.java:631)","java.base\/java.lang.VirtualThread.sleepNanos(VirtualThread.java:803)","java.base\/java.lang.Thread.sleep(Thread.java:507)","com.acme.W.run(W.java:4)"]},
+          {"name":"acc","stack":["java.base\/sun.nio.ch.Net.accept(Native Method)","java.base\/sun.nio.ch.NioSocketImpl.accept(NioSocketImpl.java:748)","com.acme.S.run(S.java:9)"]},
+          {"name":"spin","stack":["com.acme.Spin.run(Spin.java:1)"]}
+        ]}]}}"#;
+        let s = parse(j).unwrap();
+        let g = |k: &str| s.groups.iter().find(|g| g.key == k).map(|g| g.count);
+        assert_eq!(g("state:parked"), Some(1));
+        assert_eq!(g("state:sleeping"), Some(1));
+        assert_eq!(g("state:io"), Some(1));
+        assert_eq!(g("state:running"), Some(1));
     }
 
     #[test]

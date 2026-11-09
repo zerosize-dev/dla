@@ -138,3 +138,22 @@ fn classes_without_annotations_have_no_captures() {
     assert!(c.annotations.is_empty());
     assert!(jvm_class::coroutine_captures(&c).is_empty());
 }
+
+/// Primitive spills (`I$n`, `J$n`, ...) cannot retain heap and are not census entries.
+#[test]
+fn primitive_spills_are_skipped() {
+    let mut b = fixture("LeakyKt$handle$1.class");
+    let at = b
+        .windows(3)
+        .position(|w| w == b"L$1")
+        .expect("L$1 in the constant pool");
+    b[at] = b'I';
+    let c = classfile::parse(&b).unwrap();
+    assert_eq!(
+        c.annotation(DEBUG_METADATA).unwrap().strs("s"),
+        ["L$0", "I$1"]
+    );
+    let caps = jvm_class::coroutine_captures(&c);
+    assert_eq!(caps.len(), 1);
+    assert_eq!(caps[0].field, "L$0");
+}

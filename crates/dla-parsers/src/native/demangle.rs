@@ -263,6 +263,10 @@ impl V0<'_> {
         if target >= start || self.depth >= MAX_DEPTH {
             return None;
         }
+        if !self.on {
+            // Nothing is printed, so do not follow it (keeps nested backrefs linear).
+            return Some(());
+        }
         let saved = self.pos;
         self.pos = target;
         self.depth += 1;

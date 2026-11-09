@@ -453,21 +453,11 @@ fn ffi_setup(
             r.message
         )
     })?;
-    let mut lib_dirs = Vec::new();
+    let mut lib_dirs: Vec<String> = Vec::new();
     if b.cdylib
         && let Some(dir) = &b.native_dir
     {
-        let abs = if dir == "." {
-            work.to_path_buf()
-        } else {
-            work.join(dir)
-        };
-        lib_dirs.push(
-            abs.join("target")
-                .join("release")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        lib_dirs = cdylib_target_dirs(work, dir);
     }
     let harness = FfiHarness {
         kind: b.kind.clone(),
@@ -484,6 +474,32 @@ fn ffi_setup(
             .collect(),
     };
     Ok((harness, commands::FfiSwitch { lib_dirs }))
+}
+
+/// Candidate directories of a built Rust cdylib: the `target` of the crate and of each parent
+/// directory up to the work root (a Cargo workspace keeps one `target` at its root), release
+/// and debug. They go on `LD_LIBRARY_PATH`; a directory that does not exist is harmless.
+fn cdylib_target_dirs(work: &Path, native_dir: &str) -> Vec<String> {
+    let mut dir = if native_dir == "." {
+        work.to_path_buf()
+    } else {
+        work.join(native_dir)
+    };
+    let mut out = Vec::new();
+    loop {
+        for profile in ["release", "debug"] {
+            out.push(
+                dir.join("target")
+                    .join(profile)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        if dir == work || !dir.pop() || !dir.starts_with(work) {
+            break;
+        }
+    }
+    out
 }
 
 /// Writes the agent files of `rt` into `agent` (compiling what needs it).
@@ -1308,6 +1324,24 @@ fn jfr_available() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn cdylib_dirs_cover_crate_workspace_and_both_profiles() {
+        let w = std::path::Path::new("/w");
+        assert_eq!(
+            super::cdylib_target_dirs(w, "native/codec"),
+            [
+                "/w/native/codec/target/release",
+                "/w/native/codec/target/debug",
+                "/w/native/target/release",
+                "/w/native/target/debug",
+                "/w/target/release",
+                "/w/target/debug",
+            ]
+        );
+        assert_eq!(super::cdylib_target_dirs(w, ".").len(), 2);
+    }
+
     use super::*;
 
     #[test]

@@ -109,6 +109,93 @@ fn is_shell(program: &str) -> bool {
     matches!(base, "sh" | "bash" | "dash" | "zsh" | "make" | "env")
 }
 
+/// The file `program` names: relative to `cwd`, or found on `PATH` when it has no slash.
+fn resolve_program(cwd: &Path, program: &str) -> Option<PathBuf> {
+    if program.contains('/') {
+        let p = cwd.join(program);
+        return p.is_file().then_some(p);
+    }
+    let local = cwd.join(program);
+    if local.is_file() && !is_shell(program) {
+        return Some(local);
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(program))
+        .find(|p| p.is_file())
+}
+
+/// Whether `program` is a wrapper (a shell, `make`, a `#!` script) rather than the native
+/// executable under test. A program that cannot be found counts as native: the spawn error
+/// then names it.
+fn is_wrapper(cwd: &Path, program: &str) -> bool {
+    is_shell(program)
+        || resolve_program(cwd, program)
+            .is_some_and(|p| !super::super::commands::is_native_binary(&p))
+}
+
+/// The `<exe>` of the traced program (`<argv>`, not valgrind's own `<vargv>`) in a valgrind
+/// XML file, and its first `<arg>` values.
+fn traced_program(xml: &str) -> Option<(String, Vec<String>)> {
+    let at = xml.find("<argv>")?;
+    let rest = &xml[at..];
+    let end = rest.find("</argv>").unwrap_or(rest.len());
+    let block = &rest[..end];
+    let exe = block
+        .split_once("<exe>")?
+        .1
+        .split_once("</exe>")?
+        .0
+        .to_owned();
+    let args = block
+        .split("<arg>")
+        .skip(1)
+        .filter_map(|a| a.split_once("</arg>").map(|(v, _)| v.to_owned()))
+        .collect();
+    Some((exe, args))
+}
+
+/// Of the per-process XML files `valgrind.<pid>.xml` that a traced wrapper left in `dir`,
+/// the one of the program itself: not a shell, `make` or script, and preferably the one that
+/// got `n` as an argument. Returns the file and how many candidates there were.
+fn pick_program_xml(dir: &Path, cwd: &Path, n: u64) -> Option<(PathBuf, usize)> {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|f| f.to_str()).is_some_and(|f| {
+                f.starts_with("valgrind.") && f.ends_with(".xml") && f != "valgrind.xml"
+            })
+        })
+        .collect();
+    files.sort();
+    let mut cands: Vec<(PathBuf, bool)> = Vec::new();
+    for f in files {
+        let Ok(text) = fs::read_to_string(&f) else {
+            continue;
+        };
+        let Some((exe, args)) = traced_program(&text) else {
+            continue;
+        };
+        if is_wrapper(cwd, &exe) {
+            continue;
+        }
+        let n_text = n.to_string();
+        let has_n = args
+            .iter()
+            .any(|a| *a == n_text || a.ends_with(&format!("={n_text}")));
+        cands.push((f, has_n));
+    }
+    let count = cands.len();
+    let pick = cands
+        .iter()
+        .find(|(_, has_n)| *has_n)
+        .or_else(|| cands.first())
+        .map(|(f, _)| f.clone())?;
+    Some((pick, count))
+}
+
 /// Where a tool report belongs in the capture list.
 struct Slot<'a> {
     label: &'a str,
@@ -216,6 +303,31 @@ pub(super) fn run_tool_points(
             continue;
         };
         let target = std::mem::take(&mut spec.argv);
+        let wrapper = is_wrapper(&spec.cwd, &program);
+        if wrapper && tool == NativeTool::Heaptrack {
+            // heaptrack's preload is cleared in the processes the wrapper starts, so it would
+            // report the wrapper only.
+            let _ = CoverageManifest::update(&ctx.run_dir, |m| {
+                m.set_backend(
+                    manifest.runtime.as_str(),
+                    tool.as_str(),
+                    BackendCoverage::blocked(format!(
+                        "the run command starts {program}, a wrapper: heaptrack cannot follow its children"
+                    )),
+                );
+            });
+            return Err(Refusal::new(
+                dla_core::error::codes::INVALID_VALUE,
+                format!(
+                    "heaptrack cannot follow the children of {program}, so it would report the wrapper instead of the program"
+                ),
+                "a run command that starts the native executable directly",
+                format!(
+                    "dla harness gen --lang native --workload <main id> --iter-arg <template> (or point run.argv at the binary), then dla harness run {} --tool heaptrack",
+                    manifest.id
+                ),
+            ));
+        }
         // A relative program is resolved against the working directory by the tool.
         let mut argv = vec![tool_path.to_string_lossy().into_owned()];
         let report: PathBuf;
@@ -223,19 +335,31 @@ pub(super) fn run_tool_points(
             NativeTool::Valgrind => {
                 report = dir.join("valgrind.xml");
                 let _ = fs::remove_file(&report);
+                if let Ok(rd) = fs::read_dir(&dir) {
+                    for e in rd.flatten() {
+                        let f = e.file_name().to_string_lossy().into_owned();
+                        if f.starts_with("valgrind.") && f.ends_with(".xml") {
+                            let _ = fs::remove_file(e.path());
+                        }
+                    }
+                }
+                // Every traced process writes its own file when a wrapper starts the program:
+                // processes that share one file overwrite each other.
+                let xml_file = if wrapper {
+                    dir.join("valgrind.%p.xml")
+                } else {
+                    report.clone()
+                };
                 argv.extend([
                     "--tool=memcheck".to_owned(),
                     "--leak-check=full".to_owned(),
                     "--show-reachable=yes".to_owned(),
                     "--num-callers=32".to_owned(),
                     "--xml=yes".to_owned(),
-                    format!("--xml-file={}", report.display()),
+                    format!("--xml-file={}", xml_file.display()),
                 ]);
-                if is_shell(&program) {
+                if wrapper {
                     argv.push("--trace-children=yes".to_owned());
-                    out.limitations.push(format!(
-                        "{label}: the workload starts through {program}; valgrind follows its children, so the report may include other programs"
-                    ));
                 }
             }
             NativeTool::Heaptrack => {
@@ -272,6 +396,21 @@ pub(super) fn run_tool_points(
         }
         match tool {
             NativeTool::Valgrind => {
+                if wrapper {
+                    match pick_program_xml(&dir, &spec.cwd, n) {
+                        Some((f, count)) => {
+                            let _ = fs::rename(&f, &report);
+                            if count > 1 {
+                                out.limitations.push(format!(
+                                    "{label}: {count} traced programs started through {program}; the report is the one that got n={n}, or the first"
+                                ));
+                            }
+                        }
+                        None => out.limitations.push(format!(
+                            "{label}: the run command starts {program}, a wrapper, and no traced process was the program itself, so there is no report (log {log_rel})"
+                        )),
+                    }
+                }
                 let slot = Slot {
                     label: &label,
                     seq: 1,

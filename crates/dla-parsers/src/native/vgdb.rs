@@ -15,9 +15,13 @@
 //!    `vgdb --pid=<pid> --vgdb-prefix=<dir>/vgdb leak_check full reachable any`
 //!    (use `increased` instead of `any` to see only records that grew since the last check),
 //!    then `vgdb ... block_list <loss_record_nr>`, then
-//!    `vgdb ... who_points_at 0xADDR [len]` for one block address of that record.
+//!    `vgdb ... who_points_at 0xADDR LEN` for one block of that record (`LEN` is the block size
+//!    from `block_list`).
 //! 3. Each `vgdb` call takes about a second. Record numbers are those of the last
-//!    `leak_check`. To walk up a chain, query `who_points_at` for the block's start address;
+//!    `leak_check`. Always give the block size: without it Valgrind reports only pointers to
+//!    the block start, so a block held by an interior pointer (an intrusive list link, a C++
+//!    `new[]` cookie) looks unreferenced. To walk up a chain, query `who_points_at` for the
+//!    block's start address and size;
 //!    when the answer is another heap block, query that block's start
 //!    ([`next_block_to_query`]) until a data symbol, a stack or nothing answers.
 //!
@@ -46,6 +50,9 @@ pub struct LossRecord {
     /// For a definitely-lost record that also owns other blocks: `(D direct, I indirect)`.
     pub direct_bytes: Option<u64>,
     pub indirect_bytes: Option<u64>,
+    /// The record is new since the previous check (`in new loss record`).
+    #[serde(default)]
+    pub is_new: bool,
     /// Growth since the previous check (`leak_check ... increased` prints `(+N)`).
     pub bytes_delta: Option<i64>,
     pub blocks_delta: Option<i64>,
@@ -101,6 +108,10 @@ pub enum Holder {
 pub struct PointerRef {
     /// Address of the pointer itself.
     pub from: u64,
+    /// For `interior points at N bytes inside`: the offset of the pointed-to byte from the
+    /// block start. `None` for a pointer to the block start.
+    #[serde(default)]
+    pub interior: Option<u64>,
     pub holder: Holder,
 }
 
@@ -164,11 +175,18 @@ fn signed(text: &str) -> Option<i64> {
     Some(if neg { -v } else { v })
 }
 
-/// `1,088 (+704) bytes in 17 (+11) blocks are still reachable in loss record 1 of 1`.
+/// `1,088 (+704) bytes in 17 (+11) blocks are still reachable in loss record 1 of 1`. The
+/// record number may carry thousands separators (`1,050 of 1,105`) and the marker may be
+/// `in new loss record`. The bytes part may be `232 (+116) (32 (+16) direct, 200 (+100) indirect)`.
 fn parse_record_header(line: &str) -> Option<LossRecord> {
     let (left, rest) = line.split_once(" bytes in ")?;
     let (blocks_part, rest) = rest.split_once(" blocks are ")?;
-    let (kind_text, rest) = rest.split_once(" in loss record ")?;
+    let (kind_text, is_new, rest) = if let Some((k, r)) = rest.split_once(" in new loss record ") {
+        (k, true, r)
+    } else {
+        let (k, r) = rest.split_once(" in loss record ")?;
+        (k, false, r)
+    };
     let (nr, of) = rest.split_once(" of ")?;
     let kind = match kind_text.trim() {
         "definitely lost" => "definitely-lost",
@@ -177,25 +195,31 @@ fn parse_record_header(line: &str) -> Option<LossRecord> {
         "still reachable" => "still-reachable",
         _ => return None,
     };
-    let (bytes_text, bytes_paren) = split_paren(left);
     let (blocks_text, blocks_paren) = split_paren(blocks_part);
+    let left = left.trim();
+    let (bytes_text, mut tail) = left.split_once(' ').unwrap_or((left, ""));
     let mut rec = LossRecord {
-        nr: nr.trim().parse().ok()?,
-        of: of.trim().parse().ok()?,
+        nr: u32::try_from(number(nr.trim())?).ok()?,
+        of: u32::try_from(number(of.trim())?).ok()?,
         kind: kind.to_owned(),
+        is_new,
         bytes: number(bytes_text)?,
         blocks: number(blocks_text)?,
         ..LossRecord::default()
     };
-    if let Some(p) = bytes_paren {
-        if p.contains(" direct") {
-            let (direct, indirect) = p.split_once(", ").unwrap_or((p, ""));
-            let first = |t: &str| t.trim().split(' ').next().and_then(number);
-            rec.direct_bytes = first(direct);
-            rec.indirect_bytes = first(indirect);
-        } else {
-            rec.bytes_delta = signed(p);
-        }
+    tail = tail.trim();
+    if (tail.starts_with("(+") || tail.starts_with("(-"))
+        && let Some((delta, after)) = tail[1..].split_once(')')
+    {
+        rec.bytes_delta = signed(delta);
+        tail = after.trim();
+    }
+    if let Some(inner) = tail.strip_prefix('(').and_then(|t| t.strip_suffix(')')) {
+        let (direct, indirect) = inner.split_once(", ").unwrap_or((inner, ""));
+        // Each part is `N [(+d)] direct`; the delta inside it is ignored.
+        let first = |t: &str| t.trim().split(' ').next().and_then(number);
+        rec.direct_bytes = first(direct);
+        rec.indirect_bytes = first(indirect);
     }
     if let Some(p) = blocks_paren {
         rec.blocks_delta = signed(p);
@@ -256,17 +280,43 @@ pub fn parse_leak_check(text: &str) -> Result<LeakCheck, ParseError> {
     check_error(text, "leak_check")?;
     let mut records: Vec<LossRecord> = Vec::new();
     let mut saw_summary = false;
+    let mut lost_in_summary = false;
+    // Stack lines belong to the header just before them; anything else ends that record.
+    let mut current = false;
     for line in text.lines() {
         let l = strip_prefix(line);
-        if let Some(rec) = parse_record_header(l.trim()) {
+        let t = l.trim();
+        if let Some(rec) = parse_record_header(t) {
             records.push(rec);
-        } else if let Some(frame) = parse_stack_line(l) {
+            current = true;
+            continue;
+        }
+        if current && let Some(frame) = parse_stack_line(l) {
             if let Some(rec) = records.last_mut() {
                 rec.frames.push(frame);
             }
-        } else if l.trim() == "LEAK SUMMARY:" {
-            saw_summary = true;
+            continue;
         }
+        current = false;
+        if t == "LEAK SUMMARY:" || t.starts_with("All heap blocks were freed") {
+            saw_summary = true;
+        } else if let Some(rest) = t.strip_prefix("definitely lost:")
+            && !rest.contains("(+")
+            && let Some((_, blocks)) = rest.split_once(" bytes in ")
+            && blocks
+                .split(' ')
+                .next()
+                .and_then(number)
+                .is_some_and(|n| n > 0)
+        {
+            // Not an `increased` answer (those carry deltas) and something is definitely lost.
+            lost_in_summary = true;
+        }
+    }
+    if records.is_empty() && lost_in_summary {
+        return Err(ParseError::new(
+            "leak_check summary reports definitely lost blocks but no loss record header could be read (the output format may have changed)",
+        ));
     }
     if records.is_empty() && !saw_summary {
         return Err(ParseError::new(
@@ -284,17 +334,22 @@ pub fn parse_block_list(text: &str) -> Result<BlockList, ParseError> {
     check_error(text, "block_list")?;
     let mut record: Option<LossRecord> = None;
     let mut blocks = Vec::new();
+    let mut current = false;
     for line in text.lines() {
         let l = strip_prefix(line);
         let t = l.trim();
         if let Some(rec) = parse_record_header(t) {
             record = Some(rec);
-        } else if let Some(frame) = parse_stack_line(t) {
+            current = true;
+        } else if current && let Some(frame) = parse_stack_line(t) {
             if let Some(rec) = record.as_mut() {
                 rec.frames.push(frame);
             }
-        } else if let Some(b) = parse_block_ref(t) {
-            blocks.push(b);
+        } else {
+            current = false;
+            if let Some(b) = parse_block_ref(t) {
+                blocks.push(b);
+            }
         }
     }
     let Some(mut record) = record else {
@@ -326,13 +381,17 @@ pub fn parse_who_points_at(text: &str) -> Result<WhoPointsAt, ParseError> {
     check_error(text, "who_points_at")?;
     let mut out: Option<WhoPointsAt> = None;
     // The reference being described by following `Address ...` and stack lines.
-    let mut open: Option<(u64, Option<Holder>)> = None;
-    fn close(open: &mut Option<(u64, Option<Holder>)>, out: &mut Option<WhoPointsAt>) {
-        if let (Some((from, holder)), Some(o)) = (open.take(), out.as_mut()) {
+    let mut open: Option<(u64, Option<u64>, Option<Holder>)> = None;
+    fn close(open: &mut Option<(u64, Option<u64>, Option<Holder>)>, out: &mut Option<WhoPointsAt>) {
+        if let (Some((from, interior, holder)), Some(o)) = (open.take(), out.as_mut()) {
             let holder = holder.unwrap_or(Holder::Other {
                 description: "no description".to_owned(),
             });
-            o.refs.push(PointerRef { from, holder });
+            o.refs.push(PointerRef {
+                from,
+                interior,
+                holder,
+            });
         }
     }
     for line in text.lines() {
@@ -355,19 +414,29 @@ pub fn parse_who_points_at(text: &str) -> Result<WhoPointsAt, ParseError> {
             });
         } else if let Some(rest) = t.strip_prefix('*') {
             close(&mut open, &mut out);
-            if let Some((from, _)) = rest.split_once(" points at ") {
-                open = Some((parse_hex(from).ok_or_else(|| bad_target(t))?, None));
+            // `*0xFROM points at 0xT` or `*0xFROM interior points at N bytes inside 0xT`.
+            // A line that is not understood is skipped, not an error for the whole answer.
+            if let Some((from, tail)) = rest.split_once(' ')
+                && let Some(from) = parse_hex(from)
+            {
+                if tail.starts_with("points at ") {
+                    open = Some((from, None, None));
+                } else if let Some(r) = tail.strip_prefix("interior points at ")
+                    && let Some((off, _)) = r.split_once(" bytes inside ")
+                {
+                    open = Some((from, number(off), None));
+                }
             }
         } else if t.starts_with("Address 0x") {
-            if let Some((_, holder)) = open.as_mut() {
+            if let Some((_, _, holder)) = open.as_mut() {
                 *holder = Some(parse_description(t));
             }
         } else if let Some(frame_text) = t.strip_prefix("in frame #") {
-            if let Some((_, Some(Holder::Stack { frame, .. }))) = open.as_mut() {
+            if let Some((_, _, Some(Holder::Stack { frame, .. }))) = open.as_mut() {
                 *frame = Some(format!("frame #{frame_text}"));
             }
         } else if let Some(frame) = parse_stack_line(t)
-            && let Some((_, Some(Holder::Block { frames, .. }))) = open.as_mut()
+            && let Some((_, _, Some(Holder::Block { frames, .. }))) = open.as_mut()
         {
             frames.push(frame);
         }
@@ -454,7 +523,8 @@ pub enum Step {
     Root(Holder),
     /// A heap block keeps the queried block alive; query `start` next.
     Block { start: u64, holder: Holder },
-    /// Nothing points at the queried block (it is leaked outright).
+    /// Nothing points at the queried block. Only for a query with a length does this mean it is
+    /// leaked outright; a plain query misses interior pointers.
     Unreferenced,
 }
 
@@ -497,7 +567,8 @@ pub struct RetentionChain {
     /// Heap blocks between the root and the queried block, outermost first. Neighbours with
     /// the same size and allocation site are merged and counted.
     pub blocks: Vec<ChainBlock>,
-    /// The root was reached, or nothing points at the end of the chain (a lost block).
+    /// The root was reached, or a query with a length found nothing pointing at the end of the
+    /// chain (a lost block).
     pub complete: bool,
 }
 
@@ -522,7 +593,9 @@ pub fn build_chain(answers: &[WhoPointsAt]) -> RetentionChain {
                 break;
             }
             Step::Unreferenced => {
-                chain.complete = true;
+                // A plain query finds only pointers to the block start, so "nobody points
+                // here" is proof of a lost block only when the length form was used.
+                chain.complete = answer.len.is_some();
                 break;
             }
             Step::Block { holder, .. } => {

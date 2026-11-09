@@ -51,6 +51,7 @@ confirmable = false
 /// which `jcmd` is `ran` when the call can still find a jcmd, `missing` otherwise. The tool
 /// is looked up the way dla does: on PATH, then under JAVA_HOME.
 const FAKE_DLA: &str = r#"
+if [ -n "$FAKE_CRASH" ] && [ -f .dla/current ]; then echo boom >&2; exit 101; fi
 mkdir -p .dla/R1
 echo R1 > .dla/current
 : > .dla/R1/ledger.jsonl
@@ -95,6 +96,10 @@ fn setup() -> Setup {
 }
 
 fn dynamic(s: &Setup, extra: &[&str]) -> Output {
+    dynamic_env(s, extra, &[])
+}
+
+fn dynamic_env(s: &Setup, extra: &[&str], envs: &[(&str, &str)]) -> Output {
     let t = s.root.path();
     Command::new(env!("CARGO_BIN_EXE_dla-bench"))
         .arg("dynamic")
@@ -110,6 +115,7 @@ fn dynamic(s: &Setup, extra: &[&str]) -> Output {
         .env("PATH", &s.path)
         .env("JAVA_HOME", &s.java_home)
         .env("FAKE_OUT", s.root.path().join("seen.txt"))
+        .envs(envs.iter().copied())
         .output()
         .unwrap()
 }
@@ -193,4 +199,48 @@ fn a_bad_tool_name_is_refused() {
     let out = dynamic(&s, &["--without", "bin/jcmd"]);
     assert!(!out.status.success());
     assert!(text(&out).contains("not a tool name"));
+}
+
+#[test]
+fn a_crash_of_dla_in_a_without_run_fails_the_run() {
+    let s = setup();
+    let out = dynamic_env(&s, &["--without", "jcmd"], &[("FAKE_CRASH", "1")]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(text(&out).contains("crashed"), "{}", text(&out));
+}
+
+#[test]
+fn hiding_a_tool_no_row_depends_on_fails_the_run() {
+    let s = setup();
+    let out = dynamic(&s, &["--without", "git"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(
+        text(&out).contains("no coverage row depends on it"),
+        "{}",
+        text(&out)
+    );
+}
+
+#[test]
+fn a_relative_path_entry_does_not_break_the_run() {
+    let mut s = setup();
+    let t = s.root.path().to_path_buf();
+    let cwd = std::env::current_dir().unwrap();
+    // A relative entry that holds a copy of valgrind: it must not hide the later one.
+    let rel = cwd.join("target/without-rel-run");
+    let _ = fs::remove_dir_all(&rel);
+    script(&rel.join("valgrind"), "exit 0");
+    s.path = std::env::join_paths([
+        PathBuf::from("target/without-rel-run"),
+        t.join("tools"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+    ])
+    .unwrap();
+    let out = dynamic(&s, &["--without", "jcmd"]);
+    let _ = fs::remove_dir_all(&rel);
+    assert!(out.status.success(), "{}", text(&out));
+    for line in seen(&s).lines() {
+        assert_eq!(line, "jcmd=missing valgrind=ran", "{line}");
+    }
 }

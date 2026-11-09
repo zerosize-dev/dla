@@ -57,7 +57,7 @@ Regenerate and check the schemas with `dla-bench schema` and
 ## Run a baseline
 
 `run` needs Linux or macOS (the child sessions run in the Claude Code sandbox);
-on Windows it exits with an error. All other commands work on Windows.
+on Windows it exits with an error. All other commands work on Windows (`dynamic --without` is untested there).
 
 ```
 cargo run -q --release -p dla-bench -- run --ablation no-skill --runs 3 \
@@ -408,22 +408,37 @@ The graders ignore the field and the grading metrics are unchanged.
 
 ### `--without <tool>[,<tool>...]`
 
-Hides tools from every `dla` call of the run. The driver builds
-`<work>/bin-without/`, a directory of links to every executable on the current
-`PATH` except the named tools (matched on the file name; the first `PATH`
-entry wins for a name), runs each `dla` call with that as `PATH`, and unsets the
-tool-home variables that would bring a tool back (`JAVA_HOME`, `JDK_HOME`,
-`JRE_HOME`, `GRAALVM_HOME`, `GOROOT`, `ASYNC_PROFILER_HOME`, `ASPROF_HOME`,
-`MAT_HOME`, `NODE_HOME`). A run with hidden tools must still complete, and every
-coverage row (`coverage.json`) named like a hidden tool must read `missing`;
-the number of such rows is `hidden_backend_rows` in the fixture row. A leak that
-stays unconfirmed or gets another holder because its backend is hidden is
-reported as an expected failure of that run (`xfail: a tool is hidden by
---without`) and the strict list below is not applied. Any other failure stays a
-failure. Backends are matched by their coverage name, which equals the tool
-name (`jcmd`, `jfr`, `valgrind`, `heaptrack`, `memray`). Hiding `jstack` or
-`jmap` alone does not turn the `jcmd` row to `missing`; name `jcmd` for that.
-Tested with fake tools in `bench/runner/tests/without.rs`.
+Hides tools from every `dla` call of the run. Linux and macOS are the tested
+platforms; on Windows the farm uses hard links or copies and is untested. Each
+`PATH` directory that holds a hidden tool (matched on the file name) is replaced
+by `<work>/bin-without/<n>/`, a directory of absolute links to its other
+executables; the other `PATH` directories stay as they are, in order, so a
+virtualenv or any other tool directory behaves as usual (an interpreter in a
+virtualenv `bin` gets a small wrapper script, because Python finds its
+`pyvenv.cfg` from the path it was started with). The tool-home variables that
+belong to a hidden tool are unset for the call: `JAVA_HOME`, `JDK_HOME`,
+`JRE_HOME`, `GRAALVM_HOME` for a JDK tool (`jcmd`, `jfr`, `jmap`, `jstack`,
+`java`, ...), `GOROOT` for `go`, `ASYNC_PROFILER_HOME` and `ASPROF_HOME` for
+`asprof`, `MAT_HOME` for `mat`, `NODE_HOME` for `node`; hiding `valgrind` leaves
+them alone.
+
+A run with hidden tools must still complete: a `dla` call that exits with 101 or
+prints no JSON is a failure of the fixture (a JSON refusal such as `missing_tool`
+is the expected degradation). Every coverage row (`coverage.json`) that depends
+on a hidden tool must read `missing`. A row depends on a tool when it is named
+like the tool (`jcmd`), starts with it and a dash (`jcmd-class-histogram`) or is
+`harness-jfr` for `jfr`. The number of such rows is `hidden_backend_rows` in the
+fixture row. The run fails when a hidden tool matched no row in any fixture,
+because then hiding it was never exercised; the fixed policy does not yet run the
+attach, sample or summarize steps that write such rows, so today only a fixture
+set whose `dla` writes them (the tests) passes. A leak that stays unconfirmed or
+gets another holder is reported as an expected failure of that run (`xfail: a
+tool is hidden by --without`) only for a fixture that saw a hidden-tool row;
+elsewhere the strict list below applies as usual. Any other failure stays a
+failure. Hiding `jstack` or `jmap` alone does not turn the `jcmd` row to
+`missing`; name `jcmd` for that. `memray` is not reliably hidden by name: attach
+falls back to `python3 -m memray`. Tested with fake tools in
+`bench/runner/tests/without.rs`.
 
 ### Expected failures
 

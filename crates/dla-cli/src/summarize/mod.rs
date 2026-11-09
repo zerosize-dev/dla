@@ -588,15 +588,37 @@ pub fn select_in(
             let eligible: Vec<&'static dyn Adapter> =
                 all.iter().copied().filter(|a| all_sniff(*a)).collect();
             if eligible.is_empty() {
-                let who = inputs
+                if let Some(who) = inputs
                     .iter()
                     .find(|i| !all.iter().any(|a| a.sniff(i)))
-                    .or(inputs.first())
-                    .map_or_else(String::new, |i| i.shown().to_owned());
-                return Err(unsupported(&format!(
-                    "{who} is not in a format any {} backend reads",
-                    op.name()
-                )));
+                    .map(|i| i.shown().to_owned())
+                {
+                    return Err(unsupported(&format!(
+                        "{who} is not in a format any {} backend reads",
+                        op.name()
+                    )));
+                }
+                // Every input is read by some backend, but no backend reads them all.
+                let readers: Vec<String> = inputs
+                    .iter()
+                    .map(|i| {
+                        let by = all.iter().find(|a| a.sniff(i)).map_or("none", |a| a.name());
+                        format!("{} by {by}", i.shown())
+                    })
+                    .collect();
+                return Err(Failure::refuse(
+                    "mixed-formats",
+                    format!(
+                        "the inputs are in different formats and no {} backend reads them all ({})",
+                        op.name(),
+                        readers.join("; ")
+                    ),
+                    "inputs of one format per command",
+                    format!(
+                        "run one `dla summarize {} <files>` per format, each with the captures of that format",
+                        op.name()
+                    ),
+                ));
             }
             let mut skipped = Vec::new();
             for a in eligible {
@@ -677,6 +699,18 @@ pub fn execute_in(
     };
     let a = selected.adapter;
     let ctx = Ctx::new(tc, env)?;
+    // An unknown --finding is refused before anything is written, whatever the operation
+    // and however many captures there are.
+    if let Some(f) = &req.finding
+        && ctx.ledger()?.finding(f).is_none()
+    {
+        return Err(Failure::from(Refusal::new(
+            core_codes::UNKNOWN_FINDING,
+            format!("no finding {f} in the ledger"),
+            "an existing finding",
+            "dla ledger show",
+        )));
+    }
     let opts = Opts {
         finding: req.finding,
         max_objects: req.max_objects,

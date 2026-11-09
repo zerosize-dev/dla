@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::ParseError;
-use super::frames::{make_frame, split_location, trim_allocator_frames};
+use super::frames::{drop_preload_frames, make_frame, split_location, trim_allocator_frames};
 use crate::model::{AllocGroup, AllocProfile, Frame};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
@@ -118,6 +118,7 @@ pub fn parse(input: &str) -> Result<DhatReport, ParseError> {
         report.peak_bytes = report.peak_bytes.saturating_add(gb);
         report.total_bytes = report.total_bytes.saturating_add(tb);
         report.total_blocks = report.total_blocks.saturating_add(tbk);
+        drop_preload_frames(&mut frames);
         report.profile.groups.push(AllocGroup {
             frames: trim_allocator_frames(frames),
             live_bytes: eb,

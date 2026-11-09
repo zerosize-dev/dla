@@ -137,7 +137,11 @@ pub fn resolve_all(tc: &ToolCtx, files: &[PathBuf], op: Op) -> Res<Vec<Input>> {
         let rel = match abs.strip_prefix(&tc.project) {
             Ok(r) => {
                 let r = to_slash(r);
-                if !r.starts_with(&format!("{DLA_DIR}/")) && !tc.in_scope(&r) {
+                // Files under the run directory are exempt from the scope; a path that
+                // only starts with `.dla/` but steps out with `..` is not.
+                let parts: Vec<&str> = r.split('/').collect();
+                let under_dla = parts.first() == Some(&DLA_DIR) && !parts.contains(&"..");
+                if !under_dla && !tc.in_scope(&r) {
                     return Err(Failure::refuse(
                         "out-of-scope",
                         format!("{r} is outside the run's scope"),

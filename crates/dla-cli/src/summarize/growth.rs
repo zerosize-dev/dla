@@ -19,7 +19,7 @@ use dla_core::{
 };
 use serde_json::{Value, json};
 
-use super::{Ctx, Recorded, emit, rule};
+use super::{Ctx, Recorded, emit, rule, tie::TieReason};
 use crate::fail::Res;
 
 /// Passing columns named in the evidence result.
@@ -46,9 +46,21 @@ pub struct Track {
     pub candidates: Vec<FindingId>,
     /// Memory region of the column.
     pub region: SeriesRegion,
+    /// Why the column is tied to `finding` (rule and matched key); set with `finding`.
+    pub tie: Option<TieReason>,
+    /// Findings the column matches by the tie rules without being one: no tie is made.
+    pub ambiguous: Vec<FindingId>,
 }
 
 impl Track {
+    /// Ties the column to `f` for `why`.
+    pub fn tie_to(&mut self, f: FindingId, why: TieReason, site: Option<String>) {
+        self.candidates = vec![f.clone()];
+        self.finding = Some(f);
+        self.tie = Some(why);
+        self.site = site;
+    }
+
     fn observed(&self) -> rule::Observed {
         rule::Observed {
             bytes: self.values.clone(),
@@ -93,6 +105,8 @@ pub struct Plan<'a> {
     pub limitations: Vec<String>,
     /// What a point is (`capture`).
     pub what: &'a str,
+    /// The finding `--finding` names: its tied columns are shown first.
+    pub focus: Option<FindingId>,
 }
 
 /// The outcome.
@@ -104,8 +118,11 @@ pub struct Growth {
     pub evidence: Recorded,
     /// True when at least one column passes the rule.
     pub pass: bool,
-    /// Passing column names, tied ones first.
-    pub passed: Vec<String>,
+    /// Column names written into the evidence result.
+    #[allow(dead_code)]
+    pub shown: Vec<String>,
+    /// Shown columns that are tied, with their finding. Only these may be named as tied.
+    pub tied: Vec<(String, FindingId)>,
     /// Why nothing passes.
     #[allow(dead_code)]
     pub reasons: Vec<String>,
@@ -239,6 +256,35 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
         let t = &plan.tracks[passed[k]];
         (!t.tied(), std::cmp::Reverse(t.last()))
     });
+    // Which columns the bounded result shows: the ones tied to `--finding` first, then
+    // the best column of each other tied finding, then the rest. A tie is never shown
+    // without its column, so what the output names as tied is what the ledger can read.
+    let focus = plan.focus.as_ref();
+    let mut priority: Vec<usize> = Vec::new();
+    let mut covered: Vec<&FindingId> = Vec::new();
+    for &k in &order {
+        let t = &plan.tracks[passed[k]];
+        if focus.is_some() && t.finding.as_ref() == focus {
+            priority.push(k);
+        }
+    }
+    if let Some(f) = focus {
+        covered.push(f);
+    }
+    for &k in &order {
+        let t = &plan.tracks[passed[k]];
+        if let Some(f) = &t.finding
+            && !covered.contains(&f)
+        {
+            covered.push(f);
+            priority.push(k);
+        }
+    }
+    for &k in &order {
+        if !priority.contains(&k) {
+            priority.push(k);
+        }
+    }
     let gate_pass = !passed.is_empty();
     let mut reasons: Vec<String> = Vec::new();
     if n < rule::MIN_DUMPS {
@@ -253,10 +299,10 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
             plan.what
         ));
         if let Some(f) = first_failure {
-            reasons.push(f);
+            reasons.push(clip(&f, 160));
         }
     }
-    let passed_json: Vec<Value> = order
+    let rows: Vec<Value> = priority
         .iter()
         .take(SHOWN_PASSED)
         .map(|&k| {
@@ -269,29 +315,28 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
                 "shape": shapes[k],
             });
             if let Some(s) = &t.site {
-                v["site"] = json!(s);
+                v["site"] = json!(clip(s, 160));
             }
             if let Some(f) = &t.finding {
                 v["finding"] = json!(f);
-            }
-            if !t.candidates.is_empty() {
-                v["candidates"] = json!(t.candidates);
+                v["candidates"] = json!([f]);
+                if let Some(why) = &t.tie {
+                    v["tie"] = why.to_json();
+                }
             }
             v
         })
         .collect();
-    let mut result = json!({
+    let base = json!({
         "series": id,
         "axis": "dump",
         "n": n,
         "gate": if gate_pass { "pass" } else { "fail" },
-        "passed": passed_json,
         "failed": plan.tracks.len() - passed.len(),
         "reasons": reasons,
     });
-    if passed.len() > SHOWN_PASSED {
-        result["truncated"] = json!(passed.len() - SHOWN_PASSED);
-    }
+    let (result, shown_n) = fit_passed(base, rows, passed.len());
+    let shown_idx: Vec<usize> = priority.iter().take(shown_n).map(|&k| passed[k]).collect();
     let mut spec = EvidenceSpec::new(
         EvidenceKind::GrowthSeries,
         plan.tool,
@@ -319,23 +364,86 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
         },
     };
     let evidence = ctx.record(ledger, spec, &plan.signal, &raw)?;
-    let names: Vec<String> = order
+    let shown: Vec<String> = shown_idx
         .iter()
-        .map(|&k| plan.tracks[passed[k]].name.clone())
+        .map(|&i| plan.tracks[i].name.clone())
+        .collect();
+    let tied: Vec<(String, FindingId)> = shown_idx
+        .iter()
+        .filter_map(|&i| {
+            let t = &plan.tracks[i];
+            t.finding.clone().map(|f| (t.name.clone(), f))
+        })
         .collect();
     let json = json!({
         "series": id,
         "gate": if gate_pass { "pass" } else { "fail" },
         "growth_evidence": evidence.id,
-        "passed": names.iter().take(SHOWN_PASSED).collect::<Vec<_>>(),
+        "passed": shown,
         "reasons": reasons,
     });
     Ok(Growth {
         series: id,
         evidence,
         pass: gate_pass,
-        passed: names,
+        shown,
+        tied,
         reasons,
         json,
     })
+}
+
+fn clip(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n).collect();
+        t.push_str("...");
+        t
+    }
+}
+
+/// Adds `rows` as `passed` to the result `base` (an object without it), as many as keep
+/// the result within the evidence budget, and `truncated` for the passing columns left
+/// out (`total` is how many passed). Returns the result and the number of rows kept.
+pub fn fit_passed(base: Value, rows: Vec<Value>, total: usize) -> (Value, usize) {
+    for keep in (0..=rows.len()).rev() {
+        let mut r = base.clone();
+        r["passed"] = Value::Array(rows[..keep].to_vec());
+        if total > keep {
+            r["truncated"] = json!(total - keep);
+        }
+        if keep == 0 || dla_core::evidence::result_size(&r) <= emit::RESULT_BUDGET {
+            return (r, keep);
+        }
+    }
+    unreachable!("keep = 0 always returns")
+}
+
+/// The findings the shown, tied columns belong to, in column order; with `only`, just
+/// that finding when a shown column is tied to it.
+pub fn tied_ids(g: &Growth, only: Option<&FindingId>) -> Vec<FindingId> {
+    let mut out: Vec<FindingId> = Vec::new();
+    for (_, f) in &g.tied {
+        if only.is_none_or(|o| o == f) && !out.contains(f) {
+            out.push(f.clone());
+        }
+    }
+    out
+}
+
+/// `{column: [findings]}` for columns that match several findings (at most 3 columns of
+/// 4 findings each); `None` when there are none.
+pub fn ambiguous_json(items: &[(String, Vec<FindingId>)]) -> Option<Value> {
+    if items.is_empty() {
+        return None;
+    }
+    let mut m = serde_json::Map::new();
+    for (name, ids) in items.iter().take(3) {
+        m.insert(
+            clip(name, 60),
+            json!(ids.iter().take(4).collect::<Vec<_>>()),
+        );
+    }
+    Some(Value::Object(m))
 }

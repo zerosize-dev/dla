@@ -55,6 +55,28 @@ fn have(tools: &[&str]) -> bool {
     true
 }
 
+/// Major version of the `java` on the path (8 for `1.8.0`); 0 when it cannot be read.
+fn java_major() -> u32 {
+    let Ok(o) = Command::new("java")
+        .arg("-version")
+        .env_remove("JAVA_TOOL_OPTIONS")
+        .output()
+    else {
+        return 0;
+    };
+    let text = String::from_utf8_lossy(&o.stderr).into_owned();
+    let Some(v) = text.split('"').nth(1) else {
+        return 0;
+    };
+    let mut parts = v.split(['.', '-', '+']);
+    let first: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    if first == 1 {
+        parts.next().and_then(|p| p.parse().ok()).unwrap_or(0)
+    } else {
+        first
+    }
+}
+
 fn copy_dir(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
     for e in fs::read_dir(from).unwrap() {
@@ -1434,12 +1456,28 @@ fn jvm_agent_writes_the_requested_captures_and_lists_them() {
     assert_eq!(count(Histogram), 4, "{:?}", out.limitations);
     assert_eq!(count(Heap), 2);
     assert_eq!(count(Jfr), 2);
-    assert_eq!(count(NonHeap), 8);
+    // threads.json needs Thread.dump_to_file (JDK 19+); older JDKs write the other three.
+    if java_major() >= 19 {
+        assert_eq!(count(NonHeap), 8, "{:?}", out.limitations);
+    } else {
+        assert_eq!(count(NonHeap), 6, "{:?}", out.limitations);
+        assert!(
+            out.limitations
+                .iter()
+                .any(|l| l.contains("Thread.dump_to_file") && l.contains("JDK 19")),
+            "{:?}",
+            out.limitations
+        );
+    }
     for c in &out.captures {
         let abs = fx.ctx.run_dir.join(&c.path);
         assert_eq!(fs::metadata(&abs).unwrap().len(), c.bytes, "{}", c.path);
         assert!(c.bytes > 0 && c.captured_at.ends_with('Z'));
     }
+    // The recording's chunks live inside the capture directory, not in the temp directory.
+    let jfr = out.captures.iter().find(|c| c.kind == Jfr).unwrap();
+    let jdir = fx.ctx.run_dir.join(&jfr.path);
+    assert!(jdir.parent().unwrap().join("jfr-repo").is_dir());
     let heap = out.captures.iter().find(|c| c.kind == Heap).unwrap();
     assert!(heap.ms.is_some(), "the agent reports what the dump cost");
     assert!(heap.bytes > 1_000_000);
@@ -1462,4 +1500,200 @@ fn jvm_agent_writes_the_requested_captures_and_lists_them() {
     )
     .unwrap();
     assert!(plain.captures.is_empty());
+}
+
+// A selected `java` executable that runs a build tool (compiler, Gradle) stays untouched by the
+// shim, so a detached Gradle daemon is not left with the shim loaded.
+#[cfg(target_os = "linux")]
+#[test]
+fn shim_skips_tool_jvms_but_not_the_measured_one() {
+    if !have(&["cc"]) {
+        return;
+    }
+    let Some(truth) = ["/bin/true", "/usr/bin/true"]
+        .iter()
+        .map(Path::new)
+        .find(|p| p.is_file())
+    else {
+        eprintln!("skipped: no true binary");
+        return;
+    };
+    let fx = fixture("", &["native"], &[1]);
+    let lib = fx.agent.join("libdlashim.so");
+    let st = Command::new("cc")
+        .args(["-std=gnu11", "-O2", "-g", "-fPIC", "-shared", "-o"])
+        .arg(&lib)
+        .arg(fx.agent.join("dla_alloc_shim.c"))
+        .args(["-ldl", "-lpthread"])
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let java = fx.work.join("java");
+    fs::copy(truth, &java).unwrap();
+    let wrote = |args: &[&str], tag: &str| {
+        let out = fx.work.join(format!("dump-{tag}.jsonl"));
+        let st = Command::new(&java)
+            .args(args)
+            .env("LD_PRELOAD", &lib)
+            .env("DLA_SHIM_ONLY", "java")
+            .env("DLA_HARNESS_OUT", &out)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        out.is_file() && fs::metadata(&out).unwrap().len() > 0
+    };
+    assert!(wrote(&["-cp", "a:b", "app.Main"], "app"), "measured JVM");
+    assert!(!wrote(
+        &[
+            "-cp",
+            "a:b",
+            "org.gradle.launcher.daemon.bootstrap.GradleDaemon",
+            "8"
+        ],
+        "gd"
+    ));
+    assert!(!wrote(
+        &["-Xmx1g", "-m", "jdk.compiler/com.sun.tools.javac.Main"],
+        "jc"
+    ));
+    assert!(!wrote(&["-jar", "/x/sbt-launch.jar"], "sbt"));
+    // A tool name only on the class path does not hide the program.
+    assert!(wrote(&["-cp", "/x/org.gradle.jar:b", "app.Main"], "cp"));
+}
+
+// Notes the agent makes before the workload starts (a flight recording that could not start)
+// must reach the exit record, which the harness reads, not only a tick record.
+#[test]
+fn premain_capture_notes_reach_the_exit_record() {
+    if !have(&["java", "javac", "jar"]) {
+        return;
+    }
+    let fx = fixture("", &["jvm"], &[1]);
+    let jar = build_jvm_agent(&fx);
+    fs::create_dir_all(fx.work.join("app")).unwrap();
+    fs::write(
+        fx.work.join("app/Nap.java"),
+        "public class Nap { public static void main(String[] a) throws Exception { Thread.sleep(600); } }\n",
+    )
+    .unwrap();
+    assert!(
+        Command::new("javac")
+            .args(["-d", "out", "app/Nap.java"])
+            .current_dir(&fx.work)
+            .env_remove("JAVA_TOOL_OPTIONS")
+            .status()
+            .unwrap()
+            .success()
+    );
+    // The capture directory sits under a regular file, so the recording cannot start.
+    let blocker = fx.work.join("blocker");
+    fs::write(&blocker, "x").unwrap();
+    let dump = fx.work.join("dump.jsonl");
+    let st = Command::new("java")
+        .args(["-cp", "out", "Nap"])
+        .current_dir(&fx.work)
+        .env("JAVA_TOOL_OPTIONS", format!("-javaagent:{}", jar.display()))
+        .env("DLA_HARNESS_OUT", &dump)
+        .env("DLA_TICK_MS", "100")
+        .env("DLA_CAPTURE", "jfr")
+        .env("DLA_CAPTURE_DIR", blocker.join("sub"))
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let text = fs::read_to_string(&dump).unwrap();
+    let recs: Vec<serde_json::Value> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    assert!(recs.iter().any(|r| r["phase"] == "tick"), "{text}");
+    let exit = recs.iter().find(|r| r["phase"] == "exit").expect("exit");
+    let lims = exit["limitations"].to_string();
+    assert!(
+        lims.contains("flight recording could not be started"),
+        "{lims}"
+    );
+}
+
+/// A native program behind a wrapper script, built in the fixture's work directory.
+#[cfg(target_os = "linux")]
+fn wrapped_leak_fixture() -> Fx {
+    let fx = fixture("", &["native"], &[1]);
+    fs::write(
+        fx.work.join("leak.c"),
+        "#include <stdlib.h>\n#include <string.h>\nvoid *leaky_alloc(size_t n) { void *p = malloc(n); memset(p, 1, n); return p; }\nint main(int c, char **v) { int n = c > 1 ? atoi(v[1]) : 1; for (int i = 0; i < n; i++) leaky_alloc(1024); return 0; }\n",
+    )
+    .unwrap();
+    assert!(
+        Command::new("cc")
+            .args(["-g", "-O0", "-o", "leak", "leak.c"])
+            .current_dir(&fx.work)
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::write(fx.work.join("run.sh"), "#!/bin/sh\n./leak \"$@\"\n").unwrap();
+    fx
+}
+
+// valgrind follows a wrapper's children into one XML file per process; the report kept is the
+// program's, not the shell's.
+#[cfg(target_os = "linux")]
+#[test]
+fn valgrind_under_a_wrapper_reports_the_program_not_the_shell() {
+    if !have(&["cc", "valgrind", "sh"]) {
+        return;
+    }
+    let fx = wrapped_leak_fixture();
+    for argv in [
+        &["sh", "./run.sh", "{n}"][..],
+        &["sh", "-c", "./leak 2>/dev/null {n}"][..],
+        &["./leak", "{n}"][..],
+    ] {
+        let mut m = manifest(Runtime::Native, argv, vec![], 100);
+        m.warmup = 1;
+        m.iterations = 2;
+        write_manifest(&fx, &m);
+        let out = run_points(
+            &fx.ctx,
+            &m,
+            &RunOptions {
+                tool: Some(dla_workload::harness::capture::NativeTool::Valgrind),
+                ..RunOptions::default()
+            },
+        )
+        .unwrap();
+        let f = out
+            .captures
+            .iter()
+            .find(|c| c.path.ends_with("valgrind.xml"))
+            .unwrap_or_else(|| panic!("{argv:?}: {:?}", out.limitations));
+        let xml = fs::read_to_string(fx.ctx.run_dir.join(&f.path)).unwrap();
+        assert!(xml.contains("leaky_alloc"), "{argv:?}: no program frames");
+        assert!(xml.trim_end().ends_with("</valgrindoutput>"), "{argv:?}");
+    }
+}
+
+// heaptrack cannot follow children: a wrapper run command is refused, not reported as `ran`.
+#[cfg(target_os = "linux")]
+#[test]
+fn heaptrack_refuses_a_wrapper_run_command() {
+    if !have(&["cc", "heaptrack", "sh"]) {
+        return;
+    }
+    let fx = wrapped_leak_fixture();
+    for argv in [&["sh", "./run.sh", "{n}"][..], &["./run.sh", "{n}"][..]] {
+        let mut m = manifest(Runtime::Native, argv, vec![], 100);
+        m.iterations = 2;
+        write_manifest(&fx, &m);
+        let err = run_points(
+            &fx.ctx,
+            &m,
+            &RunOptions {
+                tool: Some(dla_workload::harness::capture::NativeTool::Heaptrack),
+                ..RunOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("wrapper"), "{argv:?}: {}", err.message);
+    }
 }

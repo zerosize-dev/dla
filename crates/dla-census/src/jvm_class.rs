@@ -188,7 +188,9 @@ pub fn coroutine_captures(c: &ClassFile) -> Vec<Capture> {
         let Some(variable) = names.get(k).filter(|n| !n.is_empty()) else {
             continue;
         };
-        if field.is_empty() {
+        // Only object spills (`L$n`) can retain heap; `I$n`, `J$n`, `F$n`, `D$n`, `Z$n`
+        // hold primitives.
+        if !field.starts_with("L$") {
             continue;
         }
         let line = points

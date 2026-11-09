@@ -15,7 +15,6 @@ use std::collections::BTreeMap;
 use dla_core::{
     FindingId, NewFinding, Origin,
     attribution::normalize,
-    error::codes as core_codes,
     evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal},
     finding::{Holder, Region},
     record::FindingAnnotation,
@@ -83,6 +82,8 @@ struct Stack {
     site: Option<String>,
     /// `Class.method` of the first frame in the project, else of the first frame.
     label: String,
+    /// The function of the first frame in the project.
+    site_fn: Option<String>,
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -102,15 +103,15 @@ fn frame_key(f: &Frame) -> String {
     }
 }
 
-/// The owner a root path names: the last entry that reads as `static <Class>.<field>` or
-/// `<Class>.<field>`.
+/// The holder a root path starts with: its first entry, when that is a holder key
+/// (`static:<Class>.<field>` or `static <Class>.<field>`). The entries after it are the
+/// chain down to the sampled object and never name a holder.
 fn root_owner(path: &[String]) -> Option<String> {
-    path.iter().rev().find_map(|e| {
-        let e = e.trim();
-        let e = e.strip_prefix("static ").unwrap_or(e);
-        let e = e.strip_prefix("static:").unwrap_or(e);
-        normalize(&format!("static:{e}"))
-    })
+    let e = path.first()?.trim();
+    let rest = e
+        .strip_prefix("static:")
+        .or_else(|| e.strip_prefix("static "))?;
+    normalize(&format!("static:{}", rest.trim()))
 }
 
 fn not_enough() -> Failure {
@@ -153,13 +154,17 @@ pub fn run_diff(
     let mut stacks: BTreeMap<String, Stack> = BTreeMap::new();
     for (ci, c) in captures.iter().enumerate() {
         for g in &c.profile.groups {
-            let key = g
-                .frames
-                .iter()
-                .take(KEY_FRAMES)
-                .map(frame_key)
-                .collect::<Vec<_>>()
-                .join(" < ");
+            // Stacks of different holders stay apart: the holder is part of the key.
+            let key = format!(
+                "{} || {}",
+                g.frames
+                    .iter()
+                    .take(KEY_FRAMES)
+                    .map(frame_key)
+                    .collect::<Vec<_>>()
+                    .join(" < "),
+                g.root_path.first().map_or("", |r| r.trim())
+            );
             let s = stacks.entry(key.clone()).or_insert_with(|| {
                 let project_frame = if ctx.artifact_run {
                     None
@@ -179,6 +184,7 @@ pub fn run_diff(
                     live_bytes: vec![None; n],
                     live_blocks: vec![None; n],
                     total_bytes: vec![None; n],
+                    site_fn: project_frame.as_ref().map(|(f, _)| f.function.clone()),
                     site: project_frame.map(|(_, s)| s),
                     label: label_frame.map_or_else(
                         || "(no frames)".to_owned(),
@@ -370,17 +376,6 @@ pub fn run_diff(
     let stack_ev_id = stack_ev.id.clone();
     out.evidence.push(stack_ev);
 
-    if let Some(f) = &opts.finding
-        && ledger.finding(f).is_none()
-    {
-        return Err(Failure::from(dla_core::Refusal::new(
-            core_codes::UNKNOWN_FINDING,
-            format!("no finding {f} in the ledger"),
-            "an existing finding",
-            "dla ledger show",
-        )));
-    }
-
     if n < rule::MIN_DUMPS || !has_live {
         body.insert("series".into(), Value::Null);
         body.insert("gate".into(), json!("fail"));
@@ -398,8 +393,6 @@ pub fn run_diff(
                 "a profile of live (still allocated) bytes: JFR OldObjectSample, heaptrack leaked, valgrind still-reachable or dhat end-of-run"
             }),
         );
-        // The stacks still name writers: a finding already at a stack's site learns it.
-        learn_writers(ctx, ledger, &ranked, opts.top.max(1))?;
         out.body = body;
         return Ok(out);
     }
@@ -428,30 +421,38 @@ pub fn run_diff(
     picked.truncate(TRACKED);
     let mut tracks: Vec<growth::Track> = Vec::new();
     let mut new_candidates: Vec<CandidateRow> = Vec::new();
+    let who = tie::Who::new(tc.worker.as_deref(), origin.runtime);
+    let holders: Vec<String> = picked
+        .iter()
+        .filter_map(|s| root_owner(&s.root_path))
+        .collect();
     for s in &picked {
         let owner = root_owner(&s.root_path);
-        let mut matches: Vec<FindingId> = Vec::new();
-        if let Some(f) = owner
-            .as_deref()
-            .and_then(|o| tie::finding_by_owner(ledger, o))
+        let mut matches: Vec<(FindingId, tie::TieReason)> = Vec::new();
+        if let Some(o) = owner.as_deref() {
+            // The stack names its holder: only that holder's finding.
+            if let Some(f) = tie::finding_by_holder(ledger, &who, o, &holders, None) {
+                matches.push((f, tie::TieReason::holder(o)));
+            }
+        } else if s.root_path.is_empty()
+            && let Some(site) = &s.site
         {
-            matches.push(f);
-        }
-        if let Some(site) = &s.site {
-            for f in tie::findings_at_site(ledger, site) {
-                if !matches.contains(&f) {
-                    matches.push(f);
-                }
+            // No holder named (heaptrack, dhat, valgrind): the first project frame ties
+            // by the finding's own site or its recorded writers.
+            for f in tie::findings_at_site(ledger, &who, site) {
+                matches.push((f, tie::TieReason::site(site)));
             }
         }
         // A passing stack that names an owner no finding has: a candidate, on a run with
         // source and a declaration the resolver finds.
         if matches.is_empty()
+            && opts.finding.is_none()
             && monotone(s)
             && let Some(o) = owner.as_deref()
             && !ctx.artifact_run
             && let Some(r) = ctx.resolver().resolve(o)
             && tc.in_scope(r.site.rsplit_once(':').map_or(r.site.as_str(), |(f, _)| f))
+            && tie::finding_by_holder(ledger, &who, o, &[], None).is_none()
         {
             let mut nf = NewFinding::new(
                 Origin::parse("growth-series").map_err(dla_core::Refusal::from)?,
@@ -476,14 +477,11 @@ pub fn run_diff(
                     added: true,
                     via: Some(r.via.as_str()),
                 });
-                matches.push(finding.id);
+                matches.push((finding.id, tie::TieReason::holder(o)));
             }
         }
-        let (finding, candidates) = match matches.as_slice() {
-            [one] => (Some(one.clone()), vec![one.clone()]),
-            _ => (None, matches),
-        };
-        tracks.push(growth::Track {
+        let r_tie = tie::resolve(matches, opts.finding.as_ref());
+        let mut t = growth::Track {
             name: format!("stack:{}", s.label),
             unit: Unit::Bytes,
             values: s.live_bytes.clone(),
@@ -492,11 +490,18 @@ pub fn run_diff(
                 .iter()
                 .any(|b| b.is_some_and(|b| b > 0))
                 .then(|| s.live_blocks.clone()),
-            site: s.site.clone().filter(|_| finding.is_some()),
-            finding,
-            candidates,
+            site: None,
+            finding: None,
+            candidates: Vec::new(),
             region: origin.region,
-        });
+            tie: None,
+            ambiguous: r_tie.ambiguous,
+        };
+        if let Some((f, why)) = r_tie.tie {
+            let site = tie::site_of(ledger, &f);
+            t.tie_to(f, why, site);
+        }
+        tracks.push(t);
     }
     // Two stacks can share a label: make the column names unique.
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
@@ -507,45 +512,26 @@ pub fn run_diff(
             t.name = format!("{}#{k}", t.name);
         }
     }
-    let mut tie_note: Option<&str> = None;
-    if let Some(f) = &opts.finding {
-        let passing: Vec<usize> = picked
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| monotone(s))
-            .map(|(i, _)| i)
-            .collect();
-        let matched: Vec<usize> = passing
-            .iter()
-            .copied()
-            .filter(|&i| tracks[i].candidates.contains(f))
-            .collect();
-        let to_tie: Vec<usize> = if matched.is_empty() {
-            passing.iter().copied().take(1).collect()
-        } else {
-            matched
-        };
-        if let Some(&first) = to_tie.first() {
-            if !tracks[first].candidates.contains(f) {
-                tie_note = Some("tied by --finding");
-            }
-            for i in to_tie {
-                tracks[i].finding = Some(f.clone());
-                if !tracks[i].candidates.contains(f) {
-                    tracks[i].candidates.push(f.clone());
-                }
-            }
-        }
-    }
+    let ambiguous: Vec<(String, Vec<FindingId>)> = tracks
+        .iter()
+        .zip(&picked)
+        .filter(|(t, s)| !t.ambiguous.is_empty() && monotone(s))
+        .map(|(t, _)| (t.name.clone(), t.ambiguous.clone()))
+        .collect();
     let t0 = captures[0].profile.timestamp_ms.unwrap_or(0);
     let t_ms: Vec<u64> = captures
         .iter()
         .map(|c| c.profile.timestamp_ms.unwrap_or(t0).saturating_sub(t0))
         .collect();
-    let sites: Vec<(String, Option<String>, Vec<FindingId>)> = tracks
+    let sites: Vec<(String, Option<(String, String)>)> = tracks
         .iter()
         .zip(&picked)
-        .map(|(t, s)| (t.name.clone(), s.site.clone(), t.candidates.clone()))
+        .map(|(t, s)| (t.name.clone(), s.site.clone().zip(s.site_fn.clone())))
+        .collect();
+    let tracks_by_holder: Vec<String> = tracks
+        .iter()
+        .filter(|t| t.tie.as_ref().is_some_and(|w| w.rule == "holder"))
+        .map(|t| t.name.clone())
         .collect();
     let g = growth::write(
         ctx,
@@ -561,22 +547,20 @@ pub fn run_diff(
             runtime: origin.runtime,
             limitations: origin.limitations.clone(),
             what: "capture",
+            focus: opts.finding.clone(),
         },
     )?;
-    // The allocation site of a tied, passing stack is a writer of the finding, and its
-    // site when the census had none.
-    let mut tied_ids: Vec<FindingId> = Vec::new();
-    for (name, site, cands) in &sites {
-        if !g.passed.contains(name) {
+    let tied_ids = growth::tied_ids(&g, opts.finding.as_ref());
+    // A stack tied by its holder shows where the holder is written: its first project
+    // frame becomes a writer of the finding, and its site when the finding has none. A
+    // site tie learns nothing, and neither does a constructor or allocator frame.
+    for (name, f) in &g.tied {
+        let by_holder = tracks_by_holder.contains(name);
+        let Some((_, Some((site, function)))) = sites.iter().find(|(n, _)| n == name) else {
             continue;
-        }
-        for f in cands {
-            if !tied_ids.contains(f) {
-                tied_ids.push(f.clone());
-            }
-            if let Some(site) = site {
-                add_writer(ctx, ledger, f, site)?;
-            }
+        };
+        if by_holder && !tie::is_allocator_frame(function) {
+            add_writer(ctx, ledger, f, site)?;
         }
     }
     for f in &tied_ids {
@@ -610,41 +594,27 @@ pub fn run_diff(
                 .collect::<Vec<_>>()
         ),
     );
-    if let Some(note) = tie_note {
-        body.insert("tie".into(), json!(note));
+    if let Some(a) = growth::ambiguous_json(&ambiguous) {
+        body.insert("ambiguous".into(), a);
     }
     let needed = if !g.pass {
         "no stack's live bytes grow at every step: take another profile after more traffic and rerun with all profiles".to_owned()
-    } else if tied_ids.is_empty() {
-        "the growing stacks name no finding: give --finding <F>, or run dla census so a holder at the stack's site exists".to_owned()
-    } else {
+    } else if let Some(f) = tied_ids.first() {
         format!(
-            "a refuted non-leak sibling and a holder, then dla ledger confirm {} --evidence {}",
-            tied_ids[0], g.evidence.id
+            "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {}",
+            g.evidence.id
         )
+    } else if let Some(f) = &opts.finding {
+        format!(
+            "no passing column ties to {f} by holder, site or type: a stack ties to the finding whose owner is its root holder (static:<Class>.<field>), or, with no root path, to the finding at its first project frame or among that finding's writers"
+        )
+    } else {
+        "the growing stacks tie to no finding: a stack ties to the finding whose owner is its root holder, or, with no root path, to the finding at its first project frame (dla census so a holder exists there)".to_owned()
     };
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);
     out.body = body;
     Ok(out)
-}
-
-/// A finding already at the stack's site learns the site as a writer when the stack is
-/// among the top ones; nothing is added to the ledger otherwise.
-fn learn_writers(
-    ctx: &Ctx<'_>,
-    ledger: &mut dla_core::Ledger,
-    ranked: &[&Stack],
-    top: usize,
-) -> Res<()> {
-    for s in ranked.iter().take(top) {
-        let Some(site) = &s.site else { continue };
-        let at = tie::findings_at_site(ledger, site);
-        if let [f] = at.as_slice() {
-            add_writer(ctx, ledger, f, site)?;
-        }
-    }
-    Ok(())
 }
 
 /// Records `site` as a writer of `f` (once), and as the finding's site when it has none

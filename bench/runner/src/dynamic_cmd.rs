@@ -232,6 +232,9 @@ pub struct FixtureRow {
     /// Coverage rows of hidden tools seen in a `--without` run.
     #[serde(skip_serializing_if = "is_zero")]
     pub hidden_backend_rows: usize,
+    /// The same count per hidden tool (not serialized).
+    #[serde(skip)]
+    pub hidden_rows_by_tool: BTreeMap<String, usize>,
     /// Workers of a multi-runtime fixture and what the merge took from each.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub workers: Vec<WorkerRow>,
@@ -348,6 +351,8 @@ struct Fx<'a> {
     worker: Option<String>,
     /// The `PATH` directory of `--without` runs; the tool-home variables are unset with it.
     path_dir: Option<PathBuf>,
+    /// The tool-home variables unset for `--without` calls.
+    unset_vars: Vec<&'static str>,
 }
 
 /// How a command ended.
@@ -453,7 +458,7 @@ impl Fx<'_> {
         let mut cmd = Command::new(self.bin);
         if let Some(dir) = &self.path_dir {
             cmd.env("PATH", dir);
-            for var in without::TOOL_HOME_VARS {
+            for var in &self.unset_vars {
                 cmd.env_remove(var);
             }
         }
@@ -510,6 +515,18 @@ impl Fx<'_> {
             log,
         );
         let json: Value = serde_json::from_str(stdout.trim()).unwrap_or(Value::Null);
+        // Hiding a tool must degrade dla to a refusal (JSON with ok:false), never a crash.
+        if self.path_dir.is_some()
+            && !self.timed_out
+            && code != 0
+            && (code == 101 || (json.is_null() && args.first() != Some(&"report")))
+        {
+            self.row.failures.push(format!(
+                "dla {} crashed with a hidden tool (exit {code}, {})",
+                args.join(" "),
+                if json.is_null() { "no JSON" } else { "panic" }
+            ));
+        }
         // `dla report` prints text; every other command prints one JSON object.
         let ok = if args.first() == Some(&"report") {
             code == 0
@@ -1812,6 +1829,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         timed_out: false,
         worker: None,
         path_dir: sh.path_dir.map(Path::to_path_buf),
+        unset_vars: without::home_vars_for(&sh.args.without),
     };
     let _ = fs::remove_dir_all(&fx.log_dir);
     drive(&mut fx);
@@ -1833,7 +1851,8 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         }
         if !sh.args.without.is_empty() {
             let (bad, seen) = without::check_coverage(&run_dir, &sh.args.without);
-            row.hidden_backend_rows = seen;
+            row.hidden_backend_rows = seen.values().sum();
+            row.hidden_rows_by_tool = seen;
             row.failures.extend(bad);
         }
         collect_run_files(&run_dir, &fx.log_dir);
@@ -1843,7 +1862,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     if sh.args.without.is_empty() {
         apply_expected_failures(&mut row, EXPECTED_FAILURES);
     } else {
-        accept_hidden_tool_gaps(&mut row);
+        settle_without(&mut row);
     }
     if let Ok(text) = serde_json::to_string_pretty(&row) {
         let _ = fs::write(fx.log_dir.join("row.json"), text + "\n");
@@ -1855,9 +1874,20 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     row
 }
 
+/// Settles the failures of a `--without` row: leak gaps are accepted only when the run saw a
+/// coverage row of a hidden tool; otherwise the row is judged as in a normal run.
+fn settle_without(row: &mut FixtureRow) {
+    if row.hidden_backend_rows > 0 {
+        accept_hidden_tool_gaps(row);
+    } else {
+        apply_expected_failures(row, EXPECTED_FAILURES);
+    }
+}
+
 /// In a `--without` run a leak may stay unconfirmed because its backend is hidden. Such a
-/// failure is reported as an expected one; every other failure (a crash, a timeout, a coverage
-/// row that does not read `missing`) stays a failure.
+/// failure is reported as an expected one, but only for a fixture whose run wrote a coverage
+/// row of a hidden tool (the caller checks); every other failure (a crash of dla, a timeout, a
+/// coverage row that does not read `missing`) stays a failure.
 fn accept_hidden_tool_gaps(row: &mut FixtureRow) {
     let gap = |f: &String| {
         f.starts_with("leak ")
@@ -2109,12 +2139,13 @@ fn run_in(
         }
         let dir = without::path_dir_of(work);
         let path = env::var_os("PATH").unwrap_or_default();
-        let n = without::build_path_dir(&args.without, &path, &dir)?;
+        let hidden = without::build_path_dir(&args.without, &path, &dir)?;
         eprintln!(
-            "--without {}: PATH holds {n} executable(s)",
-            args.without.join(",")
+            "--without {}: {} link(s) in the changed PATH directories",
+            args.without.join(","),
+            hidden.links
         );
-        Some(dir)
+        Some(PathBuf::from(hidden.path))
     };
     let dirs: Vec<PathBuf> = fixture_dirs(&args.fixtures)?
         .into_iter()
@@ -2165,10 +2196,21 @@ fn run_in(
     });
     let mut fixtures = done.into_inner().map_err(|e| e.to_string())?;
     fixtures.sort_by(|a, b| a.id.cmp(&b.id));
-    let failures = fixtures
+    let mut failures: Vec<String> = fixtures
         .iter()
         .flat_map(|f| f.failures.iter().map(|m| format!("{}: {m}", f.id)))
         .collect();
+    for tool in &args.without {
+        let rows: usize = fixtures
+            .iter()
+            .map(|f| f.hidden_rows_by_tool.get(tool).copied().unwrap_or(0))
+            .sum();
+        if rows == 0 {
+            failures.push(format!(
+                "hidden tool {tool}: no coverage row depends on it in any fixture, so hiding it was not exercised"
+            ));
+        }
+    }
     Ok(DynamicResult {
         archetypes: if off { "off" } else { "on" }.to_owned(),
         parallel: args.parallel.max(1),
@@ -2188,6 +2230,20 @@ mod tests {
             failure: "leak L1 is not confirmed",
             reason: "because",
         }]
+    }
+
+    #[test]
+    fn leak_gaps_need_a_hidden_backend_row() {
+        let mut r = row(&["leak L1 (a:1) is not confirmed"]);
+        r.id = "unlisted".into();
+        settle_without(&mut r);
+        assert_eq!(r.failures.len(), 1, "no hidden row: the failure stays");
+        assert!(r.xfail.is_none());
+        let mut r = row(&["leak L1 (a:1) is not confirmed"]);
+        r.hidden_backend_rows = 1;
+        settle_without(&mut r);
+        assert!(r.failures.is_empty());
+        assert!(r.xfail.is_some());
     }
 
     fn row(failures: &[&str]) -> FixtureRow {

@@ -315,6 +315,11 @@ fn prune(base: &Path, keep: Option<u32>) -> Vec<PathBuf> {
 /// Lists the capture files of one point after its process ended. `label_dir` is
 /// `out/<label>`, `run_rel` the run-relative path of that directory. Directories of other
 /// processes than `pid` are deleted when `pid` is known.
+///
+/// A heap dump or histogram is listed only when the agent's note names the file and has no
+/// error: a process killed during `dumpHeap` leaves a truncated HPROF with no note. The flight
+/// recording has no note (the JVM writes it at exit), so it is listed only when the process
+/// ended by itself (`killed` false). The second value names the files left out.
 pub fn gather(
     label_dir: &Path,
     run_rel: &str,
@@ -322,9 +327,11 @@ pub fn gather(
     pid: Option<u32>,
     notes: &AgentNotes,
     x_default: Option<f64>,
-) -> Vec<CaptureFile> {
+    killed: bool,
+) -> (Vec<CaptureFile>, Vec<String>) {
     let base = label_dir.join(DIR);
     let mut out = Vec::new();
+    let mut left_out = Vec::new();
     for dir in prune(&base, pid) {
         let pid_name = dir
             .file_name()
@@ -344,6 +351,17 @@ pub fn gather(
                 continue;
             }
             let note = notes.find(&name);
+            let confirmed = match kind {
+                CaptureKind::Heap | CaptureKind::Histogram => {
+                    note.is_some_and(|(_, c)| c.error.is_none())
+                }
+                CaptureKind::Jfr => !killed,
+                _ => true,
+            };
+            if !confirmed {
+                left_out.push(format!("{pid_name}/{name}"));
+                continue;
+            }
             out.push(CaptureFile {
                 kind,
                 path: format!("{run_rel}/{DIR}/{pid_name}/{name}"),
@@ -360,7 +378,7 @@ pub fn gather(
             });
         }
     }
-    out
+    (out, left_out)
 }
 
 /// The `dla summarize` commands that read `files`, most useful first. `pointer` turns a
@@ -420,12 +438,11 @@ pub fn summarize_commands(
     }
     if let Some((_, g)) = groups.first() {
         push("alloc-stack-diff", CaptureKind::Jfr, &[], g);
-        push(
-            "non-heap",
-            CaptureKind::NonHeap,
-            &["threads.json", "classloader-stats.txt", "nmt-diff.txt"],
-            g,
-        );
+        // One command per file kind: each format has its own adapter, and `summarize`
+        // refuses inputs of mixed formats.
+        for tail in ["threads.json", "classloader-stats.txt", "nmt-diff.txt"] {
+            push("non-heap", CaptureKind::NonHeap, &[tail], g);
+        }
         push("heap-graph", CaptureKind::Valgrind, &[], g);
         push("alloc-stack-diff", CaptureKind::Heaptrack, &[], g);
     }
@@ -534,6 +551,8 @@ mod tests {
         for (pid, name, size) in [
             ("100", "heap-1.hprof", 5),
             ("100", "histogram-1.txt", 7),
+            ("100", "heap-2.hprof", 9),
+            ("100", "recording.jfr", 4),
             ("100", "empty.jfr", 0),
             ("200", "heap-1.hprof", 5),
         ] {
@@ -541,28 +560,49 @@ mod tests {
             fs::create_dir_all(&d).unwrap();
             fs::write(d.join(name), vec![b'x'; size]).unwrap();
         }
+        let note = |kind: &str, file: &str, error: Option<&str>| DumpCapture {
+            kind: Some(kind.into()),
+            file: Some(file.into()),
+            role: None,
+            bytes: Some(5),
+            ms: Some(42),
+            error: error.map(str::to_owned),
+        };
         let notes = AgentNotes {
             records: vec![(
                 Some(2000.0),
-                vec![DumpCapture {
-                    kind: Some("heap".into()),
-                    file: Some("heap-1.hprof".into()),
-                    role: None,
-                    bytes: Some(5),
-                    ms: Some(42),
-                    error: None,
-                }],
+                vec![
+                    note("heap", "heap-1.hprof", None),
+                    note("histogram", "histogram-1.txt", None),
+                    // The dump failed part way: the file is incomplete.
+                    note("heap", "heap-2.hprof", Some("IOException")),
+                ],
             )],
         };
-        let files = gather(
-            &label_dir,
-            "harness/H1/out/p1-fresh",
-            "p1-fresh",
-            Some(100),
-            &notes,
-            None,
-        );
-        assert_eq!(files.len(), 2);
+        let args = |killed| {
+            gather(
+                &label_dir,
+                "harness/H1/out/p1-fresh",
+                "p1-fresh",
+                Some(100),
+                &notes,
+                None,
+                killed,
+            )
+        };
+        // A killed process: the flight recording and the dump with an error note stay out,
+        // and so does a dump without any note.
+        fs::write(label_dir.join(DIR).join("100").join("heap-3.hprof"), b"cut").unwrap();
+        let (files, left_out) = args(true);
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files.iter().all(|f| f.kind != CaptureKind::Jfr));
+        assert_eq!(left_out.len(), 3, "{left_out:?}");
+        assert!(left_out.iter().any(|l| l.ends_with("heap-3.hprof")));
+        assert!(left_out.iter().any(|l| l.ends_with("heap-2.hprof")));
+        // A process that ended by itself keeps its recording.
+        let (files, left_out) = args(false);
+        assert_eq!(files.len(), 3);
+        assert_eq!(left_out.len(), 2);
         let heap = files.iter().find(|f| f.kind == CaptureKind::Heap).unwrap();
         assert_eq!(
             heap.path,

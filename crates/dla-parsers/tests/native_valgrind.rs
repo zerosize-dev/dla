@@ -55,7 +55,7 @@ fn all_four_leak_kinds() {
             ("still-reachable".to_owned(), 100, 1),
             ("possibly-lost".to_owned(), 200, 1),
             ("indirectly-lost".to_owned(), 1200, 4),
-            ("definitely-lost".to_owned(), 1232, 4),
+            ("definitely-lost".to_owned(), 32, 4),
         ]
     );
     assert!(r.other_errors.is_empty());
@@ -145,4 +145,58 @@ fn bad_input_gives_clear_errors() {
     )
     .unwrap();
     assert_eq!(r.profile.groups[0].live_bytes, 0);
+}
+
+#[test]
+fn owned_blocks_are_not_counted_twice() {
+    // lp.c: a 16-byte block that holds a 100-byte block, both dropped. memcheck writes
+    // leakedbytes = 116 for the head, and the 100 again as its own indirectly-lost record.
+    let r = valgrind::parse(&fixture("valgrind_owned.xml")).unwrap();
+    let by_kind = |k: &str| {
+        r.profile
+            .groups
+            .iter()
+            .find(|g| g.kind.as_deref() == Some(k))
+            .map(|g| (g.live_bytes, g.live_blocks))
+    };
+    assert_eq!(by_kind("definitely-lost"), Some((16, 1)));
+    assert_eq!(by_kind("indirectly-lost"), Some((100, 1)));
+    let total: u64 = r.profile.groups.iter().map(|g| g.live_bytes).sum();
+    assert_eq!(total, 116);
+
+    // ll.c: a 10-node list pushed from one stack.
+    let r = valgrind::parse(&fixture("valgrind_list_owned.xml")).unwrap();
+    let total: u64 = r.profile.groups.iter().map(|g| g.live_bytes).sum();
+    assert_eq!(total, 640);
+}
+
+#[test]
+fn rust_library_frames_are_trimmed_and_two_sites_stay_apart() {
+    // Release Rust binary under memcheck: Valgrind names inlined std frames without paths.
+    let r = valgrind::parse(&fixture("valgrind_rust_two_sites.xml")).unwrap();
+    let key = |g: &dla_parsers::model::AllocGroup| {
+        g.frames
+            .iter()
+            .take(8)
+            .map(|f| format!("{}@{:?}", f.function, f.line))
+            .collect::<Vec<_>>()
+    };
+    let sites: Vec<_> = r
+        .profile
+        .groups
+        .iter()
+        .filter(|g| g.frames.iter().any(|f| f.function.starts_with("rleak::")))
+        .collect();
+    assert!(sites.len() >= 2);
+    for g in &sites {
+        assert!(
+            g.frames[0].function.starts_with("rleak::"),
+            "{:?}",
+            g.frames.iter().map(|f| &f.function).collect::<Vec<_>>()
+        );
+    }
+    let mut keys: Vec<_> = sites.iter().map(|g| key(g)).collect();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), sites.len());
 }

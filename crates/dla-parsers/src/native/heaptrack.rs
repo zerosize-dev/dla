@@ -50,7 +50,9 @@ pub struct Totals {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct HeaptrackReport {
-    /// `Debuggee command was:` lines, in order (two in a diff: the new run, then the base).
+    /// `Debuggee command was:` lines, in the order printed. In a diff there are two, but
+    /// heaptrack_print reads both files at once and prints each when its read finishes, so
+    /// the position does not say which run is the new one and which is the base.
     pub commands: Vec<String>,
     pub is_diff: bool,
     /// `MEMORY LEAKS` (needs `-l`).

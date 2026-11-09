@@ -266,19 +266,27 @@ pub fn select_measured(file: &DumpFile, runtime: Runtime, n: Option<u64>) -> Opt
         .map(|(pid, recs)| {
             // A shim loaded into a managed runtime writes its own exit record after the
             // runtime's: the runtime's record is the measured one, the shim's is merged in.
-            let exit = recs
+            // A runtime without an exit record of its own keeps its last checkpoint or tick
+            // (and the "no exit record" limitation); the shim's record is not a stand-in.
+            let own: Vec<&Rec> = recs
+                .iter()
+                .copied()
+                .filter(|r| runtime_matches(r, runtime))
+                .collect();
+            let pool = if own.is_empty() { recs.clone() } else { own };
+            let exit = pool
                 .iter()
                 .rev()
-                .find(|r| r.dump.phase == DumpPhase::Exit && runtime_matches(r, runtime))
-                .or_else(|| recs.iter().rev().find(|r| r.dump.phase == DumpPhase::Exit));
+                .find(|r| r.dump.phase == DumpPhase::Exit)
+                .copied();
             let pick = exit
                 .or_else(|| {
-                    recs.iter()
+                    pool.iter()
                         .rev()
                         .find(|r| r.dump.phase == DumpPhase::Checkpoint)
+                        .copied()
                 })
-                .or_else(|| recs.last())
-                .copied()
+                .or_else(|| pool.last().copied())
                 .unwrap_or(recs[0]);
             let has_n = n.is_some_and(|n| {
                 recs.iter()
@@ -483,6 +491,29 @@ mod tests {
         let only_jvm = file(&[json!({"dla_harness":1,"phase":"exit","pid":7,"runtime":"jvm"})]);
         let r = &only_jvm.records[0];
         assert_eq!(merge_shim(r, &only_jvm).dump, r.dump);
+    }
+
+    #[test]
+    fn a_jvm_without_an_exit_record_keeps_its_tick_and_the_limitation() {
+        let f = file(&[
+            json!({"dla_harness":1,"phase":"tick","pid":7,"runtime":"jvm","argv":["java","Main","500"],
+                "values":{"jvm.heap_used":100}}),
+            json!({"dla_harness":1,"phase":"tick","pid":7,"runtime":"jvm","argv":["java","Main","500"],
+                "values":{"jvm.heap_used":120}}),
+            json!({"dla_harness":1,"phase":"exit","pid":7,"runtime":"native","argv":["java","Main","500"],
+                "values":{"native.live_bytes":42}}),
+        ]);
+        let sel = select_measured(&f, Runtime::Jvm, Some(500)).unwrap();
+        assert_eq!(sel.rec.dump.phase, DumpPhase::Tick);
+        assert_eq!(sel.rec.value("jvm.heap_used"), Some(120.0));
+        assert!(
+            sel.limitations.iter().any(|l| l.contains("no exit record")),
+            "{:?}",
+            sel.limitations
+        );
+        let m = merge_shim(sel.rec, &f);
+        assert_eq!(m.value("jvm.heap_used"), Some(120.0));
+        assert_eq!(m.value("native.live_bytes"), Some(42.0));
     }
 
     #[test]

@@ -3,14 +3,15 @@
 //! An adapter turns its inputs into [`SnapCapture`]s (`dla_parsers::model::NonHeapSnapshot`);
 //! [`run_diff`] diffs metrics and resource groups, writes the `non-heap` evidence and,
 //! with three or more captures, a series and a `growth-series` evidence. A group's column
-//! (threads created at one site, descriptors of one kind) is tied to the finding whose
-//! site or writers include the group's creation site.
+//! (threads created at one site, descriptors of one kind) is tied (see [`tie`]) to the
+//! finding whose site or writers are the group's creation site. Only a creation site
+//! ties: the frame a JVM thread is running in now is not one, so groups read from a JVM
+//! thread dump never tie by site. Whole-process metrics tie to nothing.
 
 use std::collections::BTreeMap;
 
 use dla_core::{
     FindingId,
-    error::codes as core_codes,
     evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal},
     runtime::Runtime,
     series::{SeriesRegion, SeriesSourceKind, Unit},
@@ -66,6 +67,11 @@ struct Item {
     site: Option<String>,
 }
 
+/// Sources whose group sites are the frame a thread runs in now, not where it was made.
+fn site_is_current_frame(source: &str) -> bool {
+    source == dla_parsers::jvm::thread_dump::SOURCE
+}
+
 fn clip(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_owned()
@@ -105,7 +111,7 @@ pub fn run_diff(
     };
 
     // ---- items across captures
-    let mut items: BTreeMap<String, Item> = BTreeMap::new();
+    let mut items: BTreeMap<(String, Option<String>), Item> = BTreeMap::new();
     for (ci, c) in captures.iter().enumerate() {
         for m in &c.snap.metrics {
             let (unit, mult) = match m.unit.as_str() {
@@ -114,7 +120,7 @@ pub fn run_diff(
                 _ => (Unit::Count, 1),
             };
             let name = format!("metric:{}/{}", red.name(&m.category), red.name(&m.name));
-            let it = items.entry(name.clone()).or_insert_with(|| Item {
+            let it = items.entry((name.clone(), None)).or_insert_with(|| Item {
                 name,
                 unit,
                 values: vec![None; n],
@@ -124,7 +130,7 @@ pub fn run_diff(
         }
         for g in &c.snap.groups {
             let name = format!("group:{}/{}", red.name(&g.kind), red.name(&g.key));
-            let site = if ctx.artifact_run {
+            let site = if ctx.artifact_run || site_is_current_frame(&c.snap.source) {
                 None
             } else {
                 g.site.as_ref().and_then(|f| {
@@ -132,12 +138,15 @@ pub fn run_diff(
                         .frame_site(&f.function, f.file.as_deref(), f.line)
                 })
             };
-            let it = items.entry(name.clone()).or_insert_with(|| Item {
-                name,
-                unit: Unit::Count,
-                values: vec![None; n],
-                site,
-            });
+            // Groups of one key made at different sites are different columns.
+            let it = items
+                .entry((name.clone(), site.clone()))
+                .or_insert_with(|| Item {
+                    name,
+                    unit: Unit::Count,
+                    values: vec![None; n],
+                    site,
+                });
             it.values[ci] = Some(it.values[ci].unwrap_or(0) + g.count);
         }
     }
@@ -257,16 +266,6 @@ pub fn run_diff(
     body.insert("redaction".into(), json!(red.mode()));
     out.evidence.push(ev);
 
-    if let Some(f) = &opts.finding
-        && ledger.finding(f).is_none()
-    {
-        return Err(Failure::from(dla_core::Refusal::new(
-            core_codes::UNKNOWN_FINDING,
-            format!("no finding {f} in the ledger"),
-            "an existing finding",
-            "dla ledger show",
-        )));
-    }
     if n < rule::MIN_DUMPS {
         body.insert("series".into(), Value::Null);
         body.insert("gate".into(), json!("fail"));
@@ -290,68 +289,59 @@ pub fn run_diff(
         }
     }
     picked.truncate(TRACKED);
+    let who = tie::Who::new(tc.worker.as_deref(), origin.runtime);
     let mut tracks: Vec<growth::Track> = picked
         .iter()
         .map(|i| {
-            let matches: Vec<FindingId> = i
+            let matches: Vec<(FindingId, tie::TieReason)> = i
                 .site
                 .as_deref()
-                .map(|s| tie::findings_at_site(ledger, s))
+                .map(|s| {
+                    tie::findings_at_site(ledger, &who, s)
+                        .into_iter()
+                        .map(|f| (f, tie::TieReason::site(s)))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let (finding, candidates) = match matches.as_slice() {
-                [one] => (Some(one.clone()), vec![one.clone()]),
-                _ => (None, matches),
-            };
-            growth::Track {
-                name: i.name.clone(),
+            let r_tie = tie::resolve(matches, opts.finding.as_ref());
+            let mut t = growth::Track {
+                name: clip(&i.name, 120),
                 unit: i.unit,
                 values: i.values.clone(),
                 counts: None,
-                site: i.site.clone().filter(|_| finding.is_some()),
-                finding,
-                candidates,
+                site: None,
+                finding: None,
+                candidates: Vec::new(),
                 region: SeriesRegion::NonHeap,
+                tie: None,
+                ambiguous: r_tie.ambiguous,
+            };
+            if let Some((f, why)) = r_tie.tie {
+                let site = tie::site_of(ledger, &f);
+                t.tie_to(f, why, site);
             }
+            t
         })
         .collect();
-    let mut tie_note: Option<&str> = None;
-    if let Some(f) = &opts.finding {
-        let passing: Vec<usize> = picked
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| monotone(i))
-            .map(|(k, _)| k)
-            .collect();
-        let matched: Vec<usize> = passing
-            .iter()
-            .copied()
-            .filter(|&k| tracks[k].candidates.contains(f))
-            .collect();
-        let to_tie: Vec<usize> = if matched.is_empty() {
-            passing.iter().copied().take(1).collect()
-        } else {
-            matched
-        };
-        if let Some(&first) = to_tie.first() {
-            if !tracks[first].candidates.contains(f) {
-                tie_note = Some("tied by --finding");
-            }
-            for k in to_tie {
-                tracks[k].finding = Some(f.clone());
-                if !tracks[k].candidates.contains(f) {
-                    tracks[k].candidates.push(f.clone());
-                }
-            }
+    // Two items can share a name (one key made at two sites): make the columns unique.
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for t in &mut tracks {
+        let k = seen.entry(t.name.clone()).or_insert(0);
+        *k += 1;
+        if *k > 1 {
+            t.name = format!("{}#{k}", t.name);
         }
     }
+    let ambiguous: Vec<(String, Vec<FindingId>)> = tracks
+        .iter()
+        .zip(&picked)
+        .filter(|(t, i)| !t.ambiguous.is_empty() && monotone(i))
+        .map(|(t, _)| (t.name.clone(), t.ambiguous.clone()))
+        .collect();
     let t0 = captures[0].snap.timestamp_ms.unwrap_or(0);
     let t_ms: Vec<u64> = captures
         .iter()
         .map(|c| c.snap.timestamp_ms.unwrap_or(t0).saturating_sub(t0))
-        .collect();
-    let cands: Vec<(String, Vec<FindingId>)> = tracks
-        .iter()
-        .map(|t| (t.name.clone(), t.candidates.clone()))
         .collect();
     let g = growth::write(
         ctx,
@@ -367,18 +357,10 @@ pub fn run_diff(
             runtime: origin.runtime,
             limitations: origin.limitations.clone(),
             what: "snapshot",
+            focus: opts.finding.clone(),
         },
     )?;
-    let mut tied_ids: Vec<FindingId> = Vec::new();
-    for (name, c) in &cands {
-        if g.passed.contains(name) {
-            for f in c {
-                if !tied_ids.contains(f) {
-                    tied_ids.push(f.clone());
-                }
-            }
-        }
-    }
+    let tied_ids = growth::tied_ids(&g, opts.finding.as_ref());
     for f in &tied_ids {
         let fnd = ledger.finding(f);
         out.candidates.push(CandidateRow {
@@ -396,18 +378,22 @@ pub fn run_diff(
         body.extend(m);
     }
     body.insert("tied".into(), json!(tied_ids));
-    if let Some(note) = tie_note {
-        body.insert("tie".into(), json!(note));
+    if let Some(a) = growth::ambiguous_json(&ambiguous) {
+        body.insert("ambiguous".into(), a);
     }
     let needed = if !g.pass {
         "nothing grows at every step: take another snapshot after more traffic and rerun with all snapshots".to_owned()
-    } else if tied_ids.is_empty() {
-        "the growing items name no finding: give --finding <F>, or run dla census so a spawn or handle holder exists at the creation site".to_owned()
-    } else {
+    } else if let Some(f) = tied_ids.first() {
         format!(
-            "a refuted non-leak sibling and a holder, then dla ledger confirm {} --evidence {}",
-            tied_ids[0], g.evidence.id
+            "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {}",
+            g.evidence.id
         )
+    } else if let Some(f) = &opts.finding {
+        format!(
+            "no passing column ties to {f} by holder, site or type: a group ties only by its creation site (a goroutine's created-by frame, a thread's spawn frame) equal to the finding's site or one of its writers"
+        )
+    } else {
+        "the growing items tie to no finding: a group ties only by its creation site; run dla census so a spawn or handle holder exists there. Whole-process totals never tie".to_owned()
     };
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);

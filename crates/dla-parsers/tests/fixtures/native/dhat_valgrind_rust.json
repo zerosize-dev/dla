@@ -1,0 +1,231 @@
+{"dhatFileVersion":2
+,"mode":"heap","verb":"Allocated"
+,"bklt":true,"bkacc":true
+,"tu":"instrs","Mtu":"Minstr"
+,"tuth":500
+,"cmd":"./rtarget/release/rleak"
+,"pid":4404
+,"te":546510
+,"tg":541148
+,"pps":
+ [{"tb":472,"tbk":1
+  ,"tl":158933
+  ,"mb":472,"mbk":1
+  ,"gb":0,"gbk":0
+  ,"eb":0,"ebk":0
+  ,"rb":2871,"wb":1342
+  ,"acc":[194,-3,143,-4,0,-8,188,-8,86,-8,12,-8,17,-16,12,-8,22,-8,13,-8,10,-16,1,-8,8,-8,3,-4,14,13,-3,5,-8,0,-2,1,-6,0,-8,4,-8,7,-8,0,-16,1,-16,0,-4,9,-20,0,-8,15,-4,4,-4,3,-8,5,-88,1,-136,0,-8,1]
+  ,"fs":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]
+  }
+ ,{"tb":360,"tbk":2
+  ,"tl":158022
+  ,"mb":240,"mbk":1
+  ,"gb":0,"gbk":0
+  ,"eb":0,"ebk":0
+  ,"rb":6352,"wb":5083
+  ,"fs":[1,18,19,5,6,7,8,9,10,11,12,13,14,15,16,17]
+  }
+ ,{"tb":1024,"tbk":1
+  ,"tl":158073
+  ,"mb":1024,"mbk":1
+  ,"gb":0,"gbk":0
+  ,"eb":0,"ebk":0
+  ,"rb":9833,"wb":5120
+  ,"acc":[20,-817,15,-206,13]
+  ,"fs":[1,20,21,22,23,19,5,6,7,8,9,10,11,12,13,14,15,16,17]
+  }
+ ,{"tb":32,"tbk":1
+  ,"tl":326
+  ,"mb":0,"mbk":0
+  ,"gb":0,"gbk":0
+  ,"eb":0,"ebk":0
+  ,"rb":32,"wb":32
+  ,"acc":[-32,2]
+  ,"fs":[24,25,5,6,7,8,9,10,11,12,13,14,15,16,17]
+  }
+ ,{"tb":152,"tbk":1
+  ,"tl":297
+  ,"mb":0,"mbk":0
+  ,"gb":0,"gbk":0
+  ,"eb":0,"ebk":0
+  ,"rb":24,"wb":16
+  ,"acc":[-8,3,-8,2,-136,0]
+  ,"fs":[26,27,28,29,5,6,7,8,9,10,11,12,13,14,15,16,17]
+  }
+ ,{"tb":32,"tbk":1
+  ,"tl":213
+  ,"mb":0,"mbk":0
+  ,"gb":0,"gbk":0
+  ,"eb":0,"ebk":0
+  ,"rb":0,"wb":32
+  ,"acc":[-32,1]
+  ,"fs":[24,30,29,5,6,7,8,9,10,11,12,13,14,15,16,17]
+  }
+ ,{"tb":4,"tbk":1
+  ,"tl":57717
+  ,"mb":0,"mbk":0
+  ,"gb":4,"gbk":1
+  ,"eb":4,"ebk":1
+  ,"rb":0,"wb":4
+  ,"acc":[-4,1]
+  ,"fs":[1,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,17]
+  }
+ ,{"tb":544,"tbk":1
+  ,"tl":57629
+  ,"mb":0,"mbk":0
+  ,"gb":544,"gbk":1
+  ,"eb":544,"ebk":1
+  ,"rb":0,"wb":58
+  ,"acc":[-16,1,-80,0,-40,1,-402,0,-2,1,-4,0]
+  ,"fs":[1,54,55,56,57,58,59,60,61,62,63,64,65,46,47,48,49,50,51,52,53,17]
+  }
+ ,{"tb":614700,"tbk":300
+  ,"tl":10484049
+  ,"mb":614700,"mbk":300
+  ,"gb":614700,"gbk":300
+  ,"eb":614700,"ebk":300
+  ,"rb":0,"wb":0
+  ,"fs":[26,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,17]
+  }
+ ,{"tb":24480,"tbk":8
+  ,"tl":57149
+  ,"mb":12288,"mbk":1
+  ,"gb":12288,"gbk":1
+  ,"eb":12288,"ebk":1
+  ,"rb":12192,"wb":19392
+  ,"fs":[1,89,90,91,92,93,94,95,96,97,98,99,77,78,79,80,81,82,83,84,85,86,87,88,17]
+  }
+ ,{"tb":204900,"tbk":50
+  ,"tl":452870
+  ,"mb":204900,"mbk":50
+  ,"gb":204900,"gbk":50
+  ,"eb":204900,"ebk":50
+  ,"rb":0,"wb":0
+  ,"fs":[26,100,101,102,103,104,105,106,107,108,109,110,77,78,79,80,81,82,83,84,85,86,87,88,17]
+  }
+ ,{"tb":2976,"tbk":5
+  ,"tl":12927
+  ,"mb":1536,"mbk":1
+  ,"gb":1536,"gbk":1
+  ,"eb":1536,"ebk":1
+  ,"rb":1440,"wb":2640
+  ,"fs":[1,89,90,91,92,93,94,95,96,111,112,113,77,78,79,80,81,82,83,84,85,86,87,88,17]
+  }
+ ]
+,"ftbl":
+ ["[root]"
+ ,"0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_dhat-amd64-linux.so)"
+ ,"0x4918F5E: __fopen_internal (iofopen.c:65)"
+ ,"0x4918F5E: fopen@@GLIBC_2.2.5 (iofopen.c:86)"
+ ,"0x4931195: pthread_getattr_np@@GLIBC_2.32 (pthread_getattr_np.c:85)"
+ ,"0x13F6AD: get_stack_start (stack_overflow.rs:366)"
+ ,"0x13F6AD: stack_start_aligned (stack_overflow.rs:383)"
+ ,"0x13F6AD: install_main_guard_linux (stack_overflow.rs:441)"
+ ,"0x13F6AD: install_main_guard (stack_overflow.rs:407)"
+ ,"0x13F6AD: init (stack_overflow.rs:161)"
+ ,"0x13F6AD: init (mod.rs:38)"
+ ,"0x13F6AD: init (rt.rs:118)"
+ ,"0x13F6AD: {closure#0} (rt.rs:173)"
+ ,"0x13F6AD: do_call<std::rt::lang_start_internal::{closure_env#0}, isize> (panicking.rs:576)"
+ ,"0x13F6AD: catch_unwind<isize, std::rt::lang_start_internal::{closure_env#0}> (panicking.rs:544)"
+ ,"0x13F6AD: catch_unwind<std::rt::lang_start_internal::{closure_env#0}, isize> (panic.rs:359)"
+ ,"0x13F6AD: std::rt::lang_start_internal (rt.rs:171)"
+ ,"0x11CD0B: main (in /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/review/n7/rtarget/release/rleak)"
+ ,"0x4919E64: getdelim (iogetdelim.c:65)"
+ ,"0x49312EE: pthread_getattr_np@@GLIBC_2.32 (pthread_getattr_np.c:122)"
+ ,"0x4918294: _IO_file_doallocate (filedoalloc.c:101)"
+ ,"0x4928603: _IO_doallocbuf (genops.c:347)"
+ ,"0x4925963: _IO_file_underflow@@GLIBC_2.2.5 (fileops.c:486)"
+ ,"0x4919EEF: getdelim (iogetdelim.c:77)"
+ ,"0x484DB80: realloc (in /usr/libexec/valgrind/vgpreload_dhat-amd64-linux.so)"
+ ,"0x4931059: pthread_getattr_np@@GLIBC_2.32 (pthread_getattr_np.c:180)"
+ ,"0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_dhat-amd64-linux.so)"
+ ,"0x492CF5A: __pthread_attr_extension (pthread_attr_extension.c:28)"
+ ,"0x492D29F: pthread_attr_setaffinity_np@@GLIBC_2.32 (pthread_attr_setaffinity.c:45)"
+ ,"0x49310E7: pthread_getattr_np@@GLIBC_2.32 (pthread_getattr_np.c:194)"
+ ,"0x492D2B8: pthread_attr_setaffinity_np@@GLIBC_2.32 (pthread_attr_setaffinity.c:51)"
+ ,"0x141C57: alloc (alloc.rs:130)"
+ ,"0x141C57: alloc_impl_runtime (alloc.rs:302)"
+ ,"0x141C57: alloc_impl (alloc.rs:424)"
+ ,"0x141C57: allocate (alloc.rs:541)"
+ ,"0x141C57: try_clone_from_ref_in<str, alloc::alloc::Global> (boxed.rs:886)"
+ ,"0x141C57: clone_from_ref_in<str, alloc::alloc::Global> (boxed.rs:845)"
+ ,"0x141C57: clone_from_ref<str> (boxed.rs:798)"
+ ,"0x141C57: from (convert.rs:138)"
+ ,"0x141C57: call_once<fn(&str) -> alloc::boxed::Box<str, alloc::alloc::Global>, (&str)> (function.rs:250)"
+ ,"0x141C57: map<&str, alloc::boxed::Box<str, alloc::alloc::Global>, fn(&str) -> alloc::boxed::Box<str, alloc::alloc::Global>> (option.rs:1163)"
+ ,"0x141C57: {closure#0} (thread_info.rs:114)"
+ ,"0x141C57: {closure#0}<std::sys::pal::unix::stack_overflow::thread_info::set_current_info::{closure_env#0}, core::option::Option<alloc::boxed::Box<str, alloc::alloc::Global>>> (current.rs:234)"
+ ,"0x141C57: try_with_current<std::thread::current::with_current_name::{closure_env#0}<std::sys::pal::unix::stack_overflow::thread_info::set_current_info::{closure_env#0}, core::option::Option<alloc::boxed::Box<str, alloc::alloc::Global>>>, core::option::Option<alloc::boxed::Box<str, alloc::alloc::Global>>> (current.rs:204)"
+ ,"0x141C57: with_current_name<std::sys::pal::unix::stack_overflow::thread_info::set_current_info::{closure_env#0}, core::option::Option<alloc::boxed::Box<str, alloc::alloc::Global>>> (current.rs:216)"
+ ,"0x141C57: std::sys::pal::unix::stack_overflow::thread_info::set_current_info (thread_info.rs:114)"
+ ,"0x13F7D8: init (stack_overflow.rs:185)"
+ ,"0x13F7D8: init (mod.rs:38)"
+ ,"0x13F7D8: init (rt.rs:118)"
+ ,"0x13F7D8: {closure#0} (rt.rs:173)"
+ ,"0x13F7D8: do_call<std::rt::lang_start_internal::{closure_env#0}, isize> (panicking.rs:576)"
+ ,"0x13F7D8: catch_unwind<isize, std::rt::lang_start_internal::{closure_env#0}> (panicking.rs:544)"
+ ,"0x13F7D8: catch_unwind<std::rt::lang_start_internal::{closure_env#0}, isize> (panic.rs:359)"
+ ,"0x13F7D8: std::rt::lang_start_internal (rt.rs:171)"
+ ,"0x141E7D: alloc (alloc.rs:130)"
+ ,"0x141E7D: alloc_impl_runtime (alloc.rs:302)"
+ ,"0x141E7D: alloc_impl (alloc.rs:424)"
+ ,"0x141E7D: allocate (alloc.rs:541)"
+ ,"0x141E7D: try_new_uninit_in<alloc::collections::btree::node::LeafNode<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>, alloc::alloc::Global> (boxed.rs:619)"
+ ,"0x141E7D: new_uninit_in<alloc::collections::btree::node::LeafNode<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>, alloc::alloc::Global> (boxed.rs:586)"
+ ,"0x141E7D: new<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo, alloc::alloc::Global> (node.rs:87)"
+ ,"0x141E7D: new_leaf<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo, alloc::alloc::Global> (node.rs:225)"
+ ,"0x141E7D: insert_entry<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo, alloc::alloc::Global> (entry.rs:452)"
+ ,"0x141E7D: insert<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo, alloc::alloc::Global> (entry.rs:426)"
+ ,"0x141E7D: insert<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo, alloc::alloc::Global> (map.rs:1052)"
+ ,"0x141E7D: std::sys::pal::unix::stack_overflow::thread_info::set_current_info (thread_info.rs:122)"
+ ,"0x11C82D: alloc_zeroed (library/alloc/src/alloc.rs:290)"
+ ,"0x11C82D: alloc_impl_runtime (library/alloc/src/alloc.rs:302)"
+ ,"0x11C82D: alloc_impl (library/alloc/src/alloc.rs:424)"
+ ,"0x11C82D: allocate_zeroed (library/alloc/src/alloc.rs:547)"
+ ,"0x11C82D: try_allocate_in<alloc::alloc::Global> (library/alloc/src/raw_vec/mod.rs:468)"
+ ,"0x11C82D: with_capacity_zeroed_in<alloc::alloc::Global> (library/alloc/src/raw_vec/mod.rs:587)"
+ ,"0x11C82D: with_capacity_zeroed_in<u8, alloc::alloc::Global> (library/alloc/src/raw_vec/mod.rs:221)"
+ ,"0x11C82D: from_elem<alloc::alloc::Global> (library/alloc/src/vec/spec_from_elem.rs:51)"
+ ,"0x11C82D: from_elem<u8> (library/alloc/src/vec/mod.rs:3773)"
+ ,"0x11C82D: rleak::open_session (main.rs:5)"
+ ,"0x11C8A1: rleak::main (main.rs:9)"
+ ,"0x11C79A: call_once<fn(), ()> (library/core/src/ops/function.rs:250)"
+ ,"0x11C79A: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()> (library/std/src/sys/backtrace.rs:166)"
+ ,"0x11C7A8: std::rt::lang_start::<()>::{closure#0} (library/std/src/rt.rs:206)"
+ ,"0x13F898: call_once<(), (dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (function.rs:287)"
+ ,"0x13F898: do_call<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panicking.rs:576)"
+ ,"0x13F898: catch_unwind<i32, &(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (panicking.rs:544)"
+ ,"0x13F898: catch_unwind<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panic.rs:359)"
+ ,"0x13F898: {closure#0} (rt.rs:175)"
+ ,"0x13F898: do_call<std::rt::lang_start_internal::{closure_env#0}, isize> (panicking.rs:576)"
+ ,"0x13F898: catch_unwind<isize, std::rt::lang_start_internal::{closure_env#0}> (panicking.rs:544)"
+ ,"0x13F898: catch_unwind<std::rt::lang_start_internal::{closure_env#0}, isize> (panic.rs:359)"
+ ,"0x13F898: std::rt::lang_start_internal (rt.rs:171)"
+ ,"0x1326CF: alloc (alloc.rs:130)"
+ ,"0x1326CF: alloc_impl_runtime (alloc.rs:302)"
+ ,"0x1326CF: alloc_impl (alloc.rs:424)"
+ ,"0x1326CF: allocate (alloc.rs:541)"
+ ,"0x1326CF: <alloc::raw_vec::RawVecInner>::finish_grow (mod.rs:560)"
+ ,"0x131FAE: grow_amortized<alloc::alloc::Global> (mod.rs:529)"
+ ,"0x131FAE: grow_one<alloc::alloc::Global> (mod.rs:493)"
+ ,"0x131FAE: <alloc::raw_vec::RawVec<alloc::vec::Vec<u8>>>::grow_one (mod.rs:188)"
+ ,"0x11C918: push_mut<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global> (library/alloc/src/vec/mod.rs:1033)"
+ ,"0x11C918: push<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global> (library/alloc/src/vec/mod.rs:996)"
+ ,"0x11C918: rleak::main (main.rs:9)"
+ ,"0x11C7DD: alloc_zeroed (library/alloc/src/alloc.rs:290)"
+ ,"0x11C7DD: alloc_impl_runtime (library/alloc/src/alloc.rs:302)"
+ ,"0x11C7DD: alloc_impl (library/alloc/src/alloc.rs:424)"
+ ,"0x11C7DD: allocate_zeroed (library/alloc/src/alloc.rs:547)"
+ ,"0x11C7DD: try_allocate_in<alloc::alloc::Global> (library/alloc/src/raw_vec/mod.rs:468)"
+ ,"0x11C7DD: with_capacity_zeroed_in<alloc::alloc::Global> (library/alloc/src/raw_vec/mod.rs:587)"
+ ,"0x11C7DD: with_capacity_zeroed_in<u8, alloc::alloc::Global> (library/alloc/src/raw_vec/mod.rs:221)"
+ ,"0x11C7DD: from_elem<alloc::alloc::Global> (library/alloc/src/vec/spec_from_elem.rs:51)"
+ ,"0x11C7DD: from_elem<u8> (library/alloc/src/vec/mod.rs:3773)"
+ ,"0x11C7DD: rleak::fill_cache (main.rs:7)"
+ ,"0x11CA27: rleak::main (main.rs:10)"
+ ,"0x11CA9E: push_mut<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global> (library/alloc/src/vec/mod.rs:1033)"
+ ,"0x11CA9E: push<alloc::vec::Vec<u8, alloc::alloc::Global>, alloc::alloc::Global> (library/alloc/src/vec/mod.rs:996)"
+ ,"0x11CA9E: rleak::main (main.rs:10)"
+ ]
+}

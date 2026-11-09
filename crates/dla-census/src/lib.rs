@@ -236,6 +236,26 @@ struct Found {
     unreadable: usize,
 }
 
+/// Sorts the holders and drops repeats of one declaration. Coroutine captures share the
+/// suspension point line and holder class, so their owner (the spilled field) is part
+/// of the identity.
+fn sort_dedup(raws: &mut Vec<Raw>) {
+    raws.sort_by(|a, b| {
+        (&a.file, a.line, a.holder.as_str(), &a.owner).cmp(&(
+            &b.file,
+            b.line,
+            b.holder.as_str(),
+            &b.owner,
+        ))
+    });
+    raws.dedup_by(|b, a| {
+        a.file == b.file
+            && a.line == b.line
+            && a.holder == b.holder
+            && (a.kind != "coroutine-capture" || a.owner == b.owner)
+    });
+}
+
 fn enumerate(ctx: &ToolCtx, runtime: Runtime, files: &[SourceFile]) -> Found {
     let mut raws: Vec<Raw> = Vec::new();
     let mut covered = std::collections::HashSet::new();
@@ -291,15 +311,7 @@ fn enumerate(ctx: &ToolCtx, runtime: Runtime, files: &[SourceFile]) -> Found {
         }
         raws.extend(cx.out);
     }
-    raws.sort_by(|a, b| {
-        (&a.file, a.line, a.holder.as_str(), &a.owner).cmp(&(
-            &b.file,
-            b.line,
-            b.holder.as_str(),
-            &b.owner,
-        ))
-    });
-    raws.dedup_by(|b, a| a.file == b.file && a.line == b.line && a.holder == b.holder);
+    sort_dedup(&mut raws);
     Found {
         raws,
         source,
@@ -310,3 +322,37 @@ fn enumerate(ctx: &ToolCtx, runtime: Runtime, files: &[SourceFile]) -> Found {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+    use crate::model::SourceFile;
+    use crate::parse::Lang;
+
+    #[test]
+    fn coroutine_captures_at_one_suspension_point_all_survive() {
+        let t = tempfile::tempdir().unwrap();
+        let fx = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/kotlin_metadata/LeakyKt$handle$1.class");
+        let dir = t.path().join("target/classes/shop");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(fx, dir.join("LeakyKt$handle$1.class")).unwrap();
+        let src = SourceFile {
+            rel: "src/shop/Leaky.kt".into(),
+            text: "package shop\n".into(),
+            lang: Lang::Kotlin,
+            is_test: false,
+        };
+        let mut raws = jvm_class::holders(t.path(), std::slice::from_ref(&src)).raws;
+        sort_dedup(&mut raws);
+        let owners: Vec<&str> = raws
+            .iter()
+            .filter(|r| r.kind == "coroutine-capture")
+            .map(|r| r.owner.as_str())
+            .collect();
+        assert_eq!(
+            owners,
+            ["shop.LeakyKt$handle$1.L$0", "shop.LeakyKt$handle$1.L$1"]
+        );
+    }
+}

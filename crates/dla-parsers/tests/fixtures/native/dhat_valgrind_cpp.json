@@ -1,0 +1,59 @@
+{"dhatFileVersion":2
+,"mode":"heap","verb":"Allocated"
+,"bklt":true,"bkacc":true
+,"tu":"instrs","Mtu":"Minstr"
+,"tuth":500
+,"cmd":"./leakcc 40"
+,"pid":31146
+,"te":2092317
+,"tg":2075590
+,"pps":
+ [{"tb":73728,"tbk":1
+  ,"tl":38337
+  ,"mb":73728,"mbk":1
+  ,"gb":73728,"gbk":1
+  ,"eb":0,"ebk":0
+  ,"rb":0,"wb":16
+  ,"fs":[1,2,3,4,5,6,7,8,9]
+  }
+ ,{"tb":40000,"tbk":40
+  ,"tl":1066247
+  ,"mb":40000,"mbk":40
+  ,"gb":40000,"gbk":40
+  ,"eb":40000,"ebk":40
+  ,"rb":0,"wb":40320
+  ,"acc":[-992,40,-8,80]
+  ,"fs":[10,11,12]
+  }
+ ,{"tb":1016,"tbk":7
+  ,"tl":25854
+  ,"mb":768,"mbk":2
+  ,"gb":512,"gbk":1
+  ,"eb":0,"ebk":0
+  ,"rb":504,"wb":824
+  ,"fs":[10,13,14,15,16,17,18,19,12]
+  }
+ ]
+,"ftbl":
+ ["[root]"
+ ,"0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_dhat-amd64-linux.so)"
+ ,"0x491C38E: ??? (in /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33)"
+ ,"0x400571E: call_init.part.0 (dl-init.c:74)"
+ ,"0x4005823: call_init (dl-init.c:120)"
+ ,"0x4005823: _dl_init (dl-init.c:121)"
+ ,"0x401F59F: ??? (in /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2)"
+ ,"0x1: ???"
+ ,"0x1FFEFFEB56: ???"
+ ,"0x1FFEFFEB5F: ???"
+ ,"0x4846FA3: operator new(unsigned long) (in /usr/libexec/valgrind/vgpreload_dhat-amd64-linux.so)"
+ ,"0x109292: add_session() (leak.cc:5)"
+ ,"0x109390: main (leak.cc:6)"
+ ,"0x109EE3: std::__new_allocator<Session*>::allocate(unsigned long, void const*) (new_allocator.h:151)"
+ ,"0x109BF6: allocate (alloc_traits.h:482)"
+ ,"0x109BF6: std::_Vector_base<Session*, std::allocator<Session*> >::_M_allocate(unsigned long) (stl_vector.h:381)"
+ ,"0x1097D4: void std::vector<Session*, std::allocator<Session*> >::_M_realloc_insert<Session*>(__gnu_cxx::__normal_iterator<Session**, std::vector<Session*, std::allocator<Session*> > >, Session*&&) (vector.tcc:459)"
+ ,"0x1096AD: Session*& std::vector<Session*, std::allocator<Session*> >::emplace_back<Session*>(Session*&&) (vector.tcc:123)"
+ ,"0x109523: std::vector<Session*, std::allocator<Session*> >::push_back(Session*&&) (stl_vector.h:1299)"
+ ,"0x1092F2: add_session() (leak.cc:5)"
+ ]
+}

@@ -96,8 +96,8 @@ pub fn group(samples: &[Sample]) -> AllocProfile {
         let e = by
             .entry((stack_key, s.root_path.clone(), s.kind.clone()))
             .or_insert((idx, 0, 0));
-        e.1 += s.size;
-        e.2 += 1;
+        e.1 = e.1.saturating_add(s.size);
+        e.2 = e.2.saturating_add(1);
     }
     let mut groups: Vec<AllocGroup> = by
         .into_values()
@@ -139,6 +139,8 @@ enum Section {
 struct Event {
     section: Section,
     size: u64,
+    /// The unreadable `objectSize` text, if any.
+    bad_size: Option<String>,
     /// Raw chain lines, leaf first.
     chain: Vec<String>,
     root_system: Option<String>,
@@ -152,7 +154,10 @@ impl Event {
         match self.section {
             Section::Top => {
                 if let Some(v) = t.strip_prefix("objectSize = ") {
-                    self.size = parse_size(v);
+                    match parse_size(v) {
+                        Some(n) => self.size = n,
+                        None => self.bad_size = Some(v.trim().to_owned()),
+                    }
                 } else if t.starts_with("object = ") && t.ends_with('[') {
                     self.section = Section::Object;
                 } else if t.starts_with("root = ") && t.ends_with('{') {
@@ -193,6 +198,11 @@ impl Event {
                 "line {lno}: a jdk.OldObjectSample event ends inside a bracketed block"
             )));
         }
+        if let Some(v) = &self.bad_size {
+            return Err(ParseError::new(format!(
+                "line {lno}: cannot read objectSize `{v}`; run `jfr -J-Duser.language=en -J-Duser.country=US print --stack-depth 64 --events jdk.OldObjectSample <file.jfr>` so numbers print in English"
+            )));
+        }
         let Some(leaf) = self.chain.first() else {
             return Err(ParseError::new(format!(
                 "line {lno}: a jdk.OldObjectSample event has no `object = [ ... ]` block"
@@ -212,7 +222,22 @@ impl Event {
             if ty == "java.lang.Class"
                 && let Some(class) = desc.strip_prefix("Class Name: ")
             {
+                // A field of the Class object itself, not a static of that class.
+                if CLASS_INSTANCE_FIELDS.contains(&field) {
+                    continue;
+                }
                 let class = deproxy::normalize(class.trim());
+                let class = if class.ends_with("...") {
+                    // JFR cut the name at about 86 characters. Recover it from the
+                    // stack when exactly one class there starts with the prefix.
+                    match full_class_name(class.trim_end_matches("..."), &self.frames) {
+                        Some(full) => std::borrow::Cow::Owned(full),
+                        // No key rather than a malformed one; the path starts at `root:`.
+                        None => break,
+                    }
+                } else {
+                    class
+                };
                 holder = Some(format!("static:{class}.{field}"));
                 holder_at = Some(i);
                 break;
@@ -253,6 +278,40 @@ impl Event {
             root_path,
         })
     }
+}
+
+/// Instance fields of `java.lang.Class` that JFR prints in a chain like a static field.
+const CLASS_INSTANCE_FIELDS: [&str; 15] = [
+    "classLoader",
+    "classData",
+    "classValueMap",
+    "reflectionData",
+    "classRedefinedCount",
+    "genericInfo",
+    "enumConstants",
+    "enumConstantDirectory",
+    "annotationData",
+    "annotationType",
+    "componentType",
+    "module",
+    "name",
+    "packageName",
+    "cachedConstructor",
+];
+
+/// The one class in `frames` whose name starts with `prefix`, if there is exactly one.
+fn full_class_name(prefix: &str, frames: &[Frame]) -> Option<String> {
+    let mut found: Option<&str> = None;
+    for f in frames {
+        let c = super::class_of_function(&f.function);
+        if c.starts_with(prefix) && c.len() > prefix.len() {
+            match found {
+                Some(prev) if prev != c => return None,
+                _ => found = Some(c),
+            }
+        }
+    }
+    found.map(|c| deproxy::normalize(c).into_owned())
 }
 
 /// The class name of one chain line, normalized and without array lengths.
@@ -300,18 +359,22 @@ fn parse_frame(t: &str) -> Frame {
     }
 }
 
-/// `2.0 kB`, `512.0 kB`, `32 bytes`, `1.5 MB`, using powers of 1024 as JFR does.
-fn parse_size(v: &str) -> u64 {
-    let v = v.trim();
+/// `2.0 kB`, `512.0 kB`, `32 bytes`, `1.5 MB`, using powers of 1024 as JFR does. A
+/// decimal comma (`2,0 kB`, printed under many locales) is accepted. `None` when the
+/// number is unreadable, negative or not finite.
+fn parse_size(v: &str) -> Option<u64> {
     let mut it = v.split_whitespace();
-    let num: f64 = it.next().and_then(|n| n.parse().ok()).unwrap_or(0.0);
+    let num: f64 = it.next()?.replacen(',', ".", 1).parse().ok()?;
+    if !num.is_finite() || num < 0.0 {
+        return None;
+    }
     let mult = match it.next().unwrap_or("bytes") {
         "kB" | "KB" => 1024.0,
         "MB" => 1024.0 * 1024.0,
         "GB" => 1024.0 * 1024.0 * 1024.0,
         _ => 1.0,
     };
-    (num * mult).round() as u64
+    Some((num * mult).round() as u64)
 }
 
 #[cfg(test)]
@@ -392,8 +455,78 @@ mod tests {
 
     #[test]
     fn sizes() {
-        assert_eq!(parse_size("32 bytes"), 32);
-        assert_eq!(parse_size("1.5 MB"), 1_572_864);
-        assert_eq!(parse_size("garbage"), 0);
+        assert_eq!(parse_size("32 bytes"), Some(32));
+        assert_eq!(parse_size("1.5 MB"), Some(1_572_864));
+        assert_eq!(parse_size("garbage"), None);
+        assert_eq!(parse_size("inf kB"), None);
+        assert_eq!(parse_size("-1 kB"), None);
+    }
+
+    #[test]
+    fn decimal_comma_sizes() {
+        assert_eq!(parse_size("2,0 kB"), Some(2048));
+        assert_eq!(parse_size("256,0 kB"), Some(262_144));
+        let ev = EVENT.replace("objectSize = 2.0 kB", "objectSize = 2,0 kB");
+        assert_eq!(parse_samples(&ev).unwrap()[0].size, 2048);
+        let bad = EVENT.replace(
+            "objectSize = 2.0 kB",
+            "objectSize = \u{662}\u{66b}\u{660} kB",
+        );
+        let e = parse_samples(&bad).unwrap_err();
+        assert!(e.message().contains("user.language=en"), "{e}");
+    }
+
+    #[test]
+    fn huge_sizes_do_not_overflow() {
+        let two = format!("{EVENT}{}", EVENT.replace("2.0 kB", "1e300 bytes"));
+        let three = format!("{two}{}", EVENT.replace("2.0 kB", "1e300 bytes"));
+        let p = parse(&three).unwrap();
+        assert!(p.groups.iter().any(|g| g.live_bytes == u64::MAX));
+    }
+
+    #[test]
+    fn truncated_class_name_is_not_a_key() {
+        let long = "com.acmecorporation.platform.subscriptions.billing.internal.caching.SubscriptionEnt...";
+        let ev = EVENT.replace("com.acme.SessionCache", long);
+        // No frame names the class: no malformed `static:` key.
+        let s = &parse_samples(&ev).unwrap()[0];
+        assert_eq!(s.holder, None);
+        assert!(s.root_path[0].starts_with("root:"), "{:?}", s.root_path);
+        // A stack frame of the class gives the full name back.
+        let full = "com.acmecorporation.platform.subscriptions.billing.internal.caching.SubscriptionEntitlementSnapshotRegistry";
+        let ev2 = ev.replace(
+            "    ...\n",
+            &format!("    {full}.load() line: 3\n    ...\n"),
+        );
+        let s = &parse_samples(&ev2).unwrap()[0];
+        assert_eq!(
+            s.holder.as_deref(),
+            Some(format!("static:{full}.SESSIONS").as_str())
+        );
+    }
+
+    #[test]
+    fn class_mirror_instance_field_is_not_a_static() {
+        let ev = "jdk.OldObjectSample {
+  objectSize = 512 bytes
+  object =  [
+    byte[512]
+    [3] : java.lang.Object[360145]
+    elementData : java.util.ArrayList Size: 5
+    cacheArray : java.lang.ClassValue$ClassValueMap Size: 1
+    classValueMap : java.lang.Class Class Name: com.acme.Leak
+    appClass : java.lang.Class Class Name: sun.launcher.LauncherHelper
+  ]
+  root = {
+    system = \"VM Global\"
+  }
+}
+";
+        let s = &parse_samples(ev).unwrap()[0];
+        assert_eq!(
+            s.holder.as_deref(),
+            Some("static:sun.launcher.LauncherHelper.appClass")
+        );
+        assert!(!s.root_path.iter().any(|p| p.contains("classValueMap")));
     }
 }

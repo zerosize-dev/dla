@@ -213,3 +213,106 @@ fn a_broken_census_file_is_skipped() {
     assert!(attribution::census_entries(&run).is_empty());
     assert!(attribution::resolve(&run, &project, "a.B.c").is_none());
 }
+
+#[test]
+fn a_class_of_another_package_never_resolves_to_a_same_named_project_file() {
+    let t = tempfile::tempdir().unwrap();
+    let (project, run) = (t.path().join("p"), t.path().join("run"));
+    fs::create_dir_all(&run).unwrap();
+    put(
+        &project,
+        "src/main/java/app/desk/RfqDesk.java",
+        "package app.desk;\n\nclass RfqDesk {\n  static int[] OPEN = new int[1];\n}\n",
+    );
+    put(
+        &project,
+        "src/shop/Pool.java",
+        "package shop;\nclass Pool { void spawn() {} }\n",
+    );
+    // Only app.desk.RfqDesk exists.
+    assert!(attribution::resolve(&run, &project, "static:quotes.RfqDesk.OPEN").is_none());
+    assert_eq!(
+        attribution::resolve(&run, &project, "static:app.desk.RfqDesk.OPEN")
+            .unwrap()
+            .site,
+        "src/main/java/app/desk/RfqDesk.java:4"
+    );
+    // A library frame is not a project frame.
+    let r = Resolver::new(&run, &project);
+    assert_eq!(
+        r.frame_site("org.lib.Pool.spawn", Some("Pool.java"), Some(77)),
+        None
+    );
+    assert_eq!(
+        r.frame_site("shop.Pool.spawn", Some("Pool.java"), Some(2))
+            .as_deref(),
+        Some("src/shop/Pool.java:2")
+    );
+    // Two files of one name, neither in the package asked for.
+    put(
+        &project,
+        "src/a/Dup.java",
+        "package a;\nclass Dup {\n  static int[] big = new int[9];\n}\n",
+    );
+    put(
+        &project,
+        "src/b/Dup.java",
+        "package b;\nclass Dup {\n  static int[] big = new int[9];\n}\n",
+    );
+    assert!(attribution::resolve(&run, &project, "static:c.Dup.big").is_none());
+    // A package outside the directory layout is read from the `package` line; a path
+    // that merely ends like the package does not count.
+    put(
+        &project,
+        "src/shaded/a/Cache.java",
+        "package shaded.a;\nclass Cache {\n  static int[] MAP = null;\n}\n",
+    );
+    assert!(attribution::resolve(&run, &project, "static:a.Cache.MAP").is_none());
+    put(
+        &project,
+        "flat/Flat.kt",
+        "package x.y\n\nobject Flat {\n    val items = mutableListOf<String>()\n}\n",
+    );
+    assert_eq!(
+        attribution::resolve(&run, &project, "static:x.y.Flat.items")
+            .unwrap()
+            .site,
+        "flat/Flat.kt:4"
+    );
+}
+
+#[test]
+fn kotlin_facade_and_companion_names_are_one_owner_with_the_census_names() {
+    assert!(attribution::owners_match("a.b.top", "static:a.b.AKt.top"));
+    assert!(attribution::owners_match(
+        "shop.Svc.Companion.CACHE",
+        "static:shop.Svc.CACHE"
+    ));
+    assert_eq!(
+        attribution::canonical("a.b.AKt.top").as_deref(),
+        Some("a.b.top")
+    );
+    assert_eq!(
+        attribution::canonical("shop.Svc.Companion.CACHE").as_deref(),
+        Some("shop.Svc.CACHE")
+    );
+    // A class that merely ends in `Kt` in the middle of a package path, and a different
+    // property, are not folded.
+    assert!(!attribution::owners_match("a.b.top", "a.b.AKt.other"));
+    assert!(!attribution::owners_match("a.c.top", "a.b.AKt.top"));
+    // The facade's source file is `A.kt`.
+    let t = tempfile::tempdir().unwrap();
+    let (project, run) = (t.path().join("p"), t.path().join("run"));
+    fs::create_dir_all(&run).unwrap();
+    put(
+        &project,
+        "src/a/b/A.kt",
+        "package a.b\n\nval top = mutableListOf<String>()\n",
+    );
+    assert_eq!(
+        attribution::resolve(&run, &project, "static:a.b.AKt.top")
+            .unwrap()
+            .site,
+        "src/a/b/A.kt:3"
+    );
+}

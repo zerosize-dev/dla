@@ -111,3 +111,56 @@ fn malformed_files() {
     let empty = dhat::parse(r#"{"dhatFileVersion":2,"pps":[],"ftbl":["[root]"]}"#).unwrap();
     assert!(empty.profile.groups.is_empty());
 }
+
+#[test]
+fn valgrind_preload_and_operator_new_frames_are_dropped() {
+    let text = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/native/dhat_valgrind_cpp.json"),
+    )
+    .unwrap();
+    let r = dhat::parse(&text).unwrap();
+    for g in &r.profile.groups {
+        let f = &g.frames[0];
+        assert!(!f.function.starts_with("operator new"), "{f:?}");
+        assert!(
+            !f.module.as_deref().unwrap_or("").contains("/vgpreload_"),
+            "{f:?}"
+        );
+    }
+    // The `new Session()` site loses `operator new` and starts at the project function.
+    assert!(
+        r.profile
+            .groups
+            .iter()
+            .any(|g| g.frames[0].function == "add_session()")
+    );
+}
+
+#[test]
+fn rust_release_stacks_start_at_the_project_function() {
+    let text = std::fs::read_to_string(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/native/dhat_valgrind_rust.json"),
+    )
+    .unwrap();
+    let r = dhat::parse(&text).unwrap();
+    let mut keys = Vec::new();
+    for fname in ["rleak::open_session", "rleak::fill_cache"] {
+        let g = r
+            .profile
+            .groups
+            .iter()
+            .find(|g| g.frames.iter().any(|f| f.function == fname))
+            .unwrap_or_else(|| panic!("{fname} missing"));
+        assert_eq!(g.frames[0].function, fname);
+        keys.push(
+            g.frames
+                .iter()
+                .take(8)
+                .map(|f| f.function.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
+    assert_ne!(keys[0], keys[1]);
+}

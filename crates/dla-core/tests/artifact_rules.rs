@@ -37,7 +37,7 @@ const E_HARNESS: u32 = 8;
 const E_GROWTH_LIVE: u32 = 9;
 
 fn passed() -> serde_json::Value {
-    json!([{"column": "holder:static:Cache.entries", "region": "heap", "shape": "steady"}])
+    json!([{"column": "holder:static:com.acme.Cache.entries", "region": "heap", "shape": "steady"}])
 }
 
 fn growth(authority: Authority, gate: &str) -> dla_core::NewEvidence {

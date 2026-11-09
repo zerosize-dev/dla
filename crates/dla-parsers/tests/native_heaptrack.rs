@@ -84,7 +84,10 @@ fn c_leaks_peak_and_totals() {
 fn diff_between_two_runs_shows_the_growth() {
     let r = heaptrack::parse(&fixture("heaptrack_c_diff.txt")).unwrap();
     assert!(r.is_diff);
-    assert_eq!(r.commands.len(), 2);
+    // The order of the two commands is the order the reads finished, not new then base.
+    let mut cmds = r.commands.clone();
+    cmds.sort();
+    assert_eq!(cmds, ["./leak 1000", "./leak 3000"]);
     // 3000 iterations minus 1000: 2000 more blocks leaked per site.
     assert_eq!(r.leaks.len(), 2);
     assert_eq!(r.leaks[0].count, 2000);

@@ -1,5 +1,5 @@
 {
- "source": "jvm-thread-dump",
+ "source": "go-goroutine-dump",
  "timestamp_ms": 1800000030000,
  "metrics": [
   {

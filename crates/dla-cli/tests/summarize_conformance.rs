@@ -704,38 +704,51 @@ fn histograms(p: &Project, growing: &str) -> Vec<String> {
         .collect()
 }
 
+/// Sets the accumulation class that every dump summary of the run records for a holder.
+fn set_accumulation(p: &Project, holder_key: &str, class: &str) {
+    for e in fs::read_dir(p.run_dir.join("summaries")).unwrap().flatten() {
+        let mut s: Value = serde_json::from_str(&fs::read_to_string(e.path()).unwrap()).unwrap();
+        for h in s["holders"].as_array_mut().unwrap() {
+            if h["key"] == holder_key {
+                h["accumulation"]["class"] = json!(class);
+            }
+        }
+        fs::write(e.path(), s.to_string()).unwrap();
+    }
+}
+
+fn type_diff(p: &Project, files: &[String], extra: &[&str]) -> Value {
+    let mut args = vec!["summarize", "type-histogram-diff"];
+    args.extend_from_slice(extra);
+    args.extend(files.iter().map(String::as_str));
+    ok(p.path(), &args)
+}
+
+fn last_growth(p: &Project) -> Value {
+    p.evidence("growth-series").pop().unwrap()
+}
+
 #[test]
 fn a_growing_type_ties_to_the_finding_whose_accumulation_class_it_is() {
     let p = Project::new();
     p.put("src/app/Holder.java", HOLDER_JAVA.as_bytes());
     let f = census_finding(&p, "app.Holder.ITEMS", "src/app/Holder.java:8", &[]);
-    // The dump summaries say what piles up under app.Holder.ITEMS.
+    // The dump series passes for app.Holder.ITEMS; the summaries say what piles up under
+    // it. An ArrayList's own accumulation class is java.lang.Object[], which is generic.
     let dumps = three_dumps(&p);
     heap_graph(&p, &dumps, &[]);
-    let summary = fs::read_dir(p.run_dir.join("summaries"))
-        .unwrap()
-        .flatten()
-        .next()
-        .unwrap()
-        .path();
-    let s: Value = serde_json::from_str(&fs::read_to_string(summary).unwrap()).unwrap();
-    let acc = s["holders"][0]["accumulation"]["class"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let files = histograms(&p, &acc);
-    let mut args = vec!["summarize", "type-histogram-diff"];
-    args.extend(files.iter().map(String::as_str));
-    let v = ok(p.path(), &args);
+    let files = histograms(&p, "java.lang.Object[]");
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    // An application class the summary records for the holder ties to it.
+    set_accumulation(&p, "static:app.Holder.ITEMS", "app.Chunk");
+    let files = histograms(&p, "app.Chunk");
+    let v = type_diff(&p, &files, &[]);
     assert_eq!(v["gate"], "pass", "{v}");
     assert_eq!(v["backend"], "jcmd-class-histogram");
     assert_eq!(v["tied"][0], f.as_str(), "{v}");
-    let g = p
-        .evidence("growth-series")
-        .into_iter()
-        .rev()
-        .find(|e| e["tool"]["name"] == "jcmd-class-histogram")
-        .unwrap();
+    let g = last_growth(&p);
     let tied: Vec<&Value> = g["result"]["passed"]
         .as_array()
         .unwrap()
@@ -743,13 +756,15 @@ fn a_growing_type_ties_to_the_finding_whose_accumulation_class_it_is() {
         .filter(|c| c["finding"] == f.as_str())
         .collect();
     assert_eq!(tied.len(), 1, "{g}");
+    assert_eq!(tied[0]["column"], "type:app.Chunk");
+    assert_eq!(tied[0]["tie"]["rule"], "type");
+    assert_eq!(tied[0]["tie"]["key"], "app.Chunk");
     assert!(ledger_rule_ties(
         &g,
         &f,
         Some("src/app/Holder.java:8"),
         Some("app.Holder.ITEMS")
     ));
-    assert!(tied[0]["column"].as_str().unwrap().contains(&acc), "{g}");
     // The histogram-diff evidence names the top growing types and the monotone ones.
     let d = p.evidence("histogram-diff").pop().unwrap();
     assert_eq!(d["authority"], "live");
@@ -775,6 +790,7 @@ fn a_growing_type_the_owner_declares_ties_to_its_finding() {
         .find(|c| c["column"] == "type:app.Item")
         .unwrap();
     assert_eq!(item["finding"], f.as_str());
+    assert_eq!(item["tie"]["rule"], "type");
     assert!(ledger_rule_ties(&g, &f, None, None));
     let other = cols.iter().find(|c| c["column"] == "type:byte[]").unwrap();
     assert!(
@@ -783,52 +799,77 @@ fn a_growing_type_the_owner_declares_ties_to_its_finding() {
     );
 }
 
+fn add_hypothesis(p: &Project, extra: &[&str]) -> String {
+    let mut args = vec![
+        "ledger",
+        "add",
+        "--origin",
+        "hypothesis",
+        "--evidence",
+        "E1",
+    ];
+    args.extend_from_slice(extra);
+    ok(p.path(), &args)["id"].as_str().unwrap().to_owned()
+}
+
 #[test]
-fn a_growing_type_that_names_no_finding_stays_untied_unless_the_caller_says_so() {
+fn a_growing_type_that_names_no_finding_stays_untied_and_finding_forces_nothing() {
     let p = Project::new();
     let files = histograms(&p, "shop.Entry");
-    let mut args = vec!["summarize", "type-histogram-diff"];
-    args.extend(files.iter().map(String::as_str));
-    let v = ok(p.path(), &args);
+    let v = type_diff(&p, &files, &[]);
     assert_eq!(v["gate"], "pass");
     assert_eq!(v["tied"].as_array().unwrap().len(), 0);
-    assert!(v["needed"].as_str().unwrap().contains("--finding"), "{v}");
-    let g = p.evidence("growth-series").pop().unwrap();
+    assert!(v["needed"].as_str().unwrap().contains("heap-graph"), "{v}");
+    assert!(!v["needed"].as_str().unwrap().contains("--finding"), "{v}");
+    let g = last_growth(&p);
     for c in g["result"]["passed"].as_array().unwrap() {
         assert!(c["finding"].is_null() && c["candidates"].is_null(), "{c}");
     }
-    // `--finding` ties the best passing column to the finding.
-    ok(
-        p.path(),
-        &[
-            "ledger",
-            "add",
-            "--origin",
-            "hypothesis",
-            "--evidence",
-            "E1",
-            "--owner",
-            "shop.Cache.entries",
-        ],
+    // `--finding` on growth that ties to nothing ties nothing: the passing columns stay
+    // untied, the finding is not annotated, and the output says what is missing.
+    let f = add_hypothesis(&p, &["--owner", "shop.Cache.entries"]);
+    let lines_before = p.ledger_lines().len();
+    let v = type_diff(&p, &files, &["--finding", &f]);
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    assert!(v.get("tie").is_none(), "{v}");
+    assert!(
+        v["needed"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("no passing column ties to {f}")),
+        "{v}"
     );
-    let mut args = vec!["summarize", "type-histogram-diff", "--finding", "F1"];
-    args.extend(files.iter().map(String::as_str));
-    let v = ok(p.path(), &args);
-    assert_eq!(v["tied"][0], "F1");
-    assert_eq!(v["tie"], "tied by --finding");
-    let e = refused(
-        p.path(),
-        &[
-            "summarize",
-            "type-histogram-diff",
-            "--finding",
-            "F9",
-            &files[0],
-            &files[1],
-            &files[2],
-        ],
+    let g = last_growth(&p);
+    for c in g["result"]["passed"].as_array().unwrap() {
+        assert!(c["finding"].is_null() && c["candidates"].is_null(), "{c}");
+    }
+    assert!(!ledger_rule_ties(&g, &f, None, Some("shop.Cache.entries")));
+    assert!(
+        p.ledger_lines()
+            .iter()
+            .skip(lines_before)
+            .all(|l| l["type"] != "finding_annotated"),
+        "no annotation"
     );
-    assert_eq!(e["code"], "unknown-finding");
+}
+
+#[test]
+fn an_unknown_finding_is_refused_before_anything_is_written() {
+    let p = Project::new();
+    let files = histograms(&p, "shop.Entry");
+    for n in [3, 2] {
+        let before = p.ledger_lines().len();
+        let mut args = vec!["summarize", "type-histogram-diff", "--finding", "F9"];
+        args.extend(files.iter().take(n).map(String::as_str));
+        let e = refused(p.path(), &args);
+        assert_eq!(e["code"], "unknown-finding");
+        assert_eq!(
+            p.ledger_lines().len(),
+            before,
+            "{n} captures wrote evidence"
+        );
+        assert!(!p.run_dir.join("histograms").exists());
+    }
 }
 
 #[test]
@@ -889,51 +930,85 @@ fn harness_dump_types_and_hprof_class_stats_feed_the_same_diff() {
 
 const POOL_JAVA: &str = "package shop;\n\npublic final class Pool {\n    static void spawn() {\n        new Thread(() -> {}).start();\n    }\n}\n";
 
+/// One allocation group: `(function, file, line)` frames, live bytes, root path.
+fn grp(frames: &[(&str, &str, u32)], live: u64, root: &[&str]) -> Value {
+    json!({
+        "frames": frames.iter().map(|(f, file, l)| json!(
+            {"function": f, "file": file, "line": l, "module": null})).collect::<Vec<_>>(),
+        "live_bytes": live, "live_blocks": live / 100, "total_bytes": live * 3,
+        "root_path": root, "kind": null,
+    })
+}
+
+/// Three profiles whose groups come from `groups(i)` for i = 1, 2, 3.
+fn alloc_profiles(p: &Project, groups: impl Fn(u64) -> Vec<Value>) -> Vec<String> {
+    (1..=3u64)
+        .map(|i| {
+            let prof = json!({"source": "jfr", "timestamp_ms": T0 + i * 1000, "sampled": false,
+                "groups": groups(i)});
+            p.put(&format!("allocs/q{i}.json"), prof.to_string().as_bytes())
+        })
+        .collect()
+}
+
+fn alloc_diff(p: &Project, files: &[String], extra: &[&str]) -> Value {
+    let mut args = vec![
+        "summarize",
+        "alloc-stack-diff",
+        "--backend",
+        "dla-alloc-json",
+    ];
+    args.extend_from_slice(extra);
+    args.extend(files.iter().map(String::as_str));
+    ok(p.path(), &args)
+}
+
+fn annotations(p: &Project) -> Vec<Value> {
+    p.ledger_lines()
+        .into_iter()
+        .filter(|l| l["type"] == "finding_annotated")
+        .collect()
+}
+
+const SESSION_JAVA: &str = "package com.acme;\n\npublic final class Session {\n    byte[] data;\n    Session() {}\n    static void open() { new Session(); }\n    void a() {}\n    void b() {}\n    void c() {}\n    Session(int x) {}\n}\n";
+
 #[test]
 fn an_alloc_stack_ties_by_the_findings_writers_or_its_root_owner() {
     let fx = Fixture::load("dla-alloc-json").unwrap();
-    // By writers: the finding lists the stack's project frame.
+    // A stack with no root path ties by its first project frame to the finding whose
+    // site or census/user writers include it.
     let p = Project::new();
     p.put("src/trail.rs", &[b'\n'; 60]);
-    p.put("src/cache.rs", &[b'\n'; 20]);
-    let files = fx.materialize(&p);
-    ok(
-        p.path(),
-        &[
-            "ledger",
-            "add",
-            "--origin",
-            "hypothesis",
-            "--evidence",
-            "E1",
-            "--site",
-            "src/trail.rs:12",
-        ],
-    );
+    let files = alloc_profiles(&p, |i| {
+        vec![grp(
+            &[("shop::trail::record", "src/trail.rs", 40)],
+            1000 * i,
+            &[],
+        )]
+    });
+    add_hypothesis(&p, &["--site", "src/trail.rs:12"]);
     ok(
         p.path(),
         &["ledger", "annotate", "F1", "--writer", "src/trail.rs:40"],
     );
-    let v = ok(
-        p.path(),
-        &summarize_args("alloc-stack-diff", "dla-alloc-json", &files),
-    );
+    let v = alloc_diff(&p, &files, &[]);
     assert_eq!(v["gate"], "pass", "{v}");
     assert_eq!(v["tied"][0], "F1", "{v}");
-    let g = p.evidence("growth-series").pop().unwrap();
+    let g = last_growth(&p);
     let col = &g["result"]["passed"][0];
     assert_eq!(col["finding"], "F1");
-    assert_eq!(col["site"], "src/trail.rs:40");
+    assert_eq!(col["tie"]["rule"], "site");
+    assert_eq!(col["tie"]["key"], "src/trail.rs:40");
     assert!(ledger_rule_ties(&g, "F1", Some("src/trail.rs:12"), None));
     assert_eq!(g["result"]["passed"].as_array().unwrap().len(), 1, "{g}");
-    // The alloc-stack evidence records live bytes by stack.
-    let a = p.evidence("alloc-stack").pop().unwrap();
-    assert_eq!(a["result"]["live"], true);
-    assert_eq!(a["result"]["top"][0]["d_bytes"], 4900);
+    // No holder was named, and a site tie learns no writer.
+    assert_eq!(annotations(&p).len(), 1);
 
-    // By the root path's owner: a finding of that owner, no writers needed.
+    // By the root path's owner: a finding of that owner, no writers needed. A fixture
+    // stack names its holder, and with an owner that is the finding's.
     let q = Project::new();
     q.put("src/trail.rs", &[b'\n'; 60]);
+    q.put("src/cache.rs", &[b'\n'; 20]);
     let files = fx.materialize(&q);
     ok(
         q.path(),
@@ -950,29 +1025,724 @@ fn an_alloc_stack_ties_by_the_findings_writers_or_its_root_owner() {
             "shop.codec.Audit.trail",
         ],
     );
-    let v = ok(
-        q.path(),
-        &summarize_args("alloc-stack-diff", "dla-alloc-json", &files),
-    );
+    let v = alloc_diff(&q, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
     assert_eq!(v["tied"][0], "F1", "{v}");
-    // The allocation site is recorded as a writer of the finding.
-    let ann = q
-        .ledger_lines()
-        .into_iter()
-        .find(|l| l["type"] == "finding_annotated")
-        .unwrap_or_else(|| panic!("no annotation"));
-    assert_eq!(ann["writers"][0], "src/trail.rs:40");
-
-    // No finding: the stack names an owner the resolver cannot find, so nothing is made up.
+    let g = last_growth(&q);
+    assert_eq!(g["result"]["passed"][0]["tie"]["rule"], "holder");
+    assert_eq!(
+        g["result"]["passed"][0]["tie"]["key"],
+        "shop.codec.Audit.trail"
+    );
+    // The allocation site is recorded as a writer of the holder's finding.
+    let ann = annotations(&q);
+    assert_eq!(ann[0]["writers"][0], "src/trail.rs:40", "{ann:?}");
+    // The stack named a holder: a finding that only has the stack's site is not tied.
     let r = Project::new();
     r.put("src/trail.rs", &[b'\n'; 60]);
     let files = fx.materialize(&r);
-    let v = ok(
-        r.path(),
-        &summarize_args("alloc-stack-diff", "dla-alloc-json", &files),
-    );
+    add_hypothesis(&r, &["--site", "src/trail.rs:40"]);
+    let v = alloc_diff(&r, &files, &[]);
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    // No finding: the stack names an owner the resolver cannot find, so nothing is made up.
+    let t = Project::new();
+    t.put("src/trail.rs", &[b'\n'; 60]);
+    let files = fx.materialize(&t);
+    let v = alloc_diff(&t, &files, &[]);
     assert_eq!(v["tied"].as_array().unwrap().len(), 0);
-    assert!(r.findings().is_empty());
+    assert!(t.findings().is_empty());
+}
+
+#[test]
+fn a_jfr_shaped_root_path_ties_by_its_holder_and_never_by_a_chain_class() {
+    let p = Project::new();
+    p.put("src/com/acme/Session.java", SESSION_JAVA.as_bytes());
+    p.put(
+        "src/com/acme/SessionCache.java",
+        b"package com.acme;\n\nfinal class SessionCache {\n    static final java.util.Map<String, Session> SESSIONS = new java.util.HashMap<>();\n}\n",
+    );
+    let f = add_hypothesis(&p, &["--owner", "com.acme.SessionCache.SESSIONS"]);
+    let chain = [
+        "static:com.acme.SessionCache.SESSIONS",
+        "java.util.HashMap",
+        "java.util.HashMap$Node[]",
+        "java.util.HashMap$Node",
+        "com.acme.Session",
+        "byte[]",
+    ];
+    let files = alloc_profiles(&p, |i| {
+        vec![grp(
+            &[("com.acme.Session.open", "Session.java", 6)],
+            4000 * i,
+            &chain,
+        )]
+    });
+    let v = alloc_diff(&p, &files, &[]);
+    assert_eq!(v["tied"][0], f.as_str(), "{v}");
+    assert_eq!(
+        p.findings().len(),
+        1,
+        "no candidate named after a chain class"
+    );
+    let g = last_growth(&p);
+    assert_eq!(
+        g["result"]["passed"][0]["tie"]["key"],
+        "com.acme.SessionCache.SESSIONS"
+    );
+    // A chain class is not a holder: a path that starts with one ties to nothing and
+    // creates nothing.
+    let q = Project::new();
+    q.put("src/com/acme/Session.java", SESSION_JAVA.as_bytes());
+    add_hypothesis(&q, &["--owner", "com.acme.Session.data"]);
+    let files = alloc_profiles(&q, |i| {
+        vec![grp(
+            &[("com.acme.Session.open", "Session.java", 6)],
+            4000 * i,
+            &["java.util.ArrayList", "com.acme.Session"],
+        )]
+    });
+    let v = alloc_diff(&q, &files, &[]);
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    assert_eq!(q.findings().len(), 1);
+}
+
+#[test]
+fn stacks_of_different_holders_stay_apart_and_constructors_are_not_writers() {
+    let p = Project::new();
+    p.put("src/com/acme/Session.java", SESSION_JAVA.as_bytes());
+    let f1 = add_hypothesis(&p, &["--owner", "shop.Cache.recent"]);
+    let f2 = add_hypothesis(&p, &["--owner", "shop.Cache.active"]);
+    // Same frames, two holders: only `active` grows.
+    let ctor = [("com.acme.Session.<init>", "Session.java", 5)];
+    let files = alloc_profiles(&p, |i| {
+        vec![
+            grp(
+                &ctor,
+                5000,
+                &["static:shop.Cache.recent", "java.util.ArrayList"],
+            ),
+            grp(
+                &ctor,
+                4000 * i,
+                &["static:shop.Cache.active", "java.util.ArrayList"],
+            ),
+        ]
+    });
+    let v = alloc_diff(&p, &files, &[]);
+    assert_eq!(v["tied"], json!([f2]), "{v}");
+    let g = last_growth(&p);
+    let cols = g["result"]["passed"].as_array().unwrap();
+    assert_eq!(cols.len(), 1, "{g}");
+    assert_eq!(cols[0]["finding"], f2.as_str());
+    assert!(!ledger_rule_ties(&g, &f1, None, None));
+    // A constructor frame is not learned as a writer.
+    assert!(
+        annotations(&p)
+            .iter()
+            .all(|a| a["writers"].as_array().is_none_or(Vec::is_empty)),
+        "{:?}",
+        annotations(&p)
+    );
+    // A later stack at the same constructor under another holder ties to no one.
+    let files = alloc_profiles(&p, |i| {
+        vec![grp(
+            &ctor,
+            4000 * i,
+            &["static:shop.Other.recent", "java.util.ArrayList"],
+        )]
+    });
+    let v = alloc_diff(&p, &files, &[]);
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+}
+
+#[test]
+fn finding_on_unmatched_stacks_ties_nothing_and_annotates_nothing() {
+    let p = Project::new();
+    p.put("src/unrelated.rs", &[b'\n'; 30]);
+    let f = add_hypothesis(&p, &["--owner", "shop.Cache.entries"]);
+    let files = alloc_profiles(&p, |i| {
+        vec![grp(
+            &[("shop::unrelated::fill", "src/unrelated.rs", 17)],
+            1000 * i,
+            &[],
+        )]
+    });
+    let v = alloc_diff(&p, &files, &["--finding", &f]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    assert!(v.get("tie").is_none());
+    assert!(annotations(&p).is_empty());
+    assert!(p.findings()[0]["site"].is_null());
+    let g = last_growth(&p);
+    assert!(g["result"]["passed"][0]["finding"].is_null());
+    assert!(!ledger_rule_ties(&g, &f, None, Some("shop.Cache.entries")));
+}
+
+/// A histogram text with the given growing types (each grows 200 bytes a step) beside
+/// flat ones.
+fn histograms_of(p: &Project, growing: &[(&str, u64)]) -> Vec<String> {
+    (0..3u64)
+        .map(|i| {
+            let mut rows: Vec<(&str, u64, u64)> = vec![("shop.Flat", 50, 1_200)];
+            for (name, base) in growing {
+                rows.push((name, 100 + 10 * i, base + 200 * i));
+            }
+            p.put(&format!("hist/g{i}.txt"), histogram_text(&rows).as_bytes())
+        })
+        .collect()
+}
+
+#[test]
+fn a_declaration_ties_only_by_the_element_type_never_by_a_container_or_key_type() {
+    let p = Project::new();
+    p.put(
+        "src/shop/Sessions.java",
+        b"package shop;\n\nimport java.util.*;\n\nfinal class Sessions {\n    static final Map<String, Session> SESSIONS = new HashMap<>();\n    static final List<Entry> LOG = new ArrayList<>();\n}\n",
+    );
+    let f1 = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "shop.Sessions.SESSIONS",
+            "--site",
+            "src/shop/Sessions.java:6",
+        ],
+    );
+    let f2 = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "shop.Sessions.LOG",
+            "--site",
+            "src/shop/Sessions.java:7",
+        ],
+    );
+    // String, HashMap and TreeMap$Entry grow; shop.Session and shop.Entry do not.
+    let files = histograms_of(
+        &p,
+        &[
+            ("java.lang.String", 10_000),
+            ("java.util.HashMap", 20_000),
+            ("java.util.TreeMap$Entry", 30_000),
+        ],
+    );
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    let g = last_growth(&p);
+    assert!(!ledger_rule_ties(&g, &f1, None, None));
+    assert!(!ledger_rule_ties(&g, &f2, None, None));
+    // The element type, qualified through the package, does tie: shop.Entry to LOG and
+    // shop.Session to SESSIONS.
+    let files = histograms_of(&p, &[("shop.Entry", 10_000)]);
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"], json!([f2]), "{v}");
+    let files = histograms_of(&p, &[("shop.Session", 10_000)]);
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"], json!([f1]), "{v}");
+    // An unrelated package's class of the same simple name does not.
+    let files = histograms_of(&p, &[("other.Entry", 10_000)]);
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+}
+
+#[test]
+fn a_type_that_matches_several_findings_ties_none_even_with_finding() {
+    let p = Project::new();
+    p.put(
+        "src/shop/Pair.java",
+        b"package shop;\n\nimport java.util.*;\n\nfinal class Pair {\n    static final List<Item> A = new ArrayList<>();\n    static final List<Item> B = new ArrayList<>();\n}\n",
+    );
+    let fa = add_hypothesis(
+        &p,
+        &["--owner", "shop.Pair.A", "--site", "src/shop/Pair.java:6"],
+    );
+    let fb = add_hypothesis(
+        &p,
+        &["--owner", "shop.Pair.B", "--site", "src/shop/Pair.java:7"],
+    );
+    let files = histograms_of(&p, &[("shop.Item", 10_000)]);
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    assert_eq!(v["ambiguous"]["type:shop.Item"], json!([fa, fb]), "{v}");
+    let g = last_growth(&p);
+    let c = &g["result"]["passed"][0];
+    assert!(c["finding"].is_null() && c["candidates"].is_null(), "{c}");
+    // An ambiguity is final: `--finding` neither picks one nor forces a tie.
+    let v = type_diff(&p, &files, &["--finding", &fb]);
+    assert_eq!(v["tied"], json!([]), "{v}");
+    assert_eq!(v["ambiguous"]["type:shop.Item"], json!([fa, fb]), "{v}");
+    let needed = v["needed"].as_str().unwrap();
+    assert!(needed.contains(&fa) && needed.contains(&fb), "{needed}");
+    let c = &last_growth(&p)["result"]["passed"][0];
+    assert!(c["finding"].is_null() && c["candidates"].is_null(), "{c}");
+}
+
+#[test]
+fn a_nested_element_type_does_not_tie_a_same_named_top_level_class() {
+    let p = Project::new();
+    p.put(
+        "src/shop/Cache.java",
+        b"package shop;\n\nimport java.util.*;\n\nfinal class Cache {\n    static final List<Entry> ENTRIES = new ArrayList<>();\n    static class Entry {}\n}\n",
+    );
+    p.put(
+        "src/shop/Entry.java",
+        b"package shop;\n\nfinal class Entry {}\n",
+    );
+    let f = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "shop.Cache.ENTRIES",
+            "--site",
+            "src/shop/Cache.java:6",
+        ],
+    );
+    let top = histograms_of(&p, &[("shop.Entry", 10_000)]);
+    let v = type_diff(&p, &top, &[]);
+    assert_eq!(v["tied"], json!([]), "{v}");
+    let nested = histograms_of(&p, &[("shop.Cache$Entry", 10_000)]);
+    let v = type_diff(&p, &nested, &[]);
+    assert_eq!(v["tied"], json!([f]), "{v}");
+}
+
+#[test]
+fn five_tied_types_keep_every_named_finding_in_the_evidence() {
+    let p = Project::new();
+    let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+    let mut src = String::from("package app;\n\nimport java.util.*;\n\nfinal class Many {\n");
+    for n in names {
+        src.push_str(&format!(
+            "    static final List<{n}> L{n} = new ArrayList<>();\n"
+        ));
+    }
+    src.push_str("}\n");
+    p.put("src/app/Many.java", src.as_bytes());
+    let ids: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            add_hypothesis(
+                &p,
+                &[
+                    "--owner",
+                    &format!("app.Many.L{n}"),
+                    "--site",
+                    &format!("src/app/Many.java:{}", 6 + i),
+                ],
+            )
+        })
+        .collect();
+    // Alpha has the largest increase but the smallest last value.
+    let files: Vec<String> = (0..3u64)
+        .map(|i| {
+            let mut rows: Vec<(String, u64, u64)> =
+                vec![("app.Alpha".into(), 10 + i, 240 + 2400 * i)];
+            for n in &names[1..] {
+                rows.push((format!("app.{n}"), 1000 + i, 120_000 + 1200 * i));
+            }
+            let rows: Vec<(&str, u64, u64)> =
+                rows.iter().map(|(n, a, b)| (n.as_str(), *a, *b)).collect();
+            p.put(&format!("hist/m{i}.txt"), histogram_text(&rows).as_bytes())
+        })
+        .collect();
+    for extra in [&[][..], &["--finding", ids[0].as_str()][..]] {
+        let v = type_diff(&p, &files, extra);
+        let g = last_growth(&p);
+        let named: Vec<String> = v["tied"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap().to_owned())
+            .collect();
+        assert!(!named.is_empty(), "{v}");
+        for f in &named {
+            assert!(ledger_rule_ties(&g, f, None, None), "{f} not in {g}");
+        }
+        let needed = v["needed"].as_str().unwrap();
+        let confirm = needed.split("confirm ").nth(1).unwrap();
+        let f = confirm.split_whitespace().next().unwrap();
+        assert!(ledger_rule_ties(&g, f, None, None), "{needed}: {g}");
+        if !extra.is_empty() {
+            assert_eq!(named, [ids[0].clone()], "{v}");
+        }
+    }
+}
+
+/// A snapshot file: one thread group at `site` (file, line), `count` threads.
+fn thread_snaps(p: &Project, source: &str, key: &str, site: Option<(&str, u32)>) -> Vec<String> {
+    (1..=3u64)
+        .map(|i| {
+            let snap = json!({"source": source, "timestamp_ms": T0 + i * 1000,
+                "metrics": [],
+                "groups": [{"kind": "thread", "key": key, "count": 10 * i,
+                    "site": site.map(|(f, l)| json!({"function": "shop.Jobs.work",
+                        "file": f, "line": l, "module": null}))}]});
+            p.put(&format!("nh/t{i}.json"), snap.to_string().as_bytes())
+        })
+        .collect()
+}
+
+fn nonheap_diff(p: &Project, files: &[String]) -> Value {
+    let mut args = vec!["summarize", "non-heap", "--backend", "dla-nonheap-json"];
+    args.extend(files.iter().map(String::as_str));
+    ok(p.path(), &args)
+}
+
+#[test]
+fn thread_growth_never_ties_through_a_remover_or_a_current_frame() {
+    let p = Project::new();
+    p.put(
+        "shop/Jobs.java",
+        b"package shop;\n\nfinal class Jobs {\n    static final java.util.concurrent.BlockingQueue<Object> QUEUE = null;\n    static void work() throws Exception {\n        for (;;) {\n            QUEUE.take();\n        }\n    }\n}\n",
+    );
+    let f = add_hypothesis(
+        &p,
+        &["--owner", "shop.Jobs.QUEUE", "--site", "shop/Jobs.java:4"],
+    );
+    ok(
+        p.path(),
+        &["ledger", "annotate", &f, "--remover", "shop/Jobs.java:7"],
+    );
+    // A creation site that is only the finding's remover: no tie.
+    let files = thread_snaps(
+        &p,
+        "go-goroutine-dump",
+        "site:shop.Jobs.work",
+        Some(("shop/Jobs.java", 7)),
+    );
+    let v = nonheap_diff(&p, &files);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    assert!(!ledger_rule_ties(
+        &last_growth(&p),
+        &f,
+        Some("shop/Jobs.java:4"),
+        None
+    ));
+    // A JVM thread dump's site is where the thread runs now: even the finding's own site
+    // does not tie.
+    let files = thread_snaps(
+        &p,
+        "jvm-thread-dump",
+        "site:shop.Jobs.work",
+        Some(("shop/Jobs.java", 4)),
+    );
+    let v = nonheap_diff(&p, &files);
+    assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+    // A creation site equal to the finding's site does.
+    let files = thread_snaps(
+        &p,
+        "go-goroutine-dump",
+        "site:shop.Jobs.work",
+        Some(("shop/Jobs.java", 4)),
+    );
+    let v = nonheap_diff(&p, &files);
+    assert_eq!(v["tied"], json!([f]), "{v}");
+    assert_eq!(
+        last_growth(&p)["result"]["passed"][0]["tie"]["rule"],
+        "site"
+    );
+}
+
+#[test]
+fn long_group_names_keep_the_growth_result_bounded() {
+    let p = Project::new();
+    let long = "k".repeat(480);
+    let files: Vec<String> = (1..=3u64)
+        .map(|i| {
+            let groups: Vec<Value> = (0..6)
+                .map(|g| {
+                    json!({"kind": "thread", "key": format!("{long}{g}"), "count": 10 * i,
+                    "site": null})
+                })
+                .collect();
+            let snap = json!({"source": "go-goroutine-dump", "timestamp_ms": T0 + i * 1000,
+                "metrics": [], "groups": groups});
+            p.put(&format!("nh/l{i}.json"), snap.to_string().as_bytes())
+        })
+        .collect();
+    let v = nonheap_diff(&p, &files);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let g = last_growth(&p);
+    assert!(g["result"].to_string().len() <= 2048);
+    assert!(g["result"]["truncated"].as_u64().unwrap() > 0, "{g}");
+    // One growth evidence, one series: nothing was left behind.
+    assert_eq!(p.evidence("growth-series").len(), 1);
+    assert_eq!(fs::read_dir(p.run_dir.join("series")).unwrap().count(), 1);
+}
+
+#[test]
+fn a_path_that_steps_out_of_the_run_directory_is_checked_against_the_scope() {
+    let p = Project::with_init(&[
+        "--scope",
+        "repository",
+        "--scope-path",
+        ".",
+        "--exclude",
+        "excluded",
+    ]);
+    let files = histograms(&p, "shop.Entry");
+    for (i, f) in files.iter().enumerate() {
+        p.put(
+            &format!("excluded/x{i}.txt"),
+            &fs::read(p.path().join(f)).unwrap(),
+        );
+    }
+    let e = refused(
+        p.path(),
+        &[
+            "summarize",
+            "type-histogram-diff",
+            ".dla/../excluded/x0.txt",
+            ".dla/../excluded/x1.txt",
+            ".dla/../excluded/x2.txt",
+        ],
+    );
+    assert_eq!(e["code"], "out-of-scope");
+}
+
+#[test]
+fn inputs_in_different_formats_are_refused_as_mixed_not_as_unreadable() {
+    let p = Project::new();
+    let files = histograms(&p, "shop.Entry");
+    let fx = Fixture::load("harness-types").unwrap();
+    let jsonl = fx.materialize(&p);
+    let e = refused(
+        p.path(),
+        &["summarize", "type-histogram-diff", &files[0], &jsonl[0]],
+    );
+    assert_eq!(e["code"], "mixed-formats");
+    assert!(
+        e["message"]
+            .as_str()
+            .unwrap()
+            .contains("jcmd-class-histogram"),
+        "{e}"
+    );
+    assert!(e["fix"].as_str().unwrap().contains("per format"), "{e}");
+}
+
+/// A heap with `statics` = (class, field, items per dump), dump i of three.
+fn static_dump(ts: u64, statics: &[(&str, &str, usize)]) -> Vec<u8> {
+    use hprof_builder::{B, F, T_INT, T_OBJ};
+    let mut b = B::new(8, ts);
+    let obj = b.declare("java.lang.Object");
+    let class_cls = b.declare("java.lang.Class");
+    let list = b.declare("java.util.ArrayList");
+    let obj_arr = b.declare("[Ljava/lang/Object;");
+    let byte_arr = b.declare("[B");
+    let item = b.declare("app.Item");
+    let mut classes = Vec::new();
+    for (class, field, n) in statics {
+        let cid = b.declare(class);
+        let mut ids = Vec::new();
+        for i in 0..*n {
+            let payload = b.byte_array(&vec![1u8; 40 + (i % 3)]);
+            ids.push(b.instance(item, &[F::Id(payload), F::I4(i as i32)]));
+        }
+        let arr = b.obj_array(obj_arr, &ids);
+        let l = b.instance(list, &[F::Id(arr), F::I4(*n as i32)]);
+        classes.push((cid, *field, l));
+    }
+    b.class_dump(obj, 0, 0, 999, &[], &[]);
+    b.class_dump(class_cls, obj, 0, 999, &[], &[]);
+    b.class_dump(
+        list,
+        obj,
+        0,
+        999,
+        &[("elementData", T_OBJ), ("size", T_INT)],
+        &[],
+    );
+    b.class_dump(obj_arr, obj, 0, 999, &[], &[]);
+    b.class_dump(byte_arr, obj, 0, 999, &[], &[]);
+    b.class_dump(item, obj, 0, 999, &[("payload", T_OBJ), ("n", T_INT)], &[]);
+    for (cid, field, l) in classes {
+        b.class_dump(cid, obj, 0, 999, &[], &[(field, l)]);
+    }
+    b.finish(1)
+}
+
+fn static_dumps(p: &Project, statics: &[(&str, &str, [usize; 3])]) -> Vec<String> {
+    (0..3)
+        .map(|i| {
+            let s: Vec<(&str, &str, usize)> =
+                statics.iter().map(|(c, f, n)| (*c, *f, n[i])).collect();
+            p.put(
+                &format!("dumps/s{i}.hprof"),
+                &static_dump(T0 + 30_000 * i as u64, &s),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_short_owner_ties_only_when_one_holder_and_one_finding_match() {
+    let p = Project::new();
+    let f = add_hypothesis(&p, &["--owner", "Cache.MAP"]);
+    // Two holders share Class.field across packages: neither ties to the short owner.
+    let files = static_dumps(
+        &p,
+        &[
+            ("a.Cache", "MAP", [300, 300, 300]),
+            ("b.Cache", "MAP", [200, 400, 600]),
+        ],
+    );
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let g = last_growth(&p);
+    assert!(!ledger_rule_ties(&g, &f, None, None), "{g}");
+    assert_eq!(p.findings().len(), 2, "b.Cache.MAP got its own candidate");
+    // `--finding` with two matching holders is refused, and lists them.
+    let e = refused(
+        p.path(),
+        &[
+            "summarize",
+            "heap-graph",
+            "--finding",
+            &f,
+            &files[0],
+            &files[1],
+            &files[2],
+        ],
+    );
+    assert_eq!(e["code"], "ambiguous-holder");
+    assert!(
+        e["message"].as_str().unwrap().contains("a.Cache.MAP"),
+        "{e}"
+    );
+    // With one holder, the short owner is the shorter form of its qualified name.
+    let q = Project::new();
+    let f = add_hypothesis(&q, &["--owner", "Cache.MAP"]);
+    let files = static_dumps(&q, &[("b.Cache", "MAP", [200, 400, 600])]);
+    heap_graph(&q, &files, &[]);
+    let g = last_growth(&q);
+    assert!(ledger_rule_ties(&g, &f, None, None), "{g}");
+    assert_eq!(g["result"]["passed"][0]["tie"]["rule"], "holder");
+    assert_eq!(q.findings().len(), 1);
+}
+
+#[test]
+fn an_exact_owner_wins_over_a_shaded_copy_when_binding_a_finding() {
+    let p = Project::new();
+    let f = add_hypothesis(&p, &["--owner", "a.Cache.MAP"]);
+    let files = static_dumps(
+        &p,
+        &[
+            ("shaded.a.Cache", "MAP", [900, 900, 900]),
+            ("a.Cache", "MAP", [200, 400, 600]),
+        ],
+    );
+    let v = heap_graph(&p, &files, &["--finding", &f]);
+    let d = v["discriminators"].as_array().unwrap();
+    assert_eq!(d.len(), 1, "{v}");
+    assert_eq!(d[0]["holder"], "static:a.Cache.MAP", "{v}");
+    assert_eq!(d[0]["favors"], "leak");
+}
+
+#[test]
+fn a_kotlin_top_level_property_ties_to_the_census_finding() {
+    let p = Project::new();
+    let f = add_hypothesis(&p, &["--owner", "a.b.top", "--site", "src/a/b/A.kt:5"]);
+    let files = static_dumps(&p, &[("a.b.AKt", "top", [200, 400, 600])]);
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(p.findings().len(), 1, "no duplicate candidate: {v}");
+    assert!(ledger_rule_ties(&last_growth(&p), &f, None, None));
+    // A companion field: the JVM keeps it as a static of the outer class.
+    let q = Project::new();
+    let f = add_hypothesis(&q, &["--owner", "shop.Svc.Companion.CACHE"]);
+    let files = static_dumps(&q, &[("shop.Svc", "CACHE", [200, 400, 600])]);
+    heap_graph(&q, &files, &[]);
+    assert_eq!(q.findings().len(), 1);
+    assert!(ledger_rule_ties(&last_growth(&q), &f, None, None));
+}
+
+#[test]
+fn a_jvm_column_never_ties_to_a_finding_of_another_runtime() {
+    let p = Project::new();
+    let rust = add_hypothesis(
+        &p,
+        &["--owner", "a.Cache.MAP", "--site", "native/src/lib.rs:3"],
+    );
+    let files = static_dumps(&p, &[("a.Cache", "MAP", [200, 400, 600])]);
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert!(!ledger_rule_ties(
+        &last_growth(&p),
+        &rust,
+        Some("native/src/lib.rs:3"),
+        None
+    ));
+    assert_eq!(
+        p.findings().len(),
+        2,
+        "the JVM holder got its own candidate"
+    );
+}
+
+#[test]
+fn a_holder_is_not_tied_to_a_finding_of_another_package_through_a_same_named_file() {
+    let p = Project::new();
+    p.put(
+        "src/main/java/app/desk/RfqDesk.java",
+        b"package app.desk;\n\nimport java.util.*;\n\nfinal class RfqDesk {\n    static final List<Object> OPEN = new ArrayList<>();\n}\n",
+    );
+    let f = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "app.desk.RfqDesk.OPEN",
+            "--site",
+            "src/main/java/app/desk/RfqDesk.java:6",
+        ],
+    );
+    let files = static_dumps(&p, &[("quotes.RfqDesk", "OPEN", [200, 400, 600])]);
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert!(!ledger_rule_ties(
+        &last_growth(&p),
+        &f,
+        Some("src/main/java/app/desk/RfqDesk.java:6"),
+        Some("app.desk.RfqDesk.OPEN")
+    ));
+    // The growth got a candidate of its own, with no invented site.
+    let cands: Vec<Value> = p.findings();
+    assert_eq!(cands.len(), 2, "{cands:?}");
+    assert_eq!(cands[1]["owner"], "quotes.RfqDesk.OPEN");
+    assert!(cands[1]["site"].is_null(), "{cands:?}");
+}
+
+#[test]
+fn thread_names_read_from_the_heap_are_shaped() {
+    let p = Project::new();
+    let dumps: Vec<String> = (0..3)
+        .map(|i| {
+            let m = model(8, T0 + 30_000 * i as u64, [200, 400, 600][i], 5);
+            let mut dump = m.dump;
+            let at = dump
+                .windows(8)
+                .position(|w| w == b"worker-1")
+                .expect("the model holds the thread name");
+            dump[at..at + 8].copy_from_slice(b"k=s3cr3t");
+            p.put(&format!("dumps/t{i}.hprof"), &dump)
+        })
+        .collect();
+    let v = heap_graph(&p, &dumps, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert!(!v.to_string().contains("s3cr3t"), "{v}");
+    for (path, text) in p.run_texts() {
+        assert!(!text.contains("s3cr3t"), "{}", path.display());
+    }
+    // The thread is still a holder, under a stable key.
+    let summary = fs::read_dir(p.run_dir.join("summaries"))
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap();
+    let text = fs::read_to_string(summary.path()).unwrap();
+    assert!(text.contains("thread:<"), "{text}");
 }
 
 #[test]

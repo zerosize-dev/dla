@@ -61,9 +61,10 @@ pub struct OpArgs {
     /// of the inputs (DLA's own parsers first).
     #[arg(long, default_value = "auto")]
     pub backend: Choice,
-    /// Tie the result to this finding: for heap-graph the discriminator binds to the
-    /// holder the finding's owner names; for the other operations the growth column
-    /// that fits the finding (or, failing that, the largest) is tied to it.
+    /// Narrow the result to this finding: for heap-graph the discriminator binds to the
+    /// holder the finding's owner names; for the other operations only a growth column
+    /// that already ties to the finding by holder, site or type is tied to it. It ties
+    /// nothing by itself.
     #[arg(long, value_parser = parse_enum::<FindingId>)]
     pub finding: Option<FindingId>,
     /// Analyze at most this many objects per dump (heap-graph); above it the summary is

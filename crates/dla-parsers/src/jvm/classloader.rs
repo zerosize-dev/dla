@@ -48,7 +48,10 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
             // `36 112640 70752 + hidden classes`
             let n: u64 = toks[0].parse().map_err(|_| bad(line))?;
             let ty = last_type.clone().unwrap_or_else(|| "<unknown>".into());
-            *hidden.entry(ty).or_default() += n;
+            {
+                let e = hidden.entry(ty).or_default();
+                *e = e.saturating_add(n);
+            }
             continue;
         }
         if toks.len() >= 7 && toks[0].starts_with("0x") {
@@ -56,8 +59,8 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
             // The type is what follows the six numeric columns, spaces kept.
             let ty = type_of(t).ok_or_else(|| bad(line))?;
             let e = by_type.entry(ty.clone()).or_default();
-            e.0 += 1;
-            e.1 += classes;
+            e.0 = e.0.saturating_add(1);
+            e.1 = e.1.saturating_add(classes);
             last_type = Some(ty);
         }
     }
@@ -91,8 +94,12 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
         });
     }
     let (tl, tc) = totals.unwrap_or_else(|| {
-        let l = by_type.values().map(|v| v.0).sum();
-        let c = by_type.values().map(|v| v.1).sum::<u64>() + hidden.values().sum::<u64>();
+        let l = by_type.values().fold(0u64, |a, v| a.saturating_add(v.0));
+        let c = by_type
+            .values()
+            .map(|v| v.1)
+            .chain(hidden.values().copied())
+            .fold(0u64, u64::saturating_add);
         (l, c)
     });
     snap.metrics
@@ -108,7 +115,7 @@ fn metric(category: &str, name: &str, value: u64) -> NonHeapMetric {
     NonHeapMetric {
         category: category.into(),
         name: name.into(),
-        value: value as i64,
+        value: i64::try_from(value).unwrap_or(i64::MAX),
         unit: "count".into(),
     }
 }
@@ -168,6 +175,23 @@ ChunkSz: Total size of all allocated metaspace chunks
             .find(|m| m.name == "total_loaders")
             .unwrap();
         assert_eq!(total.value, 3);
+    }
+
+    #[test]
+    fn huge_counts_do_not_overflow() {
+        let t = "ClassLoader Parent CLD* Classes ChunkSz BlockSz Type
+0xa 0x0 0x0 18446744073709551615 1 2 T
+0xb 0x0 0x0 18446744073709551615 1 2 T
+                  18446744073709551615 1 2 + hidden classes
+                  5 1 2 + hidden classes
+";
+        let s = parse(t).unwrap();
+        let tc = s
+            .metrics
+            .iter()
+            .find(|m| m.name == "total_classes")
+            .unwrap();
+        assert_eq!(tc.value, i64::MAX);
     }
 
     #[test]

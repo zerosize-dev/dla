@@ -63,3 +63,19 @@ fn empty_and_odd_input() {
     assert_eq!(c["other"], 2);
     assert_eq!(c["weird_name"], 1);
 }
+
+#[test]
+fn an_arrow_inside_the_target_is_kept() {
+    // Split at the first arrow: the fd side never contains one.
+    assert_eq!(
+        fd::targets_from_listing("4 -> /tmp/a -> b"),
+        ["/tmp/a -> b"]
+    );
+    assert_eq!(fd::classify("/tmp/a -> b"), "file");
+    assert_eq!(
+        fd::targets_from_listing("lrwx------ 1 u g 64 Nov 9 07:00 5 -> /tmp/x -> y (deleted)"),
+        ["/tmp/x -> y (deleted)"]
+    );
+    // A plain target line is not cut.
+    assert_eq!(fd::targets_from_listing("/tmp/a -> b"), ["/tmp/a -> b"]);
+}

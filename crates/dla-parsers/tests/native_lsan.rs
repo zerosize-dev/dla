@@ -126,3 +126,36 @@ fn malformed_records_are_errors_not_panics() {
         .unwrap();
     assert_eq!(r.profile.groups[0].frames[0].function, "f");
 }
+
+#[test]
+fn a_hostile_v0_symbol_in_a_frame_does_not_hang() {
+    // Frame #1 is a 60-level nested v0 symbol (instantiating-crate path of nested backrefs).
+    fn b62(n: usize) -> String {
+        const D: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut n = n - 1;
+        let mut d = Vec::new();
+        while n > 0 {
+            d.push(D[n % 62]);
+            n /= 62;
+        }
+        if d.is_empty() {
+            d.push(b'0');
+        }
+        d.reverse();
+        format!("{}_", String::from_utf8(d).unwrap())
+    }
+    fn nest(l: usize, start: usize) -> String {
+        if l == 0 {
+            return "C1b".into();
+        }
+        format!("I{}B{}E", nest(l - 1, start + 1), b62(start + 1))
+    }
+    let sym = format!("_RC1a{}", nest(60, 3));
+    let text = format!(
+        "Direct leak of 8 byte(s) in 1 object(s) allocated from:\n    #0 0x1 in malloc (/x/liblsan.so+0x1)\n    #1 0x2 in {sym} /w/a.rs:3\n    #2 0x3 in main /w/a.rs:9\n"
+    );
+    let t = std::time::Instant::now();
+    let r = lsan::parse(&text).unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_secs(2));
+    assert_eq!(r.profile.groups.len(), 1);
+}

@@ -1,0 +1,3 @@
+sending command leak_check full reachable any to pid 5294
+==5294== All heap blocks were freed -- no leaks are possible
+==5294== 
