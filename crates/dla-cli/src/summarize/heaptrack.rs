@@ -1,5 +1,5 @@
 //! `alloc-stack-diff` over heaptrack: `heaptrack_print` text (the leaks section, with `-l`),
-//! its `-d` diff text, `-F` folded stacks with exact bytes, and a raw `heaptrack.*.zst` or
+//! its `-d` diff text, `-F` folded stacks with exact bytes (cost type leaked, named so), and a raw `heaptrack.*.zst` or
 //! `.gz` recording, which this adapter prints through `heaptrack_print` first.
 //!
 //! One report is the leak view of one run. Three or more reports of runs with growing
@@ -66,6 +66,12 @@ fn kind_of(input: &Input) -> Option<Kind> {
     None
 }
 
+/// True when the file name says the folded stacks were written with the `leaked` cost
+/// type. The format has no marker of its own; the name is the person's statement of it.
+fn leaked_name(input: &Input) -> bool {
+    input.name_lower().contains("leaked")
+}
+
 /// Lines of `frame;frame;frame <number>` and nothing else.
 fn looks_folded(head: &str) -> bool {
     let lines: Vec<&str> = head.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -95,6 +101,11 @@ impl Heaptrack {
             "-T0".into(),
             "-n".into(),
             "200".into(),
+            // No merge of backtraces and room for every sub-stack: merged, heaptrack_print
+            // lists the five biggest and elides the rest ("and N from M other places").
+            "-m0".into(),
+            "-s".into(),
+            "50".into(),
         ]
         .into();
         let out_name = format!("heaptrack-{}.txt", &input.sha256[..12]);
@@ -151,7 +162,7 @@ impl Adapter for Heaptrack {
         tool_class::ALLOC_PROFILER
     }
     fn formats(&self) -> &'static str {
-        "heaptrack_print text with -l (or its -d diff), -F folded stacks (leaked bytes), or a raw heaptrack.*.zst/.gz recording (needs heaptrack_print)"
+        "heaptrack_print text with -l (or its -d diff), -F folded stacks written with --flamegraph-cost-type leaked and named *leaked*, or a raw heaptrack.*.zst/.gz recording (needs heaptrack_print)"
     }
     fn sniff(&self, input: &Input) -> bool {
         kind_of(input).is_some()
@@ -175,6 +186,17 @@ impl Adapter for Heaptrack {
             let kind = kinds.first().copied().unwrap_or(Kind::Text);
             let mut profile: AllocProfile = match kind {
                 Kind::Folded => {
+                    if !leaked_name(i) {
+                        return Err(Failure::refuse(
+                            "unsupported-format",
+                            format!(
+                                "{} is a folded stack file whose cost type is not known: heaptrack_print writes allocation counts by default, and counts are churn, not retained bytes",
+                                i.shown()
+                            ),
+                            "a folded file written with --flamegraph-cost-type leaked, named so (the name holds \"leaked\")",
+                            "heaptrack_print -f <recording> -F leaked.folded --flamegraph-cost-type leaked",
+                        ));
+                    }
                     let text = i.read_text(MAX_BYTES)?;
                     heaptrack::parse_folded(&text, FoldedCost::Bytes).map_err(|e| {
                         Failure::refuse(
@@ -198,6 +220,19 @@ impl Adapter for Heaptrack {
                             i.shown()
                         ));
                     }
+                    let elided = text
+                        .lines()
+                        .filter(|l| {
+                            let t = l.trim();
+                            t.starts_with("and ") && t.ends_with("other places")
+                        })
+                        .count();
+                    if elided > 0 {
+                        limitations.push(format!(
+                            "{} elides {elided} group(s) of stacks (\"and N from M other places\"): their bytes are not read, so a growing site can be missing; print with -m0 -s 50",
+                            i.shown()
+                        ));
+                    }
                     let report = heaptrack::parse(&text).map_err(|e| {
                         Failure::refuse(
                             "malformed-artifact",
@@ -207,7 +242,7 @@ impl Adapter for Heaptrack {
                                 e.message()
                             ),
                             "heaptrack_print output that ran to its end",
-                            "heaptrack_print -f <recording> -l -p0 -a0 -T0 -n 200 > heaptrack.txt",
+                            "heaptrack_print -f <recording> -l -p0 -a0 -T0 -n 200 -m0 -s 50 > heaptrack.txt",
                         )
                     })?;
                     diffs.push(report.is_diff);
@@ -233,6 +268,11 @@ impl Adapter for Heaptrack {
         limitations.push(
             "figures are the bytes heaptrack counts as leaked: still allocated when the program exits".into(),
         );
+        if kinds.first() == Some(&Kind::Folded) {
+            limitations.push(
+                "folded stacks carry no line numbers and no cost-type marker: the file name says they are leaked bytes, and no frame has a site line".into(),
+            );
+        }
         if kinds.first() == Some(&Kind::Text) || kinds.first() == Some(&Kind::Raw) {
             limitations.push(
                 "heaptrack_print rounds sizes (3.02M): figures are accurate to about 1%; -F folded files carry exact bytes".into(),

@@ -17,11 +17,12 @@ use crate::fail::{Failure, Res};
 const SUPPORT: &[&str] = &["os.rss", "os.vm_hwm", "native.peak_bytes"];
 /// Columns that count runtime activity, not memory: they rise with every run by design.
 const ACTIVITY: &[&str] = &["py.gc_collections"];
-/// Process peaks. A peak never falls, so the purge test cannot release it and its verdict is
-/// at best inconclusive; one such vote would block every non-leak verdict. They are tested
-/// and reported (see [`SUPPORT`]) and vote only when nothing else can, even after passing
-/// the gate.
-const MONOTONE_PEAK: &[&str] = &["os.vm_hwm", "native.peak_bytes"];
+/// Process peaks and virtual sizes. A peak never falls, and a purge does not give reserved
+/// address space back (`os.vm_data` counts reservations, not memory in use), so the purge
+/// test cannot release them and their verdict is at best inconclusive; one such vote would
+/// block every non-leak verdict. They are reported and vote only when nothing else can,
+/// even after passing the gate.
+const NO_RELEASE: &[&str] = &["os.vm_hwm", "native.peak_bytes", "os.vm_data"];
 /// Most tied columns tested for a bound finding.
 const MAX_TIED: usize = 6;
 /// Most gate-passing columns tested without a finding.
@@ -241,13 +242,22 @@ pub fn pick(
     } else {
         let mut any_passed = false;
         if let Some(t) = trend {
+            // A peak or virtual size that passed the gate is still reported.
+            for c in &t.columns {
+                if c.gate == GateVerdict::Pass
+                    && NO_RELEASE.contains(&c.name.as_str())
+                    && series.column_index(&c.name).is_some()
+                {
+                    add(&mut p.tested, &c.name);
+                }
+            }
             let mut passed: Vec<&dla_core::trend::ColumnTrend> = t
                 .columns
                 .iter()
                 .filter(|c| c.gate == GateVerdict::Pass)
                 .filter(|c| series.column_index(&c.name).is_some())
                 .filter(|c| !ACTIVITY.contains(&c.name.as_str()))
-                .filter(|c| !MONOTONE_PEAK.contains(&c.name.as_str()))
+                .filter(|c| !NO_RELEASE.contains(&c.name.as_str()))
                 .collect();
             passed.sort_by(|a, b| {
                 let key = |c: &dla_core::trend::ColumnTrend| {

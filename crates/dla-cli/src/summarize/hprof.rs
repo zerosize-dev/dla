@@ -261,18 +261,37 @@ fn via_json(summary: &HeapSummary, n: usize) -> Vec<Value> {
         .collect()
 }
 
+/// Longest letter word of a plain thread name, and longest digit run (an ordinal such as
+/// the `3` of `pool-1-thread-3`, or a port; a longer run is an id).
+const NAME_WORD_MAX: usize = 20;
+const NAME_DIGITS_MAX: usize = 5;
+
+/// True when a thread name is program structure: words of letters and short ordinals around
+/// `-`, `_` and `.`. A token that mixes letters and digits (a hex id, `a0e6`), a long digit
+/// run (an account id), a long word or any other character makes it a value. A `.` is kept
+/// only between camel-case words (`ForkJoinPool.commonPool-worker-1`): `alice.smith` is a
+/// user and is shaped.
+fn plain_thread_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 40 {
+        return false;
+    }
+    let inner_upper = |t: &str| t.chars().skip(1).any(|c| c.is_ascii_uppercase());
+    if name.contains('.') && !name.split('.').all(inner_upper) {
+        return false;
+    }
+    name.split(['-', '_', '.']).all(|t| {
+        t.is_empty()
+            || (t.bytes().all(|b| b.is_ascii_alphabetic()) && t.len() <= NAME_WORD_MAX)
+            || (t.bytes().all(|b| b.is_ascii_digit()) && t.len() <= NAME_DIGITS_MAX)
+    })
+}
+
 /// A thread name read from the heap, shaped unless the run has raw-values consent. A name
-/// of plain program-structure characters (`main`, `pool-1-thread-3`) stays; anything
-/// else (a request thread named after its URL, a user) becomes a salted shape, the same
-/// in every dump of the run, so holder keys still join across dumps.
+/// of plain program structure (`main`, `pool-1-thread-3`, see [`plain_thread_name`]) stays;
+/// anything else (a request thread named after its URL, a user, an id) becomes a salted
+/// shape, the same in every dump of the run, so holder keys still join across dumps.
 fn thread_label(name: &str, red: &super::redact::Redactor) -> String {
-    let plain = name.len() <= 40
-        && !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        && red.name(name) == name;
-    if plain {
+    if plain_thread_name(name) && red.name(name) == name {
         name.to_owned()
     } else {
         red.value(name)
@@ -1088,5 +1107,31 @@ mod tests {
         let root = holder("instance:x>y", HolderKind::Instance, "y", None);
         assert_eq!(owner_of(&root), "instance:x>y");
         assert_eq!(finding_holder(&inst), FindingHolder::ContainerField);
+    }
+
+    #[test]
+    fn ids_and_users_in_thread_names_are_shaped_and_program_names_stay() {
+        let r = super::super::redact::Redactor::new(b"salt", false);
+        for keep in [
+            "main",
+            "pool-1-thread-3",
+            "http-nio-8080-exec-12",
+            "ForkJoinPool.commonPool-worker-1",
+            "Reference_Handler",
+        ] {
+            assert_eq!(thread_label(keep, &r), keep, "{keep}");
+        }
+        for shape in [
+            "session-8f14e45f-ceea-467f-a0e6",
+            "user-12345678",
+            "alice.smith",
+            "worker@host",
+            "acct_9f8e7d6c",
+        ] {
+            let l = thread_label(shape, &r);
+            assert!(l.starts_with('<') && l != shape, "{shape} -> {l}");
+            // The same name gives the same label in every dump.
+            assert_eq!(l, thread_label(shape, &r));
+        }
     }
 }

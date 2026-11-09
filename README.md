@@ -77,7 +77,7 @@ covers a set of tiers, and tiers escalate by intrusiveness:
 |---|---|---|
 | 1 | Build and run project code in a scratch copy under the run directory (builds, tests, harness loops, preload agents, allocator shims, in-process probes), and install analyzers | `dla probe --build`, `dla install`, `dla harness run`, `dla alloc-test`, `dla sample` of a process DLA started |
 | 2 | Observe a running local process DLA did not start (`/proc` sampling, jcmd attach, Node inspector, Python remote exec, a Go pprof endpoint) | `dla sample --pid` of another process, `dla attach` histograms, thread dumps, native-memory summaries, JFR and Node memory figures |
-| 3 | Debugger or kernel level (ptrace attach, eBPF, perf, valgrind) | `dla attach` with memray, heaptrack or goref |
+| 3 | Debugger or kernel level (ptrace attach, eBPF, perf, valgrind on a foreign pid; `harness run --tool valgrind` is tier 1) | `dla attach` with memray, heaptrack or goref |
 | 4 | Capture memory contents (heap dumps, heap snapshots, core dumps); outputs may hold secrets | `dla attach jcmd --op heap-dump`, `dla attach node-inspector --op heap-snapshot` |
 
 Seeing raw values in summaries is a separate consent (`--raw-values`). The details, including the

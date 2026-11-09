@@ -31,14 +31,15 @@ Capture with the harness, then read the files (`references/backends.md` has ever
 | `dla harness run H1 --tool valgrind` | `alloc-stack-diff` on the `valgrind.xml` files | growth of leaked bytes by allocation stack; ties by site (first project frame) |
 | the same run, `vgdb-1-leak.txt`, `vgdb-2-blocks.txt`, `vgdb-3-who.txt` | `heap-graph` on all vgdb files of every point | who points at the leaked block: a `holder:static:<symbol>` column that ties by holder to the finding whose owner ends with the symbol's module path and name. A stack or segment root ties nothing |
 | `dla harness run H1 --tool heaptrack` | `alloc-stack-diff` on `heaptrack.txt` files, then on `heaptrack-diff.txt` | allocation-stack growth; ties by site. Raw `heaptrack.*.gz`/`.zst` need `heaptrack_print` |
-| shim `out/p*/dump.jsonl` | `type-histogram-diff`, `non-heap` | stack groups (ties by site, needs `addr2line`), descriptor counts (never tie) |
+| shim `harness/H1/out/p<k>-<series>/dump.jsonl` (a plain native run prints no command for it; pass the paths by hand) | `type-histogram-diff`, `non-heap` | stack groups (ties by site, needs `addr2line`), descriptor counts (never tie) |
 | `dhat`, LeakSanitizer reports | `alloc-stack-diff` | live-at-exit or leak records by stack; tie by site |
 
 - Memcheck XML from separate runs is a run-length series (runs of different length), not dumps of
   one process. Heaptrack text is rounded (about 1%); folded `-F` files are exact bytes without counts.
 - A definitely-lost block has no holder (nothing points at it), so attribution is by allocation site,
-  not by a vgdb holder. Two findings at one site (a detector and a census finding) tie none:
-  the output lists them under `ambiguous`.
+  not by a vgdb holder. Two findings at one site (a detector and a census finding) are
+  both tied: `candidates` lists every one, `tie` names the `--finding` one if it is among them, else the
+  first by id. `ambiguous` holds only type matches that hit several findings.
 - The vgdb chain runs only when the harness starts the program directly. With a wrapper
   (make, sh) there is no chain, and a limitation line says so. Valgrind plus vgdb are Linux.
 - Stacks match across points by their first 8 resolved frames; without `addr2line` they stay as

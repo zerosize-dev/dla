@@ -376,6 +376,9 @@ const VGDB: [&str; 9] = [
     "pt120/vgdb-3-who.txt",
 ];
 
+/// A C source that defines the static `registry` at file scope.
+const C_HOLD: &str = "#include <stdlib.h>\nstruct node { struct node *next; };\nstatic struct node *registry = NULL;\nstatic int cache;\n";
+
 fn heap_graph(p: &Project, files: &[String]) -> Value {
     summarize(p, "heap-graph", files)
 }
@@ -383,6 +386,7 @@ fn heap_graph(p: &Project, files: &[String]) -> Value {
 #[test]
 fn a_data_symbol_holder_ties_by_holder_to_the_one_finding_that_ends_with_it() {
     let p = Project::new();
+    p.put("src/hold.c", C_HOLD);
     let f = p.finding("src.hold.registry", "src/hold.c:8");
     p.finding("src.hold.cache", "src/hold.c:9");
     let files = p.fixture("valgrind-vgdb", &VGDB);
@@ -479,6 +483,11 @@ fn a_rust_symbol_matches_its_module_path_and_never_a_bare_name() {
         .collect();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let files = p.fixture("valgrind-vgdb", &names);
+    // The crate of the program and the modules the findings are declared in.
+    p.put(
+        "Cargo.toml",
+        "[package]\nname = \"outline-service\"\nversion = \"0.1.0\"\n",
+    );
     // A finding in another module with the same name, and the right one.
     let right = p.finding("src.registry.REGISTRY", "src/registry.rs:3");
     p.finding("src.cache.REGISTRY", "src/cache.rs:5");
@@ -563,7 +572,7 @@ fn memcheck_xml_alone_gives_records_with_no_holder_and_points_to_alloc_stack_dif
 fn a_holder_tied_record_names_its_allocating_line_as_a_writer() {
     let p = Project::new();
     // The program's source is in the project, so the record's `hold.c:14` frame resolves.
-    p.put("src/hold.c", &"x\n".repeat(30));
+    p.put("src/hold.c", &format!("{C_HOLD}{}", "x\n".repeat(30)));
     let f = p.finding("src.hold.registry", "src/hold.c:8");
     let files = p.fixture("valgrind-vgdb", &VGDB);
     let v = heap_graph(&p, &files);
@@ -853,4 +862,106 @@ fn auto_reads_each_native_format_with_its_own_adapter() {
         &[],
     );
     assert_eq!(code, 2, "{v}");
+}
+
+/// The first passing holder column of a heap-graph run, and what it tied.
+fn tied_of(v: &Value) -> Value {
+    v["tied"].clone()
+}
+
+/// The Rust fixture of `outline_service::registry::REGISTRY` with a project whose layout is
+/// given: `(path, text)` files and one finding `(owner, site)`.
+fn rust_holder_run(files: &[(&str, &str)], finding: (&str, &str)) -> Value {
+    let p = Project::new();
+    for (path, text) in files {
+        p.put(path, text);
+    }
+    p.finding(finding.0, finding.1);
+    let names: Vec<String> = ["rs40", "rs80", "rs120"]
+        .iter()
+        .flat_map(|d| {
+            [
+                "vgdb-1-leak.txt",
+                "vgdb-2-blocks.txt",
+                "vgdb-3-who.txt",
+                "vgdb-4-who.txt",
+            ]
+            .map(|n| format!("{d}/{n}"))
+        })
+        .collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let paths = p.fixture("valgrind-vgdb", &names);
+    let v = heap_graph(&p, &paths);
+    assert_eq!(v["gate"], "pass", "{v}");
+    v
+}
+
+const OUTLINE_MANIFEST: &str = "[package]\nname = \"outline-service\"\nversion = \"0.1.0\"\n";
+
+#[test]
+fn a_rust_symbol_does_not_tie_to_a_static_of_another_module_prefix_or_crate() {
+    // The owner ends with the module path, but the file is src/net/registry.rs: the symbol
+    // is `outline_service::registry::REGISTRY`, the static of src/registry.rs.
+    let v = rust_holder_run(
+        &[
+            ("Cargo.toml", OUTLINE_MANIFEST),
+            ("src/net/registry.rs", "pub static REGISTRY: u8 = 0;\n"),
+        ],
+        ("src.net.registry.REGISTRY", "src/net/registry.rs:1"),
+    );
+    assert_eq!(tied_of(&v), serde_json::json!([]), "{v}");
+    // The same file in a crate of another name (a dependency or another workspace member).
+    let v = rust_holder_run(
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"depcrate\"\nversion = \"0.1.0\"\n",
+            ),
+            ("src/registry.rs", "pub static REGISTRY: u8 = 0;\n"),
+        ],
+        ("src.registry.REGISTRY", "src/registry.rs:1"),
+    );
+    assert_eq!(tied_of(&v), serde_json::json!([]), "{v}");
+    // No manifest says which crate the file belongs to.
+    let v = rust_holder_run(
+        &[("src/registry.rs", "pub static REGISTRY: u8 = 0;\n")],
+        ("src.registry.REGISTRY", "src/registry.rs:1"),
+    );
+    assert_eq!(tied_of(&v), serde_json::json!([]), "{v}");
+    // The right file of the right crate, in a workspace member, ties (positive control).
+    let v = rust_holder_run(
+        &[
+            ("crates/svc/Cargo.toml", OUTLINE_MANIFEST),
+            (
+                "crates/svc/src/registry.rs",
+                "pub static REGISTRY: u8 = 0;\n",
+            ),
+        ],
+        (
+            "crates.svc.src.registry.REGISTRY",
+            "crates/svc/src/registry.rs:1",
+        ),
+    );
+    assert_eq!(tied_of(&v).as_array().map(Vec::len), Some(1), "{v}");
+}
+
+#[test]
+fn a_bare_c_name_ties_only_to_the_one_file_that_defines_it() {
+    // Two files define a file-scope `registry`; the finding is one of them.
+    let p = Project::new();
+    p.put("src/hold.c", C_HOLD);
+    p.put("src/other.c", "static int registry;\n");
+    p.finding("src.hold.registry", "src/hold.c:3");
+    let files = p.fixture("valgrind-vgdb", &VGDB);
+    let v = heap_graph(&p, &files);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(tied_of(&v), serde_json::json!([]), "{v}");
+    // The flagged file is not the one that defines the name.
+    let q = Project::new();
+    q.put("src/hold.c", C_HOLD);
+    q.put("src/a.c", "int unrelated;\n");
+    q.finding("src.a.registry", "src/a.c:1");
+    let files = q.fixture("valgrind-vgdb", &VGDB);
+    let v = heap_graph(&q, &files);
+    assert_eq!(tied_of(&v), serde_json::json!([]), "{v}");
 }

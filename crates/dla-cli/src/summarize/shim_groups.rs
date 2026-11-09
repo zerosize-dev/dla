@@ -15,8 +15,11 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
+    fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 
 use dla_core::{
@@ -29,7 +32,9 @@ use dla_core::{
 use serde_json::{Map, Value, json};
 
 use super::{
-    Adapter, AdapterOut, CandidateRow, CoverageRow, Ctx, Op, Opts, Recorded, emit, growth,
+    Adapter, AdapterOut, CandidateRow, CoverageRow, Ctx, Op, Opts, Recorded, emit,
+    exec::run_to_file,
+    growth,
     input::Input,
     rule::{self, Observed},
     tie,
@@ -138,7 +143,11 @@ fn parse_addr2line(out: &str, count: usize) -> Vec<Resolved> {
             continue;
         }
         pending_fn = false;
-        let loc = t.split(" (").next().unwrap_or(t);
+        // Only a trailing ` (discriminator N)` is dropped: a directory may hold ` (`.
+        let loc = match t.rfind(" (discriminator ") {
+            Some(i) if t.ends_with(')') => &t[..i],
+            _ => t,
+        };
         if let Some((file, ln)) = loc.rsplit_once(':')
             && let Ok(ln) = ln.parse::<u32>()
             && file != "??"
@@ -151,20 +160,38 @@ fn parse_addr2line(out: &str, count: usize) -> Vec<Resolved> {
     groups
 }
 
-fn run_addr2line(module: &Path, offsets: &[u64]) -> Option<Vec<Resolved>> {
-    let mut cmd = Command::new("addr2line");
-    cmd.args(["-a", "-f", "-C", "-i", "-e"]).arg(module);
-    for o in offsets {
-        cmd.arg(format!("{o:#x}"));
-    }
-    let out = cmd
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| parse_addr2line(&String::from_utf8_lossy(&out.stdout), offsets.len()))
+/// Longest one `addr2line` call may run.
+const ADDR2LINE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Most `addr2line` calls per record, and the longest they may take in all.
+const ADDR2LINE_CALLS: usize = 64;
+const ADDR2LINE_BUDGET: Duration = Duration::from_secs(180);
+
+fn run_addr2line(
+    module: &Path,
+    offsets: &[u64],
+    tmp: &Path,
+    left: Duration,
+) -> Option<Vec<Resolved>> {
+    let mut args: Vec<OsString> = ["-a", "-f", "-C", "-i", "-e"]
+        .iter()
+        .map(OsString::from)
+        .collect();
+    args.push(module.as_os_str().to_owned());
+    args.extend(offsets.iter().map(|o| OsString::from(format!("{o:#x}"))));
+    let out = tmp.join(format!("addr2line-{}.txt", std::process::id()));
+    let run = run_to_file(
+        Path::new("addr2line"),
+        &args,
+        &out,
+        ADDR2LINE_TIMEOUT.min(left),
+    );
+    let text = run
+        .as_ref()
+        .ok()
+        .filter(|r| r.ok)
+        .and_then(|_| fs::read(&out).ok());
+    let _ = fs::remove_file(&out);
+    text.map(|b| parse_addr2line(&String::from_utf8_lossy(&b), offsets.len()))
 }
 
 /// The scratch project of the harness run an input file belongs to
@@ -247,6 +274,7 @@ fn symbolize(
     exe: Option<&str>,
     scratch: Option<&Path>,
     project: &Path,
+    tmp: Option<&Path>,
     limits: &mut BTreeSet<String>,
 ) -> Vec<Stack> {
     let paths: Vec<String> = modules
@@ -278,10 +306,24 @@ fn symbolize(
     }
     let mut resolved: BTreeMap<(usize, u64), Resolved> = BTreeMap::new();
     let mut tool_failed = false;
-    for (m, offsets) in &wanted {
+    let mut calls = 0usize;
+    let started = Instant::now();
+    'modules: for (m, offsets) in &wanted {
         let offsets: Vec<u64> = offsets.iter().copied().collect();
         for chunk in offsets.chunks(CHUNK) {
-            match run_addr2line(Path::new(&paths[*m]), chunk) {
+            let left = ADDR2LINE_BUDGET.saturating_sub(started.elapsed());
+            if calls >= ADDR2LINE_CALLS || left.is_zero() {
+                limits.insert(format!(
+                    "addr2line was stopped after {calls} calls or {} s: the remaining offsets have no site",
+                    ADDR2LINE_BUDGET.as_secs()
+                ));
+                break 'modules;
+            }
+            calls += 1;
+            let Some(tmp) = tmp else {
+                continue 'modules;
+            };
+            match run_addr2line(Path::new(&paths[*m]), chunk, tmp, left) {
                 Some(groups) => {
                     for (o, g) in chunk.iter().zip(groups) {
                         resolved.insert((*m, *o), g);
@@ -404,7 +446,7 @@ impl Adapter for ShimStackGroups {
                 if raw.is_empty() {
                     continue;
                 }
-                let total: u64 = raw.iter().map(|s| s.bytes).sum();
+                let total: u64 = raw.iter().fold(0u64, |a, s| a.saturating_add(s.bytes));
                 if best.as_ref().is_none_or(|(t, ..)| total >= *t) {
                     best = Some((total, d, raw));
                 }
@@ -416,13 +458,17 @@ impl Adapter for ShimStackGroups {
                 d.exe.as_deref(),
                 scratch.as_deref(),
                 &tc.project,
+                // A dump from another machine names modules DLA must not run tools on.
+                (!ctx.artifact_run)
+                    .then(|| tc.tmp_dir().ok())
+                    .flatten()
+                    .as_deref(),
                 &mut limits,
             );
             let unattributed = stacks
                 .iter()
                 .filter(|s| s.site.is_none())
-                .map(|s| s.bytes)
-                .sum();
+                .fold(0u64, |a, s| a.saturating_add(s.bytes));
             captures.push(ShimCapture {
                 label: i.shown().to_owned(),
                 x: d.x,
@@ -573,8 +619,8 @@ fn run_diff(
         if let Some(s) = &r.site {
             v["site"] = json!(s);
         }
-        v["d_bytes"] = json!(delta(&r.bytes));
-        v["d_blocks"] = json!(delta(&r.blocks));
+        v["d_bytes"] = json!(emit::jn(delta(&r.bytes)));
+        v["d_blocks"] = json!(emit::jn(delta(&r.blocks)));
         v
     };
     let mut base = Map::new();
@@ -779,4 +825,33 @@ fn spec_limits(limits: &BTreeSet<String>) -> Vec<String> {
     ];
     v.extend(limits.iter().cloned());
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_holding_a_space_and_parenthesis_is_kept_and_only_a_discriminator_is_cut() {
+        let out = "0x10\nfill\n/Users/me/proj (1)/src/a.c:12\n0x20\nfill2\n/Users/me/proj (1)/src/a.c:30 (discriminator 3)\n0x30\nplain\n/src/b.c:7 (discriminator 12)\n0x40\nnone\n??:0\n";
+        let g = parse_addr2line(out, 4);
+        assert_eq!(
+            g[0],
+            vec![(
+                "/Users/me/proj (1)/src/a.c".to_owned(),
+                12,
+                "fill".to_owned()
+            )]
+        );
+        assert_eq!(
+            g[1],
+            vec![(
+                "/Users/me/proj (1)/src/a.c".to_owned(),
+                30,
+                "fill2".to_owned()
+            )]
+        );
+        assert_eq!(g[2], vec![("/src/b.c".to_owned(), 7, "plain".to_owned())]);
+        assert!(g[3].is_empty());
+    }
 }

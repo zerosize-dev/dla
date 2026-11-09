@@ -163,6 +163,7 @@ siblings of the root.
 | `ledger test F3 --evidence E` | a `workload` evidence from `harness gen` or `harness run` among the cited or supporting evidence | `harness-required` |
 | `ledger test F3` (leak-side) | at least one non-leak sibling in the family | `sibling-required` |
 | `ledger confirm F3` (leak-side) | a `growth-series` or `unit-count-series` evidence of authority test, live or dump whose result has `gate: pass` | `growth-gate-failed` |
+| | a cited passing growth column tied to the finding (probe, site, owner or `candidates`) | `growth-not-tied` |
 | | the finding has a `site` and a `holder` | `site-required`, `holder-required` |
 | | some non-leak member of the family is `refuted` | `nonleak-refutation-required` |
 | `ledger confirm F3.n1` (non-leak) | a `discriminator` with `favors: non-leak`, and the leak-side root is `refuted` | `discriminator-required`, `discriminator-direction`, `leak-refutation-required` |
@@ -171,9 +172,9 @@ siblings of the root.
 | `ledger annotate F3 --holder H` | sets holder, owner, region or site only when the finding has none; a different value is refused | `annotation-conflict` |
 
 A discriminator that names a finding counts only for findings in that finding's family. Refusals
-name the missing item and the command that fixes it. A confirm that cites a passing column not
-tied to the finding (by finding id, site or `candidates`) succeeds but prints a `warning`: check
-that the column really measures this holder. On confirm the ledger fills `shape` and `region` from
+name the missing item and the command that fixes it. A leak-side confirm needs a cited passing
+growth column tied to the finding (its probe, a column at its site, a column naming its owner, or
+one listing it under `candidates`); otherwise it is refused with `growth-not-tied`. On confirm the ledger fills `shape` and `region` from
 the first passing column cited when the finding has none (a `process` region leaves `region`
 unset). `ledger strong` is not available yet.
 

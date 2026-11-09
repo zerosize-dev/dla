@@ -221,8 +221,8 @@ pub fn run_diff(
         .map(|r| {
             json!({
                 "name": red.name(r.name),
-                "d_count": delta(&r.counts),
-                "d_bytes": delta(&r.bytes),
+                "d_count": emit::jn(delta(&r.counts)),
+                "d_bytes": emit::jn(delta(&r.bytes)),
             })
         })
         .collect();
@@ -270,8 +270,8 @@ pub fn run_diff(
         }
         list.push(json!({
             "type": clip(&red.name(r.name), NAME_CLIP),
-            "d_count": delta(&r.counts),
-            "d_bytes": d,
+            "d_count": emit::jn(delta(&r.counts)),
+            "d_bytes": emit::jn(d),
         }));
     }
     let mut result = list.finish();
@@ -333,8 +333,8 @@ pub fn run_diff(
                 .filter(|r| delta(&r.bytes) > 0 || delta(&r.counts) > 0)
                 .map(|r| json!({
                     "type": clip(&red.name(r.name), 48),
-                    "d_count": delta(&r.counts),
-                    "d_bytes": delta(&r.bytes),
+                    "d_count": emit::jn(delta(&r.counts)),
+                    "d_bytes": emit::jn(delta(&r.bytes)),
                 }))
                 .collect::<Vec<_>>()
         ),

@@ -980,6 +980,18 @@ mod tests {
         let p = pick::pick(&s, &ledger, None, &[], Some(&trend), "H1").unwrap();
         assert_eq!(p.voting, ["go.heap_live"], "{}", p.basis);
         assert!(p.tested.iter().any(|c| c == "os.vm_hwm"), "{:?}", p.tested);
+        // Virtual size is the same: reservations are not given back by a purge.
+        s.columns.push(col("os.vm_data"));
+        for p in &mut s.points {
+            p.values.push(Some(9e7 + p.x * 10.0));
+        }
+        let trend = TrendReport {
+            columns: vec![passed("os.vm_hwm"), passed("os.vm_data")],
+            ..trend
+        };
+        let p = pick::pick(&s, &ledger, None, &[], Some(&trend), "H1").unwrap();
+        assert_eq!(p.voting, ["go.heap_live"], "{}", p.basis);
+        assert!(p.tested.iter().any(|c| c == "os.vm_data"), "{:?}", p.tested);
     }
 
     #[test]

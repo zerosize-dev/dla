@@ -180,10 +180,10 @@ Reading the result:
 
 - `gate` pass or fail says whether a column grows strictly enough. `passed` lists the columns that
   did, each with a `tie` (rule `holder`, `site` or `type`, and the key). `needed` says what is
-  missing; `ambiguous` lists columns that matched several findings (they tie none).
+  missing; `candidates` lists every finding tied by exact identity (holder, site or recorded writer) at one place; `ambiguous` lists only type matches that hit several findings (they tie none).
 - Growth confirms only the holder it measures. A tie exists only when the column measures the same
   holder as the finding, carries the finding's site (or a writer the census or you recorded), or the
-  growing type is the finding's recorded accumulation or declared element type. `--finding F`
+  growing type is the finding's recorded accumulation class, its declared element type, or its own plain declared type when that is a project class (not a generic, JDK or Kotlin type; an instance field of its own class type is a chain link, not a holder). `--finding F`
   narrows to such columns; it never forces a tie. Whole-process and total columns (`os.*`,
   `jvm.*`, thread totals) never tie.
 - An empty, flat or failed-gate result never refutes a leak: the capture may have missed it (a

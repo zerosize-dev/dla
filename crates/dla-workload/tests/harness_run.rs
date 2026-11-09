@@ -1456,7 +1456,8 @@ fn jvm_agent_writes_the_requested_captures_and_lists_them() {
     assert_eq!(count(Histogram), 4, "{:?}", out.limitations);
     assert_eq!(count(Heap), 2);
     assert_eq!(count(Jfr), 2);
-    // threads.json needs Thread.dump_to_file (JDK 19+); older JDKs write the other three.
+    // threads.json needs Thread.dump_to_file (JDK 19 or later; verified on 21); older JDKs
+    // write the other three.
     if java_major() >= 19 {
         assert_eq!(count(NonHeap), 8, "{:?}", out.limitations);
     } else {
@@ -1464,7 +1465,7 @@ fn jvm_agent_writes_the_requested_captures_and_lists_them() {
         assert!(
             out.limitations
                 .iter()
-                .any(|l| l.contains("Thread.dump_to_file") && l.contains("JDK 19")),
+                .any(|l| l.contains("Thread.dump_to_file") && l.contains("JDK 21")),
             "{:?}",
             out.limitations
         );

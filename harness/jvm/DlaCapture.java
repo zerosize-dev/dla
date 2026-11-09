@@ -245,7 +245,7 @@ public final class DlaCapture {
                 out.add(entry("nonheap", "thread dump (json)", f, (System.nanoTime() - t0) / 1_000_000, null));
             } catch (Throwable t) {
                 String why = t instanceof javax.management.JMException
-                    ? "Thread.dump_to_file (threadDumpToFile) needs JDK 19 or newer: " + t
+                    ? "Thread.dump_to_file (threadDumpToFile) needs JDK 21 (verified; 19 and 20 untested): " + t
                     : t.toString();
                 out.add(entry("nonheap", "thread dump (json)", null, (System.nanoTime() - t0) / 1_000_000, why));
             }

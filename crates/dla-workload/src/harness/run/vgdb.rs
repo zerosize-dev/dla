@@ -28,7 +28,7 @@
 
 use std::{
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -39,7 +39,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dla_parsers::native::vgdb::{self, Holder, LeakCheck, LossRecord, Step};
+use dla_parsers::native::vgdb::{self, BlockRef, Holder, LeakCheck, LossRecord, Step};
 
 /// Most `who_points_at` queries of the chain.
 pub(super) const MAX_CALLS: usize = 12;
@@ -314,15 +314,26 @@ fn release(plan: &VgdbPlan, pid: u32) {
 // The chain
 
 /// Waits until the log says Valgrind stopped at exit. `None` when `stop` is set first.
+/// Reads only what was appended since the last poll.
 fn wait_for_stop(log: &Path, stop: &AtomicBool) -> Option<()> {
-    let mut seen = 0usize;
+    let mut file: Option<fs::File> = None;
+    let mut seen = 0u64;
     let mut tail = String::new();
+    let mut chunk = vec![0u8; 8192];
     loop {
-        if let Ok(mut f) = fs::File::open(log) {
-            let mut text = Vec::new();
-            if f.read_to_end(&mut text).is_ok() && text.len() > seen {
-                tail.push_str(&String::from_utf8_lossy(&text[seen..]));
-                seen = text.len();
+        if file.is_none() {
+            file = fs::File::open(log).ok();
+        }
+        if let Some(f) = file.as_mut()
+            && f.seek(SeekFrom::Start(seen)).is_ok()
+        {
+            loop {
+                let n = match f.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                seen += n as u64;
+                tail.push_str(&String::from_utf8_lossy(&chunk[..n]));
                 if tail.contains("vgdb me ...") {
                     return Some(());
                 }
@@ -366,9 +377,10 @@ fn answer_file(pid: u32, command: &str, text: &str) -> String {
 }
 
 /// One walk of `who_points_at` from `(start, size)`. Returns the answers' text (with their
-/// command lines) and whether it ended in a root or in an unreferenced block.
+/// command lines) and whether it ended in a root or in an unreferenced block (a cycle, a
+/// failed call or an exhausted budget are not).
 fn walk(
-    session: &mut Session,
+    ask: &mut dyn FnMut(&str) -> Result<String, String>,
     pid: u32,
     first: (u64, u64),
     calls: &mut usize,
@@ -377,11 +389,11 @@ fn walk(
 ) -> (String, bool) {
     let mut text = String::new();
     let mut target = first;
-    let mut seen: Vec<u64> = Vec::new();
+    let mut seen: Vec<u64> = vec![first.0];
     while *calls < cap {
         let cmd = format!("who_points_at 0x{:x} {}", target.0, target.1);
         *calls += 1;
-        let answer = match session.command(&cmd) {
+        let answer = match ask(&cmd) {
             Ok(a) => a,
             Err(e) => {
                 notes.push(e);
@@ -404,8 +416,9 @@ fn walk(
                     _ => target.1,
                 };
                 if seen.contains(&start) || start == target.0 {
+                    // Not a root: the caller still tries the other start.
                     notes.push("the blocks point at each other in a cycle".to_owned());
-                    return (text, true);
+                    return (text, false);
                 }
                 seen.push(start);
                 target = (start, size);
@@ -415,8 +428,25 @@ fn walk(
     (text, false)
 }
 
+/// Margin left to the point's timeout after the chain (detach, release, the exit itself).
+const TIMEOUT_MARGIN: Duration = Duration::from_secs(5);
+
+/// The chain's budget: [`BUDGET`], or less when the point's timeout comes sooner.
+fn chain_budget(remaining: Duration) -> Duration {
+    BUDGET.min(remaining.saturating_sub(TIMEOUT_MARGIN))
+}
+
 /// Runs the chain against the stopped process `pid`; writes the answer files to `plan.dir`.
-pub(super) fn drive(plan: &VgdbPlan, pid: u32, stop: &AtomicBool) -> VgdbOutcome {
+///
+/// `remaining` is what the point's timeout still allows once the process is running; the
+/// chain budget is capped by it (less a margin) so the kill at the timeout does not land in
+/// the middle of the chain.
+pub(super) fn drive(
+    plan: &VgdbPlan,
+    pid: u32,
+    stop: &AtomicBool,
+    remaining: impl FnOnce() -> Duration,
+) -> VgdbOutcome {
     let mut out = VgdbOutcome::default();
     if wait_for_stop(&plan.log, stop).is_none() {
         out.notes.push(
@@ -426,7 +456,8 @@ pub(super) fn drive(plan: &VgdbPlan, pid: u32, stop: &AtomicBool) -> VgdbOutcome
         return out;
     }
     let started = Instant::now();
-    let deadline = started + BUDGET;
+    let budget = chain_budget(remaining());
+    let deadline = started + budget;
     let mut session = match Session::open(plan, pid, deadline) {
         Ok(s) => s,
         Err(e) => {
@@ -439,7 +470,7 @@ pub(super) fn drive(plan: &VgdbPlan, pid: u32, stop: &AtomicBool) -> VgdbOutcome
     if Instant::now() >= deadline {
         out.notes.push(format!(
             "the vgdb chain stopped after {} s; the answers so far are kept",
-            BUDGET.as_secs()
+            budget.as_secs()
         ));
     }
     session.detach();
@@ -454,7 +485,18 @@ pub(super) fn drive(plan: &VgdbPlan, pid: u32, stop: &AtomicBool) -> VgdbOutcome
 /// Whether the log still ends in the stop message with nothing after it (the process did not
 /// go on after the relay detached).
 fn pid_waits(log: &Path) -> bool {
-    fs::read_to_string(log).is_ok_and(|t| t.trim_end().ends_with("vgdb me ..."))
+    let Ok(mut f) = fs::File::open(log) else {
+        return false;
+    };
+    let len = f.metadata().map_or(0, |m| m.len());
+    if f.seek(SeekFrom::Start(len.saturating_sub(512))).is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).is_ok()
+        && String::from_utf8_lossy(&buf)
+            .trim_end()
+            .ends_with("vgdb me ...")
 }
 
 fn write_file(plan: &VgdbPlan, name: &str, text: &str, out: &mut VgdbOutcome) {
@@ -516,16 +558,27 @@ fn chain(session: &mut Session, plan: &VgdbPlan, pid: u32, out: &mut VgdbOutcome
         out.notes.push("block_list named no block".to_owned());
         return;
     };
+    follow(&mut |c| session.command(c), plan, pid, (*first, *last), out);
+}
+
+/// The `who_points_at` walks over the listed blocks (`first` is the oldest, `last` the newest).
+fn follow(
+    ask: &mut dyn FnMut(&str) -> Result<String, String>,
+    plan: &VgdbPlan,
+    pid: u32,
+    (first, last): (BlockRef, BlockRef),
+    out: &mut VgdbOutcome,
+) {
     // The newest allocation first: the head of a list that grows at the front. If that walk
     // does not end in a root, the oldest block, with the calls that are left. Only the walk
     // that ends is kept, so the files hold one chain.
     let mut calls = 0usize;
     let mut best = String::new();
     let mut rooted = false;
-    let starts = if blocks.len() > 1 {
-        vec![*last, *first]
+    let starts = if first.address != last.address {
+        vec![last, first]
     } else {
-        vec![*last]
+        vec![last]
     };
     for (i, b) in starts.iter().enumerate() {
         let cap = if i == 0 && starts.len() > 1 {
@@ -534,7 +587,7 @@ fn chain(session: &mut Session, plan: &VgdbPlan, pid: u32, out: &mut VgdbOutcome
             MAX_CALLS
         };
         let (text, done) = walk(
-            session,
+            ask,
             pid,
             (b.address, b.size),
             &mut calls,
@@ -638,5 +691,112 @@ mod tests {
         let f = valgrind_flags(Path::new("/r/tmp/vgdb/vg"));
         assert!(f.contains(&"--vgdb-stop-at=exit".to_owned()));
         assert!(f.contains(&"--vgdb-prefix=/r/tmp/vgdb/vg".to_owned()));
+    }
+
+    fn plan_in(dir: &Path) -> VgdbPlan {
+        VgdbPlan {
+            vgdb: PathBuf::from("vgdb"),
+            prefix: dir.join("vg"),
+            log: dir.join("run.log"),
+            dir: dir.to_path_buf(),
+        }
+    }
+
+    fn who(target: u64, holder: &str) -> String {
+        format!(
+            "Searching for pointers to 0x{target:x}\n*0x9000 points at 0x{target:x}\n   Address 0x9000 is {holder}\n"
+        )
+    }
+
+    fn block(address: u64) -> BlockRef {
+        BlockRef { address, size: 16 }
+    }
+
+    #[test]
+    fn a_cycle_is_not_a_root_and_the_oldest_block_is_tried() {
+        let d = tempfile::tempdir().unwrap();
+        let plan = plan_in(d.path());
+        // 0xa0 (newest) and 0xb0 point at each other; 0xc0 (oldest) is held by a data symbol.
+        let mut asked: Vec<String> = Vec::new();
+        let mut ask = |c: &str| -> Result<String, String> {
+            asked.push(c.to_owned());
+            let inside = |_a: u64| "0 bytes inside a block of size 16 alloc'd".to_string();
+            Ok(if c.contains("0xa0 ") {
+                who(0xa0, &inside(0xb0)).replace("0x9000 is", "0xb0 is")
+            } else if c.contains("0xb0 ") {
+                who(0xb0, &inside(0xa0)).replace("0x9000 is", "0xa0 is")
+            } else {
+                who(0xc0, "0 bytes inside data symbol \"registry\"")
+            })
+        };
+        let mut out = VgdbOutcome::default();
+        follow(&mut ask, &plan, 1, (block(0xc0), block(0xa0)), &mut out);
+        assert!(
+            asked.iter().any(|c| c.contains("0xc0 ")),
+            "the fallback start was not tried: {asked:?}"
+        );
+        assert!(out.rooted, "{:?}", out.notes);
+        let kept = fs::read_to_string(d.path().join("vgdb-3-who.txt")).unwrap();
+        assert!(
+            kept.contains("registry") && !kept.contains("0xb0 16"),
+            "{kept}"
+        );
+    }
+
+    #[test]
+    fn a_cycle_with_no_root_anywhere_is_partial() {
+        let d = tempfile::tempdir().unwrap();
+        let plan = plan_in(d.path());
+        let mut ask = |c: &str| -> Result<String, String> {
+            let (t, o) = if c.contains("0xa0 ") {
+                (0xa0, 0xb0)
+            } else {
+                (0xb0, 0xa0)
+            };
+            Ok(who(t, "0 bytes inside a block of size 16 alloc'd")
+                .replace("0x9000 is", &format!("0x{o:x} is")))
+        };
+        let mut out = VgdbOutcome::default();
+        follow(&mut ask, &plan, 1, (block(0xb0), block(0xa0)), &mut out);
+        assert!(!out.rooted);
+        assert!(
+            out.notes.iter().any(|n| n.contains("cycle")),
+            "{:?}",
+            out.notes
+        );
+        assert!(
+            out.notes.iter().any(|n| n.contains("partial")),
+            "{:?}",
+            out.notes
+        );
+    }
+
+    #[test]
+    fn the_chain_budget_is_capped_by_the_remaining_timeout() {
+        assert_eq!(chain_budget(Duration::from_secs(600)), BUDGET);
+        assert_eq!(
+            chain_budget(Duration::from_secs(20)),
+            Duration::from_secs(15)
+        );
+        assert_eq!(chain_budget(Duration::from_secs(3)), Duration::ZERO);
+    }
+
+    #[test]
+    fn the_stop_is_found_by_reading_only_new_bytes_and_survives_non_utf8() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("run.log");
+        let mut f = fs::File::create(&log).unwrap();
+        f.write_all(b"\xff\xfe noise vgdb m").unwrap();
+        f.flush().unwrap();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let (l2, s2) = (log.clone(), stop.clone());
+        let t = thread::spawn(move || wait_for_stop(&l2, &s2));
+        thread::sleep(Duration::from_millis(120));
+        f.write_all(b"e ...\n").unwrap();
+        f.flush().unwrap();
+        assert_eq!(t.join().unwrap(), Some(()));
+        assert!(pid_waits(&log));
+        f.write_all(b"\xff more output\n").unwrap();
+        assert!(!pid_waits(&log));
     }
 }

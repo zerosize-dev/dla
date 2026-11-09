@@ -323,8 +323,8 @@ fn run_spec(piece: &str, cwd: &str, template: Option<&str>) -> CommandSpec {
 
 /// Sets `key` in `spec.env`. A value the command already carries inline
 /// (`PYTHONPATH=src python3 ...`) is combined with the injected one, never replaced:
-/// `PYTHONPATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH` and `DYLD_INSERT_LIBRARIES` get the injected value first
-/// (path separator), `JAVA_TOOL_OPTIONS` and `NODE_OPTIONS` get it last (space).
+/// `PYTHONPATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` and `DYLD_INSERT_LIBRARIES` get the injected value first
+/// (path separator), `JAVA_TOOL_OPTIONS`, `NODE_OPTIONS` and `GRADLE_OPTS` get it last (space).
 fn set_env(spec: &mut CommandSpec, key: &str, value: String) {
     if let Some(e) = spec.env.iter_mut().find(|(k, _)| k == key) {
         let old = std::mem::take(&mut e.1);
@@ -333,15 +333,27 @@ fn set_env(spec: &mut CommandSpec, key: &str, value: String) {
         } else {
             match key {
                 "PYTHONPATH" => format!("{value}{}{old}", path_sep()),
-                "LD_PRELOAD" | "DYLD_INSERT_LIBRARIES" | "LD_LIBRARY_PATH" => {
+                "LD_PRELOAD"
+                | "DYLD_INSERT_LIBRARIES"
+                | "LD_LIBRARY_PATH"
+                | "DYLD_LIBRARY_PATH" => {
                     format!("{value}:{old}")
                 }
-                "JAVA_TOOL_OPTIONS" | "NODE_OPTIONS" => format!("{old} {value}"),
+                "JAVA_TOOL_OPTIONS" | "NODE_OPTIONS" | "GRADLE_OPTS" => format!("{old} {value}"),
                 _ => value,
             }
         };
     } else {
         spec.env.push((key.to_owned(), value));
+    }
+}
+
+/// The variable the JVM builds its default `java.library.path` from.
+fn library_path_var() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "DYLD_LIBRARY_PATH"
+    } else {
+        "LD_LIBRARY_PATH"
     }
 }
 
@@ -385,8 +397,9 @@ pub fn attach_ffi(
     set_env(run, "DLA_SHIM_ONLY", "java".to_owned());
     if !lib_dirs.is_empty() {
         // Not `-Djava.library.path`: that would replace the JVM's default path. The JVM builds
-        // its default from `LD_LIBRARY_PATH` and keeps the system directories.
-        set_env(run, "LD_LIBRARY_PATH", lib_dirs.join(":"));
+        // its default from `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH` on macOS) and keeps the
+        // system directories.
+        set_env(run, library_path_var(), lib_dirs.join(":"));
     }
     // A Gradle daemon is detached and would outlive the run with the shim loaded.
     let gradle = |a: &String| {
@@ -1181,9 +1194,16 @@ mod tests {
         let jto = env(&p.run, "JAVA_TOOL_OPTIONS").unwrap();
         assert!(!jto.contains("library.path"), "{jto}");
         assert_eq!(
-            env(&p.run, "LD_LIBRARY_PATH"),
+            env(&p.run, library_path_var()),
             Some("/r/harness/H1/work/native/target/release")
         );
+        if cfg!(target_os = "macos") {
+            assert_eq!(library_path_var(), "DYLD_LIBRARY_PATH");
+            assert!(env(&p.run, "LD_LIBRARY_PATH").is_none());
+        } else {
+            assert_eq!(library_path_var(), "LD_LIBRARY_PATH");
+            assert!(env(&p.run, "DYLD_LIBRARY_PATH").is_none());
+        }
         // Without the switch none of this appears.
         let plain = plan(&w, Some("{n}"), &layout(), &Switches::default(), None).unwrap();
         assert!(env(&plain.run, "DLA_SHIM_ONLY").is_none());
@@ -1204,13 +1224,14 @@ mod tests {
             }),
             ..Switches::default()
         };
+        let var = library_path_var();
         let w = wl(
             Runtime::Jvm,
-            "LD_LIBRARY_PATH=native/target/debug java -cp out app.Main",
+            &format!("{var}=native/target/debug java -cp out app.Main"),
         );
         let p = plan(&w, Some("{n}"), &layout(), &sw, None).unwrap();
         assert_eq!(
-            env(&p.run, "LD_LIBRARY_PATH"),
+            env(&p.run, var),
             Some("/h/work/native/target/release:native/target/debug")
         );
         assert!(
@@ -1225,6 +1246,25 @@ mod tests {
             Some("-Dorg.gradle.daemon=false")
         );
         assert!(p.gaps.iter().any(|g| g.contains("daemon")));
+        // A value the command carries inline stays, the injected option follows it.
+        let w = wl(Runtime::Jvm, "GRADLE_OPTS=-Xmx2g gradle -q run");
+        let p = plan(&w, Some("{n}"), &layout(), &sw, None).unwrap();
+        assert_eq!(
+            env(&p.run, "GRADLE_OPTS"),
+            Some("-Xmx2g -Dorg.gradle.daemon=false")
+        );
+    }
+
+    #[test]
+    fn set_env_merges_the_library_path_and_gradle_options_with_inline_values() {
+        let mut spec = CommandSpec {
+            argv: vec!["java".into()],
+            cwd: ".".into(),
+            env: Vec::new(),
+        };
+        spec.env.push(("DYLD_LIBRARY_PATH".into(), "/old".into()));
+        set_env(&mut spec, "DYLD_LIBRARY_PATH", "/new".into());
+        assert_eq!(spec.env[0].1, "/new:/old");
     }
 
     #[test]

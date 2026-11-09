@@ -230,9 +230,11 @@ enum Merge {
 fn merge_rule(key: &str) -> Merge {
     let path_sep = if cfg!(windows) { ';' } else { ':' };
     match key {
-        "JAVA_TOOL_OPTIONS" | "NODE_OPTIONS" => Merge::Append(' '),
+        "JAVA_TOOL_OPTIONS" | "NODE_OPTIONS" | "GRADLE_OPTS" => Merge::Append(' '),
         "PYTHONPATH" => Merge::Prepend(path_sep),
-        "LD_PRELOAD" | "DYLD_INSERT_LIBRARIES" => Merge::Prepend(':'),
+        "LD_PRELOAD" | "DYLD_INSERT_LIBRARIES" | "LD_LIBRARY_PATH" | "DYLD_LIBRARY_PATH" => {
+            Merge::Prepend(':')
+        }
         _ => Merge::Replace,
     }
 }
@@ -374,7 +376,12 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
     let stop = Arc::new(AtomicBool::new(false));
     let chain = spec.vgdb.clone().map(|plan| {
         let stop = Arc::clone(&stop);
-        thread::spawn(move || vgdb::drive(&plan, pid, &stop))
+        let timeout = spec.timeout;
+        thread::spawn(move || {
+            vgdb::drive(&plan, pid, &stop, move || {
+                timeout.saturating_sub(started.elapsed())
+            })
+        })
     });
     loop {
         match guard.child.try_wait() {
@@ -1936,6 +1943,16 @@ mod tests {
         let t = [("n", "300".to_owned()), ("label", "p3-native".to_owned())];
         assert_eq!(subst("--n={n} {label} {n}", &t), "--n=300 p3-native 300");
         assert_eq!(subst("{unknown}", &t), "{unknown}");
+    }
+
+    #[test]
+    fn gradle_options_and_library_paths_keep_the_inherited_value() {
+        assert!(matches!(merge_rule("GRADLE_OPTS"), Merge::Append(' ')));
+        assert!(matches!(merge_rule("LD_LIBRARY_PATH"), Merge::Prepend(':')));
+        assert!(matches!(
+            merge_rule("DYLD_LIBRARY_PATH"),
+            Merge::Prepend(':')
+        ));
     }
 
     #[test]

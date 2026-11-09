@@ -21,7 +21,7 @@
 //! * A thread stack or an unnamed segment as the root has no owner: it is reported, and no
 //!   column is tied.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
 use dla_core::{
     FindingId, Ledger,
@@ -214,12 +214,15 @@ fn symbol_parts(symbol: &str) -> Option<(String, Vec<String>, bool)> {
 }
 
 /// The finding of a data symbol: the one finding whose owner ends with the symbol's module
-/// path and name. A bare name (a C static, or a Rust static in the root module) needs
+/// path and name, and whose declaration site is where that symbol is defined (see
+/// [`defined_at`]). A bare name (a C static, or a Rust static in the root module) needs
 /// exactly one finding that ends with it; for the root module the owner's module must be
-/// `main` or `lib`. Several matches give none, listed as ambiguous.
+/// `main` or `lib`. Several suffix matches give none, listed as ambiguous; one suffix match
+/// that is not the symbol's definition gives none.
 fn finding_for_symbol(
     ledger: &Ledger,
     who: &tie::Who,
+    project: &Path,
     symbol: &str,
 ) -> (Option<(FindingId, TieReason)>, Vec<FindingId>) {
     let Some((display, rest, rust)) = symbol_parts(symbol) else {
@@ -227,7 +230,7 @@ fn finding_for_symbol(
     };
     let name = rest.last().cloned().unwrap_or_default();
     let tail = rest.join(".");
-    let hits: Vec<FindingId> = ledger
+    let hits: Vec<_> = ledger
         .findings()
         .filter(|f| who.sees(f))
         .filter(|f| {
@@ -243,13 +246,179 @@ fn finding_for_symbol(
                 ends(&name)
             }
         })
-        .map(|f| f.id.clone())
         .collect();
     match hits.as_slice() {
-        [one] => (Some((one.clone(), TieReason::holder(&display))), Vec::new()),
-        [] => (None, Vec::new()),
-        _ => (None, hits),
+        [one] if defined_at(project, one.site.as_deref(), symbol, &rest, rust) => (
+            Some((one.id.clone(), TieReason::holder(&display))),
+            Vec::new(),
+        ),
+        [_] | [] => (None, Vec::new()),
+        _ => (None, hits.iter().map(|f| f.id.clone()).collect()),
     }
+}
+
+/// True when the finding's declaration site is where the symbol is defined, so a suffix of
+/// the owner is not taken for an identity.
+///
+/// * Rust (`krate::m1::m2::NAME`): the site file is `<dir>/src/m1/m2.rs` (or `m1/m2/mod.rs`;
+///   `main.rs` or `lib.rs` for the root module), and the `Cargo.toml` of `<dir>` names the
+///   crate `krate`. A static of another crate, or of another directory of the same name,
+///   does not match.
+/// * C (a bare name): the site file is the only C source of the project that defines the
+///   name at file scope.
+fn defined_at(
+    project: &Path,
+    site: Option<&str>,
+    symbol: &str,
+    rest: &[String],
+    rust: bool,
+) -> bool {
+    let Some(file) = site
+        .and_then(|s| s.rsplit_once(':').map(|(f, _)| f).or(Some(s)))
+        .map(|f| f.replace('\\', "/"))
+        .map(|f| f.trim_start_matches("./").to_owned())
+        .filter(|f| !f.is_empty())
+    else {
+        return false;
+    };
+    if rust {
+        let d = demangle_or_raw(symbol);
+        let Some(krate) = d.split("::").next() else {
+            return false;
+        };
+        rust_defined_at(project, &file, krate, &rest[..rest.len().saturating_sub(1)])
+    } else {
+        rest.last()
+            .is_some_and(|name| c_defined_only_at(project, &file, name))
+    }
+}
+
+fn rust_defined_at(project: &Path, file: &str, krate: &str, mods: &[String]) -> bool {
+    let Some(stem) = file.strip_suffix(".rs") else {
+        return false;
+    };
+    let mut comps: Vec<&str> = stem.split('/').filter(|c| !c.is_empty()).collect();
+    if mods.is_empty() {
+        if !matches!(comps.last(), Some(&"main" | &"lib")) {
+            return false;
+        }
+        comps.pop();
+    } else {
+        if comps.last() == Some(&"mod") {
+            comps.pop();
+        }
+        if comps.len() < mods.len()
+            || !comps[comps.len() - mods.len()..]
+                .iter()
+                .zip(mods)
+                .all(|(c, m)| c == m)
+        {
+            return false;
+        }
+        comps.truncate(comps.len() - mods.len());
+    }
+    if comps.last() != Some(&"src") {
+        return false;
+    }
+    comps.pop();
+    let manifest = project.join(comps.join("/")).join("Cargo.toml");
+    let Ok(text) = std::fs::read_to_string(manifest) else {
+        return false;
+    };
+    crate_names(&text)
+        .iter()
+        .any(|n| n.replace('-', "_") == krate)
+}
+
+/// The crate names a manifest gives: `[package] name` and `[lib] name`.
+fn crate_names(manifest: &str) -> Vec<String> {
+    let mut section = "";
+    let mut names = Vec::new();
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            section = t;
+        } else if matches!(section, "[package]" | "[lib]")
+            && let Some((k, v)) = t.split_once('=')
+            && k.trim() == "name"
+        {
+            names.push(v.trim().trim_matches('"').to_owned());
+        }
+    }
+    names
+}
+
+/// Most source files looked at, and largest one, when searching for a C definition.
+const C_SCAN_FILES: usize = 20_000;
+const C_SCAN_BYTES: u64 = 4 << 20;
+
+/// True when `file` is the only C or C++ source under `project` that defines `name` at
+/// file scope (a line that starts in column 0, holds a type before the name, and has `=`,
+/// `;`, `[` or `,` after it).
+fn c_defined_only_at(project: &Path, file: &str, name: &str) -> bool {
+    let mut defining: Vec<String> = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![project.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let path = e.path();
+            let fname = e.file_name().to_string_lossy().into_owned();
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                if !matches!(fname.as_str(), ".git" | ".dla" | "target" | "node_modules") {
+                    stack.push(path);
+                }
+                continue;
+            }
+            let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
+            if !matches!(ext, "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hh") {
+                continue;
+            }
+            seen += 1;
+            if seen > C_SCAN_FILES {
+                return false;
+            }
+            if e.metadata().map_or(true, |m| m.len() > C_SCAN_BYTES) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if text.lines().any(|l| declares(l, name))
+                && let Ok(rel) = path.strip_prefix(project)
+            {
+                defining.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    defining.len() == 1 && defining[0] == file
+}
+
+/// True when a source line declares the file-scope variable `name`.
+fn declares(line: &str, name: &str) -> bool {
+    if line.is_empty() || line.starts_with([' ', '\t', '#', '/', '*', '}', '{']) {
+        return false;
+    }
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut from = 0;
+    while let Some(at) = line[from..].find(name) {
+        let (start, end) = (from + at, from + at + name.len());
+        from = end;
+        let before = &line[..start];
+        let after = line[end..].trim_start();
+        let boundary = !before.ends_with(ident) && !line[end..].starts_with(ident);
+        if boundary
+            && !before.trim().is_empty()
+            && !before.contains(['(', '=', '.', '>'])
+            && after.starts_with(['=', ';', '[', ','])
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Records `site` as a writer of `f` (once).
@@ -599,7 +768,7 @@ impl Adapter for ValgrindVgdb {
                 .collect();
             let (found, amb) = symbols
                 .get(key)
-                .map(|s| finding_for_symbol(ledger, &who, s))
+                .map(|s| finding_for_symbol(ledger, &who, &tc.project, s))
                 .unwrap_or_default();
             let matches: Vec<_> = found.into_iter().collect();
             let mut r_tie = tie::resolve(matches, opts.finding.as_ref());

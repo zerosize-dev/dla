@@ -53,7 +53,8 @@ bytehound, goref. For those runtimes keep using the harness columns and `dla att
 | JVM process or artifact | `dla attach jcmd --pid <P> --op histogram\|thread-dump\|nmt\|jfr\|heap-dump` | the same ops on `attach/P<n>/` files |
 | Rust, native (program started directly) | `dla harness run H1 --tool valgrind` | `alloc-stack-diff` on the `valgrind.xml` files; `heap-graph` on the `vgdb-*.txt` files |
 | Rust, native | `dla harness run H1 --tool heaptrack` | `alloc-stack-diff` on `heaptrack.txt` files, a second command on `heaptrack-diff.txt` |
-| Native with the shim | the normal command-mode harness | `type-histogram-diff` on `out/p*/dump.jsonl` (shim stack groups), `non-heap` on the same dumps (fd counts) |
+| Native with the shim | the normal command-mode harness; it prints no summarize command for native dumps | run by hand: `type-histogram-diff` and `non-heap` on `harness/H1/out/p<k>-<series>/dump.jsonl` (shim stack groups; fd counts) |
+| JVM with the shim (JNI) | the normal command-mode harness | `type-histogram-diff` on `shim-dump.jsonl`, as printed |
 
 Run exactly the commands `harness run` prints under `summarize`; each one uses one op and one input
 format. Mixed formats in one call are refused as `mixed-formats` and the refusal names the fix.
@@ -62,7 +63,7 @@ format. Mixed formats in one call are refused as `mixed-formats` and the refusal
 
 - A passing growth column that carries a `tie` (rule `holder`, `site` or `type`) ties to a finding:
   growth confirms only the holder it measures. Cite the `growth-series` evidence in `dla ledger confirm`.
-- A column that passes but is untied (no `tie`, or listed under `ambiguous`) is reported, and confirms
+- A column that passes but is untied (no `tie`, or a type match listed under `ambiguous`) is reported, and confirms
   nothing. `needed` says what is missing. `--finding F` never forces a tie; it only narrows to columns
   that already tie to `F`.
 - JFR is a sample of old objects, not a census. Counts are small and noisy, so a short run or a small

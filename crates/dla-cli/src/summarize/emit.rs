@@ -35,6 +35,12 @@ impl RawRef {
 }
 
 /// SHA-256 of bytes, lowercase hex.
+/// A delta as a JSON number: counts come from files and can be anything up to `u64::MAX`,
+/// and `serde_json` refuses an `i128` outside `i64`/`u64`, so the value is clamped.
+pub fn jn(d: i128) -> i64 {
+    i64::try_from(d).unwrap_or(if d < 0 { i64::MIN } else { i64::MAX })
+}
+
 pub fn sha_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }

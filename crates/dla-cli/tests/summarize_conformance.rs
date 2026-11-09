@@ -1340,6 +1340,44 @@ fn a_fields_own_project_type_ties_but_a_jdk_or_unrelated_project_type_does_not()
 }
 
 #[test]
+fn a_self_link_field_is_not_a_holder_of_its_own_type() {
+    // jvm-audit-chain's shape: a static root and the instance link of the chain it holds,
+    // both declared as the growing class. The link is inside the structure; the root holds it.
+    let p = Project::new();
+    p.put(
+        "src/gateway/RequestContext.java",
+        b"package gateway;\n\nfinal class RequestContext {\n    static RequestContext latest;\n    RequestContext previous;\n}\n",
+    );
+    let latest = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "gateway.RequestContext.latest",
+            "--site",
+            "src/gateway/RequestContext.java:4",
+            "--holder",
+            "static/global",
+        ],
+    );
+    let previous = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "gateway.RequestContext.previous",
+            "--site",
+            "src/gateway/RequestContext.java:5",
+            "--holder",
+            "container-field",
+        ],
+    );
+    let files = histograms_of(&p, &[("gateway.RequestContext", 10_000)]);
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"], json!([latest]), "{v}");
+    let g = last_growth(&p);
+    assert!(!ledger_rule_ties(&g, &previous, None, None));
+}
+
+#[test]
 fn a_type_that_matches_several_findings_ties_none_even_with_finding() {
     let p = Project::new();
     p.put(

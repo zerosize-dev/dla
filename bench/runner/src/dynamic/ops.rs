@@ -244,7 +244,7 @@ pub(super) fn check_call(
         for col in ev.result["passed"].as_array().into_iter().flatten() {
             let tied = col.get("finding").is_some_and(|f| !f.is_null())
                 || col["candidates"].as_array().is_some_and(|c| !c.is_empty());
-            if tied && col["tie"]["rule"].as_str().is_none_or(str::is_empty) {
+            if tied && !valid_tie(&col["tie"]) {
                 bad.push(format!(
                     "{label}: {id} ties column {} without a tie reason",
                     col["column"].as_str().unwrap_or("?")
@@ -267,6 +267,12 @@ fn is_coverage_gap(json: &Value) -> bool {
 
 /// The findings a passing column of the call's growth evidence is tied to, with the evidence
 /// ids the call wrote.
+/// A tie names its rule (holder, site or type) and the key that matched.
+fn valid_tie(tie: &Value) -> bool {
+    matches!(tie["rule"].as_str(), Some("holder" | "site" | "type"))
+        && tie["key"].as_str().is_some_and(|k| !k.is_empty())
+}
+
 fn tied_findings(out: &Out, view: &View) -> Option<(BTreeSet<String>, Vec<String>)> {
     if !out.ok {
         return None;
@@ -278,7 +284,7 @@ fn tied_findings(out: &Out, view: &View) -> Option<(BTreeSet<String>, Vec<String
     }
     let mut set = BTreeSet::new();
     for col in ev.result["passed"].as_array().into_iter().flatten() {
-        if col["tie"]["rule"].as_str().is_none() {
+        if !valid_tie(&col["tie"]) {
             continue;
         }
         if let Some(f) = col["finding"].as_str() {
@@ -592,6 +598,7 @@ case "$1 $2" in
 "summarize --list")
   echo '{"adapters":[{"runtime":"jvm","backend":"b","available":true}],"ok":true}';;
 "harness run")
+  if [ -n "$FAKE_CRASH_HARNESS" ]; then echo "thread main panicked" >&2; exit 101; fi
   echo '{"ok":true,"summary":{"summarize":["dla summarize type-histogram-diff a.txt \"b c.txt\" d.txt"]}}';;
 "summarize type-histogram-diff")
   mkdir -p $R/histograms
@@ -601,6 +608,9 @@ case "$1 $2" in
   echo '{"type":"evidence","evidence_id":"E1","kind":"histogram-diff","authority":"live","result":{}}' >> $R/ledger.jsonl
   echo '{"type":"evidence","evidence_id":"E2","kind":"growth-series","authority":"live","result":{"gate":"pass","passed":[{"column":"type:X",'"$tie"'"finding":"F1"}]}}' >> $R/ledger.jsonl
   echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"pass","growth_evidence":"E2","raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
+"ledger confirm")
+  if [ -n "$FAKE_CRASH_CONFIRM" ]; then echo "thread main panicked" >&2; exit 101; fi
+  echo '{"ok":true}';;
 *) echo '{"ok":true}';;
 esac
 "#;
@@ -696,6 +706,64 @@ esac
         assert!(
             calls.contains("ledger confirm F1 --evidence E0\n"),
             "{calls}"
+        );
+    }
+
+    #[test]
+    fn a_tie_needs_a_known_rule_and_a_key() {
+        let sha = sha256_hex(b"raw");
+        let read = |_: &str| Some(b"raw".to_vec());
+        for tie in [
+            json!({"rule": "holder"}),
+            json!({"rule": "holder", "key": ""}),
+            json!({"rule": "bogus", "key": "k"}),
+            json!({"key": "k"}),
+        ] {
+            let v = view_with(
+                "E1",
+                json!({"gate": "pass", "passed": [
+                {"column": "c", "finding": "F1", "tie": tie}]}),
+            );
+            let o = out(good(&sha), 100);
+            let bad = check_call("s", &o, &v, &read);
+            assert_eq!(bad.len(), 1, "{tie}: {bad:?}");
+            assert!(tied_findings(&o, &v).is_none(), "{tie}");
+        }
+        for rule in ["holder", "site", "type"] {
+            let v = view_with(
+                "E1",
+                json!({"gate": "pass", "passed": [
+                {"column": "c", "finding": "F1", "tie": {"rule": rule, "key": "k"}}]}),
+            );
+            let o = out(good(&sha), 100);
+            assert!(check_call("s", &o, &v, &read).is_empty());
+            assert!(tied_findings(&o, &v).is_some());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_crashed_capture_run_fails_a_normal_fixture() {
+        let (row, _) = drive_fake(&[("FAKE_CRASH_HARNESS", "1")]);
+        assert!(
+            row.failures
+                .iter()
+                .any(|f| f.contains("harness run H1 --capture all crashed (exit 101")),
+            "{:?}",
+            row.failures
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_crashed_ledger_confirm_fails_a_normal_fixture() {
+        let (row, _) = drive_fake(&[("FAKE_CRASH_CONFIRM", "1")]);
+        assert!(
+            row.failures
+                .iter()
+                .any(|f| f.contains("ledger confirm F1") && f.contains("crashed")),
+            "{:?}",
+            row.failures
         );
     }
 

@@ -58,6 +58,16 @@ fn is_printed(input: &Input) -> bool {
     !is_recording(input) && input.head_text().contains(EVENT_LINE)
 }
 
+/// The last `n` characters of `s`, trimmed: the end of a tool's stderr holds its error.
+fn tail_of(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    s.chars()
+        .skip(count.saturating_sub(n))
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 /// Runs `jfr print` over a recording and returns the text.
 fn print_recording(ctx: &Ctx<'_>, req: &ToolReq, input: &Input) -> Res<String> {
     let args: Vec<OsString> = [
@@ -75,6 +85,23 @@ fn print_recording(ctx: &Ctx<'_>, req: &ToolReq, input: &Input) -> Res<String> {
     .collect();
     let out_name = format!("jfr-{}.txt", &input.sha256[..16]);
     let run = ctx.run_tool(req, &args, &out_name, TOOL_TIMEOUT)?;
+    // The tool writes without a byte limit: the file is measured before it is read, like
+    // printed text given directly.
+    let size = fs::metadata(&run.out).map_or(0, |m| m.len());
+    if run.ok && size > MAX_TEXT {
+        let _ = fs::remove_file(&run.out);
+        return Err(Failure::refuse(
+            "insufficient-resources",
+            format!(
+                "jfr print wrote {} MB for {}, over the {} MB limit",
+                size >> 20,
+                input.shown(),
+                MAX_TEXT >> 20
+            ),
+            "an input of a plausible size",
+            "take a shorter recording, or capture fewer events",
+        ));
+    }
     let text = if run.ok {
         fs::read_to_string(&run.out)
             .or_else(|_| fs::read(&run.out).map(|b| String::from_utf8_lossy(&b).into_owned()))
@@ -104,7 +131,7 @@ fn print_recording(ctx: &Ctx<'_>, req: &ToolReq, input: &Input) -> Res<String> {
                 input.shown(),
                 run.code
                     .map_or_else(|| "none".to_owned(), |c| c.to_string()),
-                run.stderr_tail.chars().take(200).collect::<String>()
+                tail_of(&run.stderr_tail, 200)
             ),
             "a complete JFR recording",
             "let the JVM finish writing it (dumponexit=true), or take another with jcmd <pid> JFR.dump",

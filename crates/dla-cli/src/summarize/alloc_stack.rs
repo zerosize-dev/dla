@@ -191,6 +191,11 @@ pub fn run_diff_with(
                     None
                 } else {
                     g.frames.iter().find_map(|f| {
+                        // A frame with a file but no line (folded stacks) has no site: a
+                        // line is not invented.
+                        if f.file.is_some() && f.line.is_none_or(|l| l == 0) {
+                            return None;
+                        }
                         ctx.resolver()
                             .frame_site(&f.function, f.file.as_deref(), f.line)
                             .map(|site| (f, site))
@@ -213,7 +218,8 @@ pub fn run_diff_with(
                     ),
                 }
             });
-            let add = |slot: &mut Option<u64>, v: u64| *slot = Some(slot.unwrap_or(0) + v);
+            let add =
+                |slot: &mut Option<u64>, v: u64| *slot = Some(slot.unwrap_or(0).saturating_add(v));
             add(&mut s.live_bytes[ci], g.live_bytes);
             add(&mut s.live_blocks[ci], g.live_blocks);
             if let Some(t) = g.total_bytes {
@@ -235,8 +241,8 @@ pub fn run_diff_with(
                 frames: Vec::new(),
                 root_path: vec![first.clone()],
                 kind: Some(HOLDER_TOTAL.to_owned()),
-                live_bytes: vec![Some(0); n],
-                live_blocks: vec![Some(0); n],
+                live_bytes: vec![None; n],
+                live_blocks: vec![None; n],
                 total_bytes: vec![None; n],
                 site: None,
                 label: clip(&red.name(&key), NAME_CLIP),
@@ -247,7 +253,11 @@ pub fn run_diff_with(
                     (&mut t.live_bytes, &s.live_bytes),
                     (&mut t.live_blocks, &s.live_blocks),
                 ] {
-                    to[i] = Some(to[i].unwrap_or(0) + from[i].unwrap_or(0));
+                    // A recording that never mentions the holder stays a gap (None): a
+                    // sample that was not taken is not a total of zero.
+                    if let Some(v) = from[i] {
+                        to[i] = Some(to[i].unwrap_or(0).saturating_add(v));
+                    }
                 }
             }
         }
@@ -304,7 +314,7 @@ pub fn run_diff_with(
                         "line": f.line,
                     })).collect::<Vec<_>>(),
                     "root_path": s.root_path.iter().map(|r| red.name(r)).collect::<Vec<_>>(),
-                    "kind": s.kind,
+                    "kind": s.kind.as_deref().map(|k| red.name(k)),
                     "live_bytes": s.live_bytes,
                     "live_blocks": s.live_blocks,
                     "total_bytes": s.total_bytes,
@@ -341,10 +351,10 @@ pub fn run_diff_with(
             v["site"] = json!(site);
         }
         if has_live {
-            v["d_bytes"] = json!(delta(&s.live_bytes));
-            v["d_blocks"] = json!(delta(&s.live_blocks));
+            v["d_bytes"] = json!(emit::jn(delta(&s.live_bytes)));
+            v["d_blocks"] = json!(emit::jn(delta(&s.live_blocks)));
         } else {
-            v["alloc_bytes"] = json!(delta(&s.total_bytes));
+            v["alloc_bytes"] = json!(emit::jn(delta(&s.total_bytes)));
         }
         if let Some(r) = s.root_path.first() {
             v["root"] = json!(clip(&red.name(r), 48));

@@ -812,6 +812,18 @@ impl TypeIndex {
                         .filter(|n| !is_generic_type(n) && classes.declares(n)),
                 );
             }
+            // An instance field whose type is its own declaring class (`previous` in
+            // `RequestContext`, `children` of `Node`) is a link inside the growing
+            // structure, not what holds it: the static field at its root is. A static field
+            // of that type (`Node.ALL`) is a root and keeps its types.
+            let declaring = owner
+                .rsplit_once('.')
+                .map(|(class, _)| class.replace('$', "."));
+            if f.holder != Some(dla_core::finding::Holder::StaticGlobal)
+                && let Some(declaring) = declaring
+            {
+                names.retain(|n| *n != declaring);
+            }
             if !names.is_empty() {
                 declared.push((f.id.clone(), names));
             }

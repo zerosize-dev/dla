@@ -205,7 +205,7 @@ pub fn run_diff(
     let row = |i: &Item, short: bool| {
         let mut v = json!({
             "item": clip(&i.name, if short { 44 } else { NAME_CLIP }),
-            "d": delta(&i.values),
+            "d": emit::jn(delta(&i.values)),
             "last": i.values.last().copied().flatten().unwrap_or(0),
         });
         if let Some(s) = &i.site {

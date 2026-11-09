@@ -193,7 +193,7 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
     ExpectedFailure {
         fixture: "jni-order-codec",
         failure: "leak L1 (native/src/lib.rs:43) is not confirmed",
-        reason: "the leak lives in native code that runs only under the JVM. The rust worker finds no main workload with an iteration argument (harness gen: workload-required), so its census finding at the site ends suspected_static_only. In the JVM worker the shim columns native.live_bytes@native/src/lib.rs:40 and :43 pass, but no finding of that worker is at those sites and a tie never crosses runtimes, so no column is tied to the leak and the confirmation is refused; the JVM harness prints no shim-stack-groups summarize command, so that evidence is not produced either",
+        reason: "the leak lives in native code that runs only under the JVM. The rust worker finds no main workload with an iteration argument (harness gen: workload-required), so its census finding at the site ends suspected_static_only. In the JVM worker the shim columns native.live_bytes@native/src/lib.rs:40 and :43 pass, but no finding of that worker is at those sites and a tie never crosses runtimes, so no column is tied to the leak and the confirmation is refused; the JVM harness prints a shim-stack-groups summarize command, but its site ties meet the same rule. Cross-runtime correlation (cut 2) is the planned route",
     },
     ExpectedFailure {
         fixture: "node-retry-scheduler",
@@ -270,6 +270,10 @@ pub struct FixtureRow {
     pub max_stdout: usize,
     /// What the policy did (one line per decision), for the log and the JSON.
     pub steps: Vec<String>,
+    /// The measurements behind the decisions: passing trend columns and alloc-test column
+    /// verdicts, printed with a failing fixture's decisions (CI logs carry no run dirs).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
     /// Commands that failed or were refused.
     pub errors: Vec<String>,
     /// Reasons this fixture fails the acceptance.
@@ -550,15 +554,20 @@ impl Fx<'_> {
             log,
         );
         let json: Value = serde_json::from_str(stdout.trim()).unwrap_or(Value::Null);
-        // Hiding a tool must degrade dla to a refusal (JSON with ok:false), never a crash.
-        if self.path_dir.is_some()
-            && !self.timed_out
+        // A crashed dla command fails the fixture in every run. With a hidden tool it must
+        // degrade to a refusal (JSON with ok:false), never a crash.
+        if !self.timed_out
             && code != 0
             && (code == 101 || (json.is_null() && args.first() != Some(&"report")))
         {
             self.row.failures.push(format!(
-                "dla {} crashed with a hidden tool (exit {code}, {})",
+                "dla {} crashed{} (exit {code}, {})",
                 args.join(" "),
+                if self.path_dir.is_some() {
+                    " with a hidden tool"
+                } else {
+                    ""
+                },
                 if json.is_null() { "no JSON" } else { "panic" }
             ));
         }
@@ -1590,6 +1599,119 @@ fn check_dump_backed(view: &View, expected: &Expected) -> Vec<String> {
     bad
 }
 
+/// One line per trend report (its passing columns with shape, Sen slope and noise) and per
+/// alloc-test discriminator (each column's verdicts), at most 12 lines.
+fn diagnostics(run_dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut trends: Vec<_> = fs::read_dir(run_dir.join("trend"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    trends.sort();
+    for t in trends {
+        let Some(v) = fs::read_to_string(&t)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        else {
+            continue;
+        };
+        let cols: Vec<String> = v["columns"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["gate"] == "pass")
+            .map(|c| {
+                format!(
+                    "{} {} slope {:.3} noise {:.0}",
+                    c["name"].as_str().unwrap_or("?"),
+                    c["shape"].as_str().unwrap_or("?"),
+                    c["sen"]["slope"].as_f64().unwrap_or(f64::NAN),
+                    c["noise"].as_f64().unwrap_or(f64::NAN)
+                )
+            })
+            .collect();
+        out.push(format!(
+            "{} of {} passed: {}",
+            v["id"].as_str().unwrap_or("trend"),
+            v["series"].as_str().unwrap_or("?"),
+            if cols.is_empty() {
+                "none".to_owned()
+            } else {
+                cols.join("; ")
+            }
+        ));
+    }
+    let ledger = fs::read_to_string(run_dir.join("ledger.jsonl")).unwrap_or_default();
+    for line in ledger.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v["type"] != "evidence" || v["kind"] != "discriminator" {
+            continue;
+        }
+        let Some(cols) = v["result"]["columns"].as_array() else {
+            continue;
+        };
+        let cols: Vec<String> = cols
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} {} ({}, purge {})",
+                    c["name"].as_str().unwrap_or("?"),
+                    c["favors"].as_str().unwrap_or("?"),
+                    c["plateau"]["verdict"].as_str().unwrap_or("-"),
+                    c["purge"]["verdict"].as_str().unwrap_or("-")
+                )
+            })
+            .collect();
+        out.push(format!(
+            "alloc-test {}: {}",
+            v["evidence_id"].as_str().unwrap_or("?"),
+            cols.join("; ")
+        ));
+    }
+    out.truncate(12);
+    out
+}
+
+/// Backends the dump-backed evidence needs: tools that dump or allocation adapters and the
+/// harness run.
+const DUMP_BACKENDS: &[&str] = &[
+    "valgrind",
+    "heaptrack",
+    "heaptrack_print",
+    "jfr",
+    "jfr-old-object-sample",
+    "addr2line",
+];
+
+/// The [`DUMP_BACKENDS`] whose coverage row reads `missing` in the run.
+fn missing_dump_backends(run_dir: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(run_dir.join("coverage.json")) else {
+        return Vec::new();
+    };
+    let Ok(cov) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = cov["workers"]
+        .as_object()
+        .into_iter()
+        .flat_map(|w| w.values())
+        .filter_map(|w| w["backends"].as_object())
+        .flat_map(|rows| rows.iter())
+        .filter(|(name, row)| {
+            DUMP_BACKENDS.contains(&name.as_str()) && row["status"].as_str() == Some("missing")
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Residual over total of the residual evidence; `Err` when a row cannot be computed.
 fn residual_share(view: &View) -> Result<Option<f64>, String> {
     let mut residual = 0.0;
@@ -1895,10 +2017,22 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
             row.failures.push(format!("M3 rule: {m}"));
         }
         if sh.args.check_dump_backed {
-            for m in check_dump_backed(&view, &expected) {
-                row.failures.push(format!("dump check: {m}"));
+            let bad = check_dump_backed(&view, &expected);
+            // Dump-backed evidence comes from the dump and allocation backends: when the
+            // machine lacks one, the check cannot hold, and saying so beats a failure.
+            let missing = missing_dump_backends(&run_dir);
+            for m in bad {
+                if missing.is_empty() {
+                    row.failures.push(format!("dump check: {m}"));
+                } else {
+                    row.steps.push(format!(
+                        "dump check not applied ({} missing here): {m}",
+                        missing.join(", ")
+                    ));
+                }
             }
         }
+        row.diagnostics = diagnostics(&run_dir);
         match residual_share(&view) {
             Ok(s) => row.unexplained_growth_share = s,
             Err(e) => row.failures.push(e),
@@ -2178,6 +2312,10 @@ pub fn run(args: &DynamicArgs) -> Res<String> {
             trail.push_str(&format!("\n{} decisions:", f.id));
             for line in f.steps.iter().chain(f.errors.iter()) {
                 trail.push_str("\n  ");
+                trail.push_str(line);
+            }
+            for line in &f.diagnostics {
+                trail.push_str("\n  | ");
                 trail.push_str(line);
             }
         }
@@ -2626,6 +2764,44 @@ cause = "L-COLLECT"
                 r#"{"type":"transition","finding":"F1","from":"under_test","to":"confirmed","evidence":["E1"]}"#,
             ],
         )
+    }
+
+    #[test]
+    fn missing_backends_and_diagnostics_are_read_from_the_run_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let run = d.path();
+        fs::write(
+            run.join("coverage.json"),
+            r#"{"workers":{"native":{"backends":{"valgrind":{"status":"missing"},"heaptrack":{"status":"ran"},"sweep":{"status":"missing"}}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(missing_dump_backends(run), ["valgrind"]);
+        fs::create_dir_all(run.join("trend")).unwrap();
+        fs::write(
+            run.join("trend/T1.json"),
+            r#"{"id":"T1","series":"S1","columns":[{"name":"os.rss","gate":"pass","shape":"stair","sen":{"slope":63.1},"noise":63763.7},{"name":"py.traced","gate":"fail"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            run.join("ledger.jsonl"),
+            r#"{"type":"evidence","evidence_id":"E13","kind":"discriminator","result":{"columns":[{"name":"os.vm_data","favors":"inconclusive","plateau":{"verdict":"plateau"},"purge":{"verdict":"retained"}}]}}"#,
+        )
+        .unwrap();
+        let lines = diagnostics(run);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].starts_with("T1 of S1 passed: os.rss stair slope 63.100"),
+            "{lines:?}"
+        );
+        assert!(!lines[0].contains("py.traced"), "{lines:?}");
+        assert_eq!(
+            lines[1],
+            "alloc-test E13: os.vm_data inconclusive (plateau, purge retained)"
+        );
+        // Nothing in an empty run dir.
+        let e = tempfile::tempdir().unwrap();
+        assert!(diagnostics(e.path()).is_empty());
+        assert!(missing_dump_backends(e.path()).is_empty());
     }
 
     #[test]

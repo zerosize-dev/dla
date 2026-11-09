@@ -1,0 +1,52 @@
+Debuggee command was: ./a
+finished reading file, now analyzing data:
+
+MEMORY LEAKS
+2.80K leaked over 7 calls from
+xm
+  at src/a.c:2
+  in a
+700B leaked over 1 calls from:
+    s7
+      at src/a.c:3
+      in a
+    main
+      at src/a.c:4
+      in a
+600B leaked over 1 calls from:
+    s6
+      at src/a.c:3
+      in a
+    main
+      at src/a.c:4
+      in a
+500B leaked over 1 calls from:
+    s5
+      at src/a.c:3
+      in a
+    main
+      at src/a.c:4
+      in a
+400B leaked over 1 calls from:
+    s4
+      at src/a.c:3
+      in a
+    main
+      at src/a.c:4
+      in a
+300B leaked over 1 calls from:
+    s3
+      at src/a.c:3
+      in a
+    main
+      at src/a.c:4
+      in a
+  and 300B from 2 other places
+
+
+total runtime: 0.00s.
+calls to allocation functions: 8 (8000/s)
+temporary memory allocations: 0 (0/s)
+peak heap memory consumption: 76.53K
+peak RSS (including heaptrack overhead): 4.54M
+total memory leaked: 2.80K

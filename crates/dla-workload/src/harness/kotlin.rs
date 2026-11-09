@@ -68,7 +68,13 @@ pub fn has_kotlin_sources(root: &Path) -> bool {
                 if !skip && depth < 6 && walk(&path, depth + 1) {
                     return true;
                 }
-            } else if name.ends_with(".kt") || name.ends_with(".kts") {
+            } else if name.ends_with(".kt")
+                || (name.ends_with(".kts")
+                    && !matches!(
+                        name.as_str(),
+                        "build.gradle.kts" | "settings.gradle.kts" | "init.gradle.kts"
+                    ))
+            {
                 return true;
             }
         }
@@ -91,10 +97,20 @@ fn version_in_script(text: &str) -> Option<String> {
     .then_some(ver)
 }
 
-fn version_key(v: &str) -> Vec<u64> {
-    v.split(['.', '-'])
-        .map(|p| p.parse::<u64>().unwrap_or(0))
-        .collect()
+/// Sort key of a version: the numeric parts, then whether it is a release (a suffix such as
+/// `-RC` or `-Beta1` ranks below the same numbers without one), then the suffix.
+fn version_key(v: &str) -> (Vec<u64>, bool, String) {
+    let (nums, suffix) = match v.split_once('-') {
+        Some((n, s)) => (n, s),
+        None => (v, ""),
+    };
+    (
+        nums.split('.')
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect(),
+        suffix.is_empty(),
+        suffix.to_owned(),
+    )
 }
 
 fn from_repository(repo: &Path, wanted: Option<&str>) -> Option<PathBuf> {
@@ -290,6 +306,39 @@ mod tests {
         assert!(!has_kotlin_sources(d.path()));
         touch(&d.path().join("kotlin/shop/Native.kt"));
         assert!(has_kotlin_sources(d.path()));
+    }
+
+    #[test]
+    fn gradle_build_scripts_are_not_kotlin_sources() {
+        let d = tempfile::tempdir().unwrap();
+        touch(&d.path().join("build.gradle.kts"));
+        touch(&d.path().join("sub/settings.gradle.kts"));
+        touch(&d.path().join("init.gradle.kts"));
+        assert!(!has_kotlin_sources(d.path()));
+        touch(&d.path().join("scripts/tool.main.kts"));
+        assert!(has_kotlin_sources(d.path()));
+    }
+
+    #[test]
+    fn a_release_beats_its_pre_releases_in_the_repository() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("m2");
+        for v in [
+            "2.0.21",
+            "2.1.0",
+            "2.1.0-RC",
+            "2.1.0-Beta1",
+            "2.1.0-dev-123",
+        ] {
+            touch(&repo.join(format!(
+                "org/jetbrains/kotlin/kotlin-stdlib/{v}/kotlin-stdlib-{v}.jar"
+            )));
+        }
+        let got = from_repository(&repo, None).unwrap();
+        assert!(got.ends_with("2.1.0/kotlin-stdlib-2.1.0.jar"), "{got:?}");
+        // With only pre-releases, the newer number still wins.
+        assert!(version_key("2.2.0-RC") > version_key("2.1.0"));
+        assert!(version_key("2.1.0") > version_key("2.1.0-RC"));
     }
 
     #[test]
