@@ -74,7 +74,13 @@ pub fn normalize_path(path: &str) -> String {
         "/goroot/src/",
     ] {
         if let Some(at) = p.find(marker) {
-            return format!("$GOROOT/src/{}", &p[at + marker.len()..]);
+            let rest = &p[at + marker.len()..];
+            // A GOPATH checkout (`.../go/src/github.com/acme/app`) is not the standard
+            // library: its first element has a dot.
+            if rest.split('/').next().is_some_and(|e| e.contains('.')) {
+                continue;
+            }
+            return format!("$GOROOT/src/{rest}");
         }
     }
     p
@@ -114,6 +120,18 @@ mod tests {
         assert_eq!(
             normalize_path("/r/harness/Hx/work/a.go"),
             "/r/harness/Hx/work/a.go"
+        );
+    }
+
+    #[test]
+    fn a_gopath_project_file_is_not_the_standard_library() {
+        assert_eq!(
+            normalize_path("/home/u/go/src/github.com/x/y/z.go"),
+            "/home/u/go/src/github.com/x/y/z.go"
+        );
+        assert_eq!(
+            normalize_path("/usr/local/go/src/fmt/print.go"),
+            "$GOROOT/src/fmt/print.go"
         );
     }
 

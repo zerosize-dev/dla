@@ -278,6 +278,36 @@ impl Snapshot {
         hops
     }
 
+    /// Preorder entry and exit numbers of every node in the dominator tree; a node's
+    /// subtree is the numbers `tin[n]..=tout[n]`.
+    fn dom_intervals(&self, dom: &Dominators) -> (Vec<u32>, Vec<u32>) {
+        let n = self.node_count();
+        let (first, kids) = dom.children();
+        let mut tin = vec![0u32; n];
+        let mut tout = vec![0u32; n];
+        let mut clock = 0u32;
+        let mut stack: Vec<(usize, u32)> = Vec::new();
+        for &r in dom.order().iter().take(1) {
+            tin[r as usize] = clock;
+            clock += 1;
+            stack.push((r as usize, first[r as usize]));
+        }
+        while let Some(top) = stack.last_mut() {
+            let (u, next) = (top.0, top.1);
+            if next < first[u + 1] {
+                top.1 += 1;
+                let c = kids[next as usize] as usize;
+                tin[c] = clock;
+                clock += 1;
+                stack.push((c, first[c]));
+            } else {
+                tout[u] = clock.saturating_sub(1);
+                stack.pop();
+            }
+        }
+        (tin, tout)
+    }
+
     /// Finds the holders of this snapshot. `dom` and `bfs` come from the same snapshot.
     pub fn holders(&self, dom: &Dominators, bfs: &Bfs, opts: &HolderOptions) -> HolderSummary {
         let ix = self.build_index();
@@ -287,6 +317,9 @@ impl Snapshot {
             count: u64,
             instances: u64,
             best: Option<(u64, usize, usize, usize)>,
+            /// Outermost instances already counted, as dominator-tree intervals
+            /// `tin -> tout`: an instance inside one is already part of its retained bytes.
+            covered: BTreeMap<u32, u32>,
         }
         type Key = (
             HolderKind,
@@ -296,6 +329,7 @@ impl Snapshot {
             String,
         );
         let mut agg: BTreeMap<Key, Acc> = BTreeMap::new();
+        let (tin, tout) = self.dom_intervals(dom);
         let near_root = |u: usize| bfs.path_to(u).len() <= 3;
         let mut class_cache: Option<(usize, Option<usize>)> = None;
         for &ui in dom.order() {
@@ -419,9 +453,19 @@ impl Snapshot {
                 };
                 let key: Key = (kind, registry, script.map(|s| s as u32), owner, name);
                 let a = agg.entry(key).or_default();
-                a.retained = a.retained.saturating_add(dom.retained(v));
-                a.count = a.count.saturating_add(dom.dominated(v));
                 a.instances += 1;
+                // An instance nested in one already counted under this key adds nothing:
+                // its bytes are inside the outer one.
+                let nested = a
+                    .covered
+                    .range(..=tin[v])
+                    .next_back()
+                    .is_some_and(|(_, &out)| tin[v] <= out);
+                if !nested {
+                    a.covered.insert(tin[v], tout[v]);
+                    a.retained = a.retained.saturating_add(dom.retained(v));
+                    a.count = a.count.saturating_add(dom.dominated(v));
+                }
                 if a.best.is_none_or(|b| dom.retained(v) > b.0) {
                     a.best = Some((dom.retained(v), u, e, v));
                 }
@@ -652,5 +696,38 @@ mod tests {
             .find(|x| x.kind == HolderKind::Closure)
             .unwrap();
         assert_eq!(clo.name, "session");
+    }
+
+    #[test]
+    fn alternating_nested_instances_are_not_counted_twice() {
+        // roots -> A -b-> B -a-> A -b-> B ... each holder key repeats down the chain.
+        let n = 10;
+        let mut v: Vec<N<'static>> = vec![
+            ("synthetic", "", 0, vec![("element", "0", 1)]),
+            ("synthetic", "(GC roots)", 0, vec![("element", "0", 2)]),
+        ];
+        for i in 0..n {
+            let at = 2 + i;
+            let (name, edge) = if i % 2 == 0 { ("A", "b") } else { ("B", "a") };
+            let edges = if i + 1 < n {
+                vec![("property", edge, at + 1)]
+            } else {
+                vec![]
+            };
+            v.push(("object", name, 40, edges));
+        }
+        let s = load(&v);
+        let h = holders_of(&s);
+        assert!(!h.holders.is_empty());
+        for x in &h.holders {
+            assert!(x.retained <= h.total_bytes, "{x:?} over {}", h.total_bytes);
+        }
+        let ab = h
+            .holders
+            .iter()
+            .find(|x| x.owner == "A" && x.name == "b")
+            .expect("A.b holder");
+        assert_eq!(ab.retained, 40 * (n as u64 - 1));
+        assert!(ab.instances > 1);
     }
 }

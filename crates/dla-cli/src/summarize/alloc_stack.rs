@@ -66,6 +66,10 @@ pub struct ProfileOrigin {
     pub region: SeriesRegion,
     /// Order captures by their own timestamps when all have one.
     pub order_by_time: bool,
+    /// Each profile is a separate window (only what was allocated in it and is still
+    /// alive), not the cumulative live set: a series of windows is not retention growth,
+    /// so it never yields a growth column or a tie.
+    pub windowed: bool,
     /// Extra limitation lines.
     pub limitations: Vec<String>,
 }
@@ -398,6 +402,11 @@ pub fn run_diff_with(
             "the profile records bytes allocated, not bytes still live: allocation churn is not retention, so it never yields a growth column".into(),
         );
     }
+    if origin.windowed {
+        spec.limitations.push(
+            "the profiles are separate windows, not cumulative: a rise between windows is not retention growth, so no growth column is built from them".into(),
+        );
+    }
     if sampled {
         spec.limitations
             .push("the profile is sampled: counts and bytes are estimates".into());
@@ -438,10 +447,12 @@ pub fn run_diff_with(
     let stack_ev_id = stack_ev.id.clone();
     out.evidence.push(stack_ev);
 
-    if n < rule::MIN_DUMPS || !has_live {
+    if n < rule::MIN_DUMPS || !has_live || origin.windowed {
         body.insert("series".into(), Value::Null);
         body.insert("gate".into(), json!("fail"));
-        let why = if !has_live {
+        let why = if origin.windowed {
+            "the profiles are separate windows, not cumulative live bytes"
+        } else if !has_live {
             "the profile has no live bytes (allocation only)"
         } else {
             "captures < 3"
@@ -449,7 +460,9 @@ pub fn run_diff_with(
         body.insert("reasons".into(), json!([why]));
         body.insert(
             "needed".into(),
-            json!(if has_live {
+            json!(if origin.windowed {
+                "a heap-graph series of the same process: dla summarize heap-graph over .heapsnapshot files from dla harness run <H> --capture heap (the windows here show where allocations live, not growth)"
+            } else if has_live {
                 "2 more profiles of the same process after more traffic (3 confirm growth); rerun with all profiles"
             } else {
                 "a profile of live (still allocated) bytes: JFR OldObjectSample, heaptrack leaked, valgrind still-reachable or dhat end-of-run"

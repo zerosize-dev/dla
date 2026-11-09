@@ -502,3 +502,168 @@ fn threads_tasks_and_unclosed_files_are_recorded_with_their_creation_sites() {
     );
     assert_eq!(res["threads"]["total"], 31);
 }
+
+/// Runs `script` as `<project>/<name>` under the agent with only `nonheap` captured.
+fn nonheap_of(run: &Run, name: &str, script: &str) -> Value {
+    fs::write(run.project.join(name), script).unwrap();
+    run.python(&[name], &[("DLA_CAPTURE", "nonheap")]);
+    json(&run.pid_dir().join("py-1.nonheap.json"))
+}
+
+fn groups<'a>(res: &'a Value, section: &str) -> &'a Vec<Value> {
+    res[section]["groups"].as_array().unwrap()
+}
+
+#[test]
+fn a_thread_made_in_a_plain_class_init_is_sited_at_that_line() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let res = nonheap_of(
+        &run,
+        "watcher.py",
+        "import threading, time\n\
+         class Watcher:\n\
+         \x20   def __init__(self):\n\
+         \x20       self.t = threading.Thread(target=time.sleep, args=(30,), daemon=True, name='poller-1')\n\
+         \x20       self.t.start()\n\
+         \n\
+         w = Watcher()\n",
+    );
+    let g = groups(&res, "threads")
+        .iter()
+        .find(|g| g["pattern"] == "poller-*")
+        .unwrap_or_else(|| panic!("{res}"));
+    assert_eq!(g["site"], "watcher.py:4", "{g}");
+}
+
+#[test]
+fn a_thread_subclass_init_is_still_skipped() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let res = nonheap_of(
+        &run,
+        "sub.py",
+        "import threading, time\n\
+         class T(threading.Thread):\n\
+         \x20   def __init__(self):\n\
+         \x20       super().__init__(daemon=True, name='sub-1')\n\
+         \x20   def run(self):\n\
+         \x20       time.sleep(30)\n\
+         t = T()\n\
+         t.start()\n",
+    );
+    let g = groups(&res, "threads")
+        .iter()
+        .find(|g| g["pattern"] == "sub-*")
+        .unwrap_or_else(|| panic!("{res}"));
+    assert_eq!(g["site"], "sub.py:7", "{g}");
+}
+
+#[test]
+fn resource_warning_labels_are_plain_and_digit_free() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let res = nonheap_of(
+        &run,
+        "warn.py",
+        "import warnings\n\
+         warnings.warn('leaked conn to db.internal password=hunter2 pid 4412', ResourceWarning)\n\
+         warnings.warn('subprocess 4412 is still running', ResourceWarning)\n\
+         warnings.warn('subprocess 977 is still running', ResourceWarning)\n",
+    );
+    let text = res.to_string();
+    assert!(
+        !text.contains("hunter2") && !text.contains("4412"),
+        "{text}"
+    );
+    let whats: Vec<(&str, u64)> = groups(&res, "resource_warnings")
+        .iter()
+        .map(|g| (g["what"].as_str().unwrap(), g["count"].as_u64().unwrap()))
+        .collect();
+    assert!(
+        whats.contains(&("subprocess * is still running", 2)),
+        "{whats:?}"
+    );
+    assert!(whats.contains(&("ResourceWarning", 1)), "{whats:?}");
+}
+
+#[test]
+fn nonheap_alone_sites_a_file_opened_inside_the_stdlib() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let res = nonheap_of(
+        &run,
+        "tmp.py",
+        "import tempfile\n\
+         def make():\n\
+         \x20   tempfile.TemporaryFile()\n\
+         make()\n",
+    );
+    let g = groups(&res, "resource_warnings")
+        .iter()
+        .find(|g| g["site"] == "tmp.py:3")
+        .unwrap_or_else(|| panic!("{res}"));
+    assert!(g["count"].as_u64().unwrap() >= 1);
+}
+
+#[test]
+fn the_first_alloc_capture_baselines_every_stack() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let mut src = String::from("import sitecustomize as dla\nkeep = []\n");
+    for _ in 0..200 {
+        src.push_str("keep.append(bytearray(500))\n");
+    }
+    src.push_str("out, lim = [], []\ndla._capture_tracemalloc(out, dla._capture_dir(), lim)\n");
+    src.push_str("assert len(dla._tm_first) >= 200, len(dla._tm_first)\n");
+    fs::write(run.project.join("base.py"), src).unwrap();
+    run.python(
+        &["base.py"],
+        &[("DLA_CAPTURE", "alloc"), ("DLA_PY_MEMRAY", "0")],
+    );
+}
+
+#[test]
+fn the_memray_helper_finds_memray_through_site() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let site = run.dir.path().join("elsewhere");
+    fs::create_dir_all(site.join("memray")).unwrap();
+    fs::write(
+        site.join("memray/__init__.py"),
+        "class FileReader:\n    def __init__(self, p):\n        raise RuntimeError('fake reader')\n",
+    )
+    .unwrap();
+    let helper = run.agent.join("dla_memray_leaks.py");
+    let go = |extra: &[&str]| {
+        let o = Command::new("python3")
+            .args(["-I", helper.to_str().unwrap(), "x.bin", "o.json"])
+            .args(extra)
+            .current_dir(run.dir.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stderr).into_owned()
+    };
+    if python3_ok("import memray") {
+        eprintln!("skipped: a real memray is installed");
+        return;
+    }
+    assert!(go(&[]).contains("cannot be imported"));
+    let with_site = go(&["--site", site.to_str().unwrap()]);
+    assert!(
+        with_site.contains("cannot read") && with_site.contains("fake reader"),
+        "{with_site}"
+    );
+}

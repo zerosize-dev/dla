@@ -302,26 +302,25 @@ The policy, per fixture (repository entry, one runtime):
 6. The per-operation steps, for every harness that grew (a passing,
    non-container column), then the held-back confirmations. The steps read
    only `dla` JSON and never name a backend:
-   - `dla summarize --list` (adapters per op and runtime; `missing` names the
-     adapters whose tool is absent).
-   - `dla correlate H` for every JVM harness with a series, before the trends:
+   - `dla summarize --list` (backend names grouped by op and runtime; `missing`
+     lists the tools absent here).
+   - `dla correlate H` for every JVM harness with a foreign-function boundary, before the trends:
      a harness without a foreign-function boundary refuses (logged, not a
      failure); one with a boundary adds a correlation candidate and an
      `alloc-stack` evidence that the shim column then ties to by site (this
      confirms `jni-order-codec` L1).
-   - Capture. A node or go harness runs again as `harness run H --capture
-     alloc,nonheap`, a python harness as `--capture histogram,alloc,nonheap`
-     (node heap snapshots are left out: command-mode snapshots are separate
-     processes and give histograms only; the harness drops kinds a runtime does
-     not write and names them). A JVM harness runs again as `harness run H --capture all`. A rust
-     or native harness runs again as `harness run H --tool valgrind` and
-     `--tool heaptrack` for the tools that have a listed adapter; a missing
-     tool refuses with `tool-missing` and leaves its `missing` coverage row,
-     which is what a `--without` run looks for. Driver mode is not used: its
-     hooks are filled in by reading the code, which the policy cannot do, so
-     the dump series of a command-mode run are separate processes and
-     `heap-graph` does not take them (the harness leaves that command out and
-     says so under `limitations`).
+   - Capture. A node harness runs again as `harness run H --capture
+     heap,alloc,nonheap`, a go harness as `--capture alloc,nonheap`, a python
+     harness as `--capture histogram,alloc,nonheap` and a JVM harness as
+     `--capture all` (the harness drops kinds a runtime does not write and
+     names them). A rust or native harness runs again as `harness run H --tool
+     valgrind` and `--tool heaptrack` for the tools that have a listed adapter;
+     a missing tool refuses with `tool-missing` and leaves its `missing`
+     coverage row, which is what a `--without` run looks for. Driver mode is
+     not used: its hooks are filled in by reading the code, which the policy
+     cannot do. Command-mode heap captures of one harness (3 or more files of
+     one format) get a per-point `heap-graph` command, which the policy runs
+     with the other printed commands.
    - Every `dla summarize` command the capture runs printed runs once (the
      full list is in `harness/H<n>/captures.json` when the output was cut),
      at most 24 per fixture.
@@ -334,7 +333,10 @@ The policy, per fixture (repository entry, one runtime):
    - Each held-back `ledger confirm` cites the trend evidence and, when a
      summarize call's passing growth column is tied (with a reason) to the
      finding, that call's evidence (its histogram, allocation or retention
-     evidence and its growth series), so the leak is `dump_backed`. If the
+     evidence and its growth series), so the leak is `dump_backed`. The policy
+     runs `dla ledger annotate F --holder H` only when a summarize call's
+     `needed` names it (a finding with no holder) and the call's
+     `observed_holder` agrees. If the
      ledger refuses that citation the confirmation is retried with the trend
      evidence alone and the refusal is logged.
 7. `gap S --residual`; whatever is still a candidate or under test becomes
@@ -520,11 +522,15 @@ listed text is reported as `xfail: <reason>` in the table and in the JSON
 a listed fixture passes (remove the entry) or fails with any other text or with an
 additional failure (a regression must not hide behind the entry).
 
+The last full run: 22 of 25 fixtures pass and 3 are expected failures
+(`node-retry-scheduler`, `node-socket-heartbeat`, `rust-tree-parent-links`).
+`jvm-audit-chain` is dump-backed through `heap-graph`.
+
 | fixture | failure | reason |
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
-| `node-retry-scheduler` | `leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global` | The leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, `scheduler.js:15`), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root, and the heap-graph holder (`static:src.scheduler.shared`) needs a series of snapshots from one process (driver mode, which needs hand-filled hooks); the policy's command-mode captures give allocation profiles and resources only. |
-| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census classifies the `setInterval` timer at `heartbeat.js:15` as `blocked-stack` (non-heap) and the policy takes the holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). Since cut 2 `node-resources` ties the timer group to the finding by site, but only the heap-graph holder (driver mode) names the registration table, and the policy does not annotate holders it did not see. |
+| `node-retry-scheduler` | `leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global` | The confirmed finding is `RetryScheduler.latest`, an instance field, so its holder is `container-field`. The fixture expects the root's kind (`static/global`, the module variable `shared`). The census gives the field its own kind, and the ledger does not change a holder that is already set, so the fixed policy keeps `container-field`. A ledger change that corrects a holder from dump evidence was not made in M5. |
+| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The Node holder analysis yields no timer holder from the snapshots (no `Timeout` or `setInterval` entry), so no column ties the census timer finding by holder. `node-resources` ties the timer group to the finding by site. The census holder `blocked-stack` stays, and the fixture expects `registration-table`. |
 
 `jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
 workers, one merged ledger with both slices, merged coverage): the driver fails

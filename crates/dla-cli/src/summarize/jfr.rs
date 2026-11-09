@@ -195,6 +195,7 @@ fn run_inputs(
             region: SeriesRegion::Heap,
             // The printed time has no zone, so the recordings stay in the given order.
             order_by_time: false,
+            windowed: false,
             limitations: vec![
                 "OldObjectSample samples old objects that are still live; it is not a census, so counts and bytes are estimates and a count series over recordings is weak".into(),
                 "holders need path-to-gc-roots=true and the recording started before the leak".into(),

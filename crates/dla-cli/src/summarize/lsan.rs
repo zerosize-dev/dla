@@ -77,6 +77,7 @@ impl Adapter for Lsan {
                 runtime: None,
                 region: dla_core::series::SeriesRegion::OffHeap,
                 order_by_time: false,
+                windowed: false,
                 limitations: vec![
                     "LeakSanitizer reports blocks nothing points at (direct) or only leaked blocks point at (indirect): memory a global still holds is not reported unless use_globals=0".into(),
                     "each report is one process at exit; the reports are ordered as given".into(),

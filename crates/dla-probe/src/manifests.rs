@@ -127,7 +127,8 @@ pub fn read(tree: &Tree, runtimes: &[Runtime]) -> Manifests {
 
 fn clean_version(v: &str) -> Option<String> {
     let v = v.trim();
-    if v.is_empty() || v.contains('$') || v.contains(['[', '(', '{']) {
+    // `$prop`, ranges, `{..}` and dynamic specs (`4.1.+`, `latest.release`) pin nothing.
+    if v.is_empty() || v.contains(['$', '[', '(', '{', '+', '*']) || v.starts_with("latest") {
         None
     } else {
         Some(v.to_owned())
@@ -182,28 +183,102 @@ pub fn gradle(text: &str) -> Vec<(String, Option<String>)> {
             c.get(3).and_then(|v| clean_version(v.as_str())),
         ));
     }
+    // Map notation: `group = "x", name = "y"[, version = "z"]`.
+    let map = re(
+        r#"group\s*[:=]\s*['"]([\w.\-]+)['"]\s*,\s*name\s*[:=]\s*['"]([\w.\-]+)['"](?:\s*,\s*version\s*[:=]\s*['"]([^'"]+)['"])?"#,
+    );
+    for c in map.captures_iter(text) {
+        out.push((
+            format!("{}:{}", &c[1], &c[2]).to_ascii_lowercase(),
+            c.get(3).and_then(|v| clean_version(v.as_str())),
+        ));
+    }
     let plugin = re(
-        r#"id\s*\(?\s*['"]org\.springframework\.boot['"]\s*\)?\s*version\s*\(?\s*['"]([^'"]+)['"]"#,
+        r#"id\s*\(?\s*['"]org\.springframework\.boot['"]\s*\)?(?:\s*version\s*\(?\s*['"]([^'"]+)['"])?"#,
     );
     if let Some(c) = plugin.captures(text) {
         out.push((
             "org.springframework.boot:spring-boot-gradle-plugin".to_owned(),
-            clean_version(&c[1]),
+            c.get(1).and_then(|v| clean_version(v.as_str())),
         ));
     }
     out
 }
 
-/// go.mod: `require` lines and blocks.
+/// go.mod: `require` lines and blocks, with `replace` directives applied (a version
+/// replacement gives the built version, a path replacement an unknown one). `exclude`,
+/// `retract` and `tool` entries are not dependencies.
 pub fn go_mod(text: &str) -> Vec<(String, Option<String>)> {
-    let line = re(r"^\s*(?:require\s+)?([\w.\-]+\.[\w.\-/~]*)\s+(v[\w.\-+]+)");
-    text.lines()
-        .filter(|l| !l.contains("=>"))
-        .filter_map(|l| {
-            let c = line.captures(l)?;
-            Some((c[1].to_ascii_lowercase(), Some(c[2].to_owned())))
-        })
-        .collect()
+    let entry = re(r"^\s*([\w.\-]+\.[\w.\-/~]*)\s+(v[\w.\-+]+)");
+    let repl = re(r"^\s*([\w.\-]+\.[\w.\-/~]*)(?:\s+v[\w.\-+]+)?\s*=>\s*(\S+)(?:\s+(v[\w.\-+]+))?");
+    let mut reqs: Vec<(String, Option<String>)> = Vec::new();
+    // module -> built version (None for a local path)
+    let mut replaced: Vec<(String, Option<String>)> = Vec::new();
+    let mut block: Option<&str> = None;
+    for raw in text.lines() {
+        let l = raw.split("//").next().unwrap_or("").trim();
+        if l.is_empty() {
+            continue;
+        }
+        if block.is_some() {
+            if l == ")" {
+                block = None;
+                continue;
+            }
+        } else if let Some(kw) = [
+            "require", "replace", "exclude", "retract", "tool", "godebug",
+        ]
+        .into_iter()
+        .find(|k| {
+            l.strip_prefix(k)
+                .is_some_and(|r| r.starts_with(char::is_whitespace) || r.starts_with('('))
+        }) {
+            let rest = l[kw.len()..].trim();
+            if rest == "(" {
+                block = Some(kw);
+                continue;
+            }
+            handle_go(kw, rest, &entry, &repl, &mut reqs, &mut replaced);
+            continue;
+        } else {
+            continue;
+        }
+        if let Some(kw) = block {
+            handle_go(kw, l, &entry, &repl, &mut reqs, &mut replaced);
+        }
+    }
+    for (name, version) in &mut reqs {
+        if let Some((_, to)) = replaced.iter().rev().find(|(m, _)| m == name) {
+            *version = to.clone();
+        }
+    }
+    reqs
+}
+
+fn handle_go(
+    kw: &str,
+    line: &str,
+    entry: &Regex,
+    repl: &Regex,
+    reqs: &mut Vec<(String, Option<String>)>,
+    replaced: &mut Vec<(String, Option<String>)>,
+) {
+    match kw {
+        "require" => {
+            if let Some(c) = entry.captures(line) {
+                reqs.push((c[1].to_ascii_lowercase(), Some(c[2].to_owned())));
+            }
+        }
+        "replace" => {
+            if let Some(c) = repl.captures(line) {
+                replaced.push((
+                    c[1].to_ascii_lowercase(),
+                    c.get(3).map(|v| v.as_str().to_owned()),
+                ));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Cargo.lock, uv.lock and poetry.lock: `[[package]]` blocks with `name` and `version`.
@@ -343,6 +418,37 @@ mod tests {
         );
         assert_eq!(find(&p, "a:b"), Some(&None));
         assert_eq!(find(&p, "c:d"), Some(&None));
+    }
+
+    #[test]
+    fn go_mod_applies_replace_and_skips_exclude() {
+        let m = go_mod(
+            "module x\ngo 1.22\nrequire github.com/a/b v1.0.0\nrequire (\n\tgithub.com/c/d v2.0.0\n\tgithub.com/e/f v3.0.0 // indirect\n)\n\
+replace github.com/a/b => github.com/a/b v1.9.0\nreplace (\n\tgithub.com/c/d v2.0.0 => ./local\n)\n\
+exclude (\n\tgithub.com/g/h v1.0.0\n)\nexclude github.com/i/j v1.0.0\n",
+        );
+        let get = |n: &str| m.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
+        assert_eq!(get("github.com/a/b"), Some(Some("v1.9.0".to_owned())));
+        assert_eq!(get("github.com/c/d"), Some(None));
+        assert_eq!(get("github.com/e/f"), Some(Some("v3.0.0".to_owned())));
+        assert_eq!(get("github.com/g/h"), None);
+        assert_eq!(get("github.com/i/j"), None);
+    }
+
+    #[test]
+    fn dynamic_gradle_versions_are_unknown_and_map_notation_is_read() {
+        let g = gradle(
+            "implementation(\"io.netty:netty-all:4.1.+\")\nimplementation group: 'io.netty', name: 'netty-handler', version: '4.1.100.Final'\nplugins { id(\"org.springframework.boot\") }\n",
+        );
+        assert!(g.contains(&("io.netty:netty-all".to_owned(), None)));
+        assert!(g.contains(&(
+            "io.netty:netty-handler".to_owned(),
+            Some("4.1.100.Final".to_owned())
+        )));
+        assert!(g.contains(&(
+            "org.springframework.boot:spring-boot-gradle-plugin".to_owned(),
+            None
+        )));
     }
 
     #[test]

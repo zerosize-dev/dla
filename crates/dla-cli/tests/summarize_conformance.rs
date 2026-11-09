@@ -290,6 +290,35 @@ fn the_plain_list_groups_every_adapter_within_the_bound() {
     for a in v["adapters"].as_array().unwrap() {
         assert!(a["runtime"] == "jvm" || a["runtime"] == "any", "{a}");
     }
+    // An unknown runtime is refused with the valid names, not listed as "no backends".
+    let (code, _t, v) = run_with(
+        d.path(),
+        &["summarize", "--list", "--runtime", "rubyy"],
+        &[],
+    );
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "usage", "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("jvm"),
+        "{v}"
+    );
+    // A valid pair with no adapter says so and names the runtimes that have one.
+    let v = ok(
+        d.path(),
+        &[
+            "summarize",
+            "--list",
+            "--op",
+            "heap-graph",
+            "--runtime",
+            "go",
+        ],
+    );
+    assert_eq!(v["adapters"].as_array().unwrap().len(), 0, "{v}");
+    assert!(
+        v["note"].as_str().unwrap().contains("runtimes with one"),
+        "{v}"
+    );
     // An unknown operation is refused with the list of operations.
     let (code, _t, v) = run_with(d.path(), &["summarize", "--list", "--op", "heap"], &[]);
     assert_ne!(code, 0, "{v}");

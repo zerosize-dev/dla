@@ -354,3 +354,63 @@ fn driver_dumps_are_placed_like_the_rust_selection_and_come_from_one_process() {
         }
     }
 }
+
+#[test]
+fn vm_stat_counts_inactive_and_speculative_pages_as_available() {
+    if !have_node() {
+        return;
+    }
+    let vm = |free: u64, inactive: u64| {
+        format!(
+            "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
+             Pages free:                               {free}.\n\
+             Pages active:                             1.\n\
+             Pages inactive:                           {inactive}.\n\
+             Pages speculative:                        7.\n"
+        )
+    };
+    // Little free memory but plenty inactive: the snapshot is taken.
+    let run = Run::new("node-socket-heartbeat-cleared");
+    let big = run.dir.path().join("vm_big.txt");
+    fs::write(&big, vm(10, 100_000_000)).unwrap();
+    run.node(
+        &["load.js", "--iterations", "50"],
+        &[
+            ("DLA_CAPTURE", "heap"),
+            ("DLA_VM_STAT_FILE", big.to_str().unwrap()),
+        ],
+    );
+    let caps = captures(&run.records()[0]);
+    assert!(caps[0].get("error").is_none(), "{caps:?}");
+    assert!(run.pid_dir().join("heap-1.heapsnapshot").exists());
+    // Only a few pages in all: refused, with the figures.
+    let run = Run::new("node-socket-heartbeat-cleared");
+    let small = run.dir.path().join("vm_small.txt");
+    fs::write(&small, vm(10, 10)).unwrap();
+    run.node(
+        &["load.js", "--iterations", "50"],
+        &[
+            ("DLA_CAPTURE", "heap"),
+            ("DLA_VM_STAT_FILE", small.to_str().unwrap()),
+        ],
+    );
+    let err = captures(&run.records()[0])[0]["error"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(err.starts_with("preflight:"), "{err}");
+}
+
+#[test]
+fn the_nonheap_tracker_states_its_overhead() {
+    if !have_node() {
+        return;
+    }
+    let run = Run::new("node-socket-heartbeat-cleared");
+    run.node(
+        &["load.js", "--iterations", "20"],
+        &[("DLA_CAPTURE", "nonheap")],
+    );
+    let lim = run.records()[0]["limitations"].to_string();
+    assert!(lim.contains("async_hooks") && lim.contains("10x"), "{lim}");
+}

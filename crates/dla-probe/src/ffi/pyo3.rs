@@ -9,6 +9,8 @@ use dla_core::{
     probe::{BoundaryMethod, FfiBoundary},
     runtime::Runtime,
 };
+use std::collections::BTreeSet;
+
 use regex::Regex;
 
 use super::{dir_of, ext_of, line_of};
@@ -80,12 +82,94 @@ fn modules(tree: &Tree, crates: &[(String, bool)]) -> Vec<Module> {
     out
 }
 
-fn imports(name: &str) -> Regex {
+/// Where Python code can import a project package from: the directory names that hold
+/// Python files, the first segment of a maturin `module-name`, and the crate directories.
+fn local_packages(tree: &Tree, mods: &[Module]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for f in tree
+        .files
+        .iter()
+        .filter(|f| matches!(ext_of(f), "py" | "pyi"))
+    {
+        let d = dir_of(f);
+        if let Some(last) = d.rsplit('/').next().filter(|x| !x.is_empty()) {
+            out.insert(last.to_owned());
+        }
+    }
+    for rel in tree
+        .files
+        .iter()
+        .filter(|f| f.rsplit('/').next() == Some("pyproject.toml"))
+    {
+        let Some(text) = tree.read(rel) else { continue };
+        let Ok(doc) = toml::from_str::<toml::Value>(&text) else {
+            continue;
+        };
+        if let Some(n) = doc
+            .get("tool")
+            .and_then(|t| t.get("maturin"))
+            .and_then(|m| m.get("module-name"))
+            .and_then(|n| n.as_str())
+            && let Some((first, _)) = n.split_once('.')
+        {
+            out.insert(first.to_owned());
+        }
+    }
+    for m in mods {
+        if let Some(last) = m.dir.rsplit('/').next().filter(|x| !x.is_empty()) {
+            out.insert(last.to_owned());
+        }
+    }
+    out
+}
+
+/// True when `text` imports the Rust module `name`: bare (`import name`), relative
+/// (`from . import name`) or through a package of this project (`from pkg import name`).
+/// A qualifier from outside the project (`import numpy.core`, `from os import path`) names
+/// a different module, and so does a bare import when a Python module of the same name
+/// lives in the project.
+fn imports(text: &str, name: &str, local: &BTreeSet<String>, shadowed: bool) -> bool {
     let n = regex::escape(name);
-    Regex::new(&format!(
-        r"(?m)^\s*(?:from\s+\.*(?:[\w.]+\.)?{n}(?:\.\w+)*\s+import\b|from\s+[\w.]+\s+import\s+\(?\s*(?:\w+\s*,\s*)*{n}\b|import\s+(?:[\w.]+\.)?{n}\b)"
+    let ok_qual = |dots: &str, qual: &str| {
+        if !dots.is_empty() {
+            return true;
+        }
+        let q = qual.trim_end_matches('.');
+        if q.is_empty() {
+            return !shadowed;
+        }
+        local.contains(q.split('.').next().unwrap_or(q))
+    };
+    let from_mod = Regex::new(&format!(
+        r"(?m)^\s*from\s+(\.*)((?:[\w.]+\.)?){n}(?:\.\w+)*\s+import\b"
     ))
-    .expect("escaped name")
+    .expect("escaped name");
+    let from_pkg = Regex::new(&format!(
+        r"(?m)^\s*from\s+(\.*)([\w.]*)\s+import\s+\(?\s*(?:\w+\s*,\s*)*{n}\b"
+    ))
+    .expect("escaped name");
+    let plain =
+        Regex::new(&format!(r"(?m)^\s*import\s+((?:[\w.]+\.)?){n}\b")).expect("escaped name");
+    from_mod.captures_iter(text).any(|c| ok_qual(&c[1], &c[2]))
+        || from_pkg.captures_iter(text).any(|c| {
+            // `from . import name`: dots only; `from pkg import name`: a project package.
+            if !c[1].is_empty() && c[2].is_empty() {
+                return true;
+            }
+            ok_qual(&c[1], &format!("{}.", &c[2])) && !c[2].is_empty()
+        })
+        || plain.captures_iter(text).any(|c| ok_qual("", &c[1]))
+}
+
+/// True when a Python module or package called `name` exists outside the crate.
+fn shadowed_by_python(tree: &Tree, name: &str, crate_dir: &str) -> bool {
+    tree.files.iter().any(|f| {
+        let outside = crate_dir.is_empty() || !f.starts_with(&format!("{crate_dir}/"));
+        outside
+            && (f.rsplit('/').next() == Some(&format!("{name}.py"))
+                || f.ends_with(&format!("/{name}/__init__.py"))
+                || f == &format!("{name}/__init__.py"))
+    })
 }
 
 fn functions(tree: &Tree, dir: &str) -> Vec<BoundaryMethod> {
@@ -134,12 +218,13 @@ pub fn detect(tree: &Tree) -> Vec<FfiBoundary> {
         .filter(|f| ext_of(f) == "py" || ext_of(f) == "pyi")
         .filter_map(|f| Some((f, tree.read(f)?)))
         .collect();
+    let local = local_packages(tree, &mods);
     let mut out = Vec::new();
     for m in mods {
-        let re = imports(&m.name);
+        let shadowed = shadowed_by_python(tree, &m.name, &m.dir);
         let mut loaded_by: Vec<String> = py
             .iter()
-            .filter(|(_, text)| re.is_match(text))
+            .filter(|(_, text)| imports(text, &m.name, &local, shadowed))
             .map(|(f, _)| (*f).clone())
             .collect();
         loaded_by.sort();
@@ -230,10 +315,45 @@ mod tests {
             let (_d, t) = tree(&[
                 ("native/Cargo.toml", CARGO),
                 ("native/src/lib.rs", LIB),
+                ("pkg/__init__.py", ""),
                 ("app.py", src),
             ]);
             assert_eq!(detect(&t).len(), 1, "{src}");
         }
+    }
+
+    #[test]
+    fn unrelated_imports_of_a_common_name_are_not_a_boundary() {
+        let lib = |n: &str| format!("#[pymodule]\nfn {n}(m: &PyModule) {{}}\n");
+        let cargo = "[package]\nname = \"x\"\n[lib]\ncrate-type = [\"cdylib\"]\n[dependencies]\npyo3 = \"0.22\"\n";
+        for (n, src) in [
+            ("core", "import numpy.core\n"),
+            ("path", "from os import path\n"),
+            ("utils", "from helpers import utils\n"),
+        ] {
+            let (_d, t) = tree(&[
+                ("native/Cargo.toml", cargo),
+                ("native/src/lib.rs", &lib(n)),
+                ("app.py", src),
+            ]);
+            assert!(detect(&t).is_empty(), "{src}");
+        }
+        // A bare import that a Python module of the project answers is not the Rust module.
+        let (_d, t) = tree(&[
+            ("native/Cargo.toml", cargo),
+            ("native/src/lib.rs", &lib("utils")),
+            ("app.py", "import utils\n"),
+            ("utils.py", "x = 1\n"),
+        ]);
+        assert!(detect(&t).is_empty());
+        // The same imports through a project package still count.
+        let (_d, t) = tree(&[
+            ("native/Cargo.toml", cargo),
+            ("native/src/lib.rs", &lib("core")),
+            ("mypkg/__init__.py", "from . import core\n"),
+            ("app.py", "from mypkg import core\n"),
+        ]);
+        assert_eq!(detect(&t).len(), 1);
     }
 
     #[test]

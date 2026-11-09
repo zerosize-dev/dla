@@ -28,6 +28,8 @@ pub const TOOL_POINTS: u32 = 3;
 /// Bytes the `summary` of `dla harness run` may take in all (the rest of the 2048-byte
 /// output is the envelope: effects, artifacts, evidence).
 pub const SUMMARY_BUDGET: usize = 1120;
+/// Fewest command-mode heap dumps (one per point) the printed heap-graph command lists.
+pub const PER_POINT_MIN: usize = 3;
 /// Most class histograms one printed command lists (the full command is in `captures.json`).
 pub const COMPACT_HISTOGRAMS: usize = 4;
 
@@ -573,11 +575,22 @@ pub fn summarize_commands(
         let paths: Vec<String> = sel.iter().map(|f| pointer(&f.path)).collect();
         cmds.push(format!("dla summarize {op} {}", paths.join(" ")));
     };
-    // Dumps of separate processes (command mode) are no series for heap-graph, which
-    // reads successive dumps of one process: only driver groups get the command.
-    if !command_mode {
-        for (_, g) in &groups {
+    // Driver mode: the dumps of one process are a series for heap-graph. Command mode: each
+    // point is a process of its own, and three or more dumps, one per point, are a per-point
+    // series over n (heap-graph reads the format of the files, so one command per format).
+    for (_, g) in &groups {
+        if !command_mode {
             push("heap-graph", CaptureKind::Heap, &[], g);
+            continue;
+        }
+        for tail in [".hprof", ".heapsnapshot"] {
+            let files = g
+                .iter()
+                .filter(|f| f.kind == CaptureKind::Heap && f.path.ends_with(tail))
+                .count();
+            if files >= PER_POINT_MIN {
+                push("heap-graph", CaptureKind::Heap, &[tail], g);
+            }
         }
     }
     for (_, g) in &groups {
@@ -923,7 +936,7 @@ mod tests {
         ));
         assert!(cmds[3].ends_with("resources.json"), "{cmds:?}");
         assert!(!cmds.iter().any(|c| c.contains("scripts.json")));
-        // Snapshots of separate processes (command mode) give the histogram only.
+        // Snapshots of separate processes (command mode): a per-point series for heap-graph.
         let cmd_files: Vec<CaptureFile> = [1, 2, 3]
             .iter()
             .map(|k| {
@@ -937,8 +950,9 @@ mod tests {
             })
             .collect();
         let cmds = summarize_commands(&cmd_files, &|p| p.to_owned(), false);
-        assert_eq!(cmds.len(), 1, "{cmds:?}");
-        assert!(cmds[0].starts_with("dla summarize type-histogram-diff "));
+        assert_eq!(cmds.len(), 2, "{cmds:?}");
+        assert!(cmds[0].starts_with("dla summarize heap-graph "));
+        assert!(cmds[1].starts_with("dla summarize type-histogram-diff "));
     }
 
     #[test]
@@ -1197,20 +1211,44 @@ mod tests {
     }
 
     #[test]
-    fn command_mode_heap_dumps_get_no_heap_graph_command() {
-        let files: Vec<_> = [(1u32, 1000.0), (5, 5000.0)]
-            .iter()
-            .map(|(k, x)| {
-                file(
-                    CaptureKind::Heap,
-                    &format!("p{k}-native"),
-                    1,
-                    *x,
-                    &format!("h/p{k}-native/capture/1/heap-1.hprof"),
-                )
-            })
-            .collect();
-        assert!(summarize_commands(&files, &|p| p.to_owned(), false).is_empty());
+    fn command_mode_heap_dumps_get_heap_graph_from_three_points() {
+        let dumps = |ks: &[u32], ext: &str| -> Vec<CaptureFile> {
+            ks.iter()
+                .map(|k| {
+                    file(
+                        CaptureKind::Heap,
+                        &format!("p{k}-native"),
+                        1,
+                        f64::from(*k) * 1000.0,
+                        &format!("h/p{k}-native/capture/1/heap-1.{ext}"),
+                    )
+                })
+                .collect()
+        };
+        // Two points are no series.
+        assert!(summarize_commands(&dumps(&[1, 5], "hprof"), &|p| p.to_owned(), false).is_empty());
+        // Three or more: one heap-graph command, points in n order.
+        let cmds = summarize_commands(&dumps(&[9, 1, 5], "hprof"), &|p| p.to_owned(), false);
+        assert_eq!(cmds.len(), 1, "{cmds:#?}");
+        assert!(cmds[0].starts_with("dla summarize heap-graph h/p1-native/"));
+        assert!(cmds[0].find("p1-native").unwrap() < cmds[0].find("p5-native").unwrap());
+        assert!(cmds[0].find("p5-native").unwrap() < cmds[0].find("p9-native").unwrap());
+        // Node snapshots: heap-graph plus the class histogram diff, one format per command.
+        let cmds = summarize_commands(&dumps(&[1, 5, 9], "heapsnapshot"), &|p| p.to_owned(), false);
+        assert_eq!(cmds.len(), 2, "{cmds:#?}");
+        assert!(cmds[0].starts_with("dla summarize heap-graph "));
+        assert!(cmds[1].starts_with("dla summarize type-histogram-diff "));
+        // Mixed formats never share a command.
+        let mut mixed = dumps(&[1, 5, 9], "hprof");
+        mixed.extend(dumps(&[2, 6, 10], "heapsnapshot"));
+        let cmds = summarize_commands(&mixed, &|p| p.to_owned(), false);
+        let graphs: Vec<_> = cmds.iter().filter(|c| c.contains("heap-graph")).collect();
+        assert_eq!(graphs.len(), 2);
+        assert!(
+            graphs.iter().all(
+                |c| c.matches(".hprof").count() == 0 || c.matches(".heapsnapshot").count() == 0
+            )
+        );
     }
 
     #[test]

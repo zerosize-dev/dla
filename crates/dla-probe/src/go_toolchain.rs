@@ -102,8 +102,24 @@ pub fn cached_toolchains(modcache: &Path) -> Vec<(Version, String)> {
             out.push((v, go.to_owned()));
         }
     }
-    out.sort();
+    // A prerelease ranks below the release of the same version, and rc10 above rc2.
+    out.sort_by(|a, b| (a.0, pre_rank(&a.1), &a.1).cmp(&(b.0, pre_rank(&b.1), &b.1)));
     out
+}
+
+/// `(1, 0)` for a release; `(0, n)` for a `rcN` or `betaN` prerelease.
+fn pre_rank(name: &str) -> (u8, u32) {
+    let pre = name
+        .find("rc")
+        .map(|i| i + 2)
+        .or_else(|| name.find("beta").map(|i| i + 4));
+    match pre {
+        Some(i) => {
+            let n: String = name[i..].chars().take_while(char::is_ascii_digit).collect();
+            (0, n.parse().unwrap_or(0))
+        }
+        None => (1, 0),
+    }
 }
 
 fn go_os() -> &'static str {
@@ -231,6 +247,28 @@ mod tests {
         assert_eq!(parse_version("go1.27.0.linux-amd64"), Some((1, 27, 0)));
         assert_eq!(parse_version("devel +abc"), None);
         assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn a_cached_release_outranks_its_prerelease() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("golang.org");
+        let suffix = format!(".{}-{}", go_os(), go_arch());
+        for n in ["go1.27rc1", "go1.27.0", "go1.27rc2", "go1.27rc10"] {
+            let d = dir
+                .join(format!("toolchain@v0.0.1-{n}{suffix}"))
+                .join("bin");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(go_exe()), "").unwrap();
+        }
+        let c = cached_toolchains(tmp.path());
+        assert_eq!(c.last().unwrap().1, "go1.27.0");
+        assert_eq!(
+            decide(Some((1, 24, 7)), &c),
+            Leak::Toolchain("go1.27.0".to_owned())
+        );
+        let pre: Vec<_> = c.iter().map(|x| x.1.as_str()).collect();
+        assert_eq!(pre, ["go1.27rc1", "go1.27rc2", "go1.27rc10", "go1.27.0"]);
     }
 
     #[test]

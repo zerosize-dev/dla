@@ -62,6 +62,7 @@ use dla_core::{
 use serde_json::json;
 
 pub use registry::{BACKENDS, Backend};
+pub use tier3::native_worker;
 
 /// Schema version of `probe.json`.
 const PROBE_SCHEMA_VERSION: u32 = 1;

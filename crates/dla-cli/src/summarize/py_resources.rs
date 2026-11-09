@@ -146,6 +146,17 @@ fn thread_key(pattern: &str, red: &Redactor) -> String {
     }
 }
 
+/// The key of a ResourceWarning group: the agent's label (digit runs as `*`) when it is plain
+/// program text or the run has raw-values consent, else its shape (a warning text can carry a
+/// file name, a URL or a token).
+fn warn_key(what: &str, red: &Redactor) -> String {
+    if red.mode() == "raw" || (plain_pattern(what) && red.name(what) == what) {
+        format!("warn:{what}")
+    } else {
+        format!("warn:{}", red.value(what))
+    }
+}
+
 /// The frame a `file:line` site names; a site that does not end in a line number has none.
 fn site_frame(
     site: &Option<String>,
@@ -195,7 +206,7 @@ fn snapshot(r: &Resources, red: &Redactor, project: &std::path::Path) -> NonHeap
     for g in r.resource_warnings.groups.iter().take(MAX_GROUPS) {
         groups.push(ResourceGroup {
             kind: "handle".to_owned(),
-            key: format!("warn:{}", g.what),
+            key: warn_key(&g.what, red),
             count: g.count,
             site: site_frame(&g.site, project),
         });
@@ -322,6 +333,10 @@ mod tests {
         let k = thread_key("AKIAIOSFODNN*EXAMPLE*", &red());
         assert!(!k.contains("AKIA"), "{k}");
         assert!(thread_key("pool-*-worker", &red()).ends_with("pool-*-worker"));
+        // A warning label with a value in it is shaped like a thread name; a plain one stays.
+        assert_eq!(warn_key("unclosed file", &red()), "warn:unclosed file");
+        let k = warn_key("unclosed socket to AKIAIOSFODNN7EXAMPLE1", &red());
+        assert!(!k.contains("AKIAIOSFODNN7EXAMPLE1"), "{k}");
     }
 
     #[test]

@@ -996,6 +996,7 @@ function startScriptWatch() {
       scriptUrls.set(String(p.scriptId), { url: p.url, map });
     });
     post('Debugger.enable');
+    captureNotes.push('--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead');
   } catch (err) {
     captureNotes.push(`script ids could not be recorded: ${err && err.message}`);
   }
@@ -1056,6 +1057,7 @@ function startResourceTracker() {
     });
     hook.enable();
     trackerOn = true;
+    captureNotes.push('--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture');
   } catch (err) {
     captureNotes.push(`resource tracker unavailable: ${err && err.message}`);
   }
@@ -1088,6 +1090,38 @@ function startCaptures() {
   if (CAPTURE_KINDS.has('nonheap')) startResourceTracker();
 }
 
+/**
+ * Reclaimable memory from `vm_stat` output: free + inactive + speculative pages. On macOS
+ * os.freemem() counts only the free pages, a small part of what the system can give back.
+ * Returns null when the text has no page size or no free count.
+ */
+function parseVmStat(text) {
+  const size = /page size of (\d+) bytes/.exec(text);
+  if (size === null) return null;
+  let pages = 0;
+  let seen = false;
+  for (const line of text.split('\n')) {
+    const m = /^Pages (free|inactive|speculative):\s+(\d+)\./.exec(line);
+    if (m === null) continue;
+    pages += Number.parseInt(m[2], 10);
+    if (m[1] === 'free') seen = true;
+  }
+  return seen ? pages * Number.parseInt(size[1], 10) : null;
+}
+
+/** Available memory on macOS (or from the vm_stat text in DLA_VM_STAT_FILE, for tests); null elsewhere or on failure. */
+function macAvailable() {
+  try {
+    const file = env('DLA_VM_STAT_FILE');
+    if (file !== null) return parseVmStat(fs.readFileSync(file, 'utf8'));
+    if (process.platform !== 'darwin') return null;
+    const text = require('child_process').execFileSync('vm_stat', [], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return parseVmStat(text);
+  } catch (_) {
+    return null;
+  }
+}
+
 /** Memory the process may still use: the smaller of MemAvailable, the free memory and the cgroup headroom. */
 function availableMemory() {
   const forced = Number.parseInt(env('DLA_CAPTURE_MEM_BYTES') || '', 10); // override, for tests and tight hosts
@@ -1100,6 +1134,8 @@ function availableMemory() {
   } catch (_) {
     // not Linux
   }
+  const mac = macAvailable();
+  if (mac !== null) avail = mac;
   const cgroup = [
     ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current'],
     ['/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes'],

@@ -1,7 +1,7 @@
 """DLA measurement agent for Python processes.
 
 Placed first on PYTHONPATH by `dla harness run`. It chain-imports the project's own
-sitecustomize (if any), starts tracemalloc (DLA_TRACEMALLOC_FRAMES frames: 10 when allocation
+sitecustomize (if any), starts tracemalloc (DLA_TRACEMALLOC_FRAMES frames: 10 when allocation or non-heap
 captures are asked for, else 1) and, on Python 3.12+, a sys.monitoring
 PY_START coverage collector, and writes one JSON record per dump to the file named by
 DLA_HARNESS_OUT: an `exit` record from an atexit handler, `checkpoint` records when a driver calls
@@ -96,7 +96,7 @@ def _start_tracemalloc():
         import tracemalloc
 
         if not tracemalloc.is_tracing():
-            frames = _int_env("DLA_TRACEMALLOC_FRAMES", 10 if "alloc" in _CAPTURE_KINDS else 1)
+            frames = _int_env("DLA_TRACEMALLOC_FRAMES", 10 if ("alloc" in _CAPTURE_KINDS or "nonheap" in _CAPTURE_KINDS) else 1)
             tracemalloc.start(max(1, min(frames, _TRACEMALLOC_FRAMES_MAX)))
     except BaseException:
         pass
@@ -555,9 +555,21 @@ def _shown_path(filename):
     return _project_rel(filename) or filename
 
 
+def _is_thread_constructor(frame):
+    """True when `frame` is an `__init__` running on a `threading.Thread` instance (a subclass
+    constructor calling `super().__init__()`), not a plain class that makes a thread."""
+    try:
+        import threading
+
+        return isinstance(frame.f_locals.get("self"), threading.Thread)
+    except BaseException:
+        return False
+
+
 def _creation_site(skip):
-    """`file:line` of the project frame that created something: the innermost project frame
-    that is not an `__init__` (a subclass constructor is not where the object was made)."""
+    """`file:line` of the project frame that created something: the innermost project frame,
+    except a Thread subclass `__init__` (that is not where the thread was made, its caller is).
+    An `__init__` of any other class is where the object was made and is reported."""
     try:
         frame = sys._getframe(skip)
     except BaseException:
@@ -568,7 +580,7 @@ def _creation_site(skip):
         rel = _project_rel(frame.f_code.co_filename)
         if rel is not None:
             site = f"{rel}:{frame.f_lineno}"
-            if frame.f_code.co_name != "__init__":
+            if frame.f_code.co_name != "__init__" or not _is_thread_constructor(frame):
                 return site
             if fallback is None:
                 fallback = site
@@ -660,6 +672,10 @@ def _capture_tracemalloc(out, directory, limitations):
 
         first = not _tm_first
         if first:
+            # The baseline covers every stack, not only the ones written, so a stable stack
+            # outside the first top-N is not counted as growth from zero later.
+            for st in stats:
+                _tm_first[key_of(st)] = st.size
             picked = stats[:_ALLOC_TOP_FIRST]
         else:
             grown = sorted(stats, key=lambda st: st.size - _tm_first.get(key_of(st), 0), reverse=True)[:_ALLOC_TOP_LATER]
@@ -673,8 +689,6 @@ def _capture_tracemalloc(out, directory, limitations):
             # tracemalloc lists the oldest frame first; the file says innermost first.
             frames = [[_shown_path(f.filename), f.lineno] for f in reversed(st.traceback)]
             rows.append({"size": st.size, "count": st.count, "frames": frames})
-            if first:
-                _tm_first[key_of(st)] = st.size
         current, peak = tracemalloc.get_traced_memory()
         _cap_seq["alloc"] += 1
         doc = {
@@ -711,6 +725,10 @@ def _start_memray():
             return
         import memray
 
+        try:
+            _memray["site"] = os.path.dirname(os.path.dirname(os.path.realpath(memray.__file__)))
+        except BaseException:
+            pass
         directory = _capture_dir()
         path = os.path.join(directory, "memray.bin")
         try:
@@ -754,7 +772,7 @@ def _finish_memray(out, directory, limitations):
             raise RuntimeError("dla_memray_leaks.py is missing next to the agent")
         env = {k: v for k, v in os.environ.items() if not k.startswith("DLA_HARNESS") and k != "PYTHONPATH"}
         done = subprocess.run(
-            [sys.executable, "-I", helper, binary, target],
+            [sys.executable, "-I", helper, binary, target] + (["--site", _memray["site"]] if _memray.get("site") else []),
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -843,8 +861,15 @@ def _install_asyncio_debug():
 
 
 def _warning_kind(message):
+    """A stable, plain label for a ResourceWarning: digit runs (pids, ports) become `*`, and a
+    message that is not plain words (it may carry a name, path or secret) is the category."""
+    import re
+
     text = str(message).strip().split("<", 1)[0].strip()
-    return text[:60] or "ResourceWarning"
+    text = re.sub(r"\d+", "*", text)[:60].strip()
+    if not re.fullmatch(r"[A-Za-z][A-Za-z *_]*", text):
+        return "ResourceWarning"
+    return text
 
 
 def _install_resource_warnings():

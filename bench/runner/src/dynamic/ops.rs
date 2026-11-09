@@ -174,10 +174,11 @@ fn capture(fx: &mut Fx, harness: &str, runtime: &str, adapters: &[Adapter]) -> V
         }
         "node" | "go" | "python" => {
             // The capture kinds each runtime's agent writes; the harness drops the rest and
-            // names them. Node driver mode is not available, so node snapshots would only
-            // give histograms: node captures allocation profiles and resources.
+            // names them. Node command mode captures snapshots per point, and the printed
+            // heap-graph command forms the per-point series.
             let kinds = match runtime {
                 "python" => "histogram,alloc,nonheap",
+                "node" => "heap,alloc,nonheap",
                 _ => "alloc,nonheap",
             };
             fx.row.captures.push(format!("{harness}:capture-{kinds}"));
@@ -460,6 +461,7 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<(BTreeSet<String>, Vec<String>)> 
         None
     } else if out.ok {
         fx.row.ops.push(format!("{op}:{backend}"));
+        annotate_observed_holders(fx, &out);
         for id in out.evidence() {
             if !fx.row.summarize_evidence.contains(&id) {
                 fx.row.summarize_evidence.push(id);
@@ -480,6 +482,44 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<(BTreeSet<String>, Vec<String>)> 
         fx.step(format!("summarize {msg}"));
         fx.row.errors.push(format!("dla summarize {msg}"));
         None
+    }
+}
+
+/// The `(finding, holder)` pairs a summarize call asks to annotate: its `needed` text names
+/// `dla ledger annotate F --holder H` where the call's `observed_holder` for F differs from
+/// the finding's holder. Reads dla JSON only, so it is the same for every fixture.
+pub(super) fn holder_annotations(json: &Value) -> Vec<(String, String)> {
+    let Some(needed) = json["needed"].as_str() else {
+        return Vec::new();
+    };
+    let observed = &json["observed_holder"];
+    let words: Vec<&str> = needed.split_whitespace().collect();
+    let mut found: Vec<(String, String)> = Vec::new();
+    for w in words.windows(6) {
+        if w[0] != "dla" || w[1] != "ledger" || w[2] != "annotate" || w[4] != "--holder" {
+            continue;
+        }
+        let f = w[3];
+        let h = w[5].trim_end_matches([';', ',', '.']);
+        if observed[f].as_str() == Some(h) && !found.iter().any(|(x, _)| x == f) {
+            found.push((f.to_owned(), h.to_owned()));
+        }
+    }
+    found
+}
+
+/// Runs the holder annotations a passing summarize call asks for, so a confirmation can cite
+/// its growth evidence.
+fn annotate_observed_holders(fx: &mut Fx, out: &Out) {
+    for (f, h) in holder_annotations(&out.json) {
+        let a = fx.call_quiet(&["ledger", "annotate", &f, "--holder", &h]);
+        if a.ok {
+            fx.step(format!("{f} annotated with observed holder {h}"));
+        } else {
+            let msg = format!("dla ledger annotate {f} --holder {h}: {}", a.message());
+            fx.step(format!("annotate refused ({})", a.code()));
+            fx.row.errors.push(msg);
+        }
     }
 }
 
@@ -666,6 +706,23 @@ mod tests {
         // Evidence without raw is still a violation.
         let bad = json!({"ok": true, "evidence": ["E1"], "coverage_gap": [{"backend": "b"}]});
         assert!(!is_coverage_gap(&bad));
+    }
+
+    #[test]
+    fn an_observed_holder_that_differs_is_annotated() {
+        let j = json!({"observed_holder": {"F7": "static/global", "F9": "registration-table"},
+            "needed": "the snapshots show holder static/global for F7: dla ledger annotate F7 --holder static/global; then a refuted non-leak sibling"});
+        assert_eq!(
+            holder_annotations(&j),
+            [("F7".to_owned(), "static/global".to_owned())]
+        );
+        // Nothing is named when the holders agree, or when the observation does not match.
+        let same = json!({"observed_holder": {"F7": "static/global"},
+            "needed": "a refuted non-leak sibling and a holder, then dla ledger confirm F7 --evidence E3"});
+        assert!(holder_annotations(&same).is_empty());
+        let other = json!({"observed_holder": {"F7": "container-field"},
+            "needed": "dla ledger annotate F7 --holder static/global"});
+        assert!(holder_annotations(&other).is_empty());
     }
 
     #[test]

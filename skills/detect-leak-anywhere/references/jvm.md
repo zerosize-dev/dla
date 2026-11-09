@@ -35,7 +35,7 @@ artifact run the files come from `dla attach jcmd` or the user.
 
 | Capture | Command | What it proves |
 |---|---|---|
-| HPROF (`.hprof`, `.hprof.gz`) | `heap-graph <dump>...` | three or more dumps of one process: a retention path and a `holder:` column that ties by holder identity; `via_holders` name a static or field that keeps a set alive when the dominator is the super root or a thread (coroutines, shared sets) |
+| HPROF (`.hprof`, `.hprof.gz`) | `heap-graph <dump>...` | three or more dumps of one process, or of one harness in command mode (per-point series): a retention path and a `holder:` column that ties by holder identity; `via_holders` name a static or field that keeps a set alive when the dominator is the super root or a thread (coroutines, shared sets) |
 | HPROF or `GC.class_histogram` text | `type-histogram-diff` | growth by class. Ties by type only to the accumulation class recorded for a holder, the declared element type of a finding's field, or the field's own plain declared type when it is a project class (a type declared in the sources); an instance field whose type is its own class (a chain link such as `previous`) is not a holder of that type, the static root is; if several findings declare that type, it ties none. Generic types (`Object[]`, `String`, `java.util.*`, `kotlin.*` collections) never tie |
 | JFR `.jfr` (tool `jfr`) or `jfr print` text | `alloc-stack-diff` | a sample of old objects with the root path: a `holder:static:<Class>.<field>` total ties by holder |
 | `threads.json` | `non-heap` | thread count and groups; no creation site, so groups never tie |
@@ -46,14 +46,18 @@ artifact run the files come from `dla attach jcmd` or the user.
   and the gate often fails; a tie needs a leak large enough for a strictly rising sample count (a larger
   `--step` helped). Samples with no static holder (thread or `root:<system>` roots) never tie.
   The recording needs `settings=profile` with `path-to-gc-roots=true` (the harness does this).
-- Command-mode heap dumps are separate processes: `heap-graph` refuses them (`dumps-not-comparable`)
-  and the harness prints no `heap-graph` command for them. A `holder:` column needs a driver
-  (`dla harness gen --lang jvm --driver`).
+- Command-mode heap dumps are separate processes. When 3 or more of them are captures of one harness
+  (`harness/H<n>/captures.json`: kind heap, distinct x, one label), `heap-graph` forms a per-point series
+  over n (`series_kind: per-point`): it skips the one-process checks, keeps the HPROF format checks, and
+  uses the usual strict-growth gate and `dump-plateau` discriminator. The harness prints the command. Other
+  dumps of different processes are refused (`dumps-not-comparable`). Driver mode
+  (`dla harness gen --lang jvm --driver`) still gives one process. On copies of `jvm-audit-chain` the holder
+  `gateway.RequestContext.latest` tied to the census finding by holder.
 - JNI: when the project loads a native library through JNI, `dla harness gen --lang jvm` preloads the
   allocator shim and the series gains `native.live_bytes@<file:line>` columns. In this worker those
   columns tie to nothing (the native holder's finding lives in the rust or native worker, and ties never
   cross runtimes). After `dla harness run H1`, run `dla correlate H1` in this worker: when a native site
-  under a JNI export grows at a rate that matches the process footprint, it adds a candidate here (origin
+  under a JNI export grows at a rate that matches the managed footprint (its slope bounds the site's slope even if the footprint column misses the trend gate; the evidence records `managed.gated`), it adds a candidate here (origin
   `correlation`, site the native site, holder `native-handle/global-ref`, region off-heap, owner the
   managed method, writer its declaration) and the shim column ties to it by site. Then test, refute the
   sibling and confirm as usual. No match writes no candidate; a refusal names the missing boundary or

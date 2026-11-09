@@ -90,7 +90,7 @@ when it could not be written). `histogram` and `jfr` are JVM captures and become
 
 | Kind | File | Format | Written | `dla summarize` |
 |---|---|---|---|---|
-| `heap` | `heap-<n>.heapsnapshot` | V8 heap snapshot (`v8.writeHeapSnapshot`, after a forced gc) | driver: at the checkpoints of the JVM rule (end of warm-up, last round, evenly spaced between; `DLA_CAPTURE_DUMPS`, default 4); command: at exit of the selected points | `heap-graph` over 3 or more snapshots of ONE process (driver mode); `type-histogram-diff` over snapshots of any points |
+| `heap` | `heap-<n>.heapsnapshot` | V8 heap snapshot (`v8.writeHeapSnapshot`, after a forced gc) | driver: at the checkpoints of the JVM rule (end of warm-up, last round, evenly spaced between; `DLA_CAPTURE_DUMPS`, default 4); command: at exit of the selected points | `heap-graph` over 3 or more snapshots of ONE process (driver mode), or over 3 or more command-mode snapshots of one harness as a per-point series over n; `type-histogram-diff` over snapshots of any points |
 | `heap` | `scripts.json` | `{"dla_scripts":1,"root","scripts":{"<script id>":"<url>"},"maps":{"<id>":"<sourceMapURL>"}}` | next to each snapshot (rewritten; the last wins) | sidecar of the snapshots (`Debugger.scriptParsed`); never passed to `dla summarize`: Node 22 snapshots carry the script path on the function's shared info, so the adapters do not read it (a fallback for older Node) |
 | `alloc` | `alloc-<n>.heapprofile` | inspector sampling heap profile (`{head, samples}`; `callFrame.url` is a `file://` url, builtins have url `""` and line `-1`) | driver: at the same checkpoints (each ends a window, a new one starts); command: one at exit | `alloc-stack-diff` over the profiles |
 | `nonheap` | `resources.json` | see below | once, at the last round (driver) or at exit (command) | `non-heap` over the files of the points |
@@ -116,16 +116,18 @@ profile 2 does not hold what profile 1 held. The profile can show the agent's ow
 - `active`: `process.getActiveResourcesInfo()` counts (ref'd handles only; an `unref()`'d timer is not in it).
 - `types.<T>.tracked`: resources created and not yet destroyed. `Timeout` comes from the agent's timer
   wrappers (`source: "timers"`, exact). Other types come from an `async_hooks` hook
-  (`source: "async_hooks"`); node queues the destroy event until the next tick, so a handle closed in
+  (`source: "async_hooks"`; the hook slows promise-heavy targets by up to roughly 10x while `--capture nonheap` is on); node queues the destroy event until the next tick, so a handle closed in
   the current tick can still be counted (compare with `active`). Type names follow
   `getActiveResourcesInfo` for the handle types it knows (`TCPSocketWrap`, `TCPServerWrap`,
   `PipeWrap`, ...). Promises, ticks, immediates and request objects are not tracked.
 - `sites`: first stack frame inside `DLA_PROJECT`, as for timers (at most 40 per type, 40 types); a
   socket a server accepted takes its server's site; `unattributed` counts the rest.
 
-Snapshots are tier 4 data (memory contents): they stay in the run directory. Before each snapshot the
+Snapshots hold memory contents and stay in the run directory. A snapshot of a process DLA starts
+(`dla harness run --capture heap`) is tier 1, like the rest of a harness run. Tier 4 applies to a
+process DLA did not start (`dla attach node-inspector --op heap-snapshot`). Before each snapshot the
 agent checks that about 12 times `heapUsed` is available (`/proc/meminfo` `MemAvailable`, the cgroup
-headroom; `DLA_CAPTURE_MEM_BYTES` overrides) and that the snapshots of the process stay under 3 GiB;
+headroom; on macOS free + inactive + speculative pages from `vm_stat`; `DLA_CAPTURE_MEM_BYTES` overrides) and that the snapshots of the process stay under 3 GiB;
 otherwise the `captures` entry has an `error` and no file is written. A snapshot blocks the process
 for about 30 ms per MB of heap.
 

@@ -726,7 +726,11 @@ fn link_go_toolchain(cache: &Path) {
     }
 }
 
+#[cfg(not(unix))]
+fn link_toolchain(_dir: &Path, _cache: &Path) {}
+
 /// [`link_go_toolchain`] for a known unpacked toolchain directory.
+#[cfg(unix)]
 fn link_toolchain(dir: &Path, cache: &Path) {
     let (Some(name), Some(host)) = (
         dir.file_name().and_then(|n| n.to_str()),
@@ -739,7 +743,6 @@ fn link_toolchain(dir: &Path, cache: &Path) {
     if fs::create_dir_all(&unpacked).is_err() {
         return;
     }
-    #[cfg(unix)]
     {
         let link = unpacked.join(name);
         if link.symlink_metadata().is_err() {
@@ -2322,7 +2325,6 @@ mod tests {
     // expected values use unix path separators.
     #[cfg(unix)]
     #[test]
-    #[cfg(unix)]
     fn a_go_toolchain_is_linked_into_the_child_cache() {
         let t = std::env::temp_dir().join(format!("dla-gotc-{}", std::process::id()));
         let _ = fs::remove_dir_all(&t);
@@ -2362,6 +2364,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn toolchain_caches_live_under_the_run_cache() {
         let parent = vec![("HOME".to_owned(), "/home/u".to_owned())];

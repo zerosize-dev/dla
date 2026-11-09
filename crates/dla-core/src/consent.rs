@@ -9,7 +9,13 @@
 //! | 1 | Build and run project code in a scratch copy under the run directory: builds, tests, harness loops, preload agents, allocator shims and in-process probes in processes DLA starts, intervention edits in the scratch copy, installing analyzers into the plugin data directory |
 //! | 2 | Observe a running local process DLA did not start: `/proc` or libproc sampling of a PID, jcmd attach (class histogram, thread dump, native memory summary, JFR recordings, which hold JVM arguments and environment variables), Node inspector (SIGUSR1) memory figures, Python remote exec, reading a Go pprof endpoint |
 //! | 3 | Debugger or kernel level: ptrace attach (gdb, heaptrack --pid, goref), memray attach (gdb injection below Python 3.14, `sys.remote_exec` on 3.14; it records allocation stacks, not contents), eBPF/bpftrace, perf, valgrind with vgdb attached to a process DLA did not start (`dla harness run --tool valgrind` starts its own and is tier 1), another process's fd table, GPU counters; may need root |
-//! | 4 | Capture memory contents: heap dumps (jcmd `GC.heap_dump`), heap snapshots (the Node inspector; peak extra memory about 12x the heap in use, and the target is blocked for seconds), core dumps. Outputs may contain secrets and stay in `.dla/` |
+//! | 4 | Capture memory contents of a process DLA did not start: heap dumps (jcmd `GC.heap_dump`), heap snapshots (`dla attach node-inspector --op heap-snapshot`; peak extra memory about 12x the heap in use, and the target is blocked for seconds), core dumps. Outputs may contain secrets and stay in `.dla/` |
+//!
+//! Decision on harness captures: a heap dump or heap snapshot of a process DLA itself starts
+//! under the harness (`dla harness run --capture heap`, JVM or Node) is tier 1, like the other
+//! things a tier-1 run builds and runs in the scratch copy; the files stay under `.dla/`. Tier 4
+//! applies when the process is one DLA did not start. Attaching to a pid that is in the attach
+//! registry as DLA's own is gated as tier 1 as well.
 //!
 //! Raw values in summaries need separate consent (`--raw-values`).
 
@@ -174,6 +180,13 @@ pub fn evidence_result(c: &Consent) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_module_doc_records_the_harness_heap_decision() {
+        let src = include_str!("consent.rs");
+        assert!(src.contains("`dla harness run --capture heap`, JVM or Node) is tier 1"));
+        assert!(src.contains("Tier 4\n//! applies when the process is one DLA did not start"));
+    }
+
     use super::*;
 
     #[test]

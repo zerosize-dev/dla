@@ -135,6 +135,7 @@ impl Adapter for PyMemray {
                 runtime: Some(Runtime::Python),
                 region: SeriesRegion::Heap,
                 order_by_time: false,
+                windowed: false,
                 limitations: vec![
                     "memray reports the allocations still live when its tracker stopped at the end of the run, so a file is a leak-at-exit view; a series needs files from runs of growing size".into(),
                     "memray traces the Python stack only (no native frames); allocations the agent made after the tracker stopped are not in it".into(),

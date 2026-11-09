@@ -3,7 +3,10 @@ tracker stopped, grouped by stack, and memray's own summary.
 
 Run with the interpreter that has memray installed (the one that made the capture file):
 
-    python -I dla_memray_leaks.py <capture.bin> <out.json> [--top N]
+    python -I dla_memray_leaks.py <capture.bin> <out.json> [--top N] [--site DIR]
+
+--site is the directory memray was imported from in the target (a user site or PYTHONPATH
+install that -I would hide); it is put on sys.path before memray is imported.
 
 DLA never parses the capture file itself (its format is private to memray); this script is the
 only reader. Frames are written innermost first as [function, file, line]; a file inside
@@ -53,12 +56,26 @@ def _frames(rec, limit=FILTER_FRAMES):
         return []
 
 
+_SITE = None
+_RUN_MEMRAY = (
+    "import sys, runpy; sys.path.insert(0, sys.argv[1]); sys.argv = ['memray'] + sys.argv[2:]; "
+    "runpy.run_module('memray', run_name='__main__')"
+)
+
+
+def _stats_command(bin_path, tmp):
+    args = ["stats", "--json", "--force", "-o", tmp, bin_path]
+    if _SITE:
+        return [sys.executable, "-I", "-c", _RUN_MEMRAY, _SITE] + args
+    return [sys.executable, "-I", "-m", "memray"] + args
+
+
 def _stats(bin_path, out_path):
     """memray's own `stats --json`, reduced to a few figures. Never raises."""
     tmp = out_path + ".stats"
     try:
         subprocess.run(
-            [sys.executable, "-I", "-m", "memray", "stats", "--json", "--force", "-o", tmp, bin_path],
+            _stats_command(bin_path, tmp),
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -81,7 +98,15 @@ def main(argv):
     if len(argv) < 3:
         sys.stderr.write("usage: dla_memray_leaks.py <capture.bin> <out.json> [--top N]\n")
         return 2
+    global _SITE
     bin_path, out_path = argv[1], argv[2]
+    if "--site" in argv:
+        try:
+            _SITE = argv[argv.index("--site") + 1] or None
+        except IndexError:
+            pass
+    if _SITE and os.path.isdir(_SITE) and _SITE not in sys.path:
+        sys.path.insert(0, _SITE)
     top = MAX_RECORDS
     if "--top" in argv:
         try:

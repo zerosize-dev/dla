@@ -191,6 +191,7 @@ impl Adapter for ValgrindMemcheck {
                 runtime: None,
                 region: dla_core::series::SeriesRegion::OffHeap,
                 order_by_time: false,
+                windowed: false,
                 limitations,
             },
         )

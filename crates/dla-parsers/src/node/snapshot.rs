@@ -46,14 +46,46 @@ pub fn sniff(head: &[u8]) -> bool {
     t.starts_with('{') && t.contains("\"snapshot\"") && t.contains("\"node_fields\"")
 }
 
-/// `MemAvailable` of the host in bytes, where the operating system says.
+/// Largest file read when the operating system cannot say how much memory is free.
+const UNKNOWN_MEMORY_MAX_BYTES: u64 = 1 << 30;
+
+/// Room left under a cgroup limit: `limit` and `usage` are the file contents. An unlimited
+/// group (`max`, or a v1 limit near `u64::MAX`) gives `None`.
+#[cfg(any(target_os = "linux", test))]
+fn cgroup_headroom(limit: &str, usage: &str) -> Option<u64> {
+    let limit: u64 = limit.trim().parse().ok()?;
+    if limit >= 1 << 62 {
+        return None;
+    }
+    let usage: u64 = usage.trim().parse().unwrap_or(0);
+    Some(limit.saturating_sub(usage))
+}
+
+#[cfg(target_os = "linux")]
+fn cgroup_available_memory() -> Option<u64> {
+    let read = |p: &str| std::fs::read_to_string(p).ok();
+    if let (Some(l), Some(u)) = (
+        read("/sys/fs/cgroup/memory.max"),
+        read("/sys/fs/cgroup/memory.current"),
+    ) && let Some(h) = cgroup_headroom(&l, &u)
+    {
+        return Some(h);
+    }
+    let l = read("/sys/fs/cgroup/memory/memory.limit_in_bytes")?;
+    let u = read("/sys/fs/cgroup/memory/memory.usage_in_bytes")?;
+    cgroup_headroom(&l, &u)
+}
+
+/// Memory available in bytes where the operating system says: `MemAvailable` of the
+/// host, lowered to the container's cgroup limit when there is one.
 fn host_available_memory() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         let text = std::fs::read_to_string("/proc/meminfo").ok()?;
         let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
         let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
-        kb.checked_mul(1024)
+        let host = kb.checked_mul(1024)?;
+        Some(cgroup_available_memory().map_or(host, |c| c.min(host)))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -72,7 +104,15 @@ pub fn preflight(size: u64, opts: &Options) -> Result<(), NodeError> {
             opts.max_bytes >> 20
         )));
     }
-    if let Some(avail) = opts.available_memory.or_else(host_available_memory)
+    let avail = opts.available_memory.or_else(host_available_memory);
+    if avail.is_none() && size > UNKNOWN_MEMORY_MAX_BYTES {
+        return Err(NodeError::TooLarge(format!(
+            "the snapshot is {} MB and the available memory is unknown, so files over {} MB are refused",
+            size >> 20,
+            UNKNOWN_MEMORY_MAX_BYTES >> 20
+        )));
+    }
+    if let Some(avail) = avail
         && size.saturating_mul(MEMORY_FACTOR) > avail
     {
         return Err(NodeError::TooLarge(format!(
@@ -656,6 +696,17 @@ mod tests {
         // The edge counts of the nodes must add up.
         let off = text.replace("\"edge_count\":5", "\"edge_count\":4");
         assert!(Snapshot::read(off.as_bytes(), off.len() as u64).is_ok());
+    }
+
+    #[test]
+    fn cgroup_limits_lower_the_available_memory() {
+        assert_eq!(
+            cgroup_headroom("2147483648\n", "1073741824\n"),
+            Some(1 << 30)
+        );
+        assert_eq!(cgroup_headroom("max\n", "5"), None);
+        assert_eq!(cgroup_headroom("9223372036854771712", "5"), None);
+        assert_eq!(cgroup_headroom("100", "500"), Some(0));
     }
 
     #[test]

@@ -117,6 +117,17 @@ pub fn run(
                 },
             )?),
         };
+        if let Some(r) = a.list_runtime.as_deref() {
+            let runtimes = summarize::runtimes();
+            if !runtimes.contains(&r) {
+                let names = runtimes.join(", ");
+                return Err(Failure::usage(
+                    format!("unknown runtime `{r}`; runtimes: {names}"),
+                    format!("a runtime: {names}"),
+                    "dla summarize --list --runtime jvm",
+                ));
+            }
+        }
         return Ok(summarize::list(
             tools.as_deref(),
             &env,

@@ -42,11 +42,44 @@ impl Plan {
             return None;
         }
         let mut m = manifest.clone();
-        m.run
-            .env
-            .push(("GOEXPERIMENT".to_owned(), EXPERIMENT.to_owned()));
+        let existing = m.run.env.iter().rposition(|(k, _)| k == "GOEXPERIMENT");
+        let base = match existing {
+            Some(i) => Some(m.run.env.remove(i).1),
+            None => std::env::var("GOEXPERIMENT").ok(),
+        };
+        m.run.env.retain(|(k, _)| k != "GOEXPERIMENT");
+        m.run.env.push((
+            "GOEXPERIMENT".to_owned(),
+            merge_experiment(base.as_deref(), EXPERIMENT),
+        ));
         Some(m)
     }
+}
+
+/// `existing` (a comma-separated `GOEXPERIMENT`) with `add` appended unless it is listed.
+fn merge_experiment(existing: Option<&str>, add: &str) -> String {
+    let existing = existing.unwrap_or("").trim();
+    if existing.split(',').any(|e| e.trim() == add) {
+        return existing.to_owned();
+    }
+    if existing.is_empty() {
+        add.to_owned()
+    } else {
+        format!("{existing},{add}")
+    }
+}
+
+/// True when the person forbids toolchain switching: `GOTOOLCHAIN` is exactly `local` in the
+/// manifest's run environment (which wins) or in the process environment.
+fn toolchain_forbidden(manifest: &HarnessManifest) -> bool {
+    let v = manifest
+        .run
+        .env
+        .iter()
+        .rfind(|(k, _)| k == "GOTOOLCHAIN")
+        .map(|(_, v)| v.clone())
+        .or_else(|| std::env::var("GOTOOLCHAIN").ok());
+    v.is_some_and(|v| v.trim() == "local")
 }
 
 /// Decides how the profile is reached, records the coverage row and returns the plan; `None`
@@ -62,7 +95,28 @@ pub(super) fn plan(
         return Ok(None);
     }
     let go = go_toolchain::probe(&cwd_of(paths, &manifest.run), QUERY_TIMEOUT);
-    let (row, plan) = match go.goroutineleak.as_str() {
+    let forbidden = toolchain_forbidden(manifest);
+    let kind = if forbidden && go.goroutineleak == "toolchain" {
+        "forbidden"
+    } else {
+        go.goroutineleak.as_str()
+    };
+    let (row, plan) = match kind {
+        "forbidden" => {
+            let why = format!(
+                "the goroutineleak profile needs Go 1.27 or newer ({} here) and GOTOOLCHAIN=local forbids switching to {}",
+                go.version.as_deref().unwrap_or("an unknown Go"),
+                go.leak_toolchain.as_deref().unwrap_or("a newer toolchain")
+            );
+            limitations.push(format!("goroutineleak: blocked ({why})"));
+            (
+                BackendCoverage::blocked(why),
+                Plan {
+                    experiment: false,
+                    toolchain: None,
+                },
+            )
+        }
         "native" => (
             BackendCoverage::ran(go.version.clone(), 0),
             Plan {
@@ -263,4 +317,63 @@ pub(super) fn leak_pass(
     }
     run.captures.extend(files);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn experiments_merge_without_duplicates() {
+        assert_eq!(merge_experiment(None, EXPERIMENT), EXPERIMENT);
+        assert_eq!(
+            merge_experiment(Some("jsonv2"), EXPERIMENT),
+            "jsonv2,goroutineleakprofile"
+        );
+        assert_eq!(
+            merge_experiment(Some("jsonv2,goroutineleakprofile"), EXPERIMENT),
+            "jsonv2,goroutineleakprofile"
+        );
+    }
+
+    fn manifest(env: &[(&str, &str)]) -> HarnessManifest {
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "id": "H1", "runtime": "go", "mode": "command",
+            "scratch": "s", "run": {"argv": ["./x"], "cwd": ".", "env": env},
+            "warmup": 1, "iterations": 3, "step": 10, "key_modes": ["native"],
+            "probes": [], "agent": "go-test-wrapper", "gaps": [], "timeout_secs": 30
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_manifest_experiment_is_kept_and_not_duplicated() {
+        let plan = Plan {
+            experiment: true,
+            toolchain: None,
+        };
+        let m = manifest(&[("GOEXPERIMENT", "jsonv2"), ("X", "1")]);
+        let p = plan.patched(&m).unwrap();
+        let got: Vec<_> = p
+            .run
+            .env
+            .iter()
+            .filter(|(k, _)| k == "GOEXPERIMENT")
+            .collect();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, "jsonv2,goroutineleakprofile");
+    }
+
+    #[test]
+    fn gotoolchain_local_in_the_manifest_forbids_the_pass() {
+        assert!(toolchain_forbidden(&manifest(&[("GOTOOLCHAIN", "local")])));
+        assert!(!toolchain_forbidden(&manifest(&[(
+            "GOTOOLCHAIN",
+            "go1.27.0"
+        )])));
+    }
 }

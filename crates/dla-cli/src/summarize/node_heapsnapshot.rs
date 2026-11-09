@@ -18,7 +18,9 @@
 //! the class constructor. Snapshots that name no such script give a bare name, which ties
 //! only as a shorter form of exactly one finding.
 //!
-//! Snapshots of separate processes are not a series. The harness writes the snapshots of
+//! Snapshots of separate processes are not a series, except the per-point snapshots of one
+//! command-mode harness run (listed in its `captures.json`, one process per point at its own
+//! n): those form a series over n. Otherwise the harness writes the snapshots of
 //! one process into one directory named by its pid, so inputs from different pid
 //! directories are refused; the object ids V8 assigns must also grow from one snapshot to
 //! the next, and most of the earlier snapshot's ids must survive.
@@ -144,20 +146,28 @@ pub fn module_of(script: &str, project: &Path) -> (String, bool) {
     }
     if let Ok(rel) = Path::new(&s).strip_prefix(project) {
         let rel = rel.to_string_lossy().replace('\\', "/");
-        return (module_path(&rel), true);
+        // A package under the project is a dependency, not the program.
+        let in_modules = rel.starts_with("node_modules/") || rel.contains("/node_modules/");
+        return (module_path(&rel), !in_modules);
     }
     let parts: Vec<&str> = s
         .split('/')
         .filter(|c| !c.is_empty() && *c != ".")
         .collect();
+    // A package of another machine is never a project file, whatever its tail matches.
+    if let Some(i) = s.find("node_modules/") {
+        return (module_path(&s[i..]), false);
+    }
+    // A tail of one component matches only a path that is one component: `index.js` of
+    // another machine is not the project's root `index.js`.
     for i in 0..parts.len() {
+        if parts.len() - i < 2 && parts.len() > 1 {
+            break;
+        }
         let tail = parts[i..].join("/");
         if project.join(&tail).is_file() {
             return (module_path(&tail), true);
         }
-    }
-    if let Some(i) = s.find("node_modules/") {
-        return (module_path(&s[i..]), false);
     }
     let base = parts.last().copied().unwrap_or("");
     (module_path(base), false)
@@ -223,18 +233,27 @@ fn safe_name(name: &str, red: &super::redact::Redactor) -> String {
 /// path and its accumulation class. Strings of the heap are never read, so the data that
 /// can remain is in names.
 fn sanitize(h: &mut dla_parsers::node::Holder, red: &super::redact::Redactor) {
-    h.name = if h.kind == HolderKind::Instance {
+    // The properties of a generic container are its dictionary keys, which are data
+    // (V8 does not tell a key from a property name): they are shaped, stable within a run.
+    h.name = if h.kind == HolderKind::Instance && generic_class(&h.owner) {
+        red.value(&h.name)
+    } else if h.kind == HolderKind::Instance {
         safe_name(&h.name, red)
     } else {
         red.name(&h.name)
     };
     h.owner = red.name(&h.owner);
     for hop in &mut h.path {
+        let generic = generic_class(&hop.node);
         hop.node = red.name(&hop.node);
         if let Some(n) = hop.edge.strip_prefix('.')
             && hop.edge != "..."
         {
-            hop.edge = format!(".{}", safe_name(n, red));
+            hop.edge = if generic {
+                format!(".{}", red.value(n))
+            } else {
+                format!(".{}", safe_name(n, red))
+            };
         }
     }
     if let Some(a) = &mut h.accumulation {
@@ -367,7 +386,7 @@ fn not_comparable(why: &str) -> Failure {
         "dumps-not-comparable",
         format!("the snapshots do not look like one process: {why}"),
         "snapshots of one running process (what can be checked: one pid directory, object ids that grow, most earlier ids still present)",
-        "take the snapshots in driver mode (dla harness run <H> --capture heap) and pass the heap-*.heapsnapshot of one pid directory; command mode gives type-histogram-diff only",
+        "take the snapshots in driver mode (dla harness run <H> --capture heap) and pass the heap-*.heapsnapshot of one pid directory, or pass the per-point snapshots of one command-mode harness run (listed in its captures.json)",
     )
 }
 
@@ -419,6 +438,8 @@ struct Dump {
     summary: HolderSummary,
     views: Vec<View>,
     summary_file: String,
+    /// The iteration count `n` of the point, for a per-point series (separate processes).
+    x: Option<f64>,
 }
 
 impl Dump {
@@ -466,9 +487,18 @@ fn top_json(v: &View) -> Value {
 fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
     let tc = ctx.tc;
     // ---- read (no writes yet)
+    // Harness captures of command mode are one process per point: a per-point series.
+    let per_point = super::compat::per_point(&tc.run_dir, inputs).map_err(|why| {
+        Failure::refuse(
+            "dumps-not-comparable",
+            format!("the snapshots are harness captures that do not form one per-point series: {why}"),
+            "three or more heap snapshots of one command-mode harness run, one per point, at distinct n",
+            "dla summarize heap-graph <the heap-*.heapsnapshot files of one dla harness run --capture heap, one per point>",
+        )
+    })?;
     let mut dumps: Vec<Dump> = Vec::new();
     let mut idents: Vec<Identity> = Vec::new();
-    for i in inputs {
+    for (k, i) in inputs.iter().enumerate() {
         let snap = load(&i.rel, &i.abs)?;
         let dom = snap
             .dominators(Some(Instant::now() + DOMINATOR_TIME))
@@ -501,17 +531,23 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             summary_file: format!("summaries/{}", summary_name(&i.rel, &i.sha256)),
             summary,
             views,
+            x: per_point.as_ref().map(|xs| xs[k]),
         });
         tc.require_time("dla summarize heap-graph")?;
     }
-    order_and_check(&mut idents).map_err(|why| not_comparable(&why))?;
-    // The dumps in the order of the checked identities.
-    dumps.sort_by_key(|d| {
-        idents
-            .iter()
-            .position(|x| x.rel == d.rel)
-            .unwrap_or(usize::MAX)
-    });
+    if per_point.is_some() {
+        // Separate processes: object ids are no clock, and the points are ordered by n.
+        dumps.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        order_and_check(&mut idents).map_err(|why| not_comparable(&why))?;
+        // The dumps in the order of the checked identities.
+        dumps.sort_by_key(|d| {
+            idents
+                .iter()
+                .position(|x| x.rel == d.rel)
+                .unwrap_or(usize::MAX)
+        });
+    }
     let mut ledger_ref = ctx.ledger()?;
     let ledger: &mut Ledger = &mut ledger_ref;
     if let Some(f) = &a.finding
@@ -645,6 +681,7 @@ fn series_part(
 ) -> Res<emit::RawRef> {
     let tc = ctx.tc;
     let n = dumps.len();
+    let per_point: Option<Vec<f64>> = dumps.iter().map(|d| d.x).collect();
     // ---- holders tracked: the largest by peak retained bytes
     let mut peak: Vec<(String, u64)> = Vec::new();
     for d in dumps {
@@ -800,7 +837,7 @@ fn series_part(
         .iter()
         .enumerate()
         .map(|(i, d)| Point {
-            x: (i + 1) as f64,
+            x: d.x.unwrap_or((i + 1) as f64),
             t_ms: 0,
             values: keys
                 .iter()
@@ -817,16 +854,27 @@ fn series_part(
         schema_version: 1,
         id: id.clone(),
         source,
-        axis: Axis::Dump,
+        axis: if per_point.is_some() {
+            Axis::N
+        } else {
+            Axis::Dump
+        },
         warmup: 0,
         columns,
         points,
         events: Vec::new(),
-        limitations: vec![
-            "x is the snapshot number in object-id order (ids grow within one process); a snapshot records no time".into(),
-            "each point comes from a separate heap snapshot of one process; retained bytes follow the dominator tree".into(),
-            "holders below 1 KiB retained in a snapshot have no figure at that point".into(),
-        ],
+        limitations: match &per_point {
+            Some(xs) => vec![
+                format!("series: per-point; x is the iteration count n of each point ({}); every point is a separate process and heap snapshot", super::compat::n_list(xs)),
+                "retained bytes follow the dominator tree; a snapshot records no time".into(),
+                "holders below 1 KiB retained in a snapshot have no figure at that point".into(),
+            ],
+            None => vec![
+                "x is the snapshot number in object-id order (ids grow within one process); a snapshot records no time".into(),
+                "each point comes from a separate heap snapshot of one process; retained bytes follow the dominator tree".into(),
+                "holders below 1 KiB retained in a snapshot have no figure at that point".into(),
+            ],
+        },
     };
     series.save(&tc.run_dir)?;
 
@@ -884,14 +932,18 @@ fn series_part(
             v
         })
         .collect();
-    let base = json!({
+    let mut base = json!({
         "series": id,
-        "axis": "dump",
+        "axis": if per_point.is_some() { "n" } else { "dump" },
         "n": n,
         "gate": if gate_pass { "pass" } else { "fail" },
         "failed": keys.len() - passed.len(),
         "reasons": reasons,
     });
+    if let Some(xs) = &per_point {
+        base["series_kind"] = json!("per-point");
+        base["n_values"] = json!(xs);
+    }
     let (result, kept) = growth::fit_passed(base, rows, passed.len());
     let shown: Vec<usize> = order.iter().take(kept).copied().collect();
     let series_rel = format!("series/{id}.json");
@@ -915,7 +967,10 @@ fn series_part(
             rule::MIN_DUMPS,
             rule::LAST_OVER_FIRST * 100.0
         ),
-        "the snapshots are assumed to come from one process (checked: one pid directory, growing object ids, surviving ids)".into(),
+        match &per_point {
+            Some(xs) => format!("series: per-point; one process per point at n = {} (harness captures; checked: snapshot format)", super::compat::n_list(xs)),
+            None => "the snapshots are assumed to come from one process (checked: one pid directory, growing object ids, surviving ids)".into(),
+        },
     ];
     let shas: Vec<&str> = dumps.iter().map(|d| d.sha256.as_str()).collect();
     let signal = Signal::new(TOOL, tool_class::DUMP_PARSER, &emit::combined_sha(&shas));
@@ -980,6 +1035,10 @@ fn series_part(
     }
 
     out.insert("series".into(), json!(id));
+    if let Some(xs) = &per_point {
+        out.insert("series_kind".into(), json!("per-point"));
+        out.insert("n_values".into(), json!(xs));
+    }
     out.insert(
         "gate".into(),
         json!(if gate_pass { "pass" } else { "fail" }),
@@ -1041,14 +1100,7 @@ fn series_part(
                 .map(|t| t.holder)
         });
         let named = ledger.finding(f).and_then(|x| x.holder);
-        match seen {
-            Some(h) if named != Some(h) => format!(
-                "the snapshots show holder {h} for {f}: dla ledger annotate {f} --holder {h}; then a refuted non-leak sibling, then dla ledger confirm {f} --evidence {growth_id}"
-            ),
-            _ => format!(
-                "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {growth_id}"
-            ),
-        }
+        holder_needed(f, seen, named, &growth_id)
     } else if let Some(f) = &a.finding {
         format!(
             "no passing column ties to {f} by holder, site or type: a holder ties to the finding whose owner is its module path plus name (for example src.scheduler.shared); annotate {f}'s owner in that form"
@@ -1058,6 +1110,30 @@ fn series_part(
     };
     out.insert("needed".into(), json!(needed_text));
     Ok(series_raw)
+}
+
+/// The next step for a tied finding, given the holder the snapshots show and the one the
+/// ledger has. The ledger fills a holder that is not set and refuses to change one that is.
+fn holder_needed(
+    f: &impl std::fmt::Display,
+    seen: Option<FindingHolder>,
+    named: Option<FindingHolder>,
+    growth_id: &impl std::fmt::Display,
+) -> String {
+    match seen {
+        Some(h) if named.is_none() => format!(
+            "the snapshots show holder {h} for {f}: dla ledger annotate {f} --holder {h}; then a refuted non-leak sibling, then dla ledger confirm {f} --evidence {growth_id}"
+        ),
+        // The ledger refuses to change a holder that is set: say so, and name the route
+        // it accepts instead of a command it would refuse.
+        Some(h) if named != Some(h) => format!(
+            "the snapshots show holder {h} for {f}, which already has holder {}; annotate cannot change it: record the corrected holder on a new hypothesis (dla ledger add --origin hypothesis --sibling-of {f} --hypothesis \"<cause>\" --refute-if \"<result>\" --evidence {growth_id}), or keep {f}'s holder; then a refuted non-leak sibling and dla ledger confirm --evidence {growth_id}",
+            named.map_or_else(String::new, |x| x.to_string())
+        ),
+        _ => format!(
+            "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {growth_id}"
+        ),
+    }
 }
 
 fn canonical_owner(owner: &str) -> Option<String> {
@@ -1202,6 +1278,83 @@ mod tests {
                 .unwrap_err()
                 .contains("not the same process")
         );
+    }
+
+    #[test]
+    fn a_foreign_package_is_not_a_project_file_even_when_its_basename_is() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.js"), "x").unwrap();
+        let (m, p) = module_of("/ci/app/node_modules/lodash/index.js", dir.path());
+        assert_eq!((m.as_str(), p), ("node_modules.lodash.index", false));
+        // A one-component tail of a longer foreign path is not a match either.
+        let (m, p) = module_of("/ci/app/lib/index.js", dir.path());
+        assert_eq!((m.as_str(), p), ("index", false));
+        // A package under the project is a dependency.
+        let inside = dir.path().join("node_modules/x/index.js");
+        let (_, p) = module_of(inside.to_str().unwrap(), dir.path());
+        assert!(!p);
+        // A bare file name is the project's own file.
+        let (m, p) = module_of("index.js", dir.path());
+        assert_eq!((m.as_str(), p), ("index", true));
+    }
+
+    #[test]
+    fn dictionary_keys_of_generic_containers_are_shaped() {
+        use dla_parsers::node::{Holder, Hop};
+        let red = super::super::redact::Redactor::new(b"salt", false);
+        let mut h = Holder {
+            kind: HolderKind::Instance,
+            registry: None,
+            name: "alice_0b".into(),
+            owner: "Object".into(),
+            script: None,
+            retained: 1,
+            count: 1,
+            instances: 1,
+            path: vec![
+                Hop {
+                    node: "Object".into(),
+                    edge: ".alice_0b".into(),
+                },
+                Hop {
+                    node: "Cache".into(),
+                    edge: ".items".into(),
+                },
+            ],
+            accumulation: None,
+        };
+        sanitize(&mut h, &red);
+        assert!(!h.name.contains("alice"), "{}", h.name);
+        assert!(!h.path[0].edge.contains("alice"), "{}", h.path[0].edge);
+        assert_eq!(h.path[1].edge, ".items");
+        // A user class keeps its field names.
+        let mut u = Holder {
+            name: "items".into(),
+            owner: "Cache".into(),
+            path: vec![],
+            ..h
+        };
+        sanitize(&mut u, &red);
+        assert_eq!(u.name, "items");
+    }
+
+    #[test]
+    fn an_annotate_command_is_named_only_for_a_finding_without_a_holder() {
+        let seen = Some(FindingHolder::RegistrationTable);
+        let none = holder_needed(&"F6", seen, None, &"E9");
+        assert!(
+            none.contains("ledger annotate F6 --holder registration-table"),
+            "{none}"
+        );
+        let other = holder_needed(&"F6", seen, Some(FindingHolder::BlockedStack), &"E9");
+        assert!(!other.contains("ledger annotate"), "{other}");
+        assert!(
+            other.contains("already has holder blocked-stack"),
+            "{other}"
+        );
+        assert!(other.contains("--sibling-of F6"), "{other}");
+        let same = holder_needed(&"F6", seen, seen, &"E9");
+        assert!(!same.contains("annotate"), "{same}");
     }
 
     #[test]

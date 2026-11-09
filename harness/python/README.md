@@ -17,7 +17,7 @@ PYTHONPATH=<harness dir>[:<existing PYTHONPATH>] DLA_HARNESS_OUT=... python3 -m 
 ```
 
 The agent chain-imports the next `sitecustomize` found on `sys.path` (the project's, or the
-system's), skips `pip`/`venv`/`ensurepip`/`build` runs, starts tracemalloc (`DLA_TRACEMALLOC_FRAMES` frames: 10 when `--capture alloc` is asked for, else 1) and, on
+system's), skips `pip`/`venv`/`ensurepip`/`build` runs, starts tracemalloc (`DLA_TRACEMALLOC_FRAMES` frames: 10 when `--capture alloc` or `nonheap` is asked for, else 1) and, on
 3.12+, a `sys.monitoring` `PY_START` collector (each code object disables itself after its first
 event). Coverage items look like `reports.builder:ReportBuilder.render@reports/builder.py:18`
 and cover only files under `DLA_PROJECT`.
@@ -63,7 +63,7 @@ and rounds in between); command mode takes one set at exit. Nothing here raises 
 
 memray: the tracker starts at interpreter start-up (only when `alloc` is captured and memray imports
 here) and stops at the start of the final record, so the agent's own work is not in the report. The
-helper `dla_memray_leaks.py` then runs with `sys.executable -I` and writes `get_leaked_allocation_records`
+helper `dla_memray_leaks.py` then runs with `sys.executable -I` (given `--site <dir>`, the directory memray was imported from, so a user-site or PYTHONPATH install is found) and writes `get_leaked_allocation_records`
 (merged threads) plus `memray stats --json` figures as JSON; DLA never reads the memray file. If memray
 is not installed in that interpreter, the `alloc` capture list carries an entry with an `error` that
 says so and names `pip install memray`; the run records it as a coverage gap. guppy3 and objgraph are

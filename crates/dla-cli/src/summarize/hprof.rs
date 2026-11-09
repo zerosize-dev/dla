@@ -103,6 +103,8 @@ struct Dump {
     summary: HeapSummary,
     /// `summaries/<name>.json` relative to the run directory.
     summary_file: String,
+    /// The iteration count `n` of the point, for a per-point series (separate processes).
+    x: Option<f64>,
 }
 
 fn fail(code: &str, message: String, missing: &str, fix: &str) -> Failure {
@@ -351,8 +353,17 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
         max_objects: a.max_objects,
         ..Options::default()
     };
+    // Harness captures of command mode are one process per point: a per-point series.
+    let per_point = compat::per_point(&tc.run_dir, inputs).map_err(|why| {
+        fail(
+            "dumps-not-comparable",
+            format!("the dumps are harness captures that do not form one per-point series: {why}"),
+            "three or more heap dumps of one command-mode harness run, one per point, at distinct n",
+            "dla summarize heap-graph <the heap-*.hprof files of one dla harness run --capture heap, one per point>",
+        )
+    })?;
     let mut dumps: Vec<Dump> = Vec::new();
-    for i in inputs {
+    for (k, i) in inputs.iter().enumerate() {
         let mut summary = hprof::summarize(&i.abs, &opts).map_err(|e| parse_failure(&i.rel, &e))?;
         redact_threads(&mut summary, &ctx.redactor);
         add_via_holders(&mut summary);
@@ -362,17 +373,36 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             sha256: i.sha256.clone(),
             summary,
             summary_file,
+            x: per_point.as_ref().map(|xs| xs[k]),
         });
         tc.require_time("dla summarize heap-graph")?;
     }
-    dumps.sort_by(|x, y| {
-        x.summary
-            .header
-            .timestamp_ms
-            .cmp(&y.summary.header.timestamp_ms)
-            .then_with(|| x.rel.cmp(&y.rel))
-    });
-    for w in dumps.windows(2) {
+    if per_point.is_some() {
+        dumps.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+        for w in dumps.windows(2) {
+            compat::check_format(&w[0].summary, &w[1].summary).map_err(|why| {
+                fail(
+                    "dumps-not-comparable",
+                    format!(
+                        "{} and {} cannot be compared: {why}",
+                        short_path(&w[0].rel),
+                        short_path(&w[1].rel)
+                    ),
+                    "per-point dumps of one JVM build (same HPROF version and identifier size)",
+                    "dla summarize heap-graph <the heap dumps of one harness run>",
+                )
+            })?;
+        }
+    } else {
+        dumps.sort_by(|x, y| {
+            x.summary
+                .header
+                .timestamp_ms
+                .cmp(&y.summary.header.timestamp_ms)
+                .then_with(|| x.rel.cmp(&y.rel))
+        });
+    }
+    for w in dumps.windows(2).filter(|_| per_point.is_none()) {
         compat::check(&w[0].summary, &w[1].summary).map_err(|why| {
             fail(
                 "dumps-not-comparable",
@@ -793,6 +823,7 @@ fn series_part(
     // ---- the series file
     let id = tc.next_series_id();
     let t0 = dumps[0].summary.header.timestamp_ms;
+    let per_point: Option<Vec<f64>> = dumps.iter().map(|d| d.x).collect();
     let mut columns = Vec::new();
     for key in &keys {
         let tie = tie_for(key);
@@ -818,8 +849,13 @@ fn series_part(
         .iter()
         .enumerate()
         .map(|(i, d)| Point {
-            x: (i + 1) as f64,
-            t_ms: d.summary.header.timestamp_ms.saturating_sub(t0),
+            x: d.x.unwrap_or((i + 1) as f64),
+            // Separate processes share no clock: the header timestamps order nothing.
+            t_ms: if d.x.is_some() {
+                0
+            } else {
+                d.summary.header.timestamp_ms.saturating_sub(t0)
+            },
             values: keys
                 .iter()
                 .flat_map(|k| {
@@ -838,16 +874,27 @@ fn series_part(
         schema_version: 1,
         id: id.clone(),
         source,
-        axis: Axis::Dump,
+        axis: if per_point.is_some() {
+            Axis::N
+        } else {
+            Axis::Dump
+        },
         warmup: 0,
         columns,
         points,
         events: Vec::new(),
-        limitations: vec![
-            "x is the dump number in header-timestamp order; t_ms is the header timestamp difference from the first dump".into(),
-            "each point comes from a separate heap dump of one process; retained bytes are approximate (see the dump summaries)".into(),
-            "holders absent from a dump's 200 largest have no figure at that point".into(),
-        ],
+        limitations: match &per_point {
+            Some(xs) => vec![
+                format!("series: per-point; x is the iteration count n of each point ({}); every point is a separate process and heap dump", compat::n_list(xs)),
+                "retained bytes are approximate (see the dump summaries); t_ms is not recorded".into(),
+                "holders absent from a dump's 200 largest have no figure at that point".into(),
+            ],
+            None => vec![
+                "x is the dump number in header-timestamp order; t_ms is the header timestamp difference from the first dump".into(),
+                "each point comes from a separate heap dump of one process; retained bytes are approximate (see the dump summaries)".into(),
+                "holders absent from a dump's 200 largest have no figure at that point".into(),
+            ],
+        },
     };
     series.save(&tc.run_dir)?;
 
@@ -913,14 +960,18 @@ fn series_part(
             v
         })
         .collect();
-    let base = json!({
+    let mut base = json!({
         "series": id,
-        "axis": "dump",
+        "axis": if per_point.is_some() { "n" } else { "dump" },
         "n": n,
         "gate": if gate_pass { "pass" } else { "fail" },
         "failed": keys.len() - passed.len(),
         "reasons": reasons,
     });
+    if let Some(xs) = &per_point {
+        base["series_kind"] = json!("per-point");
+        base["n_values"] = json!(xs);
+    }
     let (result, kept) = growth::fit_passed(base, rows, passed.len());
     let shown: Vec<usize> = order.iter().take(kept).copied().collect();
     let series_rel = format!("series/{id}.json");
@@ -944,7 +995,10 @@ fn series_part(
             rule::MIN_DUMPS,
             rule::LAST_OVER_FIRST * 100.0
         ),
-        "the dumps are assumed to come from one process (checked: HPROF version, identifier size, timestamps, class set)".into(),
+        match &per_point {
+            Some(xs) => format!("series: per-point; one process per point at n = {} (harness captures; checked: HPROF version, identifier size)", compat::n_list(xs)),
+            None => "the dumps are assumed to come from one process (checked: HPROF version, identifier size, timestamps, class set)".into(),
+        },
     ];
     let dump_shas: Vec<&str> = dumps.iter().map(|d| d.sha256.as_str()).collect();
     let signal = Signal::new(
@@ -1030,6 +1084,10 @@ fn series_part(
     }
 
     out.insert("series".into(), json!(id));
+    if let Some(xs) = &per_point {
+        out.insert("series_kind".into(), json!("per-point"));
+        out.insert("n_values".into(), json!(xs));
+    }
     out.insert(
         "gate".into(),
         json!(if gate_pass { "pass" } else { "fail" }),

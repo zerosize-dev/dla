@@ -420,12 +420,10 @@ fn a_timer_holder_is_a_registration_table_and_ties_to_the_timer_finding() {
     );
     assert_eq!(v["observed_holder"][&f], "registration-table");
     let needed = v["needed"].as_str().unwrap();
-    assert!(
-        needed.contains(&format!(
-            "dla ledger annotate {f} --holder registration-table"
-        )),
-        "{needed}"
-    );
+    // The finding already has a holder, which the ledger will not change: no annotate.
+    assert!(!needed.contains("ledger annotate"), "{needed}");
+    assert!(needed.contains("already has holder"), "{needed}");
+    assert!(needed.contains(&format!("--sibling-of {f}")), "{needed}");
     let g = p.evidence("growth-series").pop().unwrap();
     assert!(ledger_rule_ties(
         &g,
@@ -721,6 +719,13 @@ fn a_bundle_profile_is_mapped_through_its_source_map() {
     assert_eq!(v["source_maps"]["frames_mapped"], 3, "{v}");
     assert_eq!(v["top"][0]["site"], "src/scheduler.js:2", "{v}");
     assert_eq!(v["sampled"], true);
+    // Windows are not cumulative: rising per-window bytes are not retention growth, so
+    // no growth column exists and nothing is tied.
+    assert_eq!(v["gate"], "fail", "{v}");
+    assert_eq!(v["tied"].as_array().map_or(0, Vec::len), 0, "{v}");
+    assert!(v["series"].is_null(), "{v}");
+    assert!(v["needed"].as_str().unwrap().contains("heap-graph"), "{v}");
+    assert!(p.evidence("growth-series").is_empty());
 }
 
 #[test]
@@ -779,4 +784,180 @@ fn a_resources_file_without_its_version_is_refused() {
     );
     assert_eq!(e["code"], "malformed-artifact");
     assert!(e["fix"].as_str().unwrap().contains("--capture nonheap"));
+}
+
+// ---------------------------------------------------------------------------------------
+// per-point series: harness captures of command mode, one process per point
+// ---------------------------------------------------------------------------------------
+
+impl Project {
+    /// Copies a fixture snapshot in as the heap snapshot of point `label` of harness H1
+    /// (its own pid directory) and lists it in `captures.json` with `x`, the way
+    /// `dla harness run H1 --capture heap` does. Returns the project-relative path.
+    fn capture(&self, label: &str, pid: u32, x: Option<f64>, src: &str) -> String {
+        let run_rel = format!("harness/H1/out/{label}/capture/{pid}/heap-1.heapsnapshot");
+        let abs = self.run_dir.join(&run_rel);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::copy(self.path().join(src), &abs).unwrap();
+        let list = self.run_dir.join("harness/H1/captures.json");
+        let mut v: Value = fs::read_to_string(&list)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_else(|| serde_json::json!({"files": []}));
+        let mut entry = serde_json::json!({
+            "kind": "heap", "path": run_rel, "label": label, "seq": 1,
+            "bytes": fs::metadata(&abs).unwrap().len(),
+            "captured_at": "2026-01-01T00:00:00Z",
+        });
+        if let Some(x) = x {
+            entry["x"] = serde_json::json!(x);
+        }
+        v["files"].as_array_mut().unwrap().push(entry);
+        fs::write(&list, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        format!(
+            ".dla/{}/{run_rel}",
+            self.run_dir.file_name().unwrap().to_string_lossy()
+        )
+    }
+}
+
+#[test]
+fn per_point_harness_snapshots_form_a_series_over_n_and_tie_by_holder() {
+    let p = Project::with_sources();
+    let shared = p.finding_with_owner("src.scheduler.shared");
+    let f = shared["id"].as_str().unwrap().to_owned();
+    let src = retry(&p);
+    // Separate processes: the snapshots are listed out of order of n.
+    let files = vec![
+        p.capture("p9-native", 30, Some(900.0), &src[2]),
+        p.capture("p1-native", 10, Some(100.0), &src[0]),
+        p.capture("p5-native", 20, Some(500.0), &src[1]),
+    ];
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["series_kind"], "per-point");
+    assert_eq!(v["n_values"], serde_json::json!([100.0, 500.0, 900.0]));
+    assert_eq!(v["passed"][0], "static:src.scheduler.shared");
+    assert!(
+        v["tied"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| *t == f.as_str()),
+        "{v}"
+    );
+    assert_eq!(v["observed_holder"][&f], "static/global");
+    let s: Value = serde_json::from_str(
+        &fs::read_to_string(
+            p.run_dir
+                .join(format!("series/{}.json", v["series"].as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(s["axis"], "n");
+    let xs: Vec<f64> = s["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["x"].as_f64().unwrap())
+        .collect();
+    assert_eq!(xs, [100.0, 500.0, 900.0]);
+    assert!(
+        s["limitations"][0]
+            .as_str()
+            .unwrap()
+            .contains("series: per-point")
+    );
+    let c = s["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "holder:static:src.scheduler.shared")
+        .unwrap();
+    assert_eq!(c["finding"], f.as_str());
+    let g = p.evidence("growth-series").pop().unwrap();
+    assert_eq!(g["result"]["axis"], "n");
+    assert_eq!(g["result"]["series_kind"], "per-point");
+    assert_eq!(g["result"]["passed"][0]["finding"], f.as_str());
+    assert_eq!(g["result"]["passed"][0]["tie"]["rule"], "holder");
+}
+
+#[test]
+fn a_per_point_snapshot_series_that_mixes_modes_or_repeats_x_is_refused() {
+    let msg = |e: &Value| e["message"].as_str().unwrap().to_owned();
+    let case = |points: [(&str, Option<f64>); 3]| {
+        let p = Project::new();
+        let src = retry(&p);
+        let files: Vec<String> = points
+            .iter()
+            .enumerate()
+            .map(|(i, (label, x))| p.capture(label, 10 + i as u32, *x, &src[i]))
+            .collect();
+        let mut args = vec!["summarize", "heap-graph", "--backend", "node-heapsnapshot"];
+        args.extend(files.iter().map(String::as_str));
+        let e = refused(p.path(), &args);
+        assert_eq!(e["code"], "dumps-not-comparable", "{e}");
+        assert!(!p.run_dir.join("series").exists());
+        e
+    };
+    let e = case([
+        ("p1-native", Some(100.0)),
+        ("p5-native", Some(500.0)),
+        ("p1-fresh", Some(900.0)),
+    ]);
+    assert!(msg(&e).contains("driver mode"), "{e}");
+    let e = case([
+        ("p1-native", Some(100.0)),
+        ("p5-native", Some(100.0)),
+        ("p9-native", Some(900.0)),
+    ]);
+    assert!(msg(&e).contains("same n"), "{e}");
+    let e = case([
+        ("p1-native", Some(100.0)),
+        ("p1-native", Some(500.0)),
+        ("p9-native", Some(900.0)),
+    ]);
+    assert!(msg(&e).contains("same point"), "{e}");
+    let e = case([
+        ("p1-native", Some(100.0)),
+        ("p5-native", None),
+        ("p9-native", Some(900.0)),
+    ]);
+    assert!(msg(&e).contains("no recorded n"), "{e}");
+}
+
+#[test]
+fn snapshots_not_listed_as_harness_captures_keep_the_pid_directory_rule() {
+    // The same layout as a harness run, but captures.json does not list the files (an
+    // artifact run or an attach): separate pid directories are separate processes.
+    let p = Project::new();
+    let src = retry(&p);
+    let files: Vec<String> = (0..3)
+        .map(|i| {
+            let rel = format!(
+                "harness/H1/out/p{}-native/capture/{}/heap-1.heapsnapshot",
+                i + 1,
+                10 + i
+            );
+            let abs = p.run_dir.join(&rel);
+            fs::create_dir_all(abs.parent().unwrap()).unwrap();
+            fs::copy(p.path().join(&src[i]), &abs).unwrap();
+            format!(
+                ".dla/{}/{rel}",
+                p.run_dir.file_name().unwrap().to_string_lossy()
+            )
+        })
+        .collect();
+    let mut args = vec!["summarize", "heap-graph", "--backend", "node-heapsnapshot"];
+    args.extend(files.iter().map(String::as_str));
+    let e = refused(p.path(), &args);
+    assert_eq!(e["code"], "dumps-not-comparable");
+    assert!(
+        e["message"]
+            .as_str()
+            .unwrap()
+            .contains("different processes"),
+        "{e}"
+    );
 }

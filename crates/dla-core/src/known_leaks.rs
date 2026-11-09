@@ -136,6 +136,10 @@ pub fn parse_version(s: &str) -> Option<Version> {
             Err(_) => break,
         }
         if digits.len() != part.len() {
+            // A PEP 440 epoch (`1!2.0`) is not a leading release number.
+            if part[digits.len()..].starts_with('!') {
+                return None;
+            }
             break;
         }
     }
@@ -202,11 +206,29 @@ impl VersionRange {
             } else {
                 (Op::Eq, p)
             };
-            let v = parse_version(rest.trim())
+            let rest = rest.trim();
+            let body = rest
+                .strip_prefix("go")
+                .or_else(|| rest.strip_prefix('v'))
+                .unwrap_or(rest);
+            if body.contains(char::is_whitespace)
+                || !body.starts_with(|c: char| c.is_ascii_digit())
+                || body.contains(['!', '^', '~', '*', '+'])
+            {
+                return Err(format!(
+                    "unsupported version {rest:?} in range {s:?} (use comma-separated comparators)"
+                ));
+            }
+            let v = parse_version(rest)
                 .ok_or_else(|| format!("bad version {:?} in range {s:?}", rest.trim()))?;
             cmps.push((op, v));
         }
         Ok(Self { cmps })
+    }
+
+    /// True for `*`: every version, and an unknown one, is inside the range.
+    pub fn is_any(&self) -> bool {
+        self.cmps.is_empty()
     }
 
     /// True when `v` is inside the range.
@@ -353,6 +375,25 @@ mod tests {
         assert!(VersionRange::parse("*").unwrap().contains(&[0]));
         assert!(VersionRange::parse("").is_err());
         assert!(VersionRange::parse(">=x").is_err());
+        assert!(VersionRange::parse("*").unwrap().is_any());
+        assert!(!VersionRange::parse("<2").unwrap().is_any());
+    }
+
+    #[test]
+    fn unsupported_range_syntax_is_refused_not_misread() {
+        for bad in [
+            ">=1.0 <2.0",
+            "^1.2",
+            "~1.2",
+            "~=1.2",
+            "1!2.0",
+            ">=1.0, <2.0 x",
+            "4.+",
+        ] {
+            assert!(VersionRange::parse(bad).is_err(), "{bad}");
+        }
+        assert!(VersionRange::parse(">=go1.23, <v2").is_ok());
+        assert_eq!(parse_version("1!2.0"), None);
     }
 
     #[test]

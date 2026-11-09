@@ -12,12 +12,16 @@
 //! under a boundary method, compares per-iteration slopes (Theil-Sen over the post-warm-up
 //! points, the same gate `dla trend` uses):
 //!
-//! * the site's `native.live_bytes@site` column must pass the slope gate;
-//! * the managed process footprint (`os.rss_anon`, else `os.rss`) must pass it too;
-//! * the site's slope must be between [`MIN_SHARE`] and [`MAX_RATIO`] of the footprint slope:
-//!   native bytes held through malloc show up in the anonymous resident set, so a site cannot
-//!   grow much faster than the process does, and one that grows far slower is not what the
-//!   process footprint shows.
+//! * the site's `native.live_bytes@site` column must pass the slope gate (the allocator shim
+//!   counts the site's live bytes directly: this is the growth);
+//! * the site's slope must be between [`MIN_SHARE`] and [`MAX_RATIO`] of the managed process
+//!   footprint slope (`os.rss_anon`, else `os.rss`): native bytes held through malloc show up
+//!   in the anonymous resident set, so a site cannot grow much faster than the process does,
+//!   and one that grows far slower is not what the process footprint shows. The footprint's
+//!   Theil-Sen slope is used even when its column misses the gate: whole-process columns are
+//!   noisy (several MB on CI runners) while the slope estimate stays sound; the evidence says
+//!   whether the footprint passed (`managed.gated`), and a footprint with no positive slope
+//!   rejects the site.
 //!
 //! With those it writes one `alloc-stack` evidence (both slopes, the boundary, the stack) and
 //! adds a candidate to the ledger of the worker it runs in: origin `correlation`, site the
@@ -100,6 +104,8 @@ struct Slope {
     lo: f64,
     p: Option<f64>,
     n: u32,
+    /// The column passed the slope gate.
+    gated: bool,
 }
 
 /// Why a site was not correlated.
@@ -154,6 +160,23 @@ fn gated_slope(series: &SeriesFile, column: &str, th: &GateThresholds) -> Result
         lo: sen.lo,
         p: a.mk.map(|m| m.p_increasing),
         n: a.n,
+        gated: true,
+    })
+}
+
+/// The Theil-Sen slope of `column` whether or not it passes the gate (`gated` says which).
+fn any_slope(series: &SeriesFile, column: &str, th: &GateThresholds) -> Option<Slope> {
+    let i = series.column_index(column)?;
+    let pts = series.post_warmup(i);
+    let a: Analysis = analyze(&pts, None, false, th);
+    let sen = a.sen?;
+    Some(Slope {
+        column: column.to_owned(),
+        slope: sen.slope,
+        lo: sen.lo,
+        p: a.mk.map(|m| m.p_increasing),
+        n: a.n,
+        gated: a.gate == GateVerdict::Pass,
     })
 }
 
@@ -178,6 +201,12 @@ fn judge(series: &SeriesFile, site: &str, th: &GateThresholds) -> Verdict {
             Err(w) => why_not.push(w),
         }
     }
+    // No footprint column passed the gate: its slope estimate still bounds the site.
+    let managed = managed.or_else(|| {
+        FOOTPRINT
+            .iter()
+            .find_map(|c| any_slope(series, c, th).filter(|s| s.slope > 0.0))
+    });
     let Some(managed) = managed else {
         let why = if why_not.is_empty() {
             "the series has no os.rss_anon or os.rss column to compare with".to_owned()
@@ -343,6 +372,7 @@ fn slope_json(s: &Slope) -> Value {
         "lo": round(s.lo),
         "p": s.p.map(|p| (p * 1e6).round() / 1e6),
         "n": s.n,
+        "gated": s.gated,
     })
 }
 
@@ -498,6 +528,20 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CorrelateArgs) 
             skipped += 1;
             continue;
         }
+        // Ties never cross runtimes: only a finding of this worker can tie the managed
+        // worker's shim column, so a finding another worker merged into the core ledger
+        // at the same site does not make the site covered. Checked before any evidence
+        // is written, so a skipped site leaves no orphan record.
+        let others: Vec<String> = ledger
+            .findings()
+            .filter(|f| f.site.as_deref() == Some(&s.site))
+            .filter(|f| f.id.prefix() == tc.worker.as_deref())
+            .map(|f| f.id.to_string())
+            .collect();
+        if !others.is_empty() {
+            existing.push(json!({"site": s.site, "findings": others}));
+            continue;
+        }
         let (rel, _) = match &raw {
             Some(r) => r.clone(),
             None => {
@@ -536,15 +580,6 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CorrelateArgs) 
         let ev: EvidenceId = tc.add_evidence(&mut ledger, spec)?;
         evidence.push(ev.to_string());
 
-        let others: Vec<String> = ledger
-            .findings()
-            .filter(|f| f.site.as_deref() == Some(&s.site))
-            .map(|f| f.id.to_string())
-            .collect();
-        if !others.is_empty() {
-            existing.push(json!({"site": s.site, "findings": others}));
-            continue;
-        }
         let cand = Candidate {
             origin: "correlation".to_owned(),
             evidence: vec![ev],
@@ -781,6 +816,29 @@ mod tests {
             panic!("matched")
         };
         assert!(why.contains("os.rss"), "{why}");
+    }
+
+    #[test]
+    fn a_noisy_footprint_that_misses_the_gate_still_bounds_the_site() {
+        // CI runner: os.rss_anon wobbles by several MB, so its column misses the gate, while
+        // the shim's site column grows cleanly.
+        let mut s = series(&[
+            ("native.live_bytes@native/src/lib.rs:40", 6000.0, 3074.0),
+            ("os.rss_anon", 5.0e7, 7200.0),
+        ]);
+        for (k, p) in s.points.iter_mut().enumerate() {
+            let wobble = if k % 2 == 0 { 4.0e6 } else { -4.0e6 };
+            p.values[1] = p.values[1].map(|v| v + wobble);
+        }
+        assert!(gated_slope(&s, "os.rss_anon", &GateThresholds::default()).is_err());
+        let Verdict::Match { managed, ratio, .. } = judge(&s, SITE, &GateThresholds::default())
+        else {
+            panic!("no match")
+        };
+        assert_eq!(managed.column, "os.rss_anon");
+        assert!(!managed.gated);
+        assert!((0.3..0.6).contains(&ratio), "{ratio}");
+        assert_eq!(slope_json(&managed)["gated"], false);
     }
 
     #[test]

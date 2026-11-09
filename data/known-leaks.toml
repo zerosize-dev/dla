@@ -51,18 +51,24 @@ aliases = ["org.springframework.boot:*", "spring-boot-starter-cache", "spring-bo
 versions = "*"
 when = { all = [
   { source_regex = '@(?:Cacheable|EnableCaching)\b' },
-  { not = { any = [
-    { library = { name = "com.github.ben-manes.caffeine:caffeine" } },
-    { library = { name = "caffeine" } },
-    { library = { name = "ehcache" } },
-    { library = { name = "org.ehcache:ehcache" } },
-    { library = { name = "org.springframework.boot:spring-boot-starter-data-redis" } },
-    { library = { name = "spring-boot-starter-data-redis" } },
-    { library = { name = "hazelcast" } },
-  ] } },
-  { not = { config = { key = "spring.cache.type" } } },
+  { any = [
+    # Set explicitly, the simple provider is in use whatever libraries are present.
+    { config = { key = "spring.cache.type", value = "simple" } },
+    { all = [
+      { not = { any = [
+        { library = { name = "com.github.ben-manes.caffeine:caffeine" } },
+        { library = { name = "caffeine" } },
+        { library = { name = "ehcache" } },
+        { library = { name = "org.ehcache:ehcache" } },
+        { library = { name = "org.springframework.boot:spring-boot-starter-data-redis" } },
+        { library = { name = "spring-boot-starter-data-redis" } },
+        { library = { name = "hazelcast" } },
+      ] } },
+      { not = { config = { key = "spring.cache.type" } } },
+    ] },
+  ] },
 ] }
-effect = "With no cache library Spring Boot configures the simple provider, a ConcurrentHashMap cache store that the documentation does not recommend for production. The page states no size limit or expiry, so entries stay until evicted by hand."
+effect = "With no cache library Spring Boot configures the simple provider, a ConcurrentHashMap cache store that the documentation calls not really recommended for production. A ConcurrentHashMap has no size bound or expiry of its own, so entries stay until evicted by hand."
 holder = "container-field"
 evidence = "https://docs.spring.io/spring-boot/reference/io/caching.html"
 remedy = "Set a bounded provider such as Caffeine with maximumSize and expireAfterWrite, or evict explicitly."

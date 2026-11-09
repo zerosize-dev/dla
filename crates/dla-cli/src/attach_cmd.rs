@@ -63,24 +63,46 @@ fn record_command(id: &str, backend: Backend, op: attach::Op) -> String {
     format!("attach {id}: {} {}", backend.name(), op.name())
 }
 
-/// The coverage worker key (the runtime) of an attach backend.
-fn coverage_worker(b: Backend) -> &'static str {
+/// The coverage worker key (the runtime) of an attach backend. Bpftrace is a native-side
+/// tool: its row goes on the worker that carries the other tier-3 rows (the
+/// `bcc-memleak` row), else the one `dla probe` would pick for the probed runtimes, else
+/// `native`.
+fn coverage_worker(b: Backend, run_dir: &Path) -> String {
     match b {
-        Backend::Jcmd => "jvm",
-        Backend::NodeInspector => "node",
-        Backend::Memray => "python",
-        Backend::Heaptrack => "rust",
-        Backend::Goref => "go",
-        Backend::Bpftrace => "native",
+        Backend::Jcmd => "jvm".to_owned(),
+        Backend::NodeInspector => "node".to_owned(),
+        Backend::Memray => "python".to_owned(),
+        Backend::Heaptrack => "rust".to_owned(),
+        Backend::Goref => "go".to_owned(),
+        Backend::Bpftrace => bpftrace_worker(run_dir),
     }
+}
+
+fn bpftrace_worker(run_dir: &Path) -> String {
+    if let Ok(Some(m)) = CoverageManifest::load(run_dir)
+        && let Some(w) = m
+            .workers
+            .iter()
+            .find(|(_, w)| w.backends.contains_key("bcc-memleak"))
+            .map(|(k, _)| k.clone())
+    {
+        return w;
+    }
+    let probed: Vec<dla_core::runtime::Runtime> =
+        std::fs::read_to_string(run_dir.join("probe/probe.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<dla_core::probe::ProbeReport>(&t).ok())
+            .map(|r| r.runtimes.iter().map(|x| x.runtime).collect())
+            .unwrap_or_default();
+    dla_probe::native_worker(&probed).map_or_else(|| "native".to_owned(), |r| r.as_str().to_owned())
 }
 
 /// Writes the backend's coverage row: `ran`, `missing` (with the fix as the install
 /// hint) or `blocked`. A failure to write it never hides the attach result.
 fn note_coverage(tc: &ToolCtx, backend: Backend, cov: BackendCoverage) {
-    let worker = coverage_worker(backend);
+    let worker = coverage_worker(backend, &tc.run_dir);
     let r = CoverageManifest::update(&tc.run_dir, |m| {
-        m.note_backend(worker, backend.name(), cov);
+        m.note_backend(&worker, backend.name(), cov);
     });
     if let Err(e) = r {
         eprintln!("dla attach: coverage.json not updated: {e}");

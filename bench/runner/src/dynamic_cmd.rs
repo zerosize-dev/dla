@@ -193,12 +193,12 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
     ExpectedFailure {
         fixture: "node-retry-scheduler",
         failure: "leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global",
-        reason: "the leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, scheduler.js:15), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root, the heap-graph holder needs a series of snapshots from one process (driver mode, hand-filled hooks) which the command-mode capture of the fixed policy does not give, and the policy cannot read the code to choose the root",
+        reason: "the leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, scheduler.js:15), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The per-point heap-graph run ties that column to the finding of the instance field with the observed holder `container-field`, the same as the census, so no annotation is due; the module variable `shared` is its own finding (scheduler.js:90) and the policy cannot read the code to choose it as the root",
     },
     ExpectedFailure {
         fixture: "node-socket-heartbeat",
         failure: "leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table",
-        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The timer census does not know which table keeps the timer reachable; node-resources ties the timer group to the finding by site, but only the heap-graph holder (driver mode) names the table, and the policy does not annotate a holder it did not see",
+        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The per-point heap-graph run ties the container fields of the sessions and the loopback socket but names no timer holder (the Node holder analysis yields none for a setInterval), so there is no observed holder to annotate; node-resources ties the timer group to the finding by site only",
     },
 ];
 
@@ -1603,12 +1603,22 @@ fn check_dump_backed(view: &View, expected: &Expected) -> Vec<String> {
         });
         if !backed {
             bad.push(format!(
-                "leak {} is marked dump_backed but {} cites no retention-path, histogram-diff or alloc-stack evidence with dump or live authority",
-                leak.id, f.id
+                "leak {} is marked dump_backed but {} {}",
+                leak.id,
+                f.id,
+                dump_backed_missing()
             ));
         }
     }
     bad
+}
+
+/// The failure text for a `dump_backed` leak with no qualifying evidence, built from [`DUMP_KINDS`].
+fn dump_backed_missing() -> String {
+    format!(
+        "cites none of {} evidence with dump or live authority",
+        DUMP_KINDS.join(", ")
+    )
 }
 
 /// One line per trend report (its passing columns with shape, Sen slope and noise) and per
@@ -2454,6 +2464,15 @@ fn run_in(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_dump_backed_message_names_every_accepted_kind() {
+        let m = super::dump_backed_missing();
+        for k in super::DUMP_KINDS {
+            assert!(m.contains(k), "{m} lacks {k}");
+        }
+        assert!(m.contains("non-heap") && m.contains("should-be-dead"));
+    }
+
     use super::*;
 
     fn listed() -> [ExpectedFailure; 1] {

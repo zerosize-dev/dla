@@ -183,6 +183,7 @@ impl Adapter for PyTracemalloc {
                 runtime: Some(Runtime::Python),
                 region: SeriesRegion::Heap,
                 order_by_time: false,
+                windowed: false,
                 limitations: vec![
                     "tracemalloc sees allocations made after it started (interpreter start-up excluded) and only through Python's allocators; memory a C extension takes with malloc is not in it".into(),
                     "each file lists the largest stacks by live bytes and, after the first, the stacks that grew most since the first file: a stack outside the list has no figure in that file".into(),

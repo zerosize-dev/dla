@@ -30,7 +30,7 @@ const JVM_VALGRIND: Row = Row {
 };
 
 /// The runtime whose worker carries the native-side rows: native, then rust, then the first.
-fn native_worker(runtimes: &[Runtime]) -> Option<Runtime> {
+pub fn native_worker(runtimes: &[Runtime]) -> Option<Runtime> {
     [Runtime::Native, Runtime::Rust]
         .into_iter()
         .find(|r| runtimes.contains(r))

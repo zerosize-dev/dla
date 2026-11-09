@@ -166,13 +166,119 @@ fn netty_sampling_depends_on_the_level_flag() {
         Verdict::False
     );
 
-    // No netty in a manifest that was read: the entry does not apply.
+    // No netty in a manifest that is not a lock file: a transitive use is not seen.
     let (_d, ctx) = project(&[("pom.xml", "<project></project>")], Some(&shipped()));
+    let v = verdicts(&ctx);
+    assert_eq!(
+        get(&v, "jvm-netty-leak-detection-sampling").1,
+        Verdict::Maybe
+    );
+}
+
+#[test]
+fn gradle_unpinned_versions_and_system_properties() {
+    // An unversioned netty dependency matches the `*` range.
+    let (_d, ctx) = project(
+        &[(
+            "build.gradle.kts",
+            "dependencies { implementation(\"io.netty:netty-all\") }\n",
+        )],
+        Some(&shipped()),
+    );
+    let v = verdicts(&ctx);
+    assert_eq!(
+        get(&v, "jvm-netty-leak-detection-sampling").1,
+        Verdict::True
+    );
+
+    // The level set with systemProperty is seen.
+    let (_d, ctx) = project(
+        &[(
+            "build.gradle.kts",
+            "dependencies { implementation(\"io.netty:netty-all:4.1.100.Final\") }\n\
+tasks.test { systemProperty(\"io.netty.leakDetection.level\", \"paranoid\") }\n",
+        )],
+        Some(&shipped()),
+    );
     let v = verdicts(&ctx);
     assert_eq!(
         get(&v, "jvm-netty-leak-detection-sampling").1,
         Verdict::False
     );
+
+    // Surefire form.
+    let (_d, ctx) = project(
+        &[(
+            "pom.xml",
+            "<project><dependencies><dependency><groupId>io.netty</groupId>\
+<artifactId>netty-handler</artifactId><version>4.1.100.Final</version></dependency></dependencies>\
+<build><plugins><plugin><configuration><systemPropertyVariables>\
+<io.netty.leakDetection.level>paranoid</io.netty.leakDetection.level>\
+</systemPropertyVariables></configuration></plugin></plugins></build></project>",
+        )],
+        Some(&shipped()),
+    );
+    let v = verdicts(&ctx);
+    assert_eq!(
+        get(&v, "jvm-netty-leak-detection-sampling").1,
+        Verdict::False
+    );
+
+    // A cache library from a version catalog is not seen: never True for the Spring entry.
+    let (_d, ctx) = project(
+        &[
+            (
+                "build.gradle.kts",
+                "plugins { id(\"org.springframework.boot\") }\ndependencies { implementation(libs.caffeine) }\n",
+            ),
+            (
+                "src/S.java",
+                "class S { @Cacheable(\"a\") String f(String k) { return k; } }\n",
+            ),
+        ],
+        Some(&shipped()),
+    );
+    let v = verdicts(&ctx);
+    assert_eq!(get(&v, "jvm-spring-simple-cache").1, Verdict::Maybe);
+
+    // A declared but unversioned caffeine makes `not(any(library ..))` false.
+    let (_d, ctx) = project(
+        &[
+            (
+                "build.gradle.kts",
+                "plugins { id(\"org.springframework.boot\") }\ndependencies { implementation(\"com.github.ben-manes.caffeine:caffeine\") }\n",
+            ),
+            (
+                "src/S.java",
+                "class S { @Cacheable(\"a\") String f(String k) { return k; } }\n",
+            ),
+        ],
+        Some(&shipped()),
+    );
+    let v = verdicts(&ctx);
+    assert_eq!(get(&v, "jvm-spring-simple-cache").1, Verdict::False);
+}
+
+#[test]
+fn spring_cache_type_simple_still_fires() {
+    let pom = "<project><parent><groupId>org.springframework.boot</groupId>\
+<artifactId>spring-boot-starter-parent</artifactId><version>3.2.1</version></parent></project>";
+    let java = "@Service class S { @Cacheable(\"a\") String f(String k) { return k; } }\n";
+    for (ty, want) in [("simple", Verdict::True), ("redis", Verdict::False)] {
+        let (_d, ctx) = project(
+            &[
+                ("pom.xml", pom),
+                ("src/S.java", java),
+                (
+                    "src/main/resources/application.properties",
+                    &format!("spring.cache.type={ty}\n"),
+                ),
+            ],
+            Some(&shipped()),
+        );
+        let v = verdicts(&ctx);
+        assert_eq!(get(&v, "jvm-spring-simple-cache").1, want, "{ty}");
+    }
 }
 
 #[test]
@@ -182,7 +288,8 @@ fn spring_simple_cache_needs_cacheable_code_and_no_provider() {
     let java = "@Service class S { @Cacheable(\"a\") String f(String k) { return k; } }\n";
     let (_d, ctx) = project(&[("pom.xml", pom), ("src/S.java", java)], Some(&shipped()));
     let v = verdicts(&ctx);
-    assert_eq!(get(&v, "jvm-spring-simple-cache").1, Verdict::True);
+    // No cache library in a pom (transitive use unseen) is not proof of absence.
+    assert_eq!(get(&v, "jvm-spring-simple-cache").1, Verdict::Maybe);
 
     let (_d, ctx) = project(
         &[

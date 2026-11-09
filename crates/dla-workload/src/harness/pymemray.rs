@@ -29,14 +29,22 @@ fn row(errors: &[(String, String)], files: &[CaptureFile]) -> Option<BackendCove
     if reports > 0 {
         return Some(BackendCoverage::ran(None, reports));
     }
-    errors
+    if errors
         .iter()
         .any(|(kind, e)| kind == "alloc" && e.starts_with(MISSING))
-        .then(|| {
-            BackendCoverage::missing(
-                "memray is not installed in the target's python interpreter, so --capture alloc has the tracemalloc report only",
-                "pip install memray in the interpreter the workload runs under, then dla harness run <H> --capture alloc",
-            )
+    {
+        return Some(BackendCoverage::missing(
+            "memray is not installed in the target's python interpreter, so --capture alloc has the tracemalloc report only",
+            "pip install memray in the interpreter the workload runs under, then dla harness run <H> --capture alloc",
+        ));
+    }
+    // Any other memray failure (could not start, did not stop, helper failed) is a blocked row.
+    errors
+        .iter()
+        .find(|(kind, e)| kind == "alloc" && e.to_ascii_lowercase().contains("memray"))
+        .map(|(_, e)| {
+            let e: String = e.chars().take(300).collect();
+            BackendCoverage::blocked(e)
         })
 }
 
@@ -93,5 +101,18 @@ mod tests {
         assert!(row(&[], &[file("p/py-1.alloc.json")]).is_none());
         let other = vec![("alloc".to_owned(), "tracemalloc is not tracing".to_owned())];
         assert!(row(&other, &[]).is_none());
+    }
+
+    #[test]
+    fn other_memray_failures_are_blocked_rows() {
+        for msg in [
+            "memray could not start: boom",
+            "memray helper exit 1: bad",
+            "memray tracker did not stop cleanly: x",
+        ] {
+            let e = vec![("alloc".to_owned(), msg.to_owned())];
+            let r = row(&e, &[file("p/py-1.alloc.json")]).unwrap();
+            assert_eq!(r.status, BackendStatus::Blocked, "{msg}");
+        }
     }
 }

@@ -156,6 +156,7 @@ impl Adapter for NodeHeapProfile {
                 runtime: Some(Runtime::Node),
                 region: SeriesRegion::Heap,
                 order_by_time: false,
+                windowed: true,
                 limitations: vec![
                     "a sampling heap profile: counts and bytes are estimates, and small allocations may never be sampled".into(),
                     "each profile covers the objects allocated in its own window that are still alive when it is read; later windows do not hold earlier ones".into(),

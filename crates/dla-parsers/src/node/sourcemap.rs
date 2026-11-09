@@ -11,6 +11,7 @@ use super::NodeError;
 /// A decoded position in an original source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Seg {
+    gen_line: u32,
     gen_col: u32,
     /// Index into `sources`, `u32::MAX` for a segment with no source.
     src: u32,
@@ -22,8 +23,9 @@ struct Seg {
 #[derive(Debug, Default, Clone)]
 pub struct SourceMap {
     sources: Vec<String>,
-    /// Segments of each generated line, sorted by generated column.
-    lines: Vec<Vec<Seg>>,
+    /// All segments, sorted by generated line and column. Stored flat so a map with
+    /// millions of empty lines costs nothing for them.
+    segs: Vec<Seg>,
     segments: usize,
 }
 
@@ -92,6 +94,7 @@ impl SourceMap {
             .map_err(|e| NodeError::Malformed(format!("the source map is not JSON: {e}")))?;
         let mut m = SourceMap::default();
         m.add_map(&v, 0, 0, max_segments)?;
+        m.segs.sort_by_key(|s| (s.gen_line, s.gen_col));
         Ok(m)
     }
 
@@ -158,7 +161,13 @@ impl SourceMap {
                     continue;
                 }
                 gen_col = add(gen_col, vlq(bytes, &mut at)?, "column")?;
+                if gen_line > 50_000_000 {
+                    return Err(NodeError::TooLarge(
+                        "the source map has more than 50 million lines".to_owned(),
+                    ));
+                }
                 let mut seg = Seg {
+                    gen_line: gen_line as u32,
                     gen_col: u32::try_from(gen_col).unwrap_or(u32::MAX),
                     src: u32::MAX,
                     line: 0,
@@ -185,26 +194,15 @@ impl SourceMap {
                         "the source map has more than {max} segments"
                     )));
                 }
-                if self.lines.len() <= gen_line {
-                    if gen_line > 50_000_000 {
-                        return Err(NodeError::TooLarge(
-                            "the source map has more than 50 million lines".to_owned(),
-                        ));
-                    }
-                    self.lines.resize(gen_line + 1, Vec::new());
-                }
                 // An index map's column offset applies to the section's first line only.
                 let off = if gen_line == line_off { col_off } else { 0 };
                 seg.gen_col = seg.gen_col.saturating_add(off);
-                self.lines[gen_line].push(seg);
+                self.segs.push(seg);
             }
             at = end + 1;
             gen_line += 1;
         }
         let _ = gen_col;
-        for l in &mut self.lines {
-            l.sort_by_key(|s| s.gen_col);
-        }
         Ok(())
     }
 
@@ -216,9 +214,13 @@ impl SourceMap {
     /// The original position of a generated position (zero-based line and column): the
     /// last segment on the line that starts at or before the column.
     pub fn lookup(&self, line: u32, column: u32) -> Option<Original<'_>> {
-        let segs = self.lines.get(line as usize)?;
-        let i = segs.partition_point(|s| s.gen_col <= column);
-        let s = segs.get(i.checked_sub(1)?)?;
+        let i = self
+            .segs
+            .partition_point(|s| (s.gen_line, s.gen_col) <= (line, column));
+        let s = self.segs.get(i.checked_sub(1)?)?;
+        if s.gen_line != line {
+            return None;
+        }
         (s.src != u32::MAX).then(|| Original {
             source: &self.sources[s.src as usize],
             line: s.line,
@@ -275,6 +277,32 @@ mod tests {
         // The second line of the section is not shifted by the column offset.
         let b2 = m.lookup(3, 0).unwrap();
         assert_eq!((b2.source, b2.line), ("b.js", 3));
+    }
+
+    #[test]
+    fn a_map_with_millions_of_empty_lines_stays_small() {
+        let json = format!(
+            "{{\"version\":3,\"sources\":[\"a\"],\"mappings\":\"{}AAAA\"}}",
+            ";".repeat(30_000_000)
+        );
+        let m = SourceMap::parse(&json, 100).unwrap();
+        assert_eq!(m.segs.len(), 1);
+        assert_eq!(m.lookup(30_000_000, 0).unwrap().source, "a");
+        assert!(m.lookup(29_999_999, 0).is_none());
+        // Many sections after a high offset do not re-walk the empty lines.
+        let mut sec = String::from(r#"{"version":3,"sections":["#);
+        for i in 0..2000 {
+            if i > 0 {
+                sec.push(',');
+            }
+            sec.push_str(&format!(
+                r#"{{"offset":{{"line":{},"column":0}},"map":{{"sources":["b"],"mappings":"AAAA"}}}}"#,
+                40_000_000 + i
+            ));
+        }
+        sec.push_str("]}");
+        let m = SourceMap::parse(&sec, 10_000).unwrap();
+        assert_eq!(m.lookup(40_000_005, 0).unwrap().source, "b");
     }
 
     #[test]

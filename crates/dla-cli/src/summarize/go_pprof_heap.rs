@@ -155,6 +155,7 @@ impl Adapter for GoPprofHeap {
                 runtime: Some(Runtime::Go),
                 region: SeriesRegion::Heap,
                 order_by_time: true,
+                windowed: false,
                 limitations: limitations(),
             },
         )

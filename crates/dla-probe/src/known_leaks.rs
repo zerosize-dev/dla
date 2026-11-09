@@ -150,6 +150,19 @@ fn extract_pairs(text: &str, yaml: bool, out: &mut Vec<(String, String)>) {
     for c in dflag.captures_iter(text) {
         out.push((norm_key(&c[1]), unquote(&c[2])));
     }
+    // Gradle `systemProperty("k", "v")` / `systemProperty 'k', 'v'`.
+    let sysprop = Regex::new(r#"systemProperty\s*\(?\s*["']([\w.\-]+)["']\s*,\s*["']?([^\s"')]+)"#)
+        .expect("static regex");
+    for c in sysprop.captures_iter(text) {
+        out.push((norm_key(&c[1]), unquote(&c[2])));
+    }
+    // Maven surefire `<systemPropertyVariables><k>v</k>` (any `<k>v</k>` element).
+    let xml = Regex::new(r#"<([\w.\-]+)>\s*([^<>\s]+)\s*</([\w.\-]+)>"#).expect("static regex");
+    for c in xml.captures_iter(text) {
+        if c[1] == c[3] && out.len() < MAX_PAIRS {
+            out.push((norm_key(&c[1]), unquote(&c[2])));
+        }
+    }
     for c in debug.captures_iter(text) {
         for item in c[1].split([',', ' ']) {
             if let Some((k, v)) = item.split_once('=') {
@@ -358,13 +371,21 @@ impl Facts {
             return if self.mf.complete.contains(&rt) {
                 (Tri::False, format!("{label} not in the lock file"))
             } else if self.mf.read.contains(&rt) {
+                // An empty result never refutes: a transitive or version-catalog use is
+                // not seen in a manifest that is not a full lock file.
                 (
-                    Tri::False,
-                    format!("{label} not declared; a transitive use is not seen"),
+                    Tri::Maybe,
+                    format!("{label} not declared; a transitive or catalog use is not seen"),
                 )
             } else {
                 (Tri::Maybe, "no manifest read".to_owned())
             };
+        }
+        if r.is_any() {
+            return (
+                Tri::True,
+                format!("{} present ({})", hits[0].name, hits[0].file),
+            );
         }
         let mut unknown: Option<&Lib> = None;
         for l in &hits {

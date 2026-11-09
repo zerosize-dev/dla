@@ -216,6 +216,55 @@ fn a_matching_native_site_becomes_a_correlation_candidate_in_the_worker() {
 }
 
 #[test]
+fn a_finding_of_another_runtime_at_the_site_does_not_suppress_the_candidate() {
+    let fx = run_with_worker();
+    write_harness(&fx, true, 3074.0, 7200.0);
+    let p = fx.project();
+    // A core finding (no worker prefix) at the same native site, e.g. from valgrind.
+    let core = fx.run_dir.join("ledger.jsonl");
+    let text = fs::read_to_string(&core).unwrap();
+    let seq = text.lines().count() + 1;
+    let eid = format!("E{}", text.matches("\"type\":\"evidence\"").count() + 1);
+    let line = json!({"schema_version": 4, "seq": seq, "ts": "2026-01-02T03:04:00Z",
+        "type": "evidence", "evidence_id": eid,
+        "source": {"repo": {"commit": "abc"}}, "tool": {"name": "valgrind", "version": "1"},
+        "authority": "test", "kind": "alloc-stack",
+        "result": {"site": SITE, "bytes": 1000},
+        "coverage": {"status": "complete"}});
+    let mut f = fs::OpenOptions::new().append(true).open(&core).unwrap();
+    writeln!(f, "{line}").unwrap();
+    drop(f);
+    ok(
+        p,
+        None,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "residual",
+            "--evidence",
+            "E1",
+            "--site",
+            SITE,
+        ],
+    );
+    let v = ok(p, Some("jvm"), &["correlate", "H1"]);
+    assert_eq!(v["candidates"], 1, "{v}");
+    assert!(v.get("existing").is_none(), "{v}");
+    assert!(
+        v["correlated"][0]["finding"]
+            .as_str()
+            .unwrap()
+            .starts_with("jvm/F")
+    );
+    // A second run adds neither a finding nor an evidence record.
+    let before = ledger_lines(&fx).len();
+    let again = ok(p, Some("jvm"), &["correlate", "H1"]);
+    assert_eq!(again["candidates"], 0);
+    assert_eq!(ledger_lines(&fx).len(), before);
+}
+
+#[test]
 fn a_second_run_adds_nothing() {
     let fx = run_with_worker();
     write_harness(&fx, true, 3074.0, 7200.0);

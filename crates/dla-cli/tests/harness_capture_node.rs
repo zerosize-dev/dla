@@ -181,18 +181,25 @@ fn command_mode_captures_one_set_per_selected_point_and_prints_histogram_command
             .all(|p| p.extension().is_some_and(|e| e == "heapsnapshot"))
     );
     assert_eq!(listed(&m, &run_dir, "alloc").len(), 3);
-    // Separate processes: no heap-graph command, one command per operation and format.
+    // Separate processes at increasing n: a per-point heap-graph series (3 snapshots), then
+    // one command per operation and format.
     let cmds = ops(&run_dir, "H1");
     let op = |c: &String| c.split_whitespace().nth(2).unwrap().to_owned();
     let found: Vec<String> = cmds.iter().map(op).collect();
     assert_eq!(
         found,
-        ["type-histogram-diff", "alloc-stack-diff", "non-heap"],
+        [
+            "heap-graph",
+            "type-histogram-diff",
+            "alloc-stack-diff",
+            "non-heap"
+        ],
         "{cmds:?}"
     );
     assert!(cmds[0].contains(".heapsnapshot") && !cmds[0].contains(".hprof"));
-    assert!(cmds[1].contains(".heapprofile"));
-    assert!(cmds[2].contains("resources.json") && !cmds[2].contains("scripts.json"));
+    assert!(cmds[1].contains(".heapsnapshot") && !cmds[1].contains(".hprof"));
+    assert!(cmds[2].contains(".heapprofile"));
+    assert!(cmds[3].contains("resources.json") && !cmds[3].contains("scripts.json"));
     let lim = fs::read_to_string(run_dir.join("harness/H1/captures.json")).unwrap();
     assert!(lim.contains("separate processes"), "{lim}");
     // Coverage rows say what ran.

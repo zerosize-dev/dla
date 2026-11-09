@@ -744,3 +744,189 @@ fn a_dump_with_no_classes_is_reported_as_such() {
     assert!(m.contains("lists no loaded classes"), "{m}");
     assert!(!m.contains("of the earlier dump's 1"), "{m}");
 }
+
+// ---------------------------------------------------------------------------------------
+// per-point series: harness captures of command mode, one process per point
+// ---------------------------------------------------------------------------------------
+
+impl Project {
+    /// Writes `bytes` as the heap dump of point `label` of harness H1 and lists it in
+    /// `captures.json` (kind heap, with `x`), the way `dla harness run H1 --capture heap`
+    /// does. Returns the project-relative path.
+    fn capture(&self, label: &str, pid: u32, x: Option<f64>, bytes: &[u8]) -> String {
+        let run_rel = format!("harness/H1/out/{label}/capture/{pid}/heap-1.hprof");
+        let abs = self.run_dir.join(&run_rel);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(&abs, bytes).unwrap();
+        let list = self.run_dir.join("harness/H1/captures.json");
+        let mut v: Value = fs::read_to_string(&list)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_else(|| serde_json::json!({"files": []}));
+        let mut entry = serde_json::json!({
+            "kind": "heap", "path": run_rel, "label": label, "seq": 1,
+            "bytes": bytes.len(), "captured_at": "2026-01-01T00:00:00Z",
+        });
+        if let Some(x) = x {
+            entry["x"] = serde_json::json!(x);
+        }
+        v["files"].as_array_mut().unwrap().push(entry);
+        fs::write(&list, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        format!(
+            ".dla/{}/{run_rel}",
+            self.run_dir.file_name().unwrap().to_string_lossy()
+        )
+    }
+}
+
+/// Three command-mode points whose dumps carry one timestamp (separate processes share no
+/// clock) and grow with n. Returned in an order that is not the order of n.
+fn per_point(p: &Project) -> Vec<String> {
+    let at = |label: &str, pid: u32, x: f64, items: usize| {
+        p.capture(label, pid, Some(x), &model(8, T0, items, 5).dump)
+    };
+    let c = at("p9-native", 3, 9000.0, 600);
+    let a = at("p1-native", 1, 1000.0, 200);
+    let b = at("p5-native", 2, 5000.0, 400);
+    vec![c, a, b]
+}
+
+fn heap_graph_args(files: &[String]) -> Vec<&str> {
+    ["summarize", "heap-graph"]
+        .into_iter()
+        .chain(files.iter().map(String::as_str))
+        .collect()
+}
+
+#[test]
+fn per_point_harness_captures_form_a_series_over_n() {
+    let p = Project::new();
+    let files = per_point(&p);
+    let v = ok(p.path(), &heap_graph_args(&files));
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["series_kind"], "per-point");
+    assert_eq!(v["n_values"], serde_json::json!([1000.0, 5000.0, 9000.0]));
+    assert_eq!(v["passed"][0], "static:app.Holder.ITEMS");
+    let s: Value =
+        serde_json::from_str(&fs::read_to_string(p.run_dir.join("series/S1.json")).unwrap())
+            .unwrap();
+    assert_eq!(s["axis"], "n");
+    let xs: Vec<f64> = s["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["x"].as_f64().unwrap())
+        .collect();
+    assert_eq!(xs, [1000.0, 5000.0, 9000.0]);
+    assert!(s["points"][0]["values"][0].as_f64() < s["points"][2]["values"][0].as_f64());
+    assert!(
+        s["limitations"][0]
+            .as_str()
+            .unwrap()
+            .contains("series: per-point"),
+        "{s}"
+    );
+    let g = &p.evidence("growth-series")[0];
+    assert_eq!(g["result"]["axis"], "n");
+    assert_eq!(g["result"]["series_kind"], "per-point");
+    assert_eq!(g["result"]["n_values"][2], 9000.0);
+    assert_eq!(g["result"]["gate"], "pass");
+    assert_eq!(g["result"]["passed"][0]["finding"], v["tied"][0]);
+    // The same strict-growth gate: a point that does not grow fails it.
+    let q = Project::new();
+    let flat = [
+        q.capture("p1-native", 1, Some(1000.0), &model(8, T0, 200, 5).dump),
+        q.capture("p5-native", 2, Some(5000.0), &model(8, T0, 400, 5).dump),
+        q.capture("p9-native", 3, Some(9000.0), &model(8, T0, 400, 5).dump),
+    ];
+    let v = ok(q.path(), &heap_graph_args(&flat));
+    assert_eq!(v["gate"], "fail", "{v}");
+    assert_eq!(v["series_kind"], "per-point");
+}
+
+#[test]
+fn a_per_point_series_that_mixes_modes_or_repeats_x_is_refused() {
+    let msg = |e: &Value| e["message"].as_str().unwrap().to_owned();
+    let dump = |items| model(8, T0, items, 5).dump;
+    // A driver-mode label among command-mode points.
+    let p = Project::new();
+    let files = [
+        p.capture("p1-native", 1, Some(1000.0), &dump(200)),
+        p.capture("p5-native", 2, Some(5000.0), &dump(400)),
+        p.capture("p1-fresh", 3, Some(9000.0), &dump(600)),
+    ];
+    let e = refused(p.path(), &heap_graph_args(&files));
+    assert_eq!(e["code"], "dumps-not-comparable");
+    assert!(msg(&e).contains("driver mode"), "{e}");
+    // Two points at the same n.
+    let p = Project::new();
+    let files = [
+        p.capture("p1-native", 1, Some(1000.0), &dump(200)),
+        p.capture("p5-native", 2, Some(1000.0), &dump(400)),
+        p.capture("p9-native", 3, Some(9000.0), &dump(600)),
+    ];
+    let e = refused(p.path(), &heap_graph_args(&files));
+    assert_eq!(e["code"], "dumps-not-comparable");
+    assert!(msg(&e).contains("same n"), "{e}");
+    // Two dumps of one point.
+    let p = Project::new();
+    let files = [
+        p.capture("p1-native", 1, Some(1000.0), &dump(200)),
+        p.capture("p1-native", 2, Some(5000.0), &dump(400)),
+        p.capture("p9-native", 3, Some(9000.0), &dump(600)),
+    ];
+    let e = refused(p.path(), &heap_graph_args(&files));
+    assert!(msg(&e).contains("same point"), "{e}");
+    // No recorded n.
+    let p = Project::new();
+    let files = [
+        p.capture("p1-native", 1, Some(1000.0), &dump(200)),
+        p.capture("p5-native", 2, None, &dump(400)),
+        p.capture("p9-native", 3, Some(9000.0), &dump(600)),
+    ];
+    let e = refused(p.path(), &heap_graph_args(&files));
+    assert!(msg(&e).contains("no recorded n"), "{e}");
+    // Builds that cannot be compared still fail the format check.
+    let p = Project::new();
+    let files = [
+        p.capture("p1-native", 1, Some(1000.0), &dump(200)),
+        p.capture("p5-native", 2, Some(5000.0), &model(4, T0, 400, 5).dump),
+        p.capture("p9-native", 3, Some(9000.0), &dump(600)),
+    ];
+    let e = refused(p.path(), &heap_graph_args(&files));
+    assert!(msg(&e).contains("identifier sizes differ"), "{e}");
+    assert!(!p.run_dir.join("series").exists());
+}
+
+#[test]
+fn dumps_that_are_not_harness_captures_keep_the_one_process_rule() {
+    // The same three dumps, at one timestamp, as plain files: not one process.
+    let p = Project::new();
+    let plain: Vec<String> = [(1, 200), (2, 400), (3, 600)]
+        .iter()
+        .map(|(i, items)| p.put(&format!("same-{i}.hprof"), &model(8, T0, *items, 5).dump))
+        .collect();
+    let e = refused(p.path(), &heap_graph_args(&plain));
+    assert_eq!(e["code"], "dumps-not-comparable");
+    assert!(e["message"].as_str().unwrap().contains("timestamp"), "{e}");
+    // Files under the harness directory that captures.json does not list count as plain.
+    let q = Project::new();
+    let unlisted: Vec<String> = (1..=3u32)
+        .map(|i| {
+            let rel = format!("harness/H1/out/p{i}-native/capture/{i}/heap-1.hprof");
+            let abs = q.run_dir.join(&rel);
+            fs::create_dir_all(abs.parent().unwrap()).unwrap();
+            fs::write(&abs, model(8, T0, 200 * i as usize, 5).dump).unwrap();
+            format!(
+                ".dla/{}/{rel}",
+                q.run_dir.file_name().unwrap().to_string_lossy()
+            )
+        })
+        .collect();
+    let e = refused(q.path(), &heap_graph_args(&unlisted));
+    assert_eq!(e["code"], "dumps-not-comparable");
+    assert!(
+        e["message"].as_str().unwrap().contains("one process"),
+        "{e}"
+    );
+}

@@ -19,8 +19,9 @@ Worker name and runtime id: `node`. Facts from `harness/node/README.md` and `doc
   become a limitation). `alloc` writes sampling heap profiles (`alloc-<n>.heapprofile`), `nonheap` a
   `resources.json` of active resources by type and creation site (timers are exact, unref'd ones included),
   `heap` V8 snapshots (`heap-<n>.heapsnapshot`). Command mode takes one set per selected point, in separate
-  processes, so it feeds `type-histogram-diff` only; a snapshot series for `heap-graph` needs driver mode
-  (`--driver`, 3 or more snapshots of one process in one pid directory). Run the `dla summarize` commands
+  processes. Its snapshots feed `type-histogram-diff`, and `heap-graph` forms a per-point series over n
+  from 3 or more of them (listed in `harness/H<n>/captures.json`: kind heap, distinct x, one label). Driver
+  mode (`--driver`) gives 3 or more snapshots of one process in one pid directory. Run the `dla summarize` commands
   the harness prints. Before a snapshot the agent checks that about 12 times `heapUsed` is available and
   skips it with an error if not (a coverage gap, not a failure).
 
@@ -33,13 +34,22 @@ Worker name and runtime id: `node`. Facts from `harness/node/README.md` and `doc
 
 ## Artifacts
 - `.heapsnapshot` files land under `attach/P<n>/` (attach) or `harness/H<n>/out/` (harness). Read them
-  with `dla summarize` (`node-heapsnapshot` for 3 or more snapshots of one process, `node-heapsnapshot-types`
-  for any); never parse them by hand. Two snapshots from different pid directories are refused
-  (`dumps-not-comparable`); an attach snapshot taken twice of the same pid is one process.
+  with `dla summarize` (`node-heapsnapshot` for 3 or more snapshots of one process or a per-point series
+  of one harness, `node-heapsnapshot-types` for any); never parse them by hand. Two snapshots from
+  different pid directories are refused (`dumps-not-comparable`) unless they are command-mode captures of
+  one harness (see the next item); an attach snapshot taken twice of the same pid is one process.
+- Per-point series: 3 or more command-mode heap captures of one harness form a series over n. `heap-graph`
+  orders them by n, skips the one-process checks, keeps the format checks, uses the same strict-growth
+  gate and `dump-plateau` discriminator, and says `series_kind: per-point` with the n values. The harness
+  prints the command when it has 3 or more files of one format. Measured on copies of the fixtures: on
+  `node-retry-scheduler` the module variable `src.scheduler.shared` tied to its census finding
+  (static/global).
 - What the series gives: a `holder:` growth column per holder with its kind (static/global,
-  registration-table, closure/continuation, container-field). A holder the census labelled differently
-  (the census calls a `setInterval` timer `blocked-stack`) is reported as `observed_holder` and `needed`
-  prints the `dla ledger annotate F --holder <kind>` command; run it, then the column ties by holder.
+  registration-table, closure/continuation, container-field). A holder that differs from the finding's is
+  reported as `observed_holder`. If the finding has no holder, `needed` prints
+  `dla ledger annotate F --holder <kind>`; run it, then the column ties by holder. `annotate --holder`
+  fills a holder only when the finding has none. If the finding already has a different holder, `needed`
+  says so and names the sibling route (`dla ledger add --sibling-of F ...`) instead of an annotate command.
   New candidates come from project holders only (at most 3 per run), without a site.
 - `alloc-<n>.heapprofile`: `dla summarize alloc-stack-diff`. Frames of `dla-preload.js` and builtins are
   skipped. A `<script>.map` next to a bundled script is applied.
@@ -54,6 +64,8 @@ Worker name and runtime id: `node`. Facts from `harness/node/README.md` and `doc
 - An async-local store can hide the real holder: the cause is the registration.
 - ES module probes are not supported (CommonJS only); closure variables cannot be inspected.
 - Heap analysis tools lag new Node releases.
+- `--capture nonheap` uses `async_hooks`; promise-heavy targets can run up to about 10x slower.
+- `scripts.json` next to the snapshots is informational; no adapter reads it.
 - A driver that keeps its own reference to the leaking object during a snapshot gives the object a
   second retainer, and the module variable stops dominating it: no static/global holder is reported.
 - Snapshot object ids are assigned in traversal order, so two processes of one program can overlap; only

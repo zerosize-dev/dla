@@ -467,6 +467,19 @@ pub fn write_coverage(tc: &ToolCtx, rows: Vec<CoverageRow>) -> Result<(), Refusa
     .map_err(|e| e.to_refusal())
 }
 
+/// The runtimes that have an adapter of their own (not the runtime-independent `any`),
+/// sorted.
+pub fn runtimes() -> Vec<&'static str> {
+    let mut r: Vec<&'static str> = registry()
+        .iter()
+        .map(|a| a.runtime())
+        .filter(|r| *r != "any")
+        .collect();
+    r.sort_unstable();
+    r.dedup();
+    r
+}
+
 /// `--list`. With an operation or a runtime: one row per matching adapter (a runtime also
 /// matches the runtime-independent `any` adapters). Without: the backend names grouped by
 /// operation and runtime, which stays within the output bound as the registry grows, and the
@@ -529,7 +542,24 @@ pub fn list(
             })
         })
         .collect();
-    json!({"ok": true, "command": "summarize --list", "adapters": rows})
+    let mut out = json!({"ok": true, "command": "summarize --list", "adapters": rows});
+    if out["adapters"].as_array().is_some_and(Vec::is_empty) {
+        let with: Vec<&str> = op
+            .map(|o| {
+                let mut r: Vec<&str> = adapters_of(o).iter().map(|a| a.runtime()).collect();
+                r.sort_unstable();
+                r.dedup();
+                r
+            })
+            .unwrap_or_default();
+        out["note"] = json!(format!(
+            "no adapter for {} on {}; runtimes with one: {}",
+            op.map_or("any operation", Op::name),
+            runtime.unwrap_or("any runtime"),
+            with.join(", ")
+        ));
+    }
+    out
 }
 
 /// The adapters of one operation, in registry order.

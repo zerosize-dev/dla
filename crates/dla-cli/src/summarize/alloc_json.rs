@@ -67,6 +67,7 @@ impl Adapter for AllocJson {
                 runtime: None,
                 region: dla_core::series::SeriesRegion::Heap,
                 order_by_time: true,
+                windowed: false,
                 limitations: vec![
                     "read from parsed profile JSON: the figures are the producing tool's".into(),
                 ],

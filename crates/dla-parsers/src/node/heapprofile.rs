@@ -226,6 +226,11 @@ impl<R: Read> Parse<R> {
 /// Function, file and line of each JavaScript frame: what makes two stacks the same.
 type StackKey = Vec<(String, String, i64)>;
 
+/// Innermost JavaScript frames kept per stack; outer frames are dropped before grouping.
+const MAX_STACK_FRAMES: usize = 128;
+/// Most frames stored across all distinct stacks.
+const MAX_STORED_FRAMES: usize = 3_000_000;
+
 fn is_js(n: &RawNode) -> bool {
     !(n.url.is_empty() && n.line < 0) && !n.function.starts_with('(')
 }
@@ -255,6 +260,7 @@ pub fn parse_with(src: impl Read, map: &mut PositionMap<'_>) -> Result<AllocProf
     let nodes = p.nodes;
     // Groups by the JavaScript frames of the stack, innermost first.
     let mut groups: BTreeMap<StackKey, (Vec<Frame>, u64, u64)> = BTreeMap::new();
+    let mut stored = 0usize;
     for (i, n) in nodes.iter().enumerate() {
         if n.self_size == 0 {
             continue;
@@ -266,7 +272,7 @@ pub fn parse_with(src: impl Read, map: &mut PositionMap<'_>) -> Result<AllocProf
         let mut hops = 0;
         while let Some(a) = at {
             let x = &nodes[a as usize];
-            if is_js(x) {
+            if is_js(x) && frames.len() < MAX_STACK_FRAMES {
                 let function = if x.function.is_empty() {
                     "(anonymous)".to_owned()
                 } else {
@@ -308,6 +314,14 @@ pub fn parse_with(src: impl Read, map: &mut PositionMap<'_>) -> Result<AllocProf
                 ..Frame::default()
             });
             key.push(("(native)".to_owned(), String::new(), -1));
+        }
+        if !groups.contains_key(&key) {
+            stored = stored.saturating_add(frames.len());
+            if stored > MAX_STORED_FRAMES {
+                return Err(NodeError::TooLarge(format!(
+                    "the heap profile's distinct stacks hold more than {MAX_STORED_FRAMES} frames"
+                )));
+            }
         }
         let e = groups.entry(key).or_insert((frames, 0, 0));
         e.1 = e.1.saturating_add(n.self_size);
@@ -384,5 +398,26 @@ mod tests {
         assert!(parse(deep.as_bytes()).is_err());
         assert!(sniff(PROFILE.as_bytes()));
         assert!(!sniff(b"{\"snapshot\":{}}"));
+    }
+
+    #[test]
+    fn deep_chains_keep_only_the_innermost_frames() {
+        let n = 1500;
+        let mut json = String::from(r#"{"head":"#);
+        for i in 0..n {
+            json.push_str(&format!(
+                r#"{{"callFrame":{{"functionName":"f{i}","scriptId":"1","url":"file:///a.js","lineNumber":{i},"columnNumber":0}},"selfSize":10,"id":{},"children":["#,
+                i + 1
+            ));
+        }
+        json.push_str(&"]}".repeat(n));
+        json.push('}');
+        let p = parse(json.as_bytes()).unwrap();
+        assert_eq!(p.groups.len(), n);
+        assert!(p.groups.iter().all(|g| g.frames.len() <= MAX_STACK_FRAMES));
+        assert_eq!(
+            p.groups.iter().map(|g| g.live_bytes).sum::<u64>(),
+            10 * n as u64
+        );
     }
 }

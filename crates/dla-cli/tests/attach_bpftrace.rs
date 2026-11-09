@@ -125,6 +125,44 @@ fn missing_prerequisites_are_named_and_become_a_coverage_row() {
 }
 
 #[test]
+fn the_bpftrace_row_lands_on_the_worker_of_the_other_tier_three_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"p\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("app.py"), "print(1)\n").unwrap();
+    init(dir.path(), "1-3");
+    let (code, v) = call(dir.path(), None, &["probe"]);
+    assert_eq!(code, 0, "{v}");
+    let target = sleeper();
+    let pid = target.0.id().to_string();
+    let empty = tempfile::tempdir().unwrap();
+    let (code, v) = call(
+        dir.path(),
+        Some(empty.path()),
+        &["attach", "bpftrace", "--pid", &pid, "--op", "record"],
+    );
+    assert_eq!(code, 2, "{v}");
+    let run = std::fs::read_dir(dir.path().join(".dla"))
+        .unwrap()
+        .flatten()
+        .find(|e| e.path().join("coverage.json").is_file())
+        .expect("a run with a coverage manifest");
+    let cov: Value =
+        serde_json::from_str(&std::fs::read_to_string(run.path().join("coverage.json")).unwrap())
+            .unwrap();
+    let w = &cov["workers"];
+    assert!(w["python"]["backends"]["bcc-memleak"].is_object(), "{cov}");
+    assert_eq!(
+        w["python"]["backends"]["bpftrace"]["status"], "missing",
+        "{cov}"
+    );
+    assert!(w.get("native").is_none(), "{cov}");
+}
+
+#[test]
 fn an_unknown_operation_is_refused_with_the_choices() {
     let dir = tempfile::tempdir().unwrap();
     init(dir.path(), "1-3");

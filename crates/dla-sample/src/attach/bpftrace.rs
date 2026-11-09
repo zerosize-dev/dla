@@ -36,9 +36,15 @@ const MIB: u64 = 1 << 20;
 /// Largest output file kept; past it the tracer is interrupted so its maps print.
 const OUTPUT_CAP: u64 = 8 * MIB;
 /// Extra wall time after `--duration` before the tracer is interrupted.
+#[cfg(not(test))]
 const MARGIN: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const MARGIN: Duration = Duration::from_secs(0);
 /// How long an interrupted tracer may take to print its maps before it is killed.
+#[cfg(not(test))]
 const GRACE: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const GRACE: Duration = Duration::from_secs(1);
 /// Distinct stacks the maps may hold (`BPFTRACE_MAP_KEYS_MAX`).
 const MAP_KEYS: u32 = 1024;
 /// User stack depth.
@@ -394,7 +400,13 @@ pub(crate) fn run(
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) => {}
-            Err(e) => return Err(io("waiting for bpftrace", e)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // Reaped: the pid may be reused, so the interrupt must never run.
+                t.keep(&stop);
+                return Err(io("waiting for bpftrace", e));
+            }
         }
         let size = std::fs::metadata(&out_path).map_or(0, |m| m.len());
         if interrupted_at.is_none() && (started.elapsed() >= wall || size > OUTPUT_CAP) {
@@ -407,6 +419,8 @@ pub(crate) fn run(
         {
             let _ = child.kill();
             let _ = child.wait();
+            // Reaped: the pid may be reused, so the interrupt must never run.
+            t.keep(&stop);
             return Err(AttachError::failed(
                 "bpftrace did not stop after an interrupt and was killed; its maps were not printed",
                 "repeat with a shorter --duration",
@@ -642,6 +656,31 @@ mod tests {
             assert!(out.path().join("bpftrace.bt").is_file());
             // The cleanup guarding the process and the file is released on success.
             assert!(t.left.is_empty(), "{:?}", t.left);
+        }
+
+        #[test]
+        fn a_tracer_killed_after_the_grace_leaves_no_stale_interrupt() {
+            let tools = tempfile::tempdir().unwrap();
+            fake_bpftrace(tools.path(), "trap '' INT; while :; do sleep 1; done");
+            let (_d, s) = sys(true, true, true);
+            let req = request(tools.path());
+            let plan = plan_with(&req, &s).unwrap();
+            let Detail::Bpftrace(prep) = &plan.detail else {
+                panic!("wrong detail")
+            };
+            let out = tempfile::tempdir().unwrap();
+            let mut seen = Vec::new();
+            let mut sink = |c: &Cleanup| seen.push(c.clone());
+            let mut t = Tracker::new(&mut sink);
+            let e = run(prep, &plan, &req, out.path(), &mut t).unwrap_err();
+            assert!(e.message.contains("did not stop"), "{}", e.message);
+            // The kill -INT <pid> entry was registered, and is gone: the pid is reaped.
+            assert!(
+                t.left.iter().all(|c| !matches!(c, Cleanup::Run(_))),
+                "{:?}",
+                t.left
+            );
+            assert!(seen.iter().any(|c| matches!(c, Cleanup::Run(_))));
         }
 
         #[test]

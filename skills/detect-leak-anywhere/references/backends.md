@@ -1,16 +1,17 @@
 # Backends: which `dla summarize` operation reads which capture
 
 `dla summarize <op> <files...>` turns a captured file into bounded evidence. `dla summarize --list`
-prints the adapters of the installed release with their tool and whether it is available here; trust
-it over this table. `--backend auto` (default) picks by the format of the inputs, DLA's own readers
+prints the backend names of the installed release grouped by operation and runtime, and a `missing` list of
+tools absent here; `--list --op <op>` or `--list --runtime <runtime>` prints one row per adapter (an unknown
+runtime is refused). Trust it over this table. `--backend auto` (default) picks by the format of the inputs, DLA's own readers
 first; `--backend <name>` forces one.
 
 ## Operations and adapters
 
 | Op | Runtime | Backend | Reads | Tool needed | Row when the tool is missing |
 |---|---|---|---|---|---|
-| `heap-graph` | JVM | `dla-hprof` | `.hprof`, `.hprof.gz`, 3 or more of one process | none | none |
-| `heap-graph` | Node | `node-heapsnapshot` | `.heapsnapshot`, 3 or more of one process (driver mode) | none | none |
+| `heap-graph` | JVM | `dla-hprof` | `.hprof`, `.hprof.gz`, 3 or more of one process, or 3 or more command-mode captures of one harness (per-point series) | none | none |
+| `heap-graph` | Node | `node-heapsnapshot` | `.heapsnapshot`, 3 or more of one process (driver mode), or 3 or more command-mode captures of one harness (per-point series) | none | none |
 | `heap-graph` | native | `valgrind-vgdb` | the `vgdb-*.txt` answers of `harness run --tool valgrind` (one chain per point) | none to read; valgrind and vgdb to capture | `valgrind` (harness) |
 | `type-histogram-diff` | JVM | `dla-hprof-histogram` | HPROF dumps | none | none |
 | `type-histogram-diff` | JVM | `jcmd-class-histogram` | `GC.class_histogram` text (`attach` or `--capture histogram`) | none to read (`jcmd` to attach) | none for reading; `jcmd` (attach) |
@@ -62,9 +63,11 @@ driver for at tier 3 (bcc `memleak`, GPU memory, Valgrind on a JVM) get a `block
 |---|---|---|
 | JVM | `dla harness run H1 --capture all` (or `heap,histogram,jfr,nonheap`) | one command per file kind, as printed: `type-histogram-diff` on `histogram-*.txt`, `alloc-stack-diff` on the `.jfr`, `non-heap` on `threads.json`, then on `classloader-stats.txt`, then on `nmt-diff.txt` |
 | JVM driver mode | the same flag; all `heap-*.hprof` are one process | `heap-graph` on all dumps of the label |
+| JVM command mode | the same flag; one process per point | `heap-graph` on 3 or more dumps of one format, as printed (per-point series over n) |
 | JVM process or artifact | `dla attach jcmd --pid <P> --op histogram\|thread-dump\|nmt\|jfr\|heap-dump` | the same ops on `attach/P<n>/` files |
-| Node | `dla harness run H1 --capture alloc,nonheap` (add `heap` for V8 snapshots) | `alloc-stack-diff` on `alloc-*.heapprofile`; `non-heap` on `resources.json`; `type-histogram-diff` on the snapshots |
+| Node | `dla harness run H1 --capture heap,alloc,nonheap` | `alloc-stack-diff` on `alloc-*.heapprofile`; `non-heap` on `resources.json`; `type-histogram-diff` on the snapshots |
 | Node driver mode | `--capture heap,alloc,nonheap`; all `heap-*.heapsnapshot` of one pid directory are one process | `heap-graph` on all snapshots (3 or more) |
+| Node command mode | the same flag; one process per point | `heap-graph` on 3 or more snapshots, as printed (per-point series over n) |
 | Go | `dla harness run H1 --capture alloc,nonheap` | `alloc-stack-diff` on `go-*.heap.pb.gz`; `non-heap` on `go-*.goroutine.txt`, then on `go-*.goroutineleak.txt` |
 | Python | `dla harness run H1 --capture histogram,alloc,nonheap` | `type-histogram-diff` on `py-*.types.json`; `alloc-stack-diff` on `py-*.alloc.json`, then on `py-*.memray.json`; `non-heap` on `py-*.nonheap.json` |
 | Rust, native (program started directly) | `dla harness run H1 --tool valgrind` | `alloc-stack-diff` on the `valgrind.xml` files; `heap-graph` on the `vgdb-*.txt` files |
@@ -90,9 +93,11 @@ format. Mixed formats in one call are refused as `mixed-formats` and the refusal
 - Node: `node-heapsnapshot` names holders from a snapshot series of one process (3 or more): a module
   variable or global property is `static/global`, a timer callback or event listener table is
   `registration-table`, a closure variable `closure/continuation`, an object property `container-field`.
-  It ties by holder identity only and prints `needed` with a `dla ledger annotate F --holder ...` command
-  when the finding's holder differs from what the snapshots show. Strings are one `(string)` row and are
-  never named after their text. A snapshot is tier 4 data (memory contents); a class histogram
+  It ties by holder identity only. When the finding's holder differs from what the snapshots show, `needed`
+  prints a `dla ledger annotate F --holder ...` command if the finding has no holder; if it has a different
+  holder, `needed` names the sibling route (`dla ledger add --sibling-of F ...`), because annotate fills a
+  holder only when none is set. Strings are one `(string)` row and are
+  never named after their text. A snapshot holds memory contents (tier 1 from `dla harness run`, tier 4 from `dla attach`); a class histogram
   (`node-heapsnapshot-types`) ties to nothing. `node-heapprofile` is a sample (builtin frames are charged
   to the nearest JavaScript frame; a `<script>.map` next to the script maps frames back to the source,
   `source_maps.frames_mapped`); a profile frame is the function, so a site tie by line happens only when
@@ -110,6 +115,12 @@ format. Mixed formats in one call are refused as `mixed-formats` and the refusal
   coverage gap.
 - Thread dumps, class loader groups and NMT categories are counts: they report growth and never tie.
   `proc-fd` counts descriptors by kind and never ties.
+- Per-point series: 3 or more command-mode heap captures of one harness (listed in `captures.json`: kind
+  heap, distinct x, one label) form a series over n. `heap-graph` orders them by n, skips the one-process
+  checks, keeps the format checks, applies the same strict-growth gate and `dump-plateau` discriminator, and
+  says `series_kind: per-point` with the n values. Any other set of dumps keeps the one-process rule.
+  Measured on copies of `jvm-audit-chain`: the holder `gateway.RequestContext.latest` tied to the census
+  finding by holder.
 - Cross-runtime: `dla correlate H1` (below) is the only way a native site gets a managed finding.
 - An empty or flat result never refutes a leak. Only a plateau discriminator (`dla alloc-test`,
   `dump-plateau`) favors non-leak.
@@ -120,8 +131,9 @@ format. Mixed formats in one call are refused as `mixed-formats` and the refusal
 holds the allocator shim's `native.live_bytes@<file:line>` columns (a JVM project that loads a JNI library
 today). A tie never crosses runtimes, so those columns would tie to nothing in the managed worker. For
 each native site under a boundary method the command compares per-iteration slopes (the `dla trend`
-gate): the site must pass, the process footprint (`os.rss_anon`, else `os.rss`) must pass, and the site
-slope must be between 0.2 and 1.25 of the footprint slope. With a match it writes one correlation evidence
+gate): the site must pass, and its slope must be between 0.2 and 1.25 of the managed footprint slope
+(`os.rss_anon`, else `os.rss`). The footprint bounds the site by its Theil-Sen slope even when the footprint
+column misses the trend gate (os.rss noise can do that); the evidence records `managed.gated`. With a match it writes one correlation evidence
 (both slopes, the boundary, the native stack) and adds a candidate to the worker it runs in: origin
 `correlation`, site the native site, holder `native-handle/global-ref`, region off-heap, owner the managed
 method. The shim column then ties to that finding by site; confirmation goes through the normal ledger

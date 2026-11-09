@@ -177,11 +177,11 @@ For each passed column tied to a candidate `F3`:
 
 Turn the captures into bounded evidence with `dla summarize <op> <files...>`. Run the commands
 `dla harness run` printed, one per op and file format (the op x runtime x backend table, tools and
-coverage rows are in `references/backends.md`; `dla summarize --list` shows what is installed).
+coverage rows are in `references/backends.md`; `dla summarize --list` prints backend names by op and runtime and a `missing` list of tools absent here; `--list --op <op>` or `--list --runtime <runtime>` prints one row per adapter).
 
 | Op | Use it for | Gives |
 |---|---|---|
-| `heap-graph` | HPROF dumps or V8 snapshots of one process (3 or more), or the native vgdb chain | retention path per dump, a `holder:` growth column, `via_holders` |
+| `heap-graph` | HPROF dumps or V8 snapshots of one process (3 or more), 3 or more command-mode heap captures of one harness (a per-point series over n), or the native vgdb chain | retention path per dump, a `holder:` growth column, `via_holders` |
 | `type-histogram-diff` | class histograms, shim stack groups | growth by type or by allocation stack |
 | `alloc-stack-diff` | JFR old objects, valgrind, heaptrack, dhat, LeakSanitizer, Go heap profiles, Node sampling profiles, Python tracemalloc and memray | growth by allocation stack, site is the first project frame |
 | `non-heap` | thread dumps, class loaders, NMT, descriptors; Go goroutine dumps and leak profile; Node resources; Python threads, tasks, ResourceWarnings | counts by group; ties to a finding only by creation site (Go goroutines, Node `Type@file:line`, Python threads and tasks); JVM thread dumps and the other counts never tie |
@@ -196,10 +196,19 @@ Reading the result:
   growing type is the finding's recorded accumulation class, its declared element type, or its own plain declared type when that is a project class (not a generic, JDK or Kotlin type; an instance field of its own class type is a chain link, not a holder). `--finding F`
   narrows to such columns; it never forces a tie. Whole-process and total columns (`os.*`,
   `jvm.*`, thread totals) never tie.
-- A Node snapshot series names the holder kind (`observed_holder`). When it differs from the finding's
-  holder, `needed` prints the `dla ledger annotate F --holder <kind>` command; run it and summarize again.
+- A Node or JVM heap-graph result names the holder it observed (`observed_holder`). `dla ledger annotate F
+  --holder H` fills a holder only when the finding has none. For a finding with no holder, `needed` prints
+  the annotate command; run it and summarize again. When the finding already has a different holder,
+  `needed` says so and names the sibling route (`dla ledger add --sibling-of F ...`) instead.
+- Per-point series: `heap-graph` forms a series over n when 3 or more inputs are all command-mode heap
+  captures of one harness listed in `.dla/<run>/harness/H<n>/captures.json` (kind heap, distinct x, one
+  label). It orders them by n, skips the one-process checks, keeps the format checks, uses the same
+  strict-growth dump-series gate and `dump-plateau` discriminator, and says `series_kind: per-point` with
+  the n values. Other dumps keep the one-process rule. `dla harness run` prints the command for
+  command-mode heap captures with 3 or more files of one format.
 - A JNI harness (`dla probe` lists the boundary): after the harness run, `dla correlate H1` in the managed
-  worker ties native growth to a managed finding (`references/backends.md`, Correlate).
+  worker ties native growth to a managed finding (`references/backends.md`, Correlate). The managed
+  footprint bounds the native slope even when its column misses the trend gate.
 - A `go-goroutineleak` result is a second signal; it never refutes and never confirms alone.
 - An empty, flat or failed-gate result never refutes a leak: the capture may have missed it (a
   sample, a short run, a retention the tool cannot see). Only `dla alloc-test` or the
