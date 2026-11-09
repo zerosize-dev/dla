@@ -69,6 +69,10 @@ it: every confirmation cited tied growth.
   runs followed it. This is a regression of the M5 snapshot analysis: a registration on the
   retention path should outrank the closure variables below it.
 
+**Follow-up:** after a holder fix (root-kind holders, and ledger schema 5 corrections), the two Node
+fixtures were run again, three times each: `../m5-gates-node`. node-retry-scheduler reached 1/3 and
+node-socket-heartbeat 2/3.
+
 ## How the runs used DLA
 
 Counted from the transcripts.

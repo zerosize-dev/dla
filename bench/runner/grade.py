@@ -178,13 +178,15 @@ def parse_ledger(path):
                 )
         elif rtype == "finding_annotated":
             # `dla ledger annotate --holder/--site` fills a holder or site the
-            # finding was added without; it never changes one that is set.
+            # finding was added without. Only a holder correction (ledger schema 5:
+            # the record names the `replaced_holder`, backed by heap-graph growth
+            # evidence that observed the holder) changes the holder that was set.
             fid = rec.get("finding")
             key = ledger_key(fid, rec) if isinstance(fid, str) else None
             if key is not None and key in by_id:
                 f = by_id[key]
-                if f["holder"] is None:
-                    f["holder"] = str_or_none(rec.get("holder"))
+                if f["holder"] is None or rec.get("replaced_holder") is not None:
+                    f["holder"] = str_or_none(rec.get("holder")) or f["holder"]
                 if f["site"] is None:
                     f["site"] = str_or_none(rec.get("site"))
                 if f["owner"] is None:

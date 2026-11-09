@@ -279,6 +279,17 @@ class LedgerParseTest(EnvCase):
         self.assertEqual((fs[0]["holder"], fs[0]["site"]), ("native-handle/global-ref", "a.c:29"))
         self.assertEqual((fs[1]["holder"], fs[1]["site"]), ("static/global", "c.c:2"))
 
+    def test_a_holder_correction_replaces_a_set_holder(self):
+        # Ledger schema 5: the record names the replaced holder.
+        lines = [
+            json.dumps({"type": "finding_added", "finding": {"id": "F5", "holder": "container-field"}}),
+            json.dumps({"type": "finding_annotated", "finding": "F5", "holder": "static/global",
+                        "replaced_holder": "container-field", "evidence": ["E22"]}),
+            json.dumps({"type": "finding_annotated", "finding": "F5", "holder": "cycle-only"}),
+        ]
+        _, fs = self.parse(ledger(*lines))
+        self.assertEqual(fs[0]["holder"], "static/global")
+
     def test_missing_or_nonstring_members_are_null(self):
         line = json.dumps({"type": "finding_added",
                            "finding": {"id": "f", "site": 5, "holder": None, "archetype": 3}})

@@ -1,0 +1,1175 @@
+{
+  "schema_version": 1,
+  "id": "T2",
+  "series": "S4",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "os.rss",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 112,
+        "var_s": 493.3333333333333,
+        "z": 4.997499374687305,
+        "p_increasing": 2.903926352020304e-7,
+        "tau": 0.9333333333333333
+      },
+      "sen": {
+        "slope": 8011.618461538461,
+        "intercept": 55563074.95384616,
+        "lo": 6832.872727272727,
+        "hi": 9297.454545454546
+      },
+      "halves": {
+        "first": 8232.11774891775,
+        "second": 10419.2,
+        "ratio": 1.2656767453757303
+      },
+      "noise": 3441299.0810584566,
+      "rise": 52876681.84615384,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "os.rss_anon",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 116,
+        "var_s": 493.3333333333333,
+        "z": 5.177589442243604,
+        "p_increasing": 1.123855963021691e-7,
+        "tau": 0.9666666666666667
+      },
+      "sen": {
+        "slope": 8139.326060606061,
+        "intercept": 9377689.6,
+        "lo": 6881.745454545455,
+        "hi": 9243.927272727273
+      },
+      "halves": {
+        "first": 8316.50909090909,
+        "second": 10406.012121212121,
+        "ratio": 1.251247609719696
+      },
+      "noise": 3342076.129280003,
+      "rise": 53719552.00000001,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "os.rss_file",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 16,
+        "var_s": 428.0,
+        "z": 0.7250523667842477,
+        "p_increasing": 0.2342099524697845,
+        "tau": 0.13333333333333333
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 45711360.0,
+        "lo": 0.0,
+        "hi": 9.309090909090909
+      },
+      "halves": {
+        "first": 34.75393939393939,
+        "second": 0.0,
+        "ratio": 0.0
+      },
+      "noise": 3036.3648,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.rss_shmem",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.swap",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "os.vm_data",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 5438.060606060606,
+        "intercept": 81794048.0,
+        "lo": 4384.581818181819,
+        "hi": 8753.87012987013
+      },
+      "halves": {
+        "first": 13767.812987012987,
+        "second": 4072.0623376623375,
+        "ratio": 0.2957668252396706
+      },
+      "noise": 3743837.7983999997,
+      "rise": 35891200.0,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "os.vm_hwm",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 112,
+        "var_s": 493.3333333333333,
+        "z": 4.997499374687305,
+        "p_increasing": 2.903926352020304e-7,
+        "tau": 0.9333333333333333
+      },
+      "sen": {
+        "slope": 7999.283916083916,
+        "intercept": 56057718.15384616,
+        "lo": 6801.842424242424,
+        "hi": 9235.549090909091
+      },
+      "halves": {
+        "first": 8348.038095238095,
+        "second": 10409.11515151515,
+        "ratio": 1.246893585386576
+      },
+      "noise": 3615405.4065230843,
+      "rise": 52795273.84615384,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "os.threads",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 7.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "node.array_buffers",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 27039.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "node.detached_contexts",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "node.external",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": -19,
+        "var_s": 221.0,
+        "z": -1.2108110291933625,
+        "p_increasing": 0.8870160813997414,
+        "tau": -0.15833333333333333
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1595583.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "node.heap_total",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 118,
+        "var_s": 493.3333333333333,
+        "z": 5.267634476021754,
+        "p_increasing": 6.909646170811231e-8,
+        "tau": 0.9833333333333333
+      },
+      "sen": {
+        "slope": 5610.278787878788,
+        "intercept": 32055296.000000004,
+        "lo": 4495.444628099173,
+        "hi": 8340.945454545454
+      },
+      "halves": {
+        "first": 13319.97922077922,
+        "second": 4617.309090909091,
+        "ratio": 0.3466453674121406
+      },
+      "noise": 5311614.156799996,
+      "rise": 37027840.0,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "node.heap_used",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 4270.659090909091,
+        "intercept": 4595141.0,
+        "lo": 4258.776623376623,
+        "hi": 4278.192207792208
+      },
+      "halves": {
+        "first": 4287.579545454546,
+        "second": 4264.945454545455,
+        "ratio": 0.994721009681771
+      },
+      "noise": 20704.509,
+      "rise": 28186350.0,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "node.listeners",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "node.malloced_memory",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 147552.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "node.native_contexts",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "node.timers",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:90",
+      "finding": "F8",
+      "candidates": [
+        "F8"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 25.945540633608815,
+        "intercept": 8.36742424242766,
+        "lo": 25.93219696969697,
+        "hi": 25.9650974025974
+      },
+      "halves": {
+        "first": 25.97340909090909,
+        "second": 25.910227272727273,
+        "ratio": 0.9975674422267529
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 11282.0,
+        "max": 11560.0
+      },
+      "noise": 55.906374999992806,
+      "rise": 171240.56818181818,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.clock",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:90",
+      "finding": "F8",
+      "candidates": [
+        "F8"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.counts",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:90",
+      "finding": "F8",
+      "candidates": [
+        "F8"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.deadLetters",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:16",
+      "finding": "F6",
+      "candidates": [
+        "F6",
+        "F4",
+        "F5",
+        "F7"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.deadLetters.size",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:16",
+      "finding": "F6",
+      "candidates": [
+        "F6",
+        "F4",
+        "F5",
+        "F7"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.endpoint",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:90",
+      "finding": "F8",
+      "candidates": [
+        "F8"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.inflight",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:17",
+      "finding": "F7",
+      "candidates": [
+        "F7",
+        "F4",
+        "F5",
+        "F6"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.inflight.size",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:17",
+      "finding": "F7",
+      "candidates": [
+        "F7",
+        "F4",
+        "F5",
+        "F6"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 0.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.latest",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:15",
+      "finding": "F5",
+      "candidates": [
+        "F5",
+        "F4",
+        "F6",
+        "F7"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 25.945540633608815,
+        "intercept": 1.36742424242766,
+        "lo": 25.93219696969697,
+        "hi": 25.9650974025974
+      },
+      "halves": {
+        "first": 25.97340909090909,
+        "second": 25.910227272727273,
+        "ratio": 0.9975674422267529
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": true,
+        "min": 11282.0,
+        "max": 11560.0
+      },
+      "noise": 55.906374999992806,
+      "rise": 171240.56818181818,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "probe:src/scheduler.js:shared.pending",
+      "unit": "count",
+      "kind": "counter",
+      "region": "heap",
+      "site": "src/scheduler.js:14",
+      "finding": "F4",
+      "candidates": [
+        "F4",
+        "F5",
+        "F6",
+        "F7"
+      ],
+      "n": 16,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 16,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "node.array_buffers.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": -37,
+        "var_s": 221.0,
+        "z": -2.421622058386725,
+        "p_increasing": 0.9922742944684289,
+        "tau": -0.30833333333333335
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 10655.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": -0.005844155844155844,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "node.external.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": -19,
+        "var_s": 221.0,
+        "z": -1.2108110291933625,
+        "p_increasing": 0.8870160813997414,
+        "tau": -0.15833333333333333
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1579235.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "node.heap_total.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 117,
+        "var_s": 492.3333333333333,
+        "z": 5.227913207622326,
+        "p_increasing": 8.571697386467713e-8,
+        "tau": 0.975
+      },
+      "sen": {
+        "slope": 5362.036363636364,
+        "intercept": 34185216.0,
+        "lo": 4468.363636363636,
+        "hi": 8936.727272727272
+      },
+      "halves": {
+        "first": 13671.064935064935,
+        "second": 4170.472727272727,
+        "ratio": 0.30505836575875483
+      },
+      "noise": 3692219.5968,
+      "rise": 35389440.0,
+      "shape": "plateau",
+      "gate": "fail",
+      "gate_failed": [
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "node.heap_used.pre_gc",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "heap",
+      "candidates": [],
+      "n": 16,
+      "mk": {
+        "s": 120,
+        "var_s": 493.3333333333333,
+        "z": 5.357679509799904,
+        "p_increasing": 4.214879933156828e-8,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 4256.9409090909085,
+        "intercept": 5201554.000000002,
+        "lo": 4135.809090909091,
+        "hi": 4293.322424242424
+      },
+      "halves": {
+        "first": 4124.751818181818,
+        "second": 4373.395454545454,
+        "ratio": 1.0602808719951637
+      },
+      "noise": 293043.30299999996,
+      "rise": 28095809.999999996,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    }
+  ]
+}

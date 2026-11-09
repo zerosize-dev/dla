@@ -109,7 +109,10 @@ first `/` of its key, or null when the key has no `/` or that text is empty.
   set its `holder` from the record's `holder` when the finding's `holder` is
   null and the record's is a string, and likewise `site` and `owner` (this is
   how `dla ledger annotate --holder/--site/--owner` fills a value the finding
-  was added without; a value that is already set never changes).
+  was added without; a value that is already set never changes), except that a
+  record with a `replaced_holder` member (a ledger schema 5 holder correction,
+  backed by heap-graph growth evidence) sets the `holder` from the record's
+  `holder` when that is a string, whatever the finding held.
 - `finding_merged`: if the records' `canonical` and `duplicate` are strings
   that give two different keys, and a finding exists under both, the finding
   under the `duplicate` key is removed and the one under the `canonical` key

@@ -1,0 +1,208 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 22,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "candidates": [
+              "F8"
+            ],
+            "column": "probe:src/scheduler.js:shared",
+            "finding": "F8",
+            "lo": 25.93,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/scheduler.js:90",
+            "slope": 25.97,
+            "unit": "count"
+          },
+          {
+            "candidates": [
+              "F5",
+              "F4",
+              "F6",
+              "F7"
+            ],
+            "column": "probe:src/scheduler.js:shared.latest",
+            "finding": "F5",
+            "lo": 25.93,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/scheduler.js:15",
+            "slope": 25.97,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 13,
+          "insufficient": 9,
+          "steady": 2
+        },
+        "trend": "T1",
+        "workload": "node:script:package.json:load"
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E16-S2.json",
+      "id": "E16",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 29,
+        "gate": "pass",
+        "n": 4,
+        "n_values": [
+          440.0,
+          1760.0,
+          2640.0,
+          3960.0
+        ],
+        "passed": [
+          {
+            "candidates": [
+              "F8"
+            ],
+            "column": "holder:static:.dla.20261109-221930-6461.harness.H1.work.src.scheduler.shared",
+            "finding": "F8",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/scheduler.js:90",
+            "slope": 5011701,
+            "tie": {
+              "key": ".dla.20261109-221930-6461.harness.H1.work.src.scheduler.shared",
+              "rule": "holder"
+            },
+            "unit": "bytes"
+          },
+          {
+            "candidates": [
+              "F5"
+            ],
+            "column": "holder:field:.dla.20261109-221930-6461.harness.H1.work.src.scheduler.RetryScheduler.latest",
+            "finding": "F5",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "site": "src/scheduler.js:15",
+            "slope": 5011275,
+            "tie": {
+              "key": ".dla.20261109-221930-6461.harness.H1.work.src.scheduler.RetryScheduler.latest",
+              "rule": "holder"
+            },
+            "unit": "bytes"
+          },
+          {
+            "column": "holder:field:Object.rows",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 4722331,
+            "unit": "bytes"
+          }
+        ],
+        "reasons": [],
+        "series": "S2",
+        "series_kind": "per-point",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "340b545592cb2e480987f3ee74b733f56d025efc2af409fb494a903c22b38f52",
+          "tool": "dla-v8-snapshot"
+        }
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E20-A1.json",
+      "id": "E20",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:src/scheduler.js:shared.latest",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:src/scheduler.js:shared.latest",
+            "plateau": {
+              "extra_rise": 91220.0,
+              "extra_slope": 25.92,
+              "main_slope": 25.97,
+              "noise": 44.48,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 30380000.0,
+              "extra_slope": 9863.0,
+              "main_slope": 8367.0,
+              "noise": 1819000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 114300000.0,
+              "before": 114300000.0,
+              "drop": 0.0,
+              "growth": 52880000.0,
+              "kind": "gc",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 30570000.0,
+              "extra_slope": 9926.0,
+              "main_slope": 8412.0,
+              "noise": 1899000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "finding": "F5",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "gc",
+        "series": "S4",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": "excerpt.txt",
+  "finding": "F5",
+  "site": "src/scheduler.js:15"
+}
