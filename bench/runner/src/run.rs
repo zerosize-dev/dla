@@ -656,6 +656,122 @@ const CACHE_DIRS: [&str; 8] = [
     "xdg",
 ];
 
+// ------------------------------------------------------------ go toolchain
+
+/// The Go release the goroutine leak profile needs (`dla install go-toolchain-1.27`).
+const GO_LEAK_TOOLCHAIN: &str = "go1.27.0";
+
+/// The unpacked toolchain directory name inside a Go module cache, for this platform.
+pub fn go_toolchain_dir_name(version: &str, os: &str, arch: &str) -> String {
+    let arch = match arch {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        a => a,
+    };
+    let os = if os == "macos" { "darwin" } else { os };
+    format!("toolchain@v0.0.1-{version}.{os}-{arch}")
+}
+
+/// The host module cache: `go env GOMODCACHE`, else `$HOME/go/pkg/mod`.
+fn host_go_modcache() -> Option<PathBuf> {
+    let out = Command::new("go")
+        .args(["env", "GOMODCACHE"])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if out.status.success() && !s.is_empty() {
+        return Some(PathBuf::from(s));
+    }
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join("go/pkg/mod"))
+}
+
+/// Makes sure the Go leak toolchain is in the shared (host) module cache, once per run of
+/// the benchmark and before any child starts. A cached toolchain costs nothing; otherwise
+/// `GOTOOLCHAIN=go1.27.0 go version` fetches it (the benchmark process has the network, the
+/// children do not). Returns the unpacked directory, or `None` with a warning when it cannot
+/// be had; the children then see the `go/goroutineleak` coverage row as missing.
+pub fn prefetch_go_toolchain() -> Option<PathBuf> {
+    static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let name = go_toolchain_dir_name(GO_LEAK_TOOLCHAIN, std::env::consts::OS, std::env::consts::ARCH);
+        let cache = host_go_modcache()?;
+        let dir = cache.join("golang.org").join(&name);
+        if dir.join("bin").is_dir() {
+            return Some(dir);
+        }
+        let fetched = Command::new("go")
+            .arg("version")
+            .env("GOTOOLCHAIN", GO_LEAK_TOOLCHAIN)
+            .env_remove("GOFLAGS")
+            .stdin(Stdio::null())
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if fetched && dir.join("bin").is_dir() {
+            Some(dir)
+        } else {
+            eprintln!("warning: {GO_LEAK_TOOLCHAIN} could not be fetched; go/goroutineleak stays missing in the children");
+            None
+        }
+    })
+    .clone()
+}
+
+/// Links the prefetched toolchain into a child's module cache, so `GOTOOLCHAIN=go1.27.0`
+/// switches offline: the unpacked directory, and the download-cache entry that Go checks
+/// before it unpacks (the small files are copied so a lock can be written, the archive is
+/// linked). A failure is not an error: the coverage row says it.
+fn link_go_toolchain(cache: &Path) {
+    if let Some(dir) = prefetch_go_toolchain() {
+        link_toolchain(&dir, cache);
+    }
+}
+
+/// [`link_go_toolchain`] for a known unpacked toolchain directory.
+fn link_toolchain(dir: &Path, cache: &Path) {
+    let (Some(name), Some(host)) = (
+        dir.file_name().and_then(|n| n.to_str()),
+        dir.parent().and_then(Path::parent),
+    ) else {
+        return;
+    };
+    let modcache = cache.join("gopath/pkg/mod");
+    let unpacked = modcache.join("golang.org");
+    if fs::create_dir_all(&unpacked).is_err() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        let link = unpacked.join(name);
+        if link.symlink_metadata().is_err() {
+            let _ = std::os::unix::fs::symlink(dir, &link);
+        }
+        // `toolchain@v0.0.1-go1.27.0.linux-amd64` is cached as `v0.0.1-go1.27.0.linux-amd64.*`.
+        let Some(version) = name.strip_prefix("toolchain@") else {
+            return;
+        };
+        let src = host.join("cache/download/golang.org/toolchain/@v");
+        let dst = modcache.join("cache/download/golang.org/toolchain/@v");
+        if fs::create_dir_all(&dst).is_err() {
+            return;
+        }
+        for e in fs::read_dir(&src).into_iter().flatten().flatten() {
+            let file = e.file_name();
+            let Some(f) = file.to_str().filter(|f| f.starts_with(version)) else {
+                continue;
+            };
+            let to = dst.join(f);
+            if to.symlink_metadata().is_ok() {
+                continue;
+            }
+            if f.ends_with(".zip") {
+                let _ = std::os::unix::fs::symlink(e.path(), &to);
+            } else {
+                let _ = fs::copy(e.path(), &to);
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------- tasks
 
 #[derive(Debug, Clone)]
@@ -1278,6 +1394,7 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     for sub in CACHE_DIRS {
         fs::create_dir_all(cache.join(sub)).map_err(|e| format!("{}: {e}", cache.display()))?;
     }
+    link_go_toolchain(&cache);
     let tmp = work.join("tmp");
     fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     let settings_path = work.join("settings.json");
@@ -2204,6 +2321,47 @@ mod tests {
     // `run` is unix-only (the sandbox exists only on Linux and macOS), and the
     // expected values use unix path separators.
     #[cfg(unix)]
+    #[test]
+    #[cfg(unix)]
+    fn a_go_toolchain_is_linked_into_the_child_cache() {
+        let t = std::env::temp_dir().join(format!("dla-gotc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&t);
+        let host = t.join("host");
+        let name = "toolchain@v0.0.1-go1.27.0.linux-amd64";
+        let dir = host.join("golang.org").join(name);
+        fs::create_dir_all(dir.join("bin")).unwrap();
+        let dl = host.join("cache/download/golang.org/toolchain/@v");
+        fs::create_dir_all(&dl).unwrap();
+        for f in ["zip", "ziphash", "lock"] {
+            fs::write(dl.join(format!("v0.0.1-go1.27.0.linux-amd64.{f}")), f).unwrap();
+        }
+        fs::write(dl.join("v0.0.1-go1.26.0.linux-amd64.zip"), "other").unwrap();
+        let cache = t.join("child");
+        link_toolchain(&dir, &cache);
+        let m = cache.join("gopath/pkg/mod");
+        assert!(m.join("golang.org").join(name).join("bin").is_dir());
+        let c = m.join("cache/download/golang.org/toolchain/@v");
+        let zip = c.join("v0.0.1-go1.27.0.linux-amd64.zip");
+        assert!(zip.symlink_metadata().unwrap().file_type().is_symlink());
+        let hash = c.join("v0.0.1-go1.27.0.linux-amd64.ziphash");
+        assert!(!hash.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(!c.join("v0.0.1-go1.26.0.linux-amd64.zip").exists());
+        link_toolchain(&dir, &cache);
+        let _ = fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn go_toolchain_directory_names_follow_the_go_module_cache() {
+        assert_eq!(
+            go_toolchain_dir_name("go1.27.0", "linux", "x86_64"),
+            "toolchain@v0.0.1-go1.27.0.linux-amd64"
+        );
+        assert_eq!(
+            go_toolchain_dir_name("go1.27.0", "macos", "aarch64"),
+            "toolchain@v0.0.1-go1.27.0.darwin-arm64"
+        );
+    }
+
     #[test]
     fn toolchain_caches_live_under_the_run_cache() {
         let parent = vec![("HOME".to_owned(), "/home/u".to_owned())];

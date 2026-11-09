@@ -49,6 +49,15 @@ artifact run the files come from `dla attach jcmd` or the user.
 - Command-mode heap dumps are separate processes: `heap-graph` refuses them (`dumps-not-comparable`)
   and the harness prints no `heap-graph` command for them. A `holder:` column needs a driver
   (`dla harness gen --lang jvm --driver`).
+- JNI: when the project loads a native library through JNI, `dla harness gen --lang jvm` preloads the
+  allocator shim and the series gains `native.live_bytes@<file:line>` columns. In this worker those
+  columns tie to nothing (the native holder's finding lives in the rust or native worker, and ties never
+  cross runtimes). After `dla harness run H1`, run `dla correlate H1` in this worker: when a native site
+  under a JNI export grows at a rate that matches the process footprint, it adds a candidate here (origin
+  `correlation`, site the native site, holder `native-handle/global-ref`, region off-heap, owner the
+  managed method, writer its declaration) and the shim column ties to it by site. Then test, refute the
+  sibling and confirm as usual. No match writes no candidate; a refusal names the missing boundary or
+  series.
 - Kotlin: a coroutine's captured locals are fields `L$0`, `L$1` of the compiled continuation (class-file
   census with `DebugMetadata`). The ledger keeps one finding per suspension point, so two captures at
   one line become one finding.

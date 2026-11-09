@@ -53,8 +53,11 @@ fn list_adapters(fx: &mut Fx) -> Vec<Adapter> {
     parse_adapters(&out.json)
 }
 
+/// The adapters of a listing: `ops` maps an op to its runtimes and their backends, and
+/// `missing` names the backends whose tool is absent. The older row form
+/// (`adapters: [{runtime, backend, available}]`) is read too.
 fn parse_adapters(v: &Value) -> Vec<Adapter> {
-    v["adapters"]
+    let mut list: Vec<Adapter> = v["adapters"]
         .as_array()
         .map(|a| {
             a.iter()
@@ -65,7 +68,22 @@ fn parse_adapters(v: &Value) -> Vec<Adapter> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let missing = strings(&v["missing"]);
+    if let Some(ops) = v["ops"].as_object() {
+        for runtimes in ops.values().filter_map(Value::as_object) {
+            for (runtime, backends) in runtimes {
+                for b in strings(backends) {
+                    list.push(Adapter {
+                        runtime: runtime.clone(),
+                        available: !missing.contains(&b),
+                        backend: b,
+                    });
+                }
+            }
+        }
+    }
+    list
 }
 
 /// The native tools to run a harness under: those with a listed native adapter, listed or
@@ -150,6 +168,29 @@ fn capture(fx: &mut Fx, harness: &str, runtime: &str, adapters: &[Adapter]) -> V
                 cmds.extend(n);
             } else {
                 let msg = format!("harness run {harness} --capture all: {}", out.message());
+                fx.step(msg.clone());
+                fx.row.errors.push(msg);
+            }
+        }
+        "node" | "go" | "python" => {
+            // The capture kinds each runtime's agent writes; the harness drops the rest and
+            // names them. Node driver mode is not available, so node snapshots would only
+            // give histograms: node captures allocation profiles and resources.
+            let kinds = match runtime {
+                "python" => "histogram,alloc,nonheap",
+                _ => "alloc,nonheap",
+            };
+            fx.row.captures.push(format!("{harness}:capture-{kinds}"));
+            let out = fx.call_quiet(&["harness", "run", harness, "--capture", kinds]);
+            if out.ok {
+                let n = printed_commands(fx, &out);
+                fx.step(format!(
+                    "{harness} --capture {kinds}: {} summarize command(s)",
+                    n.len()
+                ));
+                cmds.extend(n);
+            } else {
+                let msg = format!("harness run {harness} --capture {kinds}: {}", out.message());
                 fx.step(msg.clone());
                 fx.row.errors.push(msg);
             }
@@ -293,6 +334,58 @@ fn tied_findings(out: &Out, view: &View) -> Option<(BTreeSet<String>, Vec<String
         set.extend(strings(&col["candidates"]));
     }
     (!set.is_empty()).then(|| (set, out.evidence()))
+}
+
+/// `dla correlate H` for a JVM harness: a harness without a foreign-function boundary
+/// refuses, which is the normal answer and not a failure. A correlation writes a candidate
+/// and an `alloc-stack` evidence that the trend step ties to the native column.
+pub(super) fn correlate(fx: &mut Fx, harness: &str) {
+    let out = fx.call_quiet(&["correlate", harness]);
+    fx.row.max_stdout = fx.row.max_stdout.max(out.bytes);
+    if out.bytes > LIMIT {
+        fx.row.failures.push(format!(
+            "correlate: stdout is {} bytes, over {LIMIT}",
+            out.bytes
+        ));
+    }
+    if out.json.is_null() {
+        fx.row
+            .failures
+            .push(format!("correlate: stdout is not JSON (exit {})", out.exit));
+        return;
+    }
+    if out.ok {
+        let view = fx.view();
+        for id in out.evidence() {
+            match view.evidence.get(&id) {
+                None => fx
+                    .row
+                    .failures
+                    .push(format!("correlate: evidence {id} is not in the ledger")),
+                Some(ev) => {
+                    let size = serde_json::to_string(&ev.result).map_or(0, |s| s.len());
+                    if size > LIMIT {
+                        fx.row.failures.push(format!(
+                            "correlate: result of {id} is {size} bytes, over {LIMIT}"
+                        ));
+                    }
+                }
+            }
+        }
+        fx.row.ops.push("correlate".to_owned());
+        fx.step(format!(
+            "{harness} correlate: {}",
+            out.json["summary"].as_str().unwrap_or("done")
+        ));
+    } else if out.message().contains("no foreign-function boundary") {
+        fx.step(format!("{harness} correlate: no foreign-function boundary"));
+    } else {
+        fx.step(format!(
+            "{harness} correlate refused ({}): {}",
+            out.code(),
+            out.message()
+        ));
+    }
 }
 
 /// Steps 1 to 5. `grew` holds the harnesses with a passing column (id, runtime).
@@ -794,6 +887,19 @@ esac
                 backend: "x".into(),
                 available: true
             }]
+        );
+        let v = json!({"ops": {"alloc-stack-diff": {"native": ["valgrind-memcheck", "dhat"],
+                                                    "go": ["go-pprof-heap"]}},
+                       "missing": ["dhat"]});
+        let got = parse_adapters(&v);
+        assert_eq!(got.len(), 3);
+        assert!(
+            got.iter()
+                .any(|a| a.backend == "dhat" && a.runtime == "native" && !a.available)
+        );
+        assert!(
+            got.iter()
+                .any(|a| a.backend == "go-pprof-heap" && a.runtime == "go" && a.available)
         );
     }
 }

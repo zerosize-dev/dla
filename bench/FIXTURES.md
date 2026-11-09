@@ -139,8 +139,9 @@ Field rules:
   the range to that statement.
 - `dump_backed` (optional, default false) marks a leak whose confirmation must
   rest on a heap dump or an allocation profile: the chosen confirmed finding
-  cites evidence of kind `retention-path`, `histogram-diff` or `alloc-stack`
-  with authority `dump` or `live`. Only `dla-bench dynamic` checks it (and only
+  cites evidence of kind `retention-path`, `histogram-diff`, `alloc-stack`,
+  `non-heap` (a goroutine or thread dump grouped by creation site) or
+  `should-be-dead` (the goroutine leak profile) with authority `dump` or `live`. Only `dla-bench dynamic` checks it (and only
   when its dump check is switched on); both graders accept the field and ignore
   it, and the grading metrics do not change.
 - `alt_sites` (optional) lists other locations a correct diagnosis may cite

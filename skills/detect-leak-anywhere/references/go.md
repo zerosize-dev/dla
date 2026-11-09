@@ -15,6 +15,16 @@ Worker name and runtime id: `go`. Facts from `harness/go/README.md` and `docs/VE
   `go.released`, `go.stacks`, `go.goroutines`, the `os.*` set, and the goroutine profile grouped by
   `created by` file:line (`go.goroutines@file:line`). Coverage comes from `go test -coverprofile`.
 - Purges: `free-os-memory` and `gc`.
+- Raw captures: `dla harness run H1 --capture alloc,nonheap`. `alloc` writes `go-<n>.heap.pb.gz`
+  (`DLA_MEMPROFILE_RATE`, default 4096); `nonheap` writes `go-<n>.goroutine.pb.gz`, `go-<n>.goroutine.txt`
+  (debug=2, with the `created by` frame) and `go-<n>.goroutineleak.txt`. Driver mode captures at the
+  checkpoints, so 3 or more files come from one process.
+- The goroutine leak profile is generally available from Go 1.27 (Go 1.26: `GOEXPERIMENT=goroutineleakprofile`).
+  `dla probe` records the toolchain decision (probe field `go`, coverage row `go/goroutineleak`). With an
+  older project toolchain and Go 1.27 in the module cache, `harness run` makes one extra pass with
+  `GOTOOLCHAIN=go1.27.x` just for the leak profile; with none cached the row is `missing` and the hint is
+  `dla install go-toolchain-1.27` (tier 1; it downloads the toolchain into the Go module cache, outside the
+  project). Record the candidate `unresolved` (`tool_missing`) if you cannot install it.
 
 ## Attach backends
 | Backend | Tier | Notes |
@@ -25,13 +35,22 @@ Worker name and runtime id: `go`. Facts from `harness/go/README.md` and `docs/VE
 There is no jcmd-style attach for Go. Prefer the harness.
 
 ## Artifacts
-- goref heap profiles and pprof files land under `attach/P<n>/`, but
-  no `dla summarize` adapter reads them in this release (Go profiles and the `goroutineleak` profile are
-  cut 2; see `references/backends.md`). Record them as artifacts and say the summarizer is not available yet.
+- Harness captures: read the heap profiles with `dla summarize alloc-stack-diff` (`go-pprof-heap`, ties
+  by allocation site), the goroutine dumps with `non-heap` (`go-goroutine`: the group at the `created by`
+  site ties to the finding at that `go` statement) and the leak files with `non-heap` (`go-goroutineleak`).
+  The leak evidence is a second signal: it never confirms alone and never refutes.
+- goref heap profiles land under `attach/P<n>/`; no `dla summarize` adapter reads them. Record them as
+  artifacts.
+- cgo: `import "C"` with project-defined C functions is detected as a boundary (probe summary `boundaries`),
+  but the allocator shim measures JNI only, so `dla correlate` has nothing to compare for Go.
 
 ## Blind spots
 - The leaked-goroutine profile misses primitives still reachable from globals and depends on the
-  Go version.
+  Go version; an empty profile proves nothing. The debug=2 text lists every goroutine (the profiler's own
+  included), so count the `(leaked)` marks.
+- debug=2 goroutine text carries no pprof label values.
+- Known leak: timers before Go 1.23 (see `references/backends.md`, known leaks): `dla probe` reports it when
+  the `go` line is older and the source makes timers or tickers.
 - Heap profiles blame the allocation site, not the holder (a subslice pinning a large buffer).
 - Maps and pools keep peak capacity: a flat entry count with high memory is a high-water mark,
   not necessarily a leak.

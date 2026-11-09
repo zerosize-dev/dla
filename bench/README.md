@@ -302,8 +302,18 @@ The policy, per fixture (repository entry, one runtime):
 6. The per-operation steps, for every harness that grew (a passing,
    non-container column), then the held-back confirmations. The steps read
    only `dla` JSON and never name a backend:
-   - `dla summarize --list` (adapters, their tools, availability).
-   - Capture. A JVM harness runs again as `harness run H --capture all`. A rust
+   - `dla summarize --list` (adapters per op and runtime; `missing` names the
+     adapters whose tool is absent).
+   - `dla correlate H` for every JVM harness with a series, before the trends:
+     a harness without a foreign-function boundary refuses (logged, not a
+     failure); one with a boundary adds a correlation candidate and an
+     `alloc-stack` evidence that the shim column then ties to by site (this
+     confirms `jni-order-codec` L1).
+   - Capture. A node or go harness runs again as `harness run H --capture
+     alloc,nonheap`, a python harness as `--capture histogram,alloc,nonheap`
+     (node heap snapshots are left out: command-mode snapshots are separate
+     processes and give histograms only; the harness drops kinds a runtime does
+     not write and names them). A JVM harness runs again as `harness run H --capture all`. A rust
      or native harness runs again as `harness run H --tool valgrind` and
      `--tool heaptrack` for the tools that have a listed adapter; a missing
      tool refuses with `tool-missing` and leaves its `missing` coverage row,
@@ -428,12 +438,13 @@ kind of the holder key (`static` is `static/global`, `jni-global` is
 
 A leak with `dump_backed = true` in `expected.toml` (see FIXTURES.md) must be
 confirmed by a finding that cites evidence of kind `retention-path`,
-`histogram-diff` or `alloc-stack` with authority `dump` or `live`, in its
+`histogram-diff`, `alloc-stack`, `non-heap` or `should-be-dead` with authority
+`dump` or `live`, in its
 supports or in the evidence of its confirming transition. The check is **on by
 default** (`CHECK_DUMP_BACKED` in `dynamic_cmd.rs`, flag
 `--check-dump-backed=false` to turn it off): the policy runs the summarize
 steps before it confirms and cites the evidence of a call whose passing growth
-column is tied to the chosen finding (step 6 above). Marked: `jvm-audit-chain` L1, `jvm-order-cache` L1,
+column is tied to the chosen finding (step 6 above). Marked: `go-subscription-workers` L1 (goroutine groups tied by creation site), `jvm-audit-chain` L1, `jvm-order-cache` L1,
 `jni-order-codec` L2, `rust-tree-parent-links` L1 and `native-frame-decoder` L1
 (the one native fixture with a confirmable leak, which runs under valgrind;
 `native-glyph-cache` and `native-vendor-codec` have no confirmable leak).
@@ -485,6 +496,19 @@ failure. Hiding `jstack` or `jmap` alone does not turn the `jcmd` row to
 falls back to `python3 -m memray`. Tested with fake tools in
 `bench/runner/tests/without.rs`.
 
+### Go 1.27 prefetch (gates benchmark)
+
+The goroutine leak profile needs Go 1.27. Before the first child of `dla-bench
+run` starts, the runner makes sure `go1.27.0` is in the host module cache
+(`GOTOOLCHAIN=go1.27.0 go version` fetches it when it is absent; a failure is a
+warning, and the children then see the coverage row `go/goroutineleak` as
+missing). Each child's private module cache gets the unpacked toolchain and its
+download-cache entry (small files copied, the archive linked), so
+`GOTOOLCHAIN=go1.27.0` switches offline with `GOPROXY=off`. The children keep
+`GOTOOLCHAIN=local` for the project build; `dla` sets the switch itself for the
+leak pass. Checked by hand: with only those links in a fresh module cache,
+`GOTOOLCHAIN=go1.27.0 GOPROXY=off go version` prints go1.27.0.
+
 ### Expected failures
 
 The policy is mechanical: it cannot read the code to choose which edge of a
@@ -499,18 +523,16 @@ additional failure (a regression must not hide behind the entry).
 | fixture | failure | reason |
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
-| `jni-order-codec` | `leak L1 (native/src/lib.rs:43) is not confirmed` | The leak lives in native code that runs only under the JVM. The rust worker finds no main workload with an iteration argument (`harness gen`: `workload-required`), so its census finding at the site ends `suspected_static_only`. In the JVM worker the shim columns `native.live_bytes@native/src/lib.rs:40` and `:43` pass, but no finding of that worker is at those sites and a tie never crosses runtimes, so no column is tied to the leak and the confirmation is refused. The JVM harness now prints a `shim-stack-groups` summarize command, but its site ties meet the same rule; cross-runtime correlation (cut 2) is the planned route. |
-| `node-retry-scheduler` | `leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global` | The leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, `scheduler.js:15`), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root. |
-| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census classifies the `setInterval` timer at `heartbeat.js:15` as `blocked-stack` (non-heap) and the policy takes the holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). |
+| `node-retry-scheduler` | `leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global` | The leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, `scheduler.js:15`), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root, and the heap-graph holder (`static:src.scheduler.shared`) needs a series of snapshots from one process (driver mode, which needs hand-filled hooks); the policy's command-mode captures give allocation profiles and resources only. |
+| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census classifies the `setInterval` timer at `heartbeat.js:15` as `blocked-stack` (non-heap) and the policy takes the holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). Since cut 2 `node-resources` ties the timer group to the finding by site, but only the heap-graph holder (driver mode) names the registration table, and the policy does not annotate holders it did not see. |
 
-`jni-order-codec` still meets the milestone's acceptance for multi-runtime
-runs (two workers, one merged ledger with both slices, merged coverage): the
-driver fails the fixture if that is not so, and the listed failure concerns
-only leak confirmation. The Kotlin leak L2 (`Audit.kt:12`) has been confirmed
-since M4 (probe columns tie to the finding with that owner) and is no longer on
-the list. L1 is reachable once the native shim runs inside the JVM harness; its
-allocation stack names `native/src/lib.rs:40`, which is now one of its alternative
-sites.
+`jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
+workers, one merged ledger with both slices, merged coverage): the driver fails
+the fixture if that is not so. Its native leak L1 (`native/src/lib.rs:43`) is
+confirmed since cut 2: the policy runs `dla correlate` for a JVM harness before
+the trends, the correlation adds a candidate at the native site under the managed
+method, and the shim column ties to it by site. The Kotlin leak L2 (`Audit.kt:12`)
+has been confirmed since M4 (probe columns tie to the finding with that owner).
 
 ## Isolation and cost
 

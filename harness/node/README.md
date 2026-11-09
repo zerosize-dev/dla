@@ -91,7 +91,7 @@ when it could not be written). `histogram` and `jfr` are JVM captures and become
 | Kind | File | Format | Written | `dla summarize` |
 |---|---|---|---|---|
 | `heap` | `heap-<n>.heapsnapshot` | V8 heap snapshot (`v8.writeHeapSnapshot`, after a forced gc) | driver: at the checkpoints of the JVM rule (end of warm-up, last round, evenly spaced between; `DLA_CAPTURE_DUMPS`, default 4); command: at exit of the selected points | `heap-graph` over 3 or more snapshots of ONE process (driver mode); `type-histogram-diff` over snapshots of any points |
-| `heap` | `scripts.json` | `{"dla_scripts":1,"root","scripts":{"<script id>":"<url>"},"maps":{"<id>":"<sourceMapURL>"}}` | next to each snapshot (rewritten; the last wins) | sidecar of the snapshots: `locations` of a snapshot hold script ids, the url comes from here (`Debugger.scriptParsed`) |
+| `heap` | `scripts.json` | `{"dla_scripts":1,"root","scripts":{"<script id>":"<url>"},"maps":{"<id>":"<sourceMapURL>"}}` | next to each snapshot (rewritten; the last wins) | sidecar of the snapshots (`Debugger.scriptParsed`); never passed to `dla summarize`: Node 22 snapshots carry the script path on the function's shared info, so the adapters do not read it (a fallback for older Node) |
 | `alloc` | `alloc-<n>.heapprofile` | inspector sampling heap profile (`{head, samples}`; `callFrame.url` is a `file://` url, builtins have url `""` and line `-1`) | driver: at the same checkpoints (each ends a window, a new one starts); command: one at exit | `alloc-stack-diff` over the profiles |
 | `nonheap` | `resources.json` | see below | once, at the last round (driver) or at exit (command) | `non-heap` over the files of the points |
 

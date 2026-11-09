@@ -91,7 +91,10 @@ raw values. A second consent is refused; never ask twice.
 
 `dla probe` records runtimes, versions, tools, privileges, test runners and library flags. A
 backend the runtimes could use but the machine lacks is recorded in coverage as `missing`, with an
-install hint. After tier-1 consent run `dla probe --build` (`--build-timeout <secs>`, default 300);
+install hint (Go: `go/goroutineleak` reads `missing` with the hint `dla install go-toolchain-1.27` when no
+Go 1.27 toolchain is cached). The probe also writes `known_leaks` verdicts (documented library or runtime
+behavior checked against the project, `true`, `false` or `maybe`); they are context for stage 4, never
+findings, and a tier-3 tool DLA does not drive is a `blocked` coverage row. After tier-1 consent run `dla probe --build` (`--build-timeout <secs>`, default 300);
 a failed build is a coverage gap (`build_fails`), not a reason to stop. For each missing backend,
 `dla install <backend>` once, in the core and before `dla run dispatch` (installs write to a shared
 directory without a lock). A failed install stays a recorded gap; never retry in a loop and never
@@ -128,6 +131,13 @@ under the run directory and need tier 1.
   - JVM: `--capture heap,histogram,jfr,nonheap` or `--capture all` (`--dumps <N>` heap dumps,
     default 4). Command-mode heap dumps are separate processes, so `heap-graph` cannot compare them;
     a driver (`--driver`) takes all dumps in one process.
+  - Node: `--capture heap,alloc,nonheap` (sampling heap profiles, resources by creation site, V8
+    snapshots). Command-mode snapshots are separate processes (histograms only); a snapshot series for
+    `heap-graph` needs a driver. Snapshots need about 12x the heap in free memory and hold memory contents.
+  - Go: `--capture alloc,nonheap` (heap profiles, goroutine dumps and the goroutine leak profile; an older
+    project toolchain gets one extra pass with a cached Go 1.27, else a `missing` row).
+  - Python: `--capture histogram,alloc,nonheap` (type counts, tracemalloc stacks and memray when the
+    program's interpreter has it, threads, tasks, ResourceWarning sites). `alloc` slows the points that take it.
   - Rust and native, program started directly: `--tool valgrind` (memcheck XML plus the vgdb chain
     files) or `--tool heaptrack` (`heaptrack_print` report and a first-to-last diff) instead of a
     measured series. A wrapper (make, sh) gets no vgdb chain. A missing tool refuses with
@@ -171,10 +181,10 @@ coverage rows are in `references/backends.md`; `dla summarize --list` shows what
 
 | Op | Use it for | Gives |
 |---|---|---|
-| `heap-graph` | HPROF dumps of one process (3 or more), or the native vgdb chain | retention path per dump, a `holder:` growth column, `via_holders` |
+| `heap-graph` | HPROF dumps or V8 snapshots of one process (3 or more), or the native vgdb chain | retention path per dump, a `holder:` growth column, `via_holders` |
 | `type-histogram-diff` | class histograms, shim stack groups | growth by type or by allocation stack |
-| `alloc-stack-diff` | JFR old objects, valgrind, heaptrack, dhat, LeakSanitizer | growth by allocation stack, site is the first project frame |
-| `non-heap` | thread dumps, class loaders, NMT, descriptors | counts by group; never ties to a finding |
+| `alloc-stack-diff` | JFR old objects, valgrind, heaptrack, dhat, LeakSanitizer, Go heap profiles, Node sampling profiles, Python tracemalloc and memray | growth by allocation stack, site is the first project frame |
+| `non-heap` | thread dumps, class loaders, NMT, descriptors; Go goroutine dumps and leak profile; Node resources; Python threads, tasks, ResourceWarnings | counts by group; ties to a finding only by creation site (Go goroutines, Node `Type@file:line`, Python threads and tasks); JVM thread dumps and the other counts never tie |
 
 Reading the result:
 
@@ -186,6 +196,11 @@ Reading the result:
   growing type is the finding's recorded accumulation class, its declared element type, or its own plain declared type when that is a project class (not a generic, JDK or Kotlin type; an instance field of its own class type is a chain link, not a holder). `--finding F`
   narrows to such columns; it never forces a tie. Whole-process and total columns (`os.*`,
   `jvm.*`, thread totals) never tie.
+- A Node snapshot series names the holder kind (`observed_holder`). When it differs from the finding's
+  holder, `needed` prints the `dla ledger annotate F --holder <kind>` command; run it and summarize again.
+- A JNI harness (`dla probe` lists the boundary): after the harness run, `dla correlate H1` in the managed
+  worker ties native growth to a managed finding (`references/backends.md`, Correlate).
+- A `go-goroutineleak` result is a second signal; it never refutes and never confirms alone.
 - An empty, flat or failed-gate result never refutes a leak: the capture may have missed it (a
   sample, a short run, a retention the tool cannot see). Only `dla alloc-test` or the
   `dump-plateau` discriminator can favor non-leak.

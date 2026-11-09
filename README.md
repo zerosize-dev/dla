@@ -51,7 +51,7 @@ Commands:
 | `dla census --lang <l>` | Adds every process-lifetime holder of one runtime as a candidate, with heuristic writers and removers |
 | `dla workload discover` | Lists the tests, entry points and dev servers a loop can run, ranked by entry points; unrunnable ones are recorded with a reason |
 | `dla harness gen --lang <l>` | Copies the project into a scratch worktree under the run directory and writes a loop harness for a workload (command mode: the workload's own command at growing iteration counts; `--driver`: a loop test with hooks to fill in). Runs nothing and needs no consent |
-| `dla harness run <H>` | Builds the harness once, measures every point with a per-runtime agent, shim or driver, and writes one series per key mode (`--mode fresh\|repeated\|both`). `--capture heap,histogram,jfr,nonheap\|all` (JVM) and `--tool valgrind\|heaptrack` (Rust and native) also write raw captures and print the `dla summarize` commands that read them. Tier 1 |
+| `dla harness run <H>` | Builds the harness once, measures every point with a per-runtime agent, shim or driver, and writes one series per key mode (`--mode fresh\|repeated\|both`). `--capture <kinds>\|all` (JVM: heap, histogram, jfr, nonheap; Node: heap, alloc, nonheap; Go: alloc, nonheap; Python: histogram, alloc, nonheap) and `--tool valgrind\|heaptrack` (Rust and native) also write raw captures and print the `dla summarize` commands that read them. Tier 1 |
 | `dla trend <series>` | Mann-Kendall, Theil-Sen and half-split statistics, the slope gate (counters: every delta at least 1) and a shape for every column; `--against` compares fresh and repeated keys |
 | `dla sample --pid <P>` | Samples a running process (memory, threads, descriptors, cgroup figures and runtime counters) into a time series. Tier 1 for a process DLA started, tier 2 for any other |
 | `dla gap [<series>]` | Splits process memory into runtime-accounted and unexplained; with `--residual`, totals each region's growth, subtracts what confirmed findings explain and opens an item for the rest |
@@ -64,7 +64,8 @@ Commands:
 | `dla ledger done\|merge` | A worker closes its slice; the core merges every slice into the main ledger, dedupes findings, and marks unfinished workers and contradictions as open items |
 | `dla bundle <F>` and `dla ledger verify <F>` | Write a finding's evidence without labels or hypotheses for an independent verifier, and record the verifier's site, holder and mechanism against the bundle's hash |
 | `dla attach <backend> --pid <P> --op <op>` | Preflight (disk, memory, effects), then a histogram, thread dump, native-memory summary, recording, heap dump or heap snapshot of a process DLA did not start. Tier 2 to 4 by operation |
-| `dla summarize <heap-graph\|type-histogram-diff\|alloc-stack-diff\|non-heap> <files...>` | Reads captured files into bounded evidence: HPROF dumps, class histograms, JFR old-object samples, thread dumps, class loader and native-memory reports, valgrind, heaptrack, dhat and LeakSanitizer output, shim stack groups, descriptor counts. A growth column confirms only the finding it is tied to by holder, site or type; `--list` shows the adapters and their tools |
+| `dla correlate <H>` | For a harness with a JNI boundary: compares the slopes of the allocator shim's native site columns with the process footprint and, on a match, adds a cross-boundary candidate to the managed worker. No tier |
+| `dla summarize <heap-graph\|type-histogram-diff\|alloc-stack-diff\|non-heap> <files...>` | Reads captured files into bounded evidence: HPROF dumps, class histograms, JFR old-object samples, thread dumps, class loader and native-memory reports, valgrind, heaptrack, dhat and LeakSanitizer output, shim stack groups, descriptor counts, V8 heap snapshots and sampling profiles, Go heap and goroutine profiles and the goroutine leak profile, Python tracemalloc, memray, type counts and resources. A growth column confirms only the finding it is tied to by holder, site or type; `--list` shows the adapters and their tools |
 | `dla report` | Renders the report, writes `report.md` and stores its hash in `state.json` |
 | `dla schema` | Writes or checks the JSON Schema files |
 
@@ -77,7 +78,7 @@ covers a set of tiers, and tiers escalate by intrusiveness:
 |---|---|---|
 | 1 | Build and run project code in a scratch copy under the run directory (builds, tests, harness loops, preload agents, allocator shims, in-process probes), and install analyzers | `dla probe --build`, `dla install`, `dla harness run`, `dla alloc-test`, `dla sample` of a process DLA started |
 | 2 | Observe a running local process DLA did not start (`/proc` sampling, jcmd attach, Node inspector, Python remote exec, a Go pprof endpoint) | `dla sample --pid` of another process, `dla attach` histograms, thread dumps, native-memory summaries, JFR and Node memory figures |
-| 3 | Debugger or kernel level (ptrace attach, eBPF, perf, valgrind on a foreign pid; `harness run --tool valgrind` is tier 1) | `dla attach` with memray, heaptrack or goref |
+| 3 | Debugger or kernel level (ptrace attach, eBPF, perf, valgrind on a foreign pid; `harness run --tool valgrind` is tier 1) | `dla attach` with memray, heaptrack, goref or bpftrace (Linux, root) |
 | 4 | Capture memory contents (heap dumps, heap snapshots, core dumps); outputs may hold secrets | `dla attach jcmd --op heap-dump`, `dla attach node-inspector --op heap-snapshot` |
 
 Seeing raw values in summaries is a separate consent (`--raw-values`). The details, including the

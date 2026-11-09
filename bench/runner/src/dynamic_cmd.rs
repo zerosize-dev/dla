@@ -191,19 +191,14 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
         reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
     },
     ExpectedFailure {
-        fixture: "jni-order-codec",
-        failure: "leak L1 (native/src/lib.rs:43) is not confirmed",
-        reason: "the leak lives in native code that runs only under the JVM. The rust worker finds no main workload with an iteration argument (harness gen: workload-required), so its census finding at the site ends suspected_static_only. In the JVM worker the shim columns native.live_bytes@native/src/lib.rs:40 and :43 pass, but no finding of that worker is at those sites and a tie never crosses runtimes, so no column is tied to the leak and the confirmation is refused; the JVM harness prints a shim-stack-groups summarize command, but its site ties meet the same rule. Cross-runtime correlation (cut 2) is the planned route",
-    },
-    ExpectedFailure {
         fixture: "node-retry-scheduler",
         failure: "leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global",
-        reason: "the leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, scheduler.js:15), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root, and the fixed policy cannot read the code to choose the root",
+        reason: "the leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, scheduler.js:15), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root, the heap-graph holder needs a series of snapshots from one process (driver mode, hand-filled hooks) which the command-mode capture of the fixed policy does not give, and the policy cannot read the code to choose the root",
     },
     ExpectedFailure {
         fixture: "node-socket-heartbeat",
         failure: "leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table",
-        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The timer census does not know which table keeps the timer reachable",
+        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The timer census does not know which table keeps the timer reachable; node-resources ties the timer group to the finding by site, but only the heap-graph holder (driver mode) names the table, and the policy does not annotate a holder it did not see",
     },
 ];
 
@@ -1116,6 +1111,14 @@ struct TrendInfo {
 
 /// Steps 2 to 4.
 fn analyse(fx: &mut Fx, ran: &[Ran]) {
+    // Native growth behind a managed method is correlated before the trends, so the
+    // candidate it adds is tied by the native column.
+    for r in ran
+        .iter()
+        .filter(|r| r.runtime == "jvm" && !r.series.is_empty())
+    {
+        ops::correlate(fx, &r.harness);
+    }
     let mut trends: Vec<TrendInfo> = Vec::new();
     for r in ran {
         for s in &r.series {
@@ -1549,7 +1552,16 @@ fn check_m3_rules(view: &View, entry: Entry) -> Vec<String> {
 }
 
 /// Evidence kinds that show what retains or allocates the memory.
-const DUMP_KINDS: [&str; 3] = ["retention-path", "histogram-diff", "alloc-stack"];
+/// `non-heap` (a goroutine or thread dump grouped by creation site) and `should-be-dead` (the
+/// goroutine leak profile) count with `dump` or `live` authority, for the marked leaks of
+/// runtimes without a heap dump.
+const DUMP_KINDS: [&str; 5] = [
+    "retention-path",
+    "histogram-diff",
+    "alloc-stack",
+    "non-heap",
+    "should-be-dead",
+];
 
 /// The `dump_backed` rule: for every confirmable leak that the expected file marks, the chosen
 /// confirmed finding (the first confirmed leak-side finding that names the leak) cites evidence
@@ -2517,14 +2529,12 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_list_names_only_the_native_slice_of_the_jni_fixture() {
-        let jni: Vec<&str> = EXPECTED_FAILURES
-            .iter()
-            .filter(|e| e.fixture == "jni-order-codec")
-            .map(|e| e.failure)
-            .collect();
-        assert_eq!(jni.len(), 1);
-        assert!(jni[0].contains("native/src/lib.rs:43"));
+    fn the_jni_fixture_has_no_expected_failure_left() {
+        assert!(
+            EXPECTED_FAILURES
+                .iter()
+                .all(|e| e.fixture != "jni-order-codec")
+        );
     }
 
     #[test]
