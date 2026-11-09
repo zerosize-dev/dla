@@ -1,0 +1,16 @@
+lr-x------ 1 root root 64 Nov  9 11:47 0 -> pipe:[637360]
+l-wx------ 1 root root 64 Nov  9 11:47 1 -> /var/log/app.log
+lrwx------ 1 root root 64 Nov  9 11:47 10 -> socket:[637373]
+lrwx------ 1 root root 64 Nov  9 11:47 11 -> socket:[637374]
+lrwx------ 1 root root 64 Nov  9 11:47 12 -> socket:[637375]
+lrwx------ 1 root root 64 Nov  9 11:47 13 -> socket:[637376]
+lr-x------ 1 root root 64 Nov  9 11:47 14 -> pipe:[637377]
+lr-x------ 1 root root 64 Nov  9 11:47 16 -> pipe:[637378]
+l-wx------ 1 root root 64 Nov  9 11:47 2 -> /var/log/app.log
+l-wx------ 1 root root 64 Nov  9 11:47 3 -> /tmp/AKIAIOSFODNN7EXAMPLE1.tmp (deleted)
+lrwx------ 1 root root 64 Nov  9 11:47 4 -> socket:[637364]
+lrwx------ 1 root root 64 Nov  9 11:47 5 -> socket:[637365]
+lrwx------ 1 root root 64 Nov  9 11:47 6 -> socket:[637366]
+lrwx------ 1 root root 64 Nov  9 11:47 7 -> socket:[637367]
+lrwx------ 1 root root 64 Nov  9 11:47 8 -> socket:[637371]
+lrwx------ 1 root root 64 Nov  9 11:47 9 -> socket:[637372]

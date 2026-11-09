@@ -1,0 +1,62 @@
+reading file "heaptrack.gz" - please wait, this might take some time...
+Debuggee command was: ./framedec --iterations 440
+finished reading file, now analyzing data:
+
+MEMORY LEAKS
+464.90K leaked over 440 calls from
+decode_frame
+  at src/decoder.c:29
+  in /home/user/proj/framedec
+464.90K leaked over 440 calls from:
+    AKIAIOSFODNN7EXAMPLE1
+      at src/main.c:47
+      in /home/user/proj/framedec
+
+4.10K leaked over 1 calls from
+__GI__IO_file_doallocate
+  at ./libio/filedoalloc.c:101
+  in /lib/x86_64-linux-gnu/libc.so.6
+4.10K leaked over 1 calls from:
+    __GI__IO_doallocbuf
+      at ./libio/genops.c:347
+      in /lib/x86_64-linux-gnu/libc.so.6
+    _IO_new_file_overflow
+      at ./libio/fileops.c:745
+      in /lib/x86_64-linux-gnu/libc.so.6
+    _IO_new_file_xsputn::_IO_new_file_xsputn
+      at ./libio/fileops.c:1244
+      in /lib/x86_64-linux-gnu/libc.so.6
+    _IO_new_file_xsputn
+      at ./libio/./libio/fileops.c:1197
+    __printf_buffer_to_file_done::__printf_buffer_flush_to_file
+      at ./stdio-common/printf_buffer_to_file.c:59
+      in /lib/x86_64-linux-gnu/libc.so.6
+    __printf_buffer_to_file_done
+      at ./stdio-common/./stdio-common/printf_buffer_to_file.c:120
+    __vfprintf_internal
+      at ./stdio-common/vfprintf-internal.c:1560
+      in /lib/x86_64-linux-gnu/libc.so.6
+    ___printf_chk
+      at ./debug/printf_chk.c:33
+      in /lib/x86_64-linux-gnu/libc.so.6
+    main::printf
+      at /usr/include/x86_64-linux-gnu/bits/stdio2.h:86
+      in /home/user/proj/framedec
+    AKIAIOSFODNN7EXAMPLE1
+      at /home/user/proj/src/main.c:58
+    __libc_start_call_main
+      at ../sysdeps/nptl/libc_start_call_main.h:58
+      in /lib/x86_64-linux-gnu/libc.so.6
+    __libc_start_main_impl
+      at ../csu/libc-start.c:360
+      in /lib/x86_64-linux-gnu/libc.so.6
+    _start
+      in /home/user/proj/framedec
+
+
+total runtime: 0.05s.
+calls to allocation functions: 443 (8358/s)
+temporary memory allocations: 414 (7811/s)
+peak heap memory consumption: 700.48K
+peak RSS (including heaptrack overhead): 5.24M
+total memory leaked: 468.99K

@@ -31,7 +31,10 @@ use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -50,6 +53,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 mod tool;
+mod vgdb;
 
 use super::{
     AGENT, COV, DRIVER, LOGS, OUT, PROBES,
@@ -268,6 +272,8 @@ struct ExecSpec<'a> {
     timeout: Duration,
     sample: bool,
     command: &'a str,
+    /// Ask the stopped process questions through `vgdb` (valgrind runs only).
+    vgdb: Option<vgdb::VgdbPlan>,
 }
 
 #[derive(Default)]
@@ -278,6 +284,8 @@ struct ExecResult {
     wall_ms: u64,
     sampler: Option<SamplerOutput>,
     spawn_error: Option<String>,
+    /// What the vgdb chain wrote, when one ran.
+    vgdb: Option<vgdb::VgdbOutcome>,
 }
 
 /// Kills the process group of `pid` (`dla_core::proc`: `kill -s KILL -- -pgid`, or
@@ -363,6 +371,11 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
             .ok()
         })
         .flatten();
+    let stop = Arc::new(AtomicBool::new(false));
+    let chain = spec.vgdb.clone().map(|plan| {
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || vgdb::drive(&plan, pid, &stop))
+    });
     loop {
         match guard.child.try_wait() {
             Ok(Some(status)) => {
@@ -389,6 +402,8 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         }
     }
     res.wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    stop.store(true, Ordering::Relaxed);
+    res.vgdb = chain.and_then(|t| t.join().ok());
     // Anything the process left running in its group goes with it.
     kill_group(pid);
     res.sampler = sampler.map(Sampler::stop);
@@ -675,6 +690,7 @@ fn build_once(
             timeout: Duration::from_secs(BUILD_TIMEOUT_SECS),
             sample: false,
             command: &command,
+            vgdb: None,
         },
     )?;
     let log_rel = paths.rel(ctx, &log);
@@ -810,6 +826,7 @@ impl PointEnv<'_> {
             timeout,
             sample: true,
             command,
+            vgdb: None,
         }
     }
 }

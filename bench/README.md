@@ -291,14 +291,43 @@ The policy, per fixture (repository entry, one runtime):
    H --finding F`. Favors leak: refute the sibling, annotate the holder if
    missing (census entry at the site, else `blocked-stack` for a goroutine or
    thread column, `registration-table` for a timer, listener or handle
-   column, else `static/global`) and `ledger confirm`. Favors non-leak: refute
-   the finding. Inconclusive: `unresolved` (`time_budget`).
+   column, else `static/global`); the `ledger confirm` waits for step 6.
+   Favors non-leak: refute the finding. Inconclusive: `unresolved`
+   (`time_budget`).
 4. Candidates tied only to non-passing columns: sibling, test, alloc-test;
    refuted when it favors non-leak, else unresolved.
 5. When no passed column had candidates but a non-container column passed: a
    `growth-series` finding without a site, N-HEADROOM and N-ALLOC siblings, an
    unbound alloc-test, refuted when it favors non-leak.
-6. `gap S --residual`; whatever is still a candidate or under test becomes
+6. The per-operation steps, for every harness that grew (a passing,
+   non-container column), then the held-back confirmations. The steps read
+   only `dla` JSON and never name a backend:
+   - `dla summarize --list` (adapters, their tools, availability).
+   - Capture. A JVM harness runs again as `harness run H --capture all`. A rust
+     or native harness runs again as `harness run H --tool valgrind` and
+     `--tool heaptrack` for the tools that have a listed adapter; a missing
+     tool refuses with `tool-missing` and leaves its `missing` coverage row,
+     which is what a `--without` run looks for. Driver mode is not used: its
+     hooks are filled in by reading the code, which the policy cannot do, so
+     the dump series of a command-mode run are separate processes and
+     `heap-graph` does not take them (the harness leaves that command out and
+     says so under `limitations`).
+   - Every `dla summarize` command the capture runs printed runs once (the
+     full list is in `harness/H<n>/captures.json` when the output was cut),
+     at most 24 per fixture.
+   - Every call is checked, and a violation fails the fixture: stdout is at
+     most 2048 bytes; `raw` exists in the run directory with a matching
+     sha256; every evidence id is in the ledger; every evidence result is at
+     most 2048 bytes; every tied passing column carries a `tie` reason.
+     A refusal (for example `tool-missing`) is logged, not a failure; it
+     still counts for the size check, and a crash or non-JSON output fails.
+   - Each held-back `ledger confirm` cites the trend evidence and, when a
+     summarize call's passing growth column is tied (with a reason) to the
+     finding, that call's evidence (its histogram, allocation or retention
+     evidence and its growth series), so the leak is `dump_backed`. If the
+     ledger refuses that citation the confirmation is retried with the trend
+     evidence alone and the refusal is logged.
+7. `gap S --residual`; whatever is still a candidate or under test becomes
    `suspected_static_only` (`not_exercised`) when it has static evidence, else
    `unresolved`; then `report`.
 
@@ -309,9 +338,13 @@ non-leak and impossible fixtures carry no claim; non-leak fixtures have at least
 one rule-out; every confirmed finding satisfies the M3 rules when the ledger is
 re-read (a test before the confirmation, a refuted N-* sibling, cited growth
 evidence with gate pass, site and holder set); the unexplained growth share is
-computable when a residual row exists. The command prints one row per fixture
+computable when a residual row exists; the summarize checks of step 6; the
+`dump_backed` check. The command prints one row per fixture
 (runtime, harness ran, series, passed columns, confirmed, refuted, claim,
-rule-out, leaks, result) and totals, then `ok: N fixture(s) pass, M expected failure(s)`; it exits 1
+rule-out, leaks, `ops/ev/B`, result) and totals. `ops/ev/B` is the number of
+summarize calls that succeeded, the evidence ids they wrote and the largest
+stdout in bytes (`row.json` and the `--json` file list the `<op>:<backend>`
+names, the ids, the capture runs and the decisions), then `ok: N fixture(s) pass, M expected failure(s)`; it exits 1
 on a failure. The log directory holds, per fixture, every `dla` command with
 its JSON output (`NNN-<command>.log`), `row.json` (the row with the policy's
 decisions) and the run files (`ledger.jsonl`, `report.md`, `series/`, `trend/`,
@@ -396,11 +429,11 @@ kind of the holder key (`static` is `static/global`, `jni-global` is
 A leak with `dump_backed = true` in `expected.toml` (see FIXTURES.md) must be
 confirmed by a finding that cites evidence of kind `retention-path`,
 `histogram-diff` or `alloc-stack` with authority `dump` or `live`, in its
-supports or in the evidence of its confirming transition. The check is
-implemented and unit-tested, and it is **off by default** (`CHECK_DUMP_BACKED`
-in `dynamic_cmd.rs`, flag `--check-dump-backed`): the fixed policy does not yet
-run the summarize steps that produce this evidence, so switching it on today
-fails the marked fixtures. Marked: `jvm-audit-chain` L1, `jvm-order-cache` L1,
+supports or in the evidence of its confirming transition. The check is **on by
+default** (`CHECK_DUMP_BACKED` in `dynamic_cmd.rs`, flag
+`--check-dump-backed=false` to turn it off): the policy runs the summarize
+steps before it confirms and cites the evidence of a call whose passing growth
+column is tied to the chosen finding (step 6 above). Marked: `jvm-audit-chain` L1, `jvm-order-cache` L1,
 `jni-order-codec` L2, `rust-tree-parent-links` L1 and `native-frame-decoder` L1
 (the one native fixture with a confirmable leak, which runs under valgrind;
 `native-glyph-cache` and `native-vendor-codec` have no confirmable leak).
@@ -426,12 +459,24 @@ A run with hidden tools must still complete: a `dla` call that exits with 101 or
 prints no JSON is a failure of the fixture (a JSON refusal such as `missing_tool`
 is the expected degradation). Every coverage row (`coverage.json`) that depends
 on a hidden tool must read `missing`. A row depends on a tool when it is named
-like the tool (`jcmd`), starts with it and a dash (`jcmd-class-histogram`) or is
-`harness-jfr` for `jfr`. The number of such rows is `hidden_backend_rows` in the
+like the tool (`jcmd`) or starts with it and a dash (`jcmd-class-histogram`,
+`jfr-old-object-sample`). The `harness-jfr` row is not one: the JVM writes the
+recording itself, and only reading it needs the `jfr` tool. The number of such rows is `hidden_backend_rows` in the
 fixture row. The run fails when a hidden tool matched no row in any fixture,
-because then hiding it was never exercised; the fixed policy does not yet run the
-attach, sample or summarize steps that write such rows, so today only a fixture
-set whose `dla` writes them (the tests) passes. A leak that stays unconfirmed or
+because then hiding it was never exercised. The per-operation steps write the
+rows: `jfr` (JVM capture and summarize), `valgrind` and `heaptrack` (the `--tool` runs of rust and
+native harnesses; the harness names the row after the tool, also when only `heaptrack_print` is
+missing, so a `--without heaptrack_print` run does not yet see a `heaptrack_print` row: only
+`dla summarize` of a raw heaptrack recording writes that one). Each hidden
+tool also has a per-fixture expectation: when the policy ran the capture that
+needs it (`captures` in the row: `H1:capture-all` for `jfr`, `H1:tool-valgrind`
+for `valgrind`, `H1:tool-heaptrack` for `heaptrack` and `heaptrack_print`), the
+run must have written a row for the tool, and every such row must read
+`missing` (`heaptrack_print` is looked up after `heaptrack`, so it is expected
+only when `heaptrack` is not hidden too). A summarize call whose auto-selected
+tool is missing succeeds with a `coverage_gap` list, no evidence and no `raw`
+file; the checks accept that. A `dump_backed` failure of a run with a hidden-tool
+row counts as a leak gap (the evidence of the hidden backend cannot be cited). A leak that stays unconfirmed or
 gets another holder is reported as an expected failure of that run (`xfail: a
 tool is hidden by --without`) only for a fixture that saw a hidden-tool row;
 elsewhere the strict list below applies as usual. Any other failure stays a
@@ -454,7 +499,7 @@ additional failure (a regression must not hide behind the entry).
 | fixture | failure | reason |
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
-| `jni-order-codec` | `leak L1 (native/src/lib.rs:43) is not confirmed` | No Rust workload: the native code runs only under the JVM, so the rust worker finds no main workload with an iteration argument (`harness gen`: `workload-required`) and its census candidates end `suspected_static_only`; in the JVM harness the native frames show only as `os.rss` growth, which no probe column ties to a finding. |
+| `jni-order-codec` | `leak L1 (native/src/lib.rs:43) is not confirmed` | The leak lives in native code that runs only under the JVM. The rust worker finds no main workload with an iteration argument (`harness gen`: `workload-required`), so its census finding at the site ends `suspected_static_only`. In the JVM worker the shim columns `native.live_bytes@native/src/lib.rs:40` and `:43` pass, but no finding of that worker is at those sites and a tie never crosses runtimes, so no column is tied to the leak and the confirmation is refused; the JVM harness prints no `shim-stack-groups` summarize command, so that evidence is not produced either. |
 | `node-retry-scheduler` | `leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global` | The leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, `scheduler.js:15`), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The census does not follow an instance back to its static root. |
 | `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census classifies the `setInterval` timer at `heartbeat.js:15` as `blocked-stack` (non-heap) and the policy takes the holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). |
 

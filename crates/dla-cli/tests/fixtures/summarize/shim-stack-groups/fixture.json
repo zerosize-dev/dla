@@ -1,0 +1,12 @@
+{
+ "op": "type-histogram-diff",
+ "inputs": [
+  "exit1.jsonl",
+  "exit2.jsonl",
+  "exit3.jsonl"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "exit records of the allocator shim from three points of the native-frame-decoder fixture (440, 2200 and 3960 frames); the binary is not on disk, so stacks stay as module offsets, and the module name carries a planted key"
+}

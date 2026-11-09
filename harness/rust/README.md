@@ -63,3 +63,10 @@ is unverified.
 
 The stubs call `todo!` until replaced. The template contains `unsafe` (the allocator impl and
 `malloc_trim`) and is generated into the scratch copy only, never into the dla workspace.
+
+## Tool captures
+
+Command mode (the crate's binary started directly) also takes `dla harness run <H> --tool valgrind|heaptrack`;
+the files and the `dla summarize` commands are in `harness/native/README.md`. Driver mode does not
+(its counting allocator is the measurement). Rust data symbols come out of valgrind in v0 mangling and
+`dla` demangles them.

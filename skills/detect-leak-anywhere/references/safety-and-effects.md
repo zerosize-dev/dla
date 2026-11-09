@@ -49,7 +49,7 @@ Never work around a refusal by running the tool by hand.
 | `dla attach` with `memray`, `heaptrack` or `goref` | 3 | ptrace-level attach; allocation stacks, not contents. heaptrack `--pid` is refused while `kernel.yama.ptrace_scope` is above 0. Other debugger and kernel tracing (eBPF, perf, valgrind) is not in `dla` yet |
 | `dla attach jcmd` with `histogram`, `thread-dump`, `nmt` or `jfr`; `dla attach node-inspector --op memory` | 2 | JFR recordings may hold JVM arguments and environment variables |
 | `dla attach jcmd --op heap-dump`; `dla attach node-inspector --op heap-snapshot` | 4 | Memory contents; may hold secrets and stay in `.dla/`. A Node snapshot needs about 12x the heap in use and blocks the target for seconds |
-| `dla summarize heap-graph` | none | Reads dump files; HPROF only (other formats arrive in M5) |
+| `dla summarize <op>` | none | Reads captured files (HPROF, histograms, JFR, valgrind, heaptrack and the other formats of `references/backends.md`); a raw `heaptrack.*` recording runs `heaptrack_print`, and a `.jfr` runs `jfr print`, both read-only |
 
 `dla consent --ceiling N` (the plugin's privilege ceiling setting) caps which tiers may be
 granted; offer only tiers up to the ceiling.

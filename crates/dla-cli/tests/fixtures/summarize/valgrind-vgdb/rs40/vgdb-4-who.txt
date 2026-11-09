@@ -1,0 +1,4 @@
+sending command who_points_at 0x4AAA1E0 512 to pid 11054
+==11054== Searching for pointers pointing in 512 bytes from 0x4aaa1e0
+==11054== *0x15f668 points at 0x4aaa1e0
+ Address 0x15f668 is 16 bytes inside data symbol "_RNvNtCs8BELKLmmEOU_15outline_service8registry8REGISTRY"

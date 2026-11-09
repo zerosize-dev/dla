@@ -127,8 +127,29 @@ fn not_enough() -> Failure {
 pub fn run_diff(
     ctx: &Ctx<'_>,
     opts: &Opts,
+    captures: Vec<ProfileCapture>,
+    origin: &ProfileOrigin,
+) -> Res<AdapterOut> {
+    run_diff_with(ctx, opts, captures, origin, false)
+}
+
+/// Kind of the per-holder total rows (see [`run_diff_with`]).
+const HOLDER_TOTAL: &str = "holder-total";
+/// Per-holder totals followed in the series.
+const TRACKED_HOLDERS: usize = 8;
+
+/// [`run_diff`]; with `holder_totals` it also follows, for every root holder
+/// (`static:<Class>.<field>`) the profiles name, the sum of that holder's live bytes and
+/// blocks over all its stacks, as a column `holder:<key>`. A profile that was taken
+/// counts a holder it does not mention as 0. For sampling profilers (JFR) the total is
+/// the stable quantity: single stacks come and go between samples. The column ties by
+/// its holder only and learns no writer.
+pub fn run_diff_with(
+    ctx: &Ctx<'_>,
+    opts: &Opts,
     mut captures: Vec<ProfileCapture>,
     origin: &ProfileOrigin,
+    holder_totals: bool,
 ) -> Res<AdapterOut> {
     let tc = ctx.tc;
     let n = captures.len();
@@ -197,6 +218,37 @@ pub fn run_diff(
             add(&mut s.live_blocks[ci], g.live_blocks);
             if let Some(t) = g.total_bytes {
                 add(&mut s.total_bytes[ci], t);
+            }
+        }
+    }
+    // Per-holder totals: kept apart from the stacks, so they are not ranked or listed as
+    // stacks, and followed in the series first.
+    let mut totals: BTreeMap<String, Stack> = BTreeMap::new();
+    if holder_totals && has_live {
+        for s in stacks.values() {
+            let (Some(owner), Some(first)) = (root_owner(&s.root_path), s.root_path.first()) else {
+                continue;
+            };
+            let key = format!("holder:{}", first.trim().replace(' ', ":"));
+            let t = totals.entry(owner).or_insert_with(|| Stack {
+                key: key.clone(),
+                frames: Vec::new(),
+                root_path: vec![first.clone()],
+                kind: Some(HOLDER_TOTAL.to_owned()),
+                live_bytes: vec![Some(0); n],
+                live_blocks: vec![Some(0); n],
+                total_bytes: vec![None; n],
+                site: None,
+                label: clip(&red.name(&key), NAME_CLIP),
+                site_fn: None,
+            });
+            for i in 0..n {
+                for (to, from) in [
+                    (&mut t.live_bytes, &s.live_bytes),
+                    (&mut t.live_blocks, &s.live_blocks),
+                ] {
+                    to[i] = Some(to[i].unwrap_or(0) + from[i].unwrap_or(0));
+                }
             }
         }
     }
@@ -409,7 +461,11 @@ pub fn run_diff(
         })
         .is_ok()
     };
-    let mut picked: Vec<&Stack> = ranked.iter().copied().filter(|s| monotone(s)).collect();
+    let mut held: Vec<&Stack> = totals.values().collect();
+    held.sort_by_key(|s| std::cmp::Reverse((monotone(s), delta(&s.live_bytes))));
+    held.truncate(TRACKED_HOLDERS);
+    let mut picked: Vec<&Stack> = held;
+    picked.extend(ranked.iter().copied().filter(|s| monotone(s)));
     for s in &ranked {
         if picked.len() >= TRACKED {
             break;
@@ -482,7 +538,11 @@ pub fn run_diff(
         }
         let r_tie = tie::resolve(matches, opts.finding.as_ref());
         let mut t = growth::Track {
-            name: format!("stack:{}", s.label),
+            name: if s.kind.as_deref() == Some(HOLDER_TOTAL) {
+                s.label.clone()
+            } else {
+                format!("stack:{}", s.label)
+            },
             unit: Unit::Bytes,
             values: s.live_bytes.clone(),
             counts: s

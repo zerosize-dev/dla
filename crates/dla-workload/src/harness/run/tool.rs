@@ -26,7 +26,7 @@ use dla_core::{
     toolctx::ToolCtx,
 };
 
-use super::{ExecSpec, Paths, PointEnv, RunOptions, RunOutput, exec, failed, subst};
+use super::{ExecSpec, Paths, PointEnv, RunOptions, RunOutput, exec, failed, subst, vgdb};
 use crate::harness::{
     capture::{self, NativeTool},
     r#gen::TOOL_MISSING,
@@ -196,6 +196,39 @@ fn pick_program_xml(dir: &Path, cwd: &Path, n: u64) -> Option<(PathBuf, usize)> 
     Some((pick, count))
 }
 
+/// The vgdb chain for a valgrind run of a program that is started directly: the `vgdb`
+/// executable (next to `valgrind`, else on the tools path) and a private pipe prefix under
+/// the run's `tmp/`. A wrapper command is left out: each traced child would stop at exit.
+fn vgdb_plan(
+    ctx: &ToolCtx,
+    valgrind: &Path,
+    dir: &Path,
+    log: &Path,
+) -> Result<vgdb::VgdbPlan, String> {
+    let beside = valgrind
+        .parent()
+        .map(|d| d.join("vgdb"))
+        .filter(|p| p.is_file());
+    let exe = beside
+        .or_else(|| find_tool(ctx, "vgdb"))
+        .ok_or("vgdb was not found next to valgrind or on PATH, so no retention chain was taken (install the full valgrind package)")?;
+    let label = dir
+        .file_name()
+        .map_or_else(|| "point".to_owned(), |n| n.to_string_lossy().into_owned());
+    let base = ctx
+        .tmp_dir()
+        .map_err(|e| format!("no scratch directory for the vgdb pipes: {}", e.message))?
+        .join(format!("vgdb-{label}"));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&base).map_err(|e| format!("cannot create {}: {e}", base.display()))?;
+    Ok(vgdb::VgdbPlan {
+        vgdb: exe,
+        prefix: base.join("vg"),
+        log: log.to_path_buf(),
+        dir: dir.to_path_buf(),
+    })
+}
+
 /// Where a tool report belongs in the capture list.
 struct Slot<'a> {
     label: &'a str,
@@ -331,6 +364,7 @@ pub(super) fn run_tool_points(
         // A relative program is resolved against the working directory by the tool.
         let mut argv = vec![tool_path.to_string_lossy().into_owned()];
         let report: PathBuf;
+        let mut vgdb_dir: Option<PathBuf> = None;
         match tool {
             NativeTool::Valgrind => {
                 report = dir.join("valgrind.xml");
@@ -360,6 +394,15 @@ pub(super) fn run_tool_points(
                 ]);
                 if wrapper {
                     argv.push("--trace-children=yes".to_owned());
+                } else {
+                    match vgdb_plan(ctx, &tool_path, &dir, &spec.log) {
+                        Ok(plan) => {
+                            argv.extend(vgdb::valgrind_flags(&plan.prefix));
+                            vgdb_dir = Some(plan.prefix.clone());
+                            spec.vgdb = Some(plan);
+                        }
+                        Err(why) => out.limitations.push(format!("{label}: {why}")),
+                    }
                 }
             }
             NativeTool::Heaptrack => {
@@ -375,6 +418,12 @@ pub(super) fn run_tool_points(
         spec.argv = argv;
         let res = exec(ctx, &spec)?;
         out.processes += 1;
+        if let Some(prefix) = &vgdb_dir {
+            // Valgrind removes its pipes at exit; a killed run leaves them.
+            if let Some(d) = prefix.parent() {
+                let _ = fs::remove_dir_all(d);
+            }
+        }
         let log_rel = paths.rel(ctx, &spec.log);
         out.logs.push(log_rel.clone());
         out.exits.push((label.clone(), res.code));
@@ -417,6 +466,26 @@ pub(super) fn run_tool_points(
                     x: n as f64,
                     ms: Some(res.wall_ms),
                 };
+                if let Some(chain) = &res.vgdb {
+                    for note in &chain.notes {
+                        out.limitations.push(format!("{label}: {note}"));
+                    }
+                    for f in &chain.files {
+                        let seq = f
+                            .file_name()
+                            .and_then(|n| capture::classify(&n.to_string_lossy()))
+                            .map_or(1, |c| c.1);
+                        let slot = Slot {
+                            label: &label,
+                            seq,
+                            x: n as f64,
+                            ms: None,
+                        };
+                        if let Some(e) = file_entry(ctx, paths, f, tool, &slot) {
+                            out.captures.push(e);
+                        }
+                    }
+                }
                 match file_entry(ctx, paths, &report, tool, &slot) {
                     Some(f) => {
                         ran += 1;
@@ -550,6 +619,7 @@ fn print_report(
             timeout: timeout.min(Duration::from_secs(300)),
             sample: false,
             command: &command,
+            vgdb: None,
         },
     )?;
     out.processes += 1;

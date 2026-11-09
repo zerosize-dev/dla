@@ -28,12 +28,31 @@ and `docs/VERIFY.md`.
 Attach needs the same user and a writable `/tmp` (attach socket, `hsperfdata`). `dla sample --pid
 <P> --counters jcmd` is tier 2 and sparse (each call takes a second or more).
 
-## Artifacts
-- HPROF (`.hprof`, `.hprof.gz`): `dla summarize heap-graph <dump>...`. Three or more dumps of one
-  process give a dump series and the artifact path of `references/stages.md`. Retained sizes are
-  approximate (instances sized as header plus fields, compressed references assumed).
-- JFR, class histograms and thread dumps are not summarized yet: other formats are M5. The files
-  stay under `attach/P<n>/`.
+## Artifacts and summarize ops
+Read each capture with `dla summarize` (all adapters and rows: `references/backends.md`). In a repository
+run, `dla harness run H1 --capture all` writes the files and prints the commands; on a process or
+artifact run the files come from `dla attach jcmd` or the user.
+
+| Capture | Command | What it proves |
+|---|---|---|
+| HPROF (`.hprof`, `.hprof.gz`) | `heap-graph <dump>...` | three or more dumps of one process: a retention path and a `holder:` column that ties by holder identity; `via_holders` name a static or field that keeps a set alive when the dominator is the super root or a thread (coroutines, shared sets) |
+| HPROF or `GC.class_histogram` text | `type-histogram-diff` | growth by class. Ties by type only to the accumulation class recorded for a holder, or the declared element type of a finding's field. Generic types (`Object[]`, `String`, `java.util.*`, `kotlin.*` collections) never tie |
+| JFR `.jfr` (tool `jfr`) or `jfr print` text | `alloc-stack-diff` | a sample of old objects with the root path: a `holder:static:<Class>.<field>` total ties by holder |
+| `threads.json` | `non-heap` | thread count and groups; no creation site, so groups never tie |
+| `classloader-stats.txt`, `nmt-diff.txt` | `non-heap` | loader, class and native category growth; never tie. One command per file kind |
+
+- Retained sizes are approximate (instances sized as header plus fields, compressed references assumed).
+- JFR is a sample, not a census. At the default step the old-object counts are small (about 20 samples)
+  and the gate often fails; a tie needs a leak large enough for a strictly rising sample count (a larger
+  `--step` helped). Samples with no static holder (thread or `root:<system>` roots) never tie.
+  The recording needs `settings=profile` with `path-to-gc-roots=true` (the harness does this).
+- Command-mode heap dumps are separate processes: `heap-graph` refuses them (`dumps-not-comparable`)
+  and the harness prints no `heap-graph` command for them. A `holder:` column needs a driver
+  (`dla harness gen --lang jvm --driver`).
+- Kotlin: a coroutine's captured locals are fields `L$0`, `L$1` of the compiled continuation (class-file
+  census with `DebugMetadata`). The ledger keeps one finding per suspension point, so two captures at
+  one line become one finding.
+- A thread dump from `Thread.dump_to_file` needs JDK 19+ (older JDKs: `Thread.print -l`, no JSON).
 
 ## Blind spots
 - Off-heap and non-heap memory (direct buffers, mapped files, thread stacks, metaspace) is not in a

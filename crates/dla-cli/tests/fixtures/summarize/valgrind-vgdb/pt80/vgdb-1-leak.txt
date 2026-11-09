@@ -1,0 +1,13 @@
+sending command leak_check full reachable any to pid 6141
+==6141== 5,120 bytes in 80 blocks are still reachable in loss record 1 of 1
+==6141==    at 0x484D953: calloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==6141==    by 0x1091A3: AKIAIOSFODNN7EXAMPLE1 (hold.c:14)
+==6141==    by 0x109207: main (hold.c:23)
+==6141== 
+==6141== LEAK SUMMARY:
+==6141==    definitely lost: 0 bytes in 0 blocks
+==6141==    indirectly lost: 0 bytes in 0 blocks
+==6141==      possibly lost: 0 bytes in 0 blocks
+==6141==    still reachable: 5,120 bytes in 80 blocks
+==6141==         suppressed: 0 bytes in 0 blocks
+==6141== 

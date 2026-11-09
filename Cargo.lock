@@ -391,6 +391,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "signal-hook",
  "tempfile",
  "toml",
@@ -522,6 +523,7 @@ version = "0.1.0"
 dependencies = [
  "dla-census",
  "dla-core",
+ "dla-parsers",
  "dla-sample",
  "dla-stats",
  "regex",

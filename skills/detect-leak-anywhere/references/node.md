@@ -24,8 +24,8 @@ Worker name and runtime id: `node`. Facts from `harness/node/README.md` and `doc
 | `dla sample --pid <P> --counters node-inspect` | 2 | same SIGUSR1 rule |
 
 ## Artifacts
-- `.heapsnapshot` files land under `attach/P<n>/`. `dla summarize` reads HPROF only: other
-  formats are M5. Record the snapshot as an artifact; do not parse it by hand.
+- `.heapsnapshot` files land under `attach/P<n>/`. No `dla summarize` adapter reads
+  V8 snapshots in this release (cut 2). Record the snapshot as an artifact; do not parse it by hand.
 
 ## Blind spots
 - Snapshots can double the heap and perturb the process; growth that appears only with the

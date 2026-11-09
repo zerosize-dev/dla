@@ -63,13 +63,13 @@ pub fn home_vars_for(without: &[String]) -> Vec<&'static str> {
 }
 
 /// Whether the coverage row `row` depends on the PATH tool `tool`: it is named after the tool
-/// (`jcmd`), starts with it (`jcmd-class-histogram`) or is the harness row of the tool.
+/// (`jcmd`) or starts with it and a dash (`jcmd-class-histogram`). The `harness-jfr` row does
+/// not: the JVM writes the recording itself and only reading it needs the `jfr` tool.
 pub fn row_depends_on(row: &str, tool: &str) -> bool {
     row == tool
         || row
             .strip_prefix(tool)
             .is_some_and(|rest| rest.starts_with('-'))
-        || (tool == "jfr" && row == "harness-jfr")
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -255,6 +255,44 @@ pub fn check_coverage(
     (bad, seen)
 }
 
+/// The capture run of the per-operation policy that needs `tool`, as the suffix of the
+/// `FixtureRow::captures` entries (`H1:capture-all`, `H1:tool-valgrind`). `jfr` records a
+/// flight recording and reads it; `heaptrack_print` reads the heaptrack output.
+fn capture_needing(tool: &str) -> Option<&'static str> {
+    match tool {
+        "jfr" => Some(":capture-all"),
+        "valgrind" => Some(":tool-valgrind"),
+        "heaptrack" | "heaptrack_print" => Some(":tool-heaptrack"),
+        _ => None,
+    }
+}
+
+/// Per hidden tool: when the policy ran the capture that needs it, the run must have written
+/// a coverage row for the tool (`seen` counts the rows of [`check_coverage`]); the row itself
+/// is checked to read `missing` there. `heaptrack_print` is looked up after `heaptrack`, so it
+/// is only expected when `heaptrack` is not hidden too.
+pub fn check_attempted(
+    captures: &[String],
+    seen: &BTreeMap<String, usize>,
+    without: &[String],
+) -> Vec<String> {
+    without
+        .iter()
+        .filter_map(|tool| {
+            if tool == "heaptrack_print" && without.iter().any(|w| w == "heaptrack") {
+                return None;
+            }
+            let suffix = capture_needing(tool)?;
+            let ran = captures.iter().any(|c| c.ends_with(suffix));
+            (ran && seen.get(tool).copied().unwrap_or(0) == 0).then(|| {
+                format!(
+                    "hidden tool {tool}: the run tried the capture that needs it but wrote no coverage row for it"
+                )
+            })
+        })
+        .collect()
+}
+
 /// The directory `dla` calls get as `PATH`, under the work directory.
 pub fn path_dir_of(work: &Path) -> PathBuf {
     work.join("bin-without")
@@ -352,9 +390,33 @@ mod tests {
     fn rows_are_matched_by_tool_prefix() {
         assert!(row_depends_on("jcmd", "jcmd"));
         assert!(row_depends_on("jcmd-class-histogram", "jcmd"));
-        assert!(row_depends_on("harness-jfr", "jfr"));
+        assert!(row_depends_on("jfr-old-object-sample", "jfr"));
+        assert!(!row_depends_on("harness-jfr", "jfr"));
         assert!(!row_depends_on("jcmdx", "jcmd"));
         assert!(!row_depends_on("dla-hprof", "jcmd"));
+    }
+
+    #[test]
+    fn an_attempted_capture_needs_a_row_for_its_hidden_tool() {
+        let caps = vec!["H1:capture-all".to_owned(), "H2:tool-heaptrack".to_owned()];
+        let none = BTreeMap::new();
+        let w = |t: &[&str]| t.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        // jfr and heaptrack were attempted and left no row; valgrind was never attempted.
+        let bad = check_attempted(&caps, &none, &w(&["jfr", "heaptrack", "valgrind", "jcmd"]));
+        assert_eq!(bad.len(), 2, "{bad:?}");
+        assert!(bad[0].contains("jfr") && bad[1].contains("heaptrack"));
+        // heaptrack_print rides on the heaptrack run.
+        assert_eq!(
+            check_attempted(&caps, &none, &w(&["heaptrack_print"])).len(),
+            1
+        );
+        // ... unless heaptrack itself is hidden: the run stops before it needs the printer.
+        let both = w(&["heaptrack", "heaptrack_print"]);
+        assert_eq!(check_attempted(&caps, &none, &both).len(), 1);
+        // A row (any status; check_coverage judges it) satisfies the expectation.
+        let seen = BTreeMap::from([("jfr".to_owned(), 1)]);
+        assert!(check_attempted(&caps, &seen, &w(&["jfr"])).is_empty());
+        assert!(check_attempted(&[], &none, &w(&["jfr", "valgrind"])).is_empty());
     }
 
     #[test]

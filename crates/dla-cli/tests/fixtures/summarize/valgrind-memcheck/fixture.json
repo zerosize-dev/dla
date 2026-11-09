@@ -1,0 +1,12 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "memcheck1.xml",
+  "memcheck2.xml",
+  "memcheck3.xml"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "memcheck XML of the native-frame-decoder fixture at 440, 2200 and 3960 frames (valgrind 3.22); one frame name carries a planted key"
+}

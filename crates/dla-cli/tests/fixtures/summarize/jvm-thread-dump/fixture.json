@@ -1,0 +1,7 @@
+{
+  "op": "non-heap",
+  "inputs": ["threads1.json", "threads2.json", "threads3.json"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "emits_values": false,
+  "note": "three real Thread.dump_to_file -format=json dumps of a JVM that starts four threads every 300 ms, one named like a key; digits are normalized away, so the name shows only as a shape and not even raw consent prints the key"
+}

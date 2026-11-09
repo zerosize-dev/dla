@@ -1,0 +1,12 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "report1.txt",
+  "report2.txt",
+  "report3.txt"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "LeakSanitizer reports of the native-frame-decoder fixture built with gcc -fsanitize=address, at 440, 2200 and 3960 frames; one frame name carries a planted key"
+}

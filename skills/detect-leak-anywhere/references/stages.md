@@ -32,8 +32,9 @@ intend to use those operations). Stages 1, 2, then:
   A process DLA started is tier 1. Read the preflight before relying on the result. If it refuses
   with `insufficient-resources` (dump size or peak extra memory does not fit), do not retry the
   same operation: see `references/recovery.md`.
-- Captured artifacts land under `attach/P<n>/`. `dla summarize heap-graph <dump>...` reads HPROF
-  now; other formats are not supported yet and are refused with the supported list.
+- Captured artifacts land under `attach/P<n>/`. Read each with the `dla summarize` operation for
+  its format (stage 6, `references/backends.md`); a format no adapter reads is refused with the
+  supported list.
 - With the source tree available (ask once), continue as the repository path with the sample as
   live evidence. Without source no finding can carry a `file:line`, so a growing process ends with
   growth evidence and an `unresolved` item whose remedy is the source or a dump series run through
@@ -122,6 +123,17 @@ under the run directory and need tier 1.
   variables work only in driver mode.
 - `dla harness run H1` builds once and measures every point (`--mode both` in driver mode). Give a
   harness run or alloc-test Bash call a timeout of 600000 ms.
+- Raw captures for stage 6 come from flags of the same command; each is a separate, costlier run, so
+  add one only for a harness that grew (a passing column), not for every harness:
+  - JVM: `--capture heap,histogram,jfr,nonheap` or `--capture all` (`--dumps <N>` heap dumps,
+    default 4). Command-mode heap dumps are separate processes, so `heap-graph` cannot compare them;
+    a driver (`--driver`) takes all dumps in one process.
+  - Rust and native, program started directly: `--tool valgrind` (memcheck XML plus the vgdb chain
+    files) or `--tool heaptrack` (`heaptrack_print` report and a first-to-last diff) instead of a
+    measured series. A wrapper (make, sh) gets no vgdb chain. A missing tool refuses with
+    `tool-missing` and leaves a `missing` coverage row.
+  - The output lists the files under `captures` and prints the `dla summarize` commands to run
+    next (the full list is in `harness/H<n>/captures.json` when the output was cut).
 - `dla trend S1` gives the shape and slope gate per column; read the `passed` columns and their
   `candidates`. A passed column with no candidate is growth nothing explains yet.
   `dla trend S1 --against S2 --finding F3` compares fresh with repeated keys.
@@ -153,14 +165,49 @@ For each passed column tied to a candidate `F3`:
 
 ## 6. Attribute and explain
 
-Gather a retention path or allocation stack with `dla summarize heap-graph <dump>...` (HPROF; other
-formats and `dla install` backends for them arrive in M5). Name the missing pairing: what should
-have released, removed or stopped, not a weak-reference workaround. Record holder and mechanism in
-your own words with `dla ledger annotate F3 --note "<text>"`. The label, `strong` and explain
-commands arrive with the taxonomy; when `dla ledger --help` lists them use them, otherwise leave
-the finding unlabelled (UNCLASSIFIED) and say so. Verification of each confirmed finding is done by
-the core: `dla bundle F3`, one `dla:verifier` subagent given only the bundle directory, then
-`dla ledger verify` (see `SKILL.md`). A disagreement opens an open item to resolve.
+Turn the captures into bounded evidence with `dla summarize <op> <files...>`. Run the commands
+`dla harness run` printed, one per op and file format (the op x runtime x backend table, tools and
+coverage rows are in `references/backends.md`; `dla summarize --list` shows what is installed).
+
+| Op | Use it for | Gives |
+|---|---|---|
+| `heap-graph` | HPROF dumps of one process (3 or more), or the native vgdb chain | retention path per dump, a `holder:` growth column, `via_holders` |
+| `type-histogram-diff` | class histograms, shim stack groups | growth by type or by allocation stack |
+| `alloc-stack-diff` | JFR old objects, valgrind, heaptrack, dhat, LeakSanitizer | growth by allocation stack, site is the first project frame |
+| `non-heap` | thread dumps, class loaders, NMT, descriptors | counts by group; never ties to a finding |
+
+Reading the result:
+
+- `gate` pass or fail says whether a column grows strictly enough. `passed` lists the columns that
+  did, each with a `tie` (rule `holder`, `site` or `type`, and the key). `needed` says what is
+  missing; `ambiguous` lists columns that matched several findings (they tie none).
+- Growth confirms only the holder it measures. A tie exists only when the column measures the same
+  holder as the finding, carries the finding's site (or a writer the census or you recorded), or the
+  growing type is the finding's recorded accumulation or declared element type. `--finding F`
+  narrows to such columns; it never forces a tie. Whole-process and total columns (`os.*`,
+  `jvm.*`, thread totals) never tie.
+- An empty, flat or failed-gate result never refutes a leak: the capture may have missed it (a
+  sample, a short run, a retention the tool cannot see). Only `dla alloc-test` or the
+  `dump-plateau` discriminator can favor non-leak.
+- A missing tool is a coverage row (auto) or a `tool-missing` refusal (explicit `--backend`): record
+  the candidate `unresolved` with reason `tool_missing` and the install remedy; do not hand-run the tool.
+- Data values (thread names, labels, paths outside the project) are shaped as `<len:pattern:hash>`
+  unless the run has the raw-values consent. Read `raw` (path and sha256) only when the bounded
+  result is not enough.
+
+Cite it. The `growth-series` evidence id of a tied, passing column goes into `dla ledger confirm F3
+--evidence E11,E14` together with the passing `dla trend` evidence; the retention-path or
+allocation-stack evidence ids of the same call are the attribution. If the ledger answers
+`growth-not-tied`, the cited column does not measure F3's holder: pick another capture or resolve
+`suspected_static_only`, never loosen the tie.
+
+Name the missing pairing: what should have released, removed or stopped, not a weak-reference
+workaround. Record holder and mechanism in your own words with `dla ledger annotate F3 --note
+"<text>"`. The label, `strong` and explain commands arrive with the taxonomy; when `dla ledger
+--help` lists them use them, otherwise leave the finding unlabelled (UNCLASSIFIED) and say so.
+Verification of each confirmed finding is done by the core: `dla bundle F3`, one `dla:verifier`
+subagent given only the bundle directory, then `dla ledger verify` (see `SKILL.md`). A disagreement
+opens an open item to resolve.
 
 ## 7. Rule out non-leaks
 

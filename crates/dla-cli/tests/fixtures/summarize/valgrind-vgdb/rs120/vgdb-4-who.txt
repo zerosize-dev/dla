@@ -1,0 +1,4 @@
+sending command who_points_at 0x4AAB420 1 to pid 11219
+==11219== Searching for pointers to 0x4aab420
+==11219== *0x15f668 points at 0x4aab420
+ Address 0x15f668 is 16 bytes inside data symbol "_RNvNtCs8BELKLmmEOU_15outline_service8registry8REGISTRY"

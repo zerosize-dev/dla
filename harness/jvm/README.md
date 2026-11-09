@@ -66,7 +66,13 @@ processes, such as the unit-test JVM a build script starts, are deleted after th
 
 A dump costs about 20 ms and 10 to 40 MB for the fixtures; each capture's size and time are in the
 `captures` array of the record. Heap dumps from separate processes (command mode) cannot be
-compared as a series by `dla summarize heap-graph`; a driver takes all of them in one process.
+compared as a series by `dla summarize heap-graph` (it refuses them as `dumps-not-comparable`, and
+`dla harness run` prints no `heap-graph` command for them); a driver takes all of them in one process.
+The printed `dla summarize` commands are one per op and file kind: `type-histogram-diff` on the
+histograms, `alloc-stack-diff` on `recording.jfr` (reading it needs the `jfr` tool; the JVM writes
+the recording itself), and `non-heap` separately on `threads.json`, `classloader-stats.txt` and
+`nmt-diff.txt`. In a Kotlin driver run the harness puts `kotlin-stdlib` on the javac and run class
+paths (`$KOTLIN_HOME/lib`, next to `kotlinc`, or the version the build script names in `~/.m2`).
 
 ## Driver
 

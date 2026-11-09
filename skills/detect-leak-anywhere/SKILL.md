@@ -33,7 +33,7 @@ The target is what the request names (a path, a pid or port, dump files). Otherw
 | artifact | heap dump files, no live process | `dla run init --entry artifact --artifact <path>...` | 1, 6 (`dla summarize heap-graph` once over ALL dumps), 5, 8, 9 |
 | symptom | only "memory grows", nothing named and no source here | ask once, then re-route; else stop as above | 1, then the path the answer picks |
 
-Add `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` to `dla run init`. Per-path rules (process consent tiers, artifact series rules, scope) are in `references/stages.md`; failures in `references/recovery.md`; per-runtime notes in `references/<jvm|go|rust|node|python|native>.md`.
+Add `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` to `dla run init`. Per-path rules (process consent tiers, artifact series rules, scope) are in `references/stages.md`; failures in `references/recovery.md`; per-runtime notes in `references/<jvm|go|rust|node|python|native>.md`; the summarize backends in `references/backends.md`.
 
 ## Dispatch: one runtime in the core, several in workers
 
@@ -68,6 +68,7 @@ Rules that stay in force at every stage:
 - Intake: items `intake.target`, `intake.scope`, `intake.symptom`, `intake.runtimes`, `intake.build`, `intake.workload`, `intake.consent`, `intake.budget` are answered with `dla ledger resolve <item> --status answered --evidence E1`, or `--status unresolved --reason <r> --remedy "<text>"`. `dla run init` may report a `consent` object from an unattended runner: ask nothing and cite its evidence. Otherwise `dla consent --tiers <list> --ceiling ${user_config.privilege_ceiling}`; a second consent is refused.
 - Measure first and explain afterwards. Harness, trend, alloc-test and the plateau verdict decide leak versus non-leak; a runtime-heap sample alone is only a lead.
 - Confirmation needs passing growth tied to the finding (its probe, a column at its site, or a column listing it as a candidate), a holder, a refuted `N-*` sibling and a `file:line` (artifact runs: an owner and no site). Growth of another holder or of the whole process (`os.rss`) does not confirm a particular holder: `growth-not-tied`.
+- Attribute with `dla summarize <heap-graph|type-histogram-diff|alloc-stack-diff|non-heap> <files...>` on the captures `dla harness run` (`--capture`, `--tool`) or `dla attach` wrote; `references/backends.md` says which op reads which file and which tool it needs. Cite the evidence it returns. A column confirms only the holder it is tied to (the output's `tie`: holder, site or type); `--finding` never forces a tie. An empty or failed-gate result never refutes a leak, and a missing tool is a coverage row, not a finding.
 - A candidate that could not be exercised is never confirmed or refuted: `dla ledger resolve <F> --as suspected_static_only|unresolved --reason <r> --remedy "<text>"`. Reasons: `not_exercised`, `no_harness`, `env_unavailable`, `build_fails`, `privilege_declined`, `tool_missing`, `time_budget`.
 - A `time-budget` refusal means resolve the open items as `unresolved` with reason `time_budget` and a remedy, then report.
 - A refused command is fixed with the command the refusal prints, never retried in a loop.

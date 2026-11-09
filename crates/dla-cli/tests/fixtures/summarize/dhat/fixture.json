@@ -1,0 +1,12 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "dhat1.json",
+  "dhat2.json",
+  "dhat3.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "valgrind --tool=dhat JSON of the native-frame-decoder fixture at 440, 2200 and 3960 frames; one frame name carries a planted key"
+}

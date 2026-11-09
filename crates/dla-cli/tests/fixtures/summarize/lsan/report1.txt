@@ -1,0 +1,13 @@
+
+=================================================================
+==7821==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 464896 byte(s) in 27 object(s) allocated from:
+    #0 0x7f8f93efd9c7 in malloc ../../../../src/libsanitizer/asan/asan_malloc_linux.cpp:69
+    #1 0x55ded85f4bcb in decode_frame src/decoder.c:29
+    #2 0x55ded85f5973 in AKIAIOSFODNN7EXAMPLE1 src/main.c:47
+    #3 0x7f8f93a2a1c9 in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
+    #4 0x7f8f93a2a28a in __libc_start_main_impl ../csu/libc-start.c:360
+    #5 0x55ded85f42c4 in _start (/home/user/proj/framedec+0x22c4) (BuildId: 7441c55257b64d7ecc3c93753119814a96a2d137)
+
+SUMMARY: AddressSanitizer: 464896 byte(s) leaked in 27 allocation(s).

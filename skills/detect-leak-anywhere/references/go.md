@@ -26,8 +26,8 @@ There is no jcmd-style attach for Go. Prefer the harness.
 
 ## Artifacts
 - goref heap profiles and pprof files land under `attach/P<n>/`, but
-  `dla summarize` reads HPROF only: other formats are M5. Record them as artifacts and say the
-  summarizer is not available yet.
+  no `dla summarize` adapter reads them in this release (Go profiles and the `goroutineleak` profile are
+  cut 2; see `references/backends.md`). Record them as artifacts and say the summarizer is not available yet.
 
 ## Blind spots
 - The leaked-goroutine profile misses primitives still reachable from globals and depends on the

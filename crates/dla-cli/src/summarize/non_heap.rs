@@ -392,6 +392,8 @@ pub fn run_diff(
         format!(
             "no passing column ties to {f} by holder, site or type: a group ties only by its creation site (a goroutine's created-by frame, a thread's spawn frame) equal to the finding's site or one of its writers"
         )
+    } else if site_is_current_frame(&captures[0].snap.source) {
+        "the growing items tie to no finding: a JVM thread dump has no creation site, so its groups never tie; a thread leak is tied by a probe column on the holder, or by a heap-dump holder. Whole-process totals never tie".to_owned()
     } else {
         "the growing items tie to no finding: a group ties only by its creation site; run dla census so a spawn or handle holder exists there. Whole-process totals never tie".to_owned()
     };

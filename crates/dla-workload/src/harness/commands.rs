@@ -75,6 +75,9 @@ pub struct Switches {
     pub jfr: bool,
     /// The JVM calls a native library through JNI: preload the allocator shim into it.
     pub ffi: Option<FfiSwitch>,
+    /// Driver mode, Kotlin project: the `kotlin-stdlib` jar added to the driver's build and
+    /// run class paths.
+    pub kotlin_stdlib: Option<String>,
 }
 
 /// What a JVM harness needs to measure the native side of a JNI boundary.
@@ -840,8 +843,12 @@ pub fn plan_driver(
             }
             let jar = abs(&layout.agent.join("dla-agent.jar"));
             let sep = path_sep();
+            let std_cp = sw
+                .kotlin_stdlib
+                .as_deref()
+                .map_or(String::new(), |j| format!("{sep}{}", quote_opt(j)));
             let javac = format!(
-                "javac -cp {classes}{sep}{} -d {classes} {}",
+                "javac -cp {classes}{sep}{}{std_cp} -d {classes} {}",
                 quote_opt(&jar),
                 spec.work_rel
             );
@@ -858,7 +865,12 @@ pub fn plan_driver(
                 argv: vec![
                     "java".into(),
                     "-cp".into(),
-                    format!("{classes}{sep}{jar}"),
+                    format!(
+                        "{classes}{sep}{jar}{}",
+                        sw.kotlin_stdlib
+                            .as_deref()
+                            .map_or(String::new(), |j| format!("{sep}{j}"))
+                    ),
                     spec.target.clone(),
                 ],
                 cwd: cwd.to_owned(),
@@ -1105,6 +1117,42 @@ mod tests {
         assert!(jto.contains("NativeMemoryTracking=summary"));
         assert_eq!(p.agent, AgentKind::JvmAgent);
         assert!(p.gaps[0].starts_with("note:"));
+    }
+
+    #[test]
+    fn a_kotlin_stdlib_goes_on_the_driver_build_and_run_class_paths() {
+        let w = wl(Runtime::Jvm, "sh ./build.sh && sh ./build.sh run");
+        let spec = DriverSpec {
+            work_rel: "driver/Driver.java".into(),
+            target: "dla.Driver".into(),
+            ..DriverSpec::default()
+        };
+        let with = Switches {
+            kotlin_stdlib: Some("/k/lib/kotlin-stdlib.jar".into()),
+            ..Switches::default()
+        };
+        let p = plan_driver(Runtime::Jvm, Some(&w), ".", &layout(), &with, &spec).unwrap();
+        let cp = &p.run.argv[2];
+        assert!(
+            cp.starts_with("out") && cp.ends_with("/k/lib/kotlin-stdlib.jar"),
+            "{cp}"
+        );
+        assert!(cp.contains("dla-agent.jar"), "{cp}");
+        let build = p.build.unwrap().argv[2].clone();
+        assert!(
+            build.contains("javac -cp out") && build.contains("/k/lib/kotlin-stdlib.jar"),
+            "{build}"
+        );
+        let without = plan_driver(
+            Runtime::Jvm,
+            Some(&w),
+            ".",
+            &layout(),
+            &Switches::default(),
+            &spec,
+        )
+        .unwrap();
+        assert!(!without.run.argv[2].contains("kotlin"));
     }
 
     // The allocator shim does not exist on Windows (attach_ffi records a gap there).

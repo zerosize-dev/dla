@@ -1,0 +1,25 @@
+sending command who_points_at 0x4AABF60 64 to pid 11153
+==11153== Searching for pointers pointing in 64 bytes from 0x4aabf60
+==11153== *0x4aab698 points at 0x4aabf60
+ Address 0x4aab698 is 632 bytes inside a block of size 1,024 alloc'd
+==11153==    at 0x484DB80: realloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==11153==    by 0x14C215: <alloc::raw_vec::RawVecInner>::finish_grow (in /home/user/proj/target/debug/outline-service)
+==11153==    by 0x14C2D3: <alloc::raw_vec::RawVecInner>::grow_amortized (in /home/user/proj/target/debug/outline-service)
+==11153==    by 0x11F33B: grow_one<alloc::alloc::Global> (library/alloc/src/raw_vec/mod.rs:493)
+==11153==    by 0x11F33B: <alloc::raw_vec::RawVec<alloc::boxed::Box<[u8; 64]>>>::grow_one (library/alloc/src/raw_vec/mod.rs:188)
+==11153==    by 0x11F490: <alloc::vec::Vec<alloc::boxed::Box<[u8; 64]>>>::push_mut (library/alloc/src/vec/mod.rs:1033)
+==11153==    by 0x11F432: <alloc::vec::Vec<alloc::boxed::Box<[u8; 64]>>>::push (library/alloc/src/vec/mod.rs:996)
+==11153==    by 0x11FB18: outline_service::registry::add_session (registry.rs:6)
+==11153==    by 0x11EC6B: outline_service::main (main.rs:6)
+==11153==    by 0x1203AA: <fn() as core::ops::function::FnOnce<()>>::call_once (library/core/src/ops/function.rs:250)
+==11153==    by 0x11E17D: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()> (library/std/src/sys/backtrace.rs:166)
+==11153==    by 0x11EA70: std::rt::lang_start::<()>::{closure#0} (library/std/src/rt.rs:206)
+==11153==    by 0x1430B8: call_once<(), (dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (function.rs:287)
+==11153==    by 0x1430B8: do_call<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panicking.rs:576)
+==11153==    by 0x1430B8: catch_unwind<i32, &(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe)> (panicking.rs:544)
+==11153==    by 0x1430B8: catch_unwind<&(dyn core::ops::function::Fn<(), Output=i32> + core::marker::Sync + core::panic::unwind_safe::RefUnwindSafe), i32> (panic.rs:359)
+==11153==    by 0x1430B8: {closure#0} (rt.rs:175)
+==11153==    by 0x1430B8: do_call<std::rt::lang_start_internal::{closure_env#0}, isize> (panicking.rs:576)
+==11153==    by 0x1430B8: catch_unwind<isize, std::rt::lang_start_internal::{closure_env#0}> (panicking.rs:544)
+==11153==    by 0x1430B8: catch_unwind<std::rt::lang_start_internal::{closure_env#0}, isize> (panic.rs:359)
+==11153==    by 0x1430B8: std::rt::lang_start_internal (rt.rs:171)

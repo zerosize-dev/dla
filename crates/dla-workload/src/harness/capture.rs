@@ -223,6 +223,9 @@ pub fn classify(name: &str) -> Option<(CaptureKind, u32, &'static str)> {
             "native memory change since baseline",
         )),
         "valgrind.xml" => Some((CaptureKind::Valgrind, 1, "valgrind memcheck XML")),
+        "vgdb-1-leak.txt" => Some((CaptureKind::Valgrind, 2, "vgdb leak_check answer")),
+        "vgdb-2-blocks.txt" => Some((CaptureKind::Valgrind, 3, "vgdb block_list answer")),
+        "vgdb-3-who.txt" => Some((CaptureKind::Valgrind, 4, "vgdb who_points_at walk")),
         "heaptrack.txt" => Some((CaptureKind::Heaptrack, 1, "heaptrack_print report")),
         "heaptrack-diff.txt" => Some((
             CaptureKind::Heaptrack,
@@ -430,8 +433,12 @@ pub fn summarize_commands(
         let paths: Vec<String> = sel.iter().map(|f| pointer(&f.path)).collect();
         cmds.push(format!("dla summarize {op} {}", paths.join(" ")));
     };
-    for (_, g) in &groups {
-        push("heap-graph", CaptureKind::Heap, &[], g);
+    // Dumps of separate processes (command mode) are no series for heap-graph, which
+    // reads successive dumps of one process: only driver groups get the command.
+    if !command_mode {
+        for (_, g) in &groups {
+            push("heap-graph", CaptureKind::Heap, &[], g);
+        }
     }
     for (_, g) in &groups {
         push("type-histogram-diff", CaptureKind::Histogram, &[], g);
@@ -443,8 +450,32 @@ pub fn summarize_commands(
         for tail in ["threads.json", "classloader-stats.txt", "nmt-diff.txt"] {
             push("non-heap", CaptureKind::NonHeap, &[tail], g);
         }
-        push("heap-graph", CaptureKind::Valgrind, &[], g);
-        push("alloc-stack-diff", CaptureKind::Heaptrack, &[], g);
+        // Valgrind: the vgdb answers are a heap-graph input, the XML an alloc-stack-diff
+        // input. Heaptrack reports and its diff are two formats.
+        push(
+            "heap-graph",
+            CaptureKind::Valgrind,
+            &["vgdb-1-leak.txt", "vgdb-2-blocks.txt", "vgdb-3-who.txt"],
+            g,
+        );
+        push(
+            "alloc-stack-diff",
+            CaptureKind::Valgrind,
+            &["valgrind.xml"],
+            g,
+        );
+        push(
+            "alloc-stack-diff",
+            CaptureKind::Heaptrack,
+            &["heaptrack.txt"],
+            g,
+        );
+        push(
+            "alloc-stack-diff",
+            CaptureKind::Heaptrack,
+            &["heaptrack-diff.txt"],
+            g,
+        );
     }
     cmds
 }
@@ -693,6 +724,25 @@ mod tests {
             .iter()
             .map(|(k, x)| {
                 file(
+                    CaptureKind::Histogram,
+                    &format!("p{k}-native"),
+                    1,
+                    *x,
+                    &format!("h/p{k}-native/capture/1/histogram-1.txt"),
+                )
+            })
+            .collect();
+        let cmds = summarize_commands(&files, &|p| p.to_owned(), false);
+        assert_eq!(cmds.len(), 1);
+        assert!(cmds[0].find("p1-native").unwrap() < cmds[0].find("p9-native").unwrap());
+    }
+
+    #[test]
+    fn command_mode_heap_dumps_get_no_heap_graph_command() {
+        let files: Vec<_> = [(1u32, 1000.0), (5, 5000.0)]
+            .iter()
+            .map(|(k, x)| {
+                file(
                     CaptureKind::Heap,
                     &format!("p{k}-native"),
                     1,
@@ -701,8 +751,58 @@ mod tests {
                 )
             })
             .collect();
+        assert!(summarize_commands(&files, &|p| p.to_owned(), false).is_empty());
+    }
+
+    #[test]
+    fn tool_files_get_one_command_per_op_and_format() {
+        let mut files = Vec::new();
+        for (k, x) in [(1u32, 1000.0), (5, 5000.0), (9, 9000.0)] {
+            let l = format!("p{k}-native");
+            for (kind, seq, name) in [
+                (CaptureKind::Valgrind, 1, "valgrind.xml"),
+                (CaptureKind::Valgrind, 2, "vgdb-1-leak.txt"),
+                (CaptureKind::Valgrind, 3, "vgdb-2-blocks.txt"),
+                (CaptureKind::Valgrind, 4, "vgdb-3-who.txt"),
+                (CaptureKind::Heaptrack, 1, "heaptrack.txt"),
+            ] {
+                files.push(file(kind, &l, seq, x, &format!("h/{l}/{name}")));
+            }
+        }
+        files.push(file(
+            CaptureKind::Heaptrack,
+            "p9-native",
+            2,
+            9000.0,
+            "h/p9-native/heaptrack-diff.txt",
+        ));
         let cmds = summarize_commands(&files, &|p| p.to_owned(), false);
-        assert_eq!(cmds.len(), 1);
-        assert!(cmds[0].find("p1-native").unwrap() < cmds[0].find("p9-native").unwrap());
+        assert_eq!(cmds.len(), 4, "{cmds:#?}");
+        // vgdb answers: heap-graph, points in order, three files each, no XML.
+        assert!(cmds[0].starts_with("dla summarize heap-graph h/p1-native/vgdb-1-leak.txt"));
+        assert_eq!(cmds[0].matches("vgdb-").count(), 9);
+        assert!(!cmds[0].contains(".xml") && !cmds[0].contains("heaptrack"));
+        // XML: alloc-stack-diff.
+        assert!(cmds[1].starts_with("dla summarize alloc-stack-diff h/p1-native/valgrind.xml"));
+        assert_eq!(cmds[1].matches("valgrind.xml").count(), 3);
+        // heaptrack reports and the diff are separate commands.
+        assert_eq!(cmds[2].matches("heaptrack.txt").count(), 3);
+        assert!(!cmds[2].contains("heaptrack-diff"));
+        assert_eq!(
+            cmds[3],
+            "dla summarize alloc-stack-diff h/p9-native/heaptrack-diff.txt"
+        );
+    }
+
+    #[test]
+    fn vgdb_files_classify_as_valgrind_answers() {
+        for (name, seq) in [
+            ("vgdb-1-leak.txt", 2),
+            ("vgdb-2-blocks.txt", 3),
+            ("vgdb-3-who.txt", 4),
+        ] {
+            let (kind, s, _) = classify(name).unwrap();
+            assert_eq!((kind, s), (CaptureKind::Valgrind, seq));
+        }
     }
 }

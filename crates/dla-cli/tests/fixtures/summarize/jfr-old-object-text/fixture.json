@@ -1,0 +1,6 @@
+{
+  "op": "alloc-stack-diff",
+  "inputs": ["recording1.txt", "recording2.txt", "recording3.txt"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "note": "three real `jfr print --stack-depth 64 --events jdk.OldObjectSample` outputs of a JVM that keeps a static list (path-to-gc-roots=true), trimmed to ten events each; the static field is named like a key"
+}

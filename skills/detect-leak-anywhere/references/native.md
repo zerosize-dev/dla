@@ -23,10 +23,28 @@ Worker name and runtime id: `native`. Facts from `harness/native/README.md` and 
 | `dla attach heaptrack --pid <P> --op record [--duration 30s]` | 3 | allocation stacks, not contents; refused while `kernel.yama.ptrace_scope` > 0 even for root; DLA stops it through a gdb shim, never by killing the wrapper |
 | `dla sample --pid <P>` | 2 | `os.*` columns only (rss, fds, threads) |
 
-## Artifacts
-- heaptrack output (`.gz` or `.zst`) and its print summary land under `attach/P<n>/`.
-  `dla summarize` reads HPROF only: other formats are M5. Record the files; do not summarize them
-  by hand.
+## Artifacts and summarize ops
+Capture with the harness, then read the files (`references/backends.md` has every adapter and row):
+
+| Capture | Command | What it proves |
+|---|---|---|
+| `dla harness run H1 --tool valgrind` | `alloc-stack-diff` on the `valgrind.xml` files | growth of leaked bytes by allocation stack; ties by site (first project frame) |
+| the same run, `vgdb-1-leak.txt`, `vgdb-2-blocks.txt`, `vgdb-3-who.txt` | `heap-graph` on all vgdb files of every point | who points at the leaked block: a `holder:static:<symbol>` column that ties by holder to the finding whose owner ends with the symbol's module path and name. A stack or segment root ties nothing |
+| `dla harness run H1 --tool heaptrack` | `alloc-stack-diff` on `heaptrack.txt` files, then on `heaptrack-diff.txt` | allocation-stack growth; ties by site. Raw `heaptrack.*.gz`/`.zst` need `heaptrack_print` |
+| shim `out/p*/dump.jsonl` | `type-histogram-diff`, `non-heap` | stack groups (ties by site, needs `addr2line`), descriptor counts (never tie) |
+| `dhat`, LeakSanitizer reports | `alloc-stack-diff` | live-at-exit or leak records by stack; tie by site |
+
+- Memcheck XML from separate runs is a run-length series (runs of different length), not dumps of
+  one process. Heaptrack text is rounded (about 1%); folded `-F` files are exact bytes without counts.
+- A definitely-lost block has no holder (nothing points at it), so attribution is by allocation site,
+  not by a vgdb holder. Two findings at one site (a detector and a census finding) tie none:
+  the output lists them under `ambiguous`.
+- The vgdb chain runs only when the harness starts the program directly. With a wrapper
+  (make, sh) there is no chain, and a limitation line says so. Valgrind plus vgdb are Linux.
+- Stacks match across points by their first 8 resolved frames; without `addr2line` they stay as
+  module offsets and nothing ties (coverage row `addr2line` missing).
+- Census owners are file-path based: a C static is `src.<file>.<name>`, a Rust static
+  `src.<module>.<NAME>`. A symbol in the root module ties only when exactly one finding ends with it.
 
 ## Blind spots
 - Command mode reads live bytes at exit: memory freed before exit shows only in the peak columns.

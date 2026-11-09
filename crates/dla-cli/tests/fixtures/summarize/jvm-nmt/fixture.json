@@ -1,0 +1,6 @@
+{
+  "op": "non-heap",
+  "inputs": ["nmt1.txt", "nmt2.txt", "nmt3.txt"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "note": "three real VM.native_memory summary outputs (-XX:NativeMemoryTracking=summary); the Arena Chunk category is renamed to a key-like name to plant a secret"
+}

@@ -1,0 +1,18 @@
+{
+ "op": "heap-graph",
+ "inputs": [
+  "pt40/vgdb-1-leak.txt",
+  "pt40/vgdb-2-blocks.txt",
+  "pt40/vgdb-3-who.txt",
+  "pt80/vgdb-1-leak.txt",
+  "pt80/vgdb-2-blocks.txt",
+  "pt80/vgdb-3-who.txt",
+  "pt120/vgdb-1-leak.txt",
+  "pt120/vgdb-2-blocks.txt",
+  "pt120/vgdb-3-who.txt"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "vgdb answers (leak_check, block_list, who_points_at) of a C program holding 40, 80 and 120 nodes in a static list head, valgrind 3.22; the allocating function's name carries a planted key"
+}

@@ -128,6 +128,20 @@ last round and records `purge.before/after`. Env overrides: `DLA_KEY_MODE`, `DLA
 
 The stubs print a message and `abort()` until replaced.
 
+## Tool captures (`dla harness run <H> --tool valgrind|heaptrack`)
+
+For a program the harness starts directly, `--tool` runs three of the points under the tool instead of
+measuring a series (Linux; a missing tool refuses with `tool-missing` and leaves a `missing` coverage row).
+
+| `--tool` | Files per point under `out/<label>/` | Summarize command printed |
+|---|---|---|
+| `valgrind` | `valgrind.xml`, `vgdb-1-leak.txt`, `vgdb-2-blocks.txt`, `vgdb-3-who.txt` | `alloc-stack-diff` on the XML files; `heap-graph` on the vgdb files of every point |
+| `heaptrack` | `heaptrack.txt` (`heaptrack_print`), `heaptrack-diff.txt` (first to last) | `alloc-stack-diff` on the texts; a separate command for the diff |
+
+Valgrind runs with `--vgdb=yes --vgdb-stop-at=exit`, and the chain keeps one `vgdb --pid` relay open
+(a standalone `vgdb` call lets the process go on, so one stop allows one call). It walks `who_points_at`
+from the biggest leaked block, at most 12 queries. A wrapper command (make, sh) gets no chain.
+
 ## Inside a JVM (JNI)
 
 When `dla probe` finds a JNI boundary (JVM sources that call `System.loadLibrary` and a Rust

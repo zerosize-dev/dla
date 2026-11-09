@@ -22,8 +22,8 @@ Worker name and runtime id: `python`. Facts from `harness/python/README.md` and 
 | `dla sample --pid <P> --counters python-remote` | 2 | runs a small generated script in the target; needs Python 3.14 or later |
 
 ## Artifacts
-- memray capture files and stats land under `attach/P<n>/`. `dla summarize` reads HPROF only:
-  other formats are M5. Record them as artifacts; do not parse them by hand.
+- memray capture files and stats land under `attach/P<n>/`. No `dla summarize` adapter reads
+  memray files in this release (cut 2). Record them as artifacts; do not parse them by hand.
 
 ## Blind spots
 - Cycles the collector has not run yet look like leaks; only a forced collection separates a

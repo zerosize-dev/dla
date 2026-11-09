@@ -1,0 +1,255 @@
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.607 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 2.45 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    byte[2048]
+    [94] : java.lang.Object[2776]
+    elementData : java.util.ArrayList Size: 2400
+    AKIAIOSFODNN7EXAMPLE1 : java.lang.Class Class Name: shop.Leak
+  ]
+  arrayElements = 2048
+  root = {
+    description = "Thread Name: worker-0"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    shop.Leak.step(int) line: 17
+    shop.Leak.main(String[]) line: 30
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.607 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 2.45 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    byte[2048]
+    [191] : java.lang.Object[2776]
+    elementData : java.util.ArrayList Size: 2400
+    AKIAIOSFODNN7EXAMPLE1 : java.lang.Class Class Name: shop.Leak
+  ]
+  arrayElements = 2048
+  root = {
+    description = "Thread Name: worker-0"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    shop.Leak.step(int) line: 17
+    shop.Leak.main(String[]) line: 30
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.607 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 2.45 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    byte[2048]
+    [288] : java.lang.Object[2776]
+    elementData : java.util.ArrayList Size: 2400
+    AKIAIOSFODNN7EXAMPLE1 : java.lang.Class Class Name: shop.Leak
+  ]
+  arrayElements = 2048
+  root = {
+    description = "Thread Name: worker-0"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    shop.Leak.step(int) line: 17
+    shop.Leak.main(String[]) line: 30
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.625 (2026-11-09)
+  objectSize = 40 bytes
+  objectAge = 2.43 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    jdk.internal.event.ThreadSleepEvent
+  ]
+  arrayElements = N/A
+  root = {
+    description = "Thread Name: worker-0"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "worker-0" (javaThreadId = 26)
+  stackTrace = [
+    java.lang.Thread.beforeSleep(long) line: 458
+    java.lang.Thread.sleep(long) line: 504
+    shop.Leak.lambda$step$0() line: 19
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.625 (2026-11-09)
+  objectSize = 40 bytes
+  objectAge = 2.43 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    jdk.internal.event.ThreadSleepEvent
+  ]
+  arrayElements = N/A
+  root = {
+    description = "Thread Name: worker-1"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "worker-1" (javaThreadId = 27)
+  stackTrace = [
+    java.lang.Thread.beforeSleep(long) line: 458
+    java.lang.Thread.sleep(long) line: 504
+    shop.Leak.lambda$step$0() line: 19
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.625 (2026-11-09)
+  objectSize = 40 bytes
+  objectAge = 2.43 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    jdk.internal.event.ThreadSleepEvent
+  ]
+  arrayElements = N/A
+  root = {
+    description = "Thread Name: worker-2"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "worker-2" (javaThreadId = 28)
+  stackTrace = [
+    java.lang.Thread.beforeSleep(long) line: 458
+    java.lang.Thread.sleep(long) line: 504
+    shop.Leak.lambda$step$0() line: 19
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.629 (2026-11-09)
+  objectSize = 40 bytes
+  objectAge = 2.43 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    jdk.internal.event.ThreadSleepEvent
+  ]
+  arrayElements = N/A
+  root = {
+    description = "Thread Name: AKIAIOSFODNN7EXAMPLE1"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "AKIAIOSFODNN7EXAMPLE1" (javaThreadId = 29)
+  stackTrace = [
+    java.lang.Thread.beforeSleep(long) line: 458
+    java.lang.Thread.sleep(long) line: 504
+    shop.Leak.lambda$step$1() line: 22
+    java.lang.Thread.run() line: 1583
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.933 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 2.12 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    byte[2048]
+    [305] : java.lang.Object[2776]
+    elementData : java.util.ArrayList Size: 2400
+    AKIAIOSFODNN7EXAMPLE1 : java.lang.Class Class Name: shop.Leak
+  ]
+  arrayElements = 2048
+  root = {
+    description = "Thread Name: worker-0"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    shop.Leak.step(int) line: 17
+    shop.Leak.main(String[]) line: 30
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.933 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 2.12 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    byte[2048]
+    [402] : java.lang.Object[2776]
+    elementData : java.util.ArrayList Size: 2400
+    AKIAIOSFODNN7EXAMPLE1 : java.lang.Class Class Name: shop.Leak
+  ]
+  arrayElements = 2048
+  root = {
+    description = "Thread Name: worker-0"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    shop.Leak.step(int) line: 17
+    shop.Leak.main(String[]) line: 30
+  ]
+}
+
+jdk.OldObjectSample {
+  startTime = 11:36:58.058 (2026-11-09)
+  duration = 6.98 ms
+  allocationTime = 11:36:55.934 (2026-11-09)
+  objectSize = 2.0 kB
+  objectAge = 2.12 s
+  lastKnownHeapUsage = 3.1 MB
+  object =  [
+    byte[2048]
+    [476] : java.lang.Object[2776]
+    elementData : java.util.ArrayList Size: 2400
+    AKIAIOSFODNN7EXAMPLE1 : java.lang.Class Class Name: shop.Leak
+  ]
+  arrayElements = 2048
+  root = {
+    description = "Thread Name: worker-0"
+    system = "Threads"
+    type = "Stack Variable"
+  }
+  eventThread = "main" (javaThreadId = 1)
+  stackTrace = [
+    shop.Leak.step(int) line: 17
+    shop.Leak.main(String[]) line: 30
+  ]
+}

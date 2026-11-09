@@ -1095,11 +1095,25 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             Err(gap) => gaps.push(gap),
         }
     }
+    let mut kotlin_stdlib: Option<String> = None;
+    if rt == Runtime::Jvm && opts.driver && super::kotlin::has_kotlin_sources(&work) {
+        match super::kotlin::find_stdlib(&work, &super::kotlin::Lookup::current()) {
+            Ok(jar) => {
+                gaps.push(format!(
+                    "note: the project is Kotlin: {} is on the driver's class path",
+                    jar.display()
+                ));
+                kotlin_stdlib = Some(dla_core::paths::to_slash(&jar));
+            }
+            Err(why) => gaps.push(why),
+        }
+    }
     let switches = commands::Switches {
         jvm_options: det.jvm_options.clone(),
         env: det.env.clone(),
         jfr: false,
         ffi: ffi_switch,
+        kotlin_stdlib,
     };
 
     let mut tools: Vec<String> = Vec::new();

@@ -22,10 +22,20 @@ and `docs/VERIFY.md`.
 | `dla attach heaptrack --pid <P> --op record [--duration 30s]` | 3 | allocation stacks, not contents; refused while `kernel.yama.ptrace_scope` > 0; DLA stops it with its own gdb call and never kills the wrapper |
 | `dla sample --pid <P> --counters tokio` | 2 | task counts only if the process exposes them |
 
-## Artifacts
-- heaptrack output (`.gz` or `.zst`) and its `heaptrack_print` summary land under `attach/P<n>/`.
-  `dla summarize` reads HPROF only: heaptrack and dhat summaries are M5. Record the files and the
-  evidence from the attach; do not summarize them by hand.
+## Artifacts and summarize ops
+For a bin crate started directly, `dla harness run H1 --tool valgrind` (memcheck XML and the vgdb
+chain) and `--tool heaptrack` write files that `dla summarize alloc-stack-diff` and `heap-graph`
+read; a `dhat-rs` JSON file goes to `alloc-stack-diff` too. Commands, rows and what each proves:
+`references/backends.md` and `references/native.md`.
+
+- valgrind prints Rust data symbols in v0 mangling (`_RNvNtCs..._15outline_service8registry8REGISTRY`);
+  `dla` demangles them and drops the crate name. A static `REGISTRY` in `src/registry.rs` ties by
+  holder to the finding whose owner is `src.registry.REGISTRY`.
+- Rust allocator and library frames (`alloc::`, `with_capacity`, `grow_one`) are skipped when the
+  site is chosen, so the site is the first project frame. They are never learned as writers.
+- A leak held by a static collection, interner or registry is the vgdb `holder:` case; a leak whose
+  blocks are unreachable is definitely lost and attributes by site only.
+- Driver-mode runs use the counting allocator and have no valgrind or heaptrack capture.
 
 ## Blind spots
 - No live, typed retention view: retention is inferred from allocation-site growth and code reading.

@@ -1,0 +1,6 @@
+{
+  "op": "alloc-stack-diff",
+  "inputs": ["recording1.txt", "recording2.txt", "recording3.txt"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "note": "the same printed text through the tool-backed adapter, which reads printed text as it is; a real .jfr is over the 64 KB limit, so summarize_jvm.rs records one at run time and runs jfr print on it"
+}

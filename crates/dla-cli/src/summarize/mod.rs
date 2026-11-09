@@ -30,20 +30,29 @@
 pub mod alloc_json;
 pub mod alloc_stack;
 pub mod compat;
+pub mod dhat;
 pub mod emit;
 pub mod exec;
 pub mod growth;
 pub mod harness_types;
+pub mod heaptrack;
 pub mod histogram;
 pub mod hprof;
 pub mod hprof_histogram;
 pub mod input;
 pub mod jcmd_histogram;
+pub mod jfr;
+pub mod jvm_nonheap;
+pub mod lsan;
 pub mod non_heap;
 pub mod nonheap_json;
+pub mod proc_fd;
 pub mod redact;
 pub mod rule;
+pub mod shim_groups;
 pub mod tie;
+pub mod valgrind;
+pub mod vgdb;
 
 use std::{
     cell::{RefCell, RefMut},
@@ -314,11 +323,23 @@ pub trait Adapter: Sync {
 pub fn registry() -> &'static [&'static dyn Adapter] {
     static ALL: &[&dyn Adapter] = &[
         &hprof::DlaHprof,
+        &vgdb::ValgrindVgdb,
         &hprof_histogram::HprofHistogram,
         &jcmd_histogram::JcmdClassHistogram,
+        &shim_groups::ShimStackGroups,
         &harness_types::HarnessTypes,
         &alloc_json::AllocJson,
         &nonheap_json::NonHeapJson,
+        &proc_fd::ProcFd,
+        &valgrind::ValgrindMemcheck,
+        &heaptrack::Heaptrack,
+        &dhat::Dhat,
+        &lsan::Lsan,
+        &jfr::JfrOldObjectText,
+        &jvm_nonheap::JvmThreadDump,
+        &jvm_nonheap::JvmClassloaderStats,
+        &jvm_nonheap::JvmNmt,
+        &jfr::JfrOldObjectSample,
     ];
     ALL
 }

@@ -83,6 +83,31 @@ fn dla_env(project: &Path, args: &[&str], path: Option<&std::ffi::OsStr>) -> Out
     }
 }
 
+/// Like [`dla`] with one more environment variable.
+fn dla_var(project: &Path, args: &[&str], key: &str, value: &Path) -> Out {
+    let mut c = Command::cargo_bin("dla").unwrap();
+    c.arg("--project").arg(project);
+    for var in [
+        "DLA_RUN",
+        "DLA_DEFAULT_BUDGET",
+        "DLA_CONSENT_TIERS",
+        "DLA_CONSENT_RAW_VALUES",
+        "CLAUDE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "DLA_DATA_DIR",
+    ] {
+        c.env_remove(var);
+    }
+    c.env(key, value);
+    let o = c.args(args).output().unwrap();
+    let text = String::from_utf8(o.stdout).unwrap();
+    Out {
+        code: o.status.code().unwrap(),
+        json: serde_json::from_str(&text).unwrap_or(Value::Null),
+        text,
+    }
+}
+
 fn dla(project: &Path, args: &[&str]) -> Out {
     dla_env(project, args, None)
 }
@@ -472,8 +497,24 @@ fn valgrind_and_heaptrack_leave_reports_for_the_summarizers() {
             >= 2
     );
     let m = manifest(&run_dir, "H1");
-    let xmls = capture_paths(&m, &run_dir, &project, "valgrind");
+    let valgrind_files = capture_paths(&m, &run_dir, &project, "valgrind");
+    let xmls: Vec<String> = valgrind_files
+        .iter()
+        .filter(|p| p.ends_with("valgrind.xml"))
+        .cloned()
+        .collect();
     assert!(xmls.len() >= 2);
+    // One command per op and per input format: the vgdb answers read by heap-graph, the XML
+    // by alloc-stack-diff, and nothing mixes the two.
+    let cmds: Vec<&str> = vg["summary"]["summarize"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(cmds.len(), 2, "{cmds:?}");
+    assert!(cmds[0].contains("vgdb-1-leak.txt") && !cmds[0].contains(".xml"));
+    assert!(cmds[1].starts_with("dla summarize alloc-stack-diff ") && !cmds[1].contains("vgdb"));
     let xml = fs::read_to_string(project.join(&xmls[0])).unwrap();
     assert!(
         xml.contains("<valgrindoutput>") && xml.contains("Leak_"),
@@ -485,6 +526,12 @@ fn valgrind_and_heaptrack_leave_reports_for_the_summarizers() {
     let m = manifest(&run_dir, "H1");
     let reports = capture_paths(&m, &run_dir, &project, "heaptrack");
     assert!(reports.len() >= 3, "{reports:?}");
+    // The reports and the diff are two formats, so two commands.
+    let ht_cmds = ht["summary"]["summarize"].as_array().unwrap();
+    assert_eq!(ht_cmds.len(), 2, "{ht_cmds:?}");
+    assert!(ht_cmds[0].as_str().unwrap().contains("heaptrack.txt"));
+    assert!(!ht_cmds[0].as_str().unwrap().contains("heaptrack-diff"));
+    assert!(ht_cmds[1].as_str().unwrap().contains("heaptrack-diff.txt"));
     let diff = reports
         .iter()
         .find(|p| p.ends_with("heaptrack-diff.txt"))
@@ -534,5 +581,157 @@ fn a_tool_on_a_driver_harness_is_refused_with_the_fix() {
             .as_str()
             .unwrap()
             .contains("dla harness gen")
+    );
+}
+
+/// A project copy with a run, consent and discovery for a C program made of `main.c` and a
+/// Makefile, started as `./holdlist --iterations N`.
+fn native_project(list_at_tail: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("Makefile"),
+        "CC ?= cc\nCFLAGS += -std=c11 -O0 -g\nall: holdlist\nholdlist: src/main.c\n\t$(CC) $(CFLAGS) -o $@ $<\nclean:\n\trm -f holdlist\n.PHONY: all clean\n",
+    )
+    .unwrap();
+    let link = if list_at_tail {
+        "    if (!registry) { registry = n; } else { struct node *t = registry; while (t->next) t = t->next; t->next = n; }\n"
+    } else {
+        "    n->next = registry;\n    registry = n;\n"
+    };
+    let src = format!(
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\
+struct node {{ struct node *next; char payload[56]; }};\n\
+static struct node *registry;\n\
+static void remember(int i) {{\n    struct node *n = calloc(1, sizeof *n);\n    snprintf(n->payload, sizeof n->payload, \"entry-%d\", i);\n{link}}}\n\
+int main(int argc, char **argv) {{\n    int iterations = 10;\n    for (int i = 1; i + 1 < argc; i++) {{\n        if (strcmp(argv[i], \"--iterations\") == 0) iterations = atoi(argv[i + 1]);\n    }}\n    for (int i = 0; i < iterations; i++) remember(i);\n    printf(\"held %d\\n\", iterations);\n    return 0;\n}}\n"
+    );
+    fs::write(project.join("src/main.c"), src).unwrap();
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(&project, &["consent", "--tiers", "1-2"]);
+    ok(&project, &["census", "--lang", "native"]);
+    ok(&project, &["workload", "discover", "--lang", "native"]);
+    ok(&project, &["harness", "gen", "--lang", "native"]);
+    (dir, project, run_dir)
+}
+
+fn point_dirs(run_dir: &Path) -> Vec<PathBuf> {
+    let out = run_dir.join("harness/H1/out");
+    let mut dirs: Vec<PathBuf> = fs::read_dir(out)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("valgrind.xml").is_file())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+#[test]
+fn valgrind_leaves_the_vgdb_chain_that_names_the_static_holder() {
+    if skip_without(&["cc", "make", "valgrind", "vgdb"]) {
+        return;
+    }
+    let (_d, project, run_dir) = native_project(false);
+    let vg = ok(&project, &["harness", "run", "H1", "--tool", "valgrind"]);
+    let points = point_dirs(&run_dir);
+    assert_eq!(points.len(), 3, "{vg}");
+    for p in &points {
+        for f in [
+            "vgdb-1-leak.txt",
+            "vgdb-2-blocks.txt",
+            "vgdb-3-who.txt",
+            "valgrind.xml",
+        ] {
+            assert!(p.join(f).is_file(), "{} lacks {f}", p.display());
+        }
+        let who = fs::read_to_string(p.join("vgdb-3-who.txt")).unwrap();
+        assert!(who.contains("data symbol \"registry\""), "{who}");
+        // The XML is complete: the process was let go after the questions.
+        let xml = fs::read_to_string(p.join("valgrind.xml")).unwrap();
+        assert!(xml.trim_end().ends_with("</valgrindoutput>"));
+    }
+    // The pipes live under the run directory and are gone afterwards.
+    assert!(
+        fs::read_dir(run_dir.join("tmp"))
+            .map(|d| d
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with("vgdb")))
+            .unwrap_or(true)
+    );
+    // The printed command runs, and ties the holder column to the census finding.
+    let cmd = vg["summary"]["summarize"][0].as_str().unwrap();
+    assert!(cmd.starts_with("dla summarize heap-graph "), "{cmd}");
+    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+    let o = dla(&project, &args);
+    assert_eq!(o.code, 0, "{}", o.text);
+    assert_eq!(o.json["backend"], "valgrind-vgdb", "{}", o.text);
+    assert_eq!(o.json["gate"], "pass", "{}", o.text);
+    assert_eq!(o.json["passed"][0], "holder:static:registry", "{}", o.text);
+    assert_eq!(o.json["walks"][0]["root"], "static registry");
+}
+
+#[test]
+fn the_vgdb_walk_falls_back_to_the_oldest_block_for_a_list_that_grows_at_the_tail() {
+    if skip_without(&["cc", "make", "valgrind", "vgdb"]) {
+        return;
+    }
+    let (_d, project, run_dir) = native_project(true);
+    let vg = ok(&project, &["harness", "run", "H1", "--tool", "valgrind"]);
+    let points = point_dirs(&run_dir);
+    let last = points.last().unwrap();
+    let who = fs::read_to_string(last.join("vgdb-3-who.txt")).unwrap();
+    assert!(who.contains("data symbol \"registry\""), "{who}");
+    // The walk from the newest block runs out of its calls inside the list; the one from the
+    // oldest block (the list head) ends at the static in one query, and only it is kept.
+    let queries = who.matches("sending command who_points_at").count();
+    assert_eq!(queries, 1, "{who}");
+    assert!(
+        vg["summary"]["limitations"]
+            .as_array()
+            .is_none_or(|l| l.iter().all(|x| !x.as_str().unwrap().contains("partial"))),
+        "{vg}"
+    );
+}
+
+#[test]
+fn a_kotlin_driver_gets_the_stdlib_from_kotlin_home_without_a_hand_edit() {
+    if skip_without(&["java", "javac", "jar", "sh"]) {
+        return;
+    }
+    let (_d, project, run_dir) = prepared("jni-order-codec", "jvm");
+    ok(&project, &["probe"]);
+    // A Kotlin install is only a directory with lib/kotlin-stdlib.jar for this check.
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join("lib")).unwrap();
+    fs::write(home.path().join("lib/kotlin-stdlib.jar"), b"jar").unwrap();
+    let o = dla_var(
+        &project,
+        &[
+            "harness",
+            "gen",
+            "--lang",
+            "jvm",
+            "--driver",
+            "--package",
+            "shop.codec",
+        ],
+        "KOTLIN_HOME",
+        home.path(),
+    );
+    assert_eq!(o.code, 0, "{}", o.text);
+    let m = manifest(&run_dir, "H1");
+    let jar = home.path().join("lib/kotlin-stdlib.jar");
+    let jar = jar.to_string_lossy();
+    let run_cp = m["run"]["argv"][2].as_str().unwrap();
+    assert!(run_cp.ends_with(&*jar), "{run_cp}");
+    let build = m["build"]["argv"][2].as_str().unwrap();
+    assert!(build.contains(&*jar), "{build}");
+    assert!(
+        m["gaps"].to_string().contains("project is Kotlin"),
+        "{}",
+        m["gaps"]
     );
 }

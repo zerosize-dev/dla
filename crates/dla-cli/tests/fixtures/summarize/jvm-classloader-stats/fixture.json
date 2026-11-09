@@ -1,0 +1,6 @@
+{
+  "op": "non-heap",
+  "inputs": ["classloader1.txt", "classloader2.txt", "classloader3.txt"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "note": "three real VM.classloader_stats outputs of a JVM that defines one more class in its own class loader every 300 ms; the loader class is named like a key"
+}

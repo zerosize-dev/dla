@@ -1,0 +1,5 @@
+sending command who_points_at 0x4A7EBC0 64 to pid 6251
+==6251== Searching for pointers pointing in 64 bytes from 0x4a7ebc0
+==6251== *0x10c018 points at 0x4a7ebc0
+ Address 0x10c018 is 0 bytes inside data symbol "registry"
+==6251== tid 1 register R8 pointing at 0x4a7ebc0

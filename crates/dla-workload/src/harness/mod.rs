@@ -26,6 +26,7 @@ pub mod commands;
 pub mod cover;
 pub mod dumps;
 pub mod r#gen;
+pub mod kotlin;
 pub mod probes;
 pub mod run;
 pub mod scratch;

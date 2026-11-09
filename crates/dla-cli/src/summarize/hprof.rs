@@ -41,6 +41,9 @@ use super::{
 };
 use crate::fail::{Failure, Res};
 
+/// Holder keys with their peak retained bytes.
+type Peaks = Vec<(String, u64)>;
+
 /// Most holders a dump series tracks (two columns each; a series file holds 64).
 const SERIES_HOLDERS: usize = 32;
 /// Most `dump-plateau` discriminators one run writes.
@@ -49,6 +52,12 @@ const MAX_DISCRIMINATORS: usize = 5;
 const EVIDENCE_HOLDERS: usize = 3;
 /// Passing holders named in a growth-series evidence.
 const EVIDENCE_PASSED: usize = 4;
+/// Via holders named in a retention-path evidence.
+const EVIDENCE_VIA: usize = 2;
+/// Via holders named in the command output.
+const OUTPUT_VIA: usize = 3;
+/// Via holders always followed in the series, whatever their size.
+const SERIES_VIA: usize = 8;
 
 /// The DLA HPROF reader.
 pub struct DlaHprof;
@@ -187,12 +196,69 @@ fn finding_holder(h: &Holder) -> FindingHolder {
     }
 }
 
-/// `class.field` for a static, else the key.
+/// `class.field` for a static or a via-holder instance field (`field:<Decl>.<f>`), else
+/// the key.
 fn owner_of(h: &Holder) -> String {
     match (h.kind, &h.field) {
         (HolderKind::Static, Some(f)) => format!("{}.{f}", h.owner_class),
+        (HolderKind::Instance, Some(f)) if h.key.starts_with("field:") => {
+            format!("{}.{f}", h.owner_class)
+        }
         _ => h.key.clone(),
     }
+}
+
+/// Adds the summary's via holders (fields that keep a set alive although no root field
+/// dominates it) to the holders tracked across dumps, under their own key
+/// (`static:<C>.<f>` or `field:<Decl>.<f>`). A key the dump already tracks as a root
+/// holder keeps its entry, with the larger of the two figures: the dominator figure
+/// counts only what the field alone keeps alive (often just its container), the via
+/// figure what is kept alive through it. The accumulation class is filled in when the
+/// root holder has none. From here on they are holders like any other: they get
+/// `holder:<key>` columns, pass the same gate, and tie by the same rule.
+fn add_via_holders(summary: &mut HeapSummary) {
+    let mut added: Vec<Holder> = Vec::new();
+    for v in &summary.via_holders {
+        match summary.tracked.iter_mut().find(|h| h.key == v.key) {
+            Some(h) => {
+                h.retained = h.retained.max(v.retained);
+                h.dominated_count = h.dominated_count.max(v.dominated_count);
+                if h.accumulation.is_none() {
+                    h.accumulation = Some(v.accumulation.clone());
+                }
+            }
+            None => added.push(Holder {
+                key: v.key.clone(),
+                kind: v.kind,
+                owner_class: v.owner_class.clone(),
+                field: Some(v.field.clone()),
+                raw_owner_class: v.raw_owner_class.clone(),
+                retained: v.retained,
+                dominated_count: v.dominated_count,
+                path: v.path.clone(),
+                accumulation: Some(v.accumulation.clone()),
+                context: Vec::new(),
+            }),
+        }
+    }
+    summary.tracked.extend(added);
+}
+
+/// The via holders of a summary, compact, for the output and the retention evidence.
+fn via_json(summary: &HeapSummary, n: usize) -> Vec<Value> {
+    summary
+        .via_holders
+        .iter()
+        .take(n)
+        .map(|v| {
+            json!({
+                "key": clip(&v.key, 100),
+                "retained": v.retained,
+                "dominated": v.dominated_count,
+                "by": clip(&v.dominator, 40),
+            })
+        })
+        .collect()
 }
 
 /// A thread name read from the heap, shaped unless the run has raw-values consent. A name
@@ -270,6 +336,7 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
     for i in inputs {
         let mut summary = hprof::summarize(&i.abs, &opts).map_err(|e| parse_failure(&i.rel, &e))?;
         redact_threads(&mut summary, &ctx.redactor);
+        add_via_holders(&mut summary);
         let summary_file = format!("summaries/{}", summary_name(&i.rel, &i.sha256));
         dumps.push(Dump {
             rel: i.rel.clone(),
@@ -329,17 +396,22 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             .take(EVIDENCE_HOLDERS)
             .map(top_json)
             .collect();
+        let mut result = json!({
+            "file": d.rel,
+            "timestamp_ms": d.summary.header.timestamp_ms,
+            "objects": d.summary.counts.objects,
+            "truncated": d.summary.truncated,
+            "holders": top,
+        });
+        let via = via_json(&d.summary, EVIDENCE_VIA);
+        if !via.is_empty() {
+            result["via"] = json!(via);
+        }
         let mut spec = EvidenceSpec::new(
             EvidenceKind::RetentionPath,
             "dla-hprof",
             env!("CARGO_PKG_VERSION"),
-            json!({
-                "file": d.rel,
-                "timestamp_ms": d.summary.header.timestamp_ms,
-                "objects": d.summary.counts.objects,
-                "truncated": d.summary.truncated,
-                "holders": top,
-            }),
+            result,
         );
         spec.authority = Authority::Dump;
         spec.source = Some(Source::Artifact {
@@ -374,6 +446,13 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
     out.insert("summaries".into(), json!(tc.pointer("summaries/")));
     out.insert("dumps".into(), json!(dump_json));
     out.insert("redaction".into(), json!(ctx.redactor.mode()));
+    let via = dumps
+        .last()
+        .map(|d| via_json(&d.summary, OUTPUT_VIA))
+        .unwrap_or_default();
+    if !via.is_empty() {
+        out.insert("via_holders".into(), json!(via));
+    }
     let n = dumps.len();
     let enumerated = dumps.iter().map(|d| d.summary.counts.objects).sum();
     if n == 1 {
@@ -547,8 +626,19 @@ fn series_part(
         }
     }
     peak.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let mut keys: Vec<String> = peak
+    // Via holders are followed whatever their size: they are the holders a dominator
+    // search cannot see, and are often small next to the roots.
+    let via_keys: BTreeSet<&str> = dumps
+        .iter()
+        .flat_map(|d| d.summary.via_holders.iter().map(|v| v.key.as_str()))
+        .collect();
+    let (mut via_first, rest): (Peaks, Peaks) = peak
         .into_iter()
+        .partition(|(k, _)| via_keys.contains(k.as_str()));
+    via_first.truncate(SERIES_VIA);
+    let mut keys: Vec<String> = via_first
+        .into_iter()
+        .chain(rest)
         .take(SERIES_HOLDERS)
         .map(|(k, _)| k)
         .collect();
@@ -957,4 +1047,46 @@ fn series_part(
     };
     out.insert("needed".into(), json!(needed_text));
     Ok(series_raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn holder(key: &str, kind: HolderKind, owner: &str, field: Option<&str>) -> Holder {
+        Holder {
+            key: key.into(),
+            kind,
+            owner_class: owner.into(),
+            field: field.map(str::to_owned),
+            raw_owner_class: None,
+            retained: 0,
+            dominated_count: 0,
+            path: Vec::new(),
+            accumulation: None,
+            context: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_owner_of_a_via_instance_field_is_class_dot_field() {
+        let st = holder(
+            "static:shop.Waiters.gates",
+            HolderKind::Static,
+            "shop.Waiters",
+            Some("gates"),
+        );
+        assert_eq!(owner_of(&st), "shop.Waiters.gates");
+        let inst = holder(
+            "field:shop.Registry.table",
+            HolderKind::Instance,
+            "shop.Registry",
+            Some("table"),
+        );
+        assert_eq!(owner_of(&inst), "shop.Registry.table");
+        // A root instance holder has no field: its owner is its key.
+        let root = holder("instance:x>y", HolderKind::Instance, "y", None);
+        assert_eq!(owner_of(&root), "instance:x>y");
+        assert_eq!(finding_holder(&inst), FindingHolder::ContainerField);
+    }
 }

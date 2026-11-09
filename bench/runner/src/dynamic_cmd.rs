@@ -27,8 +27,10 @@
 //!    sibling, annotates the holder of F when it has none (the holder of the
 //!    census entry at the same site, else `blocked-stack` for a goroutine or
 //!    thread column, `registration-table` for a timer, listener or handle
-//!    column, else `static/global`) and confirms F; a verdict that favors
-//!    non-leak refutes F; an inconclusive one resolves F `unresolved`.
+//!    column, else `static/global`) and confirms F once step 5 ran (the
+//!    confirmation cites the summarize evidence that ties a passing column
+//!    to F, so the leak is dump backed); a verdict that favors non-leak
+//!    refutes F; an inconclusive one resolves F `unresolved`.
 //! 3. The first candidate of every non-passing, non-container column that no
 //!    passed column tied to a chosen finding: N-WARM sibling, test,
 //!    alloc-test; refuted when the verdict favors non-leak, else unresolved.
@@ -41,7 +43,18 @@
 //!    passed: a finding with origin `growth-series` (no site), N-HEADROOM and
 //!    N-ALLOC siblings, test, an unbound alloc-test; refuted when the verdict
 //!    favors non-leak, else unresolved.
-//! 5. `dla gap S --residual` (refusals ignored); every leak-side candidate or
+//! 5. The per-operation steps (module `ops`), for every harness that grew:
+//!    `dla summarize --list`; a JVM harness runs again with `--capture all`, a
+//!    rust or native harness with `--tool valgrind` and `--tool heaptrack`
+//!    (those with listed adapters; a missing tool refuses and leaves a coverage
+//!    row); every `dla summarize` command the harness printed runs once. Each
+//!    call is checked (stdout within 2048 bytes, `raw` with a matching sha256,
+//!    evidence ids in the ledger, evidence results within 2048 bytes, a `tie`
+//!    reason on every tied column); a violation fails the fixture. The policy
+//!    never names a backend: it reads `--list` and the printed commands.
+//!    Driver mode needs hooks filled in by judgement, so the policy stays in
+//!    command mode.
+//! 6. `dla gap S --residual` (refusals ignored); every leak-side candidate or
 //!    finding under test left over is resolved `suspected_static_only`
 //!    (`not_exercised`) when it has static evidence, else `unresolved`
 //!    (`time_budget`). Finally `dla report`.
@@ -83,6 +96,8 @@ use crate::{
 
 #[path = "dynamic/artifact.rs"]
 mod artifact;
+#[path = "dynamic/ops.rs"]
+mod ops;
 #[path = "dynamic/without.rs"]
 pub mod without;
 #[path = "dynamic/workers.rs"]
@@ -137,15 +152,15 @@ pub struct DynamicArgs {
     #[arg(long, value_delimiter = ',')]
     pub without: Vec<String>,
     /// Check `dump_backed` leaks: the chosen confirmed finding must cite retention or
-    /// allocation evidence with dump or live authority. Off by default until the policy
-    /// runs the summarize steps that produce that evidence.
+    /// allocation evidence with dump or live authority (the summarize steps of the policy
+    /// produce it). On by default; `--check-dump-backed=false` turns it off.
     #[arg(long, default_value_t = CHECK_DUMP_BACKED)]
     pub check_dump_backed: bool,
 }
 
-/// Default of `--check-dump-backed`. Switch it on once the policy adds the summarize steps
-/// (heap-graph, histogram, alloc-stack) to the fixed run.
-pub const CHECK_DUMP_BACKED: bool = false;
+/// Default of `--check-dump-backed`: on, because the policy runs the summarize steps
+/// (heap-graph, histogram, alloc-stack) before it confirms.
+pub const CHECK_DUMP_BACKED: bool = true;
 
 /// Default for `--command-timeout`.
 pub const DEFAULT_COMMAND_TIMEOUT_S: u64 = 900;
@@ -178,7 +193,7 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
     ExpectedFailure {
         fixture: "jni-order-codec",
         failure: "leak L1 (native/src/lib.rs:43) is not confirmed",
-        reason: "no Rust workload: the native code runs only under the JVM, so the rust worker finds no main workload with an iteration argument (harness gen: workload-required) and ends with its census candidates suspected_static_only; inside the JVM harness the native frames show only as os.rss growth, which no probe column ties to a finding",
+        reason: "the leak lives in native code that runs only under the JVM. The rust worker finds no main workload with an iteration argument (harness gen: workload-required), so its census finding at the site ends suspected_static_only. In the JVM worker the shim columns native.live_bytes@native/src/lib.rs:40 and :43 pass, but no finding of that worker is at those sites and a tie never crosses runtimes, so no column is tied to the leak and the confirmation is refused; the JVM harness prints no shim-stack-groups summarize command, so that evidence is not produced either",
     },
     ExpectedFailure {
         fixture: "node-retry-scheduler",
@@ -241,6 +256,18 @@ pub struct FixtureRow {
     /// The merge of a multi-runtime fixture.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge: Option<MergeRow>,
+    /// Capture runs of the summarize steps (`H1:capture-all`, `H1:tool-valgrind`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<String>,
+    /// Summarize calls that succeeded, as `<op>:<backend>`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ops: Vec<String>,
+    /// Evidence ids the summarize calls wrote.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub summarize_evidence: Vec<String>,
+    /// Largest stdout of a summarize call, in bytes.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub max_stdout: usize,
     /// What the policy did (one line per decision), for the log and the JSON.
     pub steps: Vec<String>,
     /// Commands that failed or were refused.
@@ -283,6 +310,10 @@ struct Out {
     ok: bool,
     /// Parsed stdout (null when it was not JSON).
     json: Value,
+    /// Bytes of stdout.
+    bytes: usize,
+    /// Exit code (-1 when killed or not started).
+    exit: i32,
 }
 
 impl Out {
@@ -353,6 +384,8 @@ struct Fx<'a> {
     path_dir: Option<PathBuf>,
     /// The tool-home variables unset for `--without` calls.
     unset_vars: Vec<&'static str>,
+    /// Leak confirmations held back until the summarize steps ran ([`ops::run`]).
+    pending: Vec<ops::Pending>,
 }
 
 /// How a command ended.
@@ -453,6 +486,8 @@ impl Fx<'_> {
             return Out {
                 ok: false,
                 json: Value::Null,
+                bytes: 0,
+                exit: -1,
             };
         }
         let mut cmd = Command::new(self.bin);
@@ -533,7 +568,12 @@ impl Fx<'_> {
         } else {
             code == 0 && json.get("ok") == Some(&Value::Bool(true))
         };
-        Out { ok, json }
+        Out {
+            ok,
+            json,
+            bytes: stdout.trim().len(),
+            exit: code,
+        }
     }
 
     fn step(&mut self, line: String) {
@@ -1213,6 +1253,19 @@ fn analyse(fx: &mut Fx, ran: &[Ran]) {
             }
         }
     }
+
+    // Step 5: capture, summarize and check for the harnesses that grew, then the
+    // confirmations held back above.
+    let grew: Vec<(String, String)> = ran
+        .iter()
+        .filter(|r| {
+            trends
+                .iter()
+                .any(|t| t.harness == r.harness && t.cols.iter().any(|c| c.pass && !c.container()))
+        })
+        .map(|r| (r.harness.clone(), r.runtime.clone()))
+        .collect();
+    ops::run(fx, &grew);
 }
 
 /// The column's own candidate: the first leak-side finding it lists, which
@@ -1279,12 +1332,12 @@ fn test_candidate(
                 fx.call(&["ledger", "annotate", &f.id, "--holder", &holder]);
                 note.push_str(&format!(", holder {holder} ({rule})"));
             }
-            let c = fx.call(&["ledger", "confirm", &f.id, "--evidence", ev]);
-            if c.ok {
-                note.push_str(", confirmed");
-            } else {
-                note.push_str(&format!(", confirm refused ({})", c.code()));
-            }
+            // The confirmation waits for the summarize steps, which add their evidence to it.
+            fx.pending.push(ops::Pending {
+                finding: f.id.clone(),
+                evidence: ev.to_owned(),
+            });
+            note.push_str(", confirmation after the summarize steps");
             note
         }
         (Verdict::NonLeak, Some(e)) => {
@@ -1830,6 +1883,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         worker: None,
         path_dir: sh.path_dir.map(Path::to_path_buf),
         unset_vars: without::home_vars_for(&sh.args.without),
+        pending: Vec::new(),
     };
     let _ = fs::remove_dir_all(&fx.log_dir);
     drive(&mut fx);
@@ -1852,6 +1906,11 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         if !sh.args.without.is_empty() {
             let (bad, seen) = without::check_coverage(&run_dir, &sh.args.without);
             row.hidden_backend_rows = seen.values().sum();
+            row.failures.extend(without::check_attempted(
+                &row.captures,
+                &seen,
+                &sh.args.without,
+            ));
             row.hidden_rows_by_tool = seen;
             row.failures.extend(bad);
         }
@@ -1890,8 +1949,10 @@ fn settle_without(row: &mut FixtureRow) {
 /// coverage row that does not read `missing`) stays a failure.
 fn accept_hidden_tool_gaps(row: &mut FixtureRow) {
     let gap = |f: &String| {
-        f.starts_with("leak ")
-            && (f.ends_with("is not confirmed") || f.contains("is confirmed with holder"))
+        (f.starts_with("leak ")
+            && (f.ends_with("is not confirmed") || f.contains("is confirmed with holder")))
+            // The evidence of a hidden backend cannot be cited.
+            || f.starts_with("dump check: ")
     };
     let (gaps, rest): (Vec<String>, Vec<String>) = std::mem::take(&mut row.failures)
         .into_iter()
@@ -1998,7 +2059,7 @@ pub fn render_table(res: &DynamicResult) -> String {
         .unwrap_or(7)
         .max(7);
     s.push_str(&format!(
-        "{:<w$}  {:<14}  {:<8}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  result\n",
+        "{:<w$}  {:<14}  {:<8}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  {:>10}  result\n",
         "fixture",
         "category",
         "runtime",
@@ -2010,10 +2071,11 @@ pub fn render_table(res: &DynamicResult) -> String {
         "claim",
         "rule-out",
         "leaks",
+        "ops/ev/B",
     ));
     for f in &res.fixtures {
         s.push_str(&format!(
-            "{:<w$}  {:<14}  {:<8}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  {}\n",
+            "{:<w$}  {:<14}  {:<8}  {:<4}  {:>6}  {:>6}  {:>4}  {:>4}  {:>5}  {:>8}  {:>5}  {:>10}  {}\n",
             f.id,
             f.category,
             if f.runtimes.is_empty() && f.entry != "repository" {
@@ -2029,6 +2091,7 @@ pub fn render_table(res: &DynamicResult) -> String {
             if f.claims { "yes" } else { "no" },
             if f.rule_outs { "yes" } else { "no" },
             format!("{}/{}", f.leaks_found, f.leaks_expected),
+            ops_cell(f),
             if let Some(why) = &f.skipped {
                 format!("skipped: {why}")
             } else if let Some(why) = &f.xfail {
@@ -2056,6 +2119,19 @@ pub fn render_table(res: &DynamicResult) -> String {
     ));
     s.push_str(&format!("logs: {}\n", res.log_dir));
     s
+}
+
+/// The compact summarize cell of the table: ops run, evidence ids, largest stdout in bytes.
+fn ops_cell(f: &FixtureRow) -> String {
+    if f.ops.is_empty() && f.max_stdout == 0 {
+        return "-".to_owned();
+    }
+    format!(
+        "{}/{}/{}",
+        f.ops.len(),
+        f.summarize_evidence.len(),
+        f.max_stdout
+    )
 }
 
 /// Runs the driver.
