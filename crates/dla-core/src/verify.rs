@@ -65,6 +65,7 @@ pub fn record(
     Verification {
         agrees_site: agrees_site(finding.site.as_deref(), site.as_deref()),
         agrees_holder: agrees_holder(finding.holder, holder),
+        agrees_label: None,
         finding: finding.id.clone(),
         site,
         holder,

@@ -151,6 +151,29 @@ string_enum! {
     }
 }
 
+impl Stage {
+    /// The stages `dla gate check --stage` accepts, in order.
+    pub const GATED: &'static [Stage] = &[
+        Stage::Intake,
+        Stage::Probe,
+        Stage::Sweep,
+        Stage::Classify,
+        Stage::Confirm,
+        Stage::Attribute,
+        Stage::RuleOut,
+    ];
+
+    /// Position of the stage in the investigation (declaration order).
+    pub fn rank(self) -> usize {
+        Self::ALL.iter().position(|s| *s == self).unwrap_or(0)
+    }
+
+    /// True when this stage is `other` or comes after it.
+    pub fn at_least(self, other: Stage) -> bool {
+        self >= other
+    }
+}
+
 /// Consent given for intrusive steps.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct Consent {
@@ -238,6 +261,14 @@ pub struct WorkerEntry {
     pub status: WorkerStatus,
     /// Slice file name inside the run directory: `ledger.<name>.jsonl`.
     pub slice: String,
+    /// The SubagentStop gate blocked the worker three times with no ledger change and let
+    /// it stop; merge turns its unfinished work into an open item.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stalled: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// The rendered report, pinned by hash.
@@ -298,6 +329,20 @@ pub struct RunState {
     /// Workers registered by `dla run dispatch`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workers: Vec<WorkerEntry>,
+    /// Stages that passed `dla gate check --stage`, in the order they passed. Written only
+    /// by a passing gate check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages_passed: Vec<Stage>,
+    /// Consecutive stop-hook blocks with an unchanged ledger digest.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stop_blocks: u32,
+    /// Digest (ledger length plus hash of the missing-item ids) of the last stop-hook block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_block_digest: Option<String>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 fn default_entry() -> EntryPath {
@@ -351,6 +396,9 @@ impl RunState {
             entry: EntryPath::Repository,
             artifacts: Vec::new(),
             workers: Vec::new(),
+            stages_passed: Vec::new(),
+            stop_blocks: 0,
+            stop_block_digest: None,
         })
     }
 

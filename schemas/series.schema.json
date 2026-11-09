@@ -433,6 +433,11 @@
           "description": "Holder sizes read from a series of heap dumps of one process.",
           "type": "string",
           "const": "dump"
+        },
+        {
+          "description": "A harness run of a scratch copy with an edit applied (`dla intervene`).",
+          "type": "string",
+          "const": "intervention"
         }
       ]
     },

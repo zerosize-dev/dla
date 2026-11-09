@@ -41,6 +41,8 @@ string_enum! {
         Gap = "gap",
         /// Holder sizes read from a series of heap dumps of one process.
         Dump = "dump",
+        /// A harness run of a scratch copy with an edit applied (`dla intervene`).
+        Intervention = "intervention",
     }
 }
 

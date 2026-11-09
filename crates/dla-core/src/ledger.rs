@@ -252,6 +252,9 @@ fn record_name(r: &Record) -> &'static str {
         Record::SliceMerged(_) => "slice_merged",
         Record::FindingMerged(_) => "finding_merged",
         Record::Verification(_) => "verification",
+        Record::FindingLabeled(_) => "finding_labeled",
+        Record::FindingExplained(_) => "finding_explained",
+        Record::IntegrityResealed(_) => "integrity_resealed",
     }
 }
 
@@ -347,6 +350,18 @@ impl Index {
             Record::SliceMerged(m) => self.check_slice_merged(m),
             Record::FindingMerged(m) => self.check_finding_merged(m),
             Record::Verification(v) => self.check_verification(v),
+            // Rules arrive with the schema 6 ledger package.
+            Record::FindingLabeled(_)
+            | Record::FindingExplained(_)
+            | Record::IntegrityResealed(_) => Err(Refusal::new(
+                codes::NOT_IMPLEMENTED,
+                format!(
+                    "{} lines are not implemented in this build",
+                    record_name(record)
+                ),
+                "the schema 6 ledger rules (milestone M6 package B)",
+                "do not write this record yet",
+            )),
         }
     }
 
@@ -420,17 +435,24 @@ impl Index {
                 format!("worker {w}"),
                 format!("dla --worker {w} ledger done"),
             )),
-            Record::SliceMerged(_) | Record::FindingMerged(_) | Record::Verification(_) => {
-                Err(Refusal::new(
-                    m4::CORE_ONLY,
-                    format!(
-                        "a worker slice cannot hold {}: the core writes it",
-                        record_name(record)
-                    ),
-                    "the core (no --worker)",
-                    "dla ledger merge   or   dla ledger verify <F> ...   (without --worker)",
-                ))
+            Record::FindingLabeled(l) if !own(l.finding.prefix()) => {
+                Err(foreign("finding", &l.finding))
             }
+            Record::FindingExplained(x) if !own(x.finding.prefix()) => {
+                Err(foreign("finding", &x.finding))
+            }
+            Record::SliceMerged(_)
+            | Record::FindingMerged(_)
+            | Record::Verification(_)
+            | Record::IntegrityResealed(_) => Err(Refusal::new(
+                m4::CORE_ONLY,
+                format!(
+                    "a worker slice cannot hold {}: the core writes it",
+                    record_name(record)
+                ),
+                "the core (no --worker)",
+                "dla ledger merge   or   dla ledger verify <F> ...   (without --worker)",
+            )),
             _ => Ok(()),
         }
     }
@@ -1276,6 +1298,10 @@ impl Index {
                     .or_default()
                     .push(v.clone());
             }
+            // `check` refuses these until the schema 6 rules exist, so nothing commits them.
+            Record::FindingLabeled(_)
+            | Record::FindingExplained(_)
+            | Record::IntegrityResealed(_) => {}
         }
     }
 }

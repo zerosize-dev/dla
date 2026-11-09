@@ -159,6 +159,7 @@ pub fn dispatch(ctx: &Ctx, a: DispatchArgs) -> Res<Value> {
                 started_at: None,
                 status: WorkerStatus::Registered,
                 slice: format!("ledger.{n}.jsonl"),
+                stalled: false,
             };
             st.workers.push(entry.clone());
             out.push(entry);

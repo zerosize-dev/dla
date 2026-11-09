@@ -18,6 +18,7 @@
 #[macro_use]
 mod macros;
 
+pub mod archetypes;
 pub mod attribution;
 pub mod census;
 pub mod checklist;
@@ -29,8 +30,10 @@ pub mod error;
 pub mod evidence;
 pub mod finding;
 pub mod fsutil;
+pub mod gate;
 pub mod harness;
 pub mod ids;
+pub mod integrity;
 pub mod known_leaks;
 pub mod ledger;
 pub mod machine;
@@ -81,7 +84,8 @@ pub use harness::{HarnessDump, HarnessManifest};
 pub use ids::{EvidenceId, FindingId, OpenItemId};
 pub use ledger::{Annotation, HolderChange, Ledger, NewFinding, OpenItemState};
 pub use record::{
-    FindingAnnotation, FindingMerged, LedgerLine, Record, Resolution, SliceDone, SliceMerged,
+    FindingAnnotation, FindingExplained, FindingLabeled, FindingMerged, IntegrityResealed,
+    LabelSatisfied, LedgerLine, Record, RemovalClaim, Resolution, SliceDone, SliceMerged,
     SliceStarted, Verification,
 };
 pub use series::SeriesFile;

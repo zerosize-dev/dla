@@ -103,9 +103,29 @@
       "description": "Current stage.",
       "$ref": "#/$defs/Stage"
     },
+    "stages_passed": {
+      "description": "Stages that passed `dla gate check --stage`, in the order they passed. Written only\nby a passing gate check.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Stage"
+      }
+    },
     "status": {
       "description": "Overall status.",
       "$ref": "#/$defs/RunStatus"
+    },
+    "stop_block_digest": {
+      "description": "Digest (ledger length plus hash of the missing-item ids) of the last stop-hook block.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stop_blocks": {
+      "description": "Consecutive stop-hook blocks with an unchanged ledger digest.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
     },
     "workers": {
       "description": "Workers registered by `dla run dispatch`.",
@@ -506,6 +526,10 @@
         "slice": {
           "description": "Slice file name inside the run directory: `ledger.<name>.jsonl`.",
           "type": "string"
+        },
+        "stalled": {
+          "description": "The SubagentStop gate blocked the worker three times with no ledger change and let\nit stop; merge turns its unfinished work into an open item.",
+          "type": "boolean"
         },
         "started_at": {
           "description": "When its slice started, once it has.",

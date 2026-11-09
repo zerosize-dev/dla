@@ -1,6 +1,7 @@
 //! `dla run init`, `dla run status`, `dla run dispatch` and `dla run abort`.
 
 mod abort;
+mod reseal;
 mod workers;
 
 use clap::{Args, Subcommand};
@@ -34,6 +35,8 @@ pub enum RunCmd {
     Dispatch(workers::DispatchArgs),
     /// Stop the processes the run started, undo what it attached, and mark the run aborted (core only).
     Abort(abort::AbortArgs),
+    /// Record an audit line and seal the protected run files again after an out-of-band change (core only).
+    Reseal(reseal::ResealArgs),
 }
 
 /// Flags of `dla run init`.
@@ -222,6 +225,7 @@ pub fn dispatch(
         RunCmd::Status => run_status(&ctx()?),
         RunCmd::Dispatch(a) => workers::dispatch(&ctx()?, a),
         RunCmd::Abort(a) => abort::run(&ctx()?, &project_root(project_arg)?, a),
+        RunCmd::Reseal(a) => reseal::run(&ctx()?, a),
     }
 }
 

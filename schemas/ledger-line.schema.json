@@ -201,6 +201,48 @@
       "required": [
         "type"
       ]
+    },
+    {
+      "description": "A finding got an archetype label (schema 6).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "finding_labeled"
+        }
+      },
+      "$ref": "#/$defs/FindingLabeled",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A finding got a structured explanation (schema 6).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "finding_explained"
+        }
+      },
+      "$ref": "#/$defs/FindingExplained",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "`dla run reseal` re-sealed protected files after an out-of-band change (schema 6).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "integrity_resealed"
+        }
+      },
+      "$ref": "#/$defs/IntegrityResealed",
+      "required": [
+        "type"
+      ]
     }
   ],
   "required": [
@@ -830,9 +872,111 @@
         "finding"
       ]
     },
+    "FindingExplained": {
+      "description": "A structured explanation of a leak (`dla ledger explain`).",
+      "type": "object",
+      "properties": {
+        "adds": {
+          "description": "`file:line` sites that add to the holder.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "description": "Evidence that shows the pairing, required with `observed`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finding": {
+          "description": "The finding.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "removal": {
+          "description": "What happens to the items afterwards.",
+          "$ref": "#/$defs/RemovalClaim"
+        },
+        "remover": {
+          "description": "`file:line` of the remover, for `conditional`, `wrong-key` and `unreachable`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag": {
+          "description": "Observed or inferred.",
+          "$ref": "#/$defs/ExplanationTag"
+        },
+        "text": {
+          "description": "The explanation text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding",
+        "tag",
+        "removal",
+        "text"
+      ]
+    },
     "FindingId": {
       "type": "string",
       "pattern": "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$"
+    },
+    "FindingLabeled": {
+      "description": "An archetype label for a confirmed or strong finding (`dla ledger label`).",
+      "type": "object",
+      "properties": {
+        "entry_sha256": {
+          "description": "SHA-256 (lowercase hex) of the archetype entry used; empty for `UNCLASSIFIED`.",
+          "type": "string",
+          "default": ""
+        },
+        "finding": {
+          "description": "The finding.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "label": {
+          "description": "An archetype ID (`L-*`, `N-*`) or `UNCLASSIFIED`.",
+          "type": "string"
+        },
+        "note": {
+          "description": "Why nothing fits (`UNCLASSIFIED`) or any other note.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "previous": {
+          "description": "The label before this line (audit trail).",
+          "type": "string"
+        },
+        "region_mismatch": {
+          "description": "The finding's region is not among the archetype's regions (a warning, not a refusal).",
+          "type": "boolean",
+          "default": false
+        },
+        "satisfied": {
+          "description": "The met `requires` alternative and its evidence; empty for `UNCLASSIFIED`.",
+          "$ref": "#/$defs/LabelSatisfied",
+          "default": {
+            "evidence": [],
+            "kinds": []
+          }
+        }
+      },
+      "required": [
+        "finding",
+        "label",
+        "previous"
+      ]
     },
     "FindingMerged": {
       "description": "Replay semantics: the duplicate is excluded from the counts and the report's finding\nlist, and its supporting evidence is added to the canonical finding.",
@@ -937,6 +1081,49 @@
         }
       ]
     },
+    "IntegrityResealed": {
+      "description": "`dla run reseal`: protected files were changed outside `dla` and sealed again.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "Protected files (names relative to the run directory) that were sealed again.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "description": "Why, in the operator's words.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    "LabelSatisfied": {
+      "description": "The proof a label was accepted on: the inner set of the archetype's `requires` that was\nmet and the evidence that met it. Replay re-checks this record and never reads `data/`.",
+      "type": "object",
+      "properties": {
+        "evidence": {
+          "description": "Evidence records that carry those kinds.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          }
+        },
+        "kinds": {
+          "description": "Evidence kinds of the met alternative (wire spelling, e.g. `unit-count-series`).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "Locus": {
       "description": "Where the leak lives.",
       "oneOf": [
@@ -1034,6 +1221,36 @@
           "description": "Runtime-internal non-heap memory.",
           "type": "string",
           "const": "non-heap"
+        }
+      ]
+    },
+    "RemovalClaim": {
+      "description": "What the explanation says about removal of the retained items.",
+      "oneOf": [
+        {
+          "description": "No code removes them.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "A search found no remover (the census is heuristic).",
+          "type": "string",
+          "const": "not-found"
+        },
+        {
+          "description": "A remover exists and runs only under a condition.",
+          "type": "string",
+          "const": "conditional"
+        },
+        {
+          "description": "A remover exists and uses another key.",
+          "type": "string",
+          "const": "wrong-key"
+        },
+        {
+          "description": "A remover exists and is never reached.",
+          "type": "string",
+          "const": "unreachable"
         }
       ]
     },
@@ -1471,6 +1688,13 @@
         "agrees_holder": {
           "description": "The verifier's holder is the finding's.",
           "type": "boolean"
+        },
+        "agrees_label": {
+          "description": "The verifier's label is the finding's (schema 6); `None` when archetypes were off or\nthe line predates the field.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "agrees_site": {
           "description": "The verifier's site is the finding's (same file, line within 3), or both are none.",

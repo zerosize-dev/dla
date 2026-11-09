@@ -319,6 +319,10 @@ pub mod tool_class {
     pub const ALLOC_SHIM: &str = "alloc-shim";
     /// The runtime's own reachability proof (the Go goroutineleak profile).
     pub const GC_REACHABILITY: &str = "gc-reachability";
+    /// A trend over a harness series (`dla trend`): the growth measurement itself.
+    pub const HARNESS_SERIES: &str = "harness-series";
+    /// A change made to a scratch copy of the target and re-measured (`dla intervene`).
+    pub const INTERVENTION: &str = "intervention";
 }
 
 /// Which observation a piece of evidence rests on: the tool, its class and the source

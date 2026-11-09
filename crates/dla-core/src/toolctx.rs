@@ -941,6 +941,7 @@ mod tests {
                 started_at: None,
                 status: crate::state::WorkerStatus::Registered,
                 slice: "ledger.jvm.jsonl".into(),
+                stalled: false,
             });
             Ok(())
         })

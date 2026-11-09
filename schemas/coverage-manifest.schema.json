@@ -60,6 +60,13 @@
           "format": "uint64",
           "minimum": 0
         },
+        "duplicates": {
+          "description": "Hits that repeat an item already counted (same site, another rule or pass); `enumerated`\ncounts hits, so findings plus duplicates account for it.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
         "enumerated": {
           "description": "Items it enumerated.",
           "type": "integer",

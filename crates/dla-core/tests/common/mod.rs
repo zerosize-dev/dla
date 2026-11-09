@@ -243,6 +243,7 @@ pub fn new_run(workers: &[&str]) -> tempfile::TempDir {
             started_at: None,
             status: WorkerStatus::Registered,
             slice: format!("ledger.{w}.jsonl"),
+            stalled: false,
         });
     }
     state.save(dir.path()).unwrap();

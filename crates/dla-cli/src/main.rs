@@ -14,11 +14,14 @@ mod correlate_cmd;
 mod ctx;
 mod fail;
 mod gap_cmd;
+mod gate_cmd;
 mod git;
 mod gitignore;
 mod harness_cmd;
 mod install_cmd;
+mod intervene_cmd;
 mod ledger_cmd;
+mod ledger_m6;
 mod out;
 mod parse;
 mod probe_cmd;
@@ -117,6 +120,11 @@ enum Command {
     Summarize(summarize_cmd::SummarizeArgs),
     /// Tie native growth at a foreign-function boundary to the managed worker that calls it.
     Correlate(correlate_cmd::CorrelateArgs),
+    /// Stage and final gates, and the hook entry points that enforce them.
+    #[command(subcommand)]
+    Gate(gate_cmd::GateCmd),
+    /// Edit a scratch copy of a harness, re-run it and judge whether the growth went away.
+    Intervene(intervene_cmd::InterveneArgs),
 }
 
 /// What a command prints on success.
@@ -186,6 +194,8 @@ fn dispatch(cli: Cli) -> Res<Output> {
         Command::Correlate(a) => {
             correlate_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
         }
+        Command::Gate(c) => gate_cmd::run(&ctx, c).map(Output::Json),
+        Command::Intervene(a) => intervene_cmd::run(&ctx()?, a).map(Output::Json),
     }
 }
 

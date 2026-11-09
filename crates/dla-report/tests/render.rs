@@ -437,6 +437,7 @@ fn workers_view() -> RunView {
         started_at: None,
         status,
         slice: format!("ledger.{name}.jsonl"),
+        stalled: false,
     };
     st.workers = vec![
         entry("jvm", WorkerStatus::Done),

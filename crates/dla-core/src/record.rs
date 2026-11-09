@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     checklist::ChecklistAnswer,
     evidence::EvidenceRecord,
-    finding::{Finding, FindingState, Holder, Region, UnresolvedReason},
+    finding::{ExplanationTag, Finding, FindingState, Holder, Region, UnresolvedReason},
     ids::{EvidenceId, FindingId, OpenItemId},
 };
 
@@ -159,6 +159,95 @@ pub enum Record {
     FindingMerged(FindingMerged),
     /// An independent verifier looked at a finding's bundle.
     Verification(Verification),
+    /// A finding got an archetype label (schema 6).
+    FindingLabeled(FindingLabeled),
+    /// A finding got a structured explanation (schema 6).
+    FindingExplained(FindingExplained),
+    /// `dla run reseal` re-sealed protected files after an out-of-band change (schema 6).
+    IntegrityResealed(IntegrityResealed),
+}
+
+/// The proof a label was accepted on: the inner set of the archetype's `requires` that was
+/// met and the evidence that met it. Replay re-checks this record and never reads `data/`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+pub struct LabelSatisfied {
+    /// Evidence kinds of the met alternative (wire spelling, e.g. `unit-count-series`).
+    #[serde(default)]
+    pub kinds: Vec<String>,
+    /// Evidence records that carry those kinds.
+    #[serde(default)]
+    pub evidence: Vec<EvidenceId>,
+}
+
+/// An archetype label for a confirmed or strong finding (`dla ledger label`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct FindingLabeled {
+    /// The finding.
+    pub finding: FindingId,
+    /// An archetype ID (`L-*`, `N-*`) or `UNCLASSIFIED`.
+    pub label: String,
+    /// The label before this line (audit trail).
+    pub previous: String,
+    /// The met `requires` alternative and its evidence; empty for `UNCLASSIFIED`.
+    #[serde(default)]
+    pub satisfied: LabelSatisfied,
+    /// SHA-256 (lowercase hex) of the archetype entry used; empty for `UNCLASSIFIED`.
+    #[serde(default)]
+    pub entry_sha256: String,
+    /// The finding's region is not among the archetype's regions (a warning, not a refusal).
+    #[serde(default)]
+    pub region_mismatch: bool,
+    /// Why nothing fits (`UNCLASSIFIED`) or any other note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+string_enum! {
+    /// What the explanation says about removal of the retained items.
+    pub enum RemovalClaim {
+        /// No code removes them.
+        Never = "never",
+        /// A search found no remover (the census is heuristic).
+        NotFound = "not-found",
+        /// A remover exists and runs only under a condition.
+        Conditional = "conditional",
+        /// A remover exists and uses another key.
+        WrongKey = "wrong-key",
+        /// A remover exists and is never reached.
+        Unreachable = "unreachable",
+    }
+}
+
+/// A structured explanation of a leak (`dla ledger explain`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct FindingExplained {
+    /// The finding.
+    pub finding: FindingId,
+    /// Observed or inferred.
+    pub tag: ExplanationTag,
+    /// `file:line` sites that add to the holder.
+    #[serde(default)]
+    pub adds: Vec<String>,
+    /// What happens to the items afterwards.
+    pub removal: RemovalClaim,
+    /// `file:line` of the remover, for `conditional`, `wrong-key` and `unreachable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remover: Option<String>,
+    /// Evidence that shows the pairing, required with `observed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EvidenceId>,
+    /// The explanation text.
+    pub text: String,
+}
+
+/// `dla run reseal`: protected files were changed outside `dla` and sealed again.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct IntegrityResealed {
+    /// Protected files (names relative to the run directory) that were sealed again.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Why, in the operator's words.
+    pub reason: String,
 }
 
 /// The first line of a worker slice.
@@ -230,6 +319,10 @@ pub struct Verification {
     pub agrees_site: bool,
     /// The verifier's holder is the finding's.
     pub agrees_holder: bool,
+    /// The verifier's label is the finding's (schema 6); `None` when archetypes were off or
+    /// the line predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agrees_label: Option<bool>,
 }
 
 /// One line of `ledger.jsonl`.

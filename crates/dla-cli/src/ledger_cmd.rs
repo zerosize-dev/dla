@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use crate::{
     ctx::Ctx,
     fail::{Failure, Res, codes},
+    ledger_m6,
     parse::parse_enum,
 };
 
@@ -50,6 +51,14 @@ pub enum LedgerCmd {
     /// Record what an independent verifier concluded about a finding from its bundle
     /// (core only).
     Verify(VerifyArgs),
+    /// Label a confirmed or strong finding with an archetype, when the evidence the
+    /// archetype requires is recorded; or `--as UNCLASSIFIED --note`; or `--suggest`.
+    Label(ledger_m6::LabelArgs),
+    /// Mark a confirmed leak-side finding strong, on a second independent class of evidence
+    /// (retention or intervention).
+    Strong(ledger_m6::StrongArgs),
+    /// Record a checked explanation of a confirmed or strong leak-side finding.
+    Explain(ledger_m6::ExplainArgs),
 }
 
 /// Flags of `dla ledger verify`.
@@ -287,6 +296,9 @@ pub fn dispatch(ctx: &Ctx, cmd: LedgerCmd) -> Res<Value> {
         LedgerCmd::Done => done(ctx),
         LedgerCmd::Merge => merge(ctx),
         LedgerCmd::Verify(a) => verify(ctx, a),
+        LedgerCmd::Label(a) => ledger_m6::label(ctx, a),
+        LedgerCmd::Strong(a) => ledger_m6::strong(ctx, a),
+        LedgerCmd::Explain(a) => ledger_m6::explain(ctx, a),
     }
 }
 

@@ -45,6 +45,10 @@ pub struct BackendCoverage {
     pub enumerated: u64,
     /// Items that were dispositioned.
     pub dispositioned: u64,
+    /// Hits that repeat an item already counted (same site, another rule or pass); `enumerated`
+    /// counts hits, so findings plus duplicates account for it.
+    #[serde(default)]
+    pub duplicates: u64,
 }
 
 impl BackendCoverage {
@@ -56,6 +60,7 @@ impl BackendCoverage {
             version: None,
             enumerated: 0,
             dispositioned: 0,
+            duplicates: 0,
         }
     }
 
