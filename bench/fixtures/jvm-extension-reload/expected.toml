@@ -1,0 +1,23 @@
+schema_version = 1
+id = "jvm-extension-reload"
+runtime = "jvm"
+category = "archetype-leak"
+pair = "jvm-extension-reload-stopped"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The reporting service has been getting slower and its memory keeps growing: after each round of extension updates, which are picked up without restarting the process, heap and metaspace usage are higher than before the round, and the process has to be restarted about once a week. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/reports/EventBus.java:13"
+lines = [13, 13]
+alt_sites = ["src/reports/EventBus.java:8", "src/reports/ExtensionManager.java:26-31"]
+holder = "registration-table"
+region = "heap"
+cause = "L-UNLOAD"
+share = 1.0
+confirmable = true
+dump_backed = true

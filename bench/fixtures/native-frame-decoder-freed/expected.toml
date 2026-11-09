@@ -1,0 +1,19 @@
+schema_version = 1
+id = "native-frame-decoder-freed"
+runtime = "native"
+category = "decoy-control"
+pair = "native-frame-decoder"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The frame decoding worker's resident memory grows steadily while it processes
+a camera feed, in proportion to the number of frames, and the process has to be
+restarted every few days. Find out why.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/decoder.c:29"
+cause = "N-WARM"
+discriminator = "every decoded buffer is released on every path, including the checksum-mismatch return (the free at line 40): peak resident size is 1540 kB at 1000 and at 128000 iterations, valgrind reports all heap blocks freed, and the slope of the second half of the run is zero"

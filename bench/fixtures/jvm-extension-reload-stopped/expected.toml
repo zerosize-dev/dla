@@ -1,0 +1,17 @@
+schema_version = 1
+id = "jvm-extension-reload-stopped"
+runtime = "jvm"
+category = "decoy-control"
+pair = "jvm-extension-reload"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The reporting service has been getting slower and its memory keeps growing: after each round of extension updates, which are picked up without restarting the process, heap and metaspace usage are higher than before the round, and the process has to be restarted about once a week. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/reports/EventBus.java:13"
+cause = "N-WARM"
+discriminator = "each reload stops the running instance first, so the bus holds one listener at every checkpoint; the loaded-class count and the post-GC heap are flat from 1000 reloads onward because the old class loaders are collected and their classes unloaded, and the slope of the second half is zero"

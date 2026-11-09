@@ -1,0 +1,14 @@
+{
+  "name": "price-board",
+  "version": "2.3.0",
+  "private": true,
+  "description": "Publishes the latest price snapshot per instrument to dashboard clients.",
+  "main": "src/board.js",
+  "scripts": {
+    "test": "node --test",
+    "load": "node load.js --iterations 2000"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

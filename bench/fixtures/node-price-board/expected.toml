@@ -1,0 +1,23 @@
+schema_version = 1
+id = "node-price-board"
+runtime = "node"
+category = "archetype-leak"
+pair = "node-price-board-flat"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The price board service's heap climbs steadily while it publishes market updates: after every burst of updates the live heap is larger than after the previous burst, even though only the latest snapshot per instrument is ever served, and the process is restarted about once a day. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/board.js:15"
+lines = [15, 17]
+alt_sites = ["src/board.js:7", "src/board.js:26-28", "src/board.js:31"]
+holder = "closure/continuation"
+region = "heap"
+cause = "L-CAPTURE"
+share = 1.0
+confirmable = true
+dump_backed = true

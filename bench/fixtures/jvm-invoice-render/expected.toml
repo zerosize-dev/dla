@@ -1,0 +1,23 @@
+schema_version = 1
+id = "jvm-invoice-render"
+runtime = "jvm"
+category = "archetype-leak"
+pair = "jvm-invoice-render-trimmed"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The invoicing service's heap usage keeps climbing under steady traffic: after every batch of invoices the live set is larger than it was after the previous one, and the process is restarted about every other day. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/billing/RenderContext.java:13"
+lines = [13, 13]
+alt_sites = ["src/billing/RenderContext.java:8"]
+holder = "thread-local"
+region = "heap"
+cause = "L-TLS"
+share = 1.0
+confirmable = true
+dump_backed = true

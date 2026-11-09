@@ -1,0 +1,17 @@
+schema_version = 1
+id = "rust-meter-callbacks-reclaimed"
+runtime = "rust"
+category = "decoy-control"
+pair = "rust-meter-callbacks"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the meter gateway's resident memory grows in step with the number of device sessions it has served, and the process is restarted every few days. Sessions are short-lived and nothing is kept between them on purpose. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/session.rs:19"
+cause = "N-WARM"
+discriminator = "the session's close hands the registered pointer back to Box::from_raw, so the window is dropped with the session; live bytes are the same at 2000 and 128000 sessions and the slope of the second half is zero"

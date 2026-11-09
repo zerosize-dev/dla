@@ -1,0 +1,23 @@
+schema_version = 1
+id = "rust-meter-callbacks"
+runtime = "rust"
+category = "archetype-leak"
+pair = "rust-meter-callbacks-reclaimed"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the meter gateway's resident memory grows in step with the number of device sessions it has served, and the process is restarted every few days. Sessions are short-lived and nothing is kept between them on purpose. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/session.rs:19"
+lines = [19, 19]
+alt_sites = ["src/session.rs:33"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-OWNERSHIP"
+share = 1.0
+confirmable = true
+dump_backed = true

@@ -447,8 +447,10 @@ default** (`CHECK_DUMP_BACKED` in `dynamic_cmd.rs`, flag
 `--check-dump-backed=false` to turn it off): the policy runs the summarize
 steps before it confirms and cites the evidence of a call whose passing growth
 column is tied to the chosen finding (step 6 above). Marked: `go-subscription-workers` L1 (goroutine groups tied by creation site), `jvm-audit-chain` L1, `jvm-order-cache` L1,
-`jni-order-codec` L2, `rust-tree-parent-links` L1 and `native-frame-decoder` L1
-(the one native fixture with a confirmable leak, which runs under valgrind;
+`jni-order-codec` L2, `rust-tree-parent-links` L1, `jvm-extension-reload` L1,
+`rust-meter-callbacks` L1, `jvm-invoice-render` L1, `node-price-board` L1 and
+`native-frame-decoder` L1 (the one native fixture with a confirmable leak, which
+runs under valgrind;
 `native-glyph-cache` and `native-vendor-codec` have no confirmable leak).
 The graders ignore the field and the grading metrics are unchanged.
 
@@ -536,6 +538,8 @@ column observed `static/global`.
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
 | `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census gives the `setInterval` timer finding the holder `blocked-stack` and the policy keeps it. The per-point heap-graph run observes `registration-table` for the column of `Session.recent` (the sessions are held through the loopback socket events) and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding, so there is no observed holder to correct it with. `node-resources` ties the timer group to the finding by site only. |
+| `jvm-invoice-render` | `leak L1 (src/billing/RenderContext.java:13) is not confirmed` | Temporary (M6, in progress): the in-process probe measures the `ThreadLocal` object, which is flat, so the census finding is refuted before the heap-graph step ties the thread-local values. |
+| `node-price-board` | `leak L1 (src/board.js:15) is not confirmed` | Temporary (M6, in progress): closure contexts are invisible to the in-process probes, and the policy does not yet drive a finding tied only by the heap-graph step to confirmation. |
 
 `jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
 workers, one merged ledger with both slices, merged coverage): the driver fails

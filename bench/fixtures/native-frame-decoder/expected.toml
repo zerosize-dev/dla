@@ -2,6 +2,7 @@ schema_version = 1
 id = "native-frame-decoder"
 runtime = "native"
 category = "archetype-leak"
+pair = "native-frame-decoder-freed"
 dynamic_confirmation = true
 
 [task]

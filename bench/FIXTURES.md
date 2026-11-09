@@ -196,7 +196,7 @@ source site although no source was given.
 | `rust-tree-parent-links` | rust | archetype-leak | `rust-tree-parent-links-weak` | Parent and child hold each other through `Rc`, one tree per request (`L-CYCLE`, holder `cycle-only`) |
 | `rust-tree-parent-links-weak` | rust | decoy-control | `rust-tree-parent-links` | Same code with a `Weak` back-edge |
 | `rust-batch-buffers` | rust | non-leak | | `Vec` and `HashMap` capacity retained after `clear()`; grows to the largest batch and stays flat (`N-HWM`) |
-| `native-frame-decoder` | native | archetype-leak | | A decode buffer is `malloc`ed and not freed on an early-return error path hit by a fixed share of inputs (`L-HANDLE`, holder `native-handle/global-ref`, region `off-heap`) |
+| `native-frame-decoder` | native | archetype-leak | `native-frame-decoder-freed` | A decode buffer is `malloc`ed and not freed on an early-return error path hit by a fixed share of inputs (`L-HANDLE`, holder `native-handle/global-ref`, region `off-heap`) |
 | `native-glyph-cache` | native | non-leak | | A fixed-capacity cache fills and then evicts; memory rises to a plateau (`N-WARM`) |
 | `native-vendor-codec` | native | impossible | | Needs a vendor header and library that are not installed. Frames the library hands to a callback are kept by the application and never handed back with the library's release call; whether that retains memory depends on the library's ownership contract, which only the missing library and its manual define, so no stand-in can settle it |
 
@@ -213,6 +213,22 @@ four non-leaks and two impossible cases.
 | `jvm-rfq-dump-series-capped` | artifact | jvm | decoy-control | Three dumps of the same service where the holder plateaus after a warm-up fill |
 | `jvm-rfq-single-dump` | artifact | jvm | impossible | One dump: it can end suspected with a request for another dump, never confirmed |
 | `symptom-no-target` | symptom | jvm | impossible | A report that names no target and a project that holds only notes: a correct run claims nothing |
+
+## The next nine (M6)
+
+New pairs for the archetype rows that had none, plus the decoy for the native row.
+
+| ID | Runtime | Category | Pair | Mechanism (for authors; never in the code) |
+|---|---|---|---|---|
+| `native-frame-decoder-freed` | native | decoy-control | `native-frame-decoder` | Same code with `free` on the checksum-mismatch path (`N-WARM`: peak resident size flat from the first frames) |
+| `jvm-invoice-render` | jvm | archetype-leak | `jvm-invoice-render-trimmed` | Per-invoice text segments appended to a `ThreadLocal<List<String>>` on pooled worker threads and never removed (`L-TLS`, holder `thread-local`) |
+| `jvm-invoice-render-trimmed` | jvm | decoy-control | `jvm-invoice-render` | Same code that cuts the per-thread list back after each render (`N-HWM`) |
+| `jvm-extension-reload` | jvm | archetype-leak | `jvm-extension-reload-stopped` | Each reload makes a new class loader and the old extension stays subscribed on a static event bus, so old loaders and classes stay reachable (`L-UNLOAD`, holder `static/global`) |
+| `jvm-extension-reload-stopped` | jvm | decoy-control | `jvm-extension-reload` | Same code that stops the old extension on reload; old loaders are collected and their classes unloaded (`N-WARM`) |
+| `node-price-board` | node | archetype-leak | `node-price-board-flat` | Two closures share one V8 context; the method stored on each snapshot keeps the context, which holds the previous snapshot, so the whole chain stays reachable (`L-CAPTURE`, holder `closure/continuation`) |
+| `node-price-board-flat` | node | decoy-control | `node-price-board` | Same code where the closure captures a number, not the previous snapshot (`N-WARM`) |
+| `rust-meter-callbacks` | rust | archetype-leak | `rust-meter-callbacks-reclaimed` | `Box::into_raw` handed to a C-style callback table as the user pointer and never converted back with `Box::from_raw` (`L-OWNERSHIP`, holder `native-handle/global-ref`, region `off-heap`) |
+| `rust-meter-callbacks-reclaimed` | rust | decoy-control | `rust-meter-callbacks` | Same code that reclaims the pointer with `Box::from_raw` on close (`N-WARM`) |
 
 ## README.md for each fixture
 
