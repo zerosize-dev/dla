@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/a.ts", "../src/main.ts"],
+  "sourcesContent": ["export const cache = new Map<string, object>();\nexport function addSession(i: number) { cache.set('k' + i, { i, buf: Buffer.alloc(1000) }); }\n", "import { addSession } from './a';\nfor (let i = 0; i < 5000; i++) addSession(i);\nrequire('v8').writeHeapSnapshot('bundle.heapsnapshot');\n"],
+  "mappings": "AAAO,IAAMA,EAAQ,IAAI,IAClB,SAASC,EAAWC,EAAW,CAAEF,EAAM,IAAI,IAAME,EAAG,CAAE,EAAAA,EAAG,IAAK,OAAO,MAAM,GAAI,CAAE,CAAC,CAAG,CCA5F,QAASC,EAAI,EAAGA,EAAI,IAAMA,IAAKC,EAAWD,CAAC,EAC3C,QAAQ,IAAI,EAAE,kBAAkB,qBAAqB",
+  "names": ["cache", "addSession", "i", "i", "addSession"]
+}

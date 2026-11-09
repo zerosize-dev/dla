@@ -122,10 +122,15 @@ pub struct RunArgs {
     /// jemalloc | empty-cache | none.
     #[arg(long, value_name = "KIND")]
     purge: Option<String>,
-    /// JVM only: also write raw captures the `dla summarize` commands read, a comma list of
-    /// heap (HPROF dumps, 3 or more per run), histogram (class histogram per point), jfr
-    /// (flight recording with old-object samples) and nonheap (thread dump, class loader
-    /// statistics, native memory); `all` for every kind. Default: none.
+    /// Also write raw captures the `dla summarize` commands read, a comma list of kinds;
+    /// `all` for every kind the runtime's agent writes. JVM: heap (HPROF dumps), histogram
+    /// (class histogram per point), jfr (old-object samples), nonheap (thread dump, class
+    /// loaders, native memory). Node: heap (V8 heap snapshots), alloc (sampling heap
+    /// profiles), nonheap (resources by creation site). Go: alloc (heap profiles), nonheap
+    /// (goroutine dumps and the goroutine leak profile). Python: histogram (type counts),
+    /// alloc (tracemalloc, and memray when the program's interpreter has it), nonheap
+    /// (threads, tasks, ResourceWarning sites). A series of heap dumps or snapshots needs
+    /// one process (driver mode). Default: none.
     #[arg(long, value_name = "KINDS", value_parser = str::parse::<CaptureSet>)]
     capture: Option<CaptureSet>,
     /// Heap dumps per run with --capture heap (driver mode: spread over the rounds;
@@ -184,7 +189,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
             let signal = if r.tool.is_some() {
                 "one report per point (valgrind XML or a heaptrack_print text), no series"
             } else if r.capture.is_some_and(|c| !c.is_empty()) {
-                "one series per key mode, plus heap dumps, class histograms, a flight recording and non-heap reports under out/"
+                "one series per key mode, plus the requested raw captures (heap dumps or snapshots, histograms, allocation profiles, non-heap reports) under out/"
             } else {
                 "one series per key mode: memory, threads, handles and probe sizes per point"
             };

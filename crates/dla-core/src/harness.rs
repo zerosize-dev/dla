@@ -109,6 +109,8 @@ string_enum! {
         Jfr = "jfr",
         /// Thread dump, class loader statistics and native memory summary.
         NonHeap = "nonheap",
+        /// Sampling allocation profile (Node `.heapprofile`).
+        Alloc = "alloc",
         /// Valgrind memcheck XML (`--tool valgrind`).
         Valgrind = "valgrind",
         /// Heaptrack data and its printed report (`--tool heaptrack`).
@@ -541,7 +543,7 @@ pub struct HarnessDump {
 /// One file an agent wrote next to a dump record (`DLA_CAPTURE`).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 pub struct DumpCapture {
-    /// `heap`, `histogram`, `jfr` or `nonheap`.
+    /// `heap`, `histogram`, `jfr`, `nonheap` or `alloc`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// File name inside `DLA_CAPTURE_DIR`.

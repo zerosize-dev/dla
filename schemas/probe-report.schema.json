@@ -19,6 +19,24 @@
         "$ref": "#/$defs/BuildProbe"
       }
     },
+    "go": {
+      "description": "The Go toolchain and its goroutineleak capability (Go projects only).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/GoProbe"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "known_leaks": {
+      "description": "Known-leak entries checked against the project (runtimes found only).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/KnownLeakVerdict"
+      }
+    },
     "libraries": {
       "description": "Libraries and the harness flags they imply.",
       "type": "array",
@@ -186,7 +204,7 @@
           "default": false
         },
         "kind": {
-          "description": "Kind of boundary: `jni`.",
+          "description": "Kind of boundary: `jni`, `pyo3`, `napi` or `cgo`.",
           "type": "string"
         },
         "library": {
@@ -232,6 +250,63 @@
         "kind",
         "managed",
         "native"
+      ]
+    },
+    "GoProbe": {
+      "description": "What the project's Go toolchain offers DLA.",
+      "type": "object",
+      "properties": {
+        "goroutineleak": {
+          "description": "How the `goroutineleak` profile is reached: `native` (Go 1.27 or newer),\n`experiment` (Go 1.26 with `GOEXPERIMENT=goroutineleakprofile`), `toolchain` (a\nnewer toolchain from the module cache runs a separate leak pass) or `missing`.",
+          "type": "string"
+        },
+        "install_hint": {
+          "description": "The command that makes the capability available, when it is `missing`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "leak_toolchain": {
+          "description": "The `GOTOOLCHAIN` value of the leak pass when `goroutineleak` is `toolchain`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The version of the `go` command that builds the project (`go1.24.7`), when it ran.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "goroutineleak"
+      ]
+    },
+    "KnownLeakVerdict": {
+      "description": "The check of one `data/known-leaks.toml` entry against the project. Context for the\nanalysis; never a finding.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Entry ID.",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "The result.",
+          "$ref": "#/$defs/Verdict"
+        },
+        "why": {
+          "description": "The deciding fact, short (a file, a version or the missing piece).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "verdict",
+        "why"
       ]
     },
     "LibraryProbe": {
@@ -491,6 +566,26 @@
       },
       "required": [
         "name"
+      ]
+    },
+    "Verdict": {
+      "description": "Three-valued result of a known-leak check.",
+      "oneOf": [
+        {
+          "description": "The project's files show the condition.",
+          "type": "string",
+          "const": "true"
+        },
+        {
+          "description": "The project's files rule the condition out.",
+          "type": "string",
+          "const": "false"
+        },
+        {
+          "description": "The files cannot decide.",
+          "type": "string",
+          "const": "maybe"
+        }
       ]
     }
   }

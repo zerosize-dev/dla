@@ -311,6 +311,11 @@
           "const": "nonheap"
         },
         {
+          "description": "Sampling allocation profile (Node `.heapprofile`).",
+          "type": "string",
+          "const": "alloc"
+        },
+        {
           "description": "Valgrind memcheck XML (`--tool valgrind`).",
           "type": "string",
           "const": "valgrind"

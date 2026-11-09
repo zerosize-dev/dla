@@ -26,10 +26,17 @@ const DEFAULT_TOP: usize = 5;
 #[derive(Args, Debug)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct SummarizeArgs {
-    /// Print the adapters: operation, runtime, backend, tool and whether the tool is
-    /// available here.
+    /// Print the adapters. Alone: the backend names grouped by operation and runtime, and
+    /// the ones whose tool is missing here. With `--op` or `--runtime`: one row per adapter
+    /// (operation, runtime, backend, tool, available).
     #[arg(long)]
     pub list: bool,
+    /// With `--list`: only the adapters of this operation.
+    #[arg(long = "op", value_name = "OP", requires = "list")]
+    pub list_op: Option<String>,
+    /// With `--list`: only the adapters of this runtime (and the runtime-independent ones).
+    #[arg(long = "runtime", value_name = "RUNTIME", requires = "list")]
+    pub list_runtime: Option<String>,
     #[command(subcommand)]
     pub op: Option<SummarizeCmd>,
 }
@@ -97,7 +104,25 @@ pub fn run(
     let env = Env::current();
     if a.list {
         let tools = dla_core::paths::tools_dir();
-        return Ok(summarize::list(tools.as_deref(), &env));
+        let op = match a.list_op.as_deref() {
+            None => None,
+            Some(name) => Some(Op::ALL.into_iter().find(|o| o.name() == name).ok_or_else(
+                || {
+                    let ops = Op::ALL.map(Op::name).join(", ");
+                    Failure::usage(
+                        format!("unknown operation `{name}`; operations: {ops}"),
+                        format!("an operation: {ops}"),
+                        "dla summarize --list --op heap-graph",
+                    )
+                },
+            )?),
+        };
+        return Ok(summarize::list(
+            tools.as_deref(),
+            &env,
+            op,
+            a.list_runtime.as_deref(),
+        ));
     }
     let Some(cmd) = a.op else {
         let ops = Op::ALL.map(Op::name).join(", ");

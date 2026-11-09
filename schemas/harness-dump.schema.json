@@ -228,7 +228,7 @@
           ]
         },
         "kind": {
-          "description": "`heap`, `histogram`, `jfr` or `nonheap`.",
+          "description": "`heap`, `histogram`, `jfr`, `nonheap` or `alloc`.",
           "type": [
             "string",
             "null"

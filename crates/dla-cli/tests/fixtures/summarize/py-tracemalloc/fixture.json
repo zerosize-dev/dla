@@ -1,0 +1,13 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "alloc-1.json",
+  "alloc-2.json",
+  "alloc-3.json",
+  "alloc-4.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "four real py-<n>.alloc.json files written by the Python harness agent (DLA_CAPTURE=alloc, 10 frames) for a sensor ingest worker run for 670, 2010, 2680 and 4020 batches, trimmed to the first 60 stacks; the frame file <frozen runpy> is renamed to a key-like name to plant a secret"
+}

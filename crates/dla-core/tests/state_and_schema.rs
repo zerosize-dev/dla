@@ -164,6 +164,7 @@ fn schema_export_is_complete_and_deterministic() {
             "coverage-manifest",
             "checklist",
             "detectors",
+            "known-leaks",
             "probe-report",
             "static-hit",
             "census-entry",

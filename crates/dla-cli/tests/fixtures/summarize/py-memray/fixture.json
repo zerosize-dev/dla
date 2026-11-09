@@ -1,0 +1,13 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "memray-1.json",
+  "memray-2.json",
+  "memray-3.json",
+  "memray-4.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "four real py-<n>.memray.json reports (memray 1.20 through dla_memray_leaks.py) of the same ingest worker at 670, 2010, 2680 and 4020 batches, trimmed to the first 60 stacks; the function _run_module_as_main is renamed to a key-like name to plant a secret"
+}

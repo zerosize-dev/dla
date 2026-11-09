@@ -506,7 +506,10 @@ fn cdylib_target_dirs(work: &Path, native_dir: &str) -> Vec<String> {
 fn write_agent(rt: Runtime, driver: bool, agent: &Path) -> Result<(), Refusal> {
     match rt {
         Runtime::Jvm => compile_jvm_agent(agent),
-        Runtime::Python => write(&agent.join("sitecustomize.py"), templates::PY_AGENT),
+        Runtime::Python => {
+            write(&agent.join("sitecustomize.py"), templates::PY_AGENT)?;
+            write(&agent.join("dla_memray_leaks.py"), templates::PY_MEMRAY)
+        }
         Runtime::Node => write(&agent.join("dla-preload.js"), templates::NODE_AGENT),
         Runtime::Go => Ok(()),
         Runtime::Rust | Runtime::Native => {

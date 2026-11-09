@@ -188,8 +188,8 @@ pub fn check_site(site: &str) -> Result<(), String> {
 }
 
 /// Where a finding came from. Validated: `detector:<backend>/<rule>`, `census`,
-/// `growth-series`, `archetype-row`, `known-leak:<id>`, `residual`, `verifier`,
-/// `hypothesis`.
+/// `growth-series`, `archetype-row`, `known-leak:<id>`, `correlation`, `residual`,
+/// `verifier`, `hypothesis`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(try_from = "String", into = "String")]
 pub struct Origin(String);
@@ -197,7 +197,7 @@ pub struct Origin(String);
 /// The origin string is not one of the allowed forms.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "invalid origin {0:?}: expected detector:<backend>/<rule>, census, growth-series, archetype-row, known-leak:<id>, residual, verifier or hypothesis"
+    "invalid origin {0:?}: expected detector:<backend>/<rule>, census, growth-series, archetype-row, known-leak:<id>, correlation, residual, verifier or hypothesis"
 )]
 pub struct OriginError(pub String);
 
@@ -209,8 +209,8 @@ impl Origin {
     /// Parses and validates an origin string.
     pub fn parse(s: &str) -> Result<Self, OriginError> {
         let ok = match s {
-            "census" | "growth-series" | "archetype-row" | "residual" | "verifier"
-            | "hypothesis" => true,
+            "census" | "growth-series" | "archetype-row" | "correlation" | "residual"
+            | "verifier" | "hypothesis" => true,
             _ => {
                 if let Some(rest) = s.strip_prefix("detector:") {
                     rest.split_once('/')
@@ -273,7 +273,7 @@ impl JsonSchema for Origin {
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "string",
-            "pattern": "^(census|growth-series|archetype-row|residual|verifier|hypothesis|detector:[^\\s:/]+/\\S+|known-leak:\\S+)$"
+            "pattern": "^(census|growth-series|archetype-row|correlation|residual|verifier|hypothesis|detector:[^\\s:/]+/\\S+|known-leak:\\S+)$"
         })
     }
 }

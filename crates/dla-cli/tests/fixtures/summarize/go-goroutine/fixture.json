@@ -1,0 +1,6 @@
+{
+  "op": "non-heap",
+  "inputs": ["goroutine1.txt", "goroutine2.txt", "goroutine3.txt"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "note": "three real go1.27.0 goroutine dumps (WriteTo(f, 2)) of the same process, 10, 20 and 30 leaked subscription workers; three goroutines per round are also parked on a global channel, created by a function named like a key"
+}

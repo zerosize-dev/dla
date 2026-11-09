@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KnownLeaksFile",
+  "description": "The known-leak table.",
+  "type": "object",
+  "properties": {
+    "leak": {
+      "description": "The `[[leak]]` entries, in file order.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/KnownLeak"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ConfigReq": {
+      "description": "A configuration requirement.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Key, for example `spring.cache.type` or `io.netty.leakDetection.level`.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Required value, compared without case. Absent means \"set to anything\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ]
+    },
+    "Holder": {
+      "description": "What holds the leaked memory.",
+      "oneOf": [
+        {
+          "description": "A static or global variable.",
+          "type": "string",
+          "const": "static/global"
+        },
+        {
+          "description": "A registration table (listeners, callbacks).",
+          "type": "string",
+          "const": "registration-table"
+        },
+        {
+          "description": "A field of a container object.",
+          "type": "string",
+          "const": "container-field"
+        },
+        {
+          "description": "Thread-local storage.",
+          "type": "string",
+          "const": "thread-local"
+        },
+        {
+          "description": "A blocked stack.",
+          "type": "string",
+          "const": "blocked-stack"
+        },
+        {
+          "description": "A closure or continuation.",
+          "type": "string",
+          "const": "closure/continuation"
+        },
+        {
+          "description": "A native handle or global reference.",
+          "type": "string",
+          "const": "native-handle/global-ref"
+        },
+        {
+          "description": "A reference cycle only.",
+          "type": "string",
+          "const": "cycle-only"
+        }
+      ]
+    },
+    "KnownLeak": {
+      "description": "One known leak.",
+      "type": "object",
+      "properties": {
+        "aliases": {
+          "description": "Other manifest names of the same library (`io.netty:*`).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "effect": {
+          "description": "What happens, in one or two sentences.",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "Public source URL that states the behavior.",
+          "type": "string"
+        },
+        "holder": {
+          "description": "What holds the memory.",
+          "$ref": "#/$defs/Holder"
+        },
+        "id": {
+          "description": "Stable ID, `<runtime>-<slug>`.",
+          "type": "string"
+        },
+        "library": {
+          "description": "Library name, or a runtime name (`go`) for the runtime itself.",
+          "type": "string"
+        },
+        "remedy": {
+          "description": "How to fix or avoid it.",
+          "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime the entry applies to.",
+          "$ref": "#/$defs/Runtime"
+        },
+        "versions": {
+          "description": "Affected version range of the library.",
+          "type": "string"
+        },
+        "when": {
+          "description": "Extra condition (config keys, source patterns, other libraries).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Predicate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "runtime",
+        "library",
+        "versions",
+        "effect",
+        "holder",
+        "evidence",
+        "remedy"
+      ]
+    },
+    "LibraryReq": {
+      "description": "A library requirement.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Library name as the manifests spell it (`artifactId`, module path, crate or\npackage name); `group:*` matches a whole group.",
+          "type": "string"
+        },
+        "versions": {
+          "description": "Version range, for example `>=4.1.0, <4.2`. `*` for any.",
+          "type": "string",
+          "default": "*"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "Predicate": {
+      "description": "A condition over the project. Evaluated three-valued by `dla probe`.",
+      "oneOf": [
+        {
+          "description": "True when every part is true.",
+          "type": "object",
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Predicate"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "all"
+          ]
+        },
+        {
+          "description": "True when any part is true.",
+          "type": "object",
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Predicate"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "any"
+          ]
+        },
+        {
+          "description": "Negation. `maybe` stays `maybe`.",
+          "type": "object",
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/Predicate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "not"
+          ]
+        },
+        {
+          "description": "The runtime version (the `go` line of go.mod, the declared or installed\nlanguage version) is in this range.",
+          "type": "object",
+          "properties": {
+            "runtime_version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "runtime_version"
+          ]
+        },
+        {
+          "description": "A library from the manifests is present with a version in the range.",
+          "type": "object",
+          "properties": {
+            "library": {
+              "$ref": "#/$defs/LibraryReq"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "library"
+          ]
+        },
+        {
+          "description": "A configuration key is set in the project's config files, build files or\nscripts, optionally to a value (compared without case).",
+          "type": "object",
+          "properties": {
+            "config": {
+              "$ref": "#/$defs/ConfigReq"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "config"
+          ]
+        },
+        {
+          "description": "A regular expression matches a source file of the entry's runtime.",
+          "type": "object",
+          "properties": {
+            "source_regex": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "source_regex"
+          ]
+        }
+      ]
+    },
+    "Runtime": {
+      "description": "A language runtime DLA investigates. The wire spelling is also the default\nworker key in `coverage.json` and the value of `--lang`.",
+      "oneOf": [
+        {
+          "description": "Java, Kotlin and other JVM languages.",
+          "type": "string",
+          "const": "jvm"
+        },
+        {
+          "description": "Go.",
+          "type": "string",
+          "const": "go"
+        },
+        {
+          "description": "Rust.",
+          "type": "string",
+          "const": "rust"
+        },
+        {
+          "description": "Node.js (JavaScript and TypeScript).",
+          "type": "string",
+          "const": "node"
+        },
+        {
+          "description": "Python.",
+          "type": "string",
+          "const": "python"
+        },
+        {
+          "description": "C and C++.",
+          "type": "string",
+          "const": "native"
+        }
+      ]
+    }
+  }
+}

@@ -10,6 +10,7 @@ mod budget;
 mod bundle_cmd;
 mod census_cmd;
 mod consent_cmd;
+mod correlate_cmd;
 mod ctx;
 mod fail;
 mod gap_cmd;
@@ -114,6 +115,8 @@ enum Command {
     Attach(attach_cmd::AttachArgs),
     /// Summarize captured files (heap dumps, histograms, allocation profiles, non-heap snapshots) into bounded evidence.
     Summarize(summarize_cmd::SummarizeArgs),
+    /// Tie native growth at a foreign-function boundary to the managed worker that calls it.
+    Correlate(correlate_cmd::CorrelateArgs),
 }
 
 /// What a command prints on success.
@@ -179,6 +182,9 @@ fn dispatch(cli: Cli) -> Res<Output> {
         }
         Command::Summarize(c) => {
             summarize_cmd::run(ctx, &project_root(project)?, data, c).map(Output::Json)
+        }
+        Command::Correlate(a) => {
+            correlate_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
         }
     }
 }

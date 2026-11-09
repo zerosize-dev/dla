@@ -269,6 +269,12 @@ func dlaBuild(phase string, x *int, last bool) map[string]any {
 	if tick {
 		notes = append(notes, "tick record: no forced collection")
 	}
+	if !tick {
+		if caps := dlaCapture(phase); len(caps) > 0 {
+			rec["captures"] = caps
+		}
+	}
+	rec["go_version"] = dlaruntime.Version()
 	rec["limitations"] = dlaUnique(notes)
 	return rec
 }
@@ -330,6 +336,182 @@ func dlaStartTicker() func() {
 	}()
 	var once dlasync.Once
 	return func() { once.Do(func() { close(done); <-stopped }) }
+}
+
+// ---- raw captures (DLA_CAPTURE): heap profile, goroutine profiles, goroutineleak profile
+//
+// Files go to DLA_CAPTURE_DIR/<pid>/ and are listed in the "captures" array of the record that
+// triggered them (kind, file, role, bytes, ms, error). DLA_CAPTURE is a comma list of alloc and
+// nonheap (heap, histogram and jfr are JVM and Node captures):
+//
+//	alloc    go-<n>.heap.pb.gz          pprof.Lookup("heap") after runtime.GC(): in-use bytes by stack
+//	nonheap  go-<n>.goroutine.pb.gz     pprof.Lookup("goroutine") protobuf
+//	         go-<n>.goroutine.txt       the same profile at debug=2 (the "created by" frames)
+//	         go-<n>.goroutineleak.txt   pprof.Lookup("goroutineleak") at debug=2: goroutines the
+//	                                    runtime proved blocked forever (Go 1.27, or 1.26 with
+//	                                    GOEXPERIMENT=goroutineleakprofile)
+//
+// Driver mode captures at the checkpoints dumpHere picks (DLA_CAPTURE_DUMPS, default 4: the end of
+// the warm-up, the last round and evenly spaced rounds between); command mode captures at exit.
+// DLA_GO_LEAK_ONLY=1 writes only the goroutineleak file (the separate leak pass on a newer
+// toolchain). runtime.MemProfileRate is set before the workload when alloc is asked for
+// (DLA_MEMPROFILE_RATE, default 4096). Nothing here fails the run: a capture that cannot be written
+// becomes an entry with "error".
+
+const (
+	dlaDefaultMemProfileRate = 4096
+	dlaGoroutineTextCap      = 200000 // goroutines above which the debug=2 text is not written
+)
+
+var (
+	dlaCaptureKinds  = dlaParseKinds(dlaEnv("DLA_CAPTURE"))
+	dlaMemRateSet    = dlaSetMemProfileRate()
+	dlaCaptureSeq    int
+	dlaCheckpointSeq int
+	dlaLeakNoted     bool
+)
+
+func dlaParseKinds(v string) map[string]bool {
+	out := map[string]bool{}
+	for _, part := range dlastrings.Split(v, ",") {
+		if k := dlastrings.ToLower(dlastrings.TrimSpace(part)); k != "" {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// dlaSetMemProfileRate samples allocations finely when the run asks for allocation profiles. It
+// runs as a package variable initializer, before the test or the workload starts.
+func dlaSetMemProfileRate() bool {
+	if dlaEnv("DLA_CAPTURE_DIR") == "" || !dlaCaptureKinds["alloc"] || dlaEnv("DLA_GO_LEAK_ONLY") != "" {
+		return false
+	}
+	rate := dlaDefaultMemProfileRate
+	if n, err := dlastrconv.Atoi(dlaEnv("DLA_MEMPROFILE_RATE")); err == nil && n > 0 {
+		rate = n
+	}
+	dlaruntime.MemProfileRate = rate
+	return true
+}
+
+func dlaIntEnv0(name string, def int) int {
+	if n, err := dlastrconv.Atoi(dlaEnv(name)); err == nil && n >= 0 {
+		return n
+	}
+	return def
+}
+
+// dlaDumpHere says whether the checkpoint with this 1-based number gets the heavy captures (the
+// same rule as the other agents).
+func dlaDumpHere(seq, warmup, rounds, dumps int) bool {
+	total := warmup + rounds
+	if total <= 0 || total <= dumps {
+		return true
+	}
+	first := warmup
+	if first < 1 {
+		first = 1
+	}
+	if seq == first || seq == total {
+		return true
+	}
+	interior := dumps - 2
+	if interior <= 0 || seq < first || seq > total {
+		return false
+	}
+	for j := 1; j <= interior; j++ {
+		if seq == first+int(float64(total-first)*float64(j)/float64(interior+1)+0.5) {
+			return true
+		}
+	}
+	return false
+}
+
+// dlaCaptureHere counts checkpoints and decides whether this record captures.
+func dlaCaptureHere(phase string) bool {
+	switch phase {
+	case "tick":
+		return false
+	case "checkpoint":
+		dlaCheckpointSeq++
+		return dlaDumpHere(dlaCheckpointSeq, dlaIntEnv0("DLA_WARMUP", 0), dlaIntEnv0("DLA_ROUNDS", 0), dlaIntEnv0("DLA_CAPTURE_DUMPS", 4))
+	}
+	return true
+}
+
+// dlaWriteProfile writes one named profile to dir/file and returns its capture entry.
+func dlaWriteProfile(dir, file, kind, role, name string, debug int) map[string]any {
+	entry := map[string]any{"kind": kind, "role": role}
+	p := dlapprof.Lookup(name)
+	if p == nil {
+		entry["error"] = "the " + name + " profile is not available in " + dlaruntime.Version()
+		return entry
+	}
+	t0 := dlatime.Now()
+	tmp := dlafilepath.Join(dir, file+".tmp")
+	f, err := dlaos.Create(tmp)
+	if err != nil {
+		entry["error"] = err.Error()
+		return entry
+	}
+	werr := p.WriteTo(f, debug)
+	cerr := f.Close()
+	if werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = dlaos.Rename(tmp, dlafilepath.Join(dir, file))
+	}
+	if werr != nil {
+		_ = dlaos.Remove(tmp)
+		entry["error"] = werr.Error()
+		return entry
+	}
+	entry["file"] = file
+	if st, err := dlaos.Stat(dlafilepath.Join(dir, file)); err == nil {
+		entry["bytes"] = st.Size()
+	}
+	entry["ms"] = dlatime.Since(t0).Milliseconds()
+	return entry
+}
+
+// dlaCapture writes the profiles asked for at this record and returns its "captures" entries.
+// The caller has just run runtime.GC() twice, so the heap profile is current.
+func dlaCapture(phase string) []map[string]any {
+	root := dlaEnv("DLA_CAPTURE_DIR")
+	if root == "" || len(dlaCaptureKinds) == 0 || !dlaCaptureHere(phase) {
+		return nil
+	}
+	dir := dlafilepath.Join(root, dlastrconv.Itoa(dlaos.Getpid()))
+	if err := dlaos.MkdirAll(dir, 0o755); err != nil {
+		return []map[string]any{{"kind": "nonheap", "error": "capture directory unusable: " + err.Error()}}
+	}
+	dlaCaptureSeq++
+	n := dlastrconv.Itoa(dlaCaptureSeq)
+	leakOnly := dlaEnv("DLA_GO_LEAK_ONLY") != ""
+	var out []map[string]any
+	if dlaCaptureKinds["alloc"] && !leakOnly {
+		out = append(out, dlaWriteProfile(dir, "go-"+n+".heap.pb.gz", "alloc", "heap profile (in-use bytes by stack, after GC)", "heap", 0))
+	}
+	if dlaCaptureKinds["nonheap"] {
+		if !leakOnly {
+			out = append(out, dlaWriteProfile(dir, "go-"+n+".goroutine.pb.gz", "nonheap", "goroutine profile (protobuf)", "goroutine", 0))
+			if p := dlapprof.Lookup("goroutine"); p != nil && p.Count() > dlaGoroutineTextCap {
+				out = append(out, map[string]any{"kind": "nonheap", "error": "more than " + dlastrconv.Itoa(dlaGoroutineTextCap) + " goroutines: the debug=2 text was not written"})
+			} else {
+				out = append(out, dlaWriteProfile(dir, "go-"+n+".goroutine.txt", "nonheap", "goroutine dump (debug=2, created-by frames)", "goroutine", 2))
+			}
+		}
+		if dlapprof.Lookup("goroutineleak") != nil {
+			out = append(out, dlaWriteProfile(dir, "go-"+n+".goroutineleak.txt", "nonheap", "goroutineleak profile (debug=2)", "goroutineleak", 2))
+		} else if !dlaLeakNoted {
+			// Not an error of this run: dla harness run decides how to reach the profile.
+			dlaLeakNoted = true
+			dlaNotes = append(dlaNotes, "the goroutineleak profile is not available in "+dlaruntime.Version())
+		}
+	}
+	return out
 }
 
 // DLA-ENGINE-END

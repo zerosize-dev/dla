@@ -1,0 +1,12 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "profile-1.heapprofile",
+  "profile-2.heapprofile",
+  "profile-3.heapprofile"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "three real node --heap-prof profiles (--heap-prof-interval=16384) of a webhook retry scheduler run for 400, 800 and 1200 jobs; the function makeJob is renamed to a key-like name to plant a secret"
+}

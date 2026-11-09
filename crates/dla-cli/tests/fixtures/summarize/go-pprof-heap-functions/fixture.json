@@ -1,0 +1,6 @@
+{
+  "op": "type-histogram-diff",
+  "inputs": ["heap1.pb.gz", "heap2.pb.gz", "heap3.pb.gz"],
+  "secrets": ["AKIAIOSFODNN7EXAMPLE1"],
+  "note": "three real go1.27.0 heap profiles (pprof.Lookup(\"heap\").WriteTo(f, 0) after runtime.GC()) of a program that replays go-subscription-workers and holds 6 KB more each round in a function named like a key"
+}

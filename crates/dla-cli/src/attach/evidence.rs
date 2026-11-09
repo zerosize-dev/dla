@@ -60,9 +60,8 @@ pub fn file_entries(run_dir: &Path, rel_dir: &str, done: &Done) -> Vec<FileEntry
 pub fn coverage(backend: Backend, op: Op) -> CoverageStatus {
     match (backend, op) {
         // Allocations after the attach only, or a sampling profile.
-        (Backend::Memray | Backend::Heaptrack, _) | (Backend::Jcmd, Op::Jfr) => {
-            CoverageStatus::Partial
-        }
+        (Backend::Memray | Backend::Heaptrack | Backend::Bpftrace, _)
+        | (Backend::Jcmd, Op::Jfr) => CoverageStatus::Partial,
         (Backend::Goref, _) => CoverageStatus::Unknown,
         _ => CoverageStatus::Complete,
     }
@@ -209,6 +208,10 @@ mod tests {
         );
         assert_eq!(
             coverage(Backend::Heaptrack, Op::Record),
+            CoverageStatus::Partial
+        );
+        assert_eq!(
+            coverage(Backend::Bpftrace, Op::Record),
             CoverageStatus::Partial
         );
         assert_eq!(

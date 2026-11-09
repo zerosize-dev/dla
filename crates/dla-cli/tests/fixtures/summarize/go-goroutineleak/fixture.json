@@ -1,0 +1,13 @@
+{
+  "op": "non-heap",
+  "inputs": [
+    "goroutineleak1.txt",
+    "goroutineleak2.txt",
+    "goroutineleak3.txt"
+  ],
+  "secrets": [
+    "AKIAIOSFODNN7EXAMPLE1"
+  ],
+  "emits_values": false,
+  "note": "three real go1.27.0 goroutineleak profiles (WriteTo(f, 2)) of the same process: 10, 20 and 30 goroutines created at subscription.go:33; the goroutines parked on a global channel are not reported; the function named like a key creates only goroutines parked on a global channel, which the profile does not report, so the key never reaches the output even with raw values"
+}

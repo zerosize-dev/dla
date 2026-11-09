@@ -31,6 +31,7 @@ pub mod finding;
 pub mod fsutil;
 pub mod harness;
 pub mod ids;
+pub mod known_leaks;
 pub mod ledger;
 pub mod machine;
 pub mod merge;

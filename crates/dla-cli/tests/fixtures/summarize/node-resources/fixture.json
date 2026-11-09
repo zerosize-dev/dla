@@ -1,0 +1,12 @@
+{
+ "op": "non-heap",
+ "inputs": [
+  "resources-1.json",
+  "resources-2.json",
+  "resources-3.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "three real resources.json files written by the Node harness agent (DLA_CAPTURE=nonheap) for a gateway that never clears its heartbeat timers (40, 80 and 120 sessions); the handle type PipeWrap is renamed to a key-like name to plant a secret"
+}

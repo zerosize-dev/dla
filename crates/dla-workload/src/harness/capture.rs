@@ -14,7 +14,10 @@ use std::{
     str::FromStr,
 };
 
-use dla_core::harness::{CaptureFile, CaptureKind, DumpCapture};
+use dla_core::{
+    harness::{CaptureFile, CaptureKind, DumpCapture},
+    runtime::Runtime,
+};
 
 /// Directory (inside `out/<label>/`) the JVM agent writes to.
 pub const DIR: &str = "capture";
@@ -37,14 +40,28 @@ pub struct CaptureSet {
     pub histogram: bool,
     /// Flight recording with old-object samples.
     pub jfr: bool,
-    /// Thread dump, class loader statistics, native memory.
+    /// Thread dump, class loader statistics, native memory (JVM); active resources by
+    /// creation site (Node).
     pub nonheap: bool,
+    /// Sampling allocation profile of the objects still alive (Node `.heapprofile`).
+    pub alloc: bool,
 }
 
 impl CaptureSet {
     /// Nothing is captured.
     pub fn is_empty(&self) -> bool {
-        !(self.heap || self.histogram || self.jfr || self.nonheap)
+        !(self.heap || self.histogram || self.jfr || self.nonheap || self.alloc)
+    }
+
+    /// The kinds of `self` that are also in `other`.
+    pub fn intersect(&self, other: &Self) -> Self {
+        Self {
+            heap: self.heap && other.heap,
+            histogram: self.histogram && other.histogram,
+            jfr: self.jfr && other.jfr,
+            nonheap: self.nonheap && other.nonheap,
+            alloc: self.alloc && other.alloc,
+        }
     }
 
     /// The kinds, in the order they are listed.
@@ -55,6 +72,7 @@ impl CaptureSet {
             (self.histogram, "histogram"),
             (self.jfr, "jfr"),
             (self.nonheap, "nonheap"),
+            (self.alloc, "alloc"),
         ] {
             if on {
                 v.push(n);
@@ -80,6 +98,9 @@ impl CaptureSet {
             if self.nonheap {
                 v.push("nonheap");
             }
+            if self.alloc {
+                v.push("alloc");
+            }
         }
         v.join(",")
     }
@@ -95,23 +116,65 @@ impl FromStr for CaptureSet {
                 "histogram" => set.histogram = true,
                 "jfr" => set.jfr = true,
                 "nonheap" | "non-heap" => set.nonheap = true,
+                "alloc" => set.alloc = true,
                 "all" => {
                     set = Self {
                         heap: true,
                         histogram: true,
                         jfr: true,
                         nonheap: true,
+                        alloc: true,
                     }
                 }
                 "none" => set = Self::default(),
                 other => {
                     return Err(format!(
-                        "{other:?} is not a capture kind (heap, histogram, jfr, nonheap, all, none)"
+                        "{other:?} is not a capture kind (heap, histogram, jfr, nonheap, alloc, all, none)"
                     ));
                 }
             }
         }
         Ok(set)
+    }
+}
+
+/// The capture kinds the agent of `rt` writes (`--capture` asks for more than a runtime has
+/// at its own risk: the run drops the rest and says so).
+pub fn supported(rt: Runtime) -> CaptureSet {
+    match rt {
+        Runtime::Jvm => CaptureSet {
+            heap: true,
+            histogram: true,
+            jfr: true,
+            nonheap: true,
+            alloc: false,
+        },
+        Runtime::Node => CaptureSet {
+            heap: true,
+            histogram: false,
+            jfr: false,
+            nonheap: true,
+            alloc: true,
+        },
+        // Go: heap profiles (alloc) and goroutine profiles with the goroutineleak profile
+        // (nonheap).
+        Runtime::Go => CaptureSet {
+            heap: false,
+            histogram: false,
+            jfr: false,
+            nonheap: true,
+            alloc: true,
+        },
+        // Python: type counters (histogram), tracemalloc and memray stacks (alloc), threads,
+        // tasks and ResourceWarnings by creation site (nonheap).
+        Runtime::Python => CaptureSet {
+            heap: false,
+            histogram: true,
+            jfr: false,
+            nonheap: true,
+            alloc: true,
+        },
+        _ => CaptureSet::default(),
     }
 }
 
@@ -205,6 +268,62 @@ pub fn classify(name: &str) -> Option<(CaptureKind, u32, &'static str)> {
     if let Some(n) = seq_of("heap-", ".hprof") {
         return Some((CaptureKind::Heap, n, "heap dump (HPROF)"));
     }
+    if let Some(n) = seq_of("heap-", ".heapsnapshot") {
+        return Some((CaptureKind::Heap, n, "heap snapshot (v8)"));
+    }
+    if let Some(n) = seq_of("alloc-", ".heapprofile") {
+        return Some((
+            CaptureKind::Alloc,
+            n,
+            "sampling heap profile (live objects)",
+        ));
+    }
+    // Go: go-<n>.<what>.<ext>
+    if let Some(n) = seq_of("go-", ".heap.pb.gz") {
+        return Some((
+            CaptureKind::Alloc,
+            n,
+            "heap profile (in-use bytes by stack, after GC)",
+        ));
+    }
+    if let Some(n) = seq_of("go-", ".goroutine.pb.gz") {
+        return Some((CaptureKind::NonHeap, n, "goroutine profile (protobuf)"));
+    }
+    if let Some(n) = seq_of("go-", ".goroutine.txt") {
+        return Some((
+            CaptureKind::NonHeap,
+            n,
+            "goroutine dump (debug=2, created-by frames)",
+        ));
+    }
+    if let Some(n) = seq_of("go-", ".goroutineleak.txt") {
+        return Some((CaptureKind::NonHeap, n, "goroutineleak profile (debug=2)"));
+    }
+    // Python: py-<n>.<what>.json
+    if let Some(n) = seq_of("py-", ".alloc.json") {
+        return Some((
+            CaptureKind::Alloc,
+            n,
+            "tracemalloc live bytes by allocation stack",
+        ));
+    }
+    if let Some(n) = seq_of("py-", ".memray.json") {
+        return Some((
+            CaptureKind::Alloc,
+            n,
+            "memray allocations still live at the end",
+        ));
+    }
+    if let Some(n) = seq_of("py-", ".types.json") {
+        return Some((CaptureKind::Histogram, n, "python object counts by type"));
+    }
+    if let Some(n) = seq_of("py-", ".nonheap.json") {
+        return Some((
+            CaptureKind::NonHeap,
+            n,
+            "threads, asyncio tasks and resource warnings by creation site",
+        ));
+    }
     if let Some(n) = seq_of("histogram-", ".txt") {
         return Some((CaptureKind::Histogram, n, "class histogram"));
     }
@@ -221,6 +340,16 @@ pub fn classify(name: &str) -> Option<(CaptureKind, u32, &'static str)> {
             CaptureKind::NonHeap,
             4,
             "native memory change since baseline",
+        )),
+        "resources.json" => Some((
+            CaptureKind::NonHeap,
+            5,
+            "active resources by type and creation site",
+        )),
+        "scripts.json" => Some((
+            CaptureKind::NonHeap,
+            6,
+            "script id to url map (sidecar of the heap snapshots)",
         )),
         "valgrind.xml" => Some((CaptureKind::Valgrind, 1, "valgrind memcheck XML")),
         "vgdb-1-leak.txt" => Some((CaptureKind::Valgrind, 2, "vgdb leak_check answer")),
@@ -355,7 +484,7 @@ pub fn gather(
             }
             let note = notes.find(&name);
             let confirmed = match kind {
-                CaptureKind::Heap | CaptureKind::Histogram => {
+                CaptureKind::Heap | CaptureKind::Histogram | CaptureKind::Alloc => {
                     note.is_some_and(|(_, c)| c.error.is_none())
                 }
                 CaptureKind::Jfr => !killed,
@@ -415,7 +544,18 @@ pub fn summarize_commands(
             .iter()
             .copied()
             .filter(|f| {
-                f.kind == kind && (tail.is_empty() || tail.iter().any(|t| f.path.ends_with(t)))
+                // Python files have formats of their own: they are listed by their tail only.
+                let python = f
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|n| n.starts_with("py-"));
+                f.kind == kind
+                    && if tail.is_empty() {
+                        !python
+                    } else {
+                        tail.iter().any(|t| f.path.ends_with(t))
+                    }
             })
             .collect();
         sel.sort_by_key(order);
@@ -442,12 +582,40 @@ pub fn summarize_commands(
     }
     for (_, g) in &groups {
         push("type-histogram-diff", CaptureKind::Histogram, &[], g);
+        // Python: object counts by type.
+        push(
+            "type-histogram-diff",
+            CaptureKind::Histogram,
+            &[".types.json"],
+            g,
+        );
+        // Node: the class histogram of the snapshots (several processes are fine here).
+        push(
+            "type-histogram-diff",
+            CaptureKind::Heap,
+            &[".heapsnapshot"],
+            g,
+        );
     }
     if let Some((_, g)) = groups.first() {
         push("alloc-stack-diff", CaptureKind::Jfr, &[], g);
+        // Node: one command per series of sampling profiles.
+        push("alloc-stack-diff", CaptureKind::Alloc, &[], g);
+        // Python: tracemalloc stacks and memray's live-at-exit report are two formats.
+        push("alloc-stack-diff", CaptureKind::Alloc, &[".alloc.json"], g);
+        push("alloc-stack-diff", CaptureKind::Alloc, &[".memray.json"], g);
         // One command per file kind: each format has its own adapter, and `summarize`
         // refuses inputs of mixed formats.
-        for tail in ["threads.json", "classloader-stats.txt", "nmt-diff.txt"] {
+        for tail in [
+            "threads.json",
+            "classloader-stats.txt",
+            "nmt-diff.txt",
+            "resources.json",
+            ".nonheap.json",
+            // Go: the goroutine dumps (growth by creation site) and the leak profiles.
+            ".goroutine.txt",
+            ".goroutineleak.txt",
+        ] {
             push("non-heap", CaptureKind::NonHeap, &[tail], g);
         }
         // Valgrind: the vgdb answers are a heap-graph input, the XML an alloc-stack-diff
@@ -613,9 +781,164 @@ mod tests {
         assert!(s.heap && s.histogram && !s.jfr && !s.nonheap);
         assert_eq!(s.names(), ["heap", "histogram"]);
         let all: CaptureSet = "all".parse().unwrap();
-        assert_eq!(all.names().len(), 4);
+        assert_eq!(all.names().len(), 5);
+        let node: CaptureSet = "alloc,heap".parse().unwrap();
+        assert!(node.alloc && node.heap && !node.jfr);
+        assert_eq!(node.env_value(true), "heap,alloc");
         assert!("none".parse::<CaptureSet>().unwrap().is_empty());
         assert!("heap,bogus".parse::<CaptureSet>().is_err());
+    }
+
+    #[test]
+    fn runtimes_keep_only_the_kinds_their_agent_writes() {
+        let all: CaptureSet = "all".parse().unwrap();
+        let jvm = all.intersect(&supported(Runtime::Jvm));
+        assert_eq!(jvm.names(), ["heap", "histogram", "jfr", "nonheap"]);
+        let node = all.intersect(&supported(Runtime::Node));
+        assert_eq!(node.names(), ["heap", "nonheap", "alloc"]);
+        let go = all.intersect(&supported(Runtime::Go));
+        assert_eq!(go.names(), ["nonheap", "alloc"]);
+        let py = all.intersect(&supported(Runtime::Python));
+        assert_eq!(py.names(), ["histogram", "nonheap", "alloc"]);
+        assert!(all.intersect(&supported(Runtime::Rust)).is_empty());
+    }
+
+    #[test]
+    fn go_file_names_classify() {
+        let c = classify("go-3.heap.pb.gz").unwrap();
+        assert_eq!((c.0, c.1), (CaptureKind::Alloc, 3));
+        for name in [
+            "go-2.goroutine.pb.gz",
+            "go-2.goroutine.txt",
+            "go-2.goroutineleak.txt",
+        ] {
+            let c = classify(name).unwrap();
+            assert_eq!((c.0, c.1), (CaptureKind::NonHeap, 2), "{name}");
+        }
+        assert!(classify("go-x.heap.pb.gz").is_none());
+        assert!(classify("go-1.heap.txt").is_none());
+    }
+
+    #[test]
+    fn go_series_print_one_command_per_operation_and_format() {
+        let f = |kind, k: u32, tail: &str| {
+            file(
+                kind,
+                "p1-fresh",
+                k,
+                f64::from(k) * 100.0,
+                &format!("p/capture/7/go-{k}.{tail}"),
+            )
+        };
+        let mut files = Vec::new();
+        for k in 1..=3 {
+            files.push(f(CaptureKind::Alloc, k, "heap.pb.gz"));
+            files.push(f(CaptureKind::NonHeap, k, "goroutine.pb.gz"));
+            files.push(f(CaptureKind::NonHeap, k, "goroutine.txt"));
+            files.push(f(CaptureKind::NonHeap, k, "goroutineleak.txt"));
+        }
+        let cmds = summarize_commands(&files, &|p| p.to_owned(), false);
+        let heap = cmds
+            .iter()
+            .find(|c| c.contains("alloc-stack-diff"))
+            .unwrap();
+        assert!(heap.contains("go-1.heap.pb.gz") && heap.contains("go-3.heap.pb.gz"));
+        // Goroutine dumps and leak profiles are separate commands (separate adapters), and
+        // the protobuf goroutine profiles are not printed: they hold no creation site.
+        let dumps = cmds
+            .iter()
+            .find(|c| c.ends_with("go-3.goroutine.txt"))
+            .unwrap();
+        assert!(dumps.starts_with("dla summarize non-heap "));
+        assert!(!dumps.contains("leak"));
+        let leaks = cmds
+            .iter()
+            .find(|c| c.ends_with("go-3.goroutineleak.txt"))
+            .unwrap();
+        assert!(!leaks.contains("go-1.goroutine.txt"));
+        assert!(
+            !cmds.iter().any(|c| c.contains("goroutine.pb.gz")),
+            "{cmds:?}"
+        );
+    }
+
+    #[test]
+    fn node_file_names_classify() {
+        let c = classify("heap-3.heapsnapshot").unwrap();
+        assert_eq!((c.0, c.1), (CaptureKind::Heap, 3));
+        let c = classify("alloc-2.heapprofile").unwrap();
+        assert_eq!((c.0, c.1), (CaptureKind::Alloc, 2));
+        assert_eq!(classify("resources.json").unwrap().0, CaptureKind::NonHeap);
+        assert_eq!(classify("scripts.json").unwrap().0, CaptureKind::NonHeap);
+        assert!(classify("alloc-x.heapprofile").is_none());
+    }
+
+    #[test]
+    fn node_series_print_one_command_per_operation_and_format() {
+        let snap = |k: u32, x: f64| {
+            file(
+                CaptureKind::Heap,
+                "p1-fresh",
+                k,
+                x,
+                &format!("p/capture/7/heap-{k}.heapsnapshot"),
+            )
+        };
+        let mut files = vec![snap(1, 100.0), snap(2, 200.0), snap(3, 300.0)];
+        files.push(file(
+            CaptureKind::Alloc,
+            "p1-fresh",
+            1,
+            100.0,
+            "p/capture/7/alloc-1.heapprofile",
+        ));
+        files.push(file(
+            CaptureKind::NonHeap,
+            "p1-fresh",
+            5,
+            300.0,
+            "p/capture/7/resources.json",
+        ));
+        files.push(file(
+            CaptureKind::NonHeap,
+            "p1-fresh",
+            6,
+            300.0,
+            "p/capture/7/scripts.json",
+        ));
+        let cmds = summarize_commands(&files, &|p| p.to_owned(), false);
+        let ops: Vec<&str> = cmds.iter().map(|c| c.split(' ').nth(2).unwrap()).collect();
+        assert_eq!(
+            ops,
+            [
+                "heap-graph",
+                "type-histogram-diff",
+                "alloc-stack-diff",
+                "non-heap"
+            ],
+            "{cmds:?}"
+        );
+        assert!(cmds[0].ends_with(
+            "heap-1.heapsnapshot p/capture/7/heap-2.heapsnapshot p/capture/7/heap-3.heapsnapshot"
+        ));
+        assert!(cmds[3].ends_with("resources.json"), "{cmds:?}");
+        assert!(!cmds.iter().any(|c| c.contains("scripts.json")));
+        // Snapshots of separate processes (command mode) give the histogram only.
+        let cmd_files: Vec<CaptureFile> = [1, 2, 3]
+            .iter()
+            .map(|k| {
+                file(
+                    CaptureKind::Heap,
+                    &format!("p{k}-native"),
+                    1,
+                    f64::from(*k) * 100.0,
+                    &format!("p{k}/capture/{k}/heap-1.heapsnapshot"),
+                )
+            })
+            .collect();
+        let cmds = summarize_commands(&cmd_files, &|p| p.to_owned(), false);
+        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        assert!(cmds[0].starts_with("dla summarize type-histogram-diff "));
     }
 
     #[test]

@@ -16,6 +16,8 @@ pub const JVM_DRIVER: &str = include_str!("../../../../harness/jvm/DlaHarness.ja
 pub const JVM_MANIFEST: &str = include_str!("../../../../harness/jvm/MANIFEST.MF");
 /// Python agent (`sitecustomize`).
 pub const PY_AGENT: &str = include_str!("../../../../harness/python/sitecustomize.py");
+/// Python memray report helper, run with the target's interpreter (`--capture alloc`).
+pub const PY_MEMRAY: &str = include_str!("../../../../harness/python/dla_memray_leaks.py");
 /// Python driver template.
 pub const PY_DRIVER: &str = include_str!("../../../../harness/python/dla_harness.py");
 /// pytest-memray variant of the Python driver.

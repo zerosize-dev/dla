@@ -37,13 +37,13 @@ const DEFAULT_DURATION: &str = "30s";
 /// Flags of `dla attach`.
 #[derive(Args, Debug)]
 pub struct AttachArgs {
-    /// Backend: jcmd, node-inspector, memray, heaptrack, goref.
+    /// Backend: jcmd, node-inspector, memray, heaptrack, goref, bpftrace.
     pub backend: String,
     /// Target process ID.
     #[arg(long)]
     pub pid: u32,
     /// Operation: jcmd histogram|heap-dump|thread-dump|nmt|jfr, node-inspector
-    /// memory|heap-snapshot, memray|heaptrack record, goref heap-profile.
+    /// memory|heap-snapshot, memray|heaptrack|bpftrace record, goref heap-profile.
     #[arg(long)]
     pub op: String,
     /// How long recording operations run (jfr, memray, heaptrack).
@@ -71,6 +71,7 @@ fn coverage_worker(b: Backend) -> &'static str {
         Backend::Memray => "python",
         Backend::Heaptrack => "rust",
         Backend::Goref => "go",
+        Backend::Bpftrace => "native",
     }
 }
 

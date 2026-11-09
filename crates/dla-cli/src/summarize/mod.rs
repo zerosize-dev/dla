@@ -33,6 +33,9 @@ pub mod compat;
 pub mod dhat;
 pub mod emit;
 pub mod exec;
+pub mod go_goroutine;
+pub mod go_goroutineleak;
+pub mod go_pprof_heap;
 pub mod growth;
 pub mod harness_types;
 pub mod heaptrack;
@@ -44,9 +47,16 @@ pub mod jcmd_histogram;
 pub mod jfr;
 pub mod jvm_nonheap;
 pub mod lsan;
+pub mod node_heapprofile;
+pub mod node_heapsnapshot;
+pub mod node_resources;
 pub mod non_heap;
 pub mod nonheap_json;
 pub mod proc_fd;
+pub mod py_memray;
+pub mod py_resources;
+pub mod py_tracemalloc;
+pub mod py_types;
 pub mod redact;
 pub mod rule;
 pub mod shim_groups;
@@ -56,6 +66,7 @@ pub mod vgdb;
 
 use std::{
     cell::{RefCell, RefMut},
+    collections::BTreeMap,
     ffi::OsString,
     path::PathBuf,
     time::Duration,
@@ -324,6 +335,8 @@ pub fn registry() -> &'static [&'static dyn Adapter] {
     static ALL: &[&dyn Adapter] = &[
         &hprof::DlaHprof,
         &vgdb::ValgrindVgdb,
+        // Exact sniffers first: the HPROF reader takes any .gz.
+        &go_pprof_heap::GoPprofHeapFunctions,
         &hprof_histogram::HprofHistogram,
         &jcmd_histogram::JcmdClassHistogram,
         &shim_groups::ShimStackGroups,
@@ -339,6 +352,17 @@ pub fn registry() -> &'static [&'static dyn Adapter] {
         &jvm_nonheap::JvmThreadDump,
         &jvm_nonheap::JvmClassloaderStats,
         &jvm_nonheap::JvmNmt,
+        &node_heapsnapshot::NodeHeapGraph,
+        &node_heapsnapshot::NodeHeapTypes,
+        &node_heapprofile::NodeHeapProfile,
+        &node_resources::NodeResources,
+        &go_pprof_heap::GoPprofHeap,
+        &go_goroutineleak::GoGoroutineLeak,
+        &go_goroutine::GoGoroutine,
+        &py_tracemalloc::PyTracemalloc,
+        &py_memray::PyMemray,
+        &py_types::PyTypes,
+        &py_resources::PyResources,
         &jfr::JfrOldObjectSample,
     ];
     ALL
@@ -443,10 +467,48 @@ pub fn write_coverage(tc: &ToolCtx, rows: Vec<CoverageRow>) -> Result<(), Refusa
     .map_err(|e| e.to_refusal())
 }
 
-/// The `--list` table: one row per adapter.
-pub fn list(tools: Option<&std::path::Path>, env: &Env) -> Value {
+/// `--list`. With an operation or a runtime: one row per matching adapter (a runtime also
+/// matches the runtime-independent `any` adapters). Without: the backend names grouped by
+/// operation and runtime, which stays within the output bound as the registry grows, and the
+/// adapters whose tool is missing here.
+pub fn list(
+    tools: Option<&std::path::Path>,
+    env: &Env,
+    op: Option<Op>,
+    runtime: Option<&str>,
+) -> Value {
+    let ready = |a: &dyn Adapter| {
+        a.tool().is_none()
+            || matches!(
+                availability(a, tools, env, false),
+                Availability::Ready { .. }
+            )
+    };
+    if op.is_none() && runtime.is_none() {
+        let mut ops = serde_json::Map::new();
+        let mut missing = Vec::new();
+        for o in Op::ALL {
+            let mut by_runtime: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+            for a in adapters_of(o) {
+                by_runtime.entry(a.runtime()).or_default().push(a.name());
+                if !ready(a) {
+                    missing.push(json!(a.name()));
+                }
+            }
+            ops.insert(o.name().to_owned(), json!(by_runtime));
+        }
+        return json!({
+            "ok": true,
+            "command": "summarize --list",
+            "ops": ops,
+            "missing": missing,
+            "rows": "dla summarize --list --op <op> or --runtime <runtime>",
+        });
+    }
     let rows: Vec<Value> = registry()
         .iter()
+        .filter(|a| op.is_none_or(|o| a.op() == o))
+        .filter(|a| runtime.is_none_or(|r| a.runtime() == r || a.runtime() == "any"))
         .map(|a| {
             let (tool, available) = match a.tool() {
                 None => (Value::Null, true),

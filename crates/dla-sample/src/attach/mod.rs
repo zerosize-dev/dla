@@ -10,6 +10,7 @@
 //! Test hooks of the caller (not of this crate): none. The numbers the gate reads are plain
 //! arguments of [`preflight`].
 
+mod bpftrace;
 mod goref;
 mod heaptrack;
 mod jcmd;
@@ -55,6 +56,8 @@ pub enum Backend {
     Heaptrack,
     /// `grf attach` against a Go process.
     Goref,
+    /// `bpftrace` over the mmap, munmap and brk tracepoints, filtered to one process.
+    Bpftrace,
 }
 
 /// An operation of a backend.
@@ -82,12 +85,13 @@ pub enum Op {
 
 impl Backend {
     /// All backends, in the order the help lists them.
-    pub const ALL: [Backend; 5] = [
+    pub const ALL: [Backend; 6] = [
         Backend::Jcmd,
         Backend::NodeInspector,
         Backend::Memray,
         Backend::Heaptrack,
         Backend::Goref,
+        Backend::Bpftrace,
     ];
 
     /// The name used on the command line.
@@ -98,6 +102,7 @@ impl Backend {
             Self::Memray => "memray",
             Self::Heaptrack => "heaptrack",
             Self::Goref => "goref",
+            Self::Bpftrace => "bpftrace",
         }
     }
 
@@ -117,7 +122,7 @@ impl Backend {
                 Op::Jfr,
             ],
             Self::NodeInspector => &[Op::Memory, Op::HeapSnapshot],
-            Self::Memray | Self::Heaptrack => &[Op::Record],
+            Self::Memray | Self::Heaptrack | Self::Bpftrace => &[Op::Record],
             Self::Goref => &[Op::HeapProfile],
         }
     }
@@ -183,6 +188,8 @@ pub struct TierNeed {
 /// * `memray attach` (gdb injection below Python 3.14, `sys.remote_exec` on 3.14), `heaptrack
 ///   --pid` and `grf attach` inject through the debugger interface: tier 3. They capture
 ///   allocation stacks and sizes, not contents.
+/// * `bpftrace` loads eBPF programs on the memory-mapping tracepoints (kernel level, root):
+///   tier 3. It counts mapped bytes per call stack and reads no memory contents.
 pub fn tier_for(backend: Backend, op: Op) -> TierNeed {
     let (tier, why) = match (backend, op) {
         (Backend::Jcmd, Op::HeapDump) => (4, "a heap dump captures memory contents"),
@@ -197,6 +204,7 @@ pub fn tier_for(backend: Backend, op: Op) -> TierNeed {
         ),
         (Backend::Heaptrack, _) => (3, "heaptrack injects a library through a debugger (ptrace)"),
         (Backend::Goref, _) => (3, "goref reads the process through a debugger (ptrace)"),
+        (Backend::Bpftrace, _) => (3, "bpftrace loads eBPF programs into the kernel (root)"),
     };
     TierNeed { tier, why }
 }
@@ -262,6 +270,7 @@ pub(crate) enum Detail {
     Memray(memray::Prep),
     Heaptrack(heaptrack::Prep),
     Goref(goref::Prep),
+    Bpftrace(bpftrace::Prep),
 }
 
 /// Reads what is needed to plan the attach; changes nothing on the target (the Node
@@ -273,6 +282,7 @@ pub fn plan(req: &Request) -> Result<Plan, AttachError> {
         Backend::Memray => memray::plan(req),
         Backend::Heaptrack => heaptrack::plan(req),
         Backend::Goref => goref::plan(req),
+        Backend::Bpftrace => bpftrace::plan(req),
     }
 }
 
@@ -391,6 +401,7 @@ fn run_backend(
         Detail::Memray(ref p) => memray::run(p, plan, req, out_dir, t),
         Detail::Heaptrack(ref p) => heaptrack::run(p, plan, req, out_dir, t),
         Detail::Goref(ref p) => goref::run(p, plan, req, out_dir, t),
+        Detail::Bpftrace(ref p) => bpftrace::run(p, plan, req, out_dir, t),
     }
 }
 
@@ -607,5 +618,6 @@ mod tests {
         assert_eq!(t(Backend::Memray, Op::Record), 3);
         assert_eq!(t(Backend::Heaptrack, Op::Record), 3);
         assert_eq!(t(Backend::Goref, Op::HeapProfile), 3);
+        assert_eq!(t(Backend::Bpftrace, Op::Record), 3);
     }
 }

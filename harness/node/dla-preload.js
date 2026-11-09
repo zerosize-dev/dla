@@ -887,6 +887,449 @@ function purgeRecord(kind, preGc, limitations) {
   return { kind };
 }
 
+// --------------------------------------------------------------------------------------------
+// raw captures (DLA_CAPTURE): heap snapshots, sampling heap profiles, resource creation sites
+// --------------------------------------------------------------------------------------------
+
+// Files go to DLA_CAPTURE_DIR/<pid>/ and are listed in the "captures" array of the record that
+// triggered them. DLA_CAPTURE is a comma list of heap, alloc and nonheap (histogram and jfr are
+// JVM captures). Nothing here throws into the target: a failed capture becomes an entry with
+// "error".
+//
+//   heap     heap-<n>.heapsnapshot  v8.writeHeapSnapshot at the checkpoints chosen by dumpHere()
+//                                   (driver) or at exit (command); scripts.json maps script ids
+//                                   to urls (Debugger.scriptParsed seen by this agent)
+//   alloc    alloc-<n>.heapprofile  inspector sampling heap profile of the objects still alive
+//   nonheap  resources.json         active resources by type and creation site, at the end
+const OS = require('os');
+
+const CAPTURE_KINDS = new Set();
+for (const part of (env('DLA_CAPTURE') || '').split(',')) {
+  const kind = part.trim().toLowerCase();
+  if (kind) CAPTURE_KINDS.add(kind);
+}
+const CAPTURE_DIR = env('DLA_CAPTURE_DIR');
+const CAPTURE_ON = ACTIVE && CAPTURE_DIR !== null && CAPTURE_KINDS.size > 0;
+const HEAP_FACTOR = 12; // a snapshot needs about 12 times heapUsed of extra memory (docs/VERIFY.md)
+const SNAPSHOT_BYTES_CAP = 3 * 1024 * 1024 * 1024;
+const PROFILE_BYTES_CAP = 64 * 1024 * 1024;
+const SCRIPTS_CAP = 5000;
+const SITES_PER_TYPE = 40;
+const TYPES_CAP = 40;
+const TRACKED_CAP = 500000;
+const SAMPLING_INTERVAL = (() => {
+  const n = Number.parseInt(env('DLA_HEAPPROF_INTERVAL') || '', 10);
+  return Number.isFinite(n) && n >= 256 ? n : 8192;
+})();
+
+const captureNotes = []; // limitations found while starting the captures
+let capturesTaken = 0; // checkpoints seen
+let heapSeq = 0;
+let allocSeq = 0;
+let snapshotBytes = 0;
+let finalCaptured = false;
+let session = null;
+let sessionFailed = false;
+let sampling = false;
+const scriptUrls = new Map(); // script id -> {url, map}
+
+function intEnv(name, fallback) {
+  const n = Number.parseInt(env(name) || '', 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+/** Whether the checkpoint with this 1-based number gets a heavy capture (same rule as the JVM). */
+function dumpHere(seq, warmup, rounds, dumps) {
+  const total = warmup + rounds;
+  if (total <= 0 || total <= dumps) return true;
+  const first = Math.max(warmup, 1);
+  if (seq === first || seq === total) return true;
+  const interior = dumps - 2;
+  if (interior <= 0 || seq < first || seq > total) return false;
+  for (let j = 1; j <= interior; j += 1) {
+    if (seq === first + Math.round(((total - first) * j) / (interior + 1))) return true;
+  }
+  return false;
+}
+
+function inspectorSession() {
+  if (session !== null || sessionFailed) return session;
+  try {
+    const inspector = require('inspector');
+    session = new inspector.Session();
+    session.connect();
+  } catch (err) {
+    session = null;
+    sessionFailed = true;
+    captureNotes.push(`inspector session unavailable: ${err && err.message}`);
+  }
+  return session;
+}
+
+/** Post one inspector command; the callback of an in-process session runs synchronously. */
+function post(method, params) {
+  const s = inspectorSession();
+  if (s === null) throw new Error('inspector session unavailable');
+  let error = null;
+  let result;
+  let called = false;
+  s.post(method, params || {}, (err, res) => {
+    called = true;
+    error = err;
+    result = res;
+  });
+  if (!called) throw new Error(`${method} did not answer synchronously`);
+  if (error) throw new Error(`${method}: ${error.message || error}`);
+  return result;
+}
+
+function startScriptWatch() {
+  try {
+    const s = inspectorSession();
+    if (s === null) return;
+    s.on('Debugger.scriptParsed', (message) => {
+      const p = message && message.params;
+      if (!p || !p.url || p.url.startsWith('node:') || p.url.startsWith('internal/')) return;
+      if (scriptUrls.size >= SCRIPTS_CAP * 2) return;
+      let map = p.sourceMapURL || '';
+      if (map.startsWith('data:') || map.length > 512) map = map ? 'inline' : '';
+      scriptUrls.set(String(p.scriptId), { url: p.url, map });
+    });
+    post('Debugger.enable');
+  } catch (err) {
+    captureNotes.push(`script ids could not be recorded: ${err && err.message}`);
+  }
+}
+
+function startSamplingNow() {
+  post('HeapProfiler.startSampling', {
+    samplingInterval: SAMPLING_INTERVAL,
+    includeObjectsCollectedByMajorGC: false,
+    includeObjectsCollectedByMinorGC: false,
+  });
+  sampling = true;
+}
+
+// Resource creation sites. async_hooks reports every resource; the stack is read only for the
+// types that can leak (handles and watchers), not for promises, ticks or request objects.
+const RESOURCE_SKIP = new Set([
+  'PROMISE', 'Microtask', 'TickObject', 'Immediate', 'Timeout', 'TIMERWRAP',
+  'FSREQCALLBACK', 'FSREQPROMISE', 'FSREQWRAP', 'WRITEWRAP', 'SHUTDOWNWRAP', 'CONNECTWRAP',
+  'TCPCONNECTWRAP', 'PIPECONNECTWRAP', 'GETADDRINFOREQWRAP', 'GETNAMEINFOREQWRAP',
+  'QUERYWRAP', 'HTTPINCOMINGMESSAGE', 'HTTPCLIENTREQUEST', 'RANDOMBYTESREQUEST',
+  'ZLIB', 'PERFORMANCEOBSERVER', 'SIGINTWATCHDOG',
+]);
+// async_hooks type names to the names process.getActiveResourcesInfo() uses for the same handles.
+const RESOURCE_ALIAS = {
+  TCPWRAP: 'TCPSocketWrap',
+  TCPSERVERWRAP: 'TCPServerWrap',
+  PIPEWRAP: 'PipeWrap',
+  TTYWRAP: 'TTYWrap',
+  UDPWRAP: 'UDPWrap',
+  FSEVENTWRAP: 'FSEvent',
+  PROCESSWRAP: 'ProcessWrap',
+  SIGNALWRAP: 'SignalWrap',
+};
+const tracked = new Map(); // async id -> {type, site}
+const resourceCreated = new Map(); // type -> count
+let trackedOverflow = 0;
+let trackerOn = false;
+
+function startResourceTracker() {
+  try {
+    const hook = require('async_hooks').createHook({
+      init(id, rawType, trigger) {
+        if (RESOURCE_SKIP.has(rawType)) return;
+        const type = RESOURCE_ALIAS[rawType] || rawType;
+        resourceCreated.set(type, (resourceCreated.get(type) || 0) + 1);
+        if (tracked.size >= TRACKED_CAP) {
+          trackedOverflow += 1;
+          return;
+        }
+        // A socket a server accepted has no project frame of its own: it takes its server's site.
+        const parent = tracked.get(trigger);
+        tracked.set(id, { type, site: projectSite() || (parent ? parent.site : null) });
+      },
+      destroy(id) {
+        tracked.delete(id);
+      },
+    });
+    hook.enable();
+    trackerOn = true;
+  } catch (err) {
+    captureNotes.push(`resource tracker unavailable: ${err && err.message}`);
+  }
+}
+
+function captureDir() {
+  const dir = path.join(CAPTURE_DIR, String(process.pid));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function startCaptures() {
+  if (!CAPTURE_ON) return;
+  for (const kind of CAPTURE_KINDS) {
+    if (kind === 'histogram' || kind === 'jfr') {
+      captureNotes.push(`--capture ${kind} is a jvm capture; for node use heap (type-histogram-diff reads the snapshots)`);
+    } else if (kind !== 'heap' && kind !== 'alloc' && kind !== 'nonheap') {
+      captureNotes.push(`unknown capture kind ${kind}`);
+    }
+  }
+  if (CAPTURE_KINDS.has('heap')) startScriptWatch();
+  if (CAPTURE_KINDS.has('alloc')) {
+    try {
+      post('HeapProfiler.enable');
+      startSamplingNow();
+    } catch (err) {
+      captureNotes.push(`sampling heap profiler could not be started: ${err && err.message}`);
+    }
+  }
+  if (CAPTURE_KINDS.has('nonheap')) startResourceTracker();
+}
+
+/** Memory the process may still use: the smaller of MemAvailable, the free memory and the cgroup headroom. */
+function availableMemory() {
+  const forced = Number.parseInt(env('DLA_CAPTURE_MEM_BYTES') || '', 10); // override, for tests and tight hosts
+  if (Number.isFinite(forced) && forced >= 0) return forced;
+  let avail = OS.freemem();
+  try {
+    for (const line of fs.readFileSync('/proc/meminfo', 'latin1').split('\n')) {
+      if (line.startsWith('MemAvailable:')) avail = Number.parseInt(line.slice(13), 10) * 1024;
+    }
+  } catch (_) {
+    // not Linux
+  }
+  const cgroup = [
+    ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current'],
+    ['/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes'],
+  ];
+  for (const [limitFile, usedFile] of cgroup) {
+    try {
+      const limit = Number(fs.readFileSync(limitFile, 'latin1').trim());
+      const used = Number(fs.readFileSync(usedFile, 'latin1').trim());
+      if (Number.isFinite(limit) && Number.isFinite(used) && limit > 0 && limit < 2 ** 60) {
+        avail = Math.min(avail, Math.max(limit - used, 0));
+        break;
+      }
+    } catch (_) {
+      // next layout
+    }
+  }
+  return avail;
+}
+
+function entry(kind, role, file, ms, error) {
+  const e = { kind, role };
+  if (file !== null) e.file = path.basename(file);
+  if (error !== null) {
+    e.error = error;
+  } else {
+    let bytes = 0;
+    try {
+      bytes = fs.statSync(file).size;
+    } catch (_) {
+      // reported as 0
+    }
+    e.bytes = bytes;
+  }
+  e.ms = ms;
+  return e;
+}
+
+const nowMs = () => Number(process.hrtime.bigint() / 1000000n);
+
+function writeScripts(dir) {
+  const project = [];
+  const other = [];
+  for (const [id, s] of scriptUrls) {
+    const inProject = ROOT !== null && (s.url.startsWith(FILE_PREFIX) || s.url.startsWith(ROOT_PREFIX));
+    (inProject ? project : other).push([id, s]);
+  }
+  const keep = project.slice(0, SCRIPTS_CAP).concat(other.slice(0, Math.max(0, SCRIPTS_CAP - project.length)));
+  const scripts = {};
+  const maps = {};
+  for (const [id, s] of keep) {
+    scripts[id] = s.url;
+    if (s.map) maps[id] = s.map;
+  }
+  const doc = { dla_scripts: 1, pid: process.pid, root: ROOT, scripts, maps, dropped: scriptUrls.size - keep.length };
+  const file = path.join(dir, 'scripts.json');
+  fs.writeFileSync(file, JSON.stringify(doc) + '\n');
+  return file;
+}
+
+function captureHeap(out, dir, heapUsed, limitations) {
+  const t0 = nowMs();
+  const role = 'heap snapshot (v8)';
+  try {
+    const need = (heapUsed || 0) * HEAP_FACTOR;
+    const avail = availableMemory();
+    if (need > avail) {
+      throw new Error(`preflight: a snapshot needs about ${Math.round(need / 1048576)} MB (${HEAP_FACTOR}x heapUsed) and ${Math.round(avail / 1048576)} MB are available`);
+    }
+    if (snapshotBytes + (heapUsed || 0) > SNAPSHOT_BYTES_CAP) {
+      throw new Error(`the snapshots of this process already take ${Math.round(snapshotBytes / 1048576)} MB (cap ${Math.round(SNAPSHOT_BYTES_CAP / 1048576)} MB)`);
+    }
+    heapSeq += 1;
+    const file = path.join(dir, `heap-${heapSeq}.heapsnapshot`);
+    fs.rmSync(file, { force: true });
+    v8.writeHeapSnapshot(file);
+    const e = entry('heap', role, file, nowMs() - t0, null);
+    snapshotBytes += e.bytes;
+    out.push(e);
+    try {
+      const sf = writeScripts(dir);
+      out.push(entry('nonheap', 'script id to url map (sidecar of the heap snapshots)', sf, 0, null));
+    } catch (err) {
+      limitations.push(`scripts.json was not written: ${err && err.message}`);
+    }
+  } catch (err) {
+    out.push(entry('heap', role, null, nowMs() - t0, String(err && err.message ? err.message : err)));
+  }
+}
+
+function captureAlloc(out, dir, restart, limitations) {
+  const t0 = nowMs();
+  const role = 'sampling heap profile (live objects)';
+  if (!sampling) {
+    out.push(entry('alloc', role, null, 0, 'the sampling heap profiler is not running'));
+    return;
+  }
+  try {
+    if (gcFn !== null) {
+      try {
+        gcFn();
+        gcFn();
+      } catch (_) {
+        limitations.push('gc before the heap profile failed: the profile may hold dead objects');
+      }
+    }
+    const res = post('HeapProfiler.stopSampling');
+    sampling = false;
+    const text = JSON.stringify(res && res.profile);
+    if (!text || text.length > PROFILE_BYTES_CAP) {
+      throw new Error(text ? `the heap profile is over ${PROFILE_BYTES_CAP} bytes` : 'stopSampling returned no profile');
+    }
+    allocSeq += 1;
+    const file = path.join(dir, `alloc-${allocSeq}.heapprofile`);
+    fs.writeFileSync(file, text);
+    out.push(entry('alloc', role, file, nowMs() - t0, null));
+  } catch (err) {
+    out.push(entry('alloc', role, null, nowMs() - t0, String(err && err.message ? err.message : err)));
+  }
+  if (restart) {
+    try {
+      startSamplingNow();
+    } catch (err) {
+      limitations.push(`the sampling heap profiler could not be restarted: ${err && err.message}`);
+    }
+  }
+}
+
+function captureResources(out, dir, x, limitations) {
+  const t0 = nowMs();
+  const role = 'active resources by type and creation site';
+  try {
+    const active = {};
+    if (typeof process.getActiveResourcesInfo === 'function') {
+      for (const type of process.getActiveResourcesInfo()) active[type] = (active[type] || 0) + 1;
+    }
+    const byType = new Map();
+    const slot = (type) => {
+      let s = byType.get(type);
+      if (!s) {
+        s = { active: active[type] || 0, tracked: 0, source: 'async_hooks', sites: new Map(), unattributed: 0 };
+        byType.set(type, s);
+      }
+      return s;
+    };
+    for (const type of Object.keys(active)) slot(type);
+    for (const { type, site } of tracked.values()) {
+      const s = slot(type);
+      s.tracked += 1;
+      if (site === null) s.unattributed += 1;
+      else s.sites.set(site, (s.sites.get(site) || 0) + 1);
+    }
+    // Timers are exact: the timer wrappers see every clear and every fire at once, while the
+    // async_hooks destroy event of a timer reaches the tracker only after the current tick.
+    const timerSlot = slot('Timeout');
+    timerSlot.source = 'timers';
+    timerSlot.tracked = timersLive;
+    timerSlot.sites = new Map(timerSites);
+    timerSlot.unattributed = Math.max(0, timersLive - [...timerSites.values()].reduce((a, b) => a + b, 0));
+    const types = {};
+    const ordered = [...byType].sort((a, b) => b[1].tracked + b[1].active - (a[1].tracked + a[1].active) || (a[0] < b[0] ? -1 : 1));
+    for (const [type, s] of ordered.slice(0, TYPES_CAP)) {
+      const sites = [...s.sites].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+      const row = {
+        active: s.active,
+        tracked: s.tracked,
+        created: resourceCreated.get(type) || null,
+        source: s.source,
+        sites: Object.fromEntries(sites.slice(0, SITES_PER_TYPE)),
+        unattributed: s.unattributed,
+      };
+      if (sites.length > SITES_PER_TYPE) row.sites_dropped = sites.length - SITES_PER_TYPE;
+      types[type] = row;
+    }
+    const notes = [
+      'active counts the ref\'d handles node reports; tracked counts resources whose async_hooks destroy has not run, which can include resources closed in the current tick',
+    ];
+    if (!trackerOn) notes.push('the async_hooks tracker did not start: only the active counts and the timer sites are present');
+    if (trackedOverflow > 0) notes.push(`${trackedOverflow} resources were not tracked after the first ${TRACKED_CAP}`);
+    if (ordered.length > TYPES_CAP) notes.push(`${ordered.length - TYPES_CAP} resource types were left out`);
+    const doc = {
+      dla_resources: 1,
+      pid: process.pid,
+      runtime: 'node',
+      x,
+      t_ms: Number((process.hrtime.bigint() - T0) / 1000000n),
+      active,
+      types,
+      limitations: notes,
+    };
+    const file = path.join(dir, 'resources.json');
+    fs.writeFileSync(file, JSON.stringify(doc) + '\n');
+    out.push(entry('nonheap', role, file, nowMs() - t0, null));
+  } catch (err) {
+    limitations.push(`resources.json was not written: ${err && err.message}`);
+    out.push(entry('nonheap', role, null, nowMs() - t0, String(err && err.message ? err.message : err)));
+  }
+}
+
+/**
+ * Take the captures due at this record. phase is 'checkpoint' (driver) or 'exit' (command mode);
+ * last marks the final round. Returns the entries for the record's "captures" array.
+ */
+function captureNow(phase, x, last, heapUsed, limitations) {
+  const out = [];
+  if (!CAPTURE_ON || finalCaptured) return out;
+  const driver = phase === 'checkpoint';
+  const fin = !driver || last;
+  let seq = 0;
+  if (driver) {
+    capturesTaken += 1;
+    seq = capturesTaken;
+  }
+  const here = !driver || dumpHere(seq, intEnv('DLA_WARMUP', 0), intEnv('DLA_ROUNDS', 0), intEnv('DLA_CAPTURE_DUMPS', 4));
+  let dir;
+  try {
+    dir = captureDir();
+  } catch (err) {
+    limitations.push(`capture directory unusable: ${err && err.message}`);
+    return out;
+  }
+  // The profile first: the snapshot's own work should not be in it.
+  if (CAPTURE_KINDS.has('alloc') && (here || fin)) captureAlloc(out, dir, !fin, limitations);
+  if (CAPTURE_KINDS.has('heap') && here) captureHeap(out, dir, heapUsed, limitations);
+  if (fin) {
+    finalCaptured = true;
+    if (CAPTURE_KINDS.has('nonheap')) captureResources(out, dir, x, limitations);
+  }
+  return out;
+}
+
 let checkpointWritten = false;
 const detectors = [];
 
@@ -948,6 +1391,11 @@ function build(phase, x, last) {
     if (env('NODE_V8_COVERAGE') !== null) limitations.push('function coverage is written by node itself to NODE_V8_COVERAGE');
   }
   for (const note of probeLimitations) limitations.push(note);
+  for (const note of captureNotes) limitations.push(note);
+  if (!tick && CAPTURE_ON) {
+    const captures = captureNow(phase, x, last, values['node.heap_used'], limitations);
+    if (captures.length > 0) rec.captures = captures;
+  }
   limitations.push('timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted');
   rec.limitations = limitations;
   return rec;
@@ -1001,6 +1449,7 @@ function iterFromEnv() {
 
 function init() {
   if (!ACTIVE) return;
+  startCaptures();
   loadProbeSpecs();
   const { origSetInterval } = installTimers();
   installEmitter();

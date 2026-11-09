@@ -35,9 +35,13 @@
 mod build;
 mod exec;
 mod ffi;
+pub mod go_toolchain;
+pub mod known_leaks;
+mod manifests;
 mod privilege;
 mod registry;
 mod scan;
+mod tier3;
 
 use std::{
     ffi::OsString,
@@ -130,6 +134,7 @@ pub fn run_with(
     let tools = registry::probe_tools(&runtimes, tools_dir, path_var, opts.tool_timeout);
     let found = scan::find_runners_and_libraries(&tree, &runtimes);
     let privilege = privilege::collect(opts.tool_timeout);
+    let (known_leaks, known_leaks_note) = known_leak_verdicts(ctx, &tree, &detected);
     let builds: Vec<BuildProbe> = if opts.build {
         detected
             .iter()
@@ -149,6 +154,10 @@ pub fn run_with(
         libraries: found.libraries,
         builds,
         boundaries: ffi::detect(&tree),
+        go: runtimes
+            .contains(&Runtime::Go)
+            .then(|| go_toolchain::probe(&ctx.project, opts.tool_timeout)),
+        known_leaks,
     };
 
     let report_name = report_file(ctx.worker.as_deref());
@@ -177,6 +186,9 @@ pub fn run_with(
         spec.limitations
             .push("the file walk stopped at its file limit".to_owned());
     }
+    if let Some(note) = known_leaks_note {
+        spec.limitations.push(note);
+    }
     let evidence = ctx.add_evidence(&mut ledger, spec)?;
 
     record_coverage(ctx, &report)?;
@@ -188,6 +200,37 @@ pub fn run_with(
         artifacts: vec![ctx.pointer(&format!("probe/{report_name}"))],
         summary: summary.cli,
     })
+}
+
+/// Checks `data/known-leaks.toml` against the project. A missing data directory or file
+/// gives no verdicts (the ablation removes the file); an invalid file gives none and a
+/// note for the evidence limitations.
+fn known_leak_verdicts(
+    ctx: &ToolCtx,
+    tree: &scan::Tree,
+    detected: &[scan::Detected],
+) -> (Vec<dla_core::probe::KnownLeakVerdict>, Option<String>) {
+    let Ok(dir) = ctx.data_files_dir() else {
+        return (Vec::new(), None);
+    };
+    match known_leaks::load(&dir) {
+        Ok(Some(file)) => (known_leaks::evaluate(tree, detected, &file), None),
+        Ok(None) => (Vec::new(), None),
+        Err(e) => (Vec::new(), Some(format!("known leaks not checked: {e}"))),
+    }
+}
+
+/// The known-leak IDs that hold or may hold, for the bounded summaries.
+fn known_leak_ids(r: &ProbeReport) -> serde_json::Value {
+    use dla_core::probe::Verdict;
+    let ids = |v: Verdict| -> Vec<&str> {
+        r.known_leaks
+            .iter()
+            .filter(|k| k.verdict == v)
+            .map(|k| k.id.as_str())
+            .collect()
+    };
+    json!({"true": ids(Verdict::True), "maybe": ids(Verdict::Maybe)})
 }
 
 /// Pieces of the summaries derived from a report.
@@ -228,6 +271,8 @@ fn summarize(r: &ProbeReport) -> Summary {
         "builds": builds,
         "root": r.privilege.root,
         "ptrace_scope": r.privilege.ptrace_scope,
+        "go": go_summary(r),
+        "known_leaks": known_leak_ids(r),
     });
     let counts = json!({
         "runtimes": runtimes,
@@ -236,6 +281,7 @@ fn summarize(r: &ProbeReport) -> Summary {
         "test_runners": runners.len(),
         "libraries": libs.len(),
         "builds": builds,
+        "known_leaks": r.known_leaks.iter().filter(|k| k.verdict != dla_core::probe::Verdict::False).count(),
     });
     let cli = json!({
         "runtimes": runtimes,
@@ -245,6 +291,8 @@ fn summarize(r: &ProbeReport) -> Summary {
         "libraries": libs,
         "harness_flags": flags,
         "builds": builds,
+        "go": go_summary(r),
+        "known_leaks": known_leak_ids(r),
         "boundaries": r.boundaries.iter().map(|b| format!("{}:{}", b.kind, b.library.as_deref().unwrap_or("?"))).collect::<Vec<_>>(),
         "privilege": {
             "root": r.privilege.root,
@@ -256,6 +304,18 @@ fn summarize(r: &ProbeReport) -> Summary {
         evidence_result,
         counts,
         cli,
+    }
+}
+
+/// The Go toolchain facts as a small JSON object (`null` for a project with no Go).
+fn go_summary(r: &ProbeReport) -> serde_json::Value {
+    match &r.go {
+        Some(g) => json!({
+            "version": g.version,
+            "goroutineleak": g.goroutineleak,
+            "leak_toolchain": g.leak_toolchain,
+        }),
+        None => serde_json::Value::Null,
     }
 }
 
@@ -306,9 +366,38 @@ fn record_coverage(ctx: &ToolCtx, r: &ProbeReport) -> Result<(), Refusal> {
         for rt in &r.runtimes {
             m.worker_mut(rt.runtime.as_str());
         }
+        let found: Vec<Runtime> = r.runtimes.iter().map(|rt| rt.runtime).collect();
+        tier3::note(m, &found);
+        // The goroutineleak profile is decided from the toolchain version, not from PATH.
+        if let Some(g) = &r.go {
+            let keep = m
+                .workers
+                .get("go")
+                .and_then(|w| w.backends.get("goroutineleak"))
+                .is_some_and(|b| b.status == BackendStatus::Ran && b.enumerated > 0);
+            if !keep {
+                m.set_backend("go", "goroutineleak", go_leak_coverage(g));
+            }
+        }
     })
     .map_err(|e: Error| e.to_refusal())?;
     Ok(())
+}
+
+/// The coverage row of the goroutineleak profile for a probed toolchain.
+pub fn go_leak_coverage(g: &dla_core::probe::GoProbe) -> BackendCoverage {
+    match g.goroutineleak.as_str() {
+        "missing" => BackendCoverage::missing(
+            format!(
+                "the goroutineleak profile needs Go 1.27 or newer ({} here)",
+                g.version.as_deref().unwrap_or("no go command found")
+            ),
+            g.install_hint
+                .clone()
+                .unwrap_or_else(|| go_toolchain::INSTALL_HINT.to_owned()),
+        ),
+        _ => BackendCoverage::ran(g.version.clone(), 0),
+    }
 }
 
 /// Toolchain versions for one detected runtime, queried in parallel.

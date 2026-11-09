@@ -137,7 +137,7 @@ pub struct BoundaryMethod {
 /// A foreign-function boundary between two runtimes found in the sources.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct FfiBoundary {
-    /// Kind of boundary: `jni`.
+    /// Kind of boundary: `jni`, `pyo3`, `napi` or `cgo`.
     pub kind: String,
     /// Runtime on the managed side.
     pub managed: Runtime,
@@ -158,6 +158,48 @@ pub struct FfiBoundary {
     /// Exported JNI functions and the managed methods they implement.
     #[serde(default)]
     pub methods: Vec<BoundaryMethod>,
+}
+
+/// What the project's Go toolchain offers DLA.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct GoProbe {
+    /// The version of the `go` command that builds the project (`go1.24.7`), when it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// How the `goroutineleak` profile is reached: `native` (Go 1.27 or newer),
+    /// `experiment` (Go 1.26 with `GOEXPERIMENT=goroutineleakprofile`), `toolchain` (a
+    /// newer toolchain from the module cache runs a separate leak pass) or `missing`.
+    pub goroutineleak: String,
+    /// The `GOTOOLCHAIN` value of the leak pass when `goroutineleak` is `toolchain`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leak_toolchain: Option<String>,
+    /// The command that makes the capability available, when it is `missing`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_hint: Option<String>,
+}
+
+string_enum! {
+    /// Three-valued result of a known-leak check.
+    pub enum Verdict {
+        /// The project's files show the condition.
+        True = "true",
+        /// The project's files rule the condition out.
+        False = "false",
+        /// The files cannot decide.
+        Maybe = "maybe",
+    }
+}
+
+/// The check of one `data/known-leaks.toml` entry against the project. Context for the
+/// analysis; never a finding.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct KnownLeakVerdict {
+    /// Entry ID.
+    pub id: String,
+    /// The result.
+    pub verdict: Verdict,
+    /// The deciding fact, short (a file, a version or the missing piece).
+    pub why: String,
 }
 
 /// One build attempt (`dla probe --build`).
@@ -208,4 +250,10 @@ pub struct ProbeReport {
     /// Foreign-function boundaries between runtimes (JNI).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boundaries: Vec<FfiBoundary>,
+    /// The Go toolchain and its goroutineleak capability (Go projects only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub go: Option<GoProbe>,
+    /// Known-leak entries checked against the project (runtimes found only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_leaks: Vec<KnownLeakVerdict>,
 }

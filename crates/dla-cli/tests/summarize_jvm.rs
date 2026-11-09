@@ -861,7 +861,7 @@ fn class_loader_and_native_memory_growth_are_columns_that_tie_to_nothing() {
 #[test]
 fn the_list_names_the_jvm_adapters_and_their_tools() {
     let d = tempfile::tempdir().unwrap();
-    let v = ok(d.path(), &["summarize", "--list"]);
+    let v = ok(d.path(), &["summarize", "--list", "--runtime", "jvm"]);
     let rows = v["adapters"].as_array().unwrap();
     let find = |n: &str| {
         rows.iter()

@@ -1,0 +1,89 @@
+goroutine 1 [running]:
+runtime/pprof.writeGoroutineStacks({0x5f3a28, 0x21b8fe89a090})
+	/root/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.linux-amd64/src/runtime/pprof/pprof.go:816 +0x69
+runtime/pprof.writeGoroutineLeak({0x5f3a28, 0x21b8fe89a090}, 0x2)
+	/root/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.linux-amd64/src/runtime/pprof/pprof.go:803 +0xa8
+runtime/pprof.(*Profile).WriteTo(0x21b8fe8d21b0?, {0x5f3a28?, 0x21b8fe89a090?}, 0x21b8000001b6?)
+	/root/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.linux-amd64/src/runtime/pprof/pprof.go:405 +0x149
+main.write({0x21b8fe8d21b0, 0x17}, {0x4e74ea, 0xd}, 0x2)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:31 +0x86
+main.main()
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:46 +0x1e5
+
+goroutine 18 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da000)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 19 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da080)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 20 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da100)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 21 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da180)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 22 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da280)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 23 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da300)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 24 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da400)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 25 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da480)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 26 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da500)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 27 [select (leaked)]:
+example.com/notifyd/internal/notify.(*Subscription).run(0x21b8fe8da600)
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:40 +0xff
+created by example.com/notifyd/internal/notify.newSubscription in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/internal/notify/subscription.go:33 +0x1b6
+
+goroutine 28 [chan receive]:
+main.AKIAIOSFODNN7EXAMPLE1.func1()
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:19 +0x1c
+created by main.AKIAIOSFODNN7EXAMPLE1 in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:19 +0x3e
+
+goroutine 29 [chan receive]:
+main.AKIAIOSFODNN7EXAMPLE1.func1()
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:19 +0x1c
+created by main.AKIAIOSFODNN7EXAMPLE1 in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:19 +0x3e
+
+goroutine 30 [chan receive]:
+main.AKIAIOSFODNN7EXAMPLE1.func1()
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:19 +0x1c
+created by main.AKIAIOSFODNN7EXAMPLE1 in goroutine 1
+	/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/g-work/fx/.dla/20260101-aaaa/harness/H1/work/cmd/scratch/main.go:19 +0x3e

@@ -28,6 +28,7 @@ pub mod dumps;
 pub mod r#gen;
 pub mod kotlin;
 pub mod probes;
+mod pymemray;
 pub mod run;
 pub mod scratch;
 pub mod symbolize;

@@ -1,13 +1,17 @@
 """DLA measurement agent for Python processes.
 
 Placed first on PYTHONPATH by `dla harness run`. It chain-imports the project's own
-sitecustomize (if any), starts tracemalloc (1 frame) and, on Python 3.12+, a sys.monitoring
+sitecustomize (if any), starts tracemalloc (DLA_TRACEMALLOC_FRAMES frames: 10 when allocation
+captures are asked for, else 1) and, on Python 3.12+, a sys.monitoring
 PY_START coverage collector, and writes one JSON record per dump to the file named by
 DLA_HARNESS_OUT: an `exit` record from an atexit handler, `checkpoint` records when a driver calls
 `checkpoint()`, and optional light `tick` records every DLA_TICK_MS.
 
 Environment: DLA_HARNESS_OUT, DLA_HARNESS_PROBES (probes.json), DLA_PURGE (trim|gc|none),
-DLA_PROJECT (scratch root), DLA_TICK_MS, DLA_ITER. The module never raises into the target.
+DLA_PROJECT (scratch root), DLA_TICK_MS, DLA_ITER. Raw captures (`dla harness run --capture`):
+DLA_CAPTURE (comma list of histogram, alloc, nonheap), DLA_CAPTURE_DIR, DLA_CAPTURE_DUMPS,
+DLA_TRACEMALLOC_FRAMES, DLA_PY_MEMRAY=0 to leave memray out of `alloc`. The module never raises
+into the target.
 """
 
 import atexit
@@ -23,6 +27,11 @@ import sys
 import threading
 import time
 import types
+
+try:
+    import re as _re
+except BaseException:  # a broken stdlib must not stop the target
+    _re = None
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _T0 = time.monotonic()
@@ -58,12 +67,37 @@ def _is_tool_process():
 _ACTIVE = _env("DLA_HARNESS_OUT") is not None and not _is_tool_process()
 
 
+_TRACEMALLOC_FRAMES_MAX = 60
+
+
+def _int_env(name, fallback):
+    raw = _env(name)
+    try:
+        return int(raw) if raw is not None else fallback
+    except ValueError:
+        return fallback
+
+
+def _capture_kinds():
+    kinds = set()
+    for part in (_env("DLA_CAPTURE") or "").split(","):
+        part = part.strip().lower()
+        if part:
+            kinds.add(part)
+    return kinds
+
+
+_CAPTURE_KINDS = _capture_kinds()
+_CAPTURE_DIR = _env("DLA_CAPTURE_DIR")
+
+
 def _start_tracemalloc():
     try:
         import tracemalloc
 
         if not tracemalloc.is_tracing():
-            tracemalloc.start(1)
+            frames = _int_env("DLA_TRACEMALLOC_FRAMES", 10 if "alloc" in _CAPTURE_KINDS else 1)
+            tracemalloc.start(max(1, min(frames, _TRACEMALLOC_FRAMES_MAX)))
     except BaseException:
         pass
 
@@ -460,6 +494,523 @@ def _purge(kind, before_gc_os, limitations):
 
 
 # ---------------------------------------------------------------------------------------------
+# raw captures (DLA_CAPTURE): allocation stacks, type counters, thread/task/resource sites
+# ---------------------------------------------------------------------------------------------
+#
+# Files go to DLA_CAPTURE_DIR/<pid>/ and are listed in the "captures" array of the record that
+# triggered them. DLA_CAPTURE is a comma list of:
+#   alloc     py-<n>.alloc.json    tracemalloc: live bytes by allocation stack (innermost first)
+#             py-1.memray.json     memray: allocations still live at the end (see below)
+#   histogram py-<n>.types.json    gc.get_objects() counts and shallow bytes by type name
+#   nonheap   py-<n>.nonheap.json  threads, asyncio tasks and ResourceWarnings by creation site
+# Nothing here throws into the target: a failed capture becomes an entry with "error".
+# memray runs only when it is importable by THIS interpreter (the target's) and DLA_PY_MEMRAY is
+# not 0: the tracker starts at interpreter start-up, stops at the final record, and the helper
+# dla_memray_leaks.py (run with this interpreter) turns the capture file into bounded JSON.
+# DLA never reads the memray file itself.
+
+_ALLOC_TOP_FIRST = 150
+_ALLOC_TOP_LATER = 100
+_ALLOC_TOP_SIZE = 50
+_TYPES_TOP = 300
+_GROUPS_CAP = 200
+_FILE_BYTES_CAP = 4 << 20
+_CAPTURE_ON = _ACTIVE and _CAPTURE_DIR is not None and bool(_CAPTURE_KINDS)
+_cap_taken = 0  # checkpoints seen (driver mode)
+_cap_seq = {"alloc": 0, "histogram": 0, "nonheap": 0}
+_cap_final = False
+_cap_notes = []  # limitations found while starting the captures
+_tm_first = {}  # stack key -> size in the first allocation file
+_rel_cache = {}
+_memray = {"tracker": None, "bin": None, "error": None, "started": False, "stopped": False}
+_resource = {"threads": False, "tasks_debug": False, "warnings": collections.Counter(), "warn_total": 0}
+
+
+def _now_ms():
+    return int(time.monotonic() * 1000)
+
+
+def _project_rel(filename):
+    """Path of a project file relative to DLA_PROJECT with '/' separators, else None."""
+    if not filename or filename.startswith("<"):
+        return None
+    got = _rel_cache.get(filename, 0)
+    if got != 0:
+        return got
+    root = _project_root()
+    out = None
+    if root is not None:
+        low = filename.replace("\\", "/")
+        if "/site-packages/" not in low and "/dist-packages/" not in low:
+            real = os.path.realpath(filename)
+            if real.startswith(root + os.sep):
+                out = real[len(root) + 1 :].replace(os.sep, "/")
+    if len(_rel_cache) < 20000:
+        _rel_cache[filename] = out
+    return out
+
+
+def _shown_path(filename):
+    """What a capture file says for a frame's file: project-relative, else the plain path."""
+    return _project_rel(filename) or filename
+
+
+def _creation_site(skip):
+    """`file:line` of the project frame that created something: the innermost project frame
+    that is not an `__init__` (a subclass constructor is not where the object was made)."""
+    try:
+        frame = sys._getframe(skip)
+    except BaseException:
+        return None
+    fallback = None
+    depth = 0
+    while frame is not None and depth < 60:
+        rel = _project_rel(frame.f_code.co_filename)
+        if rel is not None:
+            site = f"{rel}:{frame.f_lineno}"
+            if frame.f_code.co_name != "__init__":
+                return site
+            if fallback is None:
+                fallback = site
+        frame = frame.f_back
+        depth += 1
+    return fallback
+
+
+def _entry(kind, role, path, ms, error=None):
+    e = {"kind": kind, "role": role, "ms": ms}
+    if path is not None:
+        e["file"] = os.path.basename(path)
+    if error is not None:
+        e["error"] = error
+    else:
+        try:
+            e["bytes"] = os.path.getsize(path)
+        except BaseException:
+            e["bytes"] = 0
+    return e
+
+
+def _capture_dir():
+    path = os.path.join(_CAPTURE_DIR, str(os.getpid()))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _write_json(path, doc, list_key=None):
+    """Writes `doc` as one line; halves `doc[list_key]` until the file fits the cap."""
+    text = json.dumps(doc, separators=(",", ":"), default=str)
+    while len(text) > _FILE_BYTES_CAP and list_key and doc.get(list_key):
+        doc[list_key] = doc[list_key][: len(doc[list_key]) // 2]
+        doc["truncated"] = True
+        text = json.dumps(doc, separators=(",", ":"), default=str)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text + "\n")
+
+
+def _dump_here(seq, warmup, rounds, dumps):
+    """Whether the checkpoint numbered `seq` takes the heavy captures (same rule as the JVM)."""
+    total = warmup + rounds
+    if total <= 0 or total <= dumps:
+        return True
+    first = max(warmup, 1)
+    if seq == first or seq == total:
+        return True
+    interior = dumps - 2
+    if interior <= 0 or seq < first or seq > total:
+        return False
+    return any(seq == first + round((total - first) * j / (interior + 1)) for j in range(1, interior + 1))
+
+
+# ---- alloc: tracemalloc
+
+def _capture_tracemalloc(out, directory, limitations):
+    t0 = _now_ms()
+    role = "tracemalloc live bytes by allocation stack"
+    path = None
+    try:
+        import tracemalloc
+
+        if not tracemalloc.is_tracing():
+            raise RuntimeError("tracemalloc is not tracing")
+        snap = tracemalloc.take_snapshot()
+        stats = snap.statistics("traceback")
+        del snap
+        # Filtering happens here, on the grouped stacks: a tracemalloc Filter over every trace is slow.
+        agent_prefix = os.path.realpath(_HERE) + os.sep
+        own = {}
+
+        def agent_frame(filename):
+            got = own.get(filename)
+            if got is None:
+                got = not filename.startswith("<") and os.path.realpath(filename).startswith(agent_prefix)
+                own[filename] = got
+            return got
+
+        skip_files = (tracemalloc.__file__, "<frozen importlib._bootstrap>", "<frozen importlib._bootstrap_external>", "<unknown>")
+        stats = [
+            st
+            for st in stats
+            if st.traceback[-1].filename not in skip_files
+            and not any(agent_frame(f.filename) for f in st.traceback)
+        ]
+
+        def key_of(st):
+            return "|".join(f"{f.filename}:{f.lineno}" for f in st.traceback)
+
+        first = not _tm_first
+        if first:
+            picked = stats[:_ALLOC_TOP_FIRST]
+        else:
+            grown = sorted(stats, key=lambda st: st.size - _tm_first.get(key_of(st), 0), reverse=True)[:_ALLOC_TOP_LATER]
+            picked = list(grown)
+            seen = {id(st) for st in grown}
+            for st in stats[:_ALLOC_TOP_SIZE]:
+                if id(st) not in seen:
+                    picked.append(st)
+        rows = []
+        for st in picked:
+            # tracemalloc lists the oldest frame first; the file says innermost first.
+            frames = [[_shown_path(f.filename), f.lineno] for f in reversed(st.traceback)]
+            rows.append({"size": st.size, "count": st.count, "frames": frames})
+            if first:
+                _tm_first[key_of(st)] = st.size
+        current, peak = tracemalloc.get_traced_memory()
+        _cap_seq["alloc"] += 1
+        doc = {
+            "dla_pyalloc": 1,
+            "pid": os.getpid(),
+            "t_ms": int((time.monotonic() - _T0) * 1000),
+            "frames": tracemalloc.get_traceback_limit(),
+            "traced": current,
+            "traced_peak": peak,
+            "stacks_total": len(stats),
+            "stacks": rows,
+        }
+        path = os.path.join(directory, f"py-{_cap_seq['alloc']}.alloc.json")
+        _write_json(path, doc, "stacks")
+        out.append(_entry("alloc", role, path, _now_ms() - t0))
+    except BaseException as exc:
+        limitations.append(f"py alloc capture was not written: {exc!r}")
+        out.append(_entry("alloc", role, None, _now_ms() - t0, repr(exc)))
+
+
+# ---- alloc: memray
+
+def _memray_wanted():
+    return "alloc" in _CAPTURE_KINDS and _env("DLA_PY_MEMRAY") != "0"
+
+
+def _start_memray():
+    """Starts the memray tracker for the whole process when memray imports here."""
+    if not (_CAPTURE_ON and _memray_wanted()):
+        return
+    try:
+        if importlib.util.find_spec("memray") is None:
+            _memray["error"] = "memray is not installed in this interpreter (" + (sys.executable or "python") + "); pip install memray there to add its live-at-exit report"
+            return
+        import memray
+
+        directory = _capture_dir()
+        path = os.path.join(directory, "memray.bin")
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        tracker = memray.Tracker(path, native_traces=False, follow_fork=False)
+        tracker.__enter__()
+        _memray.update(tracker=tracker, bin=path, started=True)
+    except BaseException as exc:
+        _memray["error"] = f"memray could not start: {exc!r}"
+
+
+def _stop_memray():
+    """Stops the tracker at the start of the final record, so the agent's own work is not in it."""
+    tracker = _memray["tracker"]
+    if tracker is None:
+        return
+    _memray["tracker"] = None
+    try:
+        tracker.__exit__(None, None, None)
+        _memray["stopped"] = True
+    except BaseException as exc:
+        _memray["error"] = f"memray tracker did not stop cleanly: {exc!r}"
+
+
+def _finish_memray(out, directory, limitations):
+    t0 = _now_ms()
+    role = "memray allocations still live at the end"
+    if not _memray["stopped"]:
+        if _memray["error"]:
+            out.append(_entry("alloc", role, None, 0, _memray["error"]))
+        return
+    binary = _memray["bin"]
+    target = os.path.join(directory, "py-1.memray.json")
+    helper = os.path.join(_HERE, "dla_memray_leaks.py")
+    try:
+        import subprocess
+
+        if not os.path.isfile(helper):
+            raise RuntimeError("dla_memray_leaks.py is missing next to the agent")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("DLA_HARNESS") and k != "PYTHONPATH"}
+        done = subprocess.run(
+            [sys.executable, "-I", helper, binary, target],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=180,
+        )
+        if done.returncode != 0:
+            tail = done.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no message"]
+            raise RuntimeError(f"helper exit {done.returncode}: {tail[0][:200]}")
+        out.append(_entry("alloc", role, target, _now_ms() - t0))
+    except BaseException as exc:
+        limitations.append(f"py memray capture was not written: {exc!r}")
+        out.append(_entry("alloc", role, None, _now_ms() - t0, repr(exc)))
+    finally:
+        try:
+            os.remove(binary)  # the raw memray file is large and private to memray
+        except OSError:
+            pass
+
+
+# ---- histogram: type counters
+
+def _capture_types(out, directory, types_full, count, limitations):
+    t0 = _now_ms()
+    role = "python object counts by type"
+    try:
+        _cap_seq["histogram"] += 1
+        path = os.path.join(directory, f"py-{_cap_seq['histogram']}.types.json")
+        doc = {
+            "dla_pytypes": 1,
+            "pid": os.getpid(),
+            "t_ms": int((time.monotonic() - _T0) * 1000),
+            "gc_objects": count,
+            "types": types_full,
+        }
+        _write_json(path, doc, "types")
+        out.append(_entry("histogram", role, path, _now_ms() - t0))
+    except BaseException as exc:
+        limitations.append(f"py types capture was not written: {exc!r}")
+        out.append(_entry("histogram", role, None, _now_ms() - t0, repr(exc)))
+
+
+# ---- nonheap: threads, tasks, resource warnings
+
+_PATTERN_CAP = 80
+
+
+def _thread_pattern(name):
+    """A thread name with every digit run replaced by `*` (`Thread-3 (work)` is `Thread-* (work)`)."""
+    name = str(name)[:_PATTERN_CAP]
+    return _re.sub(r"\d+", "*", name) if _re is not None else name
+
+
+def _install_thread_sites():
+    """Remembers where each thread was created: Thread.__init__ stores the project frame."""
+    try:
+        orig = threading.Thread.__init__
+
+        def init(self, *args, **kwargs):
+            try:
+                self._dla_site = _creation_site(2)
+            except BaseException:
+                pass
+            orig(self, *args, **kwargs)
+
+        init.__wrapped__ = orig
+        threading.Thread.__init__ = init
+        _resource["threads"] = True
+    except BaseException as exc:
+        _cap_notes.append(f"thread creation sites unavailable: {exc!r}")
+
+
+def _install_asyncio_debug():
+    """asyncio keeps the creation stack of each task only in debug mode: ask for it."""
+    if os.environ.get("PYTHONASYNCIODEBUG"):
+        _resource["tasks_debug"] = True
+        return
+    os.environ["PYTHONASYNCIODEBUG"] = "1"
+    _resource["tasks_debug"] = True
+    try:
+        import logging
+
+        # Debug mode reports slow callbacks on stderr; that is noise in a measured run.
+        logging.getLogger("asyncio").setLevel(logging.ERROR)
+    except BaseException:
+        pass
+
+
+def _warning_kind(message):
+    text = str(message).strip().split("<", 1)[0].strip()
+    return text[:60] or "ResourceWarning"
+
+
+def _install_resource_warnings():
+    """Counts ResourceWarnings per allocation site (the warning's source object has a tracemalloc traceback)."""
+    try:
+        import warnings
+
+        warnings.simplefilter("always", ResourceWarning)
+
+        def count(message, category, source):
+            site = None
+            try:
+                import tracemalloc
+
+                tb = tracemalloc.get_object_traceback(source) if source is not None else None
+                if tb is not None:
+                    for frame in reversed(tb):  # newest first
+                        rel = _project_rel(frame.filename)
+                        if rel is not None:
+                            site = f"{rel}:{frame.lineno}"
+                            break
+            except BaseException:
+                pass
+            _resource["warn_total"] += 1
+            if len(_resource["warnings"]) < 500:
+                _resource["warnings"][(_warning_kind(message), site)] += 1
+
+        orig_impl = getattr(warnings, "_showwarnmsg_impl", None)
+        if orig_impl is not None:
+
+            def impl(msg):
+                if issubclass(msg.category, ResourceWarning):
+                    count(msg.message, msg.category, getattr(msg, "source", None))
+                    return
+                return orig_impl(msg)
+
+            warnings._showwarnmsg_impl = impl
+        else:
+            orig_show = warnings.showwarning
+
+            def show(message, category, filename, lineno, file=None, line=None, source=None):
+                if issubclass(category, ResourceWarning):
+                    count(message, category, source)
+                    return
+                return orig_show(message, category, filename, lineno, file, line)
+
+            warnings.showwarning = show
+            _cap_notes.append("ResourceWarning sites unavailable on this python (the warnings hook gets no source object)")
+    except BaseException as exc:
+        _cap_notes.append(f"ResourceWarning counting unavailable: {exc!r}")
+
+
+def _task_rows(objs):
+    asyncio = sys.modules.get("asyncio")
+    task_type = getattr(asyncio, "Task", None) if asyncio is not None else None
+    if task_type is None:
+        return 0, []
+    groups = collections.Counter()
+    total = 0
+    for obj in objs:
+        if type(obj) is not task_type and not isinstance(obj, task_type):
+            continue
+        try:
+            if obj.done():
+                continue
+            coro = obj.get_coro()
+            name = getattr(coro, "__qualname__", None) or type(coro).__name__
+            frame = getattr(coro, "cr_frame", None) or getattr(coro, "gi_frame", None)
+            where = None
+            if frame is not None:
+                rel = _project_rel(frame.f_code.co_filename)
+                where = f"{rel}:{frame.f_lineno}" if rel is not None else None
+            site = None
+            for fs in reversed(getattr(obj, "_source_traceback", None) or []):  # newest first
+                rel = _project_rel(getattr(fs, "filename", None))
+                if rel is not None:
+                    site = f"{rel}:{fs.lineno}"
+                    break
+            total += 1
+            groups[(name, where, site)] += 1
+        except BaseException:
+            continue
+    rows = [{"coro": k[0], "frame": k[1], "site": k[2], "count": n} for k, n in groups.most_common(_GROUPS_CAP)]
+    return total, rows
+
+
+def _capture_resources(out, directory, x, objs, limitations):
+    t0 = _now_ms()
+    role = "threads, asyncio tasks and resource warnings by creation site"
+    try:
+        threads = [t for t in threading.enumerate() if not str(t.name).startswith("dla-")]
+        tgroups = collections.Counter()
+        for t in threads:
+            tgroups[(_thread_pattern(t.name), getattr(t, "_dla_site", None))] += 1
+        task_total, task_rows = _task_rows(objs)
+        notes = [
+            "a thread's site is the project frame that created it (not the frame it runs in)",
+            "ResourceWarning counts are cumulative: a warning is raised when an unclosed object is collected",
+        ]
+        if not _resource["threads"]:
+            notes.append("thread creation sites were not recorded")
+        if not _resource["tasks_debug"]:
+            notes.append("asyncio debug mode was off: tasks have no creation site")
+        elif not task_rows:
+            notes.append("no pending asyncio task at this point")
+        _cap_seq["nonheap"] += 1
+        path = os.path.join(directory, f"py-{_cap_seq['nonheap']}.nonheap.json")
+        doc = {
+            "dla_py_resources": 1,
+            "pid": os.getpid(),
+            "x": x,
+            "t_ms": int((time.monotonic() - _T0) * 1000),
+            "threads": {
+                "total": len(threads),
+                "groups": [{"pattern": k[0], "site": k[1], "count": n} for k, n in tgroups.most_common(_GROUPS_CAP)],
+            },
+            "tasks": {"total": task_total, "debug": _resource["tasks_debug"], "groups": task_rows},
+            "resource_warnings": {
+                "total": _resource["warn_total"],
+                "groups": [
+                    {"what": k[0], "site": k[1], "count": n} for k, n in _resource["warnings"].most_common(_GROUPS_CAP)
+                ],
+            },
+            "limitations": notes,
+        }
+        _write_json(path, doc)
+        out.append(_entry("nonheap", role, path, _now_ms() - t0))
+    except BaseException as exc:
+        limitations.append(f"py nonheap capture was not written: {exc!r}")
+        out.append(_entry("nonheap", role, None, _now_ms() - t0, repr(exc)))
+
+
+def _capture_now(phase, x, last, types_full, objs, limitations):
+    """Takes the captures due at this record; returns the entries for its "captures" array."""
+    global _cap_taken, _cap_final
+    out = []
+    if not _CAPTURE_ON or _cap_final:
+        return out
+    driver = phase == "checkpoint"
+    final = (not driver) or last
+    here = True
+    if driver:
+        _cap_taken += 1
+        here = _dump_here(_cap_taken, _int_env("DLA_WARMUP", 0), _int_env("DLA_ROUNDS", 0), _int_env("DLA_CAPTURE_DUMPS", 4))
+    try:
+        directory = _capture_dir()
+    except BaseException as exc:
+        limitations.append(f"capture directory unusable: {exc!r}")
+        return out
+    for kind in sorted(_CAPTURE_KINDS):
+        if kind not in ("alloc", "histogram", "nonheap") and final:
+            limitations.append(f"--capture {kind} is not written by the python agent (alloc, histogram and nonheap are)")
+    if "alloc" in _CAPTURE_KINDS and (here or final):
+        _capture_tracemalloc(out, directory, limitations)
+    if "histogram" in _CAPTURE_KINDS and (here or final):
+        _capture_types(out, directory, types_full, len(objs), limitations)
+    if "nonheap" in _CAPTURE_KINDS and (here or final):
+        _capture_resources(out, directory, x, objs, limitations)
+    if final:
+        _cap_final = True
+        if "alloc" in _CAPTURE_KINDS and _memray_wanted():
+            _finish_memray(out, directory, limitations)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
 # dumping
 # ---------------------------------------------------------------------------------------------
 
@@ -478,6 +1029,8 @@ def _build(phase, x, last):
         "t_ms": int((time.monotonic() - _T0) * 1000),
         "gc_forced": not tick,
     }
+    if _CAPTURE_ON and not tick and (phase == "exit" or last):
+        _stop_memray()
     purge = _env("DLA_PURGE")
     want_purge = last and not tick and purge not in (None, "none")
     pre = None
@@ -511,8 +1064,13 @@ def _build(phase, x, last):
     if want_purge:
         rec["purge"] = _purge(purge, os_before_gc, limitations)
     if not tick:
-        rec["types"] = _types_top(objs)
-        del objs
+        types_full = _types_top(objs, _TYPES_TOP if _CAPTURE_ON and "histogram" in _CAPTURE_KINDS else 20)
+        rec["types"] = types_full[:20]
+        if _CAPTURE_ON:
+            captures = _capture_now(phase, x, last, types_full, objs, limitations)
+            if captures:
+                rec["captures"] = captures
+        del objs, types_full
         rec["probes"] = _probes(limitations)
         if phase == "exit":
             if _coverage_on:
@@ -523,6 +1081,7 @@ def _build(phase, x, last):
                 limitations.append("function coverage unavailable (sys.monitoring needs Python 3.12+)")
     if _chain_error:
         limitations.append(_chain_error)
+    limitations.extend(_cap_notes)
     limitations.append("py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)")
     rec["limitations"] = limitations
     return rec
@@ -585,6 +1144,11 @@ def _init():
     if not _ACTIVE:
         return
     _start_tracemalloc()
+    if _CAPTURE_ON and "nonheap" in _CAPTURE_KINDS:
+        _install_thread_sites()
+        _install_asyncio_debug()
+        _install_resource_warnings()
+    _start_memray()
     _start_coverage()
     atexit.register(_exit_dump)
     tick = _env("DLA_TICK_MS")

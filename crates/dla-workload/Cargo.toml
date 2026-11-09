@@ -12,6 +12,7 @@ dla-core.workspace = true
 dla-census.workspace = true
 dla-sample.workspace = true
 dla-parsers.workspace = true
+dla-probe.workspace = true
 dla-stats.workspace = true
 serde.workspace = true
 serde_json.workspace = true

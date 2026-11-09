@@ -53,6 +53,51 @@ prints the workload's stdout; keep it in the harness log.
 - `detectors`: goleak output (driver mode, tag `dlagoleak`).
 - Coverage comes from `go test -coverprofile` with `-coverpkg=./...`; the dump carries none.
 
+## Raw captures (`--capture alloc,nonheap`)
+
+`dla harness run <H> --capture alloc,nonheap` sets `DLA_CAPTURE` and `DLA_CAPTURE_DIR`. The engine
+(`dlaCapture`) writes into `DLA_CAPTURE_DIR/<pid>/` after the two forced collections of a record and
+lists each file in the record's `captures` array (`kind`, `file`, `role`, `bytes`, `ms`, `error`):
+
+| Kind | File | What |
+|---|---|---|
+| `alloc` | `go-<n>.heap.pb.gz` | `pprof.Lookup("heap").WriteTo(f, 0)`: in-use bytes and objects by stack, as of the last collection |
+| `nonheap` | `go-<n>.goroutine.pb.gz` | the goroutine profile, protobuf (stacks the goroutines are blocked in; no creation site) |
+| `nonheap` | `go-<n>.goroutine.txt` | the same profile at `debug=2`, with the `created by` frame of every goroutine |
+| `nonheap` | `go-<n>.goroutineleak.txt` | `pprof.Lookup("goroutineleak").WriteTo(f, 2)`: goroutines the runtime proved blocked forever |
+
+Driver mode captures at the checkpoints `dumpHere` picks (`DLA_CAPTURE_DUMPS`, default 4: the end of
+the warm-up, the last round and evenly spaced rounds between), so a series of 3 or more files comes from
+one process. Command mode captures at exit, one process per point. `tick` records capture nothing.
+
+- `alloc` sets `runtime.MemProfileRate` (`DLA_MEMPROFILE_RATE`, default 4096) from a package variable
+  initializer, before the test or the workload runs. The profile is a sample: sizes are estimates.
+- The goroutine text is skipped above 200000 goroutines (an `error` entry says so).
+- `DLA_GO_LEAK_ONLY=1` writes only the goroutineleak file. `dla harness run` sets it for the separate
+  leak pass (below); nothing else measured in that process is used.
+
+### The goroutineleak profile
+
+Generally available from Go 1.27; Go 1.26 has it behind `GOEXPERIMENT=goroutineleakprofile`. The
+toolchain is decided by `dla probe` (`probe.json` field `go`, coverage row `go/goroutineleak`) and
+again by `dla harness run`:
+
+| The project builds with | What `dla harness run` does | Coverage row |
+|---|---|---|
+| Go 1.27 or newer | the main run writes the profile | `ran` |
+| Go 1.26 | the main run gets `GOEXPERIMENT=goroutineleakprofile` | `ran` |
+| older, Go 1.27+ in the module cache | one more process runs the same loop with `GOTOOLCHAIN=go1.27.x` and `DLA_GO_LEAK_ONLY=1`; command mode runs the last point only. Its files are listed under the main run's label | `ran` (`blocked` when that pass fails) |
+| older, nothing cached | the run goes on without the profile | `missing`, hint `dla install go-toolchain-1.27` |
+
+`dla install go-toolchain-1.27` runs `GOTOOLCHAIN=go1.27.0 go version`, which makes the go command
+fetch that toolchain into the Go module cache (outside the project). It needs consent tier 1.
+
+The printed commands: `dla summarize alloc-stack-diff <heap profiles>`, `dla summarize non-heap
+<goroutine dumps>` (growth by creation site, tied to the finding at the `go` statement) and
+`dla summarize non-heap <goroutineleak files>` (a `should-be-dead` evidence: a second signal that
+never confirms alone and never refutes; an empty profile proves nothing, because goroutines held by
+a global and runnable goroutines are not reported).
+
 ## Driver mode
 
 ```

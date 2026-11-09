@@ -252,10 +252,55 @@ impl Fixture {
     }
 }
 
+/// Every adapter, one `--list --op` call per operation (the plain `--list` groups names to
+/// stay within the output bound).
 fn adapters() -> Vec<Value> {
     let d = tempfile::tempdir().unwrap();
-    let v = ok(d.path(), &["summarize", "--list"]);
-    v["adapters"].as_array().unwrap().clone()
+    let mut all = Vec::new();
+    for op in [
+        "heap-graph",
+        "type-histogram-diff",
+        "alloc-stack-diff",
+        "non-heap",
+    ] {
+        let v = ok(d.path(), &["summarize", "--list", "--op", op]);
+        assert!(v.get("truncated").is_none(), "{v}");
+        all.extend(v["adapters"].as_array().unwrap().iter().cloned());
+    }
+    all
+}
+
+#[test]
+fn the_plain_list_groups_every_adapter_within_the_bound() {
+    let d = tempfile::tempdir().unwrap();
+    let (code, text, v) = run_with(d.path(), &["summarize", "--list"], &[]);
+    assert_eq!(code, 0);
+    assert!(text.trim_end().len() < 2048, "{} bytes", text.len());
+    assert!(v.get("truncated").is_none(), "{v}");
+    let grouped: usize = v["ops"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|by_rt| by_rt.as_object().unwrap().values())
+        .map(|names| names.as_array().unwrap().len())
+        .sum();
+    assert_eq!(grouped, adapters().len());
+    // A runtime filter keeps that runtime's adapters and the runtime-independent ones.
+    let v = ok(d.path(), &["summarize", "--list", "--runtime", "jvm"]);
+    for a in v["adapters"].as_array().unwrap() {
+        assert!(a["runtime"] == "jvm" || a["runtime"] == "any", "{a}");
+    }
+    // An unknown operation is refused with the list of operations.
+    let (code, _t, v) = run_with(d.path(), &["summarize", "--list", "--op", "heap"], &[]);
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "usage", "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("heap-graph"),
+        "{v}"
+    );
 }
 
 fn summarize_args<'a>(op: &'a str, backend: &'a str, files: &'a [String]) -> Vec<&'a str> {

@@ -524,6 +524,7 @@ dependencies = [
  "dla-census",
  "dla-core",
  "dla-parsers",
+ "dla-probe",
  "dla-sample",
  "dla-stats",
  "regex",

@@ -997,7 +997,7 @@
     },
     "Origin": {
       "type": "string",
-      "pattern": "^(census|growth-series|archetype-row|residual|verifier|hypothesis|detector:[^\\s:/]+/\\S+|known-leak:\\S+)$"
+      "pattern": "^(census|growth-series|archetype-row|correlation|residual|verifier|hypothesis|detector:[^\\s:/]+/\\S+|known-leak:\\S+)$"
     },
     "Region": {
       "description": "Which memory region grows.",

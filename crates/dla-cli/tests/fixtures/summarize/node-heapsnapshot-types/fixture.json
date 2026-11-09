@@ -1,0 +1,12 @@
+{
+ "op": "type-histogram-diff",
+ "inputs": [
+  "heap-1.heapsnapshot",
+  "heap-2.heapsnapshot",
+  "heap-3.heapsnapshot"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "the same trimmed real V8 heap snapshots, with the class Endpoint renamed to a key-like name to plant a secret"
+}

@@ -1,0 +1,13 @@
+{
+ "op": "type-histogram-diff",
+ "inputs": [
+  "types-1.json",
+  "types-2.json",
+  "types-3.json",
+  "types-4.json"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "four real py-<n>.types.json files (DLA_CAPTURE=histogram) of the same ingest worker, trimmed to 120 types; the type typing.ForwardRef is renamed to a key-like name to plant a secret"
+}

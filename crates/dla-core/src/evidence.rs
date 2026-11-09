@@ -317,6 +317,8 @@ pub mod tool_class {
     pub const RUNTIME_COUNTER: &str = "runtime-counter";
     /// Stack groups from the allocator shim.
     pub const ALLOC_SHIM: &str = "alloc-shim";
+    /// The runtime's own reachability proof (the Go goroutineleak profile).
+    pub const GC_REACHABILITY: &str = "gc-reachability";
 }
 
 /// Which observation a piece of evidence rests on: the tool, its class and the source

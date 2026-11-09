@@ -3,8 +3,10 @@
 //!
 //! The crate uses std, serde and serde_json only and contains no unsafe code.
 
+pub mod go;
 pub mod hprof;
 pub mod inflate;
 pub mod jvm;
 pub mod model;
 pub mod native;
+pub mod node;

@@ -16,17 +16,23 @@ use crate::{
 #[derive(Args, Debug)]
 pub struct InstallArgs {
     /// Backend to install (dla, staticcheck, golangci-lint, govet, errorprone, spotbugs,
-    /// detekt, codeql, sonar, ruff, pylint, eslint, rapx).
+    /// detekt, codeql, sonar, ruff, pylint, eslint, rapx), or go-toolchain-1.27 (a newer Go
+    /// toolchain in the Go module cache, for the goroutineleak pass).
     backend: String,
 }
 
 /// Runs `dla install`.
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InstallArgs) -> Res<Value> {
-    if !KNOWN_BACKENDS.contains(&a.backend.as_str()) {
+    let go_toolchain = a.backend == dla_backends::install::GO_TOOLCHAIN_BACKEND;
+    if !go_toolchain && !KNOWN_BACKENDS.contains(&a.backend.as_str()) {
         return Err(Failure::refuse(
             core_codes::UNKNOWN_BACKEND,
             format!("{:?} is not a known backend", a.backend),
-            format!("one of: {}", KNOWN_BACKENDS.join(", ")),
+            format!(
+                "one of: {}, {}",
+                KNOWN_BACKENDS.join(", "),
+                dla_backends::install::GO_TOOLCHAIN_BACKEND
+            ),
             "dla install <backend>",
         ));
     }

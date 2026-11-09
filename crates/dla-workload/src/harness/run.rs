@@ -52,6 +52,7 @@ use dla_sample::os::{self, OsSample, Sampler, SamplerConfig, SamplerOutput};
 use regex::Regex;
 use serde_json::{Value, json};
 
+mod goleak;
 mod tool;
 mod vgdb;
 
@@ -61,7 +62,7 @@ use super::{
     capture::{self, AgentNotes, CaptureSet, NativeTool},
     cover::{self, CoverageOutcome},
     dumps::{self, DumpFile, Rec},
-    harness_dir,
+    harness_dir, pymemray,
     symbolize::{Sites, symbolize},
 };
 
@@ -895,9 +896,9 @@ struct ModeRun {
     captures: Vec<CaptureFile>,
 }
 
-/// Whether this run asks the JVM agent for raw captures.
+/// Whether this run asks the agent of the harness's runtime for raw captures.
 fn capture_active(manifest: &HarnessManifest, opts: &RunOptions) -> bool {
-    !opts.capture.is_empty() && manifest.runtime == dla_core::runtime::Runtime::Jvm
+    !opts.capture.is_empty() && !capture::supported(manifest.runtime).is_empty()
 }
 
 /// Lists the capture files of the point `pe` after its process ended, using what the agent
@@ -941,6 +942,7 @@ fn gather_captures(
             clip(&error, 160)
         ));
     }
+    pymemray::note(ctx, &notes.errors(), &files);
     run.captures.extend(files);
 }
 
@@ -1316,6 +1318,14 @@ pub fn run_points(
     opts: &RunOptions,
 ) -> Result<RunOutput, Refusal> {
     ctx.require_tier(1, "dla harness run")?;
+    // The kinds this runtime's agent does not write are dropped here and named below.
+    let masked = RunOptions {
+        capture: opts
+            .capture
+            .intersect(&capture::supported(manifest.runtime)),
+        ..opts.clone()
+    };
+    let (asked, opts) = (opts.capture, &masked);
     let paths = Paths::new(ctx, manifest)?;
     let mut out = RunOutput {
         gaps: manifest.gaps.clone(),
@@ -1334,9 +1344,22 @@ pub fn run_points(
                 .to_owned(),
         );
     }
-    if !opts.capture.is_empty() && manifest.runtime != dla_core::runtime::Runtime::Jvm {
+    if !asked.is_empty() && capture::supported(manifest.runtime).is_empty() {
         out.limitations.push(format!(
-            "--capture is available for jvm harnesses; {} writes no capture files (use --tool for rust and native code)",
+            "--capture is available for jvm and node harnesses; {} writes no capture files (use --tool for rust and native code)",
+            manifest.runtime.as_str()
+        ));
+    } else if asked != opts.capture {
+        let dropped = CaptureSet {
+            heap: asked.heap && !opts.capture.heap,
+            histogram: asked.histogram && !opts.capture.histogram,
+            jfr: asked.jfr && !opts.capture.jfr,
+            nonheap: asked.nonheap && !opts.capture.nonheap,
+            alloc: asked.alloc && !opts.capture.alloc,
+        };
+        out.limitations.push(format!(
+            "--capture {} is not written by {} harnesses",
+            dropped.names().join(","),
             manifest.runtime.as_str()
         ));
     }
@@ -1369,6 +1392,11 @@ pub fn run_points(
         }
     };
 
+    // Go: how the goroutineleak profile is reached (see `goleak`).
+    let leak_plan = goleak::plan(ctx, manifest, &paths, opts, &mut out.limitations)?;
+    let patched = leak_plan.as_ref().and_then(|p| p.patched(manifest));
+    let manifest = patched.as_ref().unwrap_or(manifest);
+
     let mut dump_cov: Vec<DumpCoverage> = Vec::new();
     let mut hits: Vec<Value> = Vec::new();
     let mut scan_logs: Vec<(String, PathBuf)> = Vec::new();
@@ -1377,11 +1405,21 @@ pub fn run_points(
     let mut first_log = None;
     let mut harness_failed: Option<Refusal> = None;
     for mode in modes {
-        let run = if command_mode {
+        let mut run = if command_mode {
             run_command_mode(ctx, manifest, opts, &paths, mode, timeout)?
         } else {
             run_driver_mode(ctx, manifest, opts, &paths, mode, timeout)?
         };
+        goleak::leak_pass(
+            ctx,
+            manifest,
+            opts,
+            &paths,
+            mode,
+            timeout,
+            leak_plan.as_ref(),
+            &mut run,
+        )?;
         out.processes += run.processes;
         out.logs.extend(run.logs.iter().cloned());
         out.exits.extend(run.exits.iter().cloned());
@@ -1630,6 +1668,7 @@ fn record_capture_coverage(
         (opts.capture.histogram, "histogram", CaptureKind::Histogram),
         (opts.capture.jfr, "jfr", CaptureKind::Jfr),
         (opts.capture.nonheap, "nonheap", CaptureKind::NonHeap),
+        (opts.capture.alloc, "alloc", CaptureKind::Alloc),
     ];
     let mut blocked = Vec::new();
     CoverageManifest::update(&ctx.run_dir, |m| {
@@ -1643,7 +1682,8 @@ fn record_capture_coverage(
             } else {
                 blocked.push(name);
                 BackendCoverage::blocked(format!(
-                    "the jvm agent wrote no {name} file (see the run's limitations)"
+                    "the {} agent wrote no {name} file (see the run's limitations)",
+                    manifest.runtime.as_str()
                 ))
             };
             m.note_backend(manifest.runtime.as_str(), &format!("harness-{name}"), cov);

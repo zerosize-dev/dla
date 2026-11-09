@@ -1,0 +1,12 @@
+{
+ "op": "heap-graph",
+ "inputs": [
+  "heap-1.heapsnapshot",
+  "heap-2.heapsnapshot",
+  "heap-3.heapsnapshot"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "three real V8 heap snapshots of ONE node process (v8.writeHeapSnapshot after each wave of a webhook retry scheduler that keeps its last record in a module variable), trimmed to the nodes around the scheduler and the path from the root (about 40 KB each); the property `rows` is renamed to a key-like name to plant a secret. hb-*.heapsnapshot are the same kind of trimmed snapshots of a gateway whose heartbeat timers are never cleared, used by tests/summarize_node.rs"
+}

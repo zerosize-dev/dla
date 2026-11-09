@@ -56,7 +56,15 @@ pub mod pins {
     pub const RAPX_REV: &str = "385907a5";
     /// RAPx repository.
     pub const RAPX_GIT: &str = "https://github.com/safer-rust/RAPx.git";
+    /// The Go toolchain `dla install go-toolchain-1.27` puts into the Go module cache
+    /// (`GOTOOLCHAIN` name). Go 1.27 has the goroutineleak profile on by default.
+    pub const GO_TOOLCHAIN: &str = "go1.27.0";
 }
+
+/// The name of the Go toolchain entry of `dla install`: not a static analyzer, so it is not
+/// in `KNOWN_BACKENDS`. It fetches a newer toolchain into the Go module cache, for the
+/// separate goroutineleak pass of a project that builds with an older Go.
+pub const GO_TOOLCHAIN_BACKEND: &str = "go-toolchain-1.27";
 
 /// One command of a recipe.
 #[derive(Debug, Clone, PartialEq)]
@@ -318,6 +326,17 @@ pub fn recipe(backend: &str, tools: &Path, p: Platform) -> Result<Recipe, String
             ],
             Probe::Program(bin.join(p.exe("golangci-lint")), vec!["--version".into()]),
             "Go modules are fetched through GOPROXY; set GOPROXY if the default is not reachable.",
+        ),
+        // `GOTOOLCHAIN=go1.27.0 go version` makes the go command download that toolchain
+        // into the module cache (GOMODCACHE, outside the project) and run it. It needs
+        // the network once; later runs find it in the cache.
+        GO_TOOLCHAIN_BACKEND => r(
+            &["go"],
+            vec![Step::Run(
+                Run::new("go", &["version"]).env("GOTOOLCHAIN", pins::GO_TOOLCHAIN),
+            )],
+            Probe::Fixed(pins::GO_TOOLCHAIN.trim_start_matches("go").to_owned()),
+            "the Go toolchain is fetched through GOPROXY into the module cache; set GOPROXY if the default is not reachable, and GOTOOLCHAIN must not be `local`.",
         ),
         "govet" => r(
             &["go"],
@@ -744,6 +763,30 @@ pub fn install(ctx: &ToolCtx, backend: &str) -> Result<StageOutcome, Refusal> {
     };
     let env = ToolEnv::from_process(Some(tools.clone()));
     match execute(ctx, &rec, &env) {
+        Ok(version) if backend == GO_TOOLCHAIN_BACKEND => {
+            // The goroutineleak profile is now available through the cached toolchain.
+            CoverageManifest::update(&ctx.run_dir, |m| {
+                m.set_backend(
+                    "go",
+                    "goroutineleak",
+                    BackendCoverage::ran(Some(format!("go{version}")), 0),
+                );
+            })
+            .map_err(|e| e.to_refusal())?;
+            Ok(StageOutcome {
+                evidence: Vec::new(),
+                candidates: 0,
+                skipped_duplicates: 0,
+                artifacts: Vec::new(),
+                summary: json!({
+                    "backend": backend,
+                    "version": version,
+                    "tools_dir": dla_core::paths::to_slash(&tools),
+                    "toolchain": pins::GO_TOOLCHAIN,
+                    "note": "stored in the Go module cache (GOMODCACHE), outside the project; dla harness run uses it for the goroutineleak pass",
+                }),
+            })
+        }
         Ok(version) => Ok(StageOutcome {
             evidence: Vec::new(),
             candidates: 0,
@@ -971,6 +1014,20 @@ mod tests {
                 .unwrap()
                 .ends_with("codeql-bundle-osx64.tar.gz")
         );
+    }
+
+    #[test]
+    fn the_go_toolchain_is_fetched_by_the_go_command_into_the_module_cache() {
+        let r = recipe(GO_TOOLCHAIN_BACKEND, &tools(), LINUX).unwrap();
+        assert_eq!(r.requires, ["go"]);
+        let run = runs(&r)[0];
+        assert_eq!(run.program, "go");
+        assert_eq!(run.args, ["version"]);
+        assert_eq!(run.env, [("GOTOOLCHAIN".to_owned(), "go1.27.0".to_owned())]);
+        assert_eq!(r.user_command(), "GOTOOLCHAIN=go1.27.0 go version");
+        assert_eq!(r.probe, Probe::Fixed("1.27.0".to_owned()));
+        // Nothing is written into the tools directory: the module cache holds it.
+        assert!(r.steps.iter().all(|s| matches!(s, Step::Run(_))));
     }
 
     #[test]

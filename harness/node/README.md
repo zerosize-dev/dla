@@ -81,6 +81,54 @@ missing. Without any `gc` the dump says so in `limitations` and `gc_forced` is f
 The agent's own bookkeeping is small but not zero: a hidden property per timer handle and per
 emitter, one weak reference per emitter, and one record entry per live listener.
 
+## Raw captures (`DLA_CAPTURE`)
+
+`dla harness run H<n> --capture heap,alloc,nonheap` sets `DLA_CAPTURE`, `DLA_CAPTURE_DIR` and
+`DLA_CAPTURE_DUMPS`; the agent writes files to `<DLA_CAPTURE_DIR>/<pid>/` and lists each one in the
+`captures` array of the record that triggered it (`kind`, `file`, `role`, `bytes`, `ms`, or `error`
+when it could not be written). `histogram` and `jfr` are JVM captures and become a limitation here.
+
+| Kind | File | Format | Written | `dla summarize` |
+|---|---|---|---|---|
+| `heap` | `heap-<n>.heapsnapshot` | V8 heap snapshot (`v8.writeHeapSnapshot`, after a forced gc) | driver: at the checkpoints of the JVM rule (end of warm-up, last round, evenly spaced between; `DLA_CAPTURE_DUMPS`, default 4); command: at exit of the selected points | `heap-graph` over 3 or more snapshots of ONE process (driver mode); `type-histogram-diff` over snapshots of any points |
+| `heap` | `scripts.json` | `{"dla_scripts":1,"root","scripts":{"<script id>":"<url>"},"maps":{"<id>":"<sourceMapURL>"}}` | next to each snapshot (rewritten; the last wins) | sidecar of the snapshots: `locations` of a snapshot hold script ids, the url comes from here (`Debugger.scriptParsed`) |
+| `alloc` | `alloc-<n>.heapprofile` | inspector sampling heap profile (`{head, samples}`; `callFrame.url` is a `file://` url, builtins have url `""` and line `-1`) | driver: at the same checkpoints (each ends a window, a new one starts); command: one at exit | `alloc-stack-diff` over the profiles |
+| `nonheap` | `resources.json` | see below | once, at the last round (driver) or at exit (command) | `non-heap` over the files of the points |
+
+Sampling starts at agent load (`HeapProfiler.startSampling`, interval `DLA_HEAPPROF_INTERVAL`
+bytes, default 8192, live objects only: a forced gc runs before each profile is read). A profile
+covers the objects allocated in its window that are still alive when it is read: a driver's
+profile 2 does not hold what profile 1 held. The profile can show the agent's own frames
+(`dla-preload.js`); attribute to the nearest project frame.
+
+`resources.json`:
+
+```json
+{"dla_resources":1,"pid":123,"runtime":"node","x":4000,"t_ms":812,
+ "active":{"TCPSocketWrap":20,"Timeout":1},
+ "types":{"Timeout":{"active":0,"tracked":2000,"created":null,"source":"timers",
+                     "sites":{"src/heartbeat.js:15":2000},"unattributed":0},
+          "TCPSocketWrap":{"active":20,"tracked":20,"created":40,"source":"async_hooks",
+                           "sites":{"src/conn.js:3":10},"unattributed":10}},
+ "limitations":["..."]}
+```
+
+- `active`: `process.getActiveResourcesInfo()` counts (ref'd handles only; an `unref()`'d timer is not in it).
+- `types.<T>.tracked`: resources created and not yet destroyed. `Timeout` comes from the agent's timer
+  wrappers (`source: "timers"`, exact). Other types come from an `async_hooks` hook
+  (`source: "async_hooks"`); node queues the destroy event until the next tick, so a handle closed in
+  the current tick can still be counted (compare with `active`). Type names follow
+  `getActiveResourcesInfo` for the handle types it knows (`TCPSocketWrap`, `TCPServerWrap`,
+  `PipeWrap`, ...). Promises, ticks, immediates and request objects are not tracked.
+- `sites`: first stack frame inside `DLA_PROJECT`, as for timers (at most 40 per type, 40 types); a
+  socket a server accepted takes its server's site; `unattributed` counts the rest.
+
+Snapshots are tier 4 data (memory contents): they stay in the run directory. Before each snapshot the
+agent checks that about 12 times `heapUsed` is available (`/proc/meminfo` `MemAvailable`, the cgroup
+headroom; `DLA_CAPTURE_MEM_BYTES` overrides) and that the snapshots of the process stay under 3 GiB;
+otherwise the `captures` entry has an `error` and no file is written. A snapshot blocks the process
+for about 30 ms per MB of heap.
+
 ## Driver
 
 `NODE_OPTIONS="--require <harness dir>/dla-preload.js" node <harness dir>/dla-harness.js` from the

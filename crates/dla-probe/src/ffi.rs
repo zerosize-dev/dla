@@ -1,4 +1,9 @@
-//! Foreign-function boundaries between runtimes (JNI in M5 cut 1).
+//! Foreign-function boundaries between runtimes: JNI (M5 cut 1), PyO3, N-API and cgo.
+//!
+//! The kinds are `jni`, `pyo3`, `napi` and `cgo`. Each needs both sides: managed code that
+//! loads or calls the native code, and native code that the project builds. The harness
+//! measures the native side of `jni` boundaries only (the allocator shim is preloaded into the
+//! JVM); the others are reported so a worker knows a native side exists.
 //!
 //! A JNI boundary is a JVM source that calls `System.loadLibrary` together with native code
 //! that exports `Java_` functions: a Rust crate with `crate-type = ["cdylib"]` or a C/C++
@@ -14,6 +19,13 @@ use dla_core::{
 use regex::Regex;
 
 use crate::scan::Tree;
+
+#[path = "ffi/cgo.rs"]
+mod cgo;
+#[path = "ffi/napi.rs"]
+mod napi;
+#[path = "ffi/pyo3.rs"]
+mod pyo3;
 
 /// What one JVM source says about native code.
 #[derive(Debug, Default)]
@@ -221,9 +233,18 @@ fn exports(tree: &Tree, cdylibs: &[String]) -> Vec<Export> {
     out
 }
 
+/// Finds every foreign-function boundary of the project: JNI first, then PyO3, N-API and cgo.
+pub fn detect(tree: &Tree) -> Vec<FfiBoundary> {
+    let mut all = detect_jni(tree);
+    all.extend(pyo3::detect(tree));
+    all.extend(napi::detect(tree));
+    all.extend(cgo::detect(tree));
+    all
+}
+
 /// Finds the JNI boundaries of the project: JVM sources that load a library plus native
 /// code that exports `Java_` functions. One boundary per native directory.
-pub fn detect(tree: &Tree) -> Vec<FfiBoundary> {
+fn detect_jni(tree: &Tree) -> Vec<FfiBoundary> {
     let jvm = jvm_side(tree);
     if jvm.loads.is_empty() {
         return Vec::new();
@@ -425,5 +446,39 @@ mod tests {
             ("b.rs", "fn Java_("),
         ]);
         assert!(detect(&t).is_empty());
+    }
+
+    #[test]
+    fn every_kind_is_found_in_one_project_and_jni_stays_first() {
+        let (_d, t) = tree(&[
+            (
+                "jvm/A.java",
+                "package a;\npublic class A {\n  static { System.loadLibrary(\"x\"); }\n  public static native int f();\n}\n",
+            ),
+            (
+                "jvm/x.c",
+                "JNIEXPORT jint JNICALL Java_a_A_f(JNIEnv *e, jclass c) { return 0; }\n",
+            ),
+            (
+                "py/Cargo.toml",
+                "[package]\nname = \"pc\"\n[lib]\ncrate-type = [\"cdylib\"]\n[dependencies]\npyo3 = \"0.22\"\n",
+            ),
+            (
+                "py/src/lib.rs",
+                "#[pymodule]\nfn pc(m: &Bound<'_, PyModule>) {}\n",
+            ),
+            ("py/app.py", "import pc\n"),
+            ("n/binding.gyp", "{\"targets\":[{\"target_name\":\"nd\"}]}"),
+            (
+                "n/index.js",
+                "module.exports = require('bindings')('nd');\n",
+            ),
+            (
+                "g/g.go",
+                "package g\n// static int f(void) { return 1; }\nimport \"C\"\nfunc F() int { return int(C.f()) }\n",
+            ),
+        ]);
+        let kinds: Vec<String> = detect(&t).into_iter().map(|b| b.kind).collect();
+        assert_eq!(kinds, ["jni", "pyo3", "napi", "cgo"]);
     }
 }
