@@ -1658,11 +1658,17 @@ fn diagnostics(run_dir: &Path) -> Vec<String> {
         let cols: Vec<String> = cols
             .iter()
             .map(|c| {
+                let p = &c["plateau"];
+                let num = |k: &str| p[k].as_f64().map_or("-".to_owned(), |v| format!("{v:.3}"));
                 format!(
-                    "{} {} ({}, purge {})",
+                    "{} {} ({} main {} extra {} rise {} noise {}, purge {})",
                     c["name"].as_str().unwrap_or("?"),
                     c["favors"].as_str().unwrap_or("?"),
-                    c["plateau"]["verdict"].as_str().unwrap_or("-"),
+                    p["verdict"].as_str().unwrap_or("-"),
+                    num("main_slope"),
+                    num("extra_slope"),
+                    num("extra_rise"),
+                    num("noise"),
                     c["purge"]["verdict"].as_str().unwrap_or("-")
                 )
             })
@@ -2796,7 +2802,7 @@ cause = "L-COLLECT"
         assert!(!lines[0].contains("py.traced"), "{lines:?}");
         assert_eq!(
             lines[1],
-            "alloc-test E13: os.vm_data inconclusive (plateau, purge retained)"
+            "alloc-test E13: os.vm_data inconclusive (plateau main - extra - rise - noise -, purge retained)"
         );
         // Nothing in an empty run dir.
         let e = tempfile::tempdir().unwrap();
