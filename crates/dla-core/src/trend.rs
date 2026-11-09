@@ -208,7 +208,14 @@ pub struct PassedColumn {
 /// possibly package-qualified). The two match when equal or when one is a trailing
 /// run of dotted components of the other.
 pub fn probe_column_matches_owner(column: &str, owner: &str) -> bool {
-    let Some(name) = column.strip_prefix("probe:") else {
+    // A probe column (`probe:<Class>.<field>[.size|.bytes]`), or a heap-dump series
+    // column (`holder:static:<Class>.<field>[.count]`, `holder:<key>[.count]`).
+    let name = if let Some(n) = column.strip_prefix("probe:") {
+        n
+    } else if let Some(n) = column.strip_prefix("holder:") {
+        let n = n.strip_suffix(".count").unwrap_or(n);
+        n.strip_prefix("static:").unwrap_or(n)
+    } else {
         return false;
     };
     let stem = ["size", "bytes"]
@@ -362,6 +369,19 @@ mod tests {
         let id = FindingId::new(2);
         assert!(!col.tied_to(&id, None));
         assert!(col.tied_to_owner(&id, None, Some("shop.codec.Audit.trail")));
+        // Heap-dump series columns tie by owner too.
+        assert!(probe_column_matches_owner(
+            "holder:static:quotes.RfqDesk.OPEN",
+            "quotes.RfqDesk.OPEN"
+        ));
+        assert!(probe_column_matches_owner(
+            "holder:static:quotes.RfqDesk.OPEN.count",
+            "RfqDesk.OPEN"
+        ));
+        assert!(!probe_column_matches_owner(
+            "holder:static:quotes.RfqDesk.RECENT",
+            "quotes.RfqDesk.OPEN"
+        ));
     }
 
     fn trend() -> TrendReport {

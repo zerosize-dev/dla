@@ -58,7 +58,7 @@ fn the_first_write_starts_the_slice_and_marks_the_worker_running() {
     assert_eq!(first["worker"], "jvm");
     assert_eq!(first["runtime"], "jvm");
     assert_eq!(first["base_seq"], 16);
-    assert_eq!(first["schema_version"], 3);
+    assert_eq!(first["schema_version"], 4);
     assert!(first["deadline"].as_str().unwrap().ends_with('Z'));
     assert_eq!(text.lines().count(), 2);
     // The main ledger is untouched.

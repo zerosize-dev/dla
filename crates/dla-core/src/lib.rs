@@ -57,8 +57,9 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Schema version written to every new ledger line. Version 1 lines (M0 to M2) still
 /// replay, under the M0 rules; version 2 lines replay under the M3 rules; version 3
 /// lines (M4) replay under the M3 rules plus the artifact-path rules, and may carry a
-/// `worker` and the slice, merge and verification records.
-pub const LEDGER_SCHEMA_VERSION: u32 = 3;
+/// `worker` and the slice, merge and verification records; version 4 lines (M5) also
+/// require a leak-side confirmation to cite a passing growth column tied to the finding.
+pub const LEDGER_SCHEMA_VERSION: u32 = 4;
 /// Bound on the serialized size of an evidence `result`.
 pub const MAX_RESULT_BYTES: usize = 2048;
 /// Bound on the size of CLI stdout.

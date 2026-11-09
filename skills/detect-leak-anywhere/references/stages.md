@@ -145,6 +145,11 @@ For each passed column tied to a candidate `F3`:
 - `dla ledger annotate F3 --holder <holder>` when the finding has no holder (`--owner`, `--region`,
   `--site` fill other gaps), then `dla ledger confirm F3 --evidence E11`, citing the passing
   `dla trend` evidence. A refusal names what is missing.
+- The passing column must be tied to `F3`: its probe (`probe:<owner>`), a group column at its site,
+  or a column that lists it under `candidates`. A refusal `growth-not-tied` means the growth you cite
+  belongs to another holder or to the whole process (`os.rss`, heap totals). Then add a probe for
+  `F3`'s holder and rerun the harness, or resolve `F3` `suspected_static_only` with a remedy; never
+  confirm one holder from another holder's growth.
 
 ## 6. Attribute and explain
 

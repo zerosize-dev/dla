@@ -653,7 +653,7 @@ fn newer_schema_in_a_ledger_line_exits_3() {
     let dir = fixture_project();
     append_line(
         &fixture_ledger(&dir),
-        r#"{"schema_version":4,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
+        r#"{"schema_version":5,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
     );
     let o = run(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
     assert_eq!(o.code, 3, "{}", o.stdout);
@@ -1910,7 +1910,7 @@ fn ledger_confirm_walks_through_every_leak_refusal_to_confirmed() {
 }
 
 #[test]
-fn ledger_confirm_warns_when_no_passing_column_is_tied_to_the_finding() {
+fn ledger_confirm_refuses_growth_that_is_not_tied_to_the_finding() {
     let d = dynamic_project();
     let p = d.dir.path();
     add_leak_finding(p, Some("src/other.go:1"));
@@ -1929,9 +1929,16 @@ fn ledger_confirm_warns_when_no_passing_column_is_tied_to_the_finding() {
         "test",
         r#"{"trend":"T2","series":"S2","gate":"pass","passed":[{"column":"probe:Elsewhere","region":"heap","site":"src/else.go:3","finding":"F7","shape":"steady"}]}"#,
     );
-    let c = ok(p, &["ledger", "confirm", "F1", "--evidence", &other]);
-    let w = c["warning"].as_str().expect("a warning");
-    assert!(w.contains("F1") && w.contains("tied"), "{w}");
+    // Since ledger schema 4 that is a refusal, not a warning: growth of another holder
+    // does not show that this one grows.
+    let e = refused(p, &["ledger", "confirm", "F1", "--evidence", &other]);
+    assert_eq!(e["code"], "growth-not-tied");
+    let msg = e["message"].as_str().unwrap();
+    assert!(msg.contains("F1") && msg.contains("probe:Elsewhere"), "{e}");
+    assert!(
+        e["fix"].as_str().unwrap().contains("dla ledger confirm F1"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -2021,7 +2028,7 @@ fn annotate_conflicts_are_refused_and_the_same_value_is_accepted() {
 }
 
 #[test]
-fn new_ledger_lines_are_version_three_and_old_ones_still_replay() {
+fn new_ledger_lines_are_version_four_and_old_ones_still_replay() {
     let dir = fixture_project();
     // The hand-written run is entirely version 1.
     let o = ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
@@ -2040,7 +2047,7 @@ fn new_ledger_lines_are_version_three_and_old_ones_still_replay() {
     );
     let text = fs::read_to_string(fixture_ledger(&dir)).unwrap();
     let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
-    assert_eq!(last["schema_version"], 3);
+    assert_eq!(last["schema_version"], 4);
     assert!(
         text.lines()
             .next()

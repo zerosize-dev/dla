@@ -29,7 +29,9 @@ use crate::{
         RepairClass, Shape, UNCLASSIFIED, check_site, claims_nonleak, nonleak_id,
     },
     ids::{EvidenceId, FindingId, OpenItemId},
-    machine::{self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, M4Rules, TransitionContext},
+    machine::{
+        self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, M4Rules, M5Rules, TransitionContext,
+    },
     record::{
         FindingAnnotation, FindingMerged, LedgerLine, OpenItem, OpenItemResolved, Record,
         Resolution, SliceDone, SliceMerged, SliceStarted, Transition, Verification,
@@ -844,7 +846,8 @@ impl Index {
         match version {
             0..=1 => machine::check_transition(&M0Rules, &ctx),
             2 => machine::check_transition(&M3Rules, &ctx),
-            _ => machine::check_transition(&M4Rules, &ctx),
+            3 => machine::check_transition(&M4Rules, &ctx),
+            _ => machine::check_transition(&M5Rules, &ctx),
         }
     }
 

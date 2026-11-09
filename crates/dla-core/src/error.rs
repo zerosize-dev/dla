@@ -101,6 +101,8 @@ pub mod codes {
     pub const GROWTH_GATE_FAILED: &str = "growth-gate-failed";
     /// Confirmation of a finding that has no site.
     pub const SITE_REQUIRED: &str = "site-required";
+    /// No passing growth column a leak-side confirmation cites is tied to the finding.
+    pub const GROWTH_NOT_TIED: &str = "growth-not-tied";
     /// Confirmation of a finding that has no holder.
     pub const HOLDER_REQUIRED: &str = "holder-required";
     /// Confirmation of a leak without a refuted non-leak sibling.

@@ -447,15 +447,26 @@ fn confirm_derives_shape_and_region_from_the_tied_column() {
 }
 
 #[test]
-fn nothing_is_derived_from_an_untied_column_and_a_warning_is_printed() {
+fn an_untied_column_does_not_confirm_and_derives_nothing() {
     let (mut l, f, _) = ready();
     // The only passing column belongs to F9 at b.go:2 (plateau, off-heap): it says
-    // nothing about F1, so confirm is allowed (warning only) but derives nothing.
-    go(&mut l, &f, S::Confirmed, &[E_GROWTH_OTHER]);
+    // nothing about F1. Since ledger schema 4 the confirmation is refused.
+    let e = l
+        .transition(
+            &f,
+            S::Confirmed,
+            None,
+            None,
+            vec![eid(E_GROWTH_OTHER)],
+            "test",
+        )
+        .unwrap_err()
+        .to_refusal();
+    assert_eq!(e.code, "growth-not-tied", "{e}");
+    assert!(e.message.contains("F1"), "{e}");
     let fin = l.finding(&f).unwrap();
+    assert_eq!(fin.state, S::UnderTest);
     assert_eq!((fin.shape, fin.region), (None, None));
-    let w = l.confirm_warning(&f).expect("a warning");
-    assert!(w.contains("F1") && w.contains("tied"), "{w}");
 }
 
 #[test]
@@ -868,14 +879,14 @@ fn a_ledger_written_by_the_api_replays_from_disk() {
     }
     let (f, _) = confirmed_leak(&mut l);
     let text = std::fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap();
-    assert!(text.lines().all(|t| t.contains("\"schema_version\":3")));
+    assert!(text.lines().all(|t| t.contains("\"schema_version\":4")));
     let again = Ledger::load(dir.path()).unwrap();
     assert_eq!(again.finding(&f).unwrap(), l.finding(&f).unwrap());
     assert_eq!(again.finding(&f).unwrap().shape, Some(Shape::Steady));
 }
 
 #[test]
-fn a_version_one_ledger_stays_valid_and_new_lines_are_version_three() {
+fn a_version_one_ledger_stays_valid_and_new_lines_are_version_four() {
     let dir = tempfile::tempdir().unwrap();
     let v1 = [
         line(1, EVIDENCE_BODY),
@@ -901,6 +912,6 @@ fn a_version_one_ledger_stays_valid_and_new_lines_are_version_three() {
         .lines()
         .map(|t| serde_json::from_str::<serde_json::Value>(t).unwrap()["schema_version"].clone())
         .collect();
-    assert_eq!(versions, [1, 1, 1, 3]);
+    assert_eq!(versions, [1, 1, 1, 4]);
     Ledger::load(dir.path()).unwrap();
 }

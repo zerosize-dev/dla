@@ -490,6 +490,61 @@ impl TransitionRules for M4Rules {
     }
 }
 
+/// The rule set of milestone 5: [`M4Rules`] plus one rule for leak-side confirmation: a
+/// passing growth column the move judges must be tied to the finding (by its `finding`,
+/// an equal site, `candidates`, or a probe named after its owner). Growth measured for
+/// another holder, or for the whole process, does not confirm a particular holder.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct M5Rules;
+
+impl TransitionRules for M5Rules {
+    fn check(&self, ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+        check_m3(ctx, ctx.entry == EntryPath::Artifact)?;
+        if ctx.to == FindingState::Confirmed && ctx.finding.polarity() == Polarity::Leak {
+            require_tied_growth(ctx)?;
+        }
+        Ok(())
+    }
+}
+
+/// Refuses a leak-side confirmation whose passing growth columns are all tied to other
+/// findings, sites or holders, or to none.
+fn require_tied_growth(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+    let f = ctx.finding;
+    let mut untied: Vec<String> = Vec::new();
+    for e in judged(ctx).filter(|e| is_passing_growth(e)) {
+        let Some(summary) = GrowthSummary::from_result(&e.result) else {
+            continue;
+        };
+        for c in summary.passed {
+            if c.tied_to_owner(&f.id, f.site.as_deref(), f.owner.as_deref()) {
+                return Ok(());
+            }
+            if untied.len() < 4 {
+                untied.push(c.column.clone());
+            }
+        }
+    }
+    let id = &f.id;
+    let named = if untied.is_empty() {
+        String::new()
+    } else {
+        format!(" (passing: {})", untied.join(", "))
+    };
+    Err(Refusal::new(
+        codes::GROWTH_NOT_TIED,
+        format!(
+            "{id} cannot be confirmed: no passing growth column it cites is tied to it by finding, site, owner or candidates{named}; growth measured for another holder or for the whole process does not show that this one grows"
+        ),
+        format!(
+            "a passing growth column tied to {id}: its probe, a group column at its site, or a column naming it as a candidate"
+        ),
+        format!(
+            "dla harness gen --lang <lang> (a probe on {id}'s holder)   then   dla harness run <H>, dla trend <S>, dla ledger confirm {id} --evidence <trend evidence id>   or   dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\""
+        ),
+    ))
+}
+
 fn check_m3(ctx: &TransitionContext<'_>, artifact: bool) -> Result<(), Refusal> {
     check_m0(ctx, artifact)?;
     match ctx.to {
