@@ -156,8 +156,9 @@ jobs:
           mkdir -p "$stdlib"
           cp "$RUNNER_TEMP/kotlin/kotlinc/lib/kotlin-stdlib.jar" "$stdlib/kotlin-stdlib-2.0.21.jar"
           "$RUNNER_TEMP/kotlin/kotlinc/bin/kotlinc" -version
-      - name: C toolchain and addr2line
-        run: sudo apt-get update && sudo apt-get install -y build-essential binutils
+      # valgrind and heaptrack are the native backends the per-operation policy runs.
+      - name: C toolchain, addr2line, valgrind and heaptrack
+        run: sudo apt-get update && sudo apt-get install -y build-essential binutils valgrind heaptrack
       - name: Build dla and dla-bench
         run: cargo build -p dla-cli -p dla-bench
       # The harness runs of the fixtures take 10 to 90 s each. The archetypes-off
