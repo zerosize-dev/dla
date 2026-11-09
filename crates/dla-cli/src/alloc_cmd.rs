@@ -942,6 +942,47 @@ mod tests {
     }
 
     #[test]
+    fn a_peak_that_passed_the_gate_is_reported_but_does_not_vote() {
+        let mut s = series(&[]);
+        s.columns[1] = col("go.heap_live");
+        s.columns.push(col("os.vm_hwm"));
+        for p in &mut s.points {
+            p.values.push(Some(4e7 + p.x * 10.0));
+        }
+        let ledger = Ledger::from_text("").unwrap();
+        let passed = |name: &str| ColumnTrend {
+            name: name.to_owned(),
+            unit: Unit::Bytes,
+            kind: ColumnKind::Gauge,
+            region: SeriesRegion::Process,
+            site: None,
+            finding: None,
+            candidates: vec![],
+            n: 12,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 1.0,
+            rise: 1e5,
+            shape: dla_stats::TrendShape::Steady,
+            gate: GateVerdict::Pass,
+            gate_failed: vec![],
+        };
+        let trend = TrendReport {
+            schema_version: TREND_SCHEMA_VERSION,
+            id: "T1".to_owned(),
+            series: "S1".to_owned(),
+            thresholds: GateThresholds::default(),
+            columns: vec![passed("os.vm_hwm")],
+        };
+        // Only the peak passed: as if nothing grew, the runtime heap decides.
+        let p = pick::pick(&s, &ledger, None, &[], Some(&trend), "H1").unwrap();
+        assert_eq!(p.voting, ["go.heap_live"], "{}", p.basis);
+        assert!(p.tested.iter().any(|c| c == "os.vm_hwm"), "{:?}", p.tested);
+    }
+
+    #[test]
     fn only_process_columns_use_the_rss_reference() {
         let s = series(&[]);
         assert!(reference_level(&s, 0) > 4e8);

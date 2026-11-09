@@ -17,6 +17,11 @@ use crate::fail::{Failure, Res};
 const SUPPORT: &[&str] = &["os.rss", "os.vm_hwm", "native.peak_bytes"];
 /// Columns that count runtime activity, not memory: they rise with every run by design.
 const ACTIVITY: &[&str] = &["py.gc_collections"];
+/// Process peaks. A peak never falls, so the purge test cannot release it and its verdict is
+/// at best inconclusive; one such vote would block every non-leak verdict. They are tested
+/// and reported (see [`SUPPORT`]) and vote only when nothing else can, even after passing
+/// the gate.
+const MONOTONE_PEAK: &[&str] = &["os.vm_hwm", "native.peak_bytes"];
 /// Most tied columns tested for a bound finding.
 const MAX_TIED: usize = 6;
 /// Most gate-passing columns tested without a finding.
@@ -242,6 +247,7 @@ pub fn pick(
                 .filter(|c| c.gate == GateVerdict::Pass)
                 .filter(|c| series.column_index(&c.name).is_some())
                 .filter(|c| !ACTIVITY.contains(&c.name.as_str()))
+                .filter(|c| !MONOTONE_PEAK.contains(&c.name.as_str()))
                 .collect();
             passed.sort_by(|a, b| {
                 let key = |c: &dla_core::trend::ColumnTrend| {
