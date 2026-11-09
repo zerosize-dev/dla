@@ -182,15 +182,16 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
                 }
             }
             // `dla ledger annotate --holder/--site` fills a holder or site the finding
-            // was added without; it never changes one that is set.
+            // was added without. A record with `replaced_holder` (ledger schema 5, citing
+            // growth evidence that observed the holder) changes the holder that was set.
             "finding_annotated" => {
                 let Some(id) = rec.get("finding").and_then(Value::as_str) else {
                     continue;
                 };
                 let key = ledger_key(id, &rec);
                 if let Some((_, f)) = list.iter_mut().find(|(i, _)| *i == key) {
-                    if f.holder.is_none() {
-                        f.holder = str_of(&rec, "holder");
+                    if f.holder.is_none() || rec.get("replaced_holder").is_some() {
+                        f.holder = str_of(&rec, "holder").or(f.holder.take());
                     }
                     if f.site.is_none() {
                         f.site = str_of(&rec, "site");

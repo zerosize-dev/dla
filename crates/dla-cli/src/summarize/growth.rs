@@ -462,3 +462,39 @@ pub fn ambiguous_json(items: &[(String, Vec<FindingId>)]) -> Option<Value> {
     }
     Some(Value::Object(m))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn holder_kind_survives_result_bounding() {
+        let rows: Vec<Value> = (0..12)
+            .map(|i| {
+                json!({
+                    "column": format!("holder:static:{}", "src.module.Name".repeat(6) + &i.to_string()),
+                    "region": "heap",
+                    "unit": "bytes",
+                    "slope": 123456,
+                    "shape": "linear",
+                    "finding": format!("F{i}"),
+                    "candidates": [format!("F{i}")],
+                    "holder_kind": "native-handle/global-ref",
+                })
+            })
+            .collect();
+        let base = json!({"series": "S1", "axis": "n", "n": 3, "gate": "pass", "failed": 0, "reasons": []});
+        let (r, kept) = fit_passed(base, rows, 12);
+        assert!(kept > 0 && kept < 12, "kept {kept}");
+        assert!(dla_core::evidence::result_size(&r) <= emit::RESULT_BUDGET);
+        let passed = r["passed"].as_array().unwrap();
+        assert_eq!(passed.len(), kept);
+        assert!(
+            passed
+                .iter()
+                .all(|c| c["holder_kind"] == "native-handle/global-ref"),
+            "{r}"
+        );
+        assert_eq!(r["truncated"], 12 - kept);
+    }
+}

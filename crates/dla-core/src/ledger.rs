@@ -23,7 +23,7 @@ use crate::{
     LEDGER_SCHEMA_VERSION,
     checklist::{AnswerStatus, Checklist, ChecklistAnswer, ChecklistEntry},
     error::{Error, Refusal, ReplayError, codes},
-    evidence::{EvidenceRecord, NewEvidence},
+    evidence::{Authority, EvidenceKind, EvidenceRecord, NewEvidence},
     finding::{
         Explanation, Finding, FindingState, Holder, Locus, NON_LEAK_IDS, Origin, Region,
         RepairClass, Shape, UNCLASSIFIED, check_site, claims_nonleak, nonleak_id,
@@ -41,6 +41,10 @@ use crate::{
     strict, verify,
     version::{Artifact, UpgradeError, upgrade},
 };
+
+/// Tools whose growth evidence may back a holder change: the HPROF reader and the V8
+/// heap snapshot reader.
+const HOLDER_EVIDENCE_TOOLS: [&str; 2] = ["dla-hprof", "dla-v8-snapshot"];
 
 /// An open item with its resolution, if any.
 #[derive(Debug, Clone, PartialEq)]
@@ -169,6 +173,19 @@ pub struct Annotation {
     pub removers: Vec<String>,
     /// Notes, oldest first.
     pub notes: Vec<String>,
+    /// Holder corrections backed by evidence, oldest first.
+    pub holder_changes: Vec<HolderChange>,
+}
+
+/// A holder replaced by an evidence-backed annotation (schema 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HolderChange {
+    /// The holder before.
+    pub from: Holder,
+    /// The holder after.
+    pub to: Holder,
+    /// The growth evidence that backs the change.
+    pub evidence: Vec<EvidenceId>,
 }
 
 impl EvidenceLookup for Index {
@@ -647,6 +664,9 @@ impl Index {
             ));
         }
         let f = self.require_finding(&a.finding, "annotation")?;
+        if version >= 5 && !a.evidence.is_empty() {
+            self.check_annotation_evidence(a)?;
+        }
         let conflicts = [
             (
                 "holder",
@@ -665,6 +685,10 @@ impl Index {
             if let (Some(have), Some(want)) = (have, want)
                 && have != want
             {
+                if field == "holder" && version >= 5 && !a.evidence.is_empty() {
+                    self.check_holder_change(a, f)?;
+                    continue;
+                }
                 return Err(Refusal::new(
                     codes::ANNOTATION_CONFLICT,
                     format!(
@@ -673,13 +697,156 @@ impl Index {
                     ),
                     format!("{field} {have:?} or a new finding"),
                     format!(
-                        "keep {have:?}, or record the corrected {field} on a new hypothesis: dla ledger add --origin hypothesis --sibling-of {} --hypothesis \"<cause>\" --refute-if \"<result>\" --evidence <id>",
-                        f.root_id()
+                        "keep {have:?}, or record the corrected {field} on a new hypothesis: dla ledger add --origin hypothesis --sibling-of {} --hypothesis \"<cause>\" --refute-if \"<result>\" --evidence <id>{}",
+                        f.root_id(),
+                        if field == "holder" {
+                            format!(
+                                "; or, when heap-graph growth evidence observed the holder: dla ledger annotate {} --holder {want} --evidence <growth evidence id>",
+                                a.finding
+                            )
+                        } else {
+                            String::new()
+                        }
                     ),
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Evidence cited by an annotation must exist, and a worker may cite only its own
+    /// evidence or the main ledger's.
+    fn check_annotation_evidence(&self, a: &FindingAnnotation) -> Result<(), Refusal> {
+        if let Some(w) = &self.slice_worker
+            && let Some(e) = a
+                .evidence
+                .iter()
+                .find(|e| e.prefix().is_some_and(|p| p != w))
+        {
+            return Err(Refusal::new(
+                m4::FOREIGN_ITEM,
+                format!(
+                    "worker {w} cites {e}, which belongs to another worker's slice; a worker may cite its own evidence or the main ledger's"
+                ),
+                format!("evidence of {w} or of the main ledger"),
+                format!("dla --worker {w} summarize heap-graph ... and cite that evidence"),
+            ));
+        }
+        self.require_evidence(
+            &a.evidence,
+            &format!("annotation of {}", a.finding),
+            "cite growth evidence from `dla summarize heap-graph` (dla run status lists the IDs)",
+        )?;
+        Ok(())
+    }
+
+    /// The rule for changing a holder already set (schema 5): a cited growth-series
+    /// evidence of authority dump or live, written by the HPROF or V8 snapshot reader,
+    /// has a passing column tied to the finding whose `holder_kind` is the new holder.
+    fn check_holder_change(&self, a: &FindingAnnotation, f: &Finding) -> Result<(), Refusal> {
+        let (Some(want), Some(have)) = (a.holder, f.holder) else {
+            return Ok(());
+        };
+        if let Some(old) = a.replaced_holder
+            && old != have
+        {
+            return Err(Refusal::new(
+                codes::ANNOTATION_CONFLICT,
+                format!(
+                    "annotation of {} says it replaces holder {old}, but the finding has {have}",
+                    a.finding
+                ),
+                format!("replaced_holder {have}"),
+                format!(
+                    "dla ledger annotate {} --holder {want} --evidence <growth evidence id>",
+                    a.finding
+                ),
+            ));
+        }
+        let fix = format!(
+            "dla summarize heap-graph <dump...> --finding {} (then) dla ledger annotate {} --holder {want} --evidence <growth evidence id>",
+            a.finding, a.finding
+        );
+        let refuse = |why: String, expected: String| {
+            Refusal::new(
+                codes::ANNOTATION_CONFLICT,
+                format!(
+                    "{} already has holder {have:?}; changing it to {want:?} needs growth evidence that observed {want}: {why}",
+                    a.finding
+                ),
+                expected,
+                fix.clone(),
+            )
+        };
+        let id = a.finding.to_string();
+        let mut reasons = Vec::new();
+        for eid in &a.evidence {
+            let Some(e) = self.evidence.get(eid) else {
+                continue;
+            };
+            if e.kind != EvidenceKind::GrowthSeries {
+                reasons.push(format!("{eid} is {}, not growth-series", e.kind));
+                continue;
+            }
+            if !matches!(e.authority, Authority::Dump | Authority::Live) {
+                reasons.push(format!(
+                    "{eid} has authority {}, not dump or live",
+                    e.authority
+                ));
+                continue;
+            }
+            if !HOLDER_EVIDENCE_TOOLS.contains(&e.tool.name.as_str()) {
+                reasons.push(format!(
+                    "{eid} was written by {}, not a heap-graph reader ({})",
+                    e.tool.name,
+                    HOLDER_EVIDENCE_TOOLS.join(" or ")
+                ));
+                continue;
+            }
+            let columns = e
+                .result
+                .get("passed")
+                .and_then(|p| p.as_array())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let mut tied = false;
+            let mut kinds = Vec::new();
+            for c in columns {
+                let ties = c.get("finding").and_then(|v| v.as_str()) == Some(id.as_str())
+                    || c.get("candidates")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|l| l.iter().any(|v| v.as_str() == Some(id.as_str())));
+                if !ties {
+                    continue;
+                }
+                tied = true;
+                match c.get("holder_kind").and_then(|v| v.as_str()) {
+                    Some(k) if k == want.as_str() => return Ok(()),
+                    Some(k) => kinds.push(k.to_owned()),
+                    None => {}
+                }
+            }
+            if !tied {
+                reasons.push(format!(
+                    "{eid} has no passing column tied to {id} (by finding or candidates)"
+                ));
+            } else if kinds.is_empty() {
+                reasons.push(format!(
+                    "the passing columns of {eid} tied to {id} carry no holder_kind"
+                ));
+            } else {
+                reasons.push(format!(
+                    "the passing columns of {eid} tied to {id} observed {}, not {want}",
+                    kinds.join(", ")
+                ));
+            }
+        }
+        Err(refuse(
+            reasons.join("; "),
+            format!(
+                "growth-series evidence (dump or live) with a passing column tied to {id} and holder_kind {want}"
+            ),
+        ))
     }
 
     fn check_finding(&self, f: &Finding, version: u32) -> Result<(), Refusal> {
@@ -1027,7 +1194,23 @@ impl Index {
             }
             Record::FindingAnnotated(a) => {
                 if let Some(f) = self.findings.get_mut(&a.finding) {
-                    f.holder = f.holder.or(a.holder);
+                    match (f.holder, a.holder) {
+                        (None, h) => f.holder = h,
+                        // The check let this pass: the change is backed by evidence.
+                        (Some(old), Some(new)) if version >= 5 && old != new => {
+                            f.holder = Some(new);
+                            self.annotations
+                                .entry(a.finding.clone())
+                                .or_default()
+                                .holder_changes
+                                .push(HolderChange {
+                                    from: old,
+                                    to: new,
+                                    evidence: a.evidence.clone(),
+                                });
+                        }
+                        _ => {}
+                    }
                     f.region = f.region.or(a.region);
                     if f.site.is_none() {
                         f.site.clone_from(&a.site);
@@ -1948,6 +2131,20 @@ impl Ledger {
         mut annotation: FindingAnnotation,
     ) -> Result<LedgerLine, Error> {
         annotation.finding = self.own_finding_id(&annotation.finding);
+        annotation.evidence = annotation
+            .evidence
+            .iter()
+            .map(|e| self.own_evidence_id(e))
+            .collect();
+        annotation.replaced_holder = None;
+        if let (Some(new), Some(f)) = (
+            annotation.holder,
+            self.index.findings.get(&annotation.finding),
+        ) && f.holder.is_some_and(|old| old != new)
+            && !annotation.evidence.is_empty()
+        {
+            annotation.replaced_holder = f.holder;
+        }
         self.append(Record::FindingAnnotated(annotation))
     }
 

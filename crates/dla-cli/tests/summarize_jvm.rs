@@ -982,6 +982,8 @@ fn a_via_holder_is_listed_followed_in_the_series_and_tied_by_its_owner() {
         .unwrap_or_else(|| panic!("{g}"));
     assert_eq!(col["finding"], f.as_str());
     assert_eq!(col["tie"]["rule"], "holder");
+    // The holder kind observed rides on the passing column, for the ledger.
+    assert_eq!(col["holder_kind"], "static/global");
     assert_eq!(v["tied"], json!([f]));
     // The retention-path evidence names it too.
     let r = &p.evidence("retention-path")[2];

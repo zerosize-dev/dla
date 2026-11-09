@@ -126,6 +126,17 @@ fn an_annotation_fills_a_missing_holder_or_site_and_never_overwrites() {
 }
 
 #[test]
+fn an_annotation_that_replaced_a_holder_changes_it() {
+    let text = [
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"holder\":\"container-field\"}}",
+        "{\"type\":\"finding_annotated\",\"finding\":\"F1\",\"holder\":\"static/global\",\"evidence\":[\"E2\"],\"replaced_holder\":\"container-field\"}",
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).expect("has finding_added");
+    assert_eq!(f[0].holder.as_deref(), Some("static/global"));
+}
+
+#[test]
 fn ledger_state_mapping() {
     let mut lines = String::new();
     for (i, to) in [

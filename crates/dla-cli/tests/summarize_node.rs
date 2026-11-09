@@ -361,7 +361,19 @@ fn a_module_variable_holder_is_static_global_and_ties_to_the_census_finding() {
         Some("src.scheduler.shared")
     ));
     // The instance field below it ties to its own census finding, not to the variable's.
+    // Its root is the module variable, so the holder observed is static/global.
     let latest = p.finding_with_owner("src.scheduler.RetryScheduler.latest");
+    assert_eq!(latest["holder"], "container-field");
+    let lid = latest["id"].as_str().unwrap();
+    assert_eq!(v["observed_holder"][lid], "static/global", "{v}");
+    let lcol = g["result"]["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["finding"] == lid)
+        .unwrap_or_else(|| panic!("{g}"));
+    assert_eq!(lcol["holder_kind"], "static/global");
+    assert_eq!(col["holder_kind"], "static/global");
     assert!(
         v["tied"]
             .as_array()
@@ -420,11 +432,27 @@ fn a_timer_holder_is_a_registration_table_and_ties_to_the_timer_finding() {
     );
     assert_eq!(v["observed_holder"][&f], "registration-table");
     let needed = v["needed"].as_str().unwrap();
-    // The finding already has a holder, which the ledger will not change: no annotate.
-    assert!(!needed.contains("ledger annotate"), "{needed}");
-    assert!(needed.contains("already has holder"), "{needed}");
-    assert!(needed.contains(&format!("--sibling-of {f}")), "{needed}");
+    // The finding has another holder: the annotation that corrects it cites the evidence.
     let g = p.evidence("growth-series").pop().unwrap();
+    let gid = v["growth_evidence"].as_str().unwrap();
+    assert!(
+        needed.contains(&format!(
+            "dla ledger annotate {f} --holder registration-table --evidence {gid}"
+        )),
+        "{needed}"
+    );
+    // The column tied to the finding carries the holder kind the ledger reads.
+    let tied: Vec<&Value> = g["result"]["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["finding"] == f.as_str())
+        .collect();
+    assert!(!tied.is_empty());
+    assert!(
+        tied.iter()
+            .all(|c| c["holder_kind"] == "registration-table")
+    );
     assert!(ledger_rule_ties(
         &g,
         &f,
@@ -438,7 +466,15 @@ fn a_timer_holder_is_a_registration_table_and_ties_to_the_timer_finding() {
         .iter()
         .find(|c| c["owner"] == "src.heartbeat.startHeartbeat.session")
         .unwrap_or_else(|| panic!("{v}"));
-    assert_eq!(c["holder"], "closure/continuation");
+    // Its root is the timer, so the kind observed is the registration, not the closure.
+    assert_eq!(c["holder"], "registration-table");
+    let col = g["result"]["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["column"].as_str().is_some_and(|n| n.contains("closure:")))
+        .unwrap_or_else(|| panic!("{g}"));
+    assert_eq!(col["holder_kind"], "registration-table");
 }
 
 #[test]

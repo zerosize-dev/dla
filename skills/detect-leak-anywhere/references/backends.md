@@ -95,8 +95,10 @@ format. Mixed formats in one call are refused as `mixed-formats` and the refusal
   `registration-table`, a closure variable `closure/continuation`, an object property `container-field`.
   It ties by holder identity only. When the finding's holder differs from what the snapshots show, `needed`
   prints a `dla ledger annotate F --holder ...` command if the finding has no holder; if it has a different
-  holder, `needed` names the sibling route (`dla ledger add --sibling-of F ...`), because annotate fills a
-  holder only when none is set. Strings are one `(string)` row and are
+  holder, `needed` prints `dla ledger annotate F --holder H --evidence <growth evidence id>`, which the
+  ledger accepts when a passing column of that evidence is tied to F and observed H. The kind is the kind
+  of the retention root (a timer or listener entry on the path is `registration-table`, a module variable
+  is `static/global`). Strings are one `(string)` row and are
   never named after their text. A snapshot holds memory contents (tier 1 from `dla harness run`, tier 4 from `dla attach`); a class histogram
   (`node-heapsnapshot-types`) ties to nothing. `node-heapprofile` is a sample (builtin frames are charged
   to the nearest JavaScript frame; a `<script>.map` next to the script maps frames back to the source,

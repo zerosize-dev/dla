@@ -744,6 +744,13 @@
       "description": "Writers and removers found for a finding's holder, and its holder, owner, region and\nsite when none is recorded yet. It does not change the finding's state; the report lists\nthe sites under the finding.",
       "type": "object",
       "properties": {
+        "evidence": {
+          "description": "Growth evidence that backs a change of a holder already set (schema 5): a heap-graph\n`growth-series` with a passing column tied to the finding whose `holder_kind` is\n`holder`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          }
+        },
         "finding": {
           "description": "The finding.",
           "$ref": "#/$defs/FindingId"
@@ -791,6 +798,17 @@
           "items": {
             "type": "string"
           }
+        },
+        "replaced_holder": {
+          "description": "The holder this annotation replaced; written by the ledger, an audit trail.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Holder"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "site": {
           "description": "`file:line` of the finding; applied only when the finding has no site yet.",

@@ -198,6 +198,19 @@ fn finding_holder(h: &Holder) -> FindingHolder {
     }
 }
 
+/// The holder kind DLA reports for a holder: the kind of its retention root. An instance
+/// field whose retention path starts at a static field of a class is static/global; the
+/// other kinds are the root's own.
+fn observed_holder(h: &Holder) -> FindingHolder {
+    if h.kind == HolderKind::Instance
+        && let Some(rest) = h.path.first().and_then(|p| p.strip_prefix("root "))
+        && (rest.starts_with("class ") || !rest.contains([' ', ':']))
+    {
+        return FindingHolder::StaticGlobal;
+    }
+    finding_holder(h)
+}
+
 /// `class.field` for a static or a via-holder instance field (`field:<Decl>.<f>`), else
 /// the key.
 fn owner_of(h: &Holder) -> String {
@@ -649,6 +662,8 @@ struct Tie {
     /// The finding's own site, when no other finding has it.
     site: Option<String>,
     why: tie::TieReason,
+    /// The holder kind the dumps show for the column.
+    holder: FindingHolder,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -769,7 +784,7 @@ fn series_part(
                     Origin::parse("growth-series").map_err(dla_core::Refusal::from)?,
                     vec![latest_retention.clone()],
                 );
-                nf.holder = Some(finding_holder(h));
+                nf.holder = Some(observed_holder(h));
                 nf.owner = Some(owner.clone());
                 nf.region = Some(Region::Heap);
                 nf.site = site.clone();
@@ -792,7 +807,7 @@ fn series_part(
             }
         };
         if added {
-            let mut c = json!({"finding": fid, "owner": owner, "holder": finding_holder(h)});
+            let mut c = json!({"finding": fid, "owner": owner, "holder": observed_holder(h)});
             if let Some(s) = &site {
                 c["site"] = json!(s);
                 c["via"] = json!(resolved.as_ref().map_or("", |r| r.via.as_str()));
@@ -802,7 +817,7 @@ fn series_part(
         cands.push(CandidateRow {
             finding: fid.clone(),
             owner: Some(owner),
-            holder: Some(finding_holder(h)),
+            holder: Some(observed_holder(h)),
             site: fsite.clone(),
             region: Some(Region::Heap),
             origin: "growth-series".into(),
@@ -815,6 +830,7 @@ fn series_part(
                 finding: fid,
                 site: fsite,
                 why,
+                holder: observed_holder(h),
             },
         ));
     }
@@ -949,6 +965,11 @@ fn series_part(
                 "owner": h.map(|h| clip(&owner_of(h), 120)),
                 "last_over_first": (g.last_over_first * 100.0).round() / 100.0,
             });
+            // The holder kind observed for the column: the ledger reads it to accept a
+            // corrected holder.
+            if let Some(h) = h {
+                v["holder_kind"] = json!(observed_holder(h));
+            }
             if let Some(t) = tie_for(key) {
                 v["finding"] = json!(t.finding);
                 v["candidates"] = json!([t.finding]);
@@ -1116,9 +1137,21 @@ fn series_part(
             .to_owned()
     } else {
         match tied_ids.first() {
-            Some(f) => format!(
-                "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {growth_id}"
-            ),
+            Some(f) => {
+                let seen = shown
+                    .iter()
+                    .filter_map(|&i| tie_for(&passed[i].0))
+                    .find(|t| &t.finding == *f)
+                    .map(|t| t.holder);
+                match (seen, ledger.finding(f).and_then(|x| x.holder)) {
+                    (Some(h), Some(named)) if h != named => format!(
+                        "the dumps show holder {h} for {f}, which has holder {named}: dla ledger annotate {f} --holder {h} --evidence {growth_id}; then a refuted non-leak sibling, then dla ledger confirm {f} --evidence {growth_id}"
+                    ),
+                    _ => format!(
+                        "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {growth_id}"
+                    ),
+                }
+            }
             None => "no passing holder is tied in the evidence: rerun with fewer holders or --finding <F>".to_owned(),
         }
     };
@@ -1165,6 +1198,45 @@ mod tests {
         let root = holder("instance:x>y", HolderKind::Instance, "y", None);
         assert_eq!(owner_of(&root), "instance:x>y");
         assert_eq!(finding_holder(&inst), FindingHolder::ContainerField);
+    }
+
+    #[test]
+    fn an_instance_field_under_a_static_root_is_static_global() {
+        let mut inst = holder(
+            "field:shop.Hub.data",
+            HolderKind::Instance,
+            "shop.Hub",
+            Some("data"),
+        );
+        // No path: the kind of the field itself.
+        assert_eq!(observed_holder(&inst), FindingHolder::ContainerField);
+        for head in ["root class shop.Waiters", "root shop.Waiters"] {
+            inst.path = vec![head.into(), "static gates -> shop.Registry".into()];
+            assert_eq!(
+                observed_holder(&inst),
+                FindingHolder::StaticGlobal,
+                "{head}"
+            );
+        }
+        // Roots that are not statics keep the field's kind.
+        for head in [
+            "root instance shop.Hub",
+            "root thread:main",
+            "root jni-global:x.Y",
+            "root instance:vm-internal>shop.Hub",
+        ] {
+            inst.path = vec![head.into()];
+            assert_eq!(
+                observed_holder(&inst),
+                FindingHolder::ContainerField,
+                "{head}"
+            );
+        }
+        // A static holder stays static, a thread stays a thread kind.
+        let st = holder("static:a.B.c", HolderKind::Static, "a.B", Some("c"));
+        assert_eq!(observed_holder(&st), FindingHolder::StaticGlobal);
+        let th = holder("thread:main", HolderKind::Thread, "main", None);
+        assert_eq!(observed_holder(&th), FindingHolder::BlockedStack);
     }
 
     #[test]

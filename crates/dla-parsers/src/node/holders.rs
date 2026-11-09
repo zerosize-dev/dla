@@ -83,6 +83,12 @@ pub struct Holder {
     /// The retention path of the largest instance, root first.
     pub path: Vec<Hop>,
     pub accumulation: Option<Accumulation>,
+    /// The kind of the retention root of the largest instance (see [`Snapshot::root_kind`]):
+    /// a timer or listener registration anywhere on the path, else a module variable or
+    /// global, else a function context variable, else an object property. `kind` stays the
+    /// kind of the reference itself, which keys the holder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_kind: Option<HolderKind>,
 }
 
 /// Limits of the holder search.
@@ -250,6 +256,49 @@ impl Snapshot {
             return None;
         }
         self.script_node_of_closure(ctor)
+    }
+
+    /// The kind of the root of a retention path: the path from the GC roots to `u`, then the
+    /// edge `e`. A registration (a timer callback, an emitter's `_events`) on it decides
+    /// first, unless a module variable follows it on the path; else a module variable or global; else a function context variable;
+    /// else an object property. A closure variable or a field below a registration or a
+    /// static does not decide the kind.
+    pub fn root_kind(&self, bfs: &Bfs, u: usize, e: usize) -> HolderKind {
+        let mut hops = bfs.path_to(u);
+        hops.push((u, e));
+        let (mut registration, mut stat, mut closure) = (false, false, false);
+        for (i, &(from, edge)) in hops.iter().enumerate() {
+            let fname = self.node_name(from);
+            let ename = self.edge_name(edge).unwrap_or_default();
+            if self.is_context(from) {
+                if Some(self.edge_type(edge)) == self.kinds.e_context {
+                    if self.is_top_context(from) {
+                        // A module variable below a registration decides: the callback
+                        // only exposes the module context, it does not own the variable.
+                        stat = true;
+                        registration = false;
+                    } else {
+                        closure = true;
+                    }
+                }
+            } else if ename == "_events"
+                || (matches!(fname, "Timeout" | "Immediate")
+                    && matches!(ename, "_onTimeout" | "_onImmediate"))
+            {
+                registration = true;
+            } else if fname == "global" && i <= 3 {
+                stat = true;
+            }
+        }
+        if registration {
+            HolderKind::Registration
+        } else if stat {
+            HolderKind::Static
+        } else if closure {
+            HolderKind::Closure
+        } else {
+            HolderKind::Instance
+        }
     }
 
     fn path_hops(&self, bfs: &Bfs, u: usize, e: usize) -> Vec<Hop> {
@@ -477,14 +526,15 @@ impl Snapshot {
         let (first, kids) = dom.children();
         let mut holders = Vec::with_capacity(ranked.len());
         for (i, ((kind, registry, script, owner, name), a)) in ranked.into_iter().enumerate() {
-            let (path, accumulation) = match a.best {
+            let (path, accumulation, root_kind) = match a.best {
                 Some((_, u, e, v)) => (
                     self.path_hops(bfs, u, e),
                     (i < opts.accumulate)
                         .then(|| self.accumulation(v, &first, &kids))
                         .flatten(),
+                    Some(self.root_kind(bfs, u, e)),
                 ),
-                None => (Vec::new(), None),
+                None => (Vec::new(), None, None),
             };
             holders.push(Holder {
                 kind,
@@ -497,6 +547,7 @@ impl Snapshot {
                 instances: a.instances,
                 path,
                 accumulation,
+                root_kind,
             });
         }
         HolderSummary {
@@ -649,6 +700,12 @@ mod tests {
                 .any(|x| x.kind == HolderKind::Instance && x.name == "latest")
         );
         assert!(h.holders.iter().all(|x| x.name != "previous"));
+        // The root decides the kind: the field below the module variable is static too,
+        // while the holder's own kind (its key) stays the field's.
+        let latest = h.holders.iter().find(|x| x.name == "latest").unwrap();
+        assert_eq!(latest.kind, HolderKind::Instance);
+        assert_eq!(latest.root_kind, Some(HolderKind::Static));
+        assert_eq!(top.root_kind, Some(HolderKind::Static));
         assert!(
             top.path.iter().any(|p| p.edge == ".shared"),
             "{:?}",
@@ -696,6 +753,72 @@ mod tests {
             .find(|x| x.kind == HolderKind::Closure)
             .unwrap();
         assert_eq!(clo.name, "session");
+        // A closure variable below a timer is a registration by its root; so is the
+        // field below it.
+        assert_eq!(reg.root_kind, Some(HolderKind::Registration));
+        assert_eq!(clo.root_kind, Some(HolderKind::Registration));
+        let recent = h.holders.iter().find(|x| x.name == "recent").unwrap();
+        assert_eq!(recent.kind, HolderKind::Instance);
+        assert_eq!(recent.root_kind, Some(HolderKind::Registration));
+    }
+
+    #[test]
+    fn a_module_variable_below_a_registration_is_still_static() {
+        // roots -> process -> _events -> listener -> top context -> `cache` -> Map
+        let s = load(&[
+            ("synthetic", "", 0, vec![("element", "0", 1)]),
+            ("synthetic", "(GC roots)", 0, vec![("element", "0", 2)]),
+            ("object", "process", 100, vec![("property", "_events", 3)]),
+            ("closure", "cleanup", 56, vec![("internal", "context", 4)]),
+            (
+                "object",
+                "system / Context",
+                48,
+                vec![("context", "cache", 5), ("internal", "previous", 7)],
+            ),
+            ("object", "Map", 120, vec![("property", "items", 6)]),
+            ("object", "Array", 64, vec![]),
+            ("hidden", "system / NativeContext", 8, vec![]),
+        ]);
+        let h = holders_of(&s);
+        let cache = h.holders.iter().find(|x| x.name == "cache").unwrap();
+        assert_eq!(cache.root_kind, Some(HolderKind::Static), "{:?}", h.holders);
+        let items = h.holders.iter().find(|x| x.name == "items").unwrap();
+        assert_eq!(items.root_kind, Some(HolderKind::Static));
+    }
+
+    #[test]
+    fn a_function_context_root_is_a_closure_and_a_plain_property_root_an_instance() {
+        // roots -> function context -> variable `cache` -> Cache -> items
+        let s = load(&[
+            ("synthetic", "", 0, vec![("element", "0", 1)]),
+            ("synthetic", "(GC roots)", 0, vec![("element", "0", 2)]),
+            (
+                "object",
+                "system / Context",
+                48,
+                vec![("context", "cache", 3), ("internal", "previous", 5)],
+            ),
+            ("object", "Cache", 120, vec![("property", "items", 4)]),
+            ("object", "Array", 64, vec![]),
+            ("hidden", "system / Other", 8, vec![]),
+        ]);
+        let h = holders_of(&s);
+        let cache = h.holders.iter().find(|x| x.name == "cache").unwrap();
+        assert_eq!(cache.kind, HolderKind::Closure);
+        assert_eq!(cache.root_kind, Some(HolderKind::Closure));
+        let items = h.holders.iter().find(|x| x.name == "items").unwrap();
+        assert_eq!(items.root_kind, Some(HolderKind::Closure));
+        // A property chain from the roots with no variable on it is an instance.
+        let s = load(&[
+            ("synthetic", "", 0, vec![("element", "0", 1)]),
+            ("synthetic", "(GC roots)", 0, vec![("element", "0", 2)]),
+            ("object", "Cache", 120, vec![("property", "items", 3)]),
+            ("object", "Array", 64, vec![]),
+        ]);
+        let h = holders_of(&s);
+        let items = h.holders.iter().find(|x| x.name == "items").unwrap();
+        assert_eq!(items.root_kind, Some(HolderKind::Instance));
     }
 
     #[test]

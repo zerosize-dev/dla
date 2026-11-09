@@ -100,6 +100,14 @@ pub struct FindingAnnotation {
     /// `file:line` of the finding; applied only when the finding has no site yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
+    /// Growth evidence that backs a change of a holder already set (schema 5): a heap-graph
+    /// `growth-series` with a passing column tied to the finding whose `holder_kind` is
+    /// `holder`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<EvidenceId>,
+    /// The holder this annotation replaced; written by the ledger, an audit trail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_holder: Option<Holder>,
 }
 
 impl FindingAnnotation {
@@ -114,6 +122,8 @@ impl FindingAnnotation {
             owner: None,
             region: None,
             site: None,
+            evidence: Vec::new(),
+            replaced_holder: None,
         }
     }
 }

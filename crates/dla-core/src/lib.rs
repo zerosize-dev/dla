@@ -60,8 +60,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// replay, under the M0 rules; version 2 lines replay under the M3 rules; version 3
 /// lines (M4) replay under the M3 rules plus the artifact-path rules, and may carry a
 /// `worker` and the slice, merge and verification records; version 4 lines (M5) also
-/// require a leak-side confirmation to cite a passing growth column tied to the finding.
-pub const LEDGER_SCHEMA_VERSION: u32 = 4;
+/// require a leak-side confirmation to cite a passing growth column tied to the finding;
+/// version 5 lines may also change a holder already set, when the annotation cites heap-graph
+/// growth evidence whose passing column tied to the finding observed that holder.
+pub const LEDGER_SCHEMA_VERSION: u32 = 5;
 /// Bound on the serialized size of an evidence `result`.
 pub const MAX_RESULT_BYTES: usize = 2048;
 /// Bound on the size of CLI stdout.
@@ -77,7 +79,7 @@ pub use evidence::{
 pub use finding::{Finding, FindingState, Origin, UNCLASSIFIED, UnresolvedReason};
 pub use harness::{HarnessDump, HarnessManifest};
 pub use ids::{EvidenceId, FindingId, OpenItemId};
-pub use ledger::{Annotation, Ledger, NewFinding, OpenItemState};
+pub use ledger::{Annotation, HolderChange, Ledger, NewFinding, OpenItemState};
 pub use record::{
     FindingAnnotation, FindingMerged, LedgerLine, Record, Resolution, SliceDone, SliceMerged,
     SliceStarted, Verification,

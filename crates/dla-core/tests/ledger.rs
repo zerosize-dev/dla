@@ -295,15 +295,15 @@ fn replay_malformed_and_blank_lines() {
 #[test]
 fn ledger_line_schema_versions() {
     let v = |n: u32| ev_line(1).replace("\"schema_version\":1", &format!("\"schema_version\":{n}"));
-    let Err(e @ Error::Schema(_)) = Ledger::from_text(&v(5)) else {
-        panic!("v5 should be refused")
+    let Err(e @ Error::Schema(_)) = Ledger::from_text(&v(6)) else {
+        panic!("v6 should be refused")
     };
     assert_eq!(e.exit_code(), 3);
     let msg = e.to_string();
     assert!(
         msg.contains("newer dla")
-            && msg.contains("schema 5")
-            && msg.contains("reads 4")
+            && msg.contains("schema 6")
+            && msg.contains("reads 5")
             && msg.contains("upgrade the plugin"),
         "{msg}"
     );
@@ -317,7 +317,15 @@ fn ledger_line_schema_versions() {
         "{msg}"
     );
     assert!(msg.contains("ledger line 1"));
-    // Versions 1, 2 and 3 are all current and keep their number.
+    // Versions 1 to 5 are all current and keep their number.
+    assert_eq!(
+        Ledger::from_text(&v(4)).unwrap().lines()[0].schema_version,
+        4
+    );
+    assert_eq!(
+        Ledger::from_text(&v(5)).unwrap().lines()[0].schema_version,
+        5
+    );
     assert!(Ledger::from_text(&v(1)).is_ok());
     let l = Ledger::from_text(&v(2)).unwrap();
     assert_eq!(l.lines()[0].schema_version, 2);
@@ -554,7 +562,7 @@ fn written_lines_have_the_documented_shape() {
         ))
         .unwrap();
     let v: serde_json::Value = serde_json::to_value(&line).unwrap();
-    assert_eq!(v["schema_version"], 4);
+    assert_eq!(v["schema_version"], 5);
     assert_eq!(v["seq"], 1);
     assert!(v.get("worker").is_none());
     assert_eq!(v["type"], "evidence");

@@ -485,38 +485,92 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<(BTreeSet<String>, Vec<String>)> 
     }
 }
 
-/// The `(finding, holder)` pairs a summarize call asks to annotate: its `needed` text names
-/// `dla ledger annotate F --holder H` where the call's `observed_holder` for F differs from
-/// the finding's holder. Reads dla JSON only, so it is the same for every fixture.
-pub(super) fn holder_annotations(json: &Value) -> Vec<(String, String)> {
+/// A holder annotation a summarize call asks for: finding, holder, and the growth evidence
+/// id the command cites (`--evidence`), when the text names one.
+pub(super) type HolderAnnotation = (String, String, Option<String>);
+
+/// The annotations a summarize call asks for: its `needed` text names
+/// `dla ledger annotate F --holder H --evidence E` where the call's `observed_holder` for F
+/// differs from the finding's holder. Only those where `observed_holder` agrees with H are
+/// returned. Reads dla JSON only, so it is the same for every fixture.
+pub(super) fn holder_annotations(json: &Value) -> Vec<HolderAnnotation> {
     let Some(needed) = json["needed"].as_str() else {
         return Vec::new();
     };
     let observed = &json["observed_holder"];
+    let clean = |w: &str| w.trim_end_matches([';', ',', '.']).to_owned();
     let words: Vec<&str> = needed.split_whitespace().collect();
-    let mut found: Vec<(String, String)> = Vec::new();
-    for w in words.windows(6) {
-        if w[0] != "dla" || w[1] != "ledger" || w[2] != "annotate" || w[4] != "--holder" {
+    let mut found: Vec<HolderAnnotation> = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        if *w != "dla"
+            || words.get(i + 1) != Some(&"ledger")
+            || words.get(i + 2) != Some(&"annotate")
+        {
             continue;
         }
-        let f = w[3];
-        let h = w[5].trim_end_matches([';', ',', '.']);
-        if observed[f].as_str() == Some(h) && !found.iter().any(|(x, _)| x == f) {
-            found.push((f.to_owned(), h.to_owned()));
+        let (Some(f), Some(&"--holder"), Some(h)) =
+            (words.get(i + 3), words.get(i + 4), words.get(i + 5))
+        else {
+            continue;
+        };
+        let h = clean(h);
+        let evidence = match (words.get(i + 6), words.get(i + 7)) {
+            (Some(&"--evidence"), Some(e)) => Some(clean(e)),
+            _ => None,
+        };
+        if observed[*f].as_str() == Some(h.as_str()) && !found.iter().any(|(x, ..)| x == f) {
+            found.push(((*f).to_owned(), h, evidence));
         }
     }
     found
 }
 
-/// Runs the holder annotations a passing summarize call asks for, so a confirmation can cite
-/// its growth evidence.
+/// The tied findings other than those `needed` names whose set holder differs from the
+/// observed one: `needed` speaks of the first tied finding only. The command has the same
+/// form `needed` prints, citing the call's growth evidence.
+pub(super) fn more_annotations(
+    json: &Value,
+    named: &[HolderAnnotation],
+    holder_of: impl Fn(&str) -> Option<String>,
+) -> Vec<HolderAnnotation> {
+    let growth = json["growth_evidence"].as_str();
+    let mut found = Vec::new();
+    for (f, h) in json["observed_holder"].as_object().into_iter().flatten() {
+        let (Some(h), Some(g)) = (h.as_str(), growth) else {
+            continue;
+        };
+        if named.iter().any(|(x, ..)| x == f) {
+            continue;
+        }
+        if holder_of(f).is_some_and(|cur| cur != h) {
+            found.push((f.clone(), h.to_owned(), Some(g.to_owned())));
+        }
+    }
+    found
+}
+
+/// Runs the holder annotations a passing summarize call asks for, exactly as its `needed`
+/// text prints them (with `--evidence`), so a confirmation can cite its growth evidence.
 fn annotate_observed_holders(fx: &mut Fx, out: &Out) {
-    for (f, h) in holder_annotations(&out.json) {
-        let a = fx.call_quiet(&["ledger", "annotate", &f, "--holder", &h]);
+    let mut todo = holder_annotations(&out.json);
+    let view = fx.view();
+    let more = more_annotations(&out.json, &todo, |f| {
+        view.findings
+            .iter()
+            .find(|x| x.id == f)
+            .and_then(|x| x.holder.clone())
+    });
+    todo.extend(more);
+    for (f, h, e) in todo {
+        let mut args = vec!["ledger", "annotate", f.as_str(), "--holder", h.as_str()];
+        if let Some(e) = e.as_deref() {
+            args.extend(["--evidence", e]);
+        }
+        let a = fx.call_quiet(&args);
         if a.ok {
             fx.step(format!("{f} annotated with observed holder {h}"));
         } else {
-            let msg = format!("dla ledger annotate {f} --holder {h}: {}", a.message());
+            let msg = format!("dla {}: {}", args[..].join(" "), a.message());
             fx.step(format!("annotate refused ({})", a.code()));
             fx.row.errors.push(msg);
         }
@@ -711,18 +765,53 @@ mod tests {
     #[test]
     fn an_observed_holder_that_differs_is_annotated() {
         let j = json!({"observed_holder": {"F7": "static/global", "F9": "registration-table"},
-            "needed": "the snapshots show holder static/global for F7: dla ledger annotate F7 --holder static/global; then a refuted non-leak sibling"});
+            "needed": "the snapshots show holder static/global for F7: dla ledger annotate F7 --holder static/global --evidence E3; then a refuted non-leak sibling"});
         assert_eq!(
             holder_annotations(&j),
-            [("F7".to_owned(), "static/global".to_owned())]
+            [(
+                "F7".to_owned(),
+                "static/global".to_owned(),
+                Some("E3".to_owned())
+            )]
+        );
+        // Without a named evidence the command is run without one.
+        let bare = json!({"observed_holder": {"F7": "static/global"},
+            "needed": "dla ledger annotate F7 --holder static/global"});
+        assert_eq!(
+            holder_annotations(&bare),
+            [("F7".to_owned(), "static/global".to_owned(), None)]
         );
         // Nothing is named when the holders agree, or when the observation does not match.
         let same = json!({"observed_holder": {"F7": "static/global"},
             "needed": "a refuted non-leak sibling and a holder, then dla ledger confirm F7 --evidence E3"});
         assert!(holder_annotations(&same).is_empty());
         let other = json!({"observed_holder": {"F7": "container-field"},
-            "needed": "dla ledger annotate F7 --holder static/global"});
+            "needed": "dla ledger annotate F7 --holder static/global --evidence E3"});
         assert!(holder_annotations(&other).is_empty());
+    }
+
+    #[test]
+    fn a_tied_finding_that_needed_does_not_name_is_annotated_too() {
+        let j = json!({"growth_evidence": "E22",
+            "observed_holder": {"F5": "static/global", "F8": "static/global", "F9": "container-field"},
+            "needed": "a refuted non-leak sibling and a holder, then dla ledger confirm F8 --evidence E22"});
+        let holder = |f: &str| match f {
+            "F5" | "F9" => Some("container-field".to_owned()),
+            "F8" => Some("static/global".to_owned()),
+            _ => None,
+        };
+        // F8 agrees, F9 agrees; F5 differs.
+        assert_eq!(
+            more_annotations(&j, &[], holder),
+            [(
+                "F5".to_owned(),
+                "static/global".to_owned(),
+                Some("E22".to_owned())
+            )]
+        );
+        // A finding the text already names is not repeated.
+        let named = [("F5".to_owned(), "static/global".to_owned(), None)];
+        assert!(more_annotations(&j, &named, holder).is_empty());
     }
 
     #[test]

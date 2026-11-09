@@ -103,7 +103,7 @@ pub struct AnnotateArgs {
     /// Free-text note.
     #[arg(long)]
     note: Option<String>,
-    /// What holds the memory; only set when the finding has no holder yet:
+    /// What holds the memory; only set when the finding has no holder yet, or changed with --evidence:
     /// static/global | registration-table | container-field | thread-local | blocked-stack |
     /// closure/continuation | native-handle/global-ref | cycle-only
     #[arg(long, value_parser = parse_enum::<Holder>)]
@@ -117,6 +117,10 @@ pub struct AnnotateArgs {
     /// `file:line` of the finding; only set when the finding has no site yet.
     #[arg(long, value_name = "FILE:LINE")]
     site: Option<String>,
+    /// Growth evidence (heap-graph, dump or live) that observed the holder; lets --holder
+    /// change a holder already set. Comma separated.
+    #[arg(long, value_delimiter = ',', value_parser = parse_enum::<EvidenceId>)]
+    evidence: Vec<EvidenceId>,
 }
 
 /// Flags of `dla ledger add`.
@@ -373,6 +377,7 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
         owner: a.owner,
         region: a.region,
         site: a.site,
+        evidence: a.evidence,
         ..FindingAnnotation::new(a.finding.clone())
     })?;
     let dla_core::Record::FindingAnnotated(rec) = &line.record else {
@@ -397,6 +402,15 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     }
     if let Some(s) = &rec.site {
         out["site"] = json!(s);
+    }
+    if let Some(old) = rec.replaced_holder {
+        out["replaced_holder"] = json!(old.as_str());
+        out["evidence"] = json!(
+            rec.evidence
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
     }
     Ok(out)
 }

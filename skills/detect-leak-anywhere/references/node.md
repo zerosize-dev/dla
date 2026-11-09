@@ -44,13 +44,17 @@ Worker name and runtime id: `node`. Facts from `harness/node/README.md` and `doc
   prints the command when it has 3 or more files of one format. Measured on copies of the fixtures: on
   `node-retry-scheduler` the module variable `src.scheduler.shared` tied to its census finding
   (static/global).
-- What the series gives: a `holder:` growth column per holder with its kind (static/global,
-  registration-table, closure/continuation, container-field). A holder that differs from the finding's is
-  reported as `observed_holder`. If the finding has no holder, `needed` prints
-  `dla ledger annotate F --holder <kind>`; run it, then the column ties by holder. `annotate --holder`
-  fills a holder only when the finding has none. If the finding already has a different holder, `needed`
-  says so and names the sibling route (`dla ledger add --sibling-of F ...`) instead of an annotate command.
-  New candidates come from project holders only (at most 3 per run), without a site.
+- What the series gives: a `holder:` growth column per holder. The holder kind is the kind of the
+  retention root, not of the last link: the path from the GC roots to the holder decides. A timer or
+  event-listener entry on the path gives registration-table; a module variable or a `global` property
+  gives static/global; a function-context variable gives closure/continuation; anything else gives
+  container-field. Each passing column in the result carries `holder_kind`. A holder that differs from the
+  finding's is reported as `observed_holder`. If the finding has no holder, `needed` prints
+  `dla ledger annotate F --holder <kind>`; run it, then the column ties by holder. If the finding has a
+  different holder, `needed` prints `dla ledger annotate F --holder <kind> --evidence <growth evidence id>`:
+  the ledger changes a holder already set only with that growth evidence, when one of its passing columns
+  is tied to F and observed that kind. Any other change of a set holder is refused.
+  New candidates come from project holders only (at most 3 per run), without a site and with the root kind.
 - `alloc-<n>.heapprofile`: `dla summarize alloc-stack-diff`. Frames of `dla-preload.js` and builtins are
   skipped. A `<script>.map` next to a bundled script is applied.
 - `resources.json`: `dla summarize non-heap`. A group `Timeout@src/heartbeat.js:15` ties to the finding

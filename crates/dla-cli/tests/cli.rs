@@ -653,7 +653,7 @@ fn newer_schema_in_a_ledger_line_exits_3() {
     let dir = fixture_project();
     append_line(
         &fixture_ledger(&dir),
-        r#"{"schema_version":5,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
+        r#"{"schema_version":6,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
     );
     let o = run(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
     assert_eq!(o.code, 3, "{}", o.stdout);
@@ -1614,6 +1614,78 @@ fn annotate_refuses_unknown_findings_bad_sites_and_empty_annotations() {
     assert_eq!(o.code, 1);
 }
 
+#[test]
+fn annotate_changes_a_holder_only_with_matching_growth_evidence() {
+    let (dir, run_id) = fresh_run();
+    ok(
+        dir.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "census",
+            "--evidence",
+            "E1",
+            "--holder",
+            "container-field",
+        ],
+    );
+    let path = dir.path().join(".dla").join(&run_id).join("ledger.jsonl");
+    let seq = fs::read_to_string(&path).unwrap().lines().count() + 1;
+    let column = r#"{"column":"holder:static:A.b","region":"heap","finding":"F1","shape":"steady","holder_kind":"static/global"}"#;
+    append_line(
+        &path,
+        &format!(
+            r#"{{"schema_version":5,"seq":{seq},"ts":"2026-01-02T03:09:00Z","type":"evidence","evidence_id":"E9","source":{{"repo":{{"commit":"abc"}}}},"tool":{{"name":"dla-v8-snapshot","version":"1"}},"authority":"dump","kind":"growth-series","result":{{"gate":"pass","passed":[{column}]}}}}"#
+        ),
+    );
+    // Without evidence the change is a conflict whose fix names the evidence flag.
+    let e = refused(
+        dir.path(),
+        &["ledger", "annotate", "F1", "--holder", "static/global"],
+    );
+    assert_eq!(e["code"], "annotation-conflict");
+    assert!(e["fix"].as_str().unwrap().contains("--evidence"), "{e}");
+    // Another holder than the evidence observed is refused.
+    let e = refused(
+        dir.path(),
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--holder",
+            "thread-local",
+            "--evidence",
+            "E9",
+        ],
+    );
+    assert_eq!(e["code"], "annotation-conflict");
+    let a = ok(
+        dir.path(),
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--holder",
+            "static/global",
+            "--evidence",
+            "E9",
+        ],
+    );
+    assert_eq!(a["holder"], "static/global");
+    assert_eq!(a["replaced_holder"], "container-field");
+    assert_eq!(a["evidence"][0], "E9");
+    // The line carries the old holder, and the ledger replays.
+    let last = fs::read_to_string(&path).unwrap();
+    let last = last.lines().last().unwrap();
+    assert!(
+        last.contains(r#""replaced_holder":"container-field""#)
+            && last.contains(r#""schema_version":5"#),
+        "{last}"
+    );
+    ok(dir.path(), &["run", "status"]);
+}
+
 // ---- stage commands
 
 #[test]
@@ -2028,7 +2100,7 @@ fn annotate_conflicts_are_refused_and_the_same_value_is_accepted() {
 }
 
 #[test]
-fn new_ledger_lines_are_version_four_and_old_ones_still_replay() {
+fn new_ledger_lines_are_version_five_and_old_ones_still_replay() {
     let dir = fixture_project();
     // The hand-written run is entirely version 1.
     let o = ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
@@ -2047,7 +2119,7 @@ fn new_ledger_lines_are_version_four_and_old_ones_still_replay() {
     );
     let text = fs::read_to_string(fixture_ledger(&dir)).unwrap();
     let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
-    assert_eq!(last["schema_version"], 4);
+    assert_eq!(last["schema_version"], 5);
     assert!(
         text.lines()
             .next()

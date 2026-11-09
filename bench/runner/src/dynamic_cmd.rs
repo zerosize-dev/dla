@@ -191,14 +191,9 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
         reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
     },
     ExpectedFailure {
-        fixture: "node-retry-scheduler",
-        failure: "leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global",
-        reason: "the leak is confirmed through the probe column of `RetryScheduler.latest` (an alternative site, scheduler.js:15), and the census classifies an instance field as `container-field`; the fixture expects the module-level `shared` that roots it (`static/global`). The per-point heap-graph run ties that column to the finding of the instance field with the observed holder `container-field`, the same as the census, so no annotation is due; the module variable `shared` is its own finding (scheduler.js:90) and the policy cannot read the code to choose it as the root",
-    },
-    ExpectedFailure {
         fixture: "node-socket-heartbeat",
         failure: "leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table",
-        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The per-point heap-graph run ties the container fields of the sessions and the loopback socket but names no timer holder (the Node holder analysis yields none for a setInterval), so there is no observed holder to annotate; node-resources ties the timer group to the finding by site only",
+        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The per-point heap-graph run now observes `registration-table` for the column of `Session.recent` and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding itself (the sessions it keeps alive are held through the loopback socket events, not through a timer entry in the snapshots), and node-resources ties the timer group to the finding by site only, so no observed holder is available to correct the timer finding",
     },
 ];
 
@@ -701,8 +696,10 @@ impl View {
                         continue;
                     };
                     if let Some(f) = v.findings.iter_mut().find(|f| f.id == id) {
-                        if f.holder.is_none() {
-                            f.holder = s(&rec, "holder");
+                        // A v5 annotation that replaced a holder (it cited growth evidence)
+                        // changes it; any other only fills a holder that is not set.
+                        if f.holder.is_none() || rec.get("replaced_holder").is_some() {
+                            f.holder = s(&rec, "holder").or(f.holder.take());
                         }
                         if f.site.is_none() {
                             f.site = s(&rec, "site");
@@ -2604,6 +2601,26 @@ mod tests {
     const ADD: &str = r#"{"type":"finding_added","finding":{"id":"F1","origin":"census","site":"a.py:1","holder":"static/global"}}"#;
     const SIB: &str =
         r#"{"type":"finding_added","finding":{"id":"F1.n1","parent":"F1","hypothesis":"N-WARM"}}"#;
+
+    #[test]
+    fn a_replaced_holder_is_read_and_a_plain_annotation_only_fills() {
+        let v = view(
+            "holder-replaced",
+            &[
+                ADD,
+                r#"{"type":"finding_annotated","finding":"F1","writers":[],"removers":[],"holder":"container-field"}"#,
+            ],
+        );
+        assert_eq!(v.findings[0].holder.as_deref(), Some("static/global"));
+        let v = view(
+            "holder-replaced2",
+            &[
+                ADD,
+                r#"{"type":"finding_annotated","finding":"F1","writers":[],"removers":[],"holder":"registration-table","evidence":["E1"],"replaced_holder":"static/global"}"#,
+            ],
+        );
+        assert_eq!(v.findings[0].holder.as_deref(), Some("registration-table"));
+    }
 
     #[test]
     fn a_complete_confirmation_passes_the_m3_rules() {

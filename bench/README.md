@@ -524,15 +524,18 @@ listed text is reported as `xfail: <reason>` in the table and in the JSON
 a listed fixture passes (remove the entry) or fails with any other text or with an
 additional failure (a regression must not hide behind the entry).
 
-The last full run: 22 of 25 fixtures pass and 3 are expected failures
-(`node-retry-scheduler`, `node-socket-heartbeat`, `rust-tree-parent-links`).
+The last full run (`dla-bench dynamic --parallel 2`, after the Node holder fixes): 23 of 25 fixtures pass and 2 are expected failures
+(`node-socket-heartbeat`, `rust-tree-parent-links`). `node-retry-scheduler` passes: the policy runs the
+`dla ledger annotate F --holder H --evidence E` command that `needed` prints for the finding of
+`RetryScheduler.latest`, and for any other tied finding whose set holder differs from the one observed
+(`needed` names the first tied finding only), and the ledger accepts it because the growth evidence's passing
+column observed `static/global`.
 `jvm-audit-chain` is dump-backed through `heap-graph`.
 
 | fixture | failure | reason |
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
-| `node-retry-scheduler` | `leak L1 (src/scheduler.js:31) is confirmed with holder container-field, expected static/global` | The confirmed finding is `RetryScheduler.latest`, an instance field, so its holder is `container-field`. The fixture expects the root's kind (`static/global`, the module variable `shared`). The census gives the field its own kind, and the ledger does not change a holder that is already set, so the fixed policy keeps `container-field`. A ledger change that corrects a holder from dump evidence was not made in M5. |
-| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The Node holder analysis yields no timer holder from the snapshots (no `Timeout` or `setInterval` entry), so no column ties the census timer finding by holder. `node-resources` ties the timer group to the finding by site. The census holder `blocked-stack` stays, and the fixture expects `registration-table`. |
+| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census gives the `setInterval` timer finding the holder `blocked-stack` and the policy keeps it. The per-point heap-graph run observes `registration-table` for the column of `Session.recent` (the sessions are held through the loopback socket events) and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding, so there is no observed holder to correct it with. `node-resources` ties the timer group to the finding by site only. |
 
 `jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
 workers, one merged ledger with both slices, merged coverage): the driver fails

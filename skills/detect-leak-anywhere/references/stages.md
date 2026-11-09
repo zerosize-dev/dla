@@ -165,7 +165,8 @@ For each passed column tied to a candidate `F3`:
 - Refute the loser: `dla ledger refute F3.n1 --evidence E13` when it favors leak,
   `dla ledger refute F3 --evidence E13` when it favors non-leak.
 - `dla ledger annotate F3 --holder <holder>` when the finding has no holder (`--owner`, `--region`,
-  `--site` fill other gaps), then `dla ledger confirm F3 --evidence E11`, citing the passing
+  `--site` fill other gaps; a holder already set changes only with `--evidence`, see the heap-graph
+  note below), then `dla ledger confirm F3 --evidence E11`, citing the passing
   `dla trend` evidence. A refusal names what is missing.
 - The passing column must be tied to `F3`: its probe (`probe:<owner>`), a group column at its site,
   or a column that lists it under `candidates`. A refusal `growth-not-tied` means the growth you cite
@@ -197,9 +198,12 @@ Reading the result:
   narrows to such columns; it never forces a tie. Whole-process and total columns (`os.*`,
   `jvm.*`, thread totals) never tie.
 - A Node or JVM heap-graph result names the holder it observed (`observed_holder`). `dla ledger annotate F
-  --holder H` fills a holder only when the finding has none. For a finding with no holder, `needed` prints
-  the annotate command; run it and summarize again. When the finding already has a different holder,
-  `needed` says so and names the sibling route (`dla ledger add --sibling-of F ...`) instead.
+  --holder H` fills a holder when the finding has none. The holder kind is the kind of the retention root.
+  For a finding with no holder, `needed` prints the annotate command; run it and summarize again. When
+  the finding already has a different holder, `needed` prints
+  `dla ledger annotate F --holder H --evidence <growth evidence id>`; run it as printed. The ledger
+  accepts a change of a set holder only with heap-graph growth evidence whose passing column is tied to F
+  and observed H (`holder_kind`); otherwise it refuses.
 - Per-point series: `heap-graph` forms a series over n when 3 or more inputs are all command-mode heap
   captures of one harness listed in `.dla/<run>/harness/H<n>/captures.json` (kind heap, distinct x, one
   label). It orders them by n, skips the one-process checks, keeps the format checks, uses the same

@@ -207,6 +207,7 @@ struct View {
     key: String,
     /// `module.name`, the form the census and the tie rule use.
     owner: String,
+    /// The holder kind of the retention root (see `Snapshot::root_kind`).
     holder: FindingHolder,
     retained: u64,
     count: u64,
@@ -267,7 +268,7 @@ fn view_of(h: &dla_parsers::node::Holder, project: &Path) -> View {
         .as_deref()
         .map_or((String::new(), false), |s| module_of(s, project));
     let name = h.name.clone();
-    let (key, owner, holder) = match (h.kind, h.registry.as_deref()) {
+    let (key, owner, _own_holder) = match (h.kind, h.registry.as_deref()) {
         (HolderKind::Static, _) => {
             let o = join(&[&module, &h.owner, &name]);
             (format!("static:{o}"), o, FindingHolder::StaticGlobal)
@@ -305,6 +306,13 @@ fn view_of(h: &dla_parsers::node::Holder, project: &Path) -> View {
             let o = join(&[&module, &h.owner, &name]);
             (format!("field:{o}"), o, FindingHolder::ContainerField)
         }
+    };
+    // The holder kind DLA reports is the kind of the retention root, not of the reference.
+    let holder = match h.root_kind.unwrap_or(h.kind) {
+        HolderKind::Static => FindingHolder::StaticGlobal,
+        HolderKind::Closure => FindingHolder::ClosureContinuation,
+        HolderKind::Registration => FindingHolder::RegistrationTable,
+        HolderKind::Instance => FindingHolder::ContainerField,
     };
     View {
         key,
@@ -919,6 +927,11 @@ fn series_part(
                 "shape": rule::shape(g),
                 "last_over_first": (g.last_over_first * 100.0).round() / 100.0,
             });
+            // The holder kind observed for the column: the ledger reads it to accept a
+            // corrected holder.
+            if let Some(l) = latest(key) {
+                v["holder_kind"] = json!(l.holder);
+            }
             if let Some(t) = tie_for(key) {
                 v["finding"] = json!(t.finding);
                 let mut c = vec![t.finding.clone()];
@@ -1113,7 +1126,8 @@ fn series_part(
 }
 
 /// The next step for a tied finding, given the holder the snapshots show and the one the
-/// ledger has. The ledger fills a holder that is not set and refuses to change one that is.
+/// ledger has. The ledger fills a holder that is not set; it changes one that is set only
+/// when the annotation cites this growth evidence, whose passing column shows the holder.
 fn holder_needed(
     f: &impl std::fmt::Display,
     seen: Option<FindingHolder>,
@@ -1127,7 +1141,7 @@ fn holder_needed(
         // The ledger refuses to change a holder that is set: say so, and name the route
         // it accepts instead of a command it would refuse.
         Some(h) if named != Some(h) => format!(
-            "the snapshots show holder {h} for {f}, which already has holder {}; annotate cannot change it: record the corrected holder on a new hypothesis (dla ledger add --origin hypothesis --sibling-of {f} --hypothesis \"<cause>\" --refute-if \"<result>\" --evidence {growth_id}), or keep {f}'s holder; then a refuted non-leak sibling and dla ledger confirm --evidence {growth_id}",
+            "the snapshots show holder {h} for {f}, which has holder {}: dla ledger annotate {f} --holder {h} --evidence {growth_id}; then a refuted non-leak sibling, then dla ledger confirm {f} --evidence {growth_id}",
             named.map_or_else(String::new, |x| x.to_string())
         ),
         _ => format!(
@@ -1322,6 +1336,7 @@ mod tests {
                 },
             ],
             accumulation: None,
+            root_kind: None,
         };
         sanitize(&mut h, &red);
         assert!(!h.name.contains("alice"), "{}", h.name);
@@ -1339,20 +1354,19 @@ mod tests {
     }
 
     #[test]
-    fn an_annotate_command_is_named_only_for_a_finding_without_a_holder() {
+    fn an_annotate_command_names_the_evidence_when_the_holder_changes() {
         let seen = Some(FindingHolder::RegistrationTable);
         let none = holder_needed(&"F6", seen, None, &"E9");
         assert!(
-            none.contains("ledger annotate F6 --holder registration-table"),
+            none.contains("dla ledger annotate F6 --holder registration-table;"),
             "{none}"
         );
         let other = holder_needed(&"F6", seen, Some(FindingHolder::BlockedStack), &"E9");
-        assert!(!other.contains("ledger annotate"), "{other}");
         assert!(
-            other.contains("already has holder blocked-stack"),
+            other.contains("dla ledger annotate F6 --holder registration-table --evidence E9"),
             "{other}"
         );
-        assert!(other.contains("--sibling-of F6"), "{other}");
+        assert!(other.contains("has holder blocked-stack"), "{other}");
         let same = holder_needed(&"F6", seen, seen, &"E9");
         assert!(!same.contains("annotate"), "{same}");
     }

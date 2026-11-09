@@ -170,6 +170,7 @@ siblings of the root.
 | `ledger refute F3` (leak-side) | a discriminator with `favors: non-leak` | `discriminator-direction` (none at all: `discriminator-required`) |
 | `ledger refute F3.n1` (non-leak) | a discriminator with `favors: leak` | the same |
 | `ledger annotate F3 --holder H` | sets holder, owner, region or site only when the finding has none; a different value is refused | `annotation-conflict` |
+| `ledger annotate F3 --holder H --evidence E` (holder already set) | `E` is a heap-graph `growth-series` (dump or live) from `dla-hprof` or `dla-v8-snapshot`; one of its passing columns is tied to `F3` and has `holder_kind` equal to `H`. The record keeps `evidence` and `replaced_holder` | `annotation-conflict` (the message names the failed condition) |
 
 A discriminator that names a finding counts only for findings in that finding's family. Refusals
 name the missing item and the command that fixes it. A leak-side confirm needs a cited passing
