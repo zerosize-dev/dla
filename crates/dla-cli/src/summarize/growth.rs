@@ -55,7 +55,21 @@ pub struct Track {
 impl Track {
     /// Ties the column to `f` for `why`.
     pub fn tie_to(&mut self, f: FindingId, why: TieReason, site: Option<String>) {
-        self.candidates = vec![f.clone()];
+        self.tie_to_all(f, &[], why, site);
+    }
+
+    /// Ties the column to `f` and to every finding in `also` (all at the same exact
+    /// identity), for `why`.
+    pub fn tie_to_all(
+        &mut self,
+        f: FindingId,
+        also: &[FindingId],
+        why: TieReason,
+        site: Option<String>,
+    ) {
+        self.candidates = std::iter::once(f.clone())
+            .chain(also.iter().cloned())
+            .collect();
         self.finding = Some(f);
         self.tie = Some(why);
         self.site = site;
@@ -319,7 +333,7 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
             }
             if let Some(f) = &t.finding {
                 v["finding"] = json!(f);
-                v["candidates"] = json!([f]);
+                v["candidates"] = json!(t.candidates);
                 if let Some(why) = &t.tie {
                     v["tie"] = why.to_json();
                 }
@@ -372,8 +386,9 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
         .iter()
         .filter_map(|&i| {
             let t = &plan.tracks[i];
-            t.finding.clone().map(|f| (t.name.clone(), f))
+            t.finding.clone().map(|_| t)
         })
+        .flat_map(|t| t.candidates.iter().map(|f| (t.name.clone(), f.clone())))
         .collect();
     let json = json!({
         "series": id,

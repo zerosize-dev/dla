@@ -340,49 +340,57 @@ fn conformance(a: &Value) {
     let fx = Fixture::load(name).unwrap_or_else(|| panic!("no fixture for {name}"));
     let secrets = fx.secrets();
 
-    // ---- shapes only: bounded, pointed, two-signalled, and no secret anywhere
-    let p = Project::new();
-    let files = fx.materialize(&p);
-    let (code, text, v) = run_with(p.path(), &summarize_args(op, name, &files), &[]);
-    assert_eq!(code, 0, "{name}: {v}");
-    assert_eq!(v["ok"], true);
-    assert_eq!(v["backend"], name);
-    check_bounded_outputs(&p, &text, &v);
-    for s in &secrets {
-        assert!(!text.contains(s.as_str()), "{name}: secret in stdout");
-        for (path, t) in p.run_texts() {
+    // A tool-backed adapter whose tool this machine lacks cannot run: skip the ran-part
+    // and check the tool-missing part below.
+    let runnable = a["available"] == true || a["tool"].is_null();
+    if runnable {
+        // ---- shapes only: bounded, pointed, two-signalled, and no secret anywhere
+        let p = Project::new();
+        let files = fx.materialize(&p);
+        let (code, text, v) = run_with(p.path(), &summarize_args(op, name, &files), &[]);
+        assert_eq!(code, 0, "{name}: {v}");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["backend"], name);
+        check_bounded_outputs(&p, &text, &v);
+        for s in &secrets {
+            assert!(!text.contains(s.as_str()), "{name}: secret in stdout");
+            for (path, t) in p.run_texts() {
+                assert!(
+                    !t.contains(s.as_str()),
+                    "{name}: secret in {}",
+                    path.display()
+                );
+            }
+        }
+        // A coverage row: the adapter ran.
+        let cov = p.coverage();
+        let row = cov["workers"]
+            .as_object()
+            .unwrap()
+            .values()
+            .find_map(|w| w["backends"].get(name))
+            .unwrap_or_else(|| panic!("{name}: no coverage row"));
+        assert_eq!(row["status"], "ran", "{name}");
+
+        // ---- with raw-values consent the secret shows (so the check above can fail), except
+        // for readers that never emit values
+        if fx.meta["emits_values"] != false && name != "dla-hprof" && name != "dla-hprof-histogram"
+        {
+            let q = Project::new();
+            ok(q.path(), &["consent", "--tiers", "1", "--raw-values"]);
+            let files = fx.materialize(&q);
+            let (code, _text, v) = run_with(q.path(), &summarize_args(op, name, &files), &[]);
+            assert_eq!(code, 0, "{name} with consent: {v}");
+            assert_eq!(v["redaction"], "raw", "{name}");
             assert!(
-                !t.contains(s.as_str()),
-                "{name}: secret in {}",
-                path.display()
+                q.run_texts()
+                    .iter()
+                    .any(|(_, t)| secrets.iter().any(|s| t.contains(s.as_str()))),
+                "{name}: raw consent should keep the planted value in the raw file"
             );
         }
-    }
-    // A coverage row: the adapter ran.
-    let cov = p.coverage();
-    let row = cov["workers"]
-        .as_object()
-        .unwrap()
-        .values()
-        .find_map(|w| w["backends"].get(name))
-        .unwrap_or_else(|| panic!("{name}: no coverage row"));
-    assert_eq!(row["status"], "ran", "{name}");
-
-    // ---- with raw-values consent the secret shows (so the check above can fail), except
-    // for readers that never emit values
-    if fx.meta["emits_values"] != false && name != "dla-hprof" && name != "dla-hprof-histogram" {
-        let q = Project::new();
-        ok(q.path(), &["consent", "--tiers", "1", "--raw-values"]);
-        let files = fx.materialize(&q);
-        let (code, _text, v) = run_with(q.path(), &summarize_args(op, name, &files), &[]);
-        assert_eq!(code, 0, "{name} with consent: {v}");
-        assert_eq!(v["redaction"], "raw", "{name}");
-        assert!(
-            q.run_texts()
-                .iter()
-                .any(|(_, t)| secrets.iter().any(|s| t.contains(s.as_str()))),
-            "{name}: raw consent should keep the planted value in the raw file"
-        );
+    } else {
+        eprintln!("conformance: skipped the run of {name}: its tool is not available here");
     }
 
     // ---- the tool is absent: PATH holds nothing, JAVA_HOME is unset
@@ -424,9 +432,20 @@ fn conformance(a: &Value) {
 
 #[test]
 fn every_adapter_is_conformant() {
-    for a in adapters() {
-        conformance(&a);
+    let list = adapters();
+    let skipped: Vec<&str> = list
+        .iter()
+        .filter(|a| a["tool"].is_string() && a["available"] != true)
+        .filter_map(|a| a["backend"].as_str())
+        .collect();
+    for a in &list {
+        conformance(a);
     }
+    eprintln!(
+        "conformance: ran {} adapters, skipped the run of {} (tool absent): {skipped:?}",
+        list.len() - skipped.len(),
+        skipped.len()
+    );
 }
 
 #[test]
@@ -1244,6 +1263,80 @@ fn a_declaration_ties_only_by_the_element_type_never_by_a_container_or_key_type(
     let files = histograms_of(&p, &[("other.Entry", 10_000)]);
     let v = type_diff(&p, &files, &[]);
     assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
+}
+
+#[test]
+fn a_fields_own_project_type_ties_but_a_jdk_or_unrelated_project_type_does_not() {
+    let p = Project::new();
+    p.put(
+        "src/gateway/RequestContext.java",
+        b"package gateway;\n\nfinal class RequestContext {\n    RequestContext previous;\n}\n",
+    );
+    p.put(
+        "src/gateway/Gateway.java",
+        b"package gateway;\n\nimport java.util.Map;\n\nfinal class Gateway {\n    static RequestContext latest;\n    static String name;\n    static Map tags;\n    static Other misc;\n}\n",
+    );
+    p.put(
+        "src/gateway/Other.java",
+        b"package gateway;\n\nfinal class Other {}\n",
+    );
+    let latest = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "gateway.Gateway.latest",
+            "--site",
+            "src/gateway/Gateway.java:6",
+        ],
+    );
+    let name = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "gateway.Gateway.name",
+            "--site",
+            "src/gateway/Gateway.java:7",
+        ],
+    );
+    let tags = add_hypothesis(
+        &p,
+        &[
+            "--owner",
+            "gateway.Gateway.tags",
+            "--site",
+            "src/gateway/Gateway.java:8",
+        ],
+    );
+    // The field's own declared project type ties.
+    let files = histograms_of(&p, &[("gateway.RequestContext", 10_000)]);
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"], json!([latest]), "{v}");
+    // A JDK type does not tie its String field, nor a raw `Map` the project never declares.
+    let files = histograms_of(
+        &p,
+        &[
+            ("java.lang.String", 10_000),
+            ("java.util.HashMap", 20_000),
+            ("gateway.Map", 30_000),
+            ("gateway.String", 40_000),
+        ],
+    );
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"], json!([]), "{v}");
+    let g = last_growth(&p);
+    assert!(!ledger_rule_ties(&g, &name, None, None));
+    assert!(!ledger_rule_ties(&g, &tags, None, None));
+    // An unrelated project type (declared, but not any field's own type) ties nothing,
+    // and a same-named class of another package does not tie.
+    let files = histograms_of(
+        &p,
+        &[
+            ("gateway.Unrelated", 10_000),
+            ("other.RequestContext", 20_000),
+        ],
+    );
+    let v = type_diff(&p, &files, &[]);
+    assert_eq!(v["tied"], json!([]), "{v}");
 }
 
 #[test]

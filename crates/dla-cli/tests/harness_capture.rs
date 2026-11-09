@@ -370,10 +370,25 @@ fn a_jni_library_gets_the_shim_and_its_native_stack_resolves_to_the_rust_line() 
     assert_eq!(env("DLA_SHIM_ONLY"), Some("java"));
     assert!(env("LD_PRELOAD").unwrap().ends_with("libdlashim.so"));
     assert_eq!(env("CARGO_PROFILE_RELEASE_DEBUG"), Some("line-tables-only"));
-    let run = ok(
-        &project,
-        &["harness", "run", "H1", "--capture", "histogram"],
-    );
+    let run = ok(&project, &["harness", "run", "H1", "--capture", "all"]);
+    // The shim's exit records have their own type-histogram-diff command.
+    let listed: Value = serde_json::from_str(
+        &fs::read_to_string(run_dir.join("harness/H1/captures.json")).unwrap(),
+    )
+    .unwrap();
+    let shim_cmd = listed["summarize"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .find(|c| c.contains("shim-dump.jsonl"))
+        .unwrap_or_else(|| panic!("no shim command in {listed}"));
+    assert!(shim_cmd.starts_with("dla summarize type-histogram-diff "));
+    let mut args = vec!["summarize", "type-histogram-diff"];
+    args.extend(shim_cmd.split_whitespace().skip(3));
+    let sg = dla(&project, &args);
+    assert_eq!(sg.code, 0, "{}", sg.text);
+    assert_eq!(sg.json["backend"], "shim-stack-groups", "{}", sg.text);
     // The leaking native frame, tied to the managed method.
     let ffi = &run["summary"]["ffi"][0];
     assert_eq!(ffi["site"], "native/src/lib.rs:40", "{run}");
@@ -473,6 +488,40 @@ fn a_missing_tool_is_a_refusal_with_the_install_command_and_a_coverage_row() {
         assert_eq!(row["status"], "missing", "{cov}");
         assert!(row["install_hint"].as_str().unwrap().contains(hint));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_missing_heaptrack_print_is_named_in_the_coverage_row_not_heaptrack() {
+    use std::os::unix::fs::PermissionsExt;
+    if skip_without(&["cc", "make"]) {
+        return;
+    }
+    let (_d, project, run_dir) = prepared("native-frame-decoder", "native");
+    ok(&project, &["harness", "gen", "--lang", "native"]);
+    ok(&project, &["harness", "run", "H1", "--iterations", "2"]);
+    // A PATH holding a `heaptrack` only.
+    let bin = tempfile::tempdir().unwrap();
+    let fake = bin.path().join("heaptrack");
+    fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let o = dla_env(
+        &project,
+        &["harness", "run", "H1", "--tool", "heaptrack"],
+        Some(bin.path().as_os_str()),
+    );
+    assert_eq!(o.code, 2, "{}", o.text);
+    let e = &o.json["error"];
+    assert_eq!(e["code"], "tool-missing", "{}", o.text);
+    assert_eq!(e["missing"], "heaptrack_print", "{}", o.text);
+    let cov: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("coverage.json")).unwrap()).unwrap();
+    let backends = &cov["workers"]["native"]["backends"];
+    assert_eq!(backends["heaptrack_print"]["status"], "missing", "{cov}");
+    assert!(
+        backends.get("heaptrack").is_none_or(Value::is_null),
+        "{cov}"
+    );
 }
 
 #[test]

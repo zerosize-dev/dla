@@ -318,7 +318,7 @@ pub fn run_diff(
             };
             if let Some((f, why)) = r_tie.tie {
                 let site = tie::site_of(ledger, &f);
-                t.tie_to(f, why, site);
+                t.tie_to_all(f, &r_tie.also, why, site);
             }
             t
         })

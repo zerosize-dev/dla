@@ -128,60 +128,76 @@ impl Who {
 /// What the rules say about one column.
 #[derive(Debug, Default, Clone)]
 pub struct Resolved {
-    /// The one finding the column is tied to, and why.
+    /// The finding the column is tied to (`--finding` when it is among the matches, else
+    /// the first by id), and why.
     pub tie: Option<(FindingId, TieReason)>,
+    /// The other findings the same exact identity ties (see `resolve`).
+    pub also: Vec<FindingId>,
     /// Findings that match by the rules but are several: no tie was made.
     pub ambiguous: Vec<FindingId>,
 }
 
-/// Applies `--finding` and uniqueness to the rule matches of one column: several matches
-/// tie none and are listed as ambiguous, even with `only`; a single match ties, and with
-/// `only` only if it is that finding.
+/// Applies `--finding` and uniqueness to the rule matches of one column.
+///
+/// Exact identity (an exact holder, an exact site or recorded writer) is not ambiguous:
+/// every finding at that place is tied, `tie` is the `--finding` one when it is among
+/// them, else the first by id, and `also` lists the others. A type match (rule 3) that
+/// hits several findings ties none and lists them as ambiguous, even with `only`. With
+/// `only`, a column whose matches do not include that finding ties nothing.
 pub fn resolve(mut matches: Vec<(FindingId, TieReason)>, only: Option<&FindingId>) -> Resolved {
     let mut seen = BTreeSet::new();
     matches.retain(|(f, _)| seen.insert(f.clone()));
-    if let (Some(only), [(f, _)]) = (only, matches.as_slice())
-        && f != only
+    matches.sort_by(|a, b| a.0.cmp(&b.0));
+    if matches.len() > 1 && matches.iter().any(|(_, r)| r.rule == "type") {
+        return Resolved {
+            tie: None,
+            also: Vec::new(),
+            ambiguous: matches.into_iter().map(|(f, _)| f).collect(),
+        };
+    }
+    if let Some(only) = only
+        && !matches.iter().any(|(f, _)| f == only)
     {
         return Resolved::default();
     }
-    match matches.len() {
-        0 => Resolved::default(),
-        1 => Resolved {
-            tie: matches.pop(),
-            ambiguous: Vec::new(),
-        },
-        _ => Resolved {
-            tie: None,
-            ambiguous: matches.into_iter().map(|(f, _)| f).collect(),
-        },
+    if matches.is_empty() {
+        return Resolved::default();
+    }
+    let at = only
+        .and_then(|o| matches.iter().position(|(f, _)| f == o))
+        .unwrap_or(0);
+    let first = matches.remove(at);
+    Resolved {
+        tie: Some(first),
+        also: matches.into_iter().map(|(f, _)| f).collect(),
+        ambiguous: Vec::new(),
     }
 }
 
-/// The finding of the holder with `owner` (`pkg.Class.field`): the only finding whose
-/// owner equals it after normalization; else the only finding whose owner is a shorter
-/// form of it (`Cache.MAP` for `shop.Cache.MAP`), when no other holder in `holders`
-/// (the owners of the run's holders) is also matched by that shorter owner. Several
-/// matches give none.
-pub fn finding_by_holder(
+/// The findings of the holder with `owner` (`pkg.Class.field`): every finding whose
+/// owner equals it after normalization (exact identity); else the only finding whose
+/// owner is a shorter form of it (`Cache.MAP` for `shop.Cache.MAP`), when no other
+/// holder in `holders` (the owners of the run's holders) is also matched by that shorter
+/// owner. Several shorter forms give none.
+pub fn findings_by_holder(
     ledger: &Ledger,
     who: &Who,
     owner: &str,
     holders: &[String],
     site: Option<&str>,
-) -> Option<FindingId> {
-    let want = canonical(owner)?;
+) -> Vec<FindingId> {
+    let Some(want) = canonical(owner) else {
+        return Vec::new();
+    };
     let owned = |f: &Finding| f.owner.as_deref().and_then(canonical);
-    let exact: Vec<&FindingId> = ledger
+    let exact: Vec<FindingId> = ledger
         .findings()
         .filter(|f| who.sees(f))
         .filter(|f| owned(f).as_deref() == Some(want.as_str()))
-        .map(|f| &f.id)
+        .map(|f| f.id.clone())
         .collect();
-    match exact.as_slice() {
-        [one] => return Some((*one).clone()),
-        [] => {}
-        _ => return None,
+    if !exact.is_empty() {
+        return exact;
     }
     let shorter: Vec<(&FindingId, String)> = ledger
         .findings()
@@ -190,21 +206,37 @@ pub fn finding_by_holder(
         .filter(|(_, o)| is_shorter_form(&want, o))
         .collect();
     let [(id, short)] = shorter.as_slice() else {
-        return None;
+        return Vec::new();
     };
     // A shorter owner is weaker evidence: where the holder's declaration site is known
     // and the finding has another, they are not the same field.
     if let (Some(a), Some(b)) = (site, ledger.finding(id).and_then(|f| f.site.as_deref()))
         && a != b
     {
-        return None;
+        return Vec::new();
     }
     let rivals = holders
         .iter()
         .filter_map(|h| canonical(h))
         .filter(|h| h != &want && (h == short || is_shorter_form(h, short)))
         .count();
-    (rivals == 0).then(|| (*id).clone())
+    if rivals == 0 {
+        vec![(*id).clone()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The one finding of a holder, when exactly one matches (see `findings_by_holder`).
+pub fn finding_by_holder(
+    ledger: &Ledger,
+    who: &Who,
+    owner: &str,
+    holders: &[String],
+    site: Option<&str>,
+) -> Option<FindingId> {
+    let mut v = findings_by_holder(ledger, who, owner, holders, site);
+    (v.len() == 1).then(|| v.remove(0))
 }
 
 /// The findings at `site` (`file:line`): the finding's own site, or one of its recorded
@@ -612,6 +644,110 @@ fn declares_nested(text: &str, name: &str) -> bool {
     })
 }
 
+/// The field's own declared type, as written, when it is a plain (non-generic, non-array)
+/// type: `RequestContext latest;` (Java) or `var latest: RequestContext?` (Kotlin).
+/// `None` for a generic, array or inferred declaration.
+pub fn own_type(text: &str, line: u32, field: &str) -> Option<String> {
+    let decl = declaration_text(text, line, field);
+    let at = find_ident(&decl, field)?;
+    let before = decl[..at].trim_end();
+    let after = decl[at + field.len()..].trim_start();
+    let written = if let Some(ann) = after.strip_prefix(':') {
+        ann.split(['=', ',', ';'])
+            .next()?
+            .trim()
+            .trim_end_matches('?')
+    } else {
+        before.rsplit(char::is_whitespace).next()?
+    };
+    let written = written.trim_start_matches('@').trim();
+    let mut parts = written.split('.');
+    let plain = !written.is_empty()
+        && parts.all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_alphanumeric() || matches!(c, '_' | '$'))
+        })
+        && written
+            .rsplit('.')
+            .next()
+            .and_then(|l| l.chars().next())
+            .is_some_and(char::is_uppercase);
+    plain.then(|| written.to_owned())
+}
+
+/// The classes a project's sources declare: `(package, simple name)`, read once.
+#[derive(Debug, Default)]
+struct ProjectClasses {
+    declared: BTreeSet<(String, String)>,
+}
+
+impl ProjectClasses {
+    fn scan(project: &Path) -> Self {
+        let mut out = Self::default();
+        let mut stack = vec![project.to_path_buf()];
+        let mut files = 0usize;
+        while let Some(dir) = stack.pop() {
+            let Ok(rd) = fs::read_dir(&dir) else { continue };
+            for e in rd.filter_map(Result::ok) {
+                let path = e.path();
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                let Ok(ft) = e.file_type() else { continue };
+                if ft.is_dir() {
+                    if !name.starts_with('.')
+                        && !matches!(&*name, "target" | "build" | "node_modules" | "out")
+                    {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if !ft.is_file()
+                    || !["java", "kt", "kts", "scala"]
+                        .iter()
+                        .any(|x| name.ends_with(&format!(".{x}")))
+                {
+                    continue;
+                }
+                files += 1;
+                if files > 5000 {
+                    return out;
+                }
+                let Ok(text) = fs::read_to_string(&path) else {
+                    continue;
+                };
+                let pkg = package_of(&text).unwrap_or_default();
+                for l in text.lines() {
+                    let words: Vec<&str> = l
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                        .filter(|w| !w.is_empty())
+                        .collect();
+                    for w in words.windows(2) {
+                        if matches!(w[0], "class" | "interface" | "enum" | "record" | "object") {
+                            out.declared.insert((pkg.clone(), w[1].to_owned()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// True when the project declares the class `qualified` (`pkg.Name`, or a nested
+    /// `pkg.Outer.Inner`, whose outer class is the one checked).
+    fn declares(&self, qualified: &str) -> bool {
+        let segs: Vec<&str> = qualified.split('.').collect();
+        let Some(first_cap) = segs
+            .iter()
+            .position(|s| s.chars().next().is_some_and(char::is_uppercase))
+        else {
+            return false;
+        };
+        let pkg = segs[..first_cap].join(".");
+        self.declared.contains(&(pkg, segs[first_cap].to_owned()))
+    }
+}
+
 /// What links a growing type to findings: accumulation classes of the run's heap
 /// summaries, and the element types the findings' owners declare in the source.
 #[derive(Debug, Default)]
@@ -633,6 +769,7 @@ impl TypeIndex {
         artifact_run: bool,
     ) -> Self {
         let mut declared = Vec::new();
+        let mut classes: Option<ProjectClasses> = None;
         for f in ledger.findings().filter(|f| who.sees(f)) {
             if artifact_run {
                 break;
@@ -653,17 +790,28 @@ impl TypeIndex {
             let Ok(text) = fs::read_to_string(project.join(file)) else {
                 continue;
             };
-            let Some(written) = element_type(&text, line, field) else {
-                continue;
-            };
             let stem = Path::new(file)
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default();
-            let names: BTreeSet<String> = qualify_type(&text, stem, &written)
-                .into_iter()
-                .filter(|n| !is_generic_type(n))
-                .collect();
+            let mut names: BTreeSet<String> = BTreeSet::new();
+            if let Some(written) = element_type(&text, line, field) {
+                names.extend(
+                    qualify_type(&text, stem, &written)
+                        .into_iter()
+                        .filter(|n| !is_generic_type(n)),
+                );
+            }
+            // The field's own declared type counts when it is a class of the project
+            // (not a JDK, Kotlin or generic type, and one the sources declare).
+            if let Some(written) = own_type(&text, line, field) {
+                let classes = classes.get_or_insert_with(|| ProjectClasses::scan(project));
+                names.extend(
+                    qualify_type(&text, stem, &written)
+                        .into_iter()
+                        .filter(|n| !is_generic_type(n) && classes.declares(n)),
+                );
+            }
             if !names.is_empty() {
                 declared.push((f.id.clone(), names));
             }
@@ -683,7 +831,7 @@ impl TypeIndex {
         }
         let mut out: BTreeMap<FindingId, TieReason> = BTreeMap::new();
         for owner in self.acc.owners_with_class(ty) {
-            if let Some(f) = finding_by_holder(ledger, &self.who, owner, &self.acc.owners, None) {
+            for f in findings_by_holder(ledger, &self.who, owner, &self.acc.owners, None) {
                 out.entry(f).or_insert_with(|| TieReason::ty(ty));
             }
         }
@@ -765,6 +913,61 @@ mod tests {
         }
         assert!(!is_allocator_frame("shop::trail::record"));
         assert!(!is_allocator_frame("shop.Cache.put"));
+    }
+
+    #[test]
+    fn own_types_are_plain_declared_types_only() {
+        let java = "class C {\n    static RequestContext latest;\n    private static final List<Item> L = null;\n    static String name;\n    Item[] slots;\n    static a.b.Q q;\n}\n";
+        assert_eq!(
+            own_type(java, 2, "latest").as_deref(),
+            Some("RequestContext")
+        );
+        assert_eq!(own_type(java, 3, "L"), None);
+        assert_eq!(own_type(java, 5, "slots"), None);
+        assert_eq!(own_type(java, 6, "q").as_deref(), Some("a.b.Q"));
+        let kt = "object A {\n    var latest: RequestContext? = null\n    val m: Map<String, X> = HashMap()\n    val inferred = Foo()\n}\n";
+        assert_eq!(own_type(kt, 2, "latest").as_deref(), Some("RequestContext"));
+        assert_eq!(own_type(kt, 3, "m"), None);
+        assert_eq!(own_type(kt, 4, "inferred"), None);
+    }
+
+    #[test]
+    fn project_classes_are_found_by_package() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join("src/gateway")).unwrap();
+        fs::write(
+            d.path().join("src/gateway/Ctx.java"),
+            "package gateway;\n\nfinal class Ctx {\n    static class Inner {}\n}\n",
+        )
+        .unwrap();
+        let c = ProjectClasses::scan(d.path());
+        assert!(c.declares("gateway.Ctx"));
+        assert!(c.declares("gateway.Ctx.Inner"));
+        assert!(!c.declares("gateway.Map"));
+        assert!(!c.declares("other.Ctx"));
+    }
+
+    #[test]
+    fn resolve_exact_matches_tie_all_and_type_matches_stay_ambiguous() {
+        let f = |s: &str| s.parse::<FindingId>().unwrap();
+        let site = |id: &str| (f(id), TieReason::site("a.c:1"));
+        let r = resolve(vec![site("F3"), site("F1")], None);
+        assert_eq!(r.tie.unwrap().0, f("F1"));
+        assert_eq!(r.also, [f("F3")]);
+        assert!(r.ambiguous.is_empty());
+        let r = resolve(vec![site("F1"), site("F3")], Some(&f("F3")));
+        assert_eq!(r.tie.unwrap().0, f("F3"));
+        assert_eq!(r.also, [f("F1")]);
+        // `--finding` that is not among the exact matches ties nothing.
+        assert!(
+            resolve(vec![site("F1"), site("F3")], Some(&f("F2")))
+                .tie
+                .is_none()
+        );
+        let ty = |id: &str| (f(id), TieReason::ty("a.B"));
+        let r = resolve(vec![ty("F1"), ty("F2")], None);
+        assert!(r.tie.is_none() && r.also.is_empty());
+        assert_eq!(r.ambiguous, [f("F1"), f("F2")]);
     }
 
     #[test]

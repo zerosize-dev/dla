@@ -1709,8 +1709,24 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
     let mut manifest = ctx.harness(id)?;
     let out = run_points(ctx, &manifest, opts)?;
     let captured = !opts.capture.is_empty() || opts.tool.is_some();
-    let commands = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), false);
-    let compact = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), true);
+    let mut commands = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), false);
+    let mut compact = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), true);
+    if captured && opts.tool.is_none() {
+        // A JVM harness with the allocator shim: the shim's exit records are a
+        // type-histogram-diff input of their own.
+        let shim = capture::shim_dump_commands(
+            &harness_dir(&ctx.run_dir, &manifest.id).join(OUT),
+            &manifest.id,
+            &|p| ctx.pointer(p),
+        );
+        for list in [&mut commands, &mut compact] {
+            let at = list
+                .iter()
+                .rposition(|x| x.starts_with("dla summarize type-histogram-diff"))
+                .map_or(0, |i| i + 1);
+            list.splice(at..at, shim.iter().cloned());
+        }
+    }
     if captured {
         // The manifest lists what the latest capturing run left in out/.
         manifest.captures.clone_from(&out.captures);

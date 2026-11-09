@@ -480,6 +480,99 @@ pub fn summarize_commands(
     cmds
 }
 
+/// File name of the allocator shim's exit records, split out of a JVM process's dump.
+pub const SHIM_DUMP: &str = "shim-dump.jsonl";
+
+/// Splits the allocator shim's exit records (with allocation stacks) out of each
+/// `<out_dir>/<label>/dump.jsonl` that also holds a managed runtime's records, and returns
+/// the `dla summarize type-histogram-diff` commands that read them (one per series: fresh
+/// keys first, then the repeated control). The `shim-stack-groups` adapter refuses a dump
+/// whose head carries the runtime's `types` rows, so it reads the split file. A harness
+/// without a shim, or a native one whose dump already is the shim's, gets no command.
+pub fn shim_dump_commands(
+    out_dir: &Path,
+    harness_id: &str,
+    pointer: &dyn Fn(&str) -> String,
+) -> Vec<String> {
+    let Ok(rd) = fs::read_dir(out_dir) else {
+        return Vec::new();
+    };
+    // (series suffix, point number, label)
+    let mut found: Vec<(String, u64, String)> = Vec::new();
+    for e in rd.flatten() {
+        let label = e.file_name().to_string_lossy().into_owned();
+        let Ok(text) = fs::read_to_string(e.path().join("dump.jsonl")) else {
+            continue;
+        };
+        let mut shim_lines: Vec<&str> = Vec::new();
+        let mut managed = false;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if v.get("dla_harness").is_none() {
+                continue;
+            }
+            let native = v
+                .get("runtime")
+                .and_then(|r| r.as_str())
+                .is_some_and(|r| r.eq_ignore_ascii_case("native"));
+            if !native {
+                managed = true;
+            } else if v.get("phase").and_then(|p| p.as_str()) == Some("exit")
+                && v.get("raw_sites")
+                    .and_then(|r| r.as_object())
+                    .is_some_and(|o| !o.is_empty())
+            {
+                shim_lines.push(line);
+            }
+        }
+        if !managed || shim_lines.is_empty() {
+            continue;
+        }
+        let file = e.path().join(SHIM_DUMP);
+        if fs::write(&file, shim_lines.join("\n") + "\n").is_err() {
+            continue;
+        }
+        let rest = label.strip_prefix('p').unwrap_or(&label);
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        let suffix = rest[digits.len()..].trim_start_matches('-').to_owned();
+        found.push((suffix, digits.parse().unwrap_or(0), label));
+    }
+    found.sort_by(|a, b| {
+        (a.0.ends_with("repeated"), &a.0, a.1, &a.2).cmp(&(
+            b.0.ends_with("repeated"),
+            &b.0,
+            b.1,
+            &b.2,
+        ))
+    });
+    let mut cmds: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < found.len() {
+        let j = found[i..]
+            .iter()
+            .position(|f| f.0 != found[i].0)
+            .map_or(found.len(), |n| i + n);
+        let paths: Vec<String> = found[i..j]
+            .iter()
+            .map(|f| {
+                pointer(&format!(
+                    "harness/{harness_id}/{}/{}/{SHIM_DUMP}",
+                    super::OUT,
+                    f.2
+                ))
+            })
+            .collect();
+        cmds.push(format!(
+            "dla summarize type-histogram-diff {}",
+            paths.join(" ")
+        ));
+        i = j;
+    }
+    cmds
+}
+
 /// Keeps the leading commands that fit `budget` bytes whole, and says how many were left
 /// out (a cut command would be useless).
 pub fn fit(commands: &[String], budget: usize) -> (Vec<String>, usize) {
@@ -696,6 +789,49 @@ mod tests {
         assert_eq!((kept.len(), left), (2, 2));
         let (none, all) = fit(&cmds, 10);
         assert_eq!((none.len(), all), (0, 4));
+    }
+
+    #[test]
+    fn shim_records_of_a_jvm_dump_are_split_out_for_the_command() {
+        let d = std::env::temp_dir().join(format!("dla-shimdump-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        for k in [1u32, 10, 2] {
+            let dir = d.join(format!("p{k}-native"));
+            fs::create_dir_all(&dir).unwrap();
+            let text = concat!(
+                r#"{"dla_harness":1,"phase":"exit","runtime":"jvm","pid":7,"types":[{"name":"A"}]}"#,
+                "\n",
+                r#"{"dla_harness":1,"phase":"exit","runtime":"native","pid":7,"raw_sites":{"0x1":{"bytes":8}}}"#,
+                "\n"
+            );
+            fs::write(dir.join("dump.jsonl"), text).unwrap();
+        }
+        // A native-only dump gets no split file.
+        let nat = d.join("p3-native");
+        fs::create_dir_all(&nat).unwrap();
+        fs::write(
+            nat.join("dump.jsonl"),
+            r#"{"dla_harness":1,"phase":"exit","runtime":"native","raw_sites":{"0x1":{"bytes":8}}}"#,
+        )
+        .unwrap();
+        let cmds = shim_dump_commands(&d, "H1", &|p| format!("r/{p}"));
+        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        let c = &cmds[0];
+        assert!(
+            c.starts_with(
+                "dla summarize type-histogram-diff r/harness/H1/out/p1-native/shim-dump.jsonl"
+            ),
+            "{c}"
+        );
+        assert!(
+            c.find("p2-native").unwrap() < c.find("p10-native").unwrap(),
+            "{c}"
+        );
+        assert!(!c.contains("p3-native"), "{c}");
+        let split = fs::read_to_string(d.join("p1-native").join(SHIM_DUMP)).unwrap();
+        assert_eq!(split.lines().count(), 1);
+        assert!(!split.contains("\"types\""));
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -487,7 +487,7 @@ pub fn run_diff_with(
         let mut matches: Vec<(FindingId, tie::TieReason)> = Vec::new();
         if let Some(o) = owner.as_deref() {
             // The stack names its holder: only that holder's finding.
-            if let Some(f) = tie::finding_by_holder(ledger, &who, o, &holders, None) {
+            for f in tie::findings_by_holder(ledger, &who, o, &holders, None) {
                 matches.push((f, tie::TieReason::holder(o)));
             }
         } else if s.root_path.is_empty()
@@ -508,7 +508,7 @@ pub fn run_diff_with(
             && !ctx.artifact_run
             && let Some(r) = ctx.resolver().resolve(o)
             && tc.in_scope(r.site.rsplit_once(':').map_or(r.site.as_str(), |(f, _)| f))
-            && tie::finding_by_holder(ledger, &who, o, &[], None).is_none()
+            && tie::findings_by_holder(ledger, &who, o, &[], None).is_empty()
         {
             let mut nf = NewFinding::new(
                 Origin::parse("growth-series").map_err(dla_core::Refusal::from)?,
@@ -559,7 +559,7 @@ pub fn run_diff_with(
         };
         if let Some((f, why)) = r_tie.tie {
             let site = tie::site_of(ledger, &f);
-            t.tie_to(f, why, site);
+            t.tie_to_all(f, &r_tie.also, why, site);
         }
         tracks.push(t);
     }

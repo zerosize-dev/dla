@@ -209,15 +209,20 @@ fn memcheck_stacks_tie_by_their_first_project_frame_and_by_nothing_else() {
 }
 
 #[test]
-fn two_findings_at_one_site_tie_none_and_one_report_never_passes() {
+fn two_findings_at_one_site_both_tie_and_one_report_never_passes() {
     let p = Project::new();
-    p.finding("src.decoder.decode_frame", "src/decoder.c:29");
-    p.finding("src.decoder.other", "src/decoder.c:29");
+    let f1 = p.finding("src.decoder.decode_frame", "src/decoder.c:29");
+    let f2 = p.finding("src.decoder.other", "src/decoder.c:29");
     let files = p.fixture("valgrind-memcheck", &MEMCHECK);
     let v = summarize(&p, "alloc-stack-diff", &files);
     assert_eq!(v["gate"], "pass");
-    assert_eq!(v["tied"], serde_json::json!([]), "{v}");
-    assert!(v["ambiguous"].is_object(), "{v}");
+    // Exact site identity is not ambiguous: every finding at the site is tied.
+    let tied = v["tied"].as_array().unwrap();
+    assert!(
+        tied.contains(&serde_json::json!(f1)) && tied.contains(&serde_json::json!(f2)),
+        "{v}"
+    );
+    assert!(v["ambiguous"].is_null(), "{v}");
     // One report: the at-exit view, no series.
     let q = Project::new();
     q.finding("src.decoder.decode_frame", "src/decoder.c:29");
@@ -410,6 +415,37 @@ fn a_data_symbol_holder_ties_by_holder_to_the_one_finding_that_ends_with_it() {
     let e = p.evidence(v["evidence"][0].as_str().unwrap());
     assert_eq!(e["authority"], "live");
     assert_eq!(e["result"]["root"], "static registry");
+}
+
+#[test]
+fn a_column_at_an_exact_site_lists_every_finding_there_and_finding_picks_the_primary() {
+    let growth_column = |p: &Project, v: &serde_json::Value| {
+        let id = v["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| p.evidence(e.as_str().unwrap()))
+            .find(|e| e["kind"] == "growth-series")
+            .expect("a growth evidence");
+        id["result"]["passed"][0].clone()
+    };
+    let p = Project::new();
+    let f1 = p.finding("src.decoder.decode_frame", "src/decoder.c:29");
+    let f2 = p.finding("src.decoder.other", "src/decoder.c:29");
+    let files = p.fixture("valgrind-memcheck", &MEMCHECK);
+    let v = summarize(&p, "alloc-stack-diff", &files);
+    let c = growth_column(&p, &v);
+    // No `--finding`: the first by id is the finding, both are candidates.
+    assert_eq!(c["finding"], serde_json::json!(f1), "{c}");
+    assert_eq!(c["candidates"], serde_json::json!([f1, f2]), "{c}");
+    assert_eq!(c["tie"]["rule"], "site", "{c}");
+    // `--finding F2` is among them: it is the finding.
+    let mut args = vec!["summarize", "alloc-stack-diff", "--finding", f2.as_str()];
+    args.extend(files.iter().map(String::as_str));
+    let v = ok(p.path(), &args);
+    let c = growth_column(&p, &v);
+    assert_eq!(c["finding"], serde_json::json!(f2), "{c}");
+    assert_eq!(c["candidates"], serde_json::json!([f2, f1]), "{c}");
 }
 
 #[test]

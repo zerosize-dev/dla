@@ -58,25 +58,28 @@ pub(super) fn find_tool(ctx: &ToolCtx, name: &str) -> Option<PathBuf> {
     std::env::split_paths(&path).find_map(|d| exe(&d))
 }
 
-fn refuse_missing(ctx: &ToolCtx, runtime: Runtime, tool: NativeTool, what: &str) -> Refusal {
-    // The row is the coverage gap; the run goes no further.
+fn refuse_missing(ctx: &ToolCtx, runtime: Runtime, tool: NativeTool, what: &[&str]) -> Refusal {
+    // One row per missing binary, named after the binary; the run goes no further.
     let _ = CoverageManifest::update(&ctx.run_dir, |m| {
-        m.set_backend(
-            runtime.as_str(),
-            tool.as_str(),
-            BackendCoverage::missing(
-                format!("{what} not found on PATH or in the tools directory"),
-                tool.install_hint(),
-            ),
-        );
+        for name in what {
+            m.set_backend(
+                runtime.as_str(),
+                name,
+                BackendCoverage::missing(
+                    format!("{name} not found on PATH or in the tools directory"),
+                    tool.install_hint(),
+                ),
+            );
+        }
     });
+    let what = what.join(" and ");
     Refusal::new(
         TOOL_MISSING,
         format!(
             "{what} is not installed, so the points cannot run under {}",
             tool.as_str()
         ),
-        what.to_owned(),
+        what.clone(),
         format!(
             "{}, then dla harness run <H> --tool {}",
             tool.install_hint(),
@@ -288,15 +291,21 @@ pub(super) fn run_tool_points(
             "dla harness gen --lang rust (or native) without --driver, then dla harness run <H> --tool valgrind",
         ));
     }
-    let tool_path = find_tool(ctx, tool.binary())
-        .ok_or_else(|| refuse_missing(ctx, manifest.runtime, tool, tool.binary()))?;
+    let tool_path = find_tool(ctx, tool.binary());
     let print_path = if tool == NativeTool::Heaptrack {
-        Some(
-            find_tool(ctx, "heaptrack_print")
-                .ok_or_else(|| refuse_missing(ctx, manifest.runtime, tool, "heaptrack_print"))?,
-        )
+        find_tool(ctx, "heaptrack_print")
     } else {
         None
+    };
+    let mut missing: Vec<&str> = Vec::new();
+    if tool_path.is_none() {
+        missing.push(tool.binary());
+    }
+    if tool == NativeTool::Heaptrack && print_path.is_none() {
+        missing.push("heaptrack_print");
+    }
+    let Some(tool_path) = tool_path.filter(|_| missing.is_empty()) else {
+        return Err(refuse_missing(ctx, manifest.runtime, tool, &missing));
     };
     let secs = opts.timeout_secs.unwrap_or(manifest.timeout_secs).max(1);
     let timeout = Duration::from_secs(secs * slowdown(tool));
