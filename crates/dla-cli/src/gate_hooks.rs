@@ -471,11 +471,13 @@ fn editable_rest(rest: &str) -> bool {
         && comps
             .iter()
             .all(|c| !c.is_empty() && *c != "." && *c != "..")
-        && comps[1] == "harness"
+        && comps[1].eq_ignore_ascii_case("harness")
+        // `normalize` lowercases paths on case-insensitive filesystems (Windows, macOS),
+        // so the harness directory can read `h1` there.
         && comps[2]
-            .strip_prefix('H')
+            .strip_prefix(['H', 'h'])
             .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-        && comps[3] == "driver"
+        && comps[3].eq_ignore_ascii_case("driver")
 }
 
 /// Denies a path under `<project>/.dla/` that is not a driver file. Everything else there is
@@ -996,5 +998,14 @@ mod tests {
         assert!(locked_name("cat skills/x/references/go-archetypes.md"));
         assert!(locked_name("cat data\\Known-Leaks.toml"));
         assert!(!locked_name("cat README.md"));
+    }
+
+    #[test]
+    fn editable_rest_accepts_a_lowercased_driver_path() {
+        assert!(editable_rest("R1/harness/H1/driver/DlaHarness.java"));
+        // What `normalize` produces on a case-insensitive filesystem.
+        assert!(editable_rest("r1/harness/h1/driver/dlaharness.java"));
+        assert!(!editable_rest("r1/harness/h1/out/x.json"));
+        assert!(!editable_rest("r1/harness/hx/driver/a.py"));
     }
 }
