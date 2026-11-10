@@ -681,6 +681,41 @@ fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
     })
 }
 
+/// True for the total of a summarize-made series (`metric:<category>/total`): the sum of the
+/// group columns the same snapshots produced.
+pub fn is_group_total(name: &str) -> bool {
+    let base = name.strip_suffix(".pre_gc").unwrap_or(name);
+    base.starts_with("metric:") && base.ends_with("/total")
+}
+
+/// The group columns of a trend that are not flat, and those of them that are not yet
+/// tied to a finding (a dispositioned one for the final gate).
+fn group_columns_state<'a>(
+    view: &RunView,
+    t: &'a TrendReport,
+    is_final: bool,
+) -> (usize, Vec<&'a str>) {
+    let mut non_flat_groups = 0;
+    let mut open = Vec::new();
+    for g in t
+        .columns
+        .iter()
+        .filter(|g| g.name.starts_with("group:") && non_flat(g))
+    {
+        non_flat_groups += 1;
+        let tied = tied_findings(view, t, g);
+        let ok = if is_final {
+            tied.iter().any(|f| f.state.is_dispositioned())
+        } else {
+            !tied.is_empty()
+        };
+        if !(ok || superseded(view, t, g) || covered_by_open_item(view, t, g)) {
+            open.push(g.name.as_str());
+        }
+    }
+    (non_flat_groups, open)
+}
+
 /// True when a resolved open item mentions the column and its trend or series.
 fn covered_by_open_item(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
     view.ledger.open_items().any(|o| {
@@ -712,12 +747,48 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
         for c in t.columns.iter().filter(|c| non_flat(c)) {
             if is_whole_process(&c.name) {
                 // Never tied to a finding. The classify stage leaves it to the final gate,
-                // which takes the residual accounting or an open item.
+                // which takes the residual accounting, an open item, or, for the total of
+                // a summarize-made series, its groups: the total is their sum, so it is
+                // accounted for when every non-flat group column of the trend is tied to a
+                // dispositioned finding (and at least one group is non-flat).
+                let groups = is_group_total(&c.name).then(|| group_columns_state(view, t, true));
                 if !is_final
+                    || groups
+                        .as_ref()
+                        .is_some_and(|(n, open)| *n > 0 && open.is_empty())
                     || residual_covers(view, &t.series, c)
                     || superseded(view, t, c)
                     || covered_by_open_item(view, t, c)
                 {
+                    continue;
+                }
+                if let Some((n, open)) = groups {
+                    let (why, fix) = if n == 0 {
+                        (
+                            "is the total of its group columns, none of which is non-flat, so nothing accounts for it".to_owned(),
+                            format!(
+                                "dla trend {}   (after dla summarize on more snapshots; the groups must show the growth)",
+                                t.series
+                            ),
+                        )
+                    } else {
+                        (
+                            format!(
+                                "is never tied to a finding; it is the sum of its group columns, which account for it once each non-flat one is tied to a dispositioned finding (not yet: {})",
+                                open.join(", ")
+                            ),
+                            format!(
+                                "tie the group columns of {} first (their own trend_column items): dla ledger add --origin growth-series --evidence <growth evidence of the group column>, then dla ledger resolve <F>",
+                                t.id
+                            ),
+                        )
+                    };
+                    out.add(
+                        "trend_column",
+                        format!("{}:{}", t.id, c.name),
+                        format!("column {} of {} ({}) {why}", c.name, t.id, c.shape_name()),
+                        fix,
+                    );
                     continue;
                 }
                 out.add(

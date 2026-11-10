@@ -17,6 +17,12 @@ const RETAINED: f64 = 0.2;
 /// A rise below this share of the column's level is drift, not growth, however small the
 /// noise around it (a smooth series makes any slope "significant").
 const MATERIAL: f64 = 0.01;
+/// Smallest rise of a byte-unit gauge column that counts as growth, in bytes (placeholder,
+/// calibrated in M7). The live heap of a correct Go program moves by a few KB between
+/// points (cache and bookkeeping structures of the runtime); the largest rise of that kind
+/// measured over an extra window was 13.4 KB, and the noise estimates of a short window
+/// can not be trusted below that. Counters and unitless gauges have no such minimum.
+pub const MIN_BYTE_RISE: f64 = 32.0 * 1024.0;
 /// Fewest points of an extra window the gauge test accepts.
 const MIN_GAUGE_POINTS: usize = 3;
 
@@ -99,13 +105,19 @@ fn sen_slope(points: &[(f64, f64)]) -> Option<f64> {
 /// it is drift, not growth, except that a verdict resting only on that floor while the main
 /// window grows with confidence (Sen interval above 0) is inconclusive. Gauges: growth continues when the extra slope is at least half the
 /// main slope and the extra rise exceeds three noise units; a plateau when the rise is
-/// within that. Counters: every delta over the extra window (starting from the last main
-/// point) at least one means growth; no net increase means a plateau.
+/// within that. The noise of the extra window is the larger of its own MAD and the residual
+/// scatter of the main window around its fitted trend, so scatter the main window shows
+/// cannot pass as growth in a short extra window whose MAD happens to read low. Counters:
+/// every delta over the extra window (starting from the last main point) at least one means
+/// growth; no net increase means a plateau. `min_rise` is the smallest rise of a gauge that
+/// is growth at all (zero when the column has no such resolution; [`MIN_BYTE_RISE`] for a
+/// byte column): a smaller rise is a plateau whatever the noise reads.
 pub fn plateau(
     main: &[(f64, f64)],
     extra: &[(f64, f64)],
     counter: bool,
     reference: f64,
+    min_rise: f64,
 ) -> Plateau {
     let main_slope = sen_slope(main);
     let not_run = Plateau {
@@ -152,7 +164,15 @@ pub fn plateau(
     let Some(sen) = theil_sen(extra, 0.05) else {
         return not_run;
     };
-    let nz = noise(extra, &sen);
+    let own_noise = noise(extra, &sen);
+    // The main window's scatter around its own trend is a second reading of the same
+    // column's point-to-point noise, from more points than the extra window has.
+    let main_noise = if main.len() >= MIN_GAUGE_POINTS {
+        theil_sen(main, 0.05).map_or(0.0, |m| noise(main, &m))
+    } else {
+        0.0
+    };
+    let nz = own_noise.max(main_noise);
     let span = extra[extra.len() - 1].0 - extra[0].0;
     let rise = sen.slope * span;
     let scale = extra.iter().fold(0.0_f64, |m, p| m.max(p.1.abs()));
@@ -165,8 +185,10 @@ pub fn plateau(
     // be a guess: inconclusive rather than plateau.
     let floor_only = rise > limit && keeps && !material;
     let main_grows = theil_sen(main, 0.05).is_some_and(|s| s.lo > 0.0);
-    let verdict = if rise > limit && keeps && material {
+    let verdict = if rise > limit && keeps && material && rise > min_rise {
         PlateauVerdict::Continues
+    } else if rise <= min_rise {
+        PlateauVerdict::Plateau
     } else if floor_only && main_grows {
         PlateauVerdict::Inconclusive
     } else if rise <= limit || !material {
@@ -446,11 +468,11 @@ mod tests {
         let grow = pts(&[90., 100., 110., 120., 130., 140., 150., 160.], 9000.0);
         let flat = pts(&[80., 80., 80., 80., 80., 80., 80., 80.], 9000.0);
         assert_eq!(
-            plateau(&main, &grow, false, 0.0).verdict,
+            plateau(&main, &grow, false, 0.0, 0.0).verdict,
             PlateauVerdict::Continues
         );
         assert_eq!(
-            plateau(&main, &flat, false, 0.0).verdict,
+            plateau(&main, &flat, false, 0.0, 0.0).verdict,
             PlateauVerdict::Plateau
         );
     }
@@ -460,11 +482,11 @@ mod tests {
         let main = pts(&[1., 2., 3., 4.], 1000.0);
         let extra = pts(&[5., 6.], 5000.0);
         assert_eq!(
-            plateau(&main, &extra, false, 0.0).verdict,
+            plateau(&main, &extra, false, 0.0, 0.0).verdict,
             PlateauVerdict::NotRun
         );
         assert_eq!(
-            plateau(&main, &[], true, 0.0).verdict,
+            plateau(&main, &[], true, 0.0, 0.0).verdict,
             PlateauVerdict::NotRun
         );
     }
@@ -477,19 +499,19 @@ mod tests {
         let wobble = pts(&[41., 40., 42., 41.], 5000.0);
         let climb = pts(&[44., 50., 49., 56., 62., 61., 68.], 5000.0);
         assert_eq!(
-            plateau(&main, &grow, true, 0.0).verdict,
+            plateau(&main, &grow, true, 0.0, 0.0).verdict,
             PlateauVerdict::Continues
         );
         assert_eq!(
-            plateau(&main, &flat, true, 0.0).verdict,
+            plateau(&main, &flat, true, 0.0, 0.0).verdict,
             PlateauVerdict::Plateau
         );
         assert_eq!(
-            plateau(&main, &wobble, true, 0.0).verdict,
+            plateau(&main, &wobble, true, 0.0, 0.0).verdict,
             PlateauVerdict::Plateau
         );
         assert_eq!(
-            plateau(&main, &climb, true, 0.0).verdict,
+            plateau(&main, &climb, true, 0.0, 0.0).verdict,
             PlateauVerdict::Inconclusive
         );
     }
@@ -572,12 +594,100 @@ mod tests {
         let main = pts(&[3000000., 3000100., 3000200., 3000300.], 1000.0);
         let drift = pts(&[3000400., 3000500., 3000601., 3000700., 3000800.], 5000.0);
         // The main window grows with confidence, so the floor alone cannot call a plateau.
-        let p = plateau(&main, &drift, false, 0.0);
+        let p = plateau(&main, &drift, false, 0.0, 0.0);
         assert_eq!(p.verdict, PlateauVerdict::Inconclusive, "{p:?}");
         // With a main window that does not grow with confidence the floor still applies.
         let still = pts(&[3000000., 3000300., 3000100., 3000200.], 1000.0);
-        let p = plateau(&still, &drift, false, 0.0);
+        let p = plateau(&still, &drift, false, 0.0, 0.0);
         assert_eq!(p.verdict, PlateauVerdict::Plateau, "{p:?}");
+    }
+
+    #[test]
+    fn the_main_windows_scatter_bounds_the_extra_windows_noise() {
+        // go-buffer-pool under load (a measured run): the live heap of a correct program
+        // scatters by a few KB between points. The extra window alone reads a MAD noise of
+        // 2.7 KB, so its rise of 13.4 KB passed three noise units.
+        let at = |xs: &[f64], ys: &[f64]| -> Vec<(f64, f64)> {
+            xs.iter().copied().zip(ys.iter().copied()).collect()
+        };
+        let main = at(
+            &[440., 880., 1320., 1760., 2200., 2640., 3080., 3520., 3960.],
+            &[
+                167144., 173448., 173704., 178488., 175000., 178312., 170456., 175976., 172488.,
+            ],
+        );
+        let extra = at(
+            &[4400., 4840., 5280., 5720., 6160., 6600., 7040., 7480.],
+            &[
+                175784., 173880., 183128., 181960., 190376., 185256., 173240., 189640.,
+            ],
+        );
+        let alone = plateau(&[], &extra, false, 0.0, 0.0);
+        assert!(
+            alone.extra_rise.unwrap() > NOISE_MULTIPLE * alone.noise.unwrap(),
+            "{alone:?}"
+        );
+        assert_eq!(alone.verdict, PlateauVerdict::Continues, "{alone:?}");
+        // With the main window's scatter the same rise is within the noise.
+        let p = plateau(&main, &extra, false, 0.0, 0.0);
+        assert!(p.noise.unwrap() > alone.noise.unwrap(), "{p:?}");
+        assert_eq!(p.verdict, PlateauVerdict::Plateau, "{p:?}");
+    }
+
+    fn shift(points: &[(f64, f64)], x0: f64) -> Vec<(f64, f64)> {
+        points.iter().map(|&(x, y)| (x0 + x, y)).collect()
+    }
+
+    #[test]
+    fn a_byte_rise_under_the_minimum_is_a_plateau_however_clean() {
+        // A smooth climb of 21 KB over the extra window: above its noise, above 1% of the
+        // level, and under the minimum rise of a byte column.
+        let main = pts(&[165000., 166000., 167000., 168000., 169000.], 440.0);
+        let extra = pts(
+            &[
+                170000., 173000., 176000., 179000., 182000., 185000., 188000., 191000.,
+            ],
+            440.0,
+        );
+        let extra = shift(&extra, 3000.0);
+        let free = plateau(&main, &extra, false, 0.0, 0.0);
+        assert_eq!(free.verdict, PlateauVerdict::Continues, "{free:?}");
+        let p = plateau(&main, &extra, false, 0.0, MIN_BYTE_RISE);
+        assert_eq!(p.verdict, PlateauVerdict::Plateau, "{p:?}");
+        // The same slope over a longer window is a rise over the minimum.
+        let long = pts(
+            &[
+                170000., 173000., 176000., 179000., 182000., 185000., 188000., 191000., 194000.,
+                197000., 200000., 203000.,
+            ],
+            440.0,
+        );
+        let long = shift(&long, 3000.0);
+        let p = plateau(&main, &long, false, 0.0, MIN_BYTE_RISE);
+        assert_eq!(p.verdict, PlateauVerdict::Continues, "{p:?}");
+    }
+
+    #[test]
+    fn a_clean_leak_keeps_its_verdict_with_the_main_windows_scatter_counted() {
+        // A straight climb has no scatter, so the larger-of rule changes nothing.
+        let main = pts(&[165000., 166000., 167000., 168000., 169000.], 440.0);
+        let extra = pts(
+            &[
+                170000., 173000., 176000., 179000., 182000., 185000., 188000., 191000.,
+            ],
+            3960.0,
+        );
+        let p = plateau(&main, &extra, false, 0.0, 0.0);
+        assert_eq!(p.verdict, PlateauVerdict::Continues, "{p:?}");
+    }
+
+    #[test]
+    fn a_main_window_shorter_than_three_points_adds_no_noise() {
+        let main = pts(&[1000., 1100.], 440.0);
+        let extra = pts(&[1200., 1300., 1400., 1500.], 3960.0);
+        let with = plateau(&main, &extra, false, 0.0, 0.0);
+        let without = plateau(&[], &extra, false, 0.0, 0.0);
+        assert_eq!(with.noise, without.noise);
     }
 
     #[test]
@@ -588,12 +698,12 @@ mod tests {
         let main = pts(&[1e6, 1.03e6, 1.06e6, 1.09e6, 1.12e6], 1000.0);
         let extra = pts(&[1.15e6, 1.18e6, 1.21e6, 1.24e6, 1.27e6], 6000.0);
         assert_eq!(
-            plateau(&main, &extra, false, 0.0).verdict,
+            plateau(&main, &extra, false, 0.0, 0.0).verdict,
             PlateauVerdict::Continues
         );
         // Even if a reference is supplied, the floor alone must not yield a plateau.
         assert_eq!(
-            plateau(&main, &extra, false, 500e6).verdict,
+            plateau(&main, &extra, false, 500e6, 0.0).verdict,
             PlateauVerdict::Inconclusive
         );
     }
@@ -630,11 +740,11 @@ mod tests {
         let main = pts(&[1000., 1100., 1200., 1300.], 1000.0);
         let creep = pts(&[1400., 1500., 1600., 1700., 1800.], 5000.0);
         assert_eq!(
-            plateau(&main, &creep, false, 0.0).verdict,
+            plateau(&main, &creep, false, 0.0, 0.0).verdict,
             PlateauVerdict::Continues
         );
         assert_eq!(
-            plateau(&main, &creep, false, 50e6).verdict,
+            plateau(&main, &creep, false, 50e6, 0.0).verdict,
             PlateauVerdict::Inconclusive
         );
     }

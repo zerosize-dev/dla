@@ -394,6 +394,92 @@ fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
 }
 
 #[test]
+fn the_total_of_a_summarize_series_is_accounted_for_by_its_tied_groups() {
+    // A summarize-made series has no byte column, so the residual cannot account for its
+    // total (`dla gap S6 --residual` is refused); the total is the sum of its groups.
+    let r = init("repository");
+    let total = "metric:goroutine/total";
+    let group = "group:goroutine/wait:select";
+    write_trend_shapes(
+        &r,
+        "T1",
+        "S6",
+        &[
+            (total, false),
+            (group, false),
+            ("group:goroutine/wait:idle", true),
+        ],
+    );
+    let items = r.items(&["--final"]);
+    let item = items
+        .iter()
+        .find(|m| m["id"] == format!("T1:{total}"))
+        .unwrap();
+    let fix = item["fix"].as_str().unwrap();
+    assert!(!fix.contains("dla gap"), "{item}");
+    assert!(
+        item["description"].as_str().unwrap().contains(group),
+        "{item}"
+    );
+    // Tie the group to a finding: the finding needs its disposition first.
+    let disc = alloc_discriminator(&r, "T1", &[group]);
+    let f = finding_citing(&r, &disc);
+    let m = r.missing(&["--final"]);
+    assert_eq!(
+        trend_columns(&m),
+        [format!("T1:{group}"), format!("T1:{total}")],
+        "{m:?}"
+    );
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    let m = r.missing(&["--final"]);
+    assert!(trend_columns(&m).is_empty(), "{m:?}");
+    // A total whose groups are all flat is not accounted for by them.
+    let r = init("repository");
+    write_trend_shapes(&r, "T1", "S6", &[(total, false), (group, true)]);
+    let items = r.items(&["--final"]);
+    let item = items
+        .iter()
+        .find(|m| m["id"] == format!("T1:{total}"))
+        .unwrap();
+    assert!(
+        item["description"]
+            .as_str()
+            .unwrap()
+            .contains("none of which"),
+        "{item}"
+    );
+    // A whole-process column that is not a group total is still never accounted for by
+    // tied columns.
+    let r = init("repository");
+    write_trend_shapes(&r, "T1", "S6", &[("os.rss", false), (group, false)]);
+    let disc = alloc_discriminator(&r, "T1", &[group]);
+    let f = finding_citing(&r, &disc);
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "x",
+    ]);
+    let m = r.missing(&["--final"]);
+    assert_eq!(trend_columns(&m), ["T1:os.rss".to_owned()], "{m:?}");
+}
+
+#[test]
 fn an_alloc_test_trend_is_dispositioned_through_the_discriminator_a_finding_cites() {
     let r = init("repository");
     write_trend(&r, "T1", "S1", &["probe:CACHE", "probe:OTHER"]);

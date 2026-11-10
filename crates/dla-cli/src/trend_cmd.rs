@@ -530,6 +530,10 @@ fn suggestions(
                     next.push(format!("dla alloc-test {h} --finding {root}"));
                 }
             }
+            // The total of a summarize-made series is the sum of its group columns: the
+            // ledger lines for the groups account for it, and the residual cannot (it
+            // needs a byte column).
+            None if dla_core::gate::is_group_total(&c.name) => {}
             None if dla_core::gate::is_whole_process(&c.name) => {
                 // The gate never ties a whole-process column to a finding: the residual
                 // accounting covers it, so a `ledger add` would open a finding that can

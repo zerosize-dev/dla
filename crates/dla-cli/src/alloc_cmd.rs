@@ -240,7 +240,12 @@ fn test_column(
         ));
     }
     let reference = reference_level(series, idx);
-    let plateau = judge::plateau(main, extra, counter, reference);
+    let min_rise = if series.columns[idx].unit == Unit::Bytes {
+        judge::MIN_BYTE_RISE
+    } else {
+        0.0
+    };
+    let plateau = judge::plateau(main, extra, counter, reference, min_rise);
     let purge = event.map(|e| {
         if counter {
             return judge::purge(&e.kind, None, None, None);

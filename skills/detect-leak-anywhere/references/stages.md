@@ -113,6 +113,10 @@ A whole-process column (`os.*`, `cgroup.*`, `fd.*`, `jvm.*`, `go.*`, `node.*`, `
 The classify gate does not ask for it. The final gate accounts for it through the residual rows: run `dla gap
 S<n> --residual`; the column is covered when the rows of its region are under their threshold, or over it with
 a resolved open item. A resolved open item that names the column and its trend also covers it.
+The total of a summarize series (`metric:<category>/total`, for example `metric:goroutine/total`) has no byte
+column to total, so the residual cannot cover it: it is the sum of its group columns, and the final gate accounts
+for it when at least one group column of the trend is not flat and every such group column is tied to a
+dispositioned finding. Tie the groups (`dla ledger add --origin growth-series`, then resolve the finding).
 
 ## 1. Intake checklist
 
