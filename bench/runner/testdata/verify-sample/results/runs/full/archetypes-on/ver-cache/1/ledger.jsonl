@@ -1,0 +1,3 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "src/Cache.java:20", "holder": "container-field"}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "confirmed"}
+{"type": "verification", "finding": "F1", "site": "src/Cache.java:21", "holder": "container-field", "mechanism": "entries are never removed", "label": "L-COLLECT", "bundle": "aa", "agrees_site": true, "agrees_holder": true, "agrees_label": true}

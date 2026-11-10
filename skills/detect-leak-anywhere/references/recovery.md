@@ -72,6 +72,37 @@ A worker subagent died, was interrupted or passed its deadline without `ledger d
 - Record: `dla ledger resolve <O> --as unresolved --reason time_budget|env_unavailable --remedy
   "start a new run for the <runtime> runtime"`. A second `dla ledger merge` is safe.
 
+## Integrity mismatch (tamper)
+
+`dla gate check`, `dla report` or `dla run status` names a protected file (`ledger.jsonl`, a worker
+slice, `state.json`, `coverage.json`, `report.md`) whose length or hash differs from its seal.
+- Remedy: find out what changed it (a restored backup, a merge conflict, a hand edit). If the change was
+  not yours and the content is right, tell the user and run `dla run reseal --reason "<what changed and
+  why>"` (core only). It appends an `integrity_resealed` record to the ledger, seals the files again,
+  and the report lists the reseal. Do not reseal to make a gate pass.
+- Record: the reseal is the record. Without it the run stays INCOMPLETE and the report names the file.
+- A run created before schema 6 has no seals; it is reported as unsealed, which is not a mismatch.
+  `report.md` edited after rendering is simply replaced by the next `dla report`, which says so.
+
+## Stop hook blocked three times
+
+The Stop hook blocks the end of the turn while `dla gate check --final` fails. After three blocks with no
+change in the ledger it lets the stop through, stamps the run INCOMPLETE with the reason "stop hook
+blocked 3 times with no ledger change" and the missing ids, and the report says so.
+- Remedy: do not wait for it. Run `dla gate check --final`, fix the items it prints, or resolve each with
+  `dla ledger resolve <F> --as unresolved --reason <r> --remedy "<text>"`, then `dla report`.
+- Record: if the stamp was already set, the report stays INCOMPLETE; say plainly what was left open and why.
+
+## A worker stalled
+
+The SubagentStop hook blocks a worker's stop while its slice is not done and dispositioned. After three
+blocks with no change in the slice it lets the worker go and marks it stalled.
+- Remedy: `dla ledger merge` copies the slice anyway and opens the item "worker <w> did not finish"; the
+  run is INCOMPLETE. Resolve the worker's open findings yourself with reasons and remedies
+  (`--as unresolved --reason time_budget|env_unavailable`), and tell the user a new run scoped to that
+  runtime would cover it. A stalled worker is not restarted in the same run.
+- Record: `dla ledger resolve <O> --as unresolved --reason ... --remedy "start a new run for the <runtime> runtime"`.
+
 ## Budget exhausted
 
 A command refuses with `time-budget` (the worker's deadline or the run deadline passed).

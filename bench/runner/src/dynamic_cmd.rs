@@ -98,6 +98,8 @@ use crate::{
 mod artifact;
 #[path = "dynamic/ops.rs"]
 mod ops;
+#[path = "dynamic/policy.rs"]
+pub mod policy;
 #[path = "dynamic/without.rs"]
 pub mod without;
 #[path = "dynamic/workers.rs"]
@@ -174,6 +176,7 @@ const RUN_BUDGET: &str = "2h";
 /// judgement is listed here instead of being weakened away. A listed fixture is reported as
 /// `xfail` and does not fail the run. The run fails when a listed fixture passes (the entry is
 /// stale) or fails in any other way (a regression hiding behind the entry).
+#[derive(Clone, Copy)]
 pub struct ExpectedFailure {
     /// Fixture id.
     pub fixture: &'static str,
@@ -181,6 +184,19 @@ pub struct ExpectedFailure {
     pub failure: &'static str,
     /// Why this failure is accepted.
     pub reason: &'static str,
+    /// The failure only occurs with archetypes on (a label that cannot be reached); with
+    /// `--archetypes off` the entry does not apply.
+    pub needs_archetypes: bool,
+}
+
+/// The list that applies to a run: with archetypes off, the entries that need archetypes
+/// are left out.
+pub fn expected_failures(archetypes_off: bool) -> Vec<ExpectedFailure> {
+    EXPECTED_FAILURES
+        .iter()
+        .copied()
+        .filter(|e| !(archetypes_off && e.needs_archetypes))
+        .collect()
 }
 
 /// Fixtures expected to fail; see [`ExpectedFailure`] and bench/README.md.
@@ -189,11 +205,37 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
         fixture: "rust-tree-parent-links",
         failure: "leak L1 (src/section.rs:27) is not confirmed",
         reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
+        needs_archetypes: false,
     },
     ExpectedFailure {
         fixture: "node-socket-heartbeat",
         failure: "leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table",
         reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The per-point heap-graph run now observes `registration-table` for the column of `Session.recent` and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding itself (the sessions it keeps alive are held through the loopback socket events, not through a timer entry in the snapshots), and node-resources ties the timer group to the finding by site only, so no observed holder is available to correct the timer finding",
+        needs_archetypes: false,
+    },
+    ExpectedFailure {
+        fixture: "jvm-extension-reload",
+        failure: "leak L1 (L-UNLOAD) label refused label-evidence-missing",
+        reason: "L-UNLOAD needs growth plus non-heap, or a retention path, tied to the finding at the event-bus registry. The class-loader columns of `summarize non-heap` tie to no finding (they carry no holder, site or type of a heap field), and `summarize heap-graph --finding` finds the registry (its discriminator names `static:reports.EventBus.LISTENERS`) while the per-dump retention-path records list only the largest holders (`LedgerExtension.ROUNDING`, JFR internals), so no retention-path record names the finding's holder. A defect of the tie rule or of the records, not of the policy",
+        needs_archetypes: true,
+    },
+    ExpectedFailure {
+        fixture: "jvm-invoice-render",
+        failure: "leak L1 (L-TLS) label refused label-evidence-missing",
+        reason: "L-TLS needs a retention path tied to the finding. The finding's owner is the class initializer frame (`billing.RenderContext.<clinit>`), so `summarize heap-graph --finding` is refused `holder-not-found` (the dump's holder is `thread-local:billing.RenderContext.SEGMENTS`), `ledger annotate --owner` cannot replace an owner that is set, and the histogram records name another finding. A defect of the owner the census or probe records, not of the policy",
+        needs_archetypes: true,
+    },
+    ExpectedFailure {
+        fixture: "rust-meter-callbacks",
+        failure: "leak L1 (L-OWNERSHIP) label refused label-evidence-missing",
+        reason: "L-OWNERSHIP needs growth plus an allocation stack, or an intervention, tied to the finding. An alloc-stack record ties only through the root key of its stacks against the finding's owner; valgrind and heaptrack stacks carry no root and the detector finding (`rust-into-raw-unpaired`) has no owner, so `summarize alloc-stack-diff --finding` ties the growth column (by site) while the alloc-stack record stays untied. The intervention alternative is refused `intervene-not-statement`: the site is a `let` declaration, and a diff needs reading the code",
+        needs_archetypes: true,
+    },
+    ExpectedFailure {
+        fixture: "jni-order-codec",
+        failure: "leak L1 (L-HANDLE) label refused label-evidence-missing",
+        reason: "The native leak (the correlation candidate at the native site) needs growth plus an allocation stack, or a unit-count series plus a retention path, tied to it. Same cause as `rust-meter-callbacks`: the alloc-stack records of the shim and the profiles tie only through a root key against an owner, which the candidate does not have. L2 (Kotlin) is labelled",
+        needs_archetypes: true,
     },
 ];
 
@@ -258,6 +300,13 @@ pub struct FixtureRow {
     /// Largest stdout of a summarize call, in bytes.
     #[serde(skip_serializing_if = "is_zero")]
     pub max_stdout: usize,
+    /// The `dla summarize` commands that ran (arguments after `dla`), for the policy to run
+    /// again narrowed to a finding.
+    #[serde(skip)]
+    pub summarize_cmds: Vec<Vec<String>>,
+    /// The M6 steps (labels, explanations, interventions, strong, final gate).
+    #[serde(skip_serializing_if = "policy::PolicyRow::is_empty")]
+    pub policy: policy::PolicyRow,
     /// What the policy did (one line per decision), for the log and the JSON.
     pub steps: Vec<String>,
     /// The measurements behind the decisions: passing trend columns and alloc-test column
@@ -604,6 +653,59 @@ impl Fx<'_> {
 // Ledger view (re-read from the file; nothing is taken on trust)
 // ---------------------------------------------------------------------------
 
+/// A line the merge copied from a worker's slice carries a `worker` member and the worker's
+/// plain ids; the merged ledger names them `<worker>/<id>`. Rewrites the ids of the line that
+/// way (an id that already has a `/` stays), so findings and evidence of two workers do not
+/// collide in the view.
+fn qualify_worker_ids(rec: &mut Value) {
+    let Some(w) = rec
+        .get("worker")
+        .and_then(Value::as_str)
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let q = |v: &mut Value| {
+        if let Some(id) = v.as_str().filter(|i| !i.contains('/')) {
+            *v = Value::String(format!("{w}/{id}"));
+        }
+    };
+    let qs = |v: &mut Value| {
+        if let Some(a) = v.as_array_mut() {
+            for x in a {
+                q(x);
+            }
+        } else {
+            q(v);
+        }
+    };
+    let kind = rec["type"].as_str().unwrap_or("").to_owned();
+    let keys: &[&str] = match kind.as_str() {
+        "evidence" => &["evidence_id"],
+        "transition" => &["finding", "evidence"],
+        "finding_annotated" => &["finding", "evidence"],
+        "finding_labeled" | "finding_explained" | "verification" => &["finding"],
+        "finding_merged" => &["canonical", "duplicate"],
+        "open_item_resolved" | "open_item" => &["id"],
+        _ => &[],
+    };
+    for k in keys {
+        if let Some(x) = rec.get_mut(*k) {
+            qs(x);
+        }
+    }
+    if kind == "finding_added"
+        && let Some(f) = rec.get_mut("finding")
+    {
+        for k in ["id", "parent", "supports"] {
+            if let Some(x) = f.get_mut(k) {
+                qs(x);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct Fnd {
     id: String,
@@ -617,6 +719,12 @@ struct Fnd {
     supports: Vec<String>,
     /// `from` and cited evidence of the transition to `confirmed`.
     confirmed: Option<(String, Vec<String>)>,
+    /// Sites that add to the holder, as annotated (`ledger annotate --writer`).
+    writers: Vec<String>,
+    /// Sites that remove from the holder, as annotated.
+    removers: Vec<String>,
+    /// The archetype label (`ledger label`), when one was recorded.
+    label: Option<String>,
 }
 
 impl Fnd {
@@ -640,6 +748,10 @@ struct View {
     evidence: BTreeMap<String, Ev>,
     /// Evidence ids in ledger order.
     order: Vec<String>,
+    /// Findings with a stored explanation (`ledger explain`).
+    explained: BTreeSet<String>,
+    /// Open items that were resolved (ids as the merged ledger names them).
+    resolved_items: BTreeSet<String>,
 }
 
 impl View {
@@ -656,9 +768,10 @@ impl View {
             .collect::<Vec<_>>()
             .join("\n");
         for line in text.lines() {
-            let Ok(rec) = serde_json::from_str::<Value>(line) else {
+            let Ok(mut rec) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
+            qualify_worker_ids(&mut rec);
             let s = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).map(str::to_owned);
             match rec["type"].as_str() {
                 Some("evidence") => {
@@ -689,13 +802,44 @@ impl View {
                         hypothesis: s(f, "hypothesis"),
                         supports: strings(&f["supports"]),
                         confirmed: None,
+                        writers: Vec::new(),
+                        removers: Vec::new(),
+                        label: s(f, "archetype"),
                     });
+                }
+                Some("finding_labeled") => {
+                    let (Some(id), Some(label)) = (s(&rec, "finding"), s(&rec, "label")) else {
+                        continue;
+                    };
+                    if let Some(f) = v.findings.iter_mut().find(|f| f.id == id) {
+                        f.label = Some(label);
+                    }
+                }
+                Some("open_item_resolved") => {
+                    if let Some(id) = s(&rec, "id") {
+                        v.resolved_items.insert(id);
+                    }
+                }
+                Some("finding_explained") => {
+                    if let Some(id) = s(&rec, "finding") {
+                        v.explained.insert(id);
+                    }
                 }
                 Some("finding_annotated") => {
                     let Some(id) = s(&rec, "finding") else {
                         continue;
                     };
                     if let Some(f) = v.findings.iter_mut().find(|f| f.id == id) {
+                        for w in strings(&rec["writers"]) {
+                            if !f.writers.contains(&w) {
+                                f.writers.push(w);
+                            }
+                        }
+                        for r in strings(&rec["removers"]) {
+                            if !f.removers.contains(&r) {
+                                f.removers.push(r);
+                            }
+                        }
                         // A v5 annotation that replaced a holder (it cited growth evidence)
                         // changes it; any other only fills a holder that is not set.
                         if f.holder.is_none() || rec.get("replaced_holder").is_some() {
@@ -2034,6 +2178,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     };
     let _ = fs::remove_dir_all(&fx.log_dir);
     drive(&mut fx);
+    policy::run(&mut fx, &expected, sh.args.archetypes == Archetypes::Off);
     let mut row = std::mem::take(&mut fx.row);
     if let Ok(run_dir) = fx.run_dir() {
         let view = View::read(&run_dir.join("ledger.jsonl"));
@@ -2077,10 +2222,11 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
     } else {
         row.failures.push("dla run init failed".to_owned());
     }
+    let listed = expected_failures(sh.args.archetypes == Archetypes::Off);
     if sh.args.without.is_empty() {
-        apply_expected_failures(&mut row, EXPECTED_FAILURES);
+        apply_expected_failures(&mut row, &listed);
     } else {
-        settle_without(&mut row);
+        settle_without(&mut row, &listed);
     }
     if let Ok(text) = serde_json::to_string_pretty(&row) {
         let _ = fs::write(fx.log_dir.join("row.json"), text + "\n");
@@ -2094,11 +2240,11 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
 
 /// Settles the failures of a `--without` row: leak gaps are accepted only when the run saw a
 /// coverage row of a hidden tool; otherwise the row is judged as in a normal run.
-fn settle_without(row: &mut FixtureRow) {
+fn settle_without(row: &mut FixtureRow, listed: &[ExpectedFailure]) {
     if row.hidden_backend_rows > 0 {
         accept_hidden_tool_gaps(row);
     } else {
-        apply_expected_failures(row, EXPECTED_FAILURES);
+        apply_expected_failures(row, listed);
     }
 }
 
@@ -2109,7 +2255,10 @@ fn settle_without(row: &mut FixtureRow) {
 fn accept_hidden_tool_gaps(row: &mut FixtureRow) {
     let gap = |f: &String| {
         (f.starts_with("leak ")
-            && (f.ends_with("is not confirmed") || f.contains("is confirmed with holder")))
+            && (f.ends_with("is not confirmed")
+                || f.contains("is confirmed with holder")
+                // The records the label needs come from the hidden tool.
+                || f.ends_with("label refused label-evidence-missing")))
             // The evidence of a hidden backend cannot be cited.
             || f.starts_with("dump check: ")
     };
@@ -2477,6 +2626,7 @@ mod tests {
             fixture: "fx",
             failure: "leak L1 is not confirmed",
             reason: "because",
+            needs_archetypes: false,
         }]
     }
 
@@ -2484,12 +2634,12 @@ mod tests {
     fn leak_gaps_need_a_hidden_backend_row() {
         let mut r = row(&["leak L1 (a:1) is not confirmed"]);
         r.id = "unlisted".into();
-        settle_without(&mut r);
+        settle_without(&mut r, EXPECTED_FAILURES);
         assert_eq!(r.failures.len(), 1, "no hidden row: the failure stays");
         assert!(r.xfail.is_none());
         let mut r = row(&["leak L1 (a:1) is not confirmed"]);
         r.hidden_backend_rows = 1;
-        settle_without(&mut r);
+        settle_without(&mut r, EXPECTED_FAILURES);
         assert!(r.failures.is_empty());
         assert!(r.xfail.is_some());
     }
@@ -2545,12 +2695,54 @@ mod tests {
     }
 
     #[test]
-    fn the_jni_fixture_has_no_expected_failure_left() {
-        assert!(
-            EXPECTED_FAILURES
-                .iter()
-                .all(|e| e.fixture != "jni-order-codec")
+    fn archetypes_off_leaves_out_the_entries_about_labels() {
+        let on = expected_failures(false);
+        let off = expected_failures(true);
+        assert_eq!(on.len(), EXPECTED_FAILURES.len());
+        assert_eq!(on.len() - off.len(), 4);
+        assert!(off.iter().all(|e| !e.failure.contains("label refused")));
+        // The flag follows the text: a label failure needs archetypes and nothing else does.
+        for e in EXPECTED_FAILURES {
+            assert_eq!(
+                e.needs_archetypes,
+                e.failure.contains("label refused"),
+                "{}",
+                e.failure
+            );
+        }
+        // With archetypes off a fixture that only had the label failure just passes.
+        let mut r = FixtureRow {
+            id: "jvm-invoice-render".into(),
+            ..FixtureRow::default()
+        };
+        apply_expected_failures(&mut r, &off);
+        assert!(r.failures.is_empty() && r.xfail.is_none());
+    }
+
+    #[test]
+    fn the_jni_fixture_has_only_the_label_of_its_native_leak_left() {
+        let jni: Vec<&str> = EXPECTED_FAILURES
+            .iter()
+            .filter(|e| e.fixture == "jni-order-codec")
+            .map(|e| e.failure)
+            .collect();
+        assert_eq!(
+            jni,
+            ["leak L1 (L-HANDLE) label refused label-evidence-missing"]
         );
+    }
+
+    #[test]
+    fn every_listed_label_failure_names_a_shipped_row() {
+        for e in EXPECTED_FAILURES {
+            if let Some(rest) = e
+                .failure
+                .strip_suffix(") label refused label-evidence-missing")
+            {
+                let cause = rest.rsplit('(').next().unwrap();
+                assert!(policy::SHIPPED_ROWS.contains(&cause), "{}", e.failure);
+            }
+        }
     }
 
     #[test]

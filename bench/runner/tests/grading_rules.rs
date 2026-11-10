@@ -2,8 +2,9 @@
 
 use dla_bench::{
     grade::{
-        Finding, Source, State, findings_from_json, findings_from_ledger, grade_findings,
-        leak_outcomes, normalise_path, parse_site, round6, select_source, site_matches,
+        Finding, Source, State, VerifCounts, findings_from_json, findings_from_ledger,
+        grade_findings, leak_outcomes, normalise_path, parse_site, read_ledger_bytes, round6,
+        select_source, site_matches,
     },
     model::Expected,
 };
@@ -1081,4 +1082,102 @@ fn source_overclaim_counts_artifact_runs_with_a_claim_that_names_a_site() {
         &[finding(State::Confirmed, Some("src/cache.py:10"))],
     );
     assert_eq!(p.parts[12], (0, 0));
+}
+
+// ---- verification metrics
+
+fn counts(lines: &[&str]) -> VerifCounts {
+    VerifCounts::of(&read_ledger_bytes(lines.join("\n").as_bytes()).unwrap())
+}
+
+const ADDED: &str = r#"{"type":"finding_added","finding":{"id":"F1","site":"a.py:1"}}"#;
+const CONFIRMED: &str = r#"{"type":"transition","finding":"F1","to":"confirmed"}"#;
+
+fn ver(finding: &str, site: bool, holder: bool, label: &str) -> String {
+    format!(
+        r#"{{"type":"verification","finding":"{finding}","holder":"static/global","mechanism":"m","label":"UNCLASSIFIED","bundle":"aa","agrees_site":{site},"agrees_holder":{holder}{label}}}"#
+    )
+}
+
+#[test]
+fn a_claim_with_a_verification_counts_its_agreements() {
+    let v = ver("F1", true, false, r#","agrees_label":true"#);
+    let c = counts(&[ADDED, CONFIRMED, &v]);
+    assert_eq!(
+        c,
+        VerifCounts {
+            records: 1,
+            claims: 1,
+            verified: 1,
+            site: 1,
+            holder: 0,
+            label: 1,
+            label_den: 1
+        }
+    );
+}
+
+#[test]
+fn a_verification_without_a_label_verdict_leaves_the_label_denominator() {
+    for label in ["", r#","agrees_label":null"#] {
+        let v = ver("F1", true, true, label);
+        let c = counts(&[ADDED, CONFIRMED, &v]);
+        assert_eq!((c.verified, c.label, c.label_den), (1, 0, 0), "{label}");
+    }
+    // A label verdict of another type is no verification at all.
+    let v = ver("F1", true, true, r#","agrees_label":"yes""#);
+    let c = counts(&[ADDED, CONFIRMED, &v]);
+    assert_eq!((c.records, c.verified), (0, 0));
+}
+
+#[test]
+fn the_last_verification_of_a_finding_wins() {
+    let first = ver("F1", false, false, r#","agrees_label":false"#);
+    let second = ver("F1", true, true, "");
+    let c = counts(&[ADDED, CONFIRMED, &first, &second]);
+    assert_eq!((c.records, c.verified, c.site, c.holder), (1, 1, 1, 1));
+    assert_eq!(c.label_den, 0, "the later record has no label verdict");
+}
+
+#[test]
+fn only_confirmed_or_strong_findings_without_a_parent_are_claims() {
+    let refuted = r#"{"type":"finding_added","finding":{"id":"F2","site":"b.py:1"}}"#;
+    let refuted_to = r#"{"type":"transition","finding":"F2","to":"refuted"}"#;
+    let hyp = r#"{"type":"finding_added","finding":{"id":"F1.n1","parent":"F1"}}"#;
+    let hyp_to = r#"{"type":"transition","finding":"F1.n1","to":"confirmed"}"#;
+    let strong = r#"{"type":"finding_added","finding":{"id":"F3","site":"c.py:1"}}"#;
+    let strong_to = r#"{"type":"transition","finding":"F3","to":"strong"}"#;
+    let v: Vec<String> = ["F1", "F2", "F1.n1", "F3"]
+        .iter()
+        .map(|f| ver(f, true, true, ""))
+        .collect();
+    let mut lines = vec![
+        ADDED, CONFIRMED, refuted, refuted_to, hyp, hyp_to, strong, strong_to,
+    ];
+    lines.extend(v.iter().map(String::as_str));
+    let c = counts(&lines);
+    assert_eq!((c.records, c.claims, c.verified), (4, 2, 2));
+}
+
+#[test]
+fn old_shapes_unknown_findings_and_workers_are_handled() {
+    // The pre-schema-3 form has no agreement flags: not a verification.
+    let old = r#"{"type":"verification","finding":"F1","to":"confirmed","result":"agrees"}"#;
+    let c = counts(&[ADDED, CONFIRMED, old]);
+    assert_eq!((c.records, c.claims, c.verified), (0, 1, 0));
+    // A finding the ledger does not have.
+    let other = ver("F9", true, true, "");
+    assert_eq!(counts(&[ADDED, CONFIRMED, &other]).records, 0);
+    // A worker line keys its finding as <worker>/<id>.
+    let wadd = r#"{"type":"finding_added","worker":"jvm","finding":{"id":"F1","site":"a.py:1"}}"#;
+    let wtr = r#"{"type":"transition","worker":"jvm","finding":"F1","to":"confirmed"}"#;
+    let wver = r#"{"type":"verification","worker":"jvm","finding":"F1","holder":"static/global","mechanism":"m","label":"UNCLASSIFIED","bundle":"aa","agrees_site":true,"agrees_holder":true}"#;
+    let c = counts(&[wadd, wtr, wver]);
+    assert_eq!((c.records, c.claims, c.verified), (1, 1, 1));
+    // A duplicate that was merged away takes its verification with it.
+    let wadd2 = r#"{"type":"finding_added","worker":"rust","finding":{"id":"F1","site":"a.py:1"}}"#;
+    let merged = r#"{"type":"finding_merged","canonical":"jvm/F1","duplicate":"rust/F1"}"#;
+    let wver2 = wver.replace("jvm", "rust");
+    let c = counts(&[wadd, wtr, wadd2, &wver2, merged]);
+    assert_eq!((c.records, c.verified), (0, 0));
 }

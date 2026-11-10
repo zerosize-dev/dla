@@ -118,14 +118,37 @@ def str_or_none(v):
     return v if isinstance(v, str) else None
 
 
+def verification_of(rec):
+    """The verification a "verification" record states, or None. agrees_site and
+    agrees_holder must be booleans and agrees_label a boolean, null or absent; a record
+    of any other shape (the pre-schema-3 "result" form) is not a verification."""
+    site = rec.get("agrees_site")
+    holder = rec.get("agrees_holder")
+    if not isinstance(site, bool) or not isinstance(holder, bool):
+        return None
+    label = rec.get("agrees_label")
+    if label is not None and not isinstance(label, bool):
+        return None
+    return {"site": site, "holder": holder, "label": label}
+
+
 def parse_ledger(path):
     """Return (has_finding_added, findings) for a ledger.jsonl file."""
+    saw_added, findings, _, _ = parse_ledger_full(path)
+    return saw_added, findings
+
+
+def parse_ledger_full(path):
+    """Return (has_finding_added, findings, verifications, keys) for a ledger.jsonl file.
+    keys holds the key of each finding, in order; verifications maps the key of a finding
+    that exists to its latest verification."""
     try:
         data = path.read_bytes()
     except OSError:
-        return False, []
+        return False, [], {}, []
     order = []  # ids in order of their surviving finding_added line
     by_id = {}
+    verifications = {}
     saw_added = False
     for raw in data.split(b"\n"):
         try:
@@ -199,6 +222,13 @@ def parse_ledger(path):
             label = str_or_none(rec.get("label"))
             if key is not None and key in by_id and label is not None:
                 by_id[key]["label"] = label
+        elif rtype == "verification":
+            # `dla ledger verify` (schema 3): the last record of a finding wins; a record
+            # of another shape changes nothing.
+            fid = rec.get("finding")
+            v = verification_of(rec)
+            if isinstance(fid, str) and v is not None:
+                verifications[ledger_key(fid, rec)] = v
         elif rtype == "finding_merged":
             # The duplicate collapses into the canonical finding.
             canonical = rec.get("canonical")
@@ -212,7 +242,9 @@ def parse_ledger(path):
     findings = [by_id[i] for i in order]
     for f in findings:
         f["discriminator"] = f["state"] == "refuted"
-    return saw_added, findings
+    # A verification of a finding that is not (or no longer) in the ledger counts for nothing.
+    verifications = {k: v for k, v in verifications.items() if k in by_id}
+    return saw_added, findings, verifications, order
 
 
 def parse_findings_json(path):
@@ -250,19 +282,49 @@ def parse_findings_json(path):
     return out
 
 
+VERIF_KEYS = ("records", "claims", "verified", "site", "holder", "label", "label_den")
+
+
+def verif_counts(findings, keys, verifications):
+    """What the verifier said about the claims (confirmed or strong, non-hypothesis
+    findings) of one run."""
+    c = dict.fromkeys(VERIF_KEYS, 0)
+    c["records"] = len(verifications)
+    for key, f in zip(keys, findings):
+        if not is_claim(f):
+            continue
+        c["claims"] += 1
+        v = verifications.get(key)
+        if v is None:
+            continue
+        c["verified"] += 1
+        c["site"] += 1 if v["site"] else 0
+        c["holder"] += 1 if v["holder"] else 0
+        if v["label"] is not None:
+            c["label_den"] += 1
+            c["label"] += 1 if v["label"] else 0
+    return c
+
+
 def load_findings(run_dir):
     """Apply source selection; return (source, findings)."""
+    source, findings, _ = load_run(run_dir)
+    return source, findings
+
+
+def load_run(run_dir):
+    """Apply source selection; return (source, findings, verification counts)."""
     ledger = run_dir / "ledger.jsonl"
     if ledger.is_file():
-        saw_added, findings = parse_ledger(ledger)
+        saw_added, findings, verifications, keys = parse_ledger_full(ledger)
         if saw_added:
-            return "ledger", findings
+            return "ledger", findings, verif_counts(findings, keys, verifications)
     fj = run_dir / "findings.json"
     if fj.is_file():
         findings = parse_findings_json(fj)
         if findings is not None:
-            return "findings", findings
-    return "none", []
+            return "findings", findings, dict.fromkeys(VERIF_KEYS, 0)
+    return "none", [], dict.fromkeys(VERIF_KEYS, 0)
 
 
 def is_claim(f):
@@ -642,13 +704,40 @@ def grade_group(ablation, archetypes, runs, fixtures, incomplete=0):
     else:
         share = {"value": None, "runs": resid_k}
 
-    return {
+    group = {
         "ablation": ablation,
         "archetypes": archetypes,
         "metrics": metrics,
         "unexplained_growth_share": share,
         "usage": usage_block(runs, incomplete),
-        "fixtures": fixture_blocks,
+    }
+    verification = verification_block(runs)
+    if verification is not None:
+        group["verification"] = verification
+    group["fixtures"] = fixture_blocks
+    return group
+
+
+def share_entry(num, den):
+    return {"num": num, "den": den, "value": round6(num / den) if den > 0 else None}
+
+
+def verification_block(runs):
+    """The verification metrics of a group, or None when no run has a verification
+    record of a finding that exists."""
+    total = dict.fromkeys(VERIF_KEYS, 0)
+    for r in runs:
+        for k in VERIF_KEYS:
+            total[k] += r["verif"][k]
+    if total["records"] == 0:
+        return None
+    return {
+        "claims": total["claims"],
+        "verified": total["verified"],
+        "verified_share": share_entry(total["verified"], total["claims"]),
+        "site_agreement": share_entry(total["site"], total["verified"]),
+        "holder_agreement": share_entry(total["holder"], total["verified"]),
+        "label_agreement": share_entry(total["label"], total["label_den"]),
     }
 
 
@@ -713,7 +802,7 @@ def grade(results, fixtures_dir):
                         continue  # not a finished run
                     load_fixture(fixtures_dir, fx_dir.name, cache)
                     run_json = load_run_json(rj)
-                    source, findings = load_findings(run_dir)
+                    source, findings, verif = load_run(run_dir)
                     groups.setdefault((abl.name, arch_name), []).append(
                         {
                             "fixture": fx_dir.name,
@@ -722,6 +811,7 @@ def grade(results, fixtures_dir):
                             "run_json": run_json,
                             "source": source,
                             "findings": findings,
+                            "verif": verif,
                         }
                     )
     out_groups = []

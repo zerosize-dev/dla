@@ -18,14 +18,14 @@ use crate::{
     evidence::{
         Authority, EvidenceClass, EvidenceKind, EvidenceRecord, Signal, records_independent,
     },
-    finding::{Finding, FindingState, Polarity, Region, Shape, UnresolvedReason},
+    finding::{Finding, FindingState, Holder, Polarity, Region, Shape, UnresolvedReason},
     harness::harness_id_of,
     holders::{InterventionResult, control_record, named_holder_kind, names_holder},
     ids::{EvidenceId, FindingId},
     m6::codes as m6_codes,
     slice::codes as m4_codes,
     state::EntryPath,
-    trend::{GrowthSummary, finding_region, finding_shape},
+    trend::{GrowthSummary, PassedColumn, finding_region, finding_shape},
 };
 
 /// States reachable from `from` in one move.
@@ -441,19 +441,58 @@ pub fn derive_attributes(finding: &Finding, lookup: &dyn EvidenceLookup) -> Deri
     }
 }
 
-/// The warning `dla ledger confirm` prints when none of the passing columns cited for a
-/// leak-side finding is tied to it (by `finding`, by an equal site or by `candidates`).
+/// The warning `dla ledger confirm` prints for a leak-side finding when none of the
+/// passing columns cited for it is tied to it (by `finding`, by an equal site or by
+/// `candidates`), or when the tied columns observed a holder kind other than the
+/// finding's. It is a warning, never a refusal.
 pub fn confirm_warning(finding: &Finding, lookup: &dyn EvidenceLookup) -> Option<String> {
     if finding.polarity() != Polarity::Leak {
         return None;
     }
     let (tied, _) = passing_columns(finding, lookup);
     if !tied.is_empty() {
-        return None;
+        return observed_holder_warning(finding, lookup);
     }
     let id = &finding.id;
     Some(format!(
         "no passing growth column cited for {id} is tied to it (by finding, site or candidates): the growth may belong to another holder; add a probe for {id} and rerun the harness if it does"
+    ))
+}
+
+/// The warning for a finding whose cited, tied passing column carries a `holder_kind`
+/// that differs from the finding's holder (and no tied column carries the finding's).
+/// It names the observed holder and the v5 command that corrects the holder.
+fn observed_holder_warning(finding: &Finding, lookup: &dyn EvidenceLookup) -> Option<String> {
+    let have = finding.holder?;
+    let id = &finding.id;
+    let mut first: Option<(Holder, String, String)> = None;
+    for e in passing_growth(finding, lookup) {
+        let Some(columns) = e.result.get("passed").and_then(|p| p.as_array()) else {
+            continue;
+        };
+        for c in columns {
+            let Ok(col) = serde_json::from_value::<PassedColumn>(c.clone()) else {
+                continue;
+            };
+            if !col.tied_to_owner(id, finding.site.as_deref(), finding.owner.as_deref()) {
+                continue;
+            }
+            let Some(kind) = c
+                .get("holder_kind")
+                .and_then(|v| v.as_str())
+                .and_then(|k| k.parse::<Holder>().ok())
+            else {
+                continue;
+            };
+            if kind == have {
+                return None;
+            }
+            first.get_or_insert((kind, col.column.clone(), e.evidence_id.to_string()));
+        }
+    }
+    let (kind, column, eid) = first?;
+    Some(format!(
+        "{id} has holder {have}, but the passing column {column} of {eid} observed {kind}; if {kind} is right: dla ledger annotate {id} --holder {kind} --evidence {eid}"
     ))
 }
 

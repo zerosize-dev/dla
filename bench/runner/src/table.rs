@@ -92,6 +92,24 @@ pub fn render_group(g: &Group) -> String {
         us.cost_usd.sum,
         num(us.cost_usd.mean)
     );
+    if let Some(v) = &g.verification {
+        let _ = writeln!(s, "\n### Verification\n");
+        s.push_str("| Item | Value | Num/Den |\n|---|---|---|\n");
+        for (n, r) in [
+            (
+                "verified share of confirmed leak-side findings",
+                &v.verified_share,
+            ),
+            ("site agreement (verified findings)", &v.site_agreement),
+            ("holder agreement (verified findings)", &v.holder_agreement),
+            (
+                "label agreement (verified findings with a label verdict)",
+                &v.label_agreement,
+            ),
+        ] {
+            let _ = writeln!(s, "| {n} | {} | {}/{} |", num(r.value), r.num, r.den);
+        }
+    }
     let _ = writeln!(s, "\n### Per fixture\n");
     s.push_str(
         "| Fixture | Category | Runs | Claim runs | Rule-out runs | Leaks (found/flagged/grounded) |\n|---|---|---|---|---|---|\n",

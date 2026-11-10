@@ -103,6 +103,42 @@ fn grade_then_table_through_the_binary() {
     );
 }
 
+#[test]
+fn the_table_shows_the_verification_block_only_where_a_group_has_one() {
+    let s = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/verify-sample");
+    let t = tempfile::tempdir().unwrap();
+    let res = t.path().join("res");
+    fs::create_dir_all(&res).unwrap();
+    copy_dir(&s.join("results"), &res);
+    bin()
+        .arg("grade")
+        .arg(&res)
+        .arg("--fixtures")
+        .arg(s.join("fixtures"))
+        .assert()
+        .success();
+    bin()
+        .arg("compare")
+        .arg(res.join("metrics.json"))
+        .arg(s.join("expected-metrics.json"))
+        .assert()
+        .success();
+    bin().arg("table").arg(&res).assert().success();
+    let md = fs::read_to_string(res.join("table.md")).unwrap();
+    assert_eq!(md.matches("### Verification").count(), 1, "{md}");
+    assert!(
+        md.contains("| verified share of confirmed leak-side findings | 0.7500 | 3/4 |"),
+        "{md}"
+    );
+    assert!(
+        md.contains("| label agreement (verified findings with a label verdict) | 0.5000 | 1/2 |"),
+        "{md}"
+    );
+    // The group without a verification record has no block: it comes after the full group.
+    let gates = md.split("## gates").nth(1).unwrap();
+    assert!(!gates.contains("Verification"), "{md}");
+}
+
 fn copy_dir(from: &Path, to: &Path) {
     for e in fs::read_dir(from).unwrap().flatten() {
         let dest = to.join(e.file_name());

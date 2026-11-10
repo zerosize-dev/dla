@@ -546,6 +546,9 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
         None
     } else if out.ok {
         fx.row.ops.push(format!("{op}:{backend}"));
+        fx.row
+            .summarize_cmds
+            .push(args.iter().map(|a| (*a).to_owned()).collect());
         annotate_observed_holders(fx, &out);
         for id in out.evidence() {
             if !fx.row.summarize_evidence.contains(&id) {

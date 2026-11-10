@@ -398,3 +398,70 @@ fn runtime_references_point_to_their_archetype_file() {
         );
     }
 }
+
+fn marked_block(text: &str, name: &str) -> Vec<String> {
+    let begin = format!("<!-- {name}:begin -->");
+    let end = format!("<!-- {name}:end -->");
+    let mut inside = false;
+    let mut lines = Vec::new();
+    let (mut begins, mut ends) = (0, 0);
+    for l in text.lines() {
+        if l.trim() == end {
+            inside = false;
+            ends += 1;
+        } else if inside {
+            lines.push(l.to_owned());
+        } else if l.trim() == begin {
+            inside = true;
+            begins += 1;
+        }
+    }
+    assert_eq!((begins, ends), (1, 1), "one {name} block in the file");
+    lines
+}
+
+#[test]
+fn the_verifiers_id_list_equals_the_table() {
+    let text = fs::read_to_string(root().join("agents/verifier.md")).unwrap();
+    let got = marked_block(&text, "archetypes");
+    // The block opens with its own one-line introduction and a blank line, so that a variant
+    // without archetypes loses the introduction with the list.
+    assert!(got[0].starts_with("IDs ("), "{got:?}");
+    assert!(got[1].is_empty());
+    let got = got[2..].to_vec();
+    let want: Vec<String> = table()
+        .entries()
+        .map(|e| format!("- `{}`: {}", e.id, e.summary))
+        .collect();
+    assert_eq!(want.len(), 17);
+    assert_eq!(
+        got, want,
+        "regenerate the block between the archetypes markers"
+    );
+}
+
+#[test]
+fn the_verifier_stays_blind() {
+    let text = fs::read_to_string(root().join("agents/verifier.md")).unwrap();
+    // Outside the marked block, the file forbids the files that would give the answer away.
+    for must in [
+        "ledger*.jsonl",
+        "state.json",
+        "report.md",
+        "known-leaks.md",
+        "*-archetypes.md",
+        "archetypes.toml",
+        "--label",
+    ] {
+        assert!(text.contains(must), "verifier.md lacks {must}");
+    }
+    let before = text.find("<!-- archetypes:begin -->").unwrap();
+    let procedure = text.find("Procedure:").unwrap();
+    let id_step = text.find("Only then choose an ID").unwrap();
+    let words_first = text.find("before any ID").unwrap();
+    assert!(procedure < words_first && words_first < id_step && id_step < before);
+    assert!(
+        !text.contains("site:"),
+        "the verifier is never given a site"
+    );
+}

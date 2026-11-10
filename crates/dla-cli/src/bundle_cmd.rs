@@ -1,10 +1,12 @@
 //! `dla bundle <F>`: a finding's label-free evidence bundle for an independent verifier.
 //!
-//! The bundle holds the finding's site with a code excerpt, copies of the raw files
-//! behind its growth, retention, allocation and discriminator evidence, and an index
-//! of those evidence records. It never holds the hypothesis, the refutation condition,
-//! the archetype or suggestion, the explanation, the origin, or annotation notes and
-//! labels: those keys are removed from every JSON file it contains.
+//! The bundle holds copies of the raw files behind the finding's growth, retention,
+//! allocation and discriminator evidence, an index of those evidence records, and code
+//! excerpts around up to four project frames that the bundled evidence names (allocation
+//! stacks, retention paths, column sites). It never holds the finding's own site, the
+//! hypothesis, the refutation condition, the archetype or suggestion, the label, the
+//! explanation, the origin, or annotation notes: those keys are removed from every JSON
+//! file it contains, and the excerpts are never chosen from the finding's site field.
 
 use std::{
     fs,
@@ -16,7 +18,6 @@ use dla_core::{
     EvidenceId, FindingId,
     error::codes as core_codes,
     evidence::EvidenceClass,
-    finding::check_site,
     fsutil::{is_written, to_pretty_json, write_atomic},
     paths,
     toolctx::ToolCtx,
@@ -55,8 +56,29 @@ pub const FORBIDDEN_KEYS: [&str; 13] = [
     "remedy",
 ];
 
-/// Lines of source shown on each side of the site.
+/// Lines of source shown on each side of a frame.
 const EXCERPT_RADIUS: usize = 20;
+/// Most frames that get an excerpt.
+const MAX_EXCERPTS: usize = 4;
+/// Most candidate frames tried before giving up.
+const MAX_CANDIDATES: usize = 400;
+/// Most files indexed when a frame names a bare file name.
+const MAX_INDEXED_FILES: usize = 50_000;
+/// Largest raw text file scanned for frames.
+const MAX_SCAN_BYTES: usize = 1024 * 1024;
+/// Directories whose files are never project frames.
+const SKIP_DIRS: [&str; 10] = [
+    ".git",
+    ".dla",
+    "target",
+    "node_modules",
+    "vendor",
+    "site-packages",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+];
 /// Largest raw file copied into a bundle.
 const MAX_COPY_BYTES: u64 = 8 * 1024 * 1024;
 /// Largest source file read for the excerpt.
@@ -165,6 +187,197 @@ fn excerpt(project: &Path, site: &str) -> Option<String> {
     Some(out)
 }
 
+/// Characters that end a `file:line` token inside free text.
+const TOKEN_BREAKS: &str = "()[]{}<>,;\"'`|=";
+
+/// Appends `file:line` when `file` looks like a source file name.
+fn push_frame(file: &str, line: usize, out: &mut Vec<(String, usize)>) {
+    let name = file.rsplit(['/', '\\']).next().unwrap_or("");
+    let ext_ok = name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty()
+            && !ext.is_empty()
+            && ext.len() <= 8
+            && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+            && ext.bytes().any(|b| b.is_ascii_alphabetic())
+    });
+    if ext_ok && line > 0 && out.len() < MAX_CANDIDATES * 10 {
+        out.push((file.to_owned(), line));
+    }
+}
+
+/// Appends every `file:line` (or `file:line:column`) token found in `s`.
+fn push_text_frames(s: &str, out: &mut Vec<(String, usize)>) {
+    for tok in s.split(|c: char| c.is_whitespace() || TOKEN_BREAKS.contains(c)) {
+        let tok = tok.trim_end_matches(['.', ':']);
+        if tok.len() > 400 || !tok.contains(':') {
+            continue;
+        }
+        let parts: Vec<&str> = tok.split(':').collect();
+        for i in 1..parts.len() {
+            let n = parts[i];
+            if !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+                && let Ok(line) = n.parse::<usize>()
+            {
+                push_frame(&parts[..i].join(":"), line, out);
+                break;
+            }
+        }
+    }
+}
+
+/// The frames a JSON value names: `{"file", "line"}` objects, `[file, line]` pairs and
+/// `file:line` tokens in any string or object key, in document order.
+fn frames_in_value(v: &Value, out: &mut Vec<(String, usize)>) {
+    match v {
+        Value::String(s) => push_text_frames(s, out),
+        Value::Array(a) => {
+            if let [Value::String(f), Value::Number(n)] = a.as_slice()
+                && let Some(line) = n.as_u64()
+            {
+                push_frame(f, line as usize, out);
+            }
+            a.iter().for_each(|x| frames_in_value(x, out));
+        }
+        Value::Object(o) => {
+            if let (Some(Value::String(f)), Some(line)) =
+                (o.get("file"), o.get("line").and_then(Value::as_u64))
+            {
+                push_frame(f, line as usize, out);
+            }
+            for (k, x) in o {
+                push_text_frames(k, out);
+                frames_in_value(x, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The frames named by a bundled raw file: its JSON strings, else its text.
+fn frames_in_bytes(bytes: &[u8], out: &mut Vec<(String, usize)>) {
+    if let Ok(v) = serde_json::from_slice::<Value>(bytes) {
+        frames_in_value(&v, out);
+    } else {
+        let head = &bytes[..bytes.len().min(MAX_SCAN_BYTES)];
+        push_text_frames(&String::from_utf8_lossy(head), out);
+    }
+}
+
+/// Turns the file part of a frame into a path relative to the project.
+struct Resolver<'a> {
+    project: &'a Path,
+    canon: Option<PathBuf>,
+    index: Option<std::collections::HashMap<String, Vec<String>>>,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(project: &'a Path) -> Self {
+        Resolver {
+            project,
+            canon: fs::canonicalize(project).ok(),
+            index: None,
+        }
+    }
+
+    /// Project files by base name, built on first use; vendored and build directories,
+    /// hidden directories and symlinks are left out.
+    fn index(&mut self) -> &std::collections::HashMap<String, Vec<String>> {
+        let project = self.project;
+        self.index.get_or_insert_with(|| {
+            let mut map: std::collections::HashMap<String, Vec<String>> = Default::default();
+            let mut stack = vec![project.to_path_buf()];
+            let mut seen = 0usize;
+            while let Some(dir) = stack.pop() {
+                let Ok(rd) = fs::read_dir(&dir) else { continue };
+                for e in rd.flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let Ok(ft) = e.file_type() else { continue };
+                    if ft.is_symlink() {
+                        continue;
+                    }
+                    if ft.is_dir() {
+                        if !name.starts_with('.') && !SKIP_DIRS.contains(&name.as_str()) {
+                            stack.push(e.path());
+                        }
+                    } else if ft.is_file() && name.contains('.') {
+                        seen += 1;
+                        if seen > MAX_INDEXED_FILES {
+                            return map;
+                        }
+                        if let Some(rel) = paths::rel_slash(project, &e.path()) {
+                            map.entry(name).or_default().push(rel);
+                        }
+                    }
+                }
+            }
+            map
+        })
+    }
+
+    fn resolve(&mut self, file: &str) -> Option<String> {
+        let norm = file.replace('\\', "/");
+        let mut rel = norm.trim_start_matches("./").to_owned();
+        if Path::new(&rel).is_absolute() {
+            let p = Path::new(&rel);
+            let stripped = self
+                .canon
+                .as_deref()
+                .and_then(|c| p.strip_prefix(c).ok())
+                .or_else(|| p.strip_prefix(self.project).ok())?;
+            rel = stripped.to_string_lossy().replace('\\', "/");
+        }
+        let skipped = |r: &str| {
+            r.split('/')
+                .any(|c| SKIP_DIRS.contains(&c) || (c.starts_with('.') && c.len() > 1))
+        };
+        if skipped(&rel) {
+            return None;
+        }
+        if contained(self.project, &rel).is_some_and(|p| p.is_file()) {
+            return Some(rel);
+        }
+        let base = rel.rsplit('/').next()?.to_owned();
+        let suffix = format!("/{rel}");
+        let hits: Vec<&String> = self
+            .index()
+            .get(&base)?
+            .iter()
+            .filter(|c| **c == rel || c.ends_with(&suffix))
+            .collect();
+        match hits.as_slice() {
+            [one] => Some((*one).clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Up to [`MAX_EXCERPTS`] excerpts of distinct project frames, in candidate order, and
+/// the frames they are centred on.
+fn excerpts_for(project: &Path, candidates: &[(String, usize)]) -> (Vec<String>, Vec<String>) {
+    let mut resolver = Resolver::new(project);
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    let (mut texts, mut frames) = (Vec::new(), Vec::new());
+    for (file, line) in candidates.iter().take(MAX_CANDIDATES) {
+        if texts.len() >= MAX_EXCERPTS {
+            break;
+        }
+        let Some(rel) = resolver.resolve(file) else {
+            continue;
+        };
+        let key = (rel, *line);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key.clone());
+        if let Some(t) = excerpt(project, &format!("{}:{}", key.0, key.1)) {
+            texts.push(t);
+            frames.push(format!("{}:{}", key.0, key.1));
+        }
+    }
+    (texts, frames)
+}
+
 /// A raw file's bytes as the bundle keeps them: JSON is stripped of forbidden keys.
 fn bundle_bytes(raw: &[u8], is_json_name: bool) -> Vec<u8> {
     if is_json_name && let Ok(mut v) = serde_json::from_slice::<Value>(raw) {
@@ -214,11 +427,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
             "dla run status   (after dla ledger merge when the finding is a worker's)",
         )
     })?;
-    let site = finding.site.clone().filter(|s| check_site(s).is_ok());
+    let owner = finding.owner.clone();
     let ids = evidence_ids(&ledger, &id);
     let dir = tc.next_bundle_dir(&dir_name(&id))?;
-    let built = build(&tc, &ledger, &dir, project, &id, site.as_deref(), &ids);
-    let (manifest_sha, files, copied, omitted, has_excerpt) = match built {
+    let built = build(&tc, &ledger, &dir, project, &id, owner.as_deref(), &ids);
+    let (manifest_sha, files, copied, omitted, frames) = match built {
         Ok(b) => b,
         Err(f) => {
             let _ = fs::remove_dir_all(&dir);
@@ -235,15 +448,16 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
         "evidence": ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "raw_copied": copied,
         "raw_omitted": omitted,
-        "excerpt": has_excerpt,
+        "excerpt": !frames.is_empty(),
+        "excerpt_frames": frames,
         "next": format!(
-            "give the verifier only {} ; then: dla ledger verify {id} --site <file:line|none> --holder <h> --mechanism \"<text>\" --bundle {manifest_sha}",
+            "give the verifier only {} ; then: dla ledger verify {id} --site <file:line|none> --holder <h> --mechanism \"<text>\" --label <ID|UNCLASSIFIED> --bundle {manifest_sha}",
             ctx.pointer(&rel)
         ),
     }))
 }
 
-type Built = (String, usize, usize, Vec<String>, bool);
+type Built = (String, usize, usize, Vec<String>, Vec<String>);
 
 fn build(
     tc: &ToolCtx,
@@ -251,7 +465,7 @@ fn build(
     dir: &Path,
     project: &Path,
     id: &FindingId,
-    site: Option<&str>,
+    owner: Option<&str>,
     ids: &[EvidenceId],
 ) -> Result<Built, Failure> {
     let write = |name: &str, bytes: &[u8]| -> Result<(), Failure> {
@@ -264,12 +478,16 @@ fn build(
     let mut copied = 0usize;
     let mut omitted: Vec<String> = Vec::new();
     let mut records: Vec<Value> = Vec::new();
+    // Frames the evidence names, each with the class rank of its record.
+    let mut named: Vec<(u8, Vec<(String, usize)>)> = Vec::new();
     for eid in ids {
         let Some(e) = ledger.evidence_by_id(eid) else {
             continue;
         };
         let mut result = e.result.clone();
         strip_forbidden(&mut result);
+        let mut here: Vec<(String, usize)> = Vec::new();
+        frames_in_value(&result, &mut here);
         let mut rec = Map::new();
         rec.insert("id".into(), json!(e.evidence_id.to_string()));
         rec.insert("kind".into(), json!(e.kind.as_str()));
@@ -294,24 +512,37 @@ fn build(
                 omitted.push(format!("{eid}: {raw} is over {MAX_COPY_BYTES} bytes"));
             } else {
                 let bytes = fs::read(&src).map_err(|e| io_fail(&src, e))?;
-                write(&name, &bundle_bytes(&bytes, raw.ends_with(".json")))?;
+                let kept = bundle_bytes(&bytes, raw.ends_with(".json"));
+                frames_in_bytes(&kept, &mut here);
+                write(&name, &kept)?;
                 rec.insert("file".into(), json!(name));
                 copied += 1;
             }
         }
         records.push(Value::Object(rec));
+        let rank = match e.kind.class() {
+            EvidenceClass::Allocation => 0,
+            EvidenceClass::Retention => 1,
+            EvidenceClass::Growth => 2,
+            _ => 3,
+        };
+        named.push((rank, here));
     }
-    let excerpt_text = site.and_then(|s| excerpt(project, s));
-    let has_excerpt = excerpt_text.is_some();
-    if let Some(text) = &excerpt_text {
-        write("excerpt.txt", text.as_bytes())?;
+    named.sort_by_key(|(rank, _)| *rank);
+    let candidates: Vec<(String, usize)> = named.into_iter().flat_map(|(_, f)| f).collect();
+    let (texts, frames) = excerpts_for(project, &candidates);
+    if !texts.is_empty() {
+        write("excerpt.txt", texts.join("\n").as_bytes())?;
     }
     let mut index = json!({
         "finding": id.to_string(),
-        "site": site,
-        "excerpt": has_excerpt.then_some("excerpt.txt"),
+        "excerpt": (!frames.is_empty()).then_some("excerpt.txt"),
+        "frames": frames,
         "evidence": records,
     });
+    if let Some(o) = owner {
+        index["owner"] = json!(o);
+    }
     if !omitted.is_empty() {
         index["omitted"] = json!(omitted);
     }
@@ -332,7 +563,7 @@ fn build(
         listing.len() + 1,
         copied,
         omitted,
-        has_excerpt,
+        frames,
     ))
 }
 
@@ -365,5 +596,101 @@ mod tests {
         assert!(excerpt(dir.path(), "a.txt:51").is_none());
         assert!(excerpt(dir.path(), "../a.txt:1").is_none());
         assert!(excerpt(dir.path(), "missing.txt:1").is_none());
+    }
+
+    fn frames(v: Value) -> Vec<String> {
+        let mut out = Vec::new();
+        frames_in_value(&v, &mut out);
+        out.into_iter().map(|(f, l)| format!("{f}:{l}")).collect()
+    }
+
+    #[test]
+    fn frames_come_from_structured_pairs_and_tokens() {
+        let got = frames(json!({
+            "frames": [
+                {"function": "grow", "file": "src/a.rs", "line": 7},
+                ["pkg/b.py", 12],
+                "com.acme.Cache.put(Cache.java:44)",
+                "at /srv/app/c.js:9:13",
+            ],
+            "alloc": "grow (d.go:2)",
+            "sites": {"e.c:5": 3},
+            "time": "12:30:15",
+            "not_a_file": "key:5",
+        }));
+        for want in [
+            "src/a.rs:7",
+            "pkg/b.py:12",
+            "Cache.java:44",
+            "/srv/app/c.js:9",
+            "d.go:2",
+            "e.c:5",
+        ] {
+            assert!(got.iter().any(|g| g == want), "{want} in {got:?}");
+        }
+        assert!(
+            !got.iter()
+                .any(|g| g.contains("12:30") || g.contains("key:"))
+        );
+    }
+
+    #[test]
+    fn excerpts_are_capped_deduped_and_stay_inside_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("src/a")).unwrap();
+        fs::create_dir_all(root.join("src/b")).unwrap();
+        fs::create_dir_all(root.join("node_modules/x")).unwrap();
+        let body: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+        for f in [
+            "src/a/Cache.java",
+            "src/a/Only.java",
+            "src/b/Cache.java",
+            "node_modules/x/lib.js",
+        ] {
+            fs::write(root.join(f), &body).unwrap();
+        }
+        for n in 1..=5 {
+            fs::write(root.join(format!("m{n}.py")), &body).unwrap();
+        }
+        let cands = |v: &[(&str, usize)]| -> Vec<(String, usize)> {
+            v.iter().map(|(f, l)| ((*f).to_owned(), *l)).collect()
+        };
+        // A bare name that two files share is skipped; a unique one resolves.
+        let (texts, got) = excerpts_for(
+            root,
+            &cands(&[
+                ("Cache.java", 10),
+                ("Only.java", 20),
+                ("a/Cache.java", 30),
+                ("node_modules/x/lib.js", 1),
+                ("lib.js", 1),
+                ("../outside.py", 1),
+                ("missing.py", 1),
+            ]),
+        );
+        assert_eq!(got, ["src/a/Only.java:20", "src/a/Cache.java:30"]);
+        assert_eq!(texts.len(), 2);
+        assert!(
+            texts[0].starts_with("src/a/Only.java:20 (lines 1-40)"),
+            "{}",
+            texts[0]
+        );
+        // An absolute path inside the project resolves; the cap is four; repeats count once.
+        let abs = format!("{}/m1.py", root.display());
+        let (_, got) = excerpts_for(
+            root,
+            &cands(&[
+                (&abs, 5),
+                ("m1.py", 5),
+                ("m2.py", 5),
+                ("m3.py", 5),
+                ("m4.py", 5),
+                ("m5.py", 5),
+            ]),
+        );
+        assert_eq!(got, ["m1.py:5", "m2.py:5", "m3.py:5", "m4.py:5"]);
+        let (texts, got) = excerpts_for(root, &[]);
+        assert!(texts.is_empty() && got.is_empty());
     }
 }

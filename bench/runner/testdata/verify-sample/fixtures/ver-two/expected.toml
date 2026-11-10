@@ -1,0 +1,24 @@
+schema_version = 1
+id = "ver-two"
+runtime = "jvm"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "The heap grows and so do the threads."
+
+[[leak]]
+id = "L1"
+site = "src/Registry.java:44"
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 0.5
+
+[[leak]]
+id = "L2"
+site = "src/Audit.java:12"
+holder = "container-field"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 0.5

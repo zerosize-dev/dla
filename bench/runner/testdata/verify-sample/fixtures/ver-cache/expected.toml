@@ -1,0 +1,16 @@
+schema_version = 1
+id = "ver-cache"
+runtime = "jvm"
+category = "archetype-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "The heap grows."
+
+[[leak]]
+id = "L1"
+site = "src/Cache.java:20"
+holder = "container-field"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0

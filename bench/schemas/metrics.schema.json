@@ -129,6 +129,17 @@
         "usage": {
           "description": "Usage.",
           "$ref": "#/$defs/UsageStats"
+        },
+        "verification": {
+          "description": "Verification metrics; absent when no run has a verification record.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -340,6 +351,36 @@
         "per_run"
       ]
     },
+    "Share": {
+      "description": "A count over a count.",
+      "type": "object",
+      "properties": {
+        "den": {
+          "description": "Denominator.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "num": {
+          "description": "Numerator.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "value": {
+          "description": "`round6(num / den)`, null when `den` is 0.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "num",
+        "den"
+      ]
+    },
     "Sources": {
       "description": "Where findings came from.",
       "type": "object",
@@ -477,6 +518,48 @@
         "cache_creation_input_tokens",
         "wall_seconds",
         "cost_usd"
+      ]
+    },
+    "VerificationStats": {
+      "description": "What the independent verifier said about the confirmed leak-side findings of a group.\nPresent only when some run of the group has a `verification` record.",
+      "type": "object",
+      "properties": {
+        "claims": {
+          "description": "Confirmed or strong leak-side findings (non-hypothesis), all runs.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "holder_agreement": {
+          "description": "Verified claims whose verifier holder agrees, over verified claims.",
+          "$ref": "#/$defs/Share"
+        },
+        "label_agreement": {
+          "description": "Verified claims whose verifier label agrees, over verified claims with a label\nverdict.",
+          "$ref": "#/$defs/Share"
+        },
+        "site_agreement": {
+          "description": "Verified claims whose verifier site agrees, over verified claims.",
+          "$ref": "#/$defs/Share"
+        },
+        "verified": {
+          "description": "Of those, the ones with a verification record.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "verified_share": {
+          "description": "`verified / claims`.",
+          "$ref": "#/$defs/Share"
+        }
+      },
+      "required": [
+        "claims",
+        "verified",
+        "verified_share",
+        "site_agreement",
+        "holder_agreement",
+        "label_agreement"
       ]
     },
     "WallSeconds": {

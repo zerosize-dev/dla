@@ -177,7 +177,28 @@ name the missing item and the command that fixes it. A leak-side confirm needs a
 growth column tied to the finding (its probe, a column at its site, a column naming its owner, or
 one listing it under `candidates`); otherwise it is refused with `growth-not-tied`. On confirm the ledger fills `shape` and `region` from
 the first passing column cited when the finding has none (a `process` region leaves `region`
-unset). `ledger strong` is not available yet.
+unset).
+
+From ledger schema 6 a confirmed finding can also carry a label, a stored explanation and a strong
+mark. Each is a record of its own that replays from the ledger alone (a record carries its proof, so
+old ledgers replay unchanged):
+
+| Move | What the ledger requires | Refusal code |
+|---|---|---|
+| `ledger label F3 --as L-X` | F3 confirmed or strong; `L-*` on a leak-side finding, `N-*` on a non-leak sibling whose hypothesis names it; one `requires` alternative of the archetype met by evidence tied to F3; F3's holder among the archetype's holders; each look-alike the archetype disconfirms that exists as a sibling is refuted | `label-evidence-missing`, `label-polarity`, `label-hypothesis-mismatch`, `label-state`, `label-holder`, `label-disconfirm-open`, `unknown-archetype`, `archetypes-off` |
+| `ledger label F3 --as UNCLASSIFIED --note ".."` | F3 confirmed or strong; a note; always allowed (also with archetypes off) | `empty-field` |
+| `ledger strong F3 --evidence E` | F3 confirmed and leak-side; a passing growth record tied to F3; a second record that names F3's holder (retention) or removed the growth (intervention); the two records independent (tool, tool class and source differ); a holder kind the second record names equals F3's holder. A `histogram-diff` never counts | `strong-leak-only`, `strong-second-class-missing`, `strong-growth-unsigned`, `strong-not-independent`, `strong-holder-mismatch` |
+| `ledger explain F3 ...` | the text names the site or owner, the holder, an adding site and how removal fails; `--adds` are recorded writers or the site; `--removal` agrees with the recorded removers; 40 to 600 characters | `explain-no-writer`, `explain-remover-recorded` and the other `explain-*` codes |
+
+The label of a finding is the latest `finding_labeled` record. `dla ledger confirm` also prints a
+`warning` (not a refusal) when the passing column tied to the finding carries a `holder_kind` other
+than the finding's holder; it names the observed holder and the `ledger annotate F --holder H
+--evidence E` command that corrects it.
+
+An `intervention` record (`dla intervene`) holds the control and treated series, the guards and an
+`effect`: `growth-removed`, `growth-remains`, `inconclusive` or `invalid`. `growth-remains` and
+`inconclusive` never refute a leak. `dla trend` writes a `signal` (tool, tool class, source hash) into
+its growth evidence, which is how independence is judged.
 
 ## Residual
 
@@ -220,5 +241,31 @@ made after tracemalloc started.
   (`Coverage: python 7040 iterations, 10 of 10 entry points exercised`), or "not measured" for
   runtimes whose entry points cannot be measured (Rust, native);
 - open items, including residual items, with the command that closes each.
+
+For labelled, explained and verified findings it also prints, per finding:
+
+- `Label: L-COLLECT (evidence: E11 unit-count-series, E14 retention-path)`; a finding with no label shows
+  its ID line as UNCLASSIFIED and, when a note was recorded, `Label: UNCLASSIFIED (<note>)`. UNCLASSIFIED has the
+  same weight as any ID;
+- `Explanation (inferred|observed): <text>` and an `Explanation structure:` line with the adding sites,
+  the removal and the remover;
+- `Strong: second class E20 retention-path that names the holder, independent of the growth record E11
+  (dla-trend)` (or `intervention that removed the growth`);
+- `Verified: agrees (verifier site .., holder .., label ..; bundle ..)`, or `Verified: DISAGREES` with
+  what differs and both mechanisms, or `Verified: no` for a confirmed leak nobody verified.
+
+## Integrity
+
+`dla` seals each protected file it writes (`ledger*.jsonl`, `state.json`, `coverage.json`, `report.md`)
+by storing its length and sha256 in `<run>/integrity/<file>.seal`, under the same lock as the write.
+`dla gate check`, `dla report` and `dla run status` verify the seals. A mismatch is a tamper item: the
+report still renders, with `Status: INCOMPLETE` and the item named, and `gate check` fails. The hooks
+(`references/safety-and-effects.md`) only make an accidental edit less likely; the seals are the
+guarantee. If a protected file really was changed outside `dla` (a restored backup, a merge conflict you
+resolved), disclose it and run `dla run reseal --reason "<what changed and why>"`: it appends an
+`integrity_resealed` record to the ledger, seals the files again, and the report lists the reseal under
+Integrity. A run created before ledger schema 6 has no `integrity/` directory and is reported as unsealed,
+not as tampered. If `report.md` is edited after it was rendered, the next `dla report` replaces it and
+says so.
 
 Show the report exactly as printed. If it says INCOMPLETE, say so and list what is open.

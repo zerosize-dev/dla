@@ -1,7 +1,9 @@
 //! The enumeration never depends on archetype data: a small multi-runtime
-//! project is swept and censused with the shipped data files and with every
-//! archetype table removed and every `suggested_archetype` blanked. The
-//! enumerated counts and the (origin, site) sets must be identical.
+//! project is swept and censused four ways: with the shipped data files, with only
+//! `data/archetypes.toml` removed, with `DLA_ARCHETYPES=off`, and with every archetype
+//! table removed and every `suggested_archetype` blanked. The enumerated counts and the
+//! (origin, site) sets must be identical. Labelling a finding with an archetype is
+//! refused with `archetypes-off` in the three off modes and only there.
 
 use std::{
     collections::BTreeSet,
@@ -81,6 +83,38 @@ fn synthetic_project(root: &Path) {
     );
 }
 
+/// How archetype data is switched off (or not).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    /// The data files as shipped.
+    Shipped,
+    /// Only `data/archetypes.toml` is missing.
+    NoTable,
+    /// The shipped files and `DLA_ARCHETYPES=off`.
+    EnvOff,
+    /// Every archetype table removed and every `suggested_archetype` blanked.
+    Stripped,
+}
+
+impl Mode {
+    fn strip(self) -> bool {
+        self == Mode::Stripped
+    }
+
+    fn off(self) -> bool {
+        self != Mode::Shipped
+    }
+
+    fn dir(self) -> &'static str {
+        match self {
+            Mode::Shipped => "shipped",
+            Mode::NoTable => "no-table",
+            Mode::EnvOff => "env-off",
+            Mode::Stripped => "stripped",
+        }
+    }
+}
+
 /// Copies the shipped data; with `strip`, removes archetype tables and
 /// blanks every `suggested_archetype`.
 fn plugin_root(dest: &Path, strip: bool) {
@@ -124,12 +158,16 @@ struct Outcome {
     sites: BTreeSet<(String, String)>,
     /// Candidates that carry a suggested archetype: (origin, tag).
     tagged: Vec<(String, String)>,
+    /// The refusal code of `ledger label <candidate> --as L-COLLECT`.
+    label_refusal: String,
+    /// `archetypes` of `ledger label <candidate> --suggest`.
+    suggest: String,
 }
 
-fn dla(project: &Path, root: &Path, data_dir: &Path, args: &[&str]) -> Value {
-    let out = Command::cargo_bin("dla")
-        .unwrap()
-        .arg("--project")
+/// Runs `dla`; the exit code and the JSON it printed.
+fn dla_raw(project: &Path, root: &Path, data_dir: &Path, off: bool, args: &[&str]) -> (i32, Value) {
+    let mut cmd = Command::cargo_bin("dla").unwrap();
+    cmd.arg("--project")
         .arg(project)
         .args(args)
         .env("DLA_PLUGIN_ROOT", root)
@@ -137,17 +175,25 @@ fn dla(project: &Path, root: &Path, data_dir: &Path, args: &[&str]) -> Value {
         .env("DLA_CONSENT_TIERS", "1-4")
         .env_remove("DLA_RUN")
         .env_remove("DLA_DATA")
-        .current_dir(project)
-        .output()
-        .unwrap();
+        .env_remove("DLA_ARCHETYPES")
+        .current_dir(project);
+    if off {
+        cmd.env("DLA_ARCHETYPES", "off");
+    }
+    let out = cmd.output().unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
     let json: Value = serde_json::from_str(stdout.trim()).unwrap_or(Value::Null);
-    assert_eq!(out.status.code(), Some(0), "dla {args:?}: {stdout}");
-    assert_eq!(json["ok"], true, "dla {args:?}: {stdout}");
+    (out.status.code().unwrap_or(-1), json)
+}
+
+fn dla(project: &Path, root: &Path, data_dir: &Path, off: bool, args: &[&str]) -> Value {
+    let (code, json) = dla_raw(project, root, data_dir, off, args);
+    assert_eq!(code, 0, "dla {args:?}: {json}");
+    assert_eq!(json["ok"], true, "dla {args:?}: {json}");
     json
 }
 
-fn enumerate(root: &Path, strip: bool) -> Outcome {
+fn enumerate(root: &Path, mode: Mode) -> Outcome {
     let work = tempfile::tempdir().unwrap();
     let project = work.path().join("project");
     synthetic_project(&project);
@@ -173,16 +219,20 @@ fn enumerate(root: &Path, strip: bool) -> Outcome {
             .unwrap();
         assert!(st.success(), "git {args:?}");
     }
-    let plugin = root.join(if strip { "stripped" } else { "shipped" });
-    plugin_root(&plugin, strip);
+    let plugin = root.join(mode.dir());
+    plugin_root(&plugin, mode.strip());
+    if mode == Mode::NoTable {
+        fs::remove_file(plugin.join("data/archetypes.toml")).unwrap();
+    }
+    let off = mode == Mode::EnvOff;
     let data_dir = work.path().join("data-dir");
     fs::create_dir_all(&data_dir).unwrap();
 
-    dla(&project, &plugin, &data_dir, &["run", "init"]);
+    dla(&project, &plugin, &data_dir, off, &["run", "init"]);
     let mut enumerated = 0;
     for lang in LANGS {
         for cmd in ["sweep", "census"] {
-            let v = dla(&project, &plugin, &data_dir, &[cmd, "--lang", lang]);
+            let v = dla(&project, &plugin, &data_dir, off, &[cmd, "--lang", lang]);
             if cmd == "census" {
                 enumerated += v["candidates"].as_u64().unwrap();
             } else {
@@ -209,18 +259,45 @@ fn enumerate(root: &Path, strip: bool) -> Outcome {
             tagged.push((origin, tag.to_owned()));
         }
     }
+    // A candidate cannot be labelled either way; the point is which refusal says why.
+    let first = ledger
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|r| r["type"] == "finding_added")
+        .and_then(|r| r["finding"]["id"].as_str().map(str::to_owned))
+        .expect("the project produced a candidate");
+    let (_, label) = dla_raw(
+        &project,
+        &plugin,
+        &data_dir,
+        off,
+        &["ledger", "label", &first, "--as", "L-COLLECT"],
+    );
+    assert_eq!(label["ok"], false, "{label}");
+    let label_refusal = label["error"]["code"].as_str().unwrap_or("").to_owned();
+    let suggest = dla(
+        &project,
+        &plugin,
+        &data_dir,
+        off,
+        &["ledger", "label", &first, "--suggest"],
+    )["archetypes"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
     Outcome {
         enumerated,
         sites,
         tagged,
+        label_refusal,
+        suggest,
     }
 }
 
 #[test]
 fn enumeration_does_not_depend_on_archetype_data() {
     let roots = tempfile::tempdir().unwrap();
-    let shipped = enumerate(roots.path(), false);
-    let stripped = enumerate(roots.path(), true);
+    let shipped = enumerate(roots.path(), Mode::Shipped);
 
     assert!(
         shipped.enumerated > 0 && !shipped.sites.is_empty(),
@@ -239,17 +316,41 @@ fn enumeration_does_not_depend_on_archetype_data() {
         !shipped.tagged.is_empty(),
         "the shipped data should tag at least one detector candidate (otherwise the test proves nothing)"
     );
-    assert_eq!(
-        shipped.enumerated, stripped.enumerated,
-        "enumerated counts differ"
-    );
-    assert_eq!(shipped.sites, stripped.sites, "(origin, site) sets differ");
+    // With archetypes on a label is refused for the finding's state, never for archetypes.
+    assert_ne!(shipped.label_refusal, "archetypes-off");
+    assert_eq!(shipped.suggest, "on");
+
+    for mode in [Mode::NoTable, Mode::EnvOff, Mode::Stripped] {
+        assert!(mode.off());
+        let off = enumerate(roots.path(), mode);
+        assert_eq!(
+            shipped.enumerated, off.enumerated,
+            "{mode:?}: enumerated counts differ"
+        );
+        assert_eq!(
+            shipped.sites, off.sites,
+            "{mode:?}: (origin, site) sets differ"
+        );
+        assert_eq!(
+            off.label_refusal, "archetypes-off",
+            "{mode:?}: the label must be refused because archetypes are off"
+        );
+        assert_eq!(off.suggest, "off", "{mode:?}");
+        for (origin, tag) in &off.tagged {
+            assert_ne!(
+                origin, "census",
+                "{mode:?}: a census candidate carries {tag}"
+            );
+        }
+    }
+    // Only the stripped data has no tags: the other off modes leave the detector files.
+    let stripped = enumerate(roots.path(), Mode::Stripped);
     assert!(
         stripped.tagged.is_empty(),
         "tags without archetype data: {:?}",
         stripped.tagged
     );
-    for (origin, tag) in shipped.tagged.iter().chain(&stripped.tagged) {
+    for (origin, tag) in &shipped.tagged {
         assert_ne!(origin, "census", "a census candidate carries {tag}");
     }
 }

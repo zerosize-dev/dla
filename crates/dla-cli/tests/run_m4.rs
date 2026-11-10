@@ -539,7 +539,8 @@ fn bundle_carries_site_excerpt_and_evidence_without_labels() {
         .add_evidence(evidence(
             EvidenceKind::GrowthSeries,
             Authority::Test,
-            json!({"gate": "pass", "hypothesis": "leak in Cache", "inner": {"origin": "census"}}),
+            json!({"gate": "pass", "hypothesis": "leak in Cache", "inner": {"origin": "census"},
+            "passed": [{"column": "probe:CACHE", "site": "src/Cache.java:30"}]}),
             Some("series/S1.json"),
         ))
         .unwrap();
@@ -598,12 +599,17 @@ fn bundle_carries_site_excerpt_and_evidence_without_labels() {
 
     let index: Value =
         serde_json::from_slice(&fs::read(bundle.join("index.json")).unwrap()).unwrap();
-    assert_eq!(index["site"], "src/Cache.java:30");
+    assert!(index.get("site").is_none(), "{index}");
+    assert_eq!(index["frames"], json!(["src/Cache.java:30"]));
     let recs = index["evidence"].as_array().unwrap();
     assert_eq!(recs.len(), 2);
     assert_eq!(recs[0]["kind"], "growth-series");
     assert_eq!(recs[0]["authority"], "test");
-    assert_eq!(recs[0]["result"], json!({"gate": "pass", "inner": {}}));
+    assert_eq!(
+        recs[0]["result"],
+        json!({"gate": "pass", "inner": {},
+        "passed": [{"column": "probe:CACHE", "site": "src/Cache.java:30"}]})
+    );
     assert!(
         recs[1].get("file").is_none(),
         "an empty placeholder is not copied"
@@ -699,7 +705,7 @@ fn bundle_does_not_follow_symlinks_out_of_the_run_or_the_project() {
         .add_evidence(evidence(
             EvidenceKind::GrowthSeries,
             Authority::Test,
-            json!({"gate": "pass"}),
+            json!({"gate": "pass", "passed": [{"site": "src/Secret.java:1"}]}),
             Some("series/link.json"),
         ))
         .unwrap();

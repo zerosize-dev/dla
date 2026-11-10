@@ -36,6 +36,13 @@
       "description": "Fixture ID.",
       "type": "string"
     },
+    "incomplete_reason": {
+      "description": "Why the run ended `incomplete` (`incomplete_reason` of `state.json`); absent when the\nrun was not marked or `dla` was not used.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "description": "Model from the init event.",
       "type": [
@@ -67,6 +74,15 @@
     "started_at": {
       "description": "Start time, RFC 3339.",
       "type": "string"
+    },
+    "stop_blocks": {
+      "description": "Times the stop hook blocked the stop (`stop_blocks` of `state.json`); absent when no\n`state.json` was collected.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
     },
     "timed_out": {
       "description": "True when the timeout fired.",

@@ -500,6 +500,10 @@ fn missing_claude_is_recorded_not_fatal() {
 
 // ---------------------------------------------------------------- variants
 
+/// The shape of the real `hooks/hooks.json`: the gates call the shim by its plugin path.
+const HOOKS_JSON: &str = r#"{"hooks":{"SubagentStop":[{"matcher":"^dla:worker$","hooks":[{"type":"command","command":"\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate stop-hook --subagent","timeout":30}]}]}}
+"#;
+
 fn mini_repo(root: &Path) {
     write(
         &root.join(".claude-plugin/plugin.json"),
@@ -508,7 +512,7 @@ fn mini_repo(root: &Path) {
     write(&root.join(".claude-plugin/marketplace.json"), "{}\n");
     write(
         &root.join("skills/detect-leak-anywhere/SKILL.md"),
-        "---\nname: detect-leak-anywhere\ndescription: d\nhooks:\n  PreToolUse:\n    - matcher: Bash\n---\nbody\n",
+        "---\nname: detect-leak-anywhere\ndescription: d\nhooks:\n  PreToolUse:\n    - matcher: Bash\n---\nbody\n<!-- archetypes:begin -->\nlabel it with `dla ledger label`\n<!-- archetypes:end -->\nend\n",
     );
     write(
         &root.join("skills/detect-leak-anywhere/references/jvm.md"),
@@ -522,9 +526,12 @@ fn mini_repo(root: &Path) {
         &root.join("skills/detect-leak-anywhere/references/known-leaks.md"),
         "k\n",
     );
-    write(&root.join("agents/verifier.md"), "v\n");
+    write(
+        &root.join("agents/verifier.md"),
+        "v\n<!-- archetypes:begin -->\nL-COLLECT: a collection\nL-TLS: a thread local\n<!-- archetypes:end -->\nafter\n",
+    );
     write(&root.join("agents/worker.md"), "w\n");
-    write(&root.join("hooks/hooks.json"), "{}\n");
+    write(&root.join("hooks/hooks.json"), HOOKS_JSON);
     script(&root.join("bin/dla"), "exit 0");
     write(&root.join("data/archetypes.toml"), "a=1\n");
     write(&root.join("data/known-leaks.toml"), "a=1\n");
@@ -605,7 +612,7 @@ fn gates_variant_has_no_hooks_no_verifier_and_no_hooks_block() {
     let skill = fs::read_to_string(d.join("skills/detect-leak-anywhere/SKILL.md")).unwrap();
     assert_eq!(
         skill,
-        "---\nname: detect-leak-anywhere\ndescription: d\n---\nbody\n"
+        "---\nname: detect-leak-anywhere\ndescription: d\n---\nbody\n<!-- archetypes:begin -->\nlabel it with `dla ledger label`\n<!-- archetypes:end -->\nend\n"
     );
     let mode = fs::metadata(d.join("bin/dla"))
         .unwrap()
@@ -714,6 +721,292 @@ fn gates_run_passes_the_plugin_dir_binary_and_consent() {
     assert!(!work.join("plugin/hooks").exists());
     let rd = e.run_dir("gates", "off", "fx-a", 1);
     assert!(rd.join("ledger.jsonl").is_file());
+}
+
+#[test]
+fn full_variant_copies_the_hook_gates_and_the_verifier_and_gates_copies_neither() {
+    let t = tempfile::tempdir().unwrap();
+    mini_repo(t.path());
+    let full = t.path().join("full");
+    variant(t.path(), Ablation::Full, false, &full);
+    // hooks.json (the gates), the skill frontmatter hooks and the verifier are all kept.
+    assert_eq!(
+        fs::read_to_string(full.join("hooks/hooks.json")).unwrap(),
+        HOOKS_JSON
+    );
+    assert!(full.join("agents/verifier.md").is_file());
+    assert!(
+        fs::read_to_string(full.join("skills/detect-leak-anywhere/SKILL.md"))
+            .unwrap()
+            .contains("hooks:\n  PreToolUse:")
+    );
+    let gates = t.path().join("gates");
+    variant(t.path(), Ablation::Gates, false, &gates);
+    assert!(!gates.join("hooks").exists());
+    assert!(!gates.join("agents/verifier.md").exists());
+    assert!(
+        !fs::read_to_string(gates.join("skills/detect-leak-anywhere/SKILL.md"))
+            .unwrap()
+            .contains("hooks:")
+    );
+    // The same holds with archetypes off.
+    let full_off = t.path().join("full-off");
+    variant(t.path(), Ablation::Full, true, &full_off);
+    assert_eq!(
+        fs::read_to_string(full_off.join("hooks/hooks.json")).unwrap(),
+        HOOKS_JSON
+    );
+    assert!(full_off.join("agents/verifier.md").is_file());
+}
+
+#[test]
+fn archetypes_off_strips_every_marked_block_of_every_markdown_file() {
+    let t = tempfile::tempdir().unwrap();
+    mini_repo(t.path());
+    for abl in [Ablation::Prose, Ablation::Gates, Ablation::Full] {
+        let on = t.path().join(format!("{abl:?}-on"));
+        let off = t.path().join(format!("{abl:?}-off"));
+        variant(t.path(), abl, false, &on);
+        variant(t.path(), abl, true, &off);
+        let skill_on = fs::read_to_string(on.join("skills/detect-leak-anywhere/SKILL.md")).unwrap();
+        let skill_off =
+            fs::read_to_string(off.join("skills/detect-leak-anywhere/SKILL.md")).unwrap();
+        if abl != Ablation::Prose {
+            // The prose variant brings its own SKILL.md, which has no block here.
+            assert!(skill_on.contains("archetypes:begin"), "{abl:?}");
+            assert!(!skill_off.contains("archetypes:"), "{abl:?}: {skill_off}");
+            assert!(!skill_off.contains("dla ledger label"), "{abl:?}");
+            assert!(skill_off.ends_with("body\nend\n"), "{abl:?}: {skill_off}");
+        }
+        if abl == Ablation::Full {
+            let v_on = fs::read_to_string(on.join("agents/verifier.md")).unwrap();
+            let v_off = fs::read_to_string(off.join("agents/verifier.md")).unwrap();
+            assert!(v_on.contains("L-COLLECT"));
+            assert_eq!(v_off, "v\nafter\n", "markers and their body are gone");
+        } else {
+            // Prose and gates have no verifier.
+            assert!(!off.join("agents/verifier.md").exists());
+        }
+    }
+}
+
+#[test]
+fn unbalanced_archetype_markers_are_an_error() {
+    use dla_bench::run::strip_archetype_blocks;
+    assert_eq!(
+        strip_archetype_blocks("a\n<!-- archetypes:begin -->\nx\n<!-- archetypes:end -->\nb\n")
+            .unwrap(),
+        "a\nb\n"
+    );
+    // Two blocks, and text with no block at all.
+    assert_eq!(
+        strip_archetype_blocks(
+            "1\n<!-- archetypes:begin -->\nx\n<!-- archetypes:end -->\n2\n<!-- archetypes:begin -->y<!-- archetypes:end -->3\n"
+        )
+        .unwrap(),
+        "1\n2\n3\n"
+    );
+    assert_eq!(strip_archetype_blocks("plain\n").unwrap(), "plain\n");
+    for bad in [
+        "a\n<!-- archetypes:begin -->\nx\n",
+        "a\n<!-- archetypes:end -->\n",
+        "<!-- archetypes:end -->\n<!-- archetypes:begin -->\nx\n<!-- archetypes:end -->\n",
+        "<!-- archetypes:begin -->\n<!-- archetypes:begin -->\n<!-- archetypes:end -->\n",
+    ] {
+        assert!(strip_archetype_blocks(bad).is_err(), "{bad:?}");
+    }
+    // A variant with an unbalanced marker is refused, not built.
+    let t = tempfile::tempdir().unwrap();
+    mini_repo(t.path());
+    write(
+        &t.path()
+            .join("skills/detect-leak-anywhere/references/jvm.md"),
+        "<!-- archetypes:begin -->\nnever closed\n",
+    );
+    let res = build_variant(
+        &VariantSpec {
+            repo_root: t.path().to_path_buf(),
+            ablations_dir: t.path().join("bench/ablations"),
+            ablation: Ablation::Full,
+            archetypes_off: true,
+        },
+        &t.path().join("v"),
+    );
+    assert!(res.unwrap_err().contains("without an end marker"));
+}
+
+/// The fake claude of the hook test: it finds the plugin directory in its arguments, runs
+/// the command of the first hook of `hooks/hooks.json` the way Claude Code does (a shell
+/// with `CLAUDE_PLUGIN_ROOT` set, in the project), and leaves a state and a bundle behind.
+const FAKE_HOOKS: &str = r#"
+cfg="$CLAUDE_CONFIG_DIR"
+env | sort > "$cfg/env.txt"
+plugin=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--plugin-dir" ]; then plugin="$a"; fi
+  prev="$a"
+done
+echo '{"type":"system","subtype":"init","model":"fake-model"}'
+mkdir -p .dla/R1/bundle/B1 .dla/R1/integrity
+echo R1 > .dla/current
+echo '{"type":"finding_added","finding":{"id":"F1","site":"src/main.py:1"}}' > .dla/R1/ledger.jsonl
+echo '{"id":"B1"}' > .dla/R1/bundle/B1/index.json
+echo '{"manifest":true}' > .dla/R1/bundle/B1/manifest.json
+echo 'excerpt one' > .dla/R1/bundle/B1/excerpt.txt
+echo 'excerpt two' > .dla/R1/bundle/B1/excerpt-2.txt
+echo 'raw' > .dla/R1/bundle/B1/raw.bin
+echo '{"len":3,"sha256":"x","written_at":"t"}' > .dla/R1/integrity/ledger.jsonl.seal
+echo 'not a seal' > .dla/R1/integrity/notes.txt
+echo '{"incomplete_reason":"the stop hook let the run stop after 3 blocks","stop_blocks":3}' > .dla/R1/state.json
+cmd=$(sed -n 's/.*"command":"\(.*\)","timeout.*/\1/p' "$plugin/hooks/hooks.json" | head -n 1 | sed 's/\\"/"/g')
+CLAUDE_PLUGIN_ROOT="$plugin" sh -c "$cmd" > "$cfg/hook-out.txt" 2> "$cfg/hook-err.txt"
+echo "exit=$?" >> "$cfg/hook-out.txt"
+echo '{"type":"result","total_cost_usd":0.1,"num_turns":1,"usage":{}}'
+"#;
+
+/// The hook command is `"${CLAUDE_PLUGIN_ROOT}/bin/dla" ...`: the shim has to find the
+/// binary the runner copied through `DLA_BIN`, from the environment the runner gives the
+/// child, with nothing else set.
+#[test]
+fn a_hook_process_finds_the_dla_binary_through_the_child_environment() {
+    let e = Env::new(FAKE_HOOKS);
+    mini_repo(&e.root.join("repo"));
+    // The real shim, so the test covers how it resolves the binary.
+    write(
+        &e.root.join("repo/bin/dla"),
+        include_str!("../../../bin/dla"),
+    );
+    fs::set_permissions(
+        e.root.join("repo/bin/dla"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    script(
+        &e.root.join("fake-dla"),
+        "echo \"args=$*\"\necho \"plugin_root=$DLA_PLUGIN_ROOT\"\necho \"data_dir=$DLA_DATA_DIR\"\nexit 7",
+    );
+    for (abl, hooks) in [("full", true), ("gates", false)] {
+        let out = e
+            .cmd(&[
+                "--ablation",
+                abl,
+                "--runs",
+                "1",
+                "--fixtures",
+                "fx-a",
+                "--keep-work",
+                "--dla-bin",
+            ])
+            .arg(e.root.join("fake-dla"))
+            .arg("--ablations-dir")
+            .arg(e.root.join("repo/bench/ablations"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{abl}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let work = e.work_dir(abl, "on", "fx-a", 1);
+        let cfg = work.join("config");
+        let envtxt = fs::read_to_string(cfg.join("env.txt")).unwrap();
+        let copy = e.root.join("work/res/bin/dla");
+        assert!(
+            envtxt.contains(&format!("DLA_BIN={}", copy.display())),
+            "{abl}: {envtxt}"
+        );
+        // The hook only runs where the variant has a hooks.json; `gates` has none, so the
+        // fake finds no command there.
+        let hook_out = fs::read_to_string(cfg.join("hook-out.txt")).unwrap_or_default();
+        if hooks {
+            let plugin = work.join("plugin");
+            assert!(
+                hook_out.contains("args=gate stop-hook --subagent"),
+                "{hook_out}"
+            );
+            assert!(
+                hook_out.contains(&format!("plugin_root={}", plugin.display())),
+                "{hook_out}"
+            );
+            assert!(hook_out.contains("exit=7"), "{hook_out}");
+            // Nothing but the child environment was needed: the shim exports the rest.
+            assert!(hook_out.contains("data_dir="), "{hook_out}");
+        } else {
+            assert!(!hook_out.contains("args="), "{abl}: {hook_out}");
+        }
+    }
+}
+
+#[test]
+fn a_run_collects_the_bundle_manifest_excerpts_seals_and_the_state_facts() {
+    let e = Env::new(FAKE_HOOKS);
+    mini_repo(&e.root.join("repo"));
+    script(&e.root.join("fake-dla"), "exit 0");
+    for abl in ["full", "no-skill"] {
+        let mut args = vec![
+            "--ablation",
+            abl,
+            "--runs",
+            "1",
+            "--fixtures",
+            "fx-a",
+            "--ablations-dir",
+        ];
+        let ab = e.root.join("repo/bench/ablations");
+        args.push(ab.to_str().unwrap());
+        let fake = e.root.join("fake-dla");
+        args.extend(["--dla-bin", fake.to_str().unwrap()]);
+        let out = e.cmd(&args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{abl}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let rd = e.run_dir(abl, "on", "fx-a", 1);
+        // Bundle: the index, the manifest and the excerpts, nothing else.
+        let b = rd.join("bundle/B1");
+        assert!(b.join("index.json").is_file(), "{abl}");
+        assert_eq!(
+            fs::read_to_string(b.join("manifest.json")).unwrap().trim(),
+            "{\"manifest\":true}"
+        );
+        assert_eq!(
+            fs::read_to_string(b.join("excerpt.txt")).unwrap().trim(),
+            "excerpt one"
+        );
+        assert!(b.join("excerpt-2.txt").is_file());
+        assert!(!b.join("raw.bin").exists());
+        // Integrity seals, and only seals.
+        assert!(rd.join("integrity/ledger.jsonl.seal").is_file(), "{abl}");
+        assert!(!rd.join("integrity/notes.txt").exists());
+        let rj = read_json(&rd.join("run.json"));
+        if abl == "full" {
+            assert_eq!(
+                rj["incomplete_reason"],
+                "the stop hook let the run stop after 3 blocks"
+            );
+            assert_eq!(rj["stop_blocks"], 3);
+        } else {
+            // No binary, no state: the fields are absent, not zero.
+            assert!(rj.get("incomplete_reason").is_none(), "{rj}");
+            assert!(rj.get("stop_blocks").is_none(), "{rj}");
+        }
+    }
+}
+
+#[test]
+fn a_state_without_a_stop_block_count_reads_as_zero_blocks() {
+    use dla_bench::run::read_state_facts;
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("state.json");
+    assert_eq!(read_state_facts(&p), (None, None), "no file");
+    fs::write(&p, "not json").unwrap();
+    assert_eq!(read_state_facts(&p), (None, None), "not JSON");
+    fs::write(&p, "{}").unwrap();
+    assert_eq!(read_state_facts(&p), (None, Some(0)));
+    fs::write(&p, r#"{"incomplete_reason":"r","stop_blocks":2}"#).unwrap();
+    assert_eq!(read_state_facts(&p), (Some("r".to_owned()), Some(2)));
 }
 
 // ---- interrupts, lock, retry, budget, systematic failure, artifacts, errors
@@ -1179,7 +1472,7 @@ fn worker_ledgers_and_bundle_indexes_are_collected_and_the_budget_is_set() {
     let envtxt = fs::read_to_string(cfg.join("env.txt")).unwrap();
     assert!(envtxt.contains("DLA_DEFAULT_BUDGET=7m"), "{envtxt}");
     assert!(
-        !envtxt.contains("9h") && !envtxt.contains("DLA_WORKER"),
+        !envtxt.contains("DLA_DEFAULT_BUDGET=9h") && !envtxt.contains("DLA_WORKER"),
         "{envtxt}"
     );
 

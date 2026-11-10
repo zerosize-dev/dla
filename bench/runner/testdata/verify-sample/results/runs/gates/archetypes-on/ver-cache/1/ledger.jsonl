@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "src/Cache.java:20", "holder": "container-field"}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "confirmed"}

@@ -1587,5 +1587,95 @@ class GoldenSampleTest(unittest.TestCase):
             self.assertEqual(out.read_bytes(), (SAMPLE / "metrics.json").read_bytes())
 
 
+class VerificationMetrics(unittest.TestCase):
+    """Verification records feed the verification metrics, never the findings."""
+
+    ADDED = {"type": "finding_added", "finding": {"id": "F1", "site": "a.py:1"}}
+    CONFIRMED = {"type": "transition", "finding": "F1", "to": "confirmed"}
+
+    def counts(self, *records):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "ledger.jsonl"
+            p.write_text(raw(*records))
+            saw, findings, verifications, keys = grade.parse_ledger_full(p)
+            self.assertTrue(saw)
+            return grade.verif_counts(findings, keys, verifications)
+
+    @staticmethod
+    def ver(finding, site, holder, **extra):
+        rec = {"type": "verification", "finding": finding, "holder": "static/global",
+               "mechanism": "m", "label": "UNCLASSIFIED", "bundle": "aa",
+               "agrees_site": site, "agrees_holder": holder}
+        rec.update(extra)
+        return rec
+
+    def test_a_claim_with_a_verification_counts_its_agreements(self):
+        c = self.counts(self.ADDED, self.CONFIRMED, self.ver("F1", True, False, agrees_label=True))
+        self.assertEqual(c, {"records": 1, "claims": 1, "verified": 1, "site": 1, "holder": 0,
+                             "label": 1, "label_den": 1})
+
+    def test_no_label_verdict_leaves_the_label_denominator(self):
+        for extra in ({}, {"agrees_label": None}):
+            c = self.counts(self.ADDED, self.CONFIRMED, self.ver("F1", True, True, **extra))
+            self.assertEqual((c["verified"], c["label"], c["label_den"]), (1, 0, 0), extra)
+        c = self.counts(self.ADDED, self.CONFIRMED, self.ver("F1", True, True, agrees_label="yes"))
+        self.assertEqual((c["records"], c["verified"]), (0, 0))
+
+    def test_the_last_verification_of_a_finding_wins(self):
+        c = self.counts(self.ADDED, self.CONFIRMED,
+                        self.ver("F1", False, False, agrees_label=False), self.ver("F1", True, True))
+        self.assertEqual((c["records"], c["verified"], c["site"], c["holder"], c["label_den"]),
+                         (1, 1, 1, 1, 0))
+
+    def test_only_confirmed_or_strong_findings_without_a_parent_are_claims(self):
+        c = self.counts(
+            self.ADDED, self.CONFIRMED,
+            {"type": "finding_added", "finding": {"id": "F2", "site": "b.py:1"}},
+            {"type": "transition", "finding": "F2", "to": "refuted"},
+            {"type": "finding_added", "finding": {"id": "F1.n1", "parent": "F1"}},
+            {"type": "transition", "finding": "F1.n1", "to": "confirmed"},
+            {"type": "finding_added", "finding": {"id": "F3", "site": "c.py:1"}},
+            {"type": "transition", "finding": "F3", "to": "strong"},
+            *[self.ver(f, True, True) for f in ("F1", "F2", "F1.n1", "F3")],
+        )
+        self.assertEqual((c["records"], c["claims"], c["verified"]), (4, 2, 2))
+
+    def test_old_shapes_unknown_findings_workers_and_merges(self):
+        old = {"type": "verification", "finding": "F1", "to": "confirmed", "result": "agrees"}
+        c = self.counts(self.ADDED, self.CONFIRMED, old)
+        self.assertEqual((c["records"], c["claims"], c["verified"]), (0, 1, 0))
+        self.assertEqual(self.counts(self.ADDED, self.CONFIRMED, self.ver("F9", True, True))["records"], 0)
+        wadd = {"type": "finding_added", "worker": "jvm", "finding": {"id": "F1", "site": "a.py:1"}}
+        wtr = {"type": "transition", "worker": "jvm", "finding": "F1", "to": "confirmed"}
+        c = self.counts(wadd, wtr, self.ver("F1", True, True, worker="jvm"))
+        self.assertEqual((c["records"], c["claims"], c["verified"]), (1, 1, 1))
+        wadd2 = dict(wadd, worker="rust")
+        merged = {"type": "finding_merged", "canonical": "jvm/F1", "duplicate": "rust/F1"}
+        c = self.counts(wadd, wtr, wadd2, self.ver("F1", True, True, worker="rust"), merged)
+        self.assertEqual((c["records"], c["verified"]), (0, 0))
+
+    def test_the_group_block_is_absent_without_a_record(self):
+        runs = [{"verif": dict.fromkeys(grade.VERIF_KEYS, 0)}]
+        self.assertIsNone(grade.verification_block(runs))
+        runs.append({"verif": dict(dict.fromkeys(grade.VERIF_KEYS, 0), records=2, claims=4,
+                                   verified=2, site=1, holder=2, label=0, label_den=0)})
+        b = grade.verification_block(runs)
+        self.assertEqual(b["verified_share"], {"num": 2, "den": 4, "value": 0.5})
+        self.assertEqual(b["site_agreement"], {"num": 1, "den": 2, "value": 0.5})
+        self.assertEqual(b["label_agreement"], {"num": 0, "den": 0, "value": None})
+
+    def test_the_verify_sample_matches_its_golden(self):
+        sample = Path(__file__).parent / "testdata" / "verify-sample"
+        with tempfile.TemporaryDirectory() as t:
+            out = Path(t) / "m.json"
+            rc = grade.main([str(sample / "results"), "--fixtures", str(sample / "fixtures"),
+                             "--out", str(out)])
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(out.read_text()), json.loads((sample / "expected-metrics.json").read_text()))
+            groups = {g["ablation"]: g for g in json.loads(out.read_text())["groups"]}
+            self.assertIn("verification", groups["full"])
+            self.assertNotIn("verification", groups["gates"])
+
+
 if __name__ == "__main__":
     unittest.main()

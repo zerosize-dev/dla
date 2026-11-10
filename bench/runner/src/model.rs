@@ -405,6 +405,14 @@ pub struct RunJson {
     pub started_at: String,
     /// Runner-side error, if any.
     pub error: Option<String>,
+    /// Why the run ended `incomplete` (`incomplete_reason` of `state.json`); absent when the
+    /// run was not marked or `dla` was not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_reason: Option<String>,
+    /// Times the stop hook blocked the stop (`stop_blocks` of `state.json`); absent when no
+    /// `state.json` was collected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_blocks: Option<u32>,
 }
 
 /// A ratio metric.
@@ -574,6 +582,36 @@ pub struct FixtureStats {
     pub worker_provenance: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
+/// A count over a count.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct Share {
+    /// Numerator.
+    pub num: u64,
+    /// Denominator.
+    pub den: u64,
+    /// `round6(num / den)`, null when `den` is 0.
+    pub value: Option<f64>,
+}
+
+/// What the independent verifier said about the confirmed leak-side findings of a group.
+/// Present only when some run of the group has a `verification` record.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct VerificationStats {
+    /// Confirmed or strong leak-side findings (non-hypothesis), all runs.
+    pub claims: u64,
+    /// Of those, the ones with a verification record.
+    pub verified: u64,
+    /// `verified / claims`.
+    pub verified_share: Share,
+    /// Verified claims whose verifier site agrees, over verified claims.
+    pub site_agreement: Share,
+    /// Verified claims whose verifier holder agrees, over verified claims.
+    pub holder_agreement: Share,
+    /// Verified claims whose verifier label agrees, over verified claims with a label
+    /// verdict.
+    pub label_agreement: Share,
+}
+
 /// One ablation with one archetypes setting.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct Group {
@@ -587,6 +625,9 @@ pub struct Group {
     pub unexplained_growth_share: Unexplained,
     /// Usage.
     pub usage: UsageStats,
+    /// Verification metrics; absent when no run has a verification record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<VerificationStats>,
     /// Per fixture statistics.
     pub fixtures: BTreeMap<String, FixtureStats>,
 }

@@ -15,7 +15,8 @@ use crate::{
     fixture::load_expected,
     model::{
         Category, Cost, Entry, Expected, FixtureStats, Group, Leak, LeakCounts, Metrics,
-        MetricsFile, PerRun, Ratio, Sources, SumMean, Unexplained, UsageStats, WallSeconds,
+        MetricsFile, PerRun, Ratio, Share, Sources, SumMean, Unexplained, UsageStats,
+        VerificationStats, WallSeconds,
     },
 };
 
@@ -121,6 +122,29 @@ fn worker_of_key(key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// What an independent verifier concluded about one finding (a ledger `verification`
+/// record, schema 3 and later).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Verif {
+    /// The verifier's site is the finding's.
+    pub agrees_site: bool,
+    /// The verifier's holder is the finding's.
+    pub agrees_holder: bool,
+    /// The verifier's label is the finding's; `None` when the record has no label verdict
+    /// (archetypes off, or a line older than schema 6).
+    pub agrees_label: Option<bool>,
+}
+
+/// A replayed ledger: the findings with their keys, and the verification of each finding
+/// that has one.
+#[derive(Debug, Clone, Default)]
+pub struct LedgerRead {
+    /// Findings in the order of their (latest) `finding_added` lines, with their keys.
+    pub findings: Vec<(String, Finding)>,
+    /// The latest verification record per finding key.
+    pub verifications: BTreeMap<String, Verif>,
+}
+
 /// Replays a ledger leniently. `None` when it holds no `finding_added` record.
 pub fn findings_from_ledger(text: &str) -> Option<Vec<Finding>> {
     findings_from_ledger_bytes(text.as_bytes())
@@ -130,8 +154,33 @@ pub fn findings_from_ledger(text: &str) -> Option<Vec<Finding>> {
 /// `\n` and decoded one by one; a line that is not valid UTF-8 is skipped
 /// like any other line that is not a JSON object.
 pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
+    read_ledger_bytes(bytes).map(|r| r.findings.into_iter().map(|(_, f)| f).collect())
+}
+
+/// The verification a `verification` record states: `agrees_site` and `agrees_holder` must
+/// be booleans, `agrees_label` a boolean or null or absent. A record of any other shape
+/// (the pre-schema-3 `result` form) is not a verification.
+fn verif_of(rec: &Value) -> Option<Verif> {
+    let site = rec.get("agrees_site")?.as_bool()?;
+    let holder = rec.get("agrees_holder")?.as_bool()?;
+    let label = match rec.get("agrees_label") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return None,
+    };
+    Some(Verif {
+        agrees_site: site,
+        agrees_holder: holder,
+        agrees_label: label,
+    })
+}
+
+/// Replays a ledger leniently, keeping the keys of the findings and the verifications.
+/// `None` when it holds no `finding_added` record.
+pub fn read_ledger_bytes(bytes: &[u8]) -> Option<LedgerRead> {
     // Findings in the order of their (latest) `finding_added` lines.
     let mut list: Vec<(String, Finding)> = Vec::new();
+    let mut verifications: BTreeMap<String, Verif> = BTreeMap::new();
     let mut saw_added = false;
     for line in bytes.split(|b| *b == b'\n') {
         let Ok(line) = std::str::from_utf8(line) else {
@@ -215,6 +264,16 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
                     f.label = Some(label);
                 }
             }
+            // `dla ledger verify` (schema 3): the last record of a finding wins; a record
+            // of another shape changes nothing.
+            "verification" => {
+                let Some(id) = rec.get("finding").and_then(Value::as_str) else {
+                    continue;
+                };
+                if let Some(v) = verif_of(&rec) {
+                    verifications.insert(ledger_key(id, &rec), v);
+                }
+            }
             // The duplicate collapses into the canonical finding.
             "finding_merged" => {
                 let (Some(canonical), Some(duplicate)) = (
@@ -238,14 +297,19 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
     if !saw_added {
         return None;
     }
-    Some(
-        list.into_iter()
-            .map(|(_, mut f)| {
-                f.discriminator = f.state == State::Refuted;
-                f
-            })
-            .collect(),
-    )
+    let findings = list
+        .into_iter()
+        .map(|(k, mut f)| {
+            f.discriminator = f.state == State::Refuted;
+            (k, f)
+        })
+        .collect::<Vec<_>>();
+    // A verification of a finding that is not (or no longer) in the ledger counts for nothing.
+    verifications.retain(|k, _| findings.iter().any(|(i, _)| i == k));
+    Some(LedgerRead {
+        findings,
+        verifications,
+    })
 }
 
 fn label_re() -> &'static Regex {
@@ -605,6 +669,53 @@ pub struct RunData {
     pub grade: RunGrade,
     /// `(residual, total_slope)` sums when coverage has a non-empty residual.
     pub residual: Option<(f64, f64)>,
+    /// What the verifier said about the run's claims.
+    pub verif: VerifCounts,
+}
+
+/// Verification counts of one run (or, summed, of a group).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VerifCounts {
+    /// Verification records of findings that exist.
+    pub records: u64,
+    /// Claims: non-hypothesis findings that are confirmed or strong.
+    pub claims: u64,
+    /// Claims with a verification.
+    pub verified: u64,
+    /// Verified claims whose site agrees.
+    pub site: u64,
+    /// Verified claims whose holder agrees.
+    pub holder: u64,
+    /// Verified claims whose label agrees.
+    pub label: u64,
+    /// Verified claims with a label verdict.
+    pub label_den: u64,
+}
+
+impl VerifCounts {
+    /// Counts the claims of a replayed ledger and what the verifier said about them.
+    pub fn of(read: &LedgerRead) -> VerifCounts {
+        let mut c = VerifCounts {
+            records: read.verifications.len() as u64,
+            ..VerifCounts::default()
+        };
+        for (key, f) in &read.findings {
+            if !f.is_claim() {
+                continue;
+            }
+            c.claims += 1;
+            if let Some(v) = read.verifications.get(key) {
+                c.verified += 1;
+                c.site += u64::from(v.agrees_site);
+                c.holder += u64::from(v.agrees_holder);
+                if let Some(l) = v.agrees_label {
+                    c.label_den += 1;
+                    c.label += u64::from(l);
+                }
+            }
+        }
+        c
+    }
 }
 
 /// A run index: a positive decimal integer without leading zeros.
@@ -714,6 +825,15 @@ pub fn grade_dir(results: &Path, fixtures: &Path) -> Res<MetricsFile> {
                     let fj = fs::read(run_dir.join("findings.json")).ok();
                     let (source, findings) = select_source_bytes(ledger.as_deref(), fj.as_deref());
                     let grade = grade_findings(exp, source, &findings);
+                    let verif = if source == Source::Ledger {
+                        ledger
+                            .as_deref()
+                            .and_then(read_ledger_bytes)
+                            .map(|r| VerifCounts::of(&r))
+                            .unwrap_or_default()
+                    } else {
+                        VerifCounts::default()
+                    };
                     let residual = read_utf8_opt(&run_dir.join("coverage.json"))
                         .as_deref()
                         .and_then(residual_of);
@@ -723,6 +843,7 @@ pub fn grade_dir(results: &Path, fixtures: &Path) -> Res<MetricsFile> {
                         run_json: rj,
                         grade,
                         residual,
+                        verif,
                     });
                 }
             }
@@ -893,6 +1014,31 @@ fn aggregate(
             mean: (cost_n > 0).then(|| round6(cost_sum / cost_n as f64)),
         },
     };
+    // Verification.
+    let v = runs
+        .iter()
+        .fold(VerifCounts::default(), |a, r| VerifCounts {
+            records: a.records + r.verif.records,
+            claims: a.claims + r.verif.claims,
+            verified: a.verified + r.verif.verified,
+            site: a.site + r.verif.site,
+            holder: a.holder + r.verif.holder,
+            label: a.label + r.verif.label,
+            label_den: a.label_den + r.verif.label_den,
+        });
+    let share = |num: u64, den: u64| Share {
+        num,
+        den,
+        value: div(num, den),
+    };
+    let verification = (v.records > 0).then(|| VerificationStats {
+        claims: v.claims,
+        verified: v.verified,
+        verified_share: share(v.verified, v.claims),
+        site_agreement: share(v.site, v.verified),
+        holder_agreement: share(v.holder, v.verified),
+        label_agreement: share(v.label, v.label_den),
+    });
     // Per fixture.
     let mut fixtures: BTreeMap<String, FixtureStats> = BTreeMap::new();
     for r in runs {
@@ -937,6 +1083,7 @@ fn aggregate(
         metrics,
         unexplained_growth_share: unexplained,
         usage,
+        verification,
         fixtures,
     }
 }

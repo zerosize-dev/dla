@@ -78,6 +78,43 @@ effects are in the manifest (`harness/H<n>/harness.json`: the build and run comm
 environment, the agent, the timeout) and in the `workload` evidence; read the manifest before the
 first run of a harness you did not just generate.
 
+## Hooks and integrity
+
+The plugin ships hooks that make the rules above harder to break by accident. They are a guard rail.
+The guarantee is the integrity seals inside `dla` (`references/evidence-and-report.md`, Integrity): a
+protected file that changed outside `dla` is detected by `gate check`, `report` and `run status`, and
+the report says INCOMPLETE and names it.
+
+What the hooks do (all call `dla gate <subcommand>`; with no active run they allow everything):
+
+| Hook | Where it is declared | What it blocks |
+|---|---|---|
+| `write-hook` | SKILL.md frontmatter (core session) and `hooks/hooks.json` (also inside workers) | `Write`, `Edit` and `NotebookEdit` of `report.md`, `state.json`, `coverage.json`, `ledger*.jsonl` and `integrity/` under `.dla/` |
+| `read-hook` | the same two places | `Read` of `*-archetypes.md`, `known-leaks.md`, `archetypes.toml` and `known-leaks.toml` until `dla gate check --stage classify` has passed; in the core session also `Grep` and `Glob` naming them |
+| `bash-hook` | SKILL.md frontmatter only | a Bash command that names `.dla/` with a write form (`>`, `tee`, `sed -i`, `cp`, `mv`, `rm`, `truncate`, an interpreter one-liner, `dd`) or that reads an archetype file before the classify gate; commands that start with `dla` are allowed. Best effort on the command text |
+| `stop-hook` | SKILL.md frontmatter (the core's Stop) | the end of the turn while `dla gate check --final` fails; it prints the first missing items and their fixes |
+| `stop-hook --subagent` | `hooks/hooks.json`, matcher `^dla:worker$` (SubagentStop) | a worker's stop while its slice is not done and dispositioned |
+
+Plugin agents ignore `hooks:` in their own frontmatter, which is why the worker hooks are in
+`hooks/hooks.json`. The PreToolUse hooks deny with `onFailure: block`, so a crashing hook denies the
+call. A stop hook never fails closed: after three blocks in a row with no change in the ledger it lets the
+stop through, marks the run (or the worker) INCOMPLETE (stalled), and says why. Claude Code also ends a turn
+after eight stop-hook continuations in a row; the count resets when Claude calls a tool.
+
+What the hooks cannot stop:
+
+- Bash commands that write or read in a way the text check does not recognise (a script that opens the
+  file, an alias, a variable). Workers get no Bash or Grep gate at all.
+- `Grep` and `Glob` in a worker, and `@file` mentions: the file contents are inserted without a tool
+  call, so no hook runs.
+- Any hook on Claude Code versions before 2.1.295 (`onFailure`) or before hooks exist for plugins:
+  they fail open, which is why `README.md` names the minimum version.
+- A crash, a timeout or an exit code other than 0 or 2 of a Stop hook: the stop goes ahead.
+
+So do not rely on a hook to stop you, and never try to get around one: a denied call names the command
+that unlocks it (`dla gate check --stage classify`, `dla gate check --final`). Do not edit `.dla` files; the
+seals detect it.
+
 ## Processes DLA starts
 
 Every process a harness run starts is recorded in `state.json` under `processes` (pid, start time,

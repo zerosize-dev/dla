@@ -647,5 +647,265 @@ fn the_verifier_label_is_compared_with_the_findings() {
     assert_eq!(v["verified"], true);
 }
 
+// ---------------------------------------------------------------------------- bundle
+
+fn all_bundle_text(dir: &Path) -> String {
+    let mut all = String::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for ent in fs::read_dir(d).unwrap() {
+            let path = ent.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                all.push_str(&String::from_utf8_lossy(&fs::read(path).unwrap()));
+            }
+        }
+    }
+    all
+}
+
+#[test]
+fn a_labelled_explained_verified_findings_bundle_shows_none_of_that() {
+    let e = env();
+    let src: String = (1..=60).map(|n| format!("int line{n};\n")).collect();
+    fs::write(e.project.path().join("a.go"), &src).unwrap();
+    // Not named by any evidence: must never become an excerpt.
+    fs::write(e.project.path().join("z.go"), &src).unwrap();
+    ok(
+        &e,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+        ],
+    );
+    ok(
+        &e,
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "a.go:9",
+            "--note",
+            "SECRET-NOTE",
+        ],
+    );
+    ok(
+        &e,
+        &[
+            "ledger",
+            "explain",
+            "F1",
+            "--tag",
+            "inferred",
+            "--removal",
+            "never",
+            "--adds",
+            "a.go:9",
+            "--text",
+            GOOD,
+        ],
+    );
+    let first = ok(&e, &["bundle", "F1"]);
+    let sha = first["manifest_sha256"].as_str().unwrap().to_owned();
+    ok(
+        &e,
+        &[
+            "ledger",
+            "verify",
+            "F1",
+            "--site",
+            "a.go:1",
+            "--holder",
+            "static/global",
+            "--mechanism",
+            "the table keeps every entry",
+            "--label",
+            "L-COLLECT",
+            "--bundle",
+            &sha,
+        ],
+    );
+
+    let v = ok(&e, &["bundle", "F1"]);
+    let dir = e.project.path().join(v["dir"].as_str().unwrap());
+    let all = all_bundle_text(&dir);
+    for secret in [
+        "L-COLLECT",
+        "A collection gains entries",
+        "SECRET-NOTE",
+        GOOD,
+        "no code removes them",
+        "static/global table",
+    ] {
+        assert!(!all.contains(secret), "{secret} in the bundle: {all}");
+    }
+    let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
+    for key in [
+        "site",
+        "label",
+        "explanation",
+        "archetype",
+        "annotation",
+        "notes",
+    ] {
+        assert!(index.get(key).is_none(), "{key} in {index}");
+    }
+    // The excerpt is the frame the bundled evidence names (the tied column's site), not
+    // the finding's own site field.
+    assert_eq!(index["frames"], json!(["a.go:1"]), "{index}");
+    let excerpt = fs::read_to_string(dir.join("excerpt.txt")).unwrap();
+    assert!(excerpt.starts_with("a.go:1 (lines 1-21)"), "{excerpt}");
+    assert!(!excerpt.contains("z.go"));
+}
+
+#[test]
+fn no_evidence_frame_means_no_excerpt_even_with_a_site() {
+    let e = env();
+    fs::write(e.project.path().join("z.go"), "package z\n".repeat(30)).unwrap();
+    let mut l = reload(&e);
+    let mut nf = NewFinding::new(
+        Origin::parse("census").unwrap(),
+        vec!["E1".parse().unwrap()],
+    );
+    nf.site = Some("z.go:5".into());
+    nf.holder = Some(Holder::StaticGlobal);
+    l.add_finding(nf).unwrap();
+    write_ledger(&e, &l);
+    let v = ok(&e, &["bundle", "F2"]);
+    assert_eq!(v["excerpt"], false, "{v}");
+    let dir = e.project.path().join(v["dir"].as_str().unwrap());
+    assert!(!dir.join("excerpt.txt").exists());
+    let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
+    assert_eq!(index["frames"], json!([]));
+    assert!(index.get("site").is_none());
+    assert!(!all_bundle_text(&dir).contains("z.go"));
+}
+
+// ------------------------------------------------------------------- confirm: holder warning
+
+/// Adds a leak-side finding at `site` with holder `holder`, its refuted N-WARM sibling and the
+/// growth evidence `kind_in_column` ties to it (`None`: the column states no holder kind);
+/// moves it to under_test and returns its id and the growth evidence id.
+fn under_test_with_column(
+    e: &Env,
+    site: &str,
+    holder: Holder,
+    kind_in_column: Option<&str>,
+) -> (String, String) {
+    let mut l = reload(e);
+    let next_f = l.findings().filter(|f| f.parent.is_none()).count() + 1;
+    let fid = format!("F{next_f}");
+    let mut col = json!({"column": format!("holder:{site}"), "region": "heap", "site": site,
+        "finding": fid, "shape": "steady"});
+    if let Some(k) = kind_in_column {
+        col["holder_kind"] = json!(k);
+    }
+    let ev = l
+        .add_evidence(evidence(
+            EvidenceKind::GrowthSeries,
+            Authority::Dump,
+            "dla-hprof",
+            "heap-graph",
+            &format!("src-{fid}"),
+            json!({"trend": "T9", "series": "S9", "n": 8, "gate": "pass", "failed": 0,
+            "passed": [col]}),
+        ))
+        .unwrap();
+    let ev_id = match ev.record {
+        dla_core::Record::Evidence(x) => x.evidence_id,
+        other => panic!("{other:?}"),
+    };
+    let mut nf = NewFinding::new(
+        Origin::parse("census").unwrap(),
+        vec!["E1".parse().unwrap()],
+    );
+    nf.site = Some(site.into());
+    nf.holder = Some(holder);
+    l.add_finding(nf).unwrap();
+    let mut nf = NewFinding::new(
+        Origin::parse("hypothesis").unwrap(),
+        vec!["E1".parse().unwrap()],
+    );
+    nf.sibling_of = Some(fid.parse().unwrap());
+    nf.hypothesis = Some("N-WARM".into());
+    nf.refute_if = Some("growth continues".into());
+    l.add_finding(nf).unwrap();
+    let id = |s: &str| s.parse().unwrap();
+    l.transition(
+        &id(&format!("{fid}.n1")),
+        FindingState::Refuted,
+        None,
+        None,
+        vec!["E3".parse().unwrap()],
+        "t",
+    )
+    .unwrap();
+    l.transition(
+        &id(&fid),
+        FindingState::UnderTest,
+        None,
+        None,
+        vec!["E2".parse().unwrap()],
+        "t",
+    )
+    .unwrap();
+    write_ledger(e, &l);
+    (fid, ev_id.to_string())
+}
+
+#[test]
+fn confirm_warns_when_the_tied_column_observed_another_holder() {
+    let e = env();
+    let (f2, e2) = under_test_with_column(
+        &e,
+        "b.go:1",
+        Holder::StaticGlobal,
+        Some("registration-table"),
+    );
+    let v = ok(&e, &["ledger", "confirm", &f2, "--evidence", &e2]);
+    assert_eq!(v["to"], "confirmed", "{v}");
+    let w = v["warning"].as_str().unwrap();
+    assert!(w.contains("has holder static/global"), "{w}");
+    assert!(w.contains("observed registration-table"), "{w}");
+    assert!(
+        w.contains(&format!(
+            "dla ledger annotate {f2} --holder registration-table --evidence {e2}"
+        )),
+        "{w}"
+    );
+    // The command it names is accepted (a warning, not a dead end).
+    ok(
+        &e,
+        &[
+            "ledger",
+            "annotate",
+            &f2,
+            "--holder",
+            "registration-table",
+            "--evidence",
+            &e2,
+        ],
+    );
+}
+
+#[test]
+fn confirm_is_silent_when_the_observed_holder_matches_or_is_not_stated() {
+    let e = env();
+    let (f2, e2) =
+        under_test_with_column(&e, "b.go:1", Holder::StaticGlobal, Some("static/global"));
+    let v = ok(&e, &["ledger", "confirm", &f2, "--evidence", &e2]);
+    assert!(v.get("warning").is_none(), "{v}");
+    let (f3, e3) = under_test_with_column(&e, "c.go:1", Holder::StaticGlobal, None);
+    let v = ok(&e, &["ledger", "confirm", &f3, "--evidence", &e3]);
+    assert!(v.get("warning").is_none(), "{v}");
+}
+
 #[allow(dead_code)]
 fn unused(_: &Path) {}

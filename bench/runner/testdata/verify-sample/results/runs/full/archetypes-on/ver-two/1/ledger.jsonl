@@ -1,0 +1,12 @@
+{"type": "finding_added", "worker": "jvm", "finding": {"id": "F1", "site": "src/Registry.java:44", "holder": "registration-table"}}
+{"type": "transition", "worker": "jvm", "finding": "F1", "from": "under_test", "to": "confirmed"}
+{"type": "finding_added", "worker": "jvm", "finding": {"id": "F2", "site": "src/Audit.java:12", "holder": "container-field"}}
+{"type": "transition", "worker": "jvm", "finding": "F2", "from": "under_test", "to": "confirmed"}
+{"type": "finding_added", "worker": "jvm", "finding": {"id": "F3", "site": "src/Other.java:3", "holder": "static/global"}}
+{"type": "transition", "worker": "jvm", "finding": "F3", "from": "under_test", "to": "refuted"}
+{"type": "finding_added", "worker": "jvm", "finding": {"id": "F1.n1", "parent": "F1", "hypothesis": "N-WARM"}}
+{"type": "verification", "worker": "jvm", "finding": "F1", "holder": "thread-local", "mechanism": "m", "label": "L-WORKER", "bundle": "aa", "agrees_site": true, "agrees_holder": false, "agrees_label": false}
+{"type": "verification", "worker": "jvm", "finding": "F3", "holder": "static/global", "mechanism": "m", "label": "UNCLASSIFIED", "bundle": "aa", "agrees_site": true, "agrees_holder": true, "agrees_label": true}
+{"type": "verification", "worker": "jvm", "finding": "F9", "holder": "static/global", "mechanism": "m", "label": "UNCLASSIFIED", "bundle": "aa", "agrees_site": true, "agrees_holder": true, "agrees_label": true}
+{"type": "verification", "finding": "F2", "result": "agrees"}
+{"type": "verification", "worker": "jvm", "finding": "F1.n1", "holder": "static/global", "mechanism": "m", "label": "N-WARM", "bundle": "aa", "agrees_site": true, "agrees_holder": true, "agrees_label": true}

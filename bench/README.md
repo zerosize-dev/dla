@@ -142,8 +142,8 @@ the prompt instead of the fixture's task; for checking the sandbox).
 |---|---|---|
 | `no-skill` | no plugin | task + the `findings.json` instructions |
 | `prose` | the skill text of `ablations/prose/SKILL.md`, `references/`, no binary, hooks or agents | `/dla:detect-leak-anywhere ` + task + the `findings.json` instructions |
-| `gates` | the plugin without `hooks/`, without `agents/verifier.md`, with any `hooks:` block removed from the SKILL.md frontmatter; `DLA_BIN` points at `target/release/dla` | `/dla:detect-leak-anywhere ` + task + an unattended-run note |
-| `full` | the plugin as it is | same as `gates` |
+| `gates` | the plugin without `hooks/`, without `agents/verifier.md`, with any `hooks:` block removed from the SKILL.md frontmatter; `DLA_BIN` points at `target/release/dla`. The gates are `dla` commands the session runs itself; the integrity seals stay (they are written by `dla`) | `/dla:detect-leak-anywhere ` + task + an unattended-run note |
+| `full` | the plugin as it is: `hooks/` with the `hooks.json` gates (worker `SubagentStop`, the `if`-filtered `PreToolUse` write and read gates), the SKILL.md frontmatter hooks and `agents/verifier.md` | same as `gates` |
 
 The `findings.json` instructions of `no-skill` and `prose` runs say that `site` stays
 empty for a finding without a source line (an artifact task) and that such a finding
@@ -156,8 +156,10 @@ because the repository is unreadable to the child; `DLA_BIN` points at the
 copy. The plugin variants are built under the work root as well. `--archetypes off` removes
 `skills/*/references/*-archetypes.md`, `skills/*/references/known-leaks.md`,
 `data/archetypes.toml` and `data/known-leaks.toml` from the plugin copy,
-blanks every `suggested_archetype = "..."` in `data/detectors/*.toml` and sets
-`DLA_ARCHETYPES=off`. Plugin ablations also set `DLA_CONSENT_TIERS=1-4` and
+blanks every `suggested_archetype = "..."` in `data/detectors/*.toml`, removes
+every `<!-- archetypes:begin -->` ... `<!-- archetypes:end -->` block from every `.md`
+file of the variant (`agents/verifier.md` carries the 17 IDs in one; an unbalanced marker
+fails the build of the variant) and sets `DLA_ARCHETYPES=off`. Plugin ablations also set `DLA_CONSENT_TIERS=1-4` and
 `DLA_CONSENT_RAW_VALUES=1`, so the runner (not the model) gives consent.
 
 The variant of an ablation can be assembled without running anything, for
@@ -171,6 +173,15 @@ claude plugin validate /tmp/variant --strict
 The `full` variant still contains the `SessionStart` hook that downloads the
 `dla` binary; the hook does not look at `DLA_BIN`, but the shim in `bin/`
 prefers `DLA_BIN`, so runs use the local build.
+
+The hooks of `full` run `"${CLAUDE_PLUGIN_ROOT}/bin/dla" gate ...` inside the child's
+environment, so the child needs `DLA_BIN` (the runner sets it for `gates` and `full`, to the
+copy of the binary next to the working copies) and the shim needs `bash`, `dirname` and
+`readlink` on `PATH` (the runner passes `PATH` through). The shim exports `DLA_PLUGIN_ROOT`
+and `DLA_DATA_DIR` itself. `tests/run_fake.rs` runs the first hook command of a `full` variant
+the way Claude Code does (a shell with `CLAUDE_PLUGIN_ROOT` set) from the environment the
+runner builds, and checks that the shim reaches the binary. It does not prove that Claude
+Code fires the hooks; `tests/live_hooks.sh` is the live check.
 
 ### Results layout
 
@@ -186,8 +197,11 @@ prefers `DLA_BIN`, so runs use the local build.
                     copied from .dla/<id in .dla/current>/ when dla ran
   ledger.<worker>.jsonl
                     the slices of the workers of a multi-runtime run
-  bundle/<id>/index.json
-                    the index file of each verification bundle
+  bundle/<id>/index.json manifest.json excerpt*.txt
+                    the index, the manifest and the excerpts of each verification
+                    bundle: what the verifier was shown (nothing else of a bundle)
+  integrity/<file>.seal
+                    the seals `dla` wrote for the ledger, state, coverage and report
 <out>/metrics.json  written by `grade`
 <out>/table.md      written by `table`
 ```
@@ -195,7 +209,10 @@ prefers `DLA_BIN`, so runs use the local build.
 `run.json` holds `schema_version, fixture, ablation, archetypes, run,
 exit_code, timed_out, wall_seconds, usage{input_tokens, output_tokens,
 cache_read_input_tokens, cache_creation_input_tokens}, cost_usd, num_turns,
-model, started_at, error`. Usage, cost and turns come from the final `result`
+model, started_at, error` and, for `gates` and `full` runs whose `state.json` was
+collected, `incomplete_reason` (why `dla` marked the run incomplete, when it did) and
+`stop_blocks` (how many times the stop hook blocked the stop; 0 when none, absent when
+there is no `state.json`). Usage, cost and turns come from the final `result`
 event of the stream, the model from the `init` event. `exit_code` is -1 when
 the process was killed or could not start. `error` says why a run failed: a
 spawn failure, a timeout, a missing `result` event, or the `result` event's own
@@ -354,6 +371,45 @@ The policy, per fixture (repository entry, one runtime):
    `suspected_static_only` (`not_exercised`) when it has static evidence, else
    `unresolved`; then `report`.
 
+8. The M6 steps (`bench/runner/src/dynamic/policy.rs`), after the steps above, on the
+   confirmed and strong leak-side findings. They never change which findings are
+   confirmed.
+   - Label. A finding that matches an expected leak whose `cause` is a row with a shipped
+     prose file (`L-CAPTURE`, `L-COLLECT`, `L-CYCLE`, `L-HANDLE`, `L-OWNERSHIP`,
+     `L-REGISTER`, `L-TLS`, `L-UNLOAD`, `L-WORKER`; `tests/archetype_lists.rs` keeps the
+     list equal to the rows of the `*-archetypes.md` files) gets `ledger label F --as
+     <cause>`; a leak whose cause is `UNCLASSIFIED` gets `--as UNCLASSIFIED --note`. A
+     refused label of a shipped row fails the fixture, so the table says whether every label
+     is reachable. A finding whose holder differs from the expected one is not labelled (that
+     is a failure already); a cause without a shipped row (`L-STALE`) is not tried.
+     `ledger label F --suggest` runs for every confirmed finding and must say `on` or `off`
+     as the run is.
+   - Explain. Every confirmed or strong leak-side finding gets `ledger explain` with
+     `--adds` the recorded writers (annotations plus the census entry of the owner or site),
+     `--removal never` (`conditional` with `--remover` when a remover is recorded) and a
+     text built from the site, the holder, the owner, the adding site and the removal. The
+     mechanical policy cannot read the code: when no writer is recorded it records the
+     finding's own site as the adding site (`ledger annotate F --writer SITE`). A refused
+     explain fails the fixture. A finding without a site (an artifact run) cannot get a
+     writer and is reported as a gap of the gate.
+   - Intervene. On a repository fixture with one runtime, `dla intervene H --finding F
+     --stub-writer W...` for the recorded writers (at most three) on the harness the finding
+     was confirmed on. The effect (`growth-removed`, `growth-remains`, `inconclusive`,
+     `invalid`) or the refusal code is reported; it never fails the fixture. A writer that
+     is a declaration, a decorator or a condition is refused (`intervene-not-statement`);
+     the policy has no way to find the statement that adds.
+   - Strong. `ledger strong F --evidence E` with each eligible record: an intervention that
+     removed the growth, and the latest retention records. Reported, never gating.
+   - Close-out. `dla gate check --final` must pass. The policy runs the command the gate
+     names for each item (answer the intake checklist items, `dla trend` for a series
+     without one, `ledger add --origin growth-series` for a trend column tied to no finding
+     and `ledger resolve --as unresolved` for that finding and for the residual open item).
+     An item that cannot be reached is reported as a gap of the gate with the reason
+     (`gate.known_gaps`); anything else still missing fails the fixture and is named.
+   - `--archetypes off`: a label of a shipped row must be refused with `archetypes-off`
+     (accepted, or refused with another code, is a failure), `UNCLASSIFIED` stays allowed,
+     `--suggest` must say `off`; everything else is as with archetypes on.
+
 At most eight alloc-tests run per fixture. Checks (the holder of each confirmed leak
 must equal the expected holder, besides the list below): every confirmable leak of a
 leak fixture with `dynamic_confirmation = true` is confirmed; decoy controls,
@@ -374,8 +430,9 @@ decisions) and the run files (`ledger.jsonl`, `report.md`, `series/`, `trend/`,
 `alloc/`, `harness/H*/harness.json`).
 
 `dla-bench run` also copies `series/S*.json`, `trend/T*.json`, `alloc/A*.json`,
-`harness/H*/harness.json` and `run-*.json`, every `ledger.<worker>.jsonl` and every
-`bundle/<id>/index.json` of the child's dla run next to its
+`harness/H*/harness.json` and `run-*.json`, every `ledger.<worker>.jsonl`, every
+`bundle/<id>/index.json`, `manifest.json` and `excerpt*.txt`, and the seals
+`integrity/*.seal` of the child's dla run next to its
 `ledger.jsonl` (never `work/`, `agent/`, `out/`, `logs/` or the rest of a bundle). The run directory is
 writable by the sandboxed model, so the copy never follows a symbolic link, copies
 only regular files with those names, and stops at 6 directory levels, 2000
@@ -537,8 +594,12 @@ listed text is reported as `xfail: <reason>` in the table and in the JSON
 a listed fixture passes (remove the entry) or fails with any other text or with an
 additional failure (a regression must not hide behind the entry).
 
-The last full run (`dla-bench dynamic --parallel 2`, after the Node holder fixes): 23 of 25 fixtures pass and 2 are expected failures
-(`node-socket-heartbeat`, `rust-tree-parent-links`). `node-retry-scheduler` passes: the policy runs the
+The last full run (`dla-bench dynamic --parallel 2`, release binaries, M6): 28 of 34
+fixtures pass and 6 are expected failures: `node-socket-heartbeat` and `rust-tree-parent-links`
+(the policy cannot read the code) and four fixtures whose label cannot be reached
+(`jvm-extension-reload`, `jvm-invoice-render`, `rust-meter-callbacks`, `jni-order-codec`; the evidence the row
+requires cannot be tied to the finding, a defect of the ledger rules or of the records and not of
+the policy). The four label entries apply with archetypes on only. `node-retry-scheduler` passes: the policy runs the
 `dla ledger annotate F --holder H --evidence E` command that `needed` prints for the finding of
 `RetryScheduler.latest`, and for any other tied finding whose set holder differs from the one observed
 (`needed` names the first tied finding only), and the ledger accepts it because the growth evidence's passing
@@ -549,6 +610,10 @@ column observed `static/global`.
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
 | `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census gives the `setInterval` timer finding the holder `blocked-stack` and the policy keeps it. The per-point heap-graph run observes `registration-table` for the column of `Session.recent` (the sessions are held through the loopback socket events) and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding, so there is no observed holder to correct it with. `node-resources` ties the timer group to the finding by site only. |
+| `jvm-extension-reload` | `leak L1 (L-UNLOAD) label refused label-evidence-missing` | L-UNLOAD needs growth plus non-heap, or a retention path, tied to the finding at the event-bus registry. The class-loader columns of `summarize non-heap` tie to no finding (they carry no holder, site or type of a heap field), and `summarize heap-graph --finding` finds the registry (its discriminator names `static:reports.EventBus.LISTENERS`) while the per-dump retention-path records list only the largest holders (`LedgerExtension.ROUNDING`, JFR internals), so no retention-path record names the finding's holder. A defect of the tie rule or of the records, not of the policy |
+| `jvm-invoice-render` | `leak L1 (L-TLS) label refused label-evidence-missing` | L-TLS needs a retention path tied to the finding. The finding's owner is the class initializer frame (`billing.RenderContext.<clinit>`), so `summarize heap-graph --finding` is refused `holder-not-found` (the dump's holder is `thread-local:billing.RenderContext.SEGMENTS`), `ledger annotate --owner` cannot replace an owner that is set, and the histogram records name another finding. A defect of the owner the census or probe records, not of the policy |
+| `rust-meter-callbacks` | `leak L1 (L-OWNERSHIP) label refused label-evidence-missing` | L-OWNERSHIP needs growth plus an allocation stack, or an intervention, tied to the finding. An alloc-stack record ties only through the root key of its stacks against the finding's owner; valgrind and heaptrack stacks carry no root and the detector finding (`rust-into-raw-unpaired`) has no owner, so `summarize alloc-stack-diff --finding` ties the growth column (by site) while the alloc-stack record stays untied. The intervention alternative is refused `intervene-not-statement`: the site is a `let` declaration, and a diff needs reading the code |
+| `jni-order-codec` | `leak L1 (L-HANDLE) label refused label-evidence-missing` | The native leak (the correlation candidate at the native site) needs growth plus an allocation stack, or a unit-count series plus a retention path, tied to it. Same cause as `rust-meter-callbacks`: the alloc-stack records of the shim and the profiles tie only through a root key against an owner, which the candidate does not have. L2 (Kotlin) is labelled |
 
 `jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
 workers, one merged ledger with both slices, merged coverage): the driver fails
@@ -557,6 +622,108 @@ confirmed since cut 2: the policy runs `dla correlate` for a JVM harness before
 the trends, the correlation adds a candidate at the native site under the managed
 method, and the shim column ties to it by site. The Kotlin leak L2 (`Audit.kt:12`)
 has been confirmed since M4 (probe columns tie to the finding with that owner).
+
+### M6 dynamic results
+
+`dla-bench dynamic --parallel 2` on the 34 fixtures with release binaries, archetypes on (28 pass, 6
+expected failures, 0 failures) and off (32 pass, 2 expected failures, 0 failures). The columns are the
+M6 steps of the policy: the label of the matched expected leak, the explanation, `dla intervene
+--stub-writer` (informational), `dla ledger strong` (informational) and `dla gate check --final`
+(`pass`; `gaps` means the gate passes except for items the policy cannot reach, listed in
+`gate.known_gaps` of the JSON: 27 fixtures name the columns of the trend that `dla alloc-test` writes,
+`jni-order-codec` the residual item of a merged ledger, `jvm-rfq-dump-series` the explanation of an
+artifact finding; `docs/VERIFY.md` has the evidence). `x2` is two findings; `unmatched` is a confirmed
+finding that matches no expected leak. Decoys and impossible fixtures confirm nothing, so they have
+no step except the gate.
+
+Archetypes on:
+
+| fixture | result | label | explain | intervene | strong | final gate |
+|---|---|---|---|---|---|---|
+| `go-buffer-pool` | pass | - | - | - | - | pass |
+| `go-subscription-workers` | pass | ok | ok | refused intervene-not-statement | no eligible record | gaps |
+| `go-subscription-workers-closed` | pass | - | - | - | - | gaps |
+| `jni-order-codec` | xfail | ok; refused label-evidence-missing | ok x2 | not tried x2 | ok; refused strong-second-class-missing x3 | gaps |
+| `jvm-audit-chain` | pass | ok | ok | invalid | ok | gaps |
+| `jvm-billing-private-repo` | pass | - | - | - | - | pass |
+| `jvm-extension-reload` | xfail | refused label-evidence-missing | ok | invalid | refused strong-second-class-missing x3 | gaps |
+| `jvm-extension-reload-stopped` | pass | - | - | - | - | gaps |
+| `jvm-invoice-render` | xfail | refused label-evidence-missing | ok | invalid | refused strong-second-class-missing x3 | gaps |
+| `jvm-invoice-render-trimmed` | pass | - | - | - | - | gaps |
+| `jvm-order-cache` | pass | ok | ok | invalid | ok | gaps |
+| `jvm-order-cache-bounded` | pass | - | - | - | - | gaps |
+| `jvm-rfq-dump-series` | pass | ok | not tried | - | refused strong-not-independent x3 | gaps |
+| `jvm-rfq-dump-series-capped` | pass | - | - | - | - | pass |
+| `jvm-rfq-single-dump` | pass | - | - | - | - | pass |
+| `native-frame-decoder` | pass | ok | ok | refused intervene-not-statement | ok | gaps |
+| `native-frame-decoder-freed` | pass | - | - | - | - | gaps |
+| `native-glyph-cache` | pass | - | - | - | - | gaps |
+| `native-vendor-codec` | pass | - | - | - | - | pass |
+| `node-price-board` | pass | ok | ok | refused intervene-no-control | refused strong-not-independent x3 | gaps |
+| `node-price-board-flat` | pass | - | - | - | - | gaps |
+| `node-retry-scheduler` | pass | ok; unmatched | ok x2 | growth-removed; refused intervene-not-statement | ok x2 | gaps |
+| `node-socket-heartbeat` | xfail | not tried (holder); unmatched x3 | ok x4 | refused intervene-not-statement; growth-removed; refused intervene-no-control x2 | refused strong-second-class-missing x3; ok; refused strong-not-independent x6 | gaps |
+| `node-socket-heartbeat-cleared` | pass | - | - | - | - | gaps |
+| `python-graph-churn` | pass | - | - | - | - | gaps |
+| `python-ingest-two-leaks` | pass | ok x2 | ok x2 | growth-removed x2 | ok x2 | gaps |
+| `python-report-memo` | pass | ok | ok | refused intervene-not-statement | no eligible record | gaps |
+| `python-report-memo-bounded` | pass | - | - | - | - | gaps |
+| `rust-batch-buffers` | pass | - | - | - | - | gaps |
+| `rust-meter-callbacks` | xfail | refused label-evidence-missing | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
+| `rust-meter-callbacks-reclaimed` | pass | - | - | - | - | gaps |
+| `rust-tree-parent-links` | xfail | unmatched | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
+| `rust-tree-parent-links-weak` | pass | - | - | - | - | gaps |
+| `symptom-no-target` | pass | - | - | - | - | pass |
+
+Archetypes off. Every label of a shipped row was refused with `archetypes-off` (12), the three
+`UNCLASSIFIED` labels were accepted, `--suggest` said `off` for every confirmed finding, and nothing
+else changed: the same leaks are confirmed with the same holders, the same explanations are accepted
+and the final gate ends the same (counts of refuted decoy findings and some intervention outcomes
+differ from run to run). The four fixtures whose label cannot be reached with archetypes on pass here,
+because their expected failure is a label failure.
+
+| fixture | result | label | explain | intervene | strong | final gate |
+|---|---|---|---|---|---|---|
+| `go-buffer-pool` | pass | - | - | - | - | gaps |
+| `go-subscription-workers` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | no eligible record | gaps |
+| `go-subscription-workers-closed` | pass | - | - | - | - | gaps |
+| `jni-order-codec` | pass | refused archetypes-off (expected) x2 | ok x2 | not tried x2 | ok; refused strong-second-class-missing x3 | gaps |
+| `jvm-audit-chain` | pass | ok | ok | refused intervene-not-statement | ok | gaps |
+| `jvm-billing-private-repo` | pass | - | - | - | - | pass |
+| `jvm-extension-reload` | pass | refused archetypes-off (expected) | ok | invalid | refused strong-second-class-missing x3 | gaps |
+| `jvm-extension-reload-stopped` | pass | - | - | - | - | gaps |
+| `jvm-invoice-render` | pass | refused archetypes-off (expected) | ok | invalid | refused strong-second-class-missing x3 | gaps |
+| `jvm-invoice-render-trimmed` | pass | - | - | - | - | gaps |
+| `jvm-order-cache` | pass | refused archetypes-off (expected) | ok | invalid | ok | gaps |
+| `jvm-order-cache-bounded` | pass | - | - | - | - | gaps |
+| `jvm-rfq-dump-series` | pass | refused archetypes-off (expected) | not tried | - | refused strong-not-independent x3 | gaps |
+| `jvm-rfq-dump-series-capped` | pass | - | - | - | - | pass |
+| `jvm-rfq-single-dump` | pass | - | - | - | - | pass |
+| `native-frame-decoder` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | ok | gaps |
+| `native-frame-decoder-freed` | pass | - | - | - | - | pass |
+| `native-glyph-cache` | pass | - | - | - | - | gaps |
+| `native-vendor-codec` | pass | - | - | - | - | pass |
+| `node-price-board` | pass | refused archetypes-off (expected) | ok | refused intervene-no-control | refused strong-not-independent x3 | gaps |
+| `node-price-board-flat` | pass | - | - | - | - | gaps |
+| `node-retry-scheduler` | pass | ok; unmatched | ok x2 | growth-removed; refused intervene-not-statement | ok x2 | gaps |
+| `node-socket-heartbeat` | xfail | not tried (holder); unmatched x3 | ok x4 | refused intervene-not-statement; growth-removed; refused intervene-no-control x2 | refused strong-second-class-missing x3; ok; refused strong-not-independent x6 | gaps |
+| `node-socket-heartbeat-cleared` | pass | - | - | - | - | gaps |
+| `python-graph-churn` | pass | - | - | - | - | gaps |
+| `python-ingest-two-leaks` | pass | ok; refused archetypes-off (expected) | ok x2 | growth-removed x2 | ok x2 | gaps |
+| `python-report-memo` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | no eligible record | gaps |
+| `python-report-memo-bounded` | pass | - | - | - | - | gaps |
+| `rust-batch-buffers` | pass | - | - | - | - | pass |
+| `rust-meter-callbacks` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
+| `rust-meter-callbacks-reclaimed` | pass | - | - | - | - | gaps |
+| `rust-tree-parent-links` | xfail | unmatched | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
+| `rust-tree-parent-links-weak` | pass | - | - | - | - | gaps |
+| `symptom-no-target` | pass | - | - | - | - | pass |
+
+Totals (on / off): labels accepted 11 / 3 (UNCLASSIFIED) with 4 / 0 refused for missing evidence and 0 / 12
+refused `archetypes-off`; explanations accepted 20 / 20; interventions `growth-removed` 4 / 4,
+`invalid` 4 / 3 (JVM harness exits 1 once the stubbed writer is gone, see `docs/VERIFY.md`),
+refused `intervene-not-statement` 7 / 8 and `intervene-no-control` 3 / 3; `strong` reached 9 / 9;
+final gate passed 6 / 7, gaps only 28 / 27, missing 0 / 0.
 
 ## Isolation and cost
 

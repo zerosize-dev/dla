@@ -41,6 +41,8 @@ first; `--backend <name>` forces one.
 | `non-heap` | any | `proc-fd` | `ls -l /proc/<pid>/fd` listings, harness dumps with `fd.*` | none | none |
 | `non-heap` | any | `dla-nonheap-json` | DLA's own non-heap JSON | none | none |
 
+`dla intervene` is not a `summarize` op and has no adapter table row: it runs a harness clone and writes one `intervention` record (see Intervene below). It works for every runtime, needs no tool beyond the harness's own build tools, and its record is a retention-independent second class for `dla ledger strong`.
+
 Not read by any adapter (no coverage row either): Go `goref` and `viewcore` heap graphs, async-profiler,
 MAT, bytehound, memlab. For those keep using the harness columns and `dla attach`. Tools DLA has no
 driver for at tier 3 (bcc `memleak`, GPU memory, Valgrind on a JVM) get a `blocked` coverage row in

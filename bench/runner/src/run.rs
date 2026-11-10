@@ -258,8 +258,10 @@ impl Collector {
         }
     }
 
-    /// Copies `bundle/<id>/index.json` (never anything else of a bundle, and never
-    /// through a link) from `run` to `out_dir`; an earlier attempt's bundles are removed first.
+    /// Copies `bundle/<id>/index.json`, `manifest.json` and the `excerpt*.txt` files (never
+    /// anything else of a bundle, and never through a link) from `run` to `out_dir`, so a
+    /// reviewer can see what the verifier was shown; an earlier attempt's bundles are removed
+    /// first.
     fn collect_bundle_indexes(&mut self, run: &Path, out_dir: &Path) {
         let _ = fs::remove_dir_all(out_dir.join("bundle"));
         let from = run.join("bundle");
@@ -283,9 +285,49 @@ impl Collector {
             let dest = out_dir.join("bundle").join(entry.file_name());
             let _ = fs::create_dir_all(&dest);
             self.copy_file(&dir.join("index.json"), &dest.join("index.json"));
+            self.copy_file(&dir.join("manifest.json"), &dest.join("manifest.json"));
+            if let Ok(files) = fs::read_dir(&dir) {
+                for f in files.flatten() {
+                    let name = f.file_name().to_string_lossy().into_owned();
+                    if is_excerpt_name(&name) {
+                        self.entries += 1;
+                        self.copy_file(&f.path(), &dest.join(&name));
+                    }
+                }
+            }
             if fs::read_dir(&dest).is_ok_and(|mut d| d.next().is_none()) {
                 let _ = fs::remove_dir(&dest);
             }
+        }
+    }
+
+    /// Copies `integrity/*.seal` (the seals `dla` wrote for the protected files) from `run`
+    /// to `out_dir`; an earlier attempt's seals are removed first.
+    fn collect_seals(&mut self, run: &Path, out_dir: &Path) {
+        let _ = fs::remove_dir_all(out_dir.join("integrity"));
+        let from = run.join("integrity");
+        if !Self::is_real_dir(&from) {
+            if fs::symlink_metadata(&from).is_ok() {
+                self.skip(&from, "not a directory");
+            }
+            return;
+        }
+        let Ok(rd) = fs::read_dir(&from) else { return };
+        let dest = out_dir.join("integrity");
+        let _ = fs::create_dir_all(&dest);
+        for entry in rd.flatten() {
+            self.entries += 1;
+            if self.entries > COLLECT_MAX_ENTRIES {
+                self.skip(&from, "entry limit reached");
+                return;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if is_seal_name(&name) {
+                self.copy_file(&entry.path(), &dest.join(&name));
+            }
+        }
+        if fs::read_dir(&dest).is_ok_and(|mut d| d.next().is_none()) {
+            let _ = fs::remove_dir(&dest);
         }
     }
 
@@ -377,10 +419,86 @@ fn remove_worker_ledgers(out_dir: &Path) {
     }
 }
 
+/// An excerpt file of a bundle: `excerpt.txt`, `excerpt-2.txt`, ...
+fn is_excerpt_name(name: &str) -> bool {
+    name.strip_prefix("excerpt")
+        .and_then(|rest| rest.strip_suffix(".txt"))
+        .is_some_and(|mid| {
+            mid.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
+}
+
+/// The integrity seal files of a run (`integrity/<file>.seal`).
+fn is_seal_name(name: &str) -> bool {
+    name.strip_suffix(".seal")
+        .is_some_and(|stem| !stem.is_empty() && !stem.contains(['/', '\\']))
+}
+
 fn remove_file_if_exists(p: &Path) {
     let _ = fs::remove_file(p);
 }
 
+/// Begin and end markers of the text the archetypes-off ablation removes.
+pub const ARCHETYPES_BEGIN: &str = "<!-- archetypes:begin -->";
+/// See [`ARCHETYPES_BEGIN`].
+pub const ARCHETYPES_END: &str = "<!-- archetypes:end -->";
+
+/// Removes every `<!-- archetypes:begin -->` ... `<!-- archetypes:end -->` block (the markers
+/// included, and the line break after the end marker). An unbalanced marker is an error: a
+/// variant must not silently keep, or lose, more text than the markers say.
+pub fn strip_archetype_blocks(text: &str) -> Res<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(b) = rest.find(ARCHETYPES_BEGIN) {
+        let (before, after) = rest.split_at(b);
+        if before.contains(ARCHETYPES_END) {
+            return Err(format!("`{ARCHETYPES_END}` without a begin marker"));
+        }
+        out.push_str(before);
+        let after = &after[ARCHETYPES_BEGIN.len()..];
+        let Some(e) = after.find(ARCHETYPES_END) else {
+            return Err(format!("`{ARCHETYPES_BEGIN}` without an end marker"));
+        };
+        if after[..e].contains(ARCHETYPES_BEGIN) {
+            return Err(format!("`{ARCHETYPES_BEGIN}` inside another block"));
+        }
+        let tail = &after[e + ARCHETYPES_END.len()..];
+        rest = tail
+            .strip_prefix("\r\n")
+            .or_else(|| tail.strip_prefix('\n'))
+            .unwrap_or(tail);
+    }
+    if rest.contains(ARCHETYPES_END) {
+        return Err(format!("`{ARCHETYPES_END}` without a begin marker"));
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// Strips the marked blocks from every `.md` file under `dir` (links are not followed).
+fn strip_archetype_blocks_in(dir: &Path) -> Res<()> {
+    let rd = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for entry in rd.flatten() {
+        let Ok(ft) = entry.file_type() else { continue };
+        let path = entry.path();
+        if ft.is_dir() {
+            strip_archetype_blocks_in(&path)?;
+        } else if ft.is_file() && path.extension().is_some_and(|e| e == "md") {
+            let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            if text.contains(ARCHETYPES_BEGIN) || text.contains(ARCHETYPES_END) {
+                let new = strip_archetype_blocks(&text)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                fs::write(&path, new).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Turns a plugin directory into its archetypes-off form: the archetype rows, the known-leaks
+/// reference and the data files are deleted, the `suggested_archetype` of every detector is
+/// blanked, and every marked archetype block of every `.md` file is removed.
 pub fn apply_archetypes_off(dest: &Path) -> Res<()> {
     let skills = dest.join("skills");
     if skills.is_dir() {
@@ -416,7 +534,7 @@ pub fn apply_archetypes_off(dest: &Path) -> Res<()> {
             }
         }
     }
-    Ok(())
+    strip_archetype_blocks_in(dest)
 }
 
 /// Assembles the plugin variant for an ablation into `dest` (which must not exist).
@@ -1325,6 +1443,7 @@ pub fn collect_run_files(run: &Path, out_dir: &Path) {
     let mut c = Collector::default();
     c.collect_worker_ledgers(run, out_dir);
     c.collect_bundle_indexes(run, out_dir);
+    c.collect_seals(run, out_dir);
     for (d, prefix) in [("series", 'S'), ("trend", 'T'), ("alloc", 'A')] {
         let _ = fs::remove_dir_all(out_dir.join(d));
         let from = run.join(d);
@@ -1376,6 +1495,29 @@ pub fn collect_run_files(run: &Path, out_dir: &Path) {
         );
         let _ = fs::write(out_dir.join(COLLECT_LOG), c.skipped.join("\n") + "\n");
     }
+}
+
+/// What the run's `state.json` says about how it ended: `incomplete_reason` and the number
+/// of times the stop hook blocked the stop (`stop_blocks`). `(None, None)` when the file is
+/// missing or unreadable (the run never started, or `dla` was not used).
+pub fn read_state_facts(state: &Path) -> (Option<String>, Option<u32>) {
+    let Some(v) = fs::read_to_string(state)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    else {
+        return (None, None);
+    };
+    let reason = v
+        .get("incomplete_reason")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let blocks = Some(
+        v.get("stop_blocks")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(0),
+    );
+    (reason, blocks)
 }
 
 fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
@@ -1490,6 +1632,11 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     } else {
         info.result_error.clone()
     };
+    let (incomplete_reason, stop_blocks) = if args.ablation.uses_binary() {
+        read_state_facts(&out_dir.join("state.json"))
+    } else {
+        (None, None)
+    };
     let rj = RunJson {
         schema_version: 1,
         fixture: t.fixture.clone(),
@@ -1505,6 +1652,8 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
         model: info.model,
         started_at,
         error: error.clone(),
+        incomplete_reason,
+        stop_blocks,
     };
     let mut body = serde_json::to_string_pretty(&rj).map_err(|e| e.to_string())?;
     body.push('\n');

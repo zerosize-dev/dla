@@ -123,9 +123,16 @@ first `/` of its key, or null when the key has no `/` or that text is empty.
   keeps its own state and fields unchanged, so the claim is counted once.
   Otherwise the record has no effect. A later `finding_added` with the
   duplicate's key creates a finding again.
-- Every other record type is ignored, in particular `verification`,
-  `slice_started`, `slice_done` and `slice_merged`: they change no finding and
-  no metric.
+- `verification`: changes no finding. It is read for the verification metrics
+  (see "Verification"). It counts when `finding` is a string, `agrees_site` and
+  `agrees_holder` are booleans, and `agrees_label` is a boolean, null or absent;
+  any other `verification` record (the form without the agreement flags) counts
+  for nothing. The key of its finding is built like the keys above. The later of
+  two records for one finding wins. A record whose finding key matches no finding
+  at the end of the replay (it never existed, or `finding_merged` removed it)
+  counts for nothing.
+- Every other record type is ignored, in particular `slice_started`,
+  `slice_done` and `slice_merged`: they change no finding and no metric.
 
 For this source, `discriminator` is true exactly when the final state is
 `refuted` (the ledger refuses `refuted` without a discriminator). Findings
@@ -237,6 +244,34 @@ for each of the four token fields `{"sum": n, "mean": round6(sum / runs)}`,
 `cost_usd` as `{"sum": round6, "mean": round6}` over the runs with a numeric
 `cost_usd` (`{"sum": 0.0, "mean": null}` when there are none).
 
+## Verification
+
+The independent verifier (`agents/verifier.md`) reads a finding's evidence
+bundle without the finding's site or label and `dla ledger verify` records what
+it concluded. These counts measure how often it was asked and how often it
+agreed. They are not part of the thirteen ratio metrics and are informational.
+
+Per run whose findings come from the ledger, a **claim** is a finding that
+passes `is_claim` (confirmed or strong, not a hypothesis). A claim is
+**verified** when it has a counting `verification` record. Over all runs of a
+group:
+
+- `claims`: the number of claims; `verified`: the number of verified claims.
+- `verified_share`: `{num: verified, den: claims, value}`.
+- `site_agreement`: verified claims whose record has `agrees_site` true, over
+  verified claims.
+- `holder_agreement`: the same for `agrees_holder`.
+- `label_agreement`: verified claims whose record has `agrees_label` true, over
+  verified claims whose `agrees_label` is a boolean (a record with null or no
+  `agrees_label` is left out of both numerator and denominator).
+
+Each is `{"num": n, "den": n, "value": round6(num / den)}` with `value` null
+when `den` is 0. The group has a `verification` member only when at least one
+run of the group has a counting `verification` record of a finding that exists
+at the end of the replay (verifications of refuted findings and hypotheses
+count for that rule); otherwise the member is absent. Runs whose findings come
+from `findings.json` or from nothing contribute zero everywhere.
+
 ## Per fixture
 
 Per group and fixture: `category`, `runs`, `claim_runs` (runs with at least
@@ -263,6 +298,7 @@ member is absent when empty. It is informational and part of no metric.
       "metrics": {"leak_recall": {...}, "...": {...}},
       "unexplained_growth_share": {"value": null, "runs": 0},
       "usage": {...},
+      "verification": {...},
       "fixtures": {"jvm-order-cache": {...}}
     }
   ]
@@ -270,7 +306,8 @@ member is absent when empty. It is informational and part of no metric.
 ```
 
 Groups are sorted by `ablation`, then `archetypes`. All thirteen ratio metrics
-are always present. Object key order does not matter. The file is UTF-8 JSON
+are always present; `verification` only when the group has a counting
+verification record. Object key order does not matter. The file is UTF-8 JSON
 with a trailing newline.
 
 ## `findings.json` (runs without dla)

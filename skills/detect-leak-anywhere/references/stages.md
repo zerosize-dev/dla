@@ -1,7 +1,8 @@
 # Stages
 
 The detail behind the nine stages in `SKILL.md`. Read the stage you are on. After each stage run
-`dla run status` and work through its `blocking` list before moving on. In a worker, every command
+`dla gate check --stage <s>` (names below) and work through the `missing` list it prints before
+moving on; `dla run status` shows the same open items as a progress view. In a worker, every command
 is `dla --run <id> --worker <name> ...` (see `agents/worker.md`).
 
 ## Entry paths
@@ -77,6 +78,25 @@ the target. No answer or an unattended run: `intake.target` unresolved as in
 `SKILL.md`, `dla report`, stop. With an answer, re-route to the path it picks (the run is already
 `--entry symptom`; start a new run with the right `--entry` if the target is a process or dumps).
 
+## Gates
+
+`dla gate check --stage intake|probe|sweep|classify|confirm|attribute|rule_out` checks the
+requirements of that stage and everything before it, prints up to five missing items with the command
+that fixes each (the full list is in `gate/<stage>.json` under the run), and exits non-zero while
+something is missing. A passing check records the stage in the run state. `--final` checks everything
+the report needs. In a worker, `dla --run <id> --worker <name> gate check ...` checks the worker's
+slice and records nothing.
+
+| Stage | Passes when |
+|---|---|
+| intake | the eight `intake.*` items are answered with evidence, or unresolved with a reason and a remedy; consent is recorded |
+| probe | probe evidence exists; each runtime has a coverage row; every backend row says ran, blocked or missing with a reason |
+| sweep | a sweep and a census ran for each runtime; every hit has a candidate or a recorded duplicate |
+| classify | every series has a trend analysis; every non-flat trend column is tied to a finding or covered by a resolved open item. **Passing it unlocks `references/<lang>-archetypes.md` and `known-leaks.md`**: until then the read hook denies them, so the first hypotheses come from the evidence and not from a list |
+| confirm | no finding is left under test without a result, and none tied to growth that passed is left untested |
+| attribute | every confirmed or strong finding has a holder and a site (an owner on an artifact run) |
+| rule_out | every leak-side finding has a non-leak sibling, and no sibling is left without a disposition |
+
 ## 1. Intake checklist
 
 Ask the user only for what the repository cannot tell you. Create the run (flags per path above,
@@ -151,6 +171,10 @@ under the run directory and need tier 1.
   process memory into accounted and unexplained; `dla gap S1 --residual` totals growth, subtracts
   what confirmed findings explain and opens an open item for the rest.
 - Column names, the gate and the residual rule: `references/evidence-and-report.md`.
+- End of the stage: `dla gate check --stage classify`. A pass unlocks the archetype tables
+  (`references/<lang>-archetypes.md`, `references/known-leaks.md`); read the one for your runtime now.
+  They are lists of mechanisms to compare with what you measured. A row never opens a finding by
+  itself, and a hit in the list is only a hypothesis until `dla ledger test` and `confirm` make it one.
 
 ## 5. Confirm
 
@@ -172,7 +196,29 @@ For each passed column tied to a candidate `F3`:
   or a column that lists it under `candidates`. A refusal `growth-not-tied` means the growth you cite
   belongs to another holder or to the whole process (`os.rss`, heap totals). Then add a probe for
   `F3`'s holder and rerun the harness, or resolve `F3` `suspected_static_only` with a remedy; never
-  confirm one holder from another holder's growth.
+  confirm one holder from another holder's growth. If `confirm` succeeds with a `warning` that the tied
+  column observed another holder, run the `dla ledger annotate F3 --holder H --evidence E` command the
+  warning prints (the heap-graph evidence decides the holder, not the census name).
+
+### Label
+
+After a leak-side finding is confirmed, `dla ledger label F3 --suggest` (read only) shows, per
+archetype, the alternative of required evidence kinds that is met, or the kinds still missing and the
+command that produces each. To record a label: `dla ledger label F3 --as L-COLLECT --evidence E11,E14`
+(`--evidence` defaults to the evidence the finding cites). The ledger accepts it only when:
+
+- the finding is confirmed or strong, and the ID is an `L-*` for a leak-side finding (an `N-*` goes on
+  a non-leak sibling whose hypothesis names it);
+- one `requires` alternative of the archetype is met by evidence tied to this finding;
+- the finding's holder is one of the archetype's holders (a refusal `label-holder` prints the
+  `ledger annotate --holder --evidence` fix when growth evidence observed another holder);
+- every look-alike the archetype disconfirms (`N-*`) that exists as a sibling is refuted.
+
+A region that differs from the archetype's is recorded as a warning in the label, not a refusal. The
+latest label wins. DLA never picks one: when nothing fits, or the evidence is missing, record
+`dla ledger label F3 --as UNCLASSIFIED --note "<holder and mechanism in your own words>"`. That is a
+correct result, and the finding is reported with the same weight. With `DLA_ARCHETYPES=off` (or no
+`data/archetypes.toml`) only UNCLASSIFIED is accepted.
 
 ## 6. Attribute and explain
 
@@ -230,12 +276,56 @@ allocation-stack evidence ids of the same call are the attribution. If the ledge
 `suspected_static_only`, never loosen the tie.
 
 Name the missing pairing: what should have released, removed or stopped, not a weak-reference
-workaround. Record holder and mechanism in your own words with `dla ledger annotate F3 --note
-"<text>"`. The label, `strong` and explain commands arrive with the taxonomy; when `dla ledger
---help` lists them use them, otherwise leave the finding unlabelled (UNCLASSIFIED) and say so.
-Verification of each confirmed finding is done by the core: `dla bundle F3`, one `dla:verifier`
-subagent given only the bundle directory, then `dla ledger verify` (see `SKILL.md`). A disagreement
-opens an open item to resolve.
+workaround. Record the writers and removers with `dla ledger annotate F3 --writer file:line --remover
+file:line` and the mechanism in your own words with `--note "<text>"`.
+
+### Explain
+
+Every confirmed or strong leak-side finding needs a stored explanation before the run can finish
+(`gate check --final` lists the ones without):
+
+```
+dla ledger explain F3 --tag inferred --adds src/Cache.java:88 --removal never --text "<one line>"
+```
+
+- `--tag observed` needs `--evidence` (a retention, intervention or tied growth record that shows the
+  pairing); `inferred` is a reading of the code.
+- `--adds` names the sites that add to the holder; they must be recorded writers (annotate them
+  first) or the finding's site. `--removal` is `never`, `not-found`, `conditional`, `wrong-key` or
+  `unreachable`; the last three need `--remover file:line`, which must match a recorded remover.
+- `--text` is 40 to 600 characters on one line. It must name the site or the owner, the holder kind or
+  the owner's last name, an adding site and how removal fails. DLA checks that these are stated and
+  consistent with the record; it cannot check that they are true, so read the code first.
+- The latest explanation wins. `dla ledger add --explanation` is refused from ledger schema 6.
+
+### Strong, last and only when time allows
+
+`dla ledger strong F3 --evidence E20[,E21]` marks a confirmed leak-side finding strong on a second
+class of evidence that is independent of the growth record that confirmed it (different tool, tool
+class and source):
+
+- retention: a retention-path or allocation-stack record that names the finding's holder (from a heap
+  dump through `dla summarize heap-graph`, or the vgdb chain); a histogram diff never counts, it shows
+  what grows and not who holds it;
+- intervention: `dla intervene H1 --finding F3 --stub-writer src/Cache.java:88` (or `--patch fix.diff`)
+  runs a scratch copy with the writer removed and records whether the growth went away; an effect of
+  `growth-removed` is the record to cite. `growth-remains` and `inconclusive` are kept and never
+  refute (`references/backends.md`, Intervene).
+
+If the growth record has no signal (an older `dla trend` record), run `dla trend` again and cite the
+new record too. A refusal names both sides and the command that produces the missing kind. Do this
+after explaining, never instead of it.
+
+### Verify every confirmed finding
+
+Verification is not limited to runs with workers. Once the leak-side findings are confirmed (after
+`dla ledger merge` when there are workers), for each confirmed finding `F3`: `dla bundle F3`, then one
+`dla:verifier` subagent given only the bundle directory, the run id, `F3` and the manifest sha256. The
+bundle holds raw evidence and up to four code excerpts around frames that the evidence names; it does not
+hold the site, the hypothesis, the label or the explanation. The verifier states a site, holder and
+mechanism in words, picks an ID or UNCLASSIFIED and runs `dla ledger verify`. A different site, holder or
+ID opens an open item that shows both mechanisms; resolve it by reading the code. A run that is not
+verified prints `Verified: no` for each confirmed finding and still reports.
 
 ## 7. Rule out non-leaks
 
@@ -255,10 +345,15 @@ confirms nothing.
 
 ## 8. Final gate
 
-`dla run status`: work through every item in `blocking`. What cannot be done is recorded:
-`dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do next>"`. Reasons:
-`not_exercised`, `no_harness`, `env_unavailable`, `build_fails`, `privilege_declined`,
-`tool_missing`, `time_budget`. With workers: `dla ledger merge` first, then this stage.
+`dla gate check --final` is the gate before the report. It needs everything the stage gates need, plus:
+every confirmed or strong leak-side finding has an explanation; every enumerated candidate of every
+backend is dispositioned; every non-flat trend column is tied to a dispositioned finding; checklist
+answers cite evidence that exists; no worker slice is unmerged; the integrity seals match (see
+`references/safety-and-effects.md`); the run is not aborted. Work through the `missing` list. What cannot be
+done is recorded: `dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do
+next>"`. Reasons: `not_exercised`, `no_harness`, `env_unavailable`, `build_fails`,
+`privilege_declined`, `tool_missing`, `time_budget`. With workers: `dla ledger merge` first, then
+verification, then this stage. `dla run status` shows the same open items in short.
 
 ## 9. Report and revisit
 

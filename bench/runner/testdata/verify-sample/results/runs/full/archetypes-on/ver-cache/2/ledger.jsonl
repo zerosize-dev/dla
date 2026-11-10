@@ -1,0 +1,4 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "src/Cache.java:20", "holder": "container-field"}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "strong"}
+{"type": "verification", "finding": "F1", "holder": "static/global", "mechanism": "unclear", "label": "UNCLASSIFIED", "bundle": "aa", "agrees_site": false, "agrees_holder": false, "agrees_label": true}
+{"type": "verification", "finding": "F1", "holder": "container-field", "mechanism": "a map keeps entries", "label": "UNCLASSIFIED", "bundle": "bb", "agrees_site": false, "agrees_holder": true}

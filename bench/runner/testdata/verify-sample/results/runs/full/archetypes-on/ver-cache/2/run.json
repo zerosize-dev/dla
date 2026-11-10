@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "fixture": "ver-cache",
+  "ablation": "full",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 0.0078125,
+  "usage": {
+    "input_tokens": 3,
+    "output_tokens": 7,
+    "cache_creation_input_tokens": 11
+  },
+  "cost_usd": 0.125,
+  "num_turns": 7,
+  "model": "sample-model",
+  "started_at": "2000-01-01T00:00:00Z",
+  "error": null
+}
