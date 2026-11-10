@@ -17,7 +17,9 @@ use dla_core::{
     EvidenceId, FindingId, FindingState, Ledger, MAX_RESULT_BYTES, RunState,
     discriminator::{DiscriminatorResult, Favors},
     error::codes,
-    evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Source},
+    evidence::{
+        Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal, Source, tool_class,
+    },
     finding::Polarity,
     fsutil::{to_pretty_json, write_atomic},
     paths::to_slash,
@@ -219,6 +221,16 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     let raw = format!("{TREND_DIR}/{trend_id}.json");
     let source = series_source(&tc, &main)?;
     let authority = crate::gap_cmd::series_authority(&main.series);
+    // The growth measurement's own signal: `dla ledger strong` judges it independent of a
+    // retention record or an intervention by tool, class and source.
+    let signal = Signal::new(
+        "dla-trend",
+        tool_class::HARNESS_SERIES,
+        match &source {
+            Source::Artifact { sha256, .. } => sha256,
+            _ => "",
+        },
+    );
 
     let (gauges, counters) = summary::by_kind(&cols);
     let mut evidence: Vec<(EvidenceKind, EvidenceId)> = Vec::new();
@@ -243,7 +255,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             kind,
             "dla",
             env!("CARGO_PKG_VERSION"),
-            summary::summarize(&trend_id, &main.series, group),
+            summary::summarize(&trend_id, &main.series, group, &signal),
         );
         spec.authority = authority;
         spec.raw = Some(raw.clone());

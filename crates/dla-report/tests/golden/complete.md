@@ -16,7 +16,7 @@ Coverage: not measured
 
 ## Findings
 
-### F1: **Novel mechanism (UNCLASSIFIED)**
+### F1: **UNCLASSIFIED**
 
 - State: confirmed
 - Evidence classes: growth
@@ -29,6 +29,7 @@ Coverage: not measured
 - Writers: `src/cache.py:42`, `src/loader.py:17`
 - Removers: `src/cache.py:90`
 - Annotation: nothing evicts on the request path
+- Verified: no
 - Repair class: bound/evict
 - Supporting evidence: E2
 - Explanation (observed): Entries are never evicted.

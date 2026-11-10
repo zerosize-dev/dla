@@ -117,7 +117,7 @@ fn matching_evidence_changes_the_holder_and_records_the_old_one() {
     let fin = l.finding(&f).unwrap();
     assert_eq!(fin.holder, Some(Holder::RegistrationTable));
     let last = l.lines().last().unwrap();
-    assert_eq!(last.schema_version, 5);
+    assert_eq!(last.schema_version, 6);
     let dla_core::Record::FindingAnnotated(rec) = &last.record else {
         panic!()
     };
@@ -299,7 +299,7 @@ fn set_version(text: &str, v: u32, only_last: bool) -> String {
     let range = if only_last { lines.len() - 1.. } else { 0.. };
     for l in &mut lines[range] {
         *l = l.replacen(
-            "\"schema_version\":5",
+            "\"schema_version\":6",
             &format!("\"schema_version\":{v}"),
             1,
         );
@@ -331,9 +331,9 @@ fn version_4_lines_keep_the_old_rule() {
     let t = set_version(&text(&l4), 4, false);
     let again = Ledger::from_text(&t).unwrap();
     assert_eq!(again.lines()[0].schema_version, 4);
-    // A v6 line is refused as written by a newer dla.
+    // A v7 line is refused as written by a newer dla.
     let t =
-        set_version(&text(&l4), 6, false).replace("\"schema_version\":4", "\"schema_version\":6");
+        set_version(&text(&l4), 7, false).replace("\"schema_version\":4", "\"schema_version\":7");
     assert!(matches!(Ledger::from_text(&t), Err(Error::Schema(_))));
 }
 

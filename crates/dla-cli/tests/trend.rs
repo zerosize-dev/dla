@@ -215,6 +215,14 @@ fn a_leak_goes_from_trend_to_confirmed() {
     assert_eq!(growth["result"]["gate"], "pass");
     assert_eq!(growth["result"]["passed"][0]["column"], "os.rss");
     assert_eq!(growth["result"]["failed"], 1); // cgroup.current
+    // The growth record carries a signal: tool dla-trend, class harness-series, and the
+    // sha256 of the series file as its source, so `dla ledger strong` can judge
+    // independence from a retention record or an intervention.
+    let sig = &growth["result"]["signal"];
+    assert_eq!(sig["tool"], "dla-trend");
+    assert_eq!(sig["class"], "harness-series");
+    assert_eq!(sig["source_sha256"], growth["source"]["artifact"]["sha256"]);
+    assert_eq!(sig["source_sha256"].as_str().unwrap().len(), 64);
     let counts = lines
         .iter()
         .find(|l| l["kind"] == "unit-count-series")

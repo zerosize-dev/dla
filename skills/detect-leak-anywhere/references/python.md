@@ -2,6 +2,8 @@
 
 Worker name and runtime id: `python`. Facts from `harness/python/README.md` and `docs/VERIFY.md`.
 
+Archetype rows (what to look for, how to confirm, how to rule out): read `references/python-archetypes.md` only after `dla gate check --stage classify` passes.
+
 ## Harness
 - Command mode (3.8+; coverage needs 3.12+): `sitecustomize.py` first on `PYTHONPATH`, chain-
   imports the next `sitecustomize`, skips pip/venv/ensurepip/build runs, starts `tracemalloc` and,

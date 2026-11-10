@@ -2,6 +2,8 @@
 
 Worker name and runtime id: `node`. Facts from `harness/node/README.md` and `docs/VERIFY.md`.
 
+Archetype rows (what to look for, how to confirm, how to rule out): read `references/node-archetypes.md` only after `dla gate check --stage classify` passes.
+
 ## Harness
 - Command mode (Node 18+): `dla-preload.js` is loaded through `NODE_OPTIONS=--require ...`
   (appended). It does nothing without `DLA_HARNESS_OUT`, in worker threads, and in

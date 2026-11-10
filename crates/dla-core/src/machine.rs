@@ -9,15 +9,20 @@
 //! rules (a dump-confirmed finding needs an owner instead of a site, and a dump's
 //! retention path can stand in for static evidence). Ledger lines written with schema
 //! version 1 replay under [`M0Rules`], version 2 under [`M3Rules`], version 3 under
-//! [`M4Rules`].
+//! [`M4Rules`], versions 4 and 5 under [`M5Rules`], version 6 under [`M6Rules`] (which adds
+//! the `strong` rule).
 
 use crate::{
     discriminator::{Favors, favors_of, finding_of},
     error::{Refusal, codes},
-    evidence::{Authority, EvidenceClass, EvidenceKind, EvidenceRecord},
+    evidence::{
+        Authority, EvidenceClass, EvidenceKind, EvidenceRecord, Signal, records_independent,
+    },
     finding::{Finding, FindingState, Polarity, Region, Shape, UnresolvedReason},
     harness::harness_id_of,
+    holders::{InterventionResult, control_record, named_holder_kind, names_holder},
     ids::{EvidenceId, FindingId},
+    m6::codes as m6_codes,
     slice::codes as m4_codes,
     state::EntryPath,
     trend::{GrowthSummary, finding_region, finding_shape},
@@ -81,8 +86,8 @@ pub struct TransitionContext<'a> {
 
 /// Evidence rules attached to edges of the graph.
 ///
-/// Extension point: later milestones implement this trait (or extend [`M3Rules`])
-/// to add the rules for `strong`.
+/// Extension point: a later milestone implements this trait (or extends an earlier rule
+/// set) to add rules.
 pub trait TransitionRules {
     /// Judges a move whose edge is already known to exist.
     fn check(&self, ctx: &TransitionContext<'_>) -> Result<(), Refusal>;
@@ -125,8 +130,8 @@ fn edge_command(id: &crate::ids::FindingId, to: FindingState) -> (String, bool) 
             true,
         ),
         FindingState::Strong => (
-            format!("dla ledger strong {id} --evidence <id> (available from M6)"),
-            false,
+            format!("dla ledger strong {id} --evidence <retention-path or intervention id>"),
+            true,
         ),
         FindingState::Refuted => (
             format!("dla ledger refute {id} --evidence <discriminator id>"),
@@ -505,6 +510,249 @@ impl TransitionRules for M5Rules {
         }
         Ok(())
     }
+}
+
+/// The rule set of milestone 6: [`M5Rules`] plus the rule for `strong`.
+///
+/// A confirmed leak-side finding becomes strong on a second class of evidence that is
+/// independent of the growth record that confirmed it:
+///
+/// * retention: a record for which [`names_holder`] is true (`histogram-diff` never is), or
+/// * intervention: `effect == growth-removed`, every non-null guard true, the control
+///   trend one the finding cites, and the control column tied to the finding.
+///
+/// Independence is [`records_independent`]: tool, tool class and source all differ.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct M6Rules;
+
+impl TransitionRules for M6Rules {
+    fn check(&self, ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+        M5Rules.check(ctx)?;
+        if ctx.to == FindingState::Strong {
+            check_strong(ctx)?;
+        }
+        Ok(())
+    }
+}
+
+fn signal_text(e: &EvidenceRecord) -> String {
+    match Signal::of(e) {
+        Some(s) => format!(
+            "{} ({}, {}, source {})",
+            e.evidence_id,
+            s.tool,
+            s.class,
+            &s.source_sha256[..12.min(s.source_sha256.len())]
+        ),
+        None => format!("{} (no signal)", e.evidence_id),
+    }
+}
+
+/// How a cited record fails to be a second class for `strong`; `None` when it is one.
+fn second_class_gap(
+    f: &Finding,
+    cited_by_finding: &[&EvidenceRecord],
+    s: &EvidenceRecord,
+) -> Option<String> {
+    let id = &s.evidence_id;
+    match s.kind {
+        EvidenceKind::RetentionPath | EvidenceKind::AllocStack => {
+            if s.authority == Authority::Static {
+                Some(format!("{id} has authority static"))
+            } else if names_holder(s, f) {
+                None
+            } else if s.kind == EvidenceKind::AllocStack {
+                Some(format!(
+                    "{id} is an allocation stack without a root path naming {}'s owner (a bare allocation stack is not retention)",
+                    f.id
+                ))
+            } else {
+                Some(format!(
+                    "{id} names no holder of {} (no holder key is its owner{}, and no allocation site is within {} lines of its site)",
+                    f.id,
+                    f.owner
+                        .as_deref()
+                        .map_or(String::new(), |o| format!(" {o:?}")),
+                    crate::verify::SITE_TOLERANCE
+                ))
+            }
+        }
+        EvidenceKind::HistogramDiff => Some(format!(
+            "{id} is a histogram: it lists types that grow, not who holds them, so it is not a second class"
+        )),
+        EvidenceKind::Intervention => {
+            let r = InterventionResult::of(s)?;
+            if let Some(why) = r.why_not_removal_of(&f.id) {
+                return Some(format!("{id}: {why}"));
+            }
+            let (Some(trend), Some(col)) =
+                (r.control_trend.as_deref(), r.control_column.as_deref())
+            else {
+                return Some(format!("{id} names no control trend and column"));
+            };
+            if control_record(cited_by_finding.iter().copied(), f, trend, col).is_none() {
+                return Some(format!(
+                    "{id}: its control {trend} / {col} is not a passing column tied to {} in a trend {} cites",
+                    f.id, f.id
+                ));
+            }
+            None
+        }
+        other => Some(format!(
+            "{id} is a {other} record, which is not retention or an intervention"
+        )),
+    }
+}
+
+fn check_strong(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+    let f = ctx.finding;
+    let id = &f.id;
+    if f.polarity() != Polarity::Leak {
+        return Err(Refusal::new(
+            m6_codes::STRONG_LEAK_ONLY,
+            format!(
+                "{id} is a non-leak hypothesis: strong is defined for leak-side findings (a non-leak finding is settled by its discriminator and the refuted root)"
+            ),
+            "a leak-side finding",
+            "dla ledger label <N-finding> --as <N-id>   (a confirmed non-leak finding keeps its label instead)",
+        ));
+    }
+    // What the finding cites, and what this move adds.
+    let cited: Vec<&EvidenceRecord> = judged(ctx).collect();
+    // G: the passing growth records of the finding with a column tied to it.
+    let growth: Vec<&EvidenceRecord> = cited
+        .iter()
+        .copied()
+        .filter(|e| is_passing_growth(e))
+        .filter(|e| {
+            GrowthSummary::from_result(&e.result).is_some_and(|s| {
+                s.passed
+                    .iter()
+                    .any(|c| c.tied_to_owner(&f.id, f.site.as_deref(), f.owner.as_deref()))
+            })
+        })
+        .collect();
+    let fix_second = format!(
+        "dla harness run <H> --capture heap   then   dla summarize heap-graph <the dumps> --finding {id}   (Node: the same on .heapsnapshot files; native: the vgdb chain, or dla summarize alloc-stack-diff on a profile with root paths)   or   dla intervene <H> --finding {id} --stub-writer <file:line>"
+    );
+    if growth.is_empty() {
+        return Err(Refusal::new(
+            codes::GROWTH_NOT_TIED,
+            format!(
+                "{id} cannot become strong: it cites no passing growth record with a column tied to it (strong needs the growth that confirmed it, and a second, independent class)"
+            ),
+            format!("a passing growth column tied to {id} among its cited evidence"),
+            format!(
+                "dla trend <series> --finding {id}   then   dla ledger confirm {id} --evidence <trend evidence id>"
+            ),
+        ));
+    }
+    let mut gaps: Vec<String> = Vec::new();
+    let mut second: Vec<&EvidenceRecord> = Vec::new();
+    for e in ctx.evidence {
+        let Some(s) = ctx.lookup.evidence(e) else {
+            continue;
+        };
+        if matches!(
+            s.kind,
+            EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+        ) {
+            continue;
+        }
+        match second_class_gap(f, &cited, s) {
+            None => second.push(s),
+            Some(g) => gaps.push(g),
+        }
+    }
+    if second.is_empty() {
+        return Err(Refusal::new(
+            m6_codes::STRONG_SECOND_CLASS,
+            format!(
+                "{id} cannot become strong: none of the records cited is a second class of evidence ({})",
+                if gaps.is_empty() {
+                    "none cited".to_owned()
+                } else {
+                    gaps.join("; ")
+                }
+            ),
+            format!(
+                "a retention record naming {id}'s holder, or an intervention that removed the growth"
+            ),
+            fix_second,
+        ));
+    }
+    // Independence: some pair (growth, second class) with different tool, class and source.
+    let pair = growth
+        .iter()
+        .flat_map(|g| second.iter().map(move |s| (*g, *s)))
+        .find(|(g, s)| records_independent(g, s));
+    let Some((_, s)) = pair else {
+        let signed: Vec<&&EvidenceRecord> =
+            growth.iter().filter(|g| Signal::of(g).is_some()).collect();
+        if signed.is_empty() {
+            let g = growth[0];
+            let series = g
+                .result
+                .get("series")
+                .and_then(|s| s.as_str())
+                .unwrap_or("<series>");
+            return Err(Refusal::new(
+                m6_codes::STRONG_GROWTH_UNSIGNED,
+                format!(
+                    "{id} cannot become strong: its growth record {} carries no signal (tool, class, source), so its independence from the second record cannot be judged; trend records written before schema 6 have none",
+                    g.evidence_id
+                ),
+                "growth evidence with a signal",
+                format!(
+                    "dla trend {series}   (it now records a signal)   then   dla ledger strong {id} --evidence <the new trend evidence id>,{}",
+                    second[0].evidence_id
+                ),
+            ));
+        }
+        let (g, s) = (*signed[0], second[0]);
+        let same = match (Signal::of(g), Signal::of(s)) {
+            (Some(a), Some(b)) => {
+                let mut parts = Vec::new();
+                if a.tool == b.tool {
+                    parts.push("tool");
+                }
+                if a.class == b.class {
+                    parts.push("tool class");
+                }
+                if a.source_sha256 == b.source_sha256 {
+                    parts.push("source");
+                }
+                parts.join(", ")
+            }
+            _ => "signal missing on the second record".to_owned(),
+        };
+        return Err(Refusal::new(
+            m6_codes::STRONG_NOT_INDEPENDENT,
+            format!(
+                "{id} cannot become strong: {} and {} are not independent (they share the {same}); two readings of one observation count once",
+                signal_text(g),
+                signal_text(s)
+            ),
+            "a second record whose tool, tool class and source all differ from the growth record's",
+            fix_second,
+        ));
+    };
+    if let (Some(kind), Some(have)) = (named_holder_kind(s, f), f.holder)
+        && kind != have
+    {
+        return Err(Refusal::new(
+            m6_codes::STRONG_HOLDER_MISMATCH,
+            format!(
+                "{id} has holder {have}, but {} observed {kind}",
+                s.evidence_id
+            ),
+            format!("holder {kind} on {id}, or a record that observed {have}"),
+            format!(
+                "dla ledger annotate {id} --holder {kind} --evidence <heap-graph growth evidence id>"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Refuses a leak-side confirmation whose passing growth columns are all tied to other

@@ -92,6 +92,10 @@
             "type": "string"
           }
         },
+        "archetype": {
+          "description": "The leak archetype (`L-*`) the behavior belongs to. A hint for the reader: a\nverdict never labels a finding.",
+          "type": "string"
+        },
         "effect": {
           "description": "What happens, in one or two sentences.",
           "type": "string"
@@ -144,6 +148,7 @@
         "versions",
         "effect",
         "holder",
+        "archetype",
         "evidence",
         "remedy"
       ]

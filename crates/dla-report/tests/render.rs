@@ -174,13 +174,13 @@ fn complete_header_and_sections_in_order() {
 }
 
 #[test]
-fn novel_mechanism_label_is_only_for_confirmed_and_strong() {
+fn unclassified_is_rendered_plainly_at_the_same_weight_in_every_state() {
     let md = render_markdown(&view("complete", None));
     // F1 is confirmed; F3 is unresolved; F2 is refuted.
-    assert!(md.contains("### F1: **Novel mechanism (UNCLASSIFIED)**\n"));
+    assert!(md.contains("### F1: **UNCLASSIFIED**\n"));
     assert!(md.contains("### F3: **UNCLASSIFIED**\n"));
     assert!(md.contains("- **F2** (UNCLASSIFIED):"));
-    assert_eq!(md.matches("Novel mechanism").count(), 1);
+    assert!(!md.contains("Novel mechanism"));
     let md = render_markdown(&view("incomplete", None));
     assert!(!md.contains("Novel mechanism"));
     assert!(!md.contains("?."), "no doubled punctuation");
@@ -413,6 +413,7 @@ fn a_confirmed_non_leak_sibling_is_explained_not_novel_and_has_no_growth_line() 
         "{section}"
     );
     assert!(!section.contains("Novel mechanism"), "{section}");
+    assert!(!section.contains("- Verified:"), "{section}");
     assert!(!section.contains("- Growth:"), "{section}");
 }
 
@@ -526,7 +527,7 @@ fn verified_line_agrees_or_names_both_values() {
         "{md}"
     );
     assert!(
-        md.contains("- Verified: DISAGREES (site: finding `native/pool.rs:7` vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local; bundle aaaaaaaaaaaa)\n"),
+        md.contains("- Verified: DISAGREES (site: finding `native/pool.rs:7` vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local; bundle aaaaaaaaaaaa); finding mechanism: not stated; verifier mechanism: a thread local\n"),
         "{md}"
     );
 }
@@ -544,4 +545,258 @@ fn entry_line_names_the_artifacts_of_an_artifact_run() {
     );
     assert!(md.contains("Scope: repository; excluded: none; out of scope: none\n"));
     assert!(!md.contains("## Workers"), "no workers, no section");
+}
+
+// ------------------------------------------------------------------ schema 6 lines
+
+mod v6 {
+    use super::*;
+    use dla_core::{
+        Authority, EvidenceKind, FindingState, NewEvidence, NewFinding, Origin, Source, Tool,
+        archetypes::Table,
+        evidence::{EvidenceCoverage, Signal},
+        finding::{ExplanationTag, Holder},
+        labels::Archetypes,
+        record::RemovalClaim,
+    };
+
+    const TABLE: &str = r#"
+[L-COLLECT]
+holders = ["static/global"]
+regions = ["heap"]
+requires = [["growth-series", "retention-path"]]
+disconfirm = ["N-WARM"]
+repair = ["bound/evict"]
+summary = "A collection gains entries and nothing removes them."
+"#;
+
+    fn ev(
+        kind: EvidenceKind,
+        authority: Authority,
+        tool: &str,
+        class: &str,
+        src: &str,
+        mut result: serde_json::Value,
+    ) -> NewEvidence {
+        result["signal"] = Signal::new(tool, class, src).to_value();
+        NewEvidence {
+            source: Source::Repo {
+                commit: "abc".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: tool.into(),
+                version: "0".into(),
+            },
+            authority,
+            kind,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        }
+    }
+
+    /// F1 confirmed, labelled L-COLLECT, explained, then strong on a vgdb retention record.
+    pub fn ledger() -> Ledger {
+        let mut l = Ledger::from_text("").unwrap();
+        let id = |s: &str| -> dla_core::FindingId { s.parse().unwrap() };
+        let e = |s: &str| -> dla_core::EvidenceId { s.parse().unwrap() };
+        for n in [
+            ev(
+                EvidenceKind::StaticHit,
+                Authority::Static,
+                "t",
+                "x",
+                "s1",
+                json!({}),
+            ),
+            ev(
+                EvidenceKind::Workload,
+                Authority::Test,
+                "t",
+                "x",
+                "s2",
+                json!({"harness": "H1", "mode": "command", "runtime": "go"}),
+            ),
+            ev(
+                EvidenceKind::Discriminator,
+                Authority::Test,
+                "dla",
+                "x",
+                "s3",
+                json!({"test": "plateau", "favors": "leak", "supports": ["leak"], "finding": null}),
+            ),
+            ev(
+                EvidenceKind::GrowthSeries,
+                Authority::Test,
+                "dla-trend",
+                "harness-series",
+                "aa",
+                json!({"trend": "T1", "series": "S1", "n": 8, "gate": "pass", "failed": 0,
+                "passed": [{"column": "probe:CACHE", "region": "heap", "site": "a.go:1", "finding": "F1", "shape": "steady"}]}),
+            ),
+            ev(
+                EvidenceKind::RetentionPath,
+                Authority::Live,
+                "valgrind-vgdb",
+                "leak-checker",
+                "bb",
+                json!({"root": "static table", "path": [], "alloc": "grow (a.go:2)"}),
+            ),
+        ] {
+            l.add_evidence(n).unwrap();
+        }
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![e("E1")]);
+        nf.site = Some("a.go:1".into());
+        nf.holder = Some(Holder::StaticGlobal);
+        l.add_finding(nf).unwrap();
+        let mut nf = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![e("E1")]);
+        nf.sibling_of = Some(id("F1"));
+        nf.hypothesis = Some("N-WARM".into());
+        nf.refute_if = Some("growth continues".into());
+        l.add_finding(nf).unwrap();
+        let mv = |l: &mut Ledger, f: &str, to, ev: &[&str]| {
+            l.transition(
+                &id(f),
+                to,
+                None,
+                None,
+                ev.iter().map(|x| e(x)).collect(),
+                "t",
+            )
+            .unwrap();
+        };
+        mv(&mut l, "F1.n1", FindingState::Refuted, &["E3"]);
+        mv(&mut l, "F1", FindingState::UnderTest, &["E2"]);
+        mv(&mut l, "F1", FindingState::Confirmed, &["E4"]);
+        let t = Table::parse(TABLE, "t").unwrap();
+        l.label(
+            &id("F1"),
+            "L-COLLECT",
+            &[e("E4"), e("E5")],
+            None,
+            Archetypes::On(&t),
+        )
+        .unwrap();
+        l.annotate(&id("F1"), vec!["a.go:9".into()], vec![], None)
+            .unwrap();
+        l.explain(
+            &id("F1"),
+            ExplanationTag::Observed,
+            &[],
+            RemovalClaim::Never,
+            None,
+            Some(&e("E5")),
+            "Requests add entries to the static/global table at a.go:1 through put at a.go:9 and no code removes them.",
+            &[],
+            &[],
+        )
+        .unwrap();
+        mv(&mut l, "F1", FindingState::Strong, &["E5"]);
+        l
+    }
+
+    fn md(l: Ledger) -> String {
+        render_markdown(&RunView::new(state("20260101-000000-abcd"), l, None))
+    }
+
+    #[test]
+    fn a_labelled_explained_strong_finding_shows_its_proof() {
+        let md = md(ledger());
+        assert!(
+            md.contains("### F1: **L-COLLECT**\n\n- State: strong\n- Label: L-COLLECT (evidence: E4 growth-series, E5 retention-path)\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("- Strong: second class E5 retention-path that names the holder, independent of the growth record E4 (dla-trend)\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("- Explanation (observed): Requests add entries"),
+            "{md}"
+        );
+        assert!(
+            md.contains("- Explanation structure: adds: a.go:9; removal: never; evidence: E5\n"),
+            "{md}"
+        );
+        assert!(md.contains("- Verified: no\n"), "{md}");
+    }
+
+    #[test]
+    fn unclassified_with_a_note_shows_the_note_and_a_verified_label_disagreement_both_mechanisms() {
+        let t = Table::parse(TABLE, "t").unwrap();
+        let mut l = ledger();
+        let id: dla_core::FindingId = "F1".parse().unwrap();
+        l.verify(
+            &id,
+            Some("a.go:1".into()),
+            Holder::StaticGlobal,
+            "the table keeps every entry",
+            "UNCLASSIFIED",
+            &"a".repeat(64),
+            Archetypes::On(&t),
+        )
+        .unwrap();
+        let md = md(l);
+        assert!(
+            md.contains("- Verified: DISAGREES (label: finding L-COLLECT vs verifier UNCLASSIFIED; bundle aaaaaaaaaaaa); finding mechanism: Requests add entries"),
+            "{md}"
+        );
+        assert!(
+            md.contains("verifier mechanism: the table keeps every entry\n"),
+            "{md}"
+        );
+        // And when everything agrees the label is named.
+        let mut l = ledger();
+        l.verify(
+            &id,
+            Some("a.go:1".into()),
+            Holder::StaticGlobal,
+            "m",
+            "L-COLLECT",
+            &"a".repeat(64),
+            Archetypes::On(&t),
+        )
+        .unwrap();
+        let md = super::render_markdown(&RunView::new(state("20260101-000000-abcd"), l, None));
+        assert!(md.contains("- Verified: agrees (verifier site `a.go:1`, holder static/global, label L-COLLECT; bundle aaaaaaaaaaaa)\n"), "{md}");
+    }
+
+    #[test]
+    fn an_explicit_unclassified_label_shows_its_note() {
+        let t = Table::parse(TABLE, "t").unwrap();
+        let mut l = Ledger::from_text("").unwrap();
+        let src = ledger();
+        for line in src
+            .lines()
+            .iter()
+            .take_while(|x| !matches!(x.record, dla_core::Record::FindingLabeled(_)))
+        {
+            l = Ledger::from_text(
+                &(l.lines()
+                    .iter()
+                    .chain(std::iter::once(line))
+                    .map(|x| serde_json::to_string(x).unwrap() + "\n")
+                    .collect::<String>()),
+            )
+            .unwrap();
+        }
+        let id: dla_core::FindingId = "F1".parse().unwrap();
+        l.label(
+            &id,
+            "UNCLASSIFIED",
+            &[],
+            Some("a pool keyed by thread; no row fits"),
+            Archetypes::On(&t),
+        )
+        .unwrap();
+        let md = md(l);
+        assert!(md.contains("### F1: **UNCLASSIFIED**\n"), "{md}");
+        assert!(
+            md.contains("- Label: UNCLASSIFIED (a pool keyed by thread; no row fits)\n"),
+            "{md}"
+        );
+    }
 }

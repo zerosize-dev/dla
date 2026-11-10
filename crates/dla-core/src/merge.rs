@@ -31,7 +31,7 @@ use serde::Serialize;
 use crate::{
     coverage::CoverageManifest,
     error::{Error, Refusal},
-    finding::{Finding, FindingState, Polarity, UnresolvedReason},
+    finding::{Finding, FindingState, Polarity, UNCLASSIFIED, UnresolvedReason},
     ids::FindingId,
     ledger::Ledger,
     probe::ProbeReport,
@@ -285,6 +285,28 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
                 }
             }
         }
+    }
+
+    // ---- 2b. a label on a duplicate is not copied to its canonical finding
+    let pairs: Vec<(FindingId, FindingId)> = main
+        .findings()
+        .filter_map(|f| main.merged_into(&f.id).map(|c| (f.id.clone(), c.clone())))
+        .collect();
+    for (dup, canonical) in pairs {
+        let label = |id: &FindingId| main.finding(id).map(|f| f.archetype.clone());
+        let (Some(dl), Some(cl)) = (label(&dup), label(&canonical)) else {
+            continue;
+        };
+        if dl == UNCLASSIFIED || cl != UNCLASSIFIED {
+            continue;
+        }
+        let text = format!(
+            "label {dl} on duplicate {dup} not carried to {canonical}: dla ledger label {canonical} --as {dl}"
+        );
+        if main.open_items().any(|o| o.item.text == text) {
+            continue;
+        }
+        main.open_item_add(&text, Some(canonical.clone()), MERGE_BY)?;
     }
 
     // ---- 3. unfinished workers

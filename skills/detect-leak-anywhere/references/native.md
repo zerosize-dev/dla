@@ -2,6 +2,8 @@
 
 Worker name and runtime id: `native`. Facts from `harness/native/README.md` and `docs/VERIFY.md`.
 
+Archetype rows (what to look for, how to confirm, how to rule out): read `references/native-archetypes.md` only after `dla gate check --stage classify` passes.
+
 ## Harness
 - Command mode: `libdlashim.so` (compiled with `cc` by `dla`, `-fno-optimize-sibling-calls`
   required) is preloaded into the measured process only (`LD_PRELOAD`; macOS `DYLD_INSERT_LIBRARIES`,

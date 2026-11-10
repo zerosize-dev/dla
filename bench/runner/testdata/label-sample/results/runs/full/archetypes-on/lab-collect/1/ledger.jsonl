@@ -1,0 +1,3 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "src/Cache.java:20", "holder": "container-field", "archetype": "UNCLASSIFIED"}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "confirmed"}
+{"type": "finding_labeled", "finding": "F1", "label": "L-COLLECT", "previous": "UNCLASSIFIED"}

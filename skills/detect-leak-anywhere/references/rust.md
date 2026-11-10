@@ -3,6 +3,8 @@
 Worker name and runtime id: `rust`. Facts from `harness/rust/README.md`, `harness/native/README.md`
 and `docs/VERIFY.md`.
 
+Archetype rows (what to look for, how to confirm, how to rule out): read `references/rust-archetypes.md` only after `dla gate check --stage classify` passes.
+
 ## Harness
 - Driver mode (`dla harness gen --lang rust --driver`): `src/bin/dla_harness.rs` in the scratch copy,
   only for crates with a library target. It installs a counting `#[global_allocator]` over `System`

@@ -3,6 +3,8 @@
 Worker name and runtime id: `jvm`. Read this after the router; facts come from `harness/jvm/README.md`
 and `docs/VERIFY.md`.
 
+Archetype rows (what to look for, how to confirm, how to rule out): read `references/jvm-archetypes.md` only after `dla gate check --stage classify` passes.
+
 ## Harness
 - Agent: `dla-agent.jar` is injected through `JAVA_TOOL_OPTIONS` (appended, never replaced) with
   `-XX:NativeMemoryTracking=summary`; the `Picked up JAVA_TOOL_OPTIONS` stderr line is expected.

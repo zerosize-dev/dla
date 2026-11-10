@@ -879,7 +879,7 @@ fn a_ledger_written_by_the_api_replays_from_disk() {
     }
     let (f, _) = confirmed_leak(&mut l);
     let text = std::fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap();
-    assert!(text.lines().all(|t| t.contains("\"schema_version\":5")));
+    assert!(text.lines().all(|t| t.contains("\"schema_version\":6")));
     let again = Ledger::load(dir.path()).unwrap();
     assert_eq!(again.finding(&f).unwrap(), l.finding(&f).unwrap());
     assert_eq!(again.finding(&f).unwrap().shape, Some(Shape::Steady));
@@ -912,6 +912,6 @@ fn a_version_one_ledger_stays_valid_and_new_lines_are_the_current_version() {
         .lines()
         .map(|t| serde_json::from_str::<serde_json::Value>(t).unwrap()["schema_version"].clone())
         .collect();
-    assert_eq!(versions, [1, 1, 1, 5]);
+    assert_eq!(versions, [1, 1, 1, 6]);
     Ledger::load(dir.path()).unwrap();
 }

@@ -1,0 +1,3 @@
+{"type": "finding_added", "finding": {"id": "F1", "site": "workers.go:30", "holder": "blocked-stack", "archetype": "UNCLASSIFIED"}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "confirmed"}
+{"type": "finding_labeled", "finding": "F1", "label": "L-COLLECT", "previous": "UNCLASSIFIED"}

@@ -3,6 +3,7 @@
 use schemars::{Schema, schema_for};
 
 use crate::{
+    archetypes::ArchetypesFile,
     census::CensusEntry,
     checklist::Checklist,
     coverage::CoverageManifest,
@@ -32,6 +33,7 @@ pub fn all() -> Vec<(&'static str, Schema)> {
         ("checklist", schema_for!(Checklist)),
         ("detectors", schema_for!(DetectorFile)),
         ("known-leaks", schema_for!(KnownLeaksFile)),
+        ("archetypes", schema_for!(ArchetypesFile)),
         ("probe-report", schema_for!(ProbeReport)),
         ("static-hit", schema_for!(StaticHit)),
         ("census-entry", schema_for!(CensusEntry)),

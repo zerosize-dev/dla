@@ -4,6 +4,8 @@
 //! With `--worker <name>` every write goes to the worker's slice `ledger.<name>.jsonl`
 //! and a bare `F3` means the worker's own `<name>/F3`.
 
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand, ValueEnum};
 use dla_core::{
     EvidenceId, FindingId, FindingState, Ledger, NewFinding, OpenItemId, Origin, Resolution,
@@ -78,7 +80,8 @@ pub struct VerifyArgs {
     /// The verifier's mechanism, in words.
     #[arg(long)]
     mechanism: String,
-    /// The verifier's label: an archetype ID or UNCLASSIFIED.
+    /// The verifier's label: an archetype ID or UNCLASSIFIED. With archetypes off only
+    /// UNCLASSIFIED is accepted and no label is compared.
     #[arg(long, default_value = "UNCLASSIFIED")]
     label: String,
     /// The sha256 `dla bundle` printed for the bundle the verifier read.
@@ -180,7 +183,7 @@ pub struct AddArgs {
     /// The result that would refute this sibling (with --sibling-of).
     #[arg(long)]
     refute_if: Option<String>,
-    /// Explanation text (with --explanation-tag).
+    /// Refused from schema 6: use `dla ledger explain`, which checks the explanation.
     #[arg(long, requires = "explanation_tag")]
     explanation: Option<String>,
     /// observed | inferred
@@ -285,7 +288,7 @@ fn missing_arg(flag: &str, fix: String) -> Failure {
 
 /// Runs `dla ledger add`.
 /// Runs one `dla ledger ...` subcommand.
-pub fn dispatch(ctx: &Ctx, cmd: LedgerCmd) -> Res<Value> {
+pub fn dispatch(ctx: &Ctx, data: Option<&PathBuf>, cmd: LedgerCmd) -> Res<Value> {
     match cmd {
         LedgerCmd::Add(a) => add(ctx, a),
         LedgerCmd::Resolve(a) => resolve(ctx, a),
@@ -295,21 +298,21 @@ pub fn dispatch(ctx: &Ctx, cmd: LedgerCmd) -> Res<Value> {
         LedgerCmd::Refute(a) => move_to(ctx, a, FindingState::Refuted),
         LedgerCmd::Done => done(ctx),
         LedgerCmd::Merge => merge(ctx),
-        LedgerCmd::Verify(a) => verify(ctx, a),
-        LedgerCmd::Label(a) => ledger_m6::label(ctx, a),
+        LedgerCmd::Verify(a) => verify(ctx, data, a),
+        LedgerCmd::Label(a) => ledger_m6::label(ctx, data, a),
         LedgerCmd::Strong(a) => ledger_m6::strong(ctx, a),
         LedgerCmd::Explain(a) => ledger_m6::explain(ctx, a),
     }
 }
 
 /// Opens the ledger writes go to: the main one, or the worker's slice.
-fn open(ctx: &Ctx) -> Res<Ledger> {
+pub(crate) fn open(ctx: &Ctx) -> Res<Ledger> {
     RunState::load(&ctx.run_dir)?;
     Ok(Ledger::load_for(&ctx.run_dir, ctx.worker.as_deref())?)
 }
 
 /// Pointer to a line of the file `ledger` appends to.
-fn pointer(ctx: &Ctx, seq: u64) -> String {
+pub(crate) fn pointer(ctx: &Ctx, seq: u64) -> String {
     match &ctx.worker {
         Some(w) => format!("{}#L{seq}", ctx.pointer(&slice_file_name(w))),
         None => ctx.ledger_line(seq),
@@ -707,7 +710,7 @@ fn bundle_of(ctx: &Ctx, finding: &FindingId, sha: &str) -> Res<()> {
 }
 
 /// Runs `dla ledger verify`.
-fn verify(ctx: &Ctx, a: VerifyArgs) -> Res<Value> {
+fn verify(ctx: &Ctx, data: Option<&PathBuf>, a: VerifyArgs) -> Res<Value> {
     if ctx.worker.is_some() {
         return Err(core_only(
             "`ledger verify`",
@@ -730,6 +733,7 @@ fn verify(ctx: &Ctx, a: VerifyArgs) -> Res<Value> {
     })?;
     bundle_of(ctx, &a.finding, &a.bundle)?;
     let mut ledger = open(ctx)?;
+    let table = ledger_m6::archetype_table(data)?;
     let (line, item) = ledger.verify(
         &a.finding,
         site,
@@ -737,6 +741,7 @@ fn verify(ctx: &Ctx, a: VerifyArgs) -> Res<Value> {
         &a.mechanism,
         &a.label,
         &a.bundle,
+        dla_core::labels::Archetypes::from_table(table.as_ref()),
     )?;
     let dla_core::Record::Verification(v) = &line.record else {
         unreachable!("verify appends a verification record");
@@ -746,7 +751,8 @@ fn verify(ctx: &Ctx, a: VerifyArgs) -> Res<Value> {
         "finding": a.finding.to_string(),
         "agrees_site": v.agrees_site,
         "agrees_holder": v.agrees_holder,
-        "verified": v.agrees_site && v.agrees_holder,
+        "agrees_label": v.agrees_label,
+        "verified": core_verify::agrees(v),
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     });

@@ -58,7 +58,7 @@ fn the_first_write_starts_the_slice_and_marks_the_worker_running() {
     assert_eq!(first["worker"], "jvm");
     assert_eq!(first["runtime"], "jvm");
     assert_eq!(first["base_seq"], 16);
-    assert_eq!(first["schema_version"], 5);
+    assert_eq!(first["schema_version"], 6);
     assert!(first["deadline"].as_str().unwrap().ends_with('Z'));
     assert_eq!(text.lines().count(), 2);
     // The main ledger is untouched.
@@ -435,6 +435,7 @@ fn a_worker_cannot_write_core_records() {
         "m",
         "UNCLASSIFIED",
         &"a".repeat(64),
+        dla_core::labels::Archetypes::Off,
     ));
     assert_eq!(r.code, m4::CORE_ONLY);
     let r = refusal(l.merge_findings(&a, &a));
@@ -1173,6 +1174,7 @@ fn a_verification_that_agrees_opens_nothing() {
             "a static map keeps every request",
             "UNCLASSIFIED",
             &"b".repeat(64),
+            dla_core::labels::Archetypes::Off,
         )
         .unwrap();
     assert!(item.is_none());
@@ -1202,6 +1204,7 @@ fn a_verification_that_disagrees_opens_an_item_naming_both_values() {
             "a thread local",
             "UNCLASSIFIED",
             &"b".repeat(64),
+            dla_core::labels::Archetypes::Off,
         )
         .unwrap();
     let Record::Verification(v) = &line.record else {
@@ -1224,6 +1227,7 @@ fn a_verification_that_disagrees_opens_an_item_naming_both_values() {
             "m",
             "UNCLASSIFIED",
             &"b".repeat(64),
+            dla_core::labels::Archetypes::Off,
         )
         .unwrap();
     assert!(item.is_some());
@@ -1242,6 +1246,7 @@ fn verification_refusals() {
         "m",
         "UNCLASSIFIED",
         &ok,
+        dla_core::labels::Archetypes::Off,
     ));
     assert_eq!(r.code, codes::UNKNOWN_FINDING);
     let r = refusal(l.verify(
@@ -1251,9 +1256,18 @@ fn verification_refusals() {
         "  ",
         "UNCLASSIFIED",
         &ok,
+        dla_core::labels::Archetypes::Off,
     ));
     assert_eq!(r.code, m4::BAD_VERIFICATION);
-    let r = refusal(l.verify(&fid(1), None, Holder::StaticGlobal, "m", "two words", &ok));
+    let r = refusal(l.verify(
+        &fid(1),
+        None,
+        Holder::StaticGlobal,
+        "m",
+        "two words",
+        &ok,
+        dla_core::labels::Archetypes::Off,
+    ));
     assert_eq!(r.code, m4::BAD_VERIFICATION);
     let r = refusal(l.verify(
         &fid(1),
@@ -1262,6 +1276,7 @@ fn verification_refusals() {
         "m",
         "UNCLASSIFIED",
         "abc",
+        dla_core::labels::Archetypes::Off,
     ));
     assert_eq!(r.code, m4::BAD_VERIFICATION);
     assert!(r.fix.contains("dla ledger verify F1"), "{r}");
@@ -1272,6 +1287,7 @@ fn verification_refusals() {
         "m",
         "UNCLASSIFIED",
         &ok,
+        dla_core::labels::Archetypes::Off,
     ));
     assert_eq!(r.code, m4::BAD_VERIFICATION);
     assert_eq!(

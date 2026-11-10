@@ -76,7 +76,8 @@ fn finding_in(state: S) -> (dla_core::Ledger, dla_core::FindingId) {
         S::Strong => {
             mv(&mut l, S::UnderTest, None, None, &[E_HARNESS]);
             mv(&mut l, S::Confirmed, None, None, &[E_GROWTH_PASS]);
-            mv(&mut l, S::Strong, None, None, &[]);
+            let (g, r) = strong_evidence(&mut l);
+            mv(&mut l, S::Strong, None, None, &[g, r]);
         }
         S::Refuted => mv(&mut l, S::Refuted, None, None, &[E_DISC_NONLEAK]),
         S::SuspectedStaticOnly => mv(
@@ -97,6 +98,13 @@ fn finding_in(state: S) -> (dla_core::Ledger, dla_core::FindingId) {
     (l, f)
 }
 
+/// A signed trend growth record and an independent retention record for F1.
+fn strong_evidence(l: &mut dla_core::Ledger) -> (u32, u32) {
+    let g = push(l, trend_growth("aa"));
+    let r = push(l, vgdb_retention("bb"));
+    (g, r)
+}
+
 fn plain_move(state: S, to: S) -> Result<(), Error> {
     let (mut l, f) = finding_in(state);
     // Supply what the target needs so only the graph can refuse.
@@ -109,6 +117,10 @@ fn plain_move(state: S, to: S) -> Result<(), Error> {
         S::Refuted => (None, None, vec![eid(E_DISC_NONLEAK)]),
         S::UnderTest => (None, None, vec![eid(E_HARNESS)]),
         S::Confirmed => (None, None, vec![eid(E_GROWTH_PASS)]),
+        S::Strong => {
+            let (g, r) = strong_evidence(&mut l);
+            (None, None, vec![eid(g), eid(r)])
+        }
         _ => (None, None, vec![]),
     };
     l.transition(&f, to, reason, remedy, ev, "test").map(|_| ())
@@ -319,7 +331,7 @@ fn illegal_transition_fix_comes_from_the_source_state() {
     assert!(r.fix.contains("dla ledger test F1 --evidence"), "{}", r.fix);
     assert!(!r.fix.contains("available from M3"), "{}", r.fix);
 
-    // confirmed -> unresolved: only `strong` is allowed, and it arrives later.
+    // confirmed -> unresolved: only `strong` is allowed, and it exists now.
     let (mut l, f) = finding_in(S::Confirmed);
     let r = refusal(l.transition(
         &f,
@@ -331,10 +343,11 @@ fn illegal_transition_fix_comes_from_the_source_state() {
     ));
     assert!(!r.fix.contains("--as unresolved"), "{}", r.fix);
     assert!(
-        r.fix.contains("strong") && r.fix.contains("M6"),
+        r.fix.contains("dla ledger strong F1 --evidence") && !r.fix.contains("M6"),
         "{}",
         r.fix
     );
+    assert!(!r.fix.contains("later:"), "{}", r.fix);
 
     // suspected_static_only -> suspected_static_only: unresolved exists now.
     let (mut l, f) = finding_in(S::SuspectedStaticOnly);
@@ -365,7 +378,7 @@ fn terminal_states_are_final_and_point_at_a_new_hypothesis() {
 }
 
 #[test]
-fn test_confirm_and_refute_exist_and_only_strong_is_later() {
+fn test_confirm_refute_and_strong_all_exist() {
     let (mut l, f) = finding_in(S::Candidate);
     let r = refusal(l.transition(&f, S::Refuted, None, None, vec![], "t"));
     assert_eq!(r.code, codes::DISCRIMINATOR_REQUIRED);
@@ -384,7 +397,7 @@ fn test_confirm_and_refute_exist_and_only_strong_is_later() {
     let (mut l, f) = finding_in(S::Confirmed);
     let r = refusal(l.transition(&f, S::Refuted, None, None, vec![], "t"));
     assert!(
-        r.fix.contains("dla ledger strong F1") && r.fix.contains("M6"),
+        r.fix.contains("dla ledger strong F1") && !r.fix.contains("M6"),
         "{}",
         r.fix
     );

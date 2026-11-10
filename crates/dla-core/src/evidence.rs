@@ -88,7 +88,8 @@ string_enum! {
 }
 
 impl EvidenceKind {
-    /// The class of this kind.
+    /// The class of this kind. Retention here means retention or population;
+    /// [`crate::holders::names_holder`] decides whether a record shows a holder.
     pub fn class(self) -> EvidenceClass {
         match self {
             Self::GrowthSeries | Self::UnitCountSeries => EvidenceClass::Growth,
@@ -370,8 +371,8 @@ impl Signal {
 
 /// True when `a` and `b` are two independent signals: the tool, the tool class and the
 /// source all differ. The DLA HPROF reader and another dump parser on one dump are one
-/// signal (same class, same source). Recorded only: what counts as `strong` is decided
-/// elsewhere.
+/// signal (same class, same source). `dla ledger strong` requires it of the growth record
+/// and the second record.
 pub fn independent(a: &Signal, b: &Signal) -> bool {
     a.tool != b.tool && a.class != b.class && a.source_sha256 != b.source_sha256
 }

@@ -69,7 +69,7 @@ Coverage: not measured
 - Evidence classes: context
 - Holder: native-handle/global-ref
 - Site: `native/pool.rs:7`
-- Verified: DISAGREES (site: finding `native/pool.rs:7` vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local; bundle aaaaaaaaaaaa)
+- Verified: DISAGREES (site: finding `native/pool.rs:7` vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local; bundle aaaaaaaaaaaa); finding mechanism: not stated; verifier mechanism: a thread local
 - Supporting evidence: E1
 
 ## Merged duplicates

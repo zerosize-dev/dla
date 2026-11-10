@@ -324,6 +324,7 @@ versions = "<2"
 when = { not = { source_regex = "zzz" } }
 effect = "e"
 holder = "container-field"
+archetype = "L-COLLECT"
 evidence = "https://example.com/x"
 remedy = "r"
 
@@ -334,6 +335,7 @@ library = "liby"
 versions = "<2"
 effect = "e"
 holder = "container-field"
+archetype = "L-COLLECT"
 evidence = "https://example.com/y"
 remedy = "r"
 
@@ -344,6 +346,7 @@ library = "node"
 versions = "<18"
 effect = "e"
 holder = "container-field"
+archetype = "L-COLLECT"
 evidence = "https://example.com/z"
 remedy = "r"
 "#;

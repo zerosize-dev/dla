@@ -141,7 +141,7 @@ fn dispatch(cli: Cli) -> Res<Output> {
     let ctx = || Ctx::resolve(project_root(project)?, run_arg, worker_arg);
     match cli.command {
         Command::Run(c) => run::dispatch(project, ctx, c).map(Output::Json),
-        Command::Ledger(c) => ledger_cmd::dispatch(&ctx()?, c).map(Output::Json),
+        Command::Ledger(c) => ledger_cmd::dispatch(&ctx()?, data, c).map(Output::Json),
         Command::Report => {
             let r = report::run(&ctx()?)?;
             eprintln!("report: {} sha256={}", r.path, r.sha256);

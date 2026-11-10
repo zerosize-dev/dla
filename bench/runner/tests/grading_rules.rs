@@ -137,6 +137,32 @@ fn an_annotation_that_replaced_a_holder_changes_it() {
 }
 
 #[test]
+fn a_label_record_sets_the_label_and_the_last_one_wins() {
+    let text = [
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"archetype\":\"UNCLASSIFIED\"}}",
+        "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F2\",\"archetype\":\"UNCLASSIFIED\"}}",
+        "{\"type\":\"finding_added\",\"worker\":\"jvm\",\"finding\":{\"id\":\"F1\"}}",
+        "{\"type\":\"finding_labeled\",\"finding\":\"F1\",\"label\":\"L-COLLECT\",\"previous\":\"UNCLASSIFIED\"}",
+        "{\"type\":\"finding_labeled\",\"finding\":\"F9\",\"label\":\"L-WORKER\"}",
+        "{\"type\":\"finding_labeled\",\"finding\":\"F2\",\"label\":7}",
+        "{\"type\":\"finding_labeled\",\"finding\":\"F2\",\"label\":\"L-HANDLE\"}",
+        "{\"type\":\"finding_labeled\",\"finding\":\"F2\",\"label\":\"UNCLASSIFIED\",\"previous\":\"L-HANDLE\"}",
+        "{\"type\":\"finding_labeled\",\"worker\":\"jvm\",\"finding\":\"F1\",\"label\":\"L-REGISTER\"}",
+        "{\"type\":\"finding_labeled\",\"finding\":\"jvm/F1\",\"label\":\"L-TLS\"}",
+        "{\"type\":\"finding_labeled\",\"finding\":\"F1\",\"label\":\"L-CYCLE\"}",
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).expect("has finding_added");
+    assert_eq!(f.len(), 3);
+    // F1 (no worker): the last record keyed to it, L-CYCLE.
+    assert_eq!(f[0].label.as_deref(), Some("L-CYCLE"));
+    // F2: a non-string label changes nothing, the later records win.
+    assert_eq!(f[1].label.as_deref(), Some("UNCLASSIFIED"));
+    // jvm/F1: the worker member and the prefixed id name one key; the later one wins.
+    assert_eq!(f[2].label.as_deref(), Some("L-TLS"));
+}
+
+#[test]
 fn ledger_state_mapping() {
     let mut lines = String::new();
     for (i, to) in [

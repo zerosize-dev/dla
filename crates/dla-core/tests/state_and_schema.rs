@@ -165,6 +165,7 @@ fn schema_export_is_complete_and_deterministic() {
             "checklist",
             "detectors",
             "known-leaks",
+            "archetypes",
             "probe-report",
             "static-hit",
             "census-entry",
@@ -196,7 +197,7 @@ fn result_size_constants() {
     assert_eq!(dla_core::MAX_RESULT_BYTES, 2048);
     assert_eq!(dla_core::MAX_OUTPUT_BYTES, 2048);
     assert_eq!(dla_core::SCHEMA_VERSION, 1);
-    assert_eq!(dla_core::LEDGER_SCHEMA_VERSION, 5);
+    assert_eq!(dla_core::LEDGER_SCHEMA_VERSION, 6);
 }
 
 #[test]

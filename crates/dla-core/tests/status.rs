@@ -100,7 +100,11 @@ fn every_disposition_state_counts_and_does_not_block() {
     // F1 confirmed and F2 strong, each with a refuted N-WARM sibling.
     confirmed_leak(&mut l);
     let (strong, _) = confirmed_leak(&mut l);
-    go(&mut l, &strong, S::Strong, &[]);
+    let (g, r) = (
+        push(&mut l, trend_growth("aa")),
+        push(&mut l, vgdb_retention("bb")),
+    );
+    go(&mut l, &strong, S::Strong, &[g, r]);
     for _ in 0..2 {
         l.add_finding(NewFinding::new(origin("census"), vec![eid(1)]))
             .unwrap();

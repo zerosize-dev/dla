@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ArchetypesFile",
+  "description": "The whole file, keyed by archetype ID. Exists for the JSON Schema export.",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/RawEntry"
+  },
+  "$defs": {
+    "EvidenceKind": {
+      "description": "The closed set of evidence kinds.",
+      "oneOf": [
+        {
+          "description": "Run configuration captured at init.",
+          "type": "string",
+          "const": "run-config"
+        },
+        {
+          "description": "Result of probing the environment.",
+          "type": "string",
+          "const": "probe"
+        },
+        {
+          "description": "A static detector hit.",
+          "type": "string",
+          "const": "static-hit"
+        },
+        {
+          "description": "A holder found by a census.",
+          "type": "string",
+          "const": "census-holder"
+        },
+        {
+          "description": "A workload execution record.",
+          "type": "string",
+          "const": "workload"
+        },
+        {
+          "description": "A growth measurement series.",
+          "type": "string",
+          "const": "growth-series"
+        },
+        {
+          "description": "A per-unit count series.",
+          "type": "string",
+          "const": "unit-count-series"
+        },
+        {
+          "description": "A retention path to a root.",
+          "type": "string",
+          "const": "retention-path"
+        },
+        {
+          "description": "An allocation stack.",
+          "type": "string",
+          "const": "alloc-stack"
+        },
+        {
+          "description": "A before/after histogram difference.",
+          "type": "string",
+          "const": "histogram-diff"
+        },
+        {
+          "description": "A profile of blocked stacks.",
+          "type": "string",
+          "const": "blocked-stack-profile"
+        },
+        {
+          "description": "Objects unreachable at exit.",
+          "type": "string",
+          "const": "unreachable-at-exit"
+        },
+        {
+          "description": "Objects that should be dead but are not.",
+          "type": "string",
+          "const": "should-be-dead"
+        },
+        {
+          "description": "An experiment that separates two hypotheses.",
+          "type": "string",
+          "const": "discriminator"
+        },
+        {
+          "description": "A change made to the target to test a cause.",
+          "type": "string",
+          "const": "intervention"
+        },
+        {
+          "description": "A measurement outside the heap.",
+          "type": "string",
+          "const": "non-heap"
+        },
+        {
+          "description": "Growth left unattributed.",
+          "type": "string",
+          "const": "residual"
+        },
+        {
+          "description": "Files captured from a live process by an attached tool (heap dump, profile).",
+          "type": "string",
+          "const": "artifact"
+        }
+      ]
+    },
+    "Holder": {
+      "description": "What holds the leaked memory.",
+      "oneOf": [
+        {
+          "description": "A static or global variable.",
+          "type": "string",
+          "const": "static/global"
+        },
+        {
+          "description": "A registration table (listeners, callbacks).",
+          "type": "string",
+          "const": "registration-table"
+        },
+        {
+          "description": "A field of a container object.",
+          "type": "string",
+          "const": "container-field"
+        },
+        {
+          "description": "Thread-local storage.",
+          "type": "string",
+          "const": "thread-local"
+        },
+        {
+          "description": "A blocked stack.",
+          "type": "string",
+          "const": "blocked-stack"
+        },
+        {
+          "description": "A closure or continuation.",
+          "type": "string",
+          "const": "closure/continuation"
+        },
+        {
+          "description": "A native handle or global reference.",
+          "type": "string",
+          "const": "native-handle/global-ref"
+        },
+        {
+          "description": "A reference cycle only.",
+          "type": "string",
+          "const": "cycle-only"
+        }
+      ]
+    },
+    "RawEntry": {
+      "description": "One entry of `archetypes.toml` as written in the file (the key is the archetype ID).",
+      "type": "object",
+      "properties": {
+        "disconfirm": {
+          "description": "`N-*` IDs whose sibling hypothesis must be refuted before a label.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "holders": {
+          "description": "Holders the archetype fits; empty for `N-*`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Holder"
+          }
+        },
+        "regions": {
+          "description": "Memory regions the archetype fits.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Region"
+          }
+        },
+        "repair": {
+          "description": "Repair classes that fit; empty for `N-*`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RepairClass"
+          }
+        },
+        "requires": {
+          "description": "Alternatives (outer list: any one); each alternative lists evidence kinds that must\nall be present (inner list: all).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/EvidenceKind"
+            }
+          }
+        },
+        "signals": {
+          "description": "Series names or name prefixes that hint at the archetype. Documentation only in M6:\nno code reads them.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "description": "One plain line: the mechanism.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "summary"
+      ]
+    },
+    "Region": {
+      "description": "Which memory region grows.",
+      "oneOf": [
+        {
+          "description": "The managed heap.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native memory outside the managed heap.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Runtime-internal non-heap memory.",
+          "type": "string",
+          "const": "non-heap"
+        }
+      ]
+    },
+    "RepairClass": {
+      "description": "Class of repair.",
+      "oneOf": [
+        {
+          "description": "Release on the regular path.",
+          "type": "string",
+          "const": "release-regular"
+        },
+        {
+          "description": "Release on the exceptional path.",
+          "type": "string",
+          "const": "release-exceptional"
+        },
+        {
+          "description": "Remove the entry.",
+          "type": "string",
+          "const": "remove-entry"
+        },
+        {
+          "description": "Bound or evict.",
+          "type": "string",
+          "const": "bound/evict"
+        },
+        {
+          "description": "Deregister.",
+          "type": "string",
+          "const": "deregister"
+        },
+        {
+          "description": "Stop or cancel.",
+          "type": "string",
+          "const": "stop/cancel"
+        },
+        {
+          "description": "Clear the reference.",
+          "type": "string",
+          "const": "clear-reference"
+        },
+        {
+          "description": "Restructure synchronisation.",
+          "type": "string",
+          "const": "restructure-sync"
+        },
+        {
+          "description": "Return ownership.",
+          "type": "string",
+          "const": "return-ownership"
+        }
+      ]
+    }
+  }
+}

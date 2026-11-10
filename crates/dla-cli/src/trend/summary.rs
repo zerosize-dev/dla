@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use dla_core::{
     MAX_RESULT_BYTES,
+    evidence::Signal,
     series::{ColumnKind, SeriesFile},
     trend::{ColumnTrend, GrowthSummary, PassedColumn},
 };
@@ -66,7 +67,12 @@ pub fn passing<'a>(columns: &[&'a ColumnTrend]) -> Vec<&'a ColumnTrend> {
 /// The summary for the columns of one kind (gauge or counter) of `series`, written
 /// into trend `trend_id`. `passed` is cut from the end until the serialized result
 /// fits in [`MAX_RESULT_BYTES`]; `truncated` counts the cut entries.
-pub fn summarize(trend_id: &str, series: &SeriesFile, columns: &[&ColumnTrend]) -> Value {
+pub fn summarize(
+    trend_id: &str,
+    series: &SeriesFile,
+    columns: &[&ColumnTrend],
+    signal: &Signal,
+) -> Value {
     let ordered = passing(columns);
     let mut shapes: BTreeMap<String, u32> = BTreeMap::new();
     for c in columns {
@@ -98,7 +104,10 @@ pub fn summarize(trend_id: &str, series: &SeriesFile, columns: &[&ColumnTrend]) 
     };
     let mut cut = 0u32;
     loop {
-        let v = serde_json::to_value(&summary).unwrap_or(Value::Null);
+        let mut v = serde_json::to_value(&summary).unwrap_or(Value::Null);
+        if let Value::Object(m) = &mut v {
+            m.insert("signal".to_owned(), signal.to_value());
+        }
         let size = serde_json::to_string(&v).map_or(usize::MAX, |s| s.len());
         if size <= MAX_RESULT_BYTES || summary.passed.is_empty() {
             return v;
@@ -126,6 +135,10 @@ mod tests {
     };
     use dla_core::FindingId;
     use dla_stats::GateThresholds;
+
+    fn sig() -> Signal {
+        Signal::new("dla-trend", "harness-series", &"ab".repeat(32))
+    }
 
     fn many(n: usize) -> (SeriesFile, Vec<ColumnTrend>) {
         let cols: Vec<Col> = (0..n)
@@ -161,7 +174,7 @@ mod tests {
         let (s, t) = many(64);
         let refs: Vec<&ColumnTrend> = t.iter().collect();
         assert!(t.iter().all(|c| c.gate == GateVerdict::Pass));
-        let v = summarize("T2", &s, &refs);
+        let v = summarize("T2", &s, &refs, &sig());
         let text = serde_json::to_string(&v).unwrap();
         assert!(text.len() <= MAX_RESULT_BYTES, "{}", text.len());
         let g = GrowthSummary::from_result(&v).unwrap();
@@ -195,7 +208,7 @@ mod tests {
         let names: Vec<&str> = passing(&refs).iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names[0], "jvm.heap_used");
         assert!(names.contains(&"os.rss"));
-        let v = summarize("T1", &s, &refs);
+        let v = summarize("T1", &s, &refs, &sig());
         let g = GrowthSummary::from_result(&v).unwrap();
         assert_eq!(g.passed[0].column, "jvm.heap_used");
         assert_eq!(g.passed[0].site.as_deref(), Some("a.java:3"));
@@ -207,7 +220,7 @@ mod tests {
         let s = series("S1", 1, vec![Col::counter("a", &plateau(100.0))]);
         let t = analyze_series(&s, &[0], &GateThresholds::default());
         let refs: Vec<&ColumnTrend> = t.iter().collect();
-        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs)).unwrap();
+        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &sig())).unwrap();
         assert!(!g.passed_gate());
         assert_eq!(g.gate, Some(GateVerdict::Fail));
         assert_eq!(g.failed, Some(1));

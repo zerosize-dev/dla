@@ -1,7 +1,9 @@
 # Known leaks: documented behavior of a runtime or library that looks like a leak,
 # or hides one. Every entry cites the public page that states it. `dla probe` checks
 # each entry against the project and writes the verdict to probe evidence. An entry
-# is context for the analysis; it never becomes a finding.
+# is context for the analysis; it never becomes a finding. `archetype` names the leak
+# archetype (an L-* ID) the behavior belongs to; the committed
+# skills/detect-leak-anywhere/references/known-leaks.md is generated from this file.
 
 [[leak]]
 id = "go-timer-unstopped-before-1.23"
@@ -11,6 +13,7 @@ versions = "<1.23"
 when = { source_regex = 'time\.(?:NewTimer|NewTicker|Tick|After|AfterFunc)\(' }
 effect = "Before Go 1.23 an unstopped Timer is not collected until it fires, and an unstopped Ticker is never collected. A loop that makes one per pass grows the runtime timer heap."
 holder = "registration-table"
+archetype = "L-REGISTER"
 evidence = "https://go.dev/doc/go1.23"
 remedy = "Call Stop on every Timer and Ticker (defer t.Stop()), or raise the go line in go.mod to 1.23.0 or later."
 
@@ -25,6 +28,7 @@ when = { all = [
 ] }
 effect = "GODEBUG asynctimerchan=1 restores the old timer behavior even when go.mod names Go 1.23.0 or later, so unstopped Timers and Tickers are not collected again."
 holder = "registration-table"
+archetype = "L-REGISTER"
 evidence = "https://go.dev/doc/go1.23"
 remedy = "Remove asynctimerchan=1 from the godebug lines and the GODEBUG environment, or stop every Timer and Ticker."
 
@@ -40,6 +44,7 @@ when = { not = { any = [
 ] } }
 effect = "Netty's default leak detection level (SIMPLE) checks about 1% of buffers, so a missing LEAK log line does not show that buffers are released."
 holder = "native-handle/global-ref"
+archetype = "L-HANDLE"
 evidence = "https://netty.io/wiki/reference-counted-objects.html"
 remedy = "Run the workload with -Dio.netty.leakDetection.level=paranoid, which checks every buffer."
 
@@ -70,5 +75,6 @@ when = { all = [
 ] }
 effect = "With no cache library Spring Boot configures the simple provider, a ConcurrentHashMap cache store that the documentation calls not really recommended for production. A ConcurrentHashMap has no size bound or expiry of its own, so entries stay until evicted by hand."
 holder = "container-field"
+archetype = "L-COLLECT"
 evidence = "https://docs.spring.io/spring-boot/reference/io/caching.html"
 remedy = "Set a bounded provider such as Caffeine with maximumSize and expireAfterWrite, or evict explicitly."

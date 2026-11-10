@@ -20,12 +20,13 @@
 //! key named. `dla ledger label` reads this table; ledger replay never does (a label
 //! record carries its own proof).
 //!
-//! This module is the shared shape. The content and the consistency tests belong to the
-//! archetype package (M6 package A).
+//! The content is `data/archetypes.toml`; the tests in `crates/dla-core/tests/archetypes_data.rs`
+//! keep it consistent with the ID list, the fixtures and the evidence producers.
 
 use std::{collections::BTreeMap, path::Path};
 
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Refusal, codes},
@@ -37,6 +38,31 @@ use crate::{
 pub const FILE_NAME: &str = "archetypes.toml";
 /// Environment variable that turns archetypes off when set to `off`.
 pub const ENV_ARCHETYPES: &str = "DLA_ARCHETYPES";
+
+/// Evidence kinds that some command or adapter writes today. An archetype `requires` list
+/// may name only these kinds (a test in `dla-cli` checks that each is produced).
+///
+/// `blocked-stack-profile` and `unreachable-at-exit` have no producer and stay out.
+/// `intervention` is produced by `dla intervene` (M6 package C); until that command lands
+/// the producer test lists it in an explicit allow-list.
+pub const PRODUCED_KINDS: [EvidenceKind; 16] = [
+    EvidenceKind::RunConfig,
+    EvidenceKind::Probe,
+    EvidenceKind::StaticHit,
+    EvidenceKind::CensusHolder,
+    EvidenceKind::Workload,
+    EvidenceKind::GrowthSeries,
+    EvidenceKind::UnitCountSeries,
+    EvidenceKind::RetentionPath,
+    EvidenceKind::AllocStack,
+    EvidenceKind::HistogramDiff,
+    EvidenceKind::ShouldBeDead,
+    EvidenceKind::Discriminator,
+    EvidenceKind::Intervention,
+    EvidenceKind::NonHeap,
+    EvidenceKind::Residual,
+    EvidenceKind::Artifact,
+];
 
 /// One archetype.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,23 +150,38 @@ impl Table {
     }
 }
 
-#[derive(Deserialize)]
+/// One entry of `archetypes.toml` as written in the file (the key is the archetype ID).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct RawEntry {
+pub struct RawEntry {
+    /// Holders the archetype fits; empty for `N-*`.
     #[serde(default)]
-    holders: Vec<Holder>,
+    pub holders: Vec<Holder>,
+    /// Memory regions the archetype fits.
     #[serde(default)]
-    regions: Vec<Region>,
+    pub regions: Vec<Region>,
+    /// Alternatives (outer list: any one); each alternative lists evidence kinds that must
+    /// all be present (inner list: all).
     #[serde(default)]
-    requires: Vec<Vec<EvidenceKind>>,
+    pub requires: Vec<Vec<EvidenceKind>>,
+    /// `N-*` IDs whose sibling hypothesis must be refuted before a label.
     #[serde(default)]
-    disconfirm: Vec<String>,
+    pub disconfirm: Vec<String>,
+    /// Series names or name prefixes that hint at the archetype. Documentation only in M6:
+    /// no code reads them.
     #[serde(default)]
-    signals: Vec<String>,
+    pub signals: Vec<String>,
+    /// Repair classes that fit; empty for `N-*`.
     #[serde(default)]
-    repair: Vec<RepairClass>,
-    summary: String,
+    pub repair: Vec<RepairClass>,
+    /// One plain line: the mechanism.
+    pub summary: String,
 }
+
+/// The whole file, keyed by archetype ID. Exists for the JSON Schema export.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+#[serde(transparent)]
+pub struct ArchetypesFile(pub BTreeMap<String, RawEntry>);
 
 /// Loads `<data_dir>/archetypes.toml`: `Ok(None)` when the file is absent (archetypes
 /// are off), a refusal that names the file when it cannot be read or is invalid.

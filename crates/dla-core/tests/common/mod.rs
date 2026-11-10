@@ -296,3 +296,81 @@ pub fn candidate_in_slice(l: &mut Ledger, site: &str, holder: Holder) -> Finding
     };
     finding.id
 }
+
+// ---------------------------------------------------------------------------------------
+// M6: records with a signal, for the strong and label rules
+// ---------------------------------------------------------------------------------------
+
+/// Evidence by `tool`, with the signal `(tool, class, source)` in its result.
+pub fn signed(
+    kind: EvidenceKind,
+    authority: Authority,
+    tool: &str,
+    class: &str,
+    source: &str,
+    mut result: Value,
+) -> NewEvidence {
+    result["signal"] = dla_core::evidence::Signal::new(tool, class, source).to_value();
+    let mut e = evidence_with(kind, authority, result);
+    e.tool.name = tool.to_owned();
+    e
+}
+
+/// A passing growth record of `dla trend` (class harness-series) with a column tied to F1.
+pub fn trend_growth(source: &str) -> NewEvidence {
+    signed(
+        EvidenceKind::GrowthSeries,
+        Authority::Test,
+        "dla-trend",
+        dla_core::evidence::tool_class::HARNESS_SERIES,
+        source,
+        json!({"trend": "T1", "series": "S1", "n": 8, "gate": "pass", "failed": 0,
+            "passed": [{"column": "probe:CACHE", "region": "heap", "site": "a.go:1",
+                "finding": "F1", "shape": "steady", "slope": 12.0, "lo": 10.0}]}),
+    )
+}
+
+/// A vgdb retention record whose allocation site is two lines from F1's site `a.go:1`.
+pub fn vgdb_retention(source: &str) -> NewEvidence {
+    signed(
+        EvidenceKind::RetentionPath,
+        Authority::Live,
+        "valgrind-vgdb",
+        dla_core::evidence::tool_class::LEAK_CHECKER,
+        source,
+        json!({"point": "p3", "root": "static table", "complete": true, "walked": 3,
+            "path": ["static table"], "alloc": "grow (a.go:2)"}),
+    )
+}
+
+/// An intervention that removed F1's growth; its control is trend T1, column `probe:CACHE`.
+pub fn intervention(effect: &str, guards: Value, source: &str) -> NewEvidence {
+    signed(
+        EvidenceKind::Intervention,
+        Authority::Test,
+        "dla-intervene",
+        dla_core::evidence::tool_class::INTERVENTION,
+        source,
+        json!({"test": "intervention", "kind": "stub-writer", "finding": "F1", "harness": "H1",
+            "control": {"series": "S1", "trend": "T1", "column": "probe:CACHE"},
+            "effect": effect, "guards": guards}),
+    )
+}
+
+/// Appends `e` and returns its number.
+pub fn push(l: &mut Ledger, e: NewEvidence) -> u32 {
+    l.add_evidence(e).unwrap().record_evidence_number()
+}
+
+trait EvidenceNumber {
+    fn record_evidence_number(&self) -> u32;
+}
+
+impl EvidenceNumber for dla_core::LedgerLine {
+    fn record_evidence_number(&self) -> u32 {
+        match &self.record {
+            Record::Evidence(e) => e.evidence_id.number(),
+            _ => unreachable!("an evidence line"),
+        }
+    }
+}

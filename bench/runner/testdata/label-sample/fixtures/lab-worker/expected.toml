@@ -1,0 +1,16 @@
+schema_version = 1
+id = "lab-worker"
+runtime = "go"
+category = "archetype-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "Goroutines grow."
+
+[[leak]]
+id = "L1"
+site = "workers.go:30"
+holder = "blocked-stack"
+region = "non-heap"
+cause = "L-WORKER"
+share = 1.0

@@ -653,7 +653,7 @@ fn newer_schema_in_a_ledger_line_exits_3() {
     let dir = fixture_project();
     append_line(
         &fixture_ledger(&dir),
-        r#"{"schema_version":6,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
+        r#"{"schema_version":7,"seq":13,"ts":"2026-01-02T03:09:00Z","type":"open_item","id":"O1","text":"x","opened_by":"manual"}"#,
     );
     let o = run(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
     assert_eq!(o.code, 3, "{}", o.stdout);
@@ -776,7 +776,8 @@ fn end_to_end_run_reaches_complete() {
     let p = dir.path();
     let st = ok(p, &["run", "status"]);
     assert_eq!(st["counts"]["checklist_missing"], 8);
-    ok(
+    // From schema 6 an explanation comes from `dla ledger explain`, not from `add`.
+    let e = refused(
         p,
         &[
             "ledger",
@@ -789,6 +790,18 @@ fn end_to_end_run_reaches_complete() {
             "never evicted",
             "--explanation-tag",
             "inferred",
+        ],
+    );
+    assert_eq!(e["code"], "explanation-locked");
+    ok(
+        p,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "growth-series",
+            "--evidence",
+            "E1",
         ],
     );
     for item in [
@@ -1680,7 +1693,7 @@ fn annotate_changes_a_holder_only_with_matching_growth_evidence() {
     let last = last.lines().last().unwrap();
     assert!(
         last.contains(r#""replaced_holder":"container-field""#)
-            && last.contains(r#""schema_version":5"#),
+            && last.contains(r#""schema_version":6"#),
         "{last}"
     );
     ok(dir.path(), &["run", "status"]);
@@ -2100,7 +2113,7 @@ fn annotate_conflicts_are_refused_and_the_same_value_is_accepted() {
 }
 
 #[test]
-fn new_ledger_lines_are_version_five_and_old_ones_still_replay() {
+fn new_ledger_lines_are_version_six_and_old_ones_still_replay() {
     let dir = fixture_project();
     // The hand-written run is entirely version 1.
     let o = ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
@@ -2119,7 +2132,7 @@ fn new_ledger_lines_are_version_five_and_old_ones_still_replay() {
     );
     let text = fs::read_to_string(fixture_ledger(&dir)).unwrap();
     let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
-    assert_eq!(last["schema_version"], 5);
+    assert_eq!(last["schema_version"], 6);
     assert!(
         text.lines()
             .next()

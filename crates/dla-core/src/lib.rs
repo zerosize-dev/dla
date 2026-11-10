@@ -28,14 +28,18 @@ pub mod detectors;
 pub mod discriminator;
 pub mod error;
 pub mod evidence;
+pub mod explain;
 pub mod finding;
 pub mod fsutil;
 pub mod gate;
 pub mod harness;
+pub mod holders;
 pub mod ids;
 pub mod integrity;
 pub mod known_leaks;
+pub mod labels;
 pub mod ledger;
+pub mod m6;
 pub mod machine;
 pub mod merge;
 pub mod paths;
@@ -65,8 +69,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// `worker` and the slice, merge and verification records; version 4 lines (M5) also
 /// require a leak-side confirmation to cite a passing growth column tied to the finding;
 /// version 5 lines may also change a holder already set, when the annotation cites heap-graph
-/// growth evidence whose passing column tied to the finding observed that holder.
-pub const LEDGER_SCHEMA_VERSION: u32 = 5;
+/// growth evidence whose passing column tied to the finding observed that holder; version 6
+/// lines add `finding_labeled`, `finding_explained` and `integrity_resealed` records, the
+/// `strong` rule, the verifier's `agrees_label`, and refuse an explanation on `ledger add`.
+pub const LEDGER_SCHEMA_VERSION: u32 = 6;
 /// Bound on the serialized size of an evidence `result`.
 pub const MAX_RESULT_BYTES: usize = 2048;
 /// Bound on the size of CLI stdout.

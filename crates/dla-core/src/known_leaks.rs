@@ -12,6 +12,7 @@
 //! when = { source_regex = 'time\.NewTicker\(' }
 //! effect = "..."
 //! holder = "registration-table"
+//! archetype = "L-REGISTER"       # the leak archetype the behavior belongs to
 //! evidence = "https://go.dev/doc/go1.23"
 //! remedy = "..."
 //! ```
@@ -102,6 +103,9 @@ pub struct KnownLeak {
     pub effect: String,
     /// What holds the memory.
     pub holder: Holder,
+    /// The leak archetype (`L-*`) the behavior belongs to. A hint for the reader: a
+    /// verdict never labels a finding.
+    pub archetype: String,
     /// Public source URL that states the behavior.
     pub evidence: String,
     /// How to fix or avoid it.
@@ -334,6 +338,18 @@ impl KnownLeaksFile {
                 return Err(invalid(file, at, "library is empty"));
             }
             VersionRange::parse(&e.versions).map_err(|m| invalid(file, at, m))?;
+            if !e.archetype.starts_with("L-")
+                || !crate::detectors::ARCHETYPE_IDS.contains(&e.archetype.as_str())
+            {
+                return Err(invalid(
+                    file,
+                    at,
+                    format!(
+                        "archetype {:?} is not a leak archetype ID (L-*)",
+                        e.archetype
+                    ),
+                ));
+            }
             if !e.evidence.starts_with("https://") {
                 return Err(invalid(
                     file,
@@ -352,6 +368,46 @@ impl KnownLeaksFile {
         }
         Ok(parsed)
     }
+}
+
+/// Opening sentence of the generated reference.
+pub const REFERENCE_OPENING: &str = "A row match opens a hypothesis and carries no verdict.";
+
+/// Renders `skills/detect-leak-anywhere/references/known-leaks.md` from the table. The
+/// text is a pure function of the entries, so a test can compare it with the committed
+/// file.
+pub fn render_reference(file: &KnownLeaksFile) -> String {
+    use std::fmt::Write;
+    let cell = |s: &str| s.replace('|', "\\|").replace('\n', " ");
+    let mut out = String::new();
+    out.push_str("# Known leaks\n\n");
+    out.push_str(REFERENCE_OPENING);
+    out.push_str(
+        "\nEach row is documented behavior of a runtime or library that looks like a leak or hides one.\n\
+         `dla probe` checks the rows against the project and writes a `true`, `false` or `maybe` verdict\n\
+         to probe evidence. Cite a verdict when choosing what to test; it never confirms or refutes a finding.\n\
+         This file is generated from `data/known-leaks.toml`; edit the table, not this file.\n\n",
+    );
+    out.push_str(
+        "| Id | Runtime | Library | Versions | Archetype | Holder | Effect | Remedy | Source |\n",
+    );
+    out.push_str("|---|---|---|---|---|---|---|---|---|\n");
+    for e in &file.leak {
+        let _ = writeln!(
+            out,
+            "| `{}` | {} | {} | `{}` | {} | {} | {} | {} | {} |",
+            e.id,
+            e.runtime.as_str(),
+            cell(&e.library),
+            cell(&e.versions),
+            e.archetype,
+            e.holder.as_str(),
+            cell(&e.effect),
+            cell(&e.remedy),
+            e.evidence
+        );
+    }
+    out
 }
 
 #[cfg(test)]
@@ -406,6 +462,7 @@ library = "go"
 versions = "<1.23"
 effect = "e"
 holder = "registration-table"
+archetype = "L-REGISTER"
 evidence = "https://go.dev/doc/go1.23"
 remedy = "r"
 "#;
@@ -421,5 +478,12 @@ remedy = "r"
         assert!(KnownLeaksFile::parse(&dup, "k.toml").is_err());
         let unknown = ok.replace("remedy", "remedies");
         assert!(KnownLeaksFile::parse(&unknown, "k.toml").is_err());
+        for bad in ["N-WARM", "L-NOPE", ""] {
+            let t = ok.replace("L-REGISTER", bad);
+            let e = KnownLeaksFile::parse(&t, "k.toml").unwrap_err();
+            assert!(e.to_string().contains("k.toml:2"), "{e}");
+        }
+        let missing = ok.replace("archetype = \"L-REGISTER\"\n", "");
+        assert!(KnownLeaksFile::parse(&missing, "k.toml").is_err());
     }
 }

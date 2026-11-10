@@ -1,0 +1,164 @@
+# Archetypes: the ten leak mechanisms (L-*) and the seven look-alikes that are not leaks (N-*).
+#
+# Archetypes are labels. They never filter, order or close a candidate, and a finding
+# without a fitting row stays UNCLASSIFIED. `dla ledger label` reads this file; ledger
+# replay never does. If the file is absent, or DLA_ARCHETYPES=off, archetypes are off.
+#
+# Fields
+#   holders     holder kinds the archetype fits (closed vocabulary, finding.rs Holder).
+#               Empty for N-*: a look-alike has no holder.
+#   regions     memory regions it fits: heap, off-heap, non-heap (closed vocabulary).
+#   requires    the evidence a label must rest on. The outer list is OR (any one
+#               alternative); each inner list is AND (every kind in it must be recorded
+#               and tied to the finding). Only evidence kinds that some command writes
+#               may appear (a test checks this). The plan's `blocked-stack-profile` and
+#               `unreachable-at-exit` have no producer and are left out.
+#   disconfirm  N-* ids whose sibling hypothesis must be refuted before the label.
+#   signals     series names (or name prefixes) that hint at the archetype. Documented
+#               hints only: no code reads them in M6. Each name exists in the samplers or
+#               the harness agents (a test checks this).
+#   repair      repair classes that fit (closed vocabulary, finding.rs RepairClass).
+#               Empty for N-*.
+#   summary     one plain line: the mechanism.
+#
+# The plan's example holders `thread` and `executor` map to `blocked-stack` and
+# `registration-table` (docs/VERIFY.md).
+
+[L-HANDLE]
+holders = ["native-handle/global-ref"]
+regions = ["off-heap", "non-heap"]
+requires = [["growth-series", "alloc-stack"], ["unit-count-series", "retention-path"]]
+disconfirm = ["N-ALLOC", "N-SCALE", "N-WARM", "N-HWM"]
+signals = ["os.fds", "os.rss", "os.rss_anon", "native.live_bytes", "native.live_blocks", "jvm.nmt_committed", "node.external"]
+repair = ["release-regular", "release-exceptional"]
+summary = "A file, socket, descriptor or native buffer is acquired and not released on some path."
+
+[L-COLLECT]
+holders = ["static/global", "container-field"]
+regions = ["heap"]
+requires = [["growth-series", "retention-path"], ["growth-series", "histogram-diff"], ["growth-series", "alloc-stack"], ["unit-count-series", "census-holder"]]
+disconfirm = ["N-WARM", "N-HWM", "N-INTENT", "N-SCALE"]
+signals = ["jvm.heap_used", "go.heap_live", "go.heap_objects", "node.heap_used", "py.traced", "py.gc_objects"]
+repair = ["bound/evict", "remove-entry"]
+summary = "A long-lived collection gains an entry per unit of work and nothing removes or bounds it."
+
+[L-REGISTER]
+holders = ["registration-table", "static/global"]
+regions = ["heap", "non-heap"]
+requires = [["unit-count-series"], ["growth-series", "retention-path"], ["growth-series", "non-heap"]]
+disconfirm = ["N-SCALE", "N-WARM", "N-INTENT"]
+signals = ["node.listeners", "node.timers", "node.active.", "os.threads"]
+repair = ["deregister"]
+summary = "A listener, callback, timer or subscription is added to a long-lived table and never removed."
+
+[L-WORKER]
+holders = ["blocked-stack", "registration-table"]
+regions = ["non-heap", "heap"]
+requires = [["unit-count-series"], ["growth-series", "non-heap"], ["growth-series", "should-be-dead"]]
+disconfirm = ["N-SCALE", "N-HWM", "N-INTENT", "N-WARM"]
+signals = ["go.goroutines", "jvm.threads", "os.threads", "node.active."]
+repair = ["stop/cancel", "restructure-sync"]
+summary = "A thread, goroutine or task is started per unit of work and never finishes because it waits on a signal that never comes."
+
+[L-TLS]
+holders = ["thread-local"]
+regions = ["heap"]
+requires = [["growth-series", "retention-path"], ["growth-series", "histogram-diff", "census-holder"]]
+disconfirm = ["N-HWM", "N-SCALE", "N-INTENT"]
+signals = ["jvm.heap_used", "jvm.threads", "os.threads"]
+repair = ["clear-reference", "release-regular"]
+summary = "A thread-local value outlives its unit of work on a long-lived pooled thread, so each thread keeps what it has seen."
+
+[L-STALE]
+holders = ["container-field", "static/global"]
+regions = ["heap"]
+requires = [["growth-series", "retention-path"], ["growth-series", "should-be-dead"]]
+disconfirm = ["N-WARM", "N-INTENT", "N-HEADROOM"]
+signals = ["jvm.heap_used", "go.heap_live", "node.heap_used", "py.traced"]
+repair = ["clear-reference", "remove-entry"]
+summary = "A reference to logical state that is dead (removed, replaced or finished) is still held."
+
+[L-CAPTURE]
+holders = ["closure/continuation"]
+regions = ["heap"]
+requires = [["growth-series", "retention-path"], ["growth-series", "alloc-stack"]]
+disconfirm = ["N-WARM", "N-INTENT", "N-HEADROOM"]
+signals = ["node.heap_used", "jvm.heap_used", "go.heap_live"]
+repair = ["clear-reference", "restructure-sync"]
+summary = "A closure or continuation keeps its enclosing scope, and what that scope holds, alive."
+
+[L-CYCLE]
+holders = ["cycle-only"]
+regions = ["heap"]
+requires = [["growth-series", "alloc-stack"], ["unit-count-series", "discriminator"]]
+disconfirm = ["N-HEADROOM", "N-ALLOC", "N-WARM"]
+signals = ["native.live_bytes", "native.live_blocks", "py.gc_objects"]
+repair = ["clear-reference", "restructure-sync"]
+summary = "Objects reference each other in a cycle that reference counting cannot reclaim."
+
+[L-OWNERSHIP]
+holders = ["native-handle/global-ref"]
+regions = ["off-heap"]
+requires = [["growth-series", "alloc-stack"], ["growth-series", "intervention"]]
+disconfirm = ["N-ALLOC", "N-INTENT", "N-OBSERVER"]
+signals = ["native.live_bytes", "native.live_blocks", "os.rss", "os.rss_anon"]
+repair = ["return-ownership", "release-regular"]
+summary = "A buffer or object is handed across a boundary and neither side takes ownership, so neither frees it."
+
+[L-UNLOAD]
+holders = ["static/global", "thread-local", "registration-table"]
+regions = ["non-heap", "heap"]
+requires = [["growth-series", "non-heap"], ["unit-count-series", "retention-path"], ["growth-series", "retention-path"]]
+disconfirm = ["N-WARM", "N-HWM", "N-INTENT"]
+signals = ["jvm.classes_loaded", "jvm.nonheap_used", "jvm.nmt_committed"]
+repair = ["deregister", "stop/cancel", "clear-reference"]
+summary = "A reload, redeploy or unload leaves the old module, class loader or plugin reachable from a long-lived holder."
+
+[N-ALLOC]
+regions = ["off-heap"]
+requires = [["discriminator", "growth-series"]]
+disconfirm = []
+signals = ["os.rss", "os.rss_anon", "native.live_bytes", "go.released"]
+summary = "The allocator keeps freed memory (arenas, fragmentation); live data is flat and a trim or purge returns it."
+
+[N-HEADROOM]
+regions = ["heap"]
+requires = [["discriminator", "growth-series"]]
+disconfirm = []
+signals = ["jvm.heap_used", "py.traced.pre_gc", "node.heap_used.pre_gc"]
+summary = "The collector lets garbage pile up to a limit; the series after a forced collection is flat."
+
+[N-WARM]
+regions = ["heap", "off-heap", "non-heap"]
+requires = [["growth-series", "discriminator"]]
+disconfirm = []
+signals = ["jvm.classes_loaded", "os.rss"]
+summary = "A one-time fill (cache to its cap, class loading, lazy init, pool to size) that stops, or memory the code gives back."
+
+[N-HWM]
+regions = ["heap", "off-heap"]
+requires = [["growth-series", "discriminator"]]
+disconfirm = []
+signals = ["os.rss", "os.vm_hwm", "native.peak_bytes"]
+summary = "A pool, buffer or map keeps the capacity of its largest batch; the level steps up once and stays."
+
+[N-SCALE]
+regions = ["heap", "non-heap"]
+requires = [["growth-series", "discriminator"]]
+disconfirm = []
+signals = ["os.threads", "go.goroutines", "jvm.threads"]
+summary = "Memory is proportional to live load (connections, sessions) and falls when the load falls."
+
+[N-INTENT]
+regions = ["heap"]
+requires = [["census-holder", "discriminator"]]
+disconfirm = []
+signals = ["jvm.heap_used", "py.traced"]
+summary = "Retention the code asks for on purpose (a log, a bounded memo, pinned data) with a bound or a stated purpose."
+
+[N-OBSERVER]
+regions = ["heap", "non-heap", "off-heap"]
+requires = [["discriminator"]]
+disconfirm = []
+signals = ["os.rss"]
+summary = "The measurement tool itself (profiler, snapshot, tracing, driver reference) holds the memory."

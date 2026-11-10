@@ -16,7 +16,7 @@ Coverage: go 8000 iterations, 2 of 3 entry points exercised
 
 ## Findings
 
-### F1: **Novel mechanism (UNCLASSIFIED)**
+### F1: **UNCLASSIFIED**
 
 - State: confirmed
 - Growth: `probe:Registry.listeners` 412 bytes/n (steady, gate pass, E3)
@@ -26,6 +26,7 @@ Coverage: go 8000 iterations, 2 of 3 entry points exercised
 - Region: heap
 - Shape: steady
 - Site: `src/bus.go:12`
+- Verified: no
 - Sibling hypotheses: F1.n1
 - Supporting evidence: E6, E2, E3
 

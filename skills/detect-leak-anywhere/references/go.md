@@ -2,6 +2,8 @@
 
 Worker name and runtime id: `go`. Facts from `harness/go/README.md` and `docs/VERIFY.md`.
 
+Archetype rows (what to look for, how to confirm, how to rule out): read `references/go-archetypes.md` only after `dla gate check --stage classify` passes.
+
 ## Harness
 - Command mode: `zz_dla_harness_test.go` is written next to a `package main` and runs the
   program's `main` through `go test -run '^TestDLAHarness$'` with the workload's flags passed in

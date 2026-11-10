@@ -191,6 +191,14 @@ def parse_ledger(path):
                     f["site"] = str_or_none(rec.get("site"))
                 if f["owner"] is None:
                     f["owner"] = str_or_none(rec.get("owner"))
+        elif rtype == "finding_labeled":
+            # `dla ledger label` (ledger schema 6) sets the archetype label; the last
+            # record of a finding wins.
+            fid = rec.get("finding")
+            key = ledger_key(fid, rec) if isinstance(fid, str) else None
+            label = str_or_none(rec.get("label"))
+            if key is not None and key in by_id and label is not None:
+                by_id[key]["label"] = label
         elif rtype == "finding_merged":
             # The duplicate collapses into the canonical finding.
             canonical = rec.get("canonical")

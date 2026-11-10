@@ -201,6 +201,20 @@ pub fn findings_from_ledger_bytes(bytes: &[u8]) -> Option<Vec<Finding>> {
                     }
                 }
             }
+            // `dla ledger label` (ledger schema 6) sets the archetype label; the last
+            // record of a finding wins.
+            "finding_labeled" => {
+                let Some(id) = rec.get("finding").and_then(Value::as_str) else {
+                    continue;
+                };
+                let key = ledger_key(id, &rec);
+                if let (Some((_, f)), Some(label)) = (
+                    list.iter_mut().find(|(i, _)| *i == key),
+                    str_of(&rec, "label"),
+                ) {
+                    f.label = Some(label);
+                }
+            }
             // The duplicate collapses into the canonical finding.
             "finding_merged" => {
                 let (Some(canonical), Some(duplicate)) = (

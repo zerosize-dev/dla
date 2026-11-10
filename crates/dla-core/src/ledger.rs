@@ -22,19 +22,25 @@ use chrono::{DateTime, Utc};
 use crate::{
     LEDGER_SCHEMA_VERSION,
     checklist::{AnswerStatus, Checklist, ChecklistAnswer, ChecklistEntry},
+    detectors::ARCHETYPE_IDS,
     error::{Error, Refusal, ReplayError, codes},
     evidence::{Authority, EvidenceKind, EvidenceRecord, NewEvidence},
+    explain::{self, ExplainInput},
     finding::{
         Explanation, Finding, FindingState, Holder, Locus, NON_LEAK_IDS, Origin, Region,
         RepairClass, Shape, UNCLASSIFIED, check_site, claims_nonleak, nonleak_id,
     },
     ids::{EvidenceId, FindingId, OpenItemId},
+    labels::{self, Archetypes, LabelInput},
+    m6::codes as m6_codes,
     machine::{
-        self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, M4Rules, M5Rules, TransitionContext,
+        self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, M4Rules, M5Rules, M6Rules,
+        TransitionContext,
     },
     record::{
-        FindingAnnotation, FindingMerged, LedgerLine, OpenItem, OpenItemResolved, Record,
-        Resolution, SliceDone, SliceMerged, SliceStarted, Transition, Verification,
+        FindingAnnotation, FindingExplained, FindingLabeled, FindingMerged, IntegrityResealed,
+        LedgerLine, OpenItem, OpenItemResolved, Record, RemovalClaim, Resolution, SliceDone,
+        SliceMerged, SliceStarted, Transition, Verification,
     },
     slice::{self, TornTail, codes as m4},
     state::{EntryPath, LEDGER_FILE, RunState, WorkerStatus, now_utc},
@@ -144,6 +150,12 @@ struct Index {
     /// Duplicate finding -> canonical finding (`finding_merged`).
     merged_into: BTreeMap<FindingId, FindingId>,
     verifications: BTreeMap<FindingId, Vec<Verification>>,
+    /// Every `finding_labeled` record per finding, oldest first (schema 6).
+    labels: BTreeMap<FindingId, Vec<FindingLabeled>>,
+    /// The latest `finding_explained` record per finding (schema 6).
+    explanations: BTreeMap<FindingId, FindingExplained>,
+    /// Every `integrity_resealed` record, oldest first (schema 6).
+    reseals: Vec<IntegrityResealed>,
 }
 
 impl Index {
@@ -159,6 +171,9 @@ impl Index {
             slices: BTreeMap::new(),
             merged_into: BTreeMap::new(),
             verifications: BTreeMap::new(),
+            labels: BTreeMap::new(),
+            explanations: BTreeMap::new(),
+            reseals: Vec::new(),
         }
     }
 }
@@ -349,20 +364,66 @@ impl Index {
             Record::SliceDone(d) => self.check_slice_done(d),
             Record::SliceMerged(m) => self.check_slice_merged(m),
             Record::FindingMerged(m) => self.check_finding_merged(m),
-            Record::Verification(v) => self.check_verification(v),
-            // Rules arrive with the schema 6 ledger package.
-            Record::FindingLabeled(_)
-            | Record::FindingExplained(_)
-            | Record::IntegrityResealed(_) => Err(Refusal::new(
-                codes::NOT_IMPLEMENTED,
-                format!(
-                    "{} lines are not implemented in this build",
-                    record_name(record)
-                ),
-                "the schema 6 ledger rules (milestone M6 package B)",
-                "do not write this record yet",
-            )),
+            Record::Verification(v) => self.check_verification(v, version),
+            Record::FindingLabeled(l) => {
+                self.require_schema6(record, version)?;
+                self.check_worker_evidence(&l.satisfied.evidence)?;
+                labels::check(self, self, l)
+            }
+            Record::FindingExplained(x) => {
+                self.require_schema6(record, version)?;
+                self.check_worker_evidence(x.evidence.as_slice())?;
+                explain::check(self, self, x)
+            }
+            Record::IntegrityResealed(r) => {
+                self.require_schema6(record, version)?;
+                if r.reason.trim().is_empty() || r.files.is_empty() {
+                    return Err(Refusal::new(
+                        codes::EMPTY_FIELD,
+                        "integrity_resealed needs the files sealed again and a reason",
+                        "files and reason",
+                        "dla run reseal --reason \"<why the files changed outside dla>\"",
+                    ));
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// A record type that exists from schema 6 on.
+    fn require_schema6(&self, record: &Record, version: u32) -> Result<(), Refusal> {
+        if version >= 6 {
+            return Ok(());
+        }
+        Err(Refusal::new(
+            codes::INVALID_VALUE,
+            format!(
+                "{} is a schema 6 record, but this line says schema version {version}",
+                record_name(record)
+            ),
+            "schema_version 6 or later",
+            "write the line with a build that writes schema 6",
+        ))
+    }
+
+    /// A worker may cite its own evidence or the main ledger's, never another worker's.
+    fn check_worker_evidence(&self, evidence: &[EvidenceId]) -> Result<(), Refusal> {
+        let Some(w) = &self.slice_worker else {
+            return Ok(());
+        };
+        if let Some(e) = evidence.iter().find(|e| e.prefix().is_some_and(|p| p != w)) {
+            return Err(Refusal::new(
+                m4::FOREIGN_ITEM,
+                format!(
+                    "worker {w} cites {e}, which belongs to another worker's slice; a worker may cite its own evidence or the main ledger's"
+                ),
+                format!("evidence of {w} or of the main ledger"),
+                format!(
+                    "dla --worker {w} ledger ... --evidence <an id of {w} or of the main ledger>"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Rules for a record appended to (or replayed from) worker `w`'s slice: it begins
@@ -586,7 +647,7 @@ impl Index {
         Ok(())
     }
 
-    fn check_verification(&self, v: &Verification) -> Result<(), Refusal> {
+    fn check_verification(&self, v: &Verification, version: u32) -> Result<(), Refusal> {
         let fix = format!(
             "dla ledger verify {} --site <file:line|none> --holder <holder> --mechanism \"<text>\" --bundle <sha256 printed by dla bundle>",
             v.finding
@@ -618,7 +679,50 @@ impl Index {
         {
             return Err(bad("--site file:line or none", m));
         }
+        if version >= 6 {
+            self.check_verification_label(v)?;
+        }
         Ok(())
+    }
+
+    /// Schema 6: the verifier's label is an archetype ID or `UNCLASSIFIED`, and
+    /// `agrees_label` is what comparing it with the finding's label gives (absent when
+    /// archetypes were off, which allows `UNCLASSIFIED` only).
+    fn check_verification_label(&self, v: &Verification) -> Result<(), Refusal> {
+        let f = self.require_finding(&v.finding, "verification")?;
+        let known = v.label == UNCLASSIFIED || ARCHETYPE_IDS.contains(&v.label.as_str());
+        if !known {
+            return Err(Refusal::new(
+                m6_codes::UNKNOWN_ARCHETYPE,
+                format!(
+                    "verification of {} has label {:?}, which is not an archetype ID",
+                    v.finding, v.label
+                ),
+                "an archetype ID or UNCLASSIFIED",
+                format!("use one of: {}, UNCLASSIFIED", ARCHETYPE_IDS.join(", ")),
+            ));
+        }
+        match v.agrees_label {
+            None if v.label != UNCLASSIFIED => Err(Refusal::new(
+                m6_codes::ARCHETYPES_OFF,
+                format!(
+                    "verification of {} has label {} but compares no label: with archetypes off only UNCLASSIFIED is accepted",
+                    v.finding, v.label
+                ),
+                "--label UNCLASSIFIED",
+                format!("dla ledger verify {} ... --label UNCLASSIFIED", v.finding),
+            )),
+            Some(b) if b != (f.archetype == v.label) => Err(Refusal::new(
+                codes::INVALID_VALUE,
+                format!(
+                    "verification of {} says agrees_label {b}, but its label {} against the finding's {} says otherwise",
+                    v.finding, v.label, f.archetype
+                ),
+                "agrees_label computed from the labels",
+                format!("dla ledger verify {} ...", v.finding),
+            )),
+            _ => Ok(()),
+        }
     }
 
     fn check_annotation(&self, a: &FindingAnnotation, version: u32) -> Result<(), Refusal> {
@@ -907,6 +1011,16 @@ impl Index {
                 "add the finding first, then use `dla ledger resolve`",
             ));
         }
+        if version >= 6 && f.explanation.is_some() {
+            return Err(Refusal::new(
+                m6_codes::EXPLANATION_LOCKED,
+                format!(
+                    "{id} sets an explanation; from schema 6 an explanation is recorded by `dla ledger explain`, which checks it"
+                ),
+                "no explanation on `ledger add`",
+                "dla ledger explain <finding> --tag inferred --adds <file:line> --removal never --text \"<text>\"",
+            ));
+        }
         if f.archetype != UNCLASSIFIED {
             return Err(Refusal::new(
                 codes::ARCHETYPE_LOCKED,
@@ -1036,7 +1150,8 @@ impl Index {
             0..=1 => machine::check_transition(&M0Rules, &ctx),
             2 => machine::check_transition(&M3Rules, &ctx),
             3 => machine::check_transition(&M4Rules, &ctx),
-            _ => machine::check_transition(&M5Rules, &ctx),
+            4..=5 => machine::check_transition(&M5Rules, &ctx),
+            _ => machine::check_transition(&M6Rules, &ctx),
         }
     }
 
@@ -1298,10 +1413,25 @@ impl Index {
                     .or_default()
                     .push(v.clone());
             }
-            // `check` refuses these until the schema 6 rules exist, so nothing commits them.
-            Record::FindingLabeled(_)
-            | Record::FindingExplained(_)
-            | Record::IntegrityResealed(_) => {}
+            Record::FindingLabeled(l) => {
+                if let Some(f) = self.findings.get_mut(&l.finding) {
+                    f.archetype.clone_from(&l.label);
+                }
+                self.labels
+                    .entry(l.finding.clone())
+                    .or_default()
+                    .push(l.clone());
+            }
+            Record::FindingExplained(x) => {
+                if let Some(f) = self.findings.get_mut(&x.finding) {
+                    f.explanation = Some(Explanation {
+                        text: x.text.clone(),
+                        tag: x.tag,
+                    });
+                }
+                self.explanations.insert(x.finding.clone(), x.clone());
+            }
+            Record::IntegrityResealed(r) => self.reseals.push(r.clone()),
         }
     }
 }
@@ -1689,6 +1819,22 @@ impl Ledger {
     /// The verifications recorded for `id`, oldest first.
     pub fn verifications(&self, id: &FindingId) -> &[Verification] {
         self.index.verifications.get(id).map_or(&[], Vec::as_slice)
+    }
+    /// The `finding_labeled` records of `id`, oldest first (schema 6).
+    pub fn labels(&self, id: &FindingId) -> &[FindingLabeled] {
+        self.index.labels.get(id).map_or(&[], Vec::as_slice)
+    }
+    /// The latest label record of `id`, with the proof it was accepted on.
+    pub fn label_record(&self, id: &FindingId) -> Option<&FindingLabeled> {
+        self.index.labels.get(id).and_then(|l| l.last())
+    }
+    /// The latest explanation record of `id` (schema 6); earlier ones stay in the file.
+    pub fn explanation(&self, id: &FindingId) -> Option<&FindingExplained> {
+        self.index.explanations.get(id)
+    }
+    /// Every `integrity_resealed` record, oldest first (schema 6).
+    pub fn reseals(&self) -> &[IntegrityResealed] {
+        &self.index.reseals
     }
     /// All evidence, ordered by ID.
     pub fn evidence(&self) -> impl Iterator<Item = &EvidenceRecord> {
@@ -2174,6 +2320,117 @@ impl Ledger {
         self.append(Record::FindingAnnotated(annotation))
     }
 
+    /// Labels a confirmed or strong finding (`dla ledger label`). `archetypes` is the
+    /// table the label is checked against, or off. Builds the proof, appends one
+    /// `finding_labeled` line and returns it.
+    pub fn label(
+        &mut self,
+        finding: &FindingId,
+        label: &str,
+        evidence: &[EvidenceId],
+        note: Option<&str>,
+        archetypes: Archetypes<'_>,
+    ) -> Result<LedgerLine, Error> {
+        let finding = self.own_finding_id(finding);
+        let evidence: Vec<EvidenceId> = evidence.iter().map(|e| self.own_evidence_id(e)).collect();
+        let rec = labels::plan(
+            &self.index,
+            &self.index,
+            &LabelInput {
+                finding: &finding,
+                label,
+                evidence: &evidence,
+                note,
+                archetypes,
+            },
+        )?;
+        self.append(Record::FindingLabeled(rec))
+    }
+
+    /// Read only: per archetype that fits `finding`, whether it can be labelled now.
+    pub fn suggest_labels(
+        &self,
+        finding: &FindingId,
+        table: &crate::archetypes::Table,
+    ) -> Result<Vec<labels::SuggestRow>, Error> {
+        let finding = self.own_finding_id(finding);
+        Ok(labels::suggest(&self.index, &self.index, &finding, table)?)
+    }
+
+    /// The writers and removers annotations recorded for `finding` (`file:line`).
+    pub fn recorded_sites(&self, finding: &FindingId) -> (Vec<String>, Vec<String>) {
+        let finding = self.own_finding_id(finding);
+        self.index
+            .annotations
+            .get(&finding)
+            .map_or((Vec::new(), Vec::new()), |a| {
+                (a.writers.clone(), a.removers.clone())
+            })
+    }
+
+    /// Records a checked explanation (`dla ledger explain`). `census_writers` and
+    /// `census_removers` are the heuristic sites the census found for the finding's
+    /// owner; they join the ones annotations recorded. Appends one `finding_explained`
+    /// line; the latest line for a finding is the explanation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn explain(
+        &mut self,
+        finding: &FindingId,
+        tag: crate::finding::ExplanationTag,
+        adds: &[String],
+        removal: RemovalClaim,
+        remover: Option<&str>,
+        evidence: Option<&EvidenceId>,
+        text: &str,
+        census_writers: &[String],
+        census_removers: &[String],
+    ) -> Result<LedgerLine, Error> {
+        let finding = self.own_finding_id(finding);
+        let evidence = evidence.map(|e| self.own_evidence_id(e));
+        let (mut writers, mut removers) = self.recorded_sites(&finding);
+        for w in census_writers {
+            if !writers.contains(w) {
+                writers.push(w.clone());
+            }
+        }
+        for r in census_removers {
+            if !removers.contains(r) {
+                removers.push(r.clone());
+            }
+        }
+        let rec = explain::plan(
+            &self.index,
+            &self.index,
+            &ExplainInput {
+                finding: &finding,
+                tag,
+                adds,
+                removal,
+                remover,
+                evidence: evidence.as_ref(),
+                text,
+                writers: &writers,
+                removers: &removers,
+            },
+        )?;
+        self.append(Record::FindingExplained(rec))
+    }
+
+    /// Core mode: records that protected files were sealed again by `dla run reseal`.
+    pub fn integrity_resealed(
+        &mut self,
+        files: Vec<String>,
+        reason: &str,
+    ) -> Result<LedgerLine, Error> {
+        if self.slice.is_some() {
+            return Err(core_only("integrity_resealed").into());
+        }
+        self.append(Record::IntegrityResealed(IntegrityResealed {
+            files,
+            reason: reason.to_owned(),
+        }))
+    }
+
     // ----- worker slices, merge and verification -----
 
     /// Ends the worker's slice with `slice_done`, listing the slice's own findings that
@@ -2265,6 +2522,7 @@ impl Ledger {
     /// The agreement with the finding's site (same file, within 3 lines, or both none)
     /// and holder is computed here; a disagreement also opens an open item naming both
     /// values. Returns the verification line and the open item line, if any.
+    #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &mut self,
         finding: &FindingId,
@@ -2273,6 +2531,7 @@ impl Ledger {
         mechanism: &str,
         label: &str,
         bundle: &str,
+        archetypes: Archetypes<'_>,
     ) -> Result<(LedgerLine, Option<LedgerLine>), Error> {
         if self.slice.is_some() {
             return Err(core_only("verification").into());
@@ -2281,6 +2540,35 @@ impl Ledger {
             .index
             .require_finding(finding, "verification")
             .map_err(Error::Refused)?;
+        let label = label.trim();
+        // An empty or spaced label is refused by the record check, with the verify fix.
+        let plain = !label.is_empty() && !label.chars().any(char::is_whitespace);
+        match archetypes {
+            Archetypes::On(t) if plain && label != UNCLASSIFIED && t.get(label).is_none() => {
+                return Err(Refusal::new(
+                    m6_codes::UNKNOWN_ARCHETYPE,
+                    format!("--label {label:?} is not an archetype ID"),
+                    "an archetype ID or UNCLASSIFIED",
+                    format!(
+                        "use one of: {}, UNCLASSIFIED",
+                        t.ids().collect::<Vec<_>>().join(", ")
+                    ),
+                )
+                .into());
+            }
+            Archetypes::Off if plain && label != UNCLASSIFIED => {
+                return Err(Refusal::new(
+                    m6_codes::ARCHETYPES_OFF,
+                    format!(
+                        "archetypes are off: --label {label:?} cannot be checked, only UNCLASSIFIED is accepted"
+                    ),
+                    "--label UNCLASSIFIED",
+                    format!("dla ledger verify {finding} ... --label UNCLASSIFIED"),
+                )
+                .into());
+            }
+            _ => {}
+        }
         let v = verify::record(
             f,
             site,
@@ -2288,9 +2576,10 @@ impl Ledger {
             mechanism.to_owned(),
             label.to_owned(),
             bundle.to_owned(),
+            matches!(archetypes, Archetypes::On(_)),
         );
         let mut batch = vec![Pending::new(Record::Verification(v.clone()))];
-        if !(v.agrees_site && v.agrees_holder) {
+        if !verify::agrees(&v) {
             batch.push(Pending::new(Record::OpenItem(OpenItem {
                 id: self.next_open_item_id(),
                 text: verify::disagreement_text(f, &v),

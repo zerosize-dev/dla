@@ -19,9 +19,6 @@ use dla_core::{
     trend::{GrowthSummary, PassedColumn},
 };
 
-/// Label shown for a finding that no archetype describes.
-/// Label of a confirmed or strong finding that matches no archetype.
-const NOVEL_LABEL: &str = "Novel mechanism (UNCLASSIFIED)";
 /// Placeholder for an absent value in a table.
 const DASH: &str = "\u{2014}";
 
@@ -97,20 +94,84 @@ fn sites(list: &[String]) -> String {
     list.iter().map(|s| code(s)).collect::<Vec<_>>().join(", ")
 }
 
-/// The archetype label. "Novel mechanism" is a claim, so it is reserved for confirmed
-/// and strong findings; any other state without an archetype is plainly UNCLASSIFIED.
+/// The archetype label: the archetype ID, or `UNCLASSIFIED` at the same weight as any
+/// other label (it is a result, not a claim of novelty).
 fn label(f: &Finding) -> String {
-    if f.archetype == UNCLASSIFIED {
-        if matches!(f.state, FindingState::Confirmed | FindingState::Strong)
-            && f.polarity() == Polarity::Leak
-        {
-            NOVEL_LABEL.to_owned()
-        } else {
-            UNCLASSIFIED.to_owned()
-        }
-    } else {
-        inline(&f.archetype)
+    inline(&f.archetype)
+}
+
+/// `- Label: ...` for a finding with a label record: the archetype and the evidence it
+/// rests on; for `UNCLASSIFIED` the note that says why nothing fits.
+fn label_line(view: &RunView, f: &Finding) -> Option<String> {
+    let rec = view.ledger.label_record(&f.id)?;
+    if rec.label == UNCLASSIFIED {
+        return Some(match &rec.note {
+            Some(n) => format!("Label: {UNCLASSIFIED} ({})", inline(n)),
+            None => format!("Label: {UNCLASSIFIED}"),
+        });
     }
+    let kind_of = |id: &EvidenceId| {
+        view.ledger
+            .evidence_by_id(id)
+            .map_or_else(String::new, |e| format!(" {}", e.kind))
+    };
+    let ev: Vec<String> = rec
+        .satisfied
+        .evidence
+        .iter()
+        .map(|id| format!("{id}{}", kind_of(id)))
+        .collect();
+    let mut s = format!(
+        "Label: {} (evidence: {})",
+        inline(&rec.label),
+        ev.join(", ")
+    );
+    if rec.region_mismatch {
+        s.push_str("; region does not match the archetype's");
+    }
+    if let Some(n) = &rec.note {
+        s.push_str(&format!("; {}", inline(n)));
+    }
+    Some(s)
+}
+
+/// `- Strong: ...` naming the second class of evidence and the growth record it is
+/// independent of.
+fn strong_line(view: &RunView, f: &Finding) -> Option<String> {
+    if f.state != FindingState::Strong {
+        return None;
+    }
+    let cited: Vec<&EvidenceRecord> = f
+        .supports
+        .iter()
+        .filter_map(|id| view.ledger.evidence_by_id(id))
+        .collect();
+    let second = cited.iter().copied().find(|e| match e.kind {
+        dla_core::EvidenceKind::RetentionPath | dla_core::EvidenceKind::AllocStack => {
+            dla_core::holders::names_holder(e, f)
+        }
+        dla_core::EvidenceKind::Intervention => dla_core::holders::InterventionResult::of(e)
+            .is_some_and(|r| r.why_not_removal_of(&f.id).is_none()),
+        _ => false,
+    })?;
+    let growth = cited
+        .iter()
+        .copied()
+        .filter(|e| is_passing_growth(e))
+        .find(|g| dla_core::evidence::records_independent(g, second));
+    let what = match second.kind {
+        dla_core::EvidenceKind::Intervention => "intervention that removed the growth".to_owned(),
+        k => format!("{k} that names the holder"),
+    };
+    Some(match growth {
+        Some(g) => format!(
+            "Strong: second class {} {what}, independent of the growth record {} ({})",
+            second.evidence_id,
+            g.evidence_id,
+            inline(&g.tool.name)
+        ),
+        None => format!("Strong: second class {} {what}", second.evidence_id),
+    })
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -474,6 +535,9 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
         }
     }
     let _ = writeln!(out, "- State: {}", f.state_label());
+    if let Some(l) = label_line(view, f) {
+        let _ = writeln!(out, "- {l}");
+    }
     if let Some(g) = growth_line(view, f) {
         let _ = writeln!(out, "- Growth: {g}");
     }
@@ -483,6 +547,9 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     let cl = classes(view, f);
     if !cl.is_empty() {
         let _ = writeln!(out, "- Evidence classes: {cl}");
+    }
+    if let Some(x) = strong_line(view, f) {
+        let _ = writeln!(out, "- {x}");
     }
     if let Some(h) = f.holder {
         let _ = writeln!(out, "- Holder: {h}");
@@ -515,6 +582,10 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(v) = view.ledger.verifications(&f.id).last() {
         let _ = writeln!(out, "- Verified: {}", verified_text(f, v));
+    } else if matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+        && f.polarity() == Polarity::Leak
+    {
+        let _ = writeln!(out, "- Verified: no");
     }
     let dups = view.ledger.duplicates_of(&f.id);
     if !dups.is_empty() {
@@ -556,15 +627,23 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(e) = &f.explanation {
         let _ = writeln!(out, "- Explanation ({}): {}", e.tag, inline(&e.text));
+        if let Some(x) = view.ledger.explanation(&f.id) {
+            let _ = writeln!(
+                out,
+                "- Explanation structure: {}",
+                inline(&dla_core::explain::structured_line(x))
+            );
+        }
     }
     out.push('\n');
 }
 
-/// `agrees (...)` or the disagreement, naming both values.
+/// `agrees (...)` or the disagreement, naming both values and both mechanisms.
 fn verified_text(f: &Finding, v: &dla_core::Verification) -> String {
     let bundle: String = v.bundle.chars().take(12).collect();
     let site = v.site.as_deref().map_or_else(|| "none".to_owned(), code);
-    if v.agrees_site && v.agrees_holder {
+    let label_ok = v.agrees_label.unwrap_or(true);
+    if v.agrees_site && v.agrees_holder && label_ok {
         return format!(
             "agrees (verifier site {site}, holder {}, label {}; bundle {bundle})",
             v.holder,
@@ -585,7 +664,22 @@ fn verified_text(f: &Finding, v: &dla_core::Verification) -> String {
             v.holder
         ));
     }
-    format!("DISAGREES ({}; bundle {bundle})", parts.join("; "))
+    if !label_ok {
+        parts.push(format!(
+            "label: finding {} vs verifier {}",
+            inline(&f.archetype),
+            inline(&v.label)
+        ));
+    }
+    let own = f
+        .explanation
+        .as_ref()
+        .map_or_else(|| "not stated".to_owned(), |e| inline(&e.text));
+    format!(
+        "DISAGREES ({}; bundle {bundle}); finding mechanism: {own}; verifier mechanism: {}",
+        parts.join("; "),
+        inline(&v.mechanism)
+    )
 }
 
 /// The Workers section: per worker its status, the slice lines merged, whether it
@@ -922,9 +1016,9 @@ mod tests {
         c.state = FindingState::Confirmed;
         let mut t = String::new();
         finding_section(&mut t, &view, &c);
-        assert!(t.starts_with("### F1: **Novel mechanism (UNCLASSIFIED)**\n"));
+        assert!(t.starts_with("### F1: **UNCLASSIFIED**\n"));
         c.state = FindingState::Strong;
-        assert_eq!(label(&c), NOVEL_LABEL);
+        assert_eq!(label(&c), "UNCLASSIFIED");
         for st in [
             FindingState::Candidate,
             FindingState::UnderTest,

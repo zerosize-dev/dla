@@ -279,6 +279,26 @@ class LedgerParseTest(EnvCase):
         self.assertEqual((fs[0]["holder"], fs[0]["site"]), ("native-handle/global-ref", "a.c:29"))
         self.assertEqual((fs[1]["holder"], fs[1]["site"]), ("static/global", "c.c:2"))
 
+    def test_a_label_record_sets_the_label_and_the_last_one_wins(self):
+        lines = [
+            json.dumps({"type": "finding_added", "finding": {"id": "F1", "archetype": "UNCLASSIFIED"}}),
+            json.dumps({"type": "finding_added", "finding": {"id": "F2", "archetype": "UNCLASSIFIED"}}),
+            json.dumps({"type": "finding_added", "worker": "jvm", "finding": {"id": "F1"}}),
+            json.dumps({"type": "finding_labeled", "finding": "F1", "label": "L-COLLECT",
+                        "previous": "UNCLASSIFIED"}),
+            json.dumps({"type": "finding_labeled", "finding": "F9", "label": "L-WORKER"}),
+            json.dumps({"type": "finding_labeled", "finding": "F2", "label": 7}),
+            json.dumps({"type": "finding_labeled", "finding": "F2", "label": "L-HANDLE"}),
+            json.dumps({"type": "finding_labeled", "finding": "F2", "label": "UNCLASSIFIED",
+                        "previous": "L-HANDLE"}),
+            json.dumps({"type": "finding_labeled", "worker": "jvm", "finding": "F1",
+                        "label": "L-REGISTER"}),
+            json.dumps({"type": "finding_labeled", "finding": "jvm/F1", "label": "L-TLS"}),
+            json.dumps({"type": "finding_labeled", "finding": "F1", "label": "L-CYCLE"}),
+        ]
+        _, fs = self.parse(ledger(*lines))
+        self.assertEqual([f["label"] for f in fs], ["L-CYCLE", "UNCLASSIFIED", "L-TLS"])
+
     def test_a_holder_correction_replaces_a_set_holder(self):
         # Ledger schema 5: the record names the replaced holder.
         lines = [
