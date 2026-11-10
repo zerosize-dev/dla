@@ -1,0 +1,12 @@
+{
+ "op": "alloc-stack-diff",
+ "inputs": [
+  "exit1.jsonl",
+  "exit2.jsonl",
+  "exit3.jsonl"
+ ],
+ "secrets": [
+  "AKIAIOSFODNN7EXAMPLE1"
+ ],
+ "note": "the same exit records as shim-stack-groups, read as allocation stacks (alloc-stack-diff)"
+}

@@ -655,6 +655,33 @@ fn strong_refuses_two_readings_of_one_dump() {
 }
 
 #[test]
+fn strong_refusal_survives_a_source_hash_that_is_not_ascii() {
+    let (mut l, f) = confirmed();
+    let odd = "a\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}";
+    let growth = signed(
+        EvidenceKind::GrowthSeries,
+        Authority::Dump,
+        "dla-hprof",
+        "dump-parser",
+        odd,
+        json!({"trend": "T2", "series": "S2", "gate": "pass", "n": 5,
+            "passed": [{"column": "holder:a.A.cache", "finding": "F1", "shape": "steady"}]}),
+    );
+    let retention = signed(
+        EvidenceKind::RetentionPath,
+        Authority::Dump,
+        "dla-hprof",
+        "dump-parser",
+        odd,
+        json!({"holders": [{"key": "static:a.A.cache"}], "alloc": "x (a.go:1)"}),
+    );
+    let g = push(&mut l, growth);
+    let r = push(&mut l, retention);
+    let e = refusal(strong(&mut l, &f, &[g, r]));
+    assert_eq!(e.code, m6::STRONG_NOT_INDEPENDENT);
+}
+
+#[test]
 fn strong_refuses_a_histogram() {
     let (mut l, f) = confirmed();
     let g = push(&mut l, trend_growth("aa"));

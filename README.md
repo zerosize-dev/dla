@@ -21,7 +21,9 @@ For the limits of what a run can establish, read [What DLA cannot see](docs/what
 
 ## Status
 
-Pre-release, milestone M4 (orchestration and entry paths, on top of the M3 dynamic core, the M2
+Pre-release, milestone M6 (archetype labels, strong findings, explanations, gates, hooks and
+integrity seals, interventions and the blind verifier bundle, on top of the M5 evidence adapters,
+the M4 orchestration and entry paths, the M3 dynamic core, the M2
 static sweep, the M1 benchmark and the M0 foundation). What exists today: the data contracts and
 JSON Schemas, the ledger and its state machine with the M3 rules (a finding is confirmed only from
 a passing growth series and a refuted non-leak explanation, and refuted only by a discriminating
@@ -32,8 +34,11 @@ paths (repository, running process, heap dumps, symptom only), one worker per ru
 ledger slice and a merge that gates the result, run locking, budgets and abort, attaching to a
 running process (jcmd, the Node inspector, memray, heaptrack; goref unverified), the HPROF reader
 with dump-series confirmation, the verifier bundle, the plugin skill and agents, the release
-pipeline and the benchmark in [bench/](bench/README.md). Labels, `strong` findings and the other
-artifact formats arrive in later milestones. Expect breaking changes. The statistical thresholds
+pipeline and the benchmark in [bench/](bench/README.md). It also has archetype labels
+(`dla ledger label`), strong findings (`dla ledger strong`), checked explanations
+(`dla ledger explain`), stage and final gates (`dla gate`), integrity seals on the run files, and
+interventions that stub a writer or apply a patch in a scratch copy (`dla intervene`). Expect
+breaking changes. The statistical thresholds
 are provisional until they are calibrated on new fixtures (M7). Open questions and unverified
 details are tracked in [docs/VERIFY.md](docs/VERIFY.md).
 
@@ -60,6 +65,12 @@ Commands:
 | `dla ledger annotate` | Records the writers and removers the model found for a holder (`--writer file:line`, `--remover file:line`, `--note`) and the holder, owner, region or site when the finding has none; changes no state |
 | `dla ledger test\|confirm\|refute` | Moves a finding under test, confirms it, or refutes it, each citing evidence (`--evidence E1,E2`); the ledger refuses the move unless its rules are met |
 | `dla ledger resolve` | Dispositions a finding or open item, or answers a checklist item |
+| `dla ledger label <F> --as <ID>` | Labels a confirmed or strong finding with an archetype when the evidence, the holder kind and the refuted look-alikes that archetype requires are recorded; `--suggest` lists what each archetype has and lacks; `--as UNCLASSIFIED --note` is always allowed |
+| `dla ledger strong <F> --evidence E..` | Marks a confirmed leak-side finding strong on a second independent class of evidence: a retention record or an intervention that removed the growth |
+| `dla ledger explain <F>` | Records a checked explanation (site, holder, who adds, why nothing removes) of a confirmed or strong leak-side finding; the final gate requires one |
+| `dla gate check --stage <s>\|--final` | Lists what a stage or the whole run still needs and how to clear each item; a passing stage is recorded. The same list feeds `dla run status`, the report's status line and the stop hooks |
+| `dla intervene <H> --finding F (--stub-writer FILE:LINE\|--patch FILE.diff)` | Re-runs a harness in a clone with a writer stubbed out or a patch applied and records whether the growth went away. Tier 1 |
+| `dla run reseal --reason "<why>"` | Seals the run files again after a change made outside `dla`; recorded in the ledger and listed in the report (core only) |
 | `dla consent` | Records the run's one consent: `--tiers` (privilege tiers 1 to 4), `--raw-values`, `--ceiling`, `--given-by user\|runner`. A second consent in a run is refused |
 | `dla ledger done\|merge` | A worker closes its slice; the core merges every slice into the main ledger, dedupes findings, and marks unfinished workers and contradictions as open items |
 | `dla bundle <F>` and `dla ledger verify <F>` | Write a finding's evidence without labels or hypotheses for an independent verifier, and record the verifier's site, holder and mechanism against the bundle's hash |
@@ -153,7 +164,8 @@ starts one `dla:worker` subagent per runtime in one turn; each worker writes its
 (`dla --worker <name> ...`). The core waits, runs `dla ledger merge` (duplicates, contradictions
 and unfinished workers become open items, so a killed worker leaves the run INCOMPLETE), then has a
 blind `dla:verifier` subagent re-derive site, holder and mechanism from `dla bundle <finding>` for
-each confirmed finding, and renders `dla report`. With one runtime the core does everything itself.
+each confirmed finding, and renders `dla report`. With one runtime the core does stages 3 to 8
+itself (no dispatch); the verifier bundle step still applies to every confirmed finding.
 A heap-dump-only run needs a series of at least three dumps of one process to confirm anything,
 and never claims a source line. The stage detail, failure recovery and per-runtime notes are in
 [skills/detect-leak-anywhere/references/](skills/detect-leak-anywhere/references/).
@@ -261,23 +273,28 @@ A passing stage is recorded in `state.json`; the archetype and known-leak tables
 the model until the `classify` stage has passed.
 
 The plugin enforces three things with hooks. The skill's frontmatter hooks cover the main
-session: a write gate (`Write`, `Edit`, `NotebookEdit`) that refuses the protected files under
-`.dla/` (`ledger*`, `state.json`, `coverage.json`, `report.md`, `integrity/`), a read gate
+session: a write gate (`Write`, `Edit`, `NotebookEdit`) that refuses every file under `.dla/`
+except the harness driver files (`.dla/<run>/harness/H<n>/driver/`), a read gate
 (`Read`, `Grep`, `Glob`) for the archetype tables before `classify`, a `Bash` gate that applies
 both checks to the command text, and a `Stop` hook that blocks the end of the turn while
 `dla gate check --final` fails. `hooks/hooks.json` repeats the write and read gates with `if`
 filters, so they also reach the worker subagents (plugin agents ignore hooks in their own
-frontmatter), and adds a `SubagentStop` hook for `dla:worker`. After three blocks with no change to
+frontmatter), and adds a `SubagentStop` hook for `dla:worker`. At the third stop attempt with no change to
 the ledger the stop hook lets the session end and stamps the run `INCOMPLETE`.
 
 Hooks are a guard rail. The `Bash` gate is best effort, `Grep` can still reach a directory, and
-an `@file` mention inserts a file with no tool call. The guarantee is inside `dla`: every write of
+an `@file` mention inserts a file with no tool call. The seals cover only the run files `dla`
+protects; the files it generates for the gates to read (`trend/`, `series/`, `gate/`, `bundle/`,
+`intervene/`, harness output and evidence files) are not sealed, and the write gate is what keeps a
+model from editing them. The guarantee for the protected files is inside `dla`: every write of
 `ledger.jsonl`, the worker slices, `state.json`, `coverage.json` and `report.md` is sealed in
 `integrity/`, and `dla gate check`, `dla report` and `dla run status` verify the seals. A file
 edited outside `dla` makes the report `INCOMPLETE` with the file named, and
 `dla run reseal --reason "<why>"` is the one way to accept the change (it is recorded in the
-ledger and listed in the report). A run written before the seals existed is reported as
-unsealed, which is not tampering.
+ledger and listed in the report). A `dla` write killed between the write and its seal is not an
+edit: the file keeps a `.pending` marker in `integrity/`, and the next `dla` write of that file, or
+`dla ledger merge`, seals it again when the difference is provably the interrupted write. A run
+written before the seals existed is reported as unsealed, which is not tampering.
 
 Gate hooks need Claude Code 2.1.295 or later to fail closed (see Minimum versions).
 

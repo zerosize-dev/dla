@@ -340,6 +340,7 @@ pub fn registry() -> &'static [&'static dyn Adapter] {
         &hprof_histogram::HprofHistogram,
         &jcmd_histogram::JcmdClassHistogram,
         &shim_groups::ShimStackGroups,
+        &shim_groups::ShimAllocStacks,
         &harness_types::HarnessTypes,
         &alloc_json::AllocJson,
         &nonheap_json::NonHeapJson,

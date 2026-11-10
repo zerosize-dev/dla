@@ -14,6 +14,7 @@ use dla_core::{
     discriminator::favors_of,
     evidence::CoverageStatus,
     finding::Polarity,
+    gate::{self, GateTarget, Missing},
     machine::is_passing_growth,
     status,
     trend::{GrowthSummary, PassedColumn},
@@ -25,7 +26,7 @@ const DASH: &str = "\u{2014}";
 /// Renders the run as a Markdown report. Deterministic: the same input yields
 /// byte-identical output.
 pub fn render_markdown(view: &RunView) -> String {
-    let st = status(view);
+    let st = gate_status(view);
     let mut out = String::new();
 
     out.push_str("# DLA report\n\n");
@@ -47,6 +48,25 @@ pub fn render_markdown(view: &RunView) -> String {
 }
 
 // ---------------------------------------------------------------- helpers
+
+/// What the report says about completeness.
+struct ReportStatus {
+    complete: bool,
+    blocking: Vec<Missing>,
+    counts: dla_core::view::StatusCounts,
+}
+
+/// The status line and the open list come from the final gate, the same evaluation
+/// `dla gate check --final` and `dla run status` use, so the three cannot disagree. The
+/// counts come from the findings and the checklist.
+fn gate_status(view: &RunView) -> ReportStatus {
+    let blocking = gate::missing(view, GateTarget::Final, None);
+    ReportStatus {
+        complete: blocking.is_empty(),
+        blocking,
+        counts: status(view).counts,
+    }
+}
 
 /// Collapses whitespace runs (including newlines) so free text stays on one line.
 fn inline(s: &str) -> String {
@@ -181,7 +201,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 // ---------------------------------------------------------------- sections
 
-fn header(out: &mut String, view: &RunView, st: &dla_core::ReportStatus) {
+fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let c = &st.counts;
     if st.complete {
         out.push_str("Status: COMPLETE\n\n");
@@ -328,7 +348,7 @@ fn residual_row(r: &ResidualRow) -> String {
     s
 }
 
-fn open_items(out: &mut String, st: &dla_core::ReportStatus) {
+fn open_items(out: &mut String, st: &ReportStatus) {
     out.push_str("## Open items\n\n");
     for b in &st.blocking {
         // Descriptions may already end in punctuation (a checklist question ends in "?").
@@ -1085,10 +1105,10 @@ mod tests {
 
     #[test]
     fn open_item_descriptions_have_no_doubled_punctuation() {
-        let st = dla_core::ReportStatus {
+        let st = ReportStatus {
             complete: false,
-            blocking: vec![dla_core::view::BlockingItem {
-                kind: dla_core::view::BlockingKind::ChecklistItem,
+            blocking: vec![Missing {
+                kind: "checklist_item".into(),
                 id: "intake.budget".into(),
                 description: "checklist item intake.budget is unanswered: How much time?".into(),
                 fix: "dla ledger resolve intake.budget --status answered --evidence E1".into(),

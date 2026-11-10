@@ -261,7 +261,12 @@ by storing its length and sha256 in `<run>/integrity/<file>.seal`, under the sam
 `dla gate check`, `dla report` and `dla run status` verify the seals. A mismatch is a tamper item: the
 report still renders, with `Status: INCOMPLETE` and the item named, and `gate check` fails. The hooks
 (`references/safety-and-effects.md`) only make an accidental edit less likely; the seals are the
-guarantee. If a protected file really was changed outside `dla` (a restored backup, a merge conflict you
+guarantee for those five kinds of file. The seals do not cover the other files `dla` generates for the
+gates to read (trend, series, gate, bundle, intervene, harness output, evidence files); only the write hook
+refuses edits to them. A `dla` command killed between a write and its seal leaves a `.pending` marker
+instead of a tamper: the next `dla` write of that file, or `dla ledger merge`, seals it again when the
+difference is the interrupted write itself (the sealed bytes are still the file's start, or the file is
+what the writer announced). If a protected file really was changed outside `dla` (a restored backup, a merge conflict you
 resolved), disclose it and run `dla run reseal --reason "<what changed and why>"`: it appends an
 `integrity_resealed` record to the ledger, seals the files again, and the report lists the reseal under
 Integrity. A run created before ledger schema 6 has no `integrity/` directory and is reported as unsealed,

@@ -98,13 +98,21 @@ uses it to open the archetype tables to that worker's subagent after `--stage cl
 | attribute | every confirmed or strong finding has a holder and a site (an owner on an artifact run) |
 | rule_out | every leak-side finding has a non-leak sibling, and no sibling is left without a disposition |
 
-Which trend columns the classify gate holds: the newest trend of each series. A column of an older trend of
-the same series is replaced when a later trend of that series analysed a column of the same name, so
-`dla trend S3` after `dla alloc-test` moves the gate to the new trend; the new trend's columns need the
-`dla ledger add --origin growth-series --evidence E..` finding the gate prints. `dla alloc-test` writes a trend
+Which trend columns the classify gate holds: the newest trend of each series. A non-flat column of an older
+trend of the same series is replaced when a later trend of that series analysed a column of the same name
+and that column is itself non-flat, so `dla trend S3` after `dla alloc-test` moves the gate to the new
+trend; the new trend's columns need the `dla ledger add --origin growth-series --evidence E..` finding the
+gate prints. A later trend in which the column is flat (a shorter window or other options) does not retire
+the older growth: tie it to a finding, or cover it with a resolved open item. `dla alloc-test` writes a trend
 for its plateau and purge test and a `discriminator` that names the trend and the columns it tested: a finding
 that cites that discriminator (`--evidence`) ties those columns, and the final gate wants it dispositioned. A
 column the discriminator did not test is not covered by it.
+
+A whole-process column (`os.*`, `cgroup.*`, `fd.*`, `jvm.*`, `go.*`, `node.*`, `py.*` and `native.*` totals,
+`metric:*/total`) is never tied to a finding, whatever evidence a finding cites: no one holder explains it.
+The classify gate does not ask for it. The final gate accounts for it through the residual rows: run `dla gap
+S<n> --residual`; the column is covered when the rows of its region are under their threshold, or over it with
+a resolved open item. A resolved open item that names the column and its trend also covers it.
 
 ## 1. Intake checklist
 
@@ -356,7 +364,7 @@ confirms nothing.
 
 `dla gate check --final` is the gate before the report. It needs everything the stage gates need, plus:
 every confirmed or strong leak-side finding has an explanation; every enumerated candidate of every
-backend is dispositioned; every non-flat trend column is tied to a dispositioned finding; checklist
+backend is dispositioned; every non-flat trend column is tied to a dispositioned finding (a whole-process column is accounted for by the residual rows instead); checklist
 answers cite evidence that exists; no worker slice is unmerged; the integrity seals match (see
 `references/safety-and-effects.md`); the run is not aborted. Work through the `missing` list. What cannot be
 done is recorded: `dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do

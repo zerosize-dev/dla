@@ -728,6 +728,54 @@ mod shim {
     }
 
     #[test]
+    fn the_shim_stacks_are_an_alloc_stack_input_tied_by_site_alone() {
+        if !(have("gcc") && have("nm") && have("addr2line")) {
+            return;
+        }
+        let p = Project::new();
+        let work = p.run_dir.join("harness/H1/work");
+        let Some(addr) = build(&work) else { return };
+        p.put(
+            "src/leak.c",
+            &fs::read_to_string(work.join("src/leak.c")).unwrap(),
+        );
+        let f = p.finding("src.leak.leak_site", "src/leak.c:3");
+        let other = p.finding("src.other.thing", "src/other.c:9");
+        let prog = work.join("prog");
+        let mut files = Vec::new();
+        for (label, x, bytes) in [
+            ("p1-native", 1000u64, 4096u64),
+            ("p2-native", 2000, 8192),
+            ("p3-native", 3000, 12288),
+        ] {
+            let rel = format!(
+                ".dla/{}/harness/H1/out/{label}/dump.jsonl",
+                p.run_dir.file_name().unwrap().to_string_lossy()
+            );
+            let path = p.path().join(&rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, dump(&prog, addr, x, bytes)).unwrap();
+            files.push(rel);
+        }
+        let v = summarize(&p, "alloc-stack-diff", &files);
+        assert_eq!(v["backend"], "shim-alloc-stacks", "{v}");
+        assert_eq!(v["gate"], "pass", "{v}");
+        assert_eq!(v["tied"], serde_json::json!([f]), "{v}");
+        // The allocation-stack record names the finding its growing stack tied to, by its
+        // site, so a label that asks for an allocation stack can count it; no other.
+        let r = p.alloc_stack_result();
+        assert_eq!(r["finding"], f.as_str(), "{r}");
+        assert_eq!(r["candidates"], serde_json::json!([f]), "{r}");
+        assert_eq!(r["ties"][0]["tie"]["rule"], "site", "{r}");
+        assert_eq!(r["ties"][0]["tie"]["key"], "src/leak.c:3", "{r}");
+        assert!(!r.to_string().contains(&format!("\"{other}\"")), "{r}");
+        // Two points give a diff and no tie.
+        let two = summarize(&p, "alloc-stack-diff", &files[..2]);
+        assert_eq!(two["gate"], "fail", "{two}");
+        assert!(p.alloc_stack_result().get("ties").is_none());
+    }
+
+    #[test]
     fn without_addr2line_stacks_stay_offsets_and_a_missing_row_names_it() {
         if !(have("gcc") && have("nm") && have("addr2line")) {
             return;

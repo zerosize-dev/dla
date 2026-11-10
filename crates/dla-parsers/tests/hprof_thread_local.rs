@@ -34,6 +34,12 @@ fn heap(in_static: bool, bytes: usize) -> Vec<u8> {
 /// As [`heap`]; with `pooled` an executor (`shop.Pool.WORKERS`) also reaches the threads, as a
 /// thread pool does, so that no thread is dominated by its own root.
 fn build(in_static: bool, pooled: bool, bytes: usize) -> Vec<u8> {
+    build_ex(in_static, pooled, bytes, false, false)
+}
+
+/// As [`build`]; `alias` also holds the ThreadLocal in a static field of `shop.Holder`, and
+/// `inherit` makes each thread's `inheritableThreadLocals` the same map as its `threadLocals`.
+fn build_ex(in_static: bool, pooled: bool, bytes: usize, alias: bool, inherit: bool) -> Vec<u8> {
     let mut b = B::new(8, 1_700_000_000_000);
     let obj = b.declare("java.lang.Object");
     let class_cls = b.declare("java.lang.Class");
@@ -64,7 +70,8 @@ fn build(in_static: bool, pooled: bool, bytes: usize) -> Vec<u8> {
         let table = b.obj_array(obj_arr, &[e]);
         let m = b.instance(map, &[F::Id(table)]);
         let tname = b.java_string(string, name);
-        let t = b.instance(thread, &[F::Id(tname), F::Id(m), F::Id(0)]);
+        let inh = if inherit { m } else { 0 };
+        let t = b.instance(thread, &[F::Id(tname), F::Id(m), F::Id(inh)]);
         b.root(0x08, t, i as u32 + 1, 5);
         threads.push(t);
     }
@@ -104,7 +111,8 @@ fn build(in_static: bool, pooled: bool, bytes: usize) -> Vec<u8> {
     b.class_dump(buf_cls, obj, loader, 0, &[("payload", T_OBJ)], &[]);
     if in_static {
         b.class_dump(ctx, obj, loader, 0, &[], &[("BUF", tl)]);
-        b.class_dump(holder_cls, obj, loader, 0, &[("tl", T_OBJ)], &[]);
+        let alias_statics: Vec<(&str, u64)> = if alias { vec![("CTX", tl)] } else { vec![] };
+        b.class_dump(holder_cls, obj, loader, 0, &[("tl", T_OBJ)], &alias_statics);
     } else {
         let h = b.instance(holder_cls, &[F::Id(tl)]);
         b.root(0x05, h, 0, 0);
@@ -180,4 +188,37 @@ fn values_on_threads_that_an_executor_also_reaches_are_still_attributed() {
     for t in s.tracked.iter().filter(|h| h.kind == HolderKind::Thread) {
         assert!(t.retained < 2_000, "{} {}", t.key, t.retained);
     }
+}
+
+#[test]
+fn a_value_in_both_thread_maps_is_counted_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let once = run(dir.path(), &build_ex(true, false, 5000, false, false));
+    let twice = run(dir.path(), &build_ex(true, false, 5000, false, true));
+    let get = |s: &HeapSummary| {
+        let h = s
+            .tracked
+            .iter()
+            .find(|h| h.key == "thread-local:shop.Ctx.BUF")
+            .unwrap();
+        (h.retained, h.dominated_count)
+    };
+    assert_eq!(get(&once), get(&twice));
+}
+
+#[test]
+fn a_threadlocal_held_by_two_static_fields_is_not_credited_to_either() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = run(dir.path(), &build_ex(true, false, 5000, true, false));
+    assert!(
+        s.tracked.iter().all(|h| h.kind != HolderKind::ThreadLocal),
+        "{:?}",
+        s.tracked
+    );
+    // The values stay with their threads.
+    assert!(
+        s.tracked
+            .iter()
+            .any(|h| h.kind == HolderKind::Thread && h.retained >= 5_000)
+    );
 }

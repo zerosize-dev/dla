@@ -84,21 +84,25 @@ slice, `state.json`, `coverage.json`, `report.md`) whose length or hash differs 
 - A run created before schema 6 has no seals; it is reported as unsealed, which is not a mismatch.
   `report.md` edited after rendering is simply replaced by the next `dla report`, which says so.
 
-## Stop hook blocked three times
+## Stop hook, three stop attempts
 
-The Stop hook blocks the end of the turn while `dla gate check --final` fails. After three blocks with no
-change in the ledger it lets the stop through, stamps the run INCOMPLETE with the reason "stop hook
-blocked 3 times with no ledger change" and the missing ids, and the report says so.
+The Stop hook blocks the end of the turn while `dla gate check --final` fails. It blocks the first two
+stop attempts; at the third attempt with no change in the ledger it lets the stop through, stamps the run
+INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts with no ledger change"
+and the missing ids, and the report says so.
 - Remedy: do not wait for it. Run `dla gate check --final`, fix the items it prints, or resolve each with
   `dla ledger resolve <F> --as unresolved --reason <r> --remedy "<text>"`, then `dla report`.
 - Record: if the stamp was already set, the report stays INCOMPLETE; say plainly what was left open and why.
 
 ## A worker stalled
 
-The SubagentStop hook blocks a worker's stop while its slice is not done and dispositioned. After three
-blocks with no change in the slice it lets the worker go and marks it stalled.
-- Remedy: `dla ledger merge` copies the slice anyway and opens the item "worker <w> did not finish"; the
-  run is INCOMPLETE. Resolve the worker's open findings yourself with reasons and remedies
+The SubagentStop hook blocks a worker's stop while its slice is not done and dispositioned. At the third
+stop attempt with no change in the worker's own slice it lets the worker go and marks it stalled (writes by
+other workers do not count as a change).
+- Remedy: `dla ledger merge` copies the slice anyway. If the worker never ended its slice it opens the item
+  "worker <w> did not finish" and the run is INCOMPLETE; if it ended the slice (`ledger done`) with findings
+  or open items still undispositioned, it opens the item "worker <w> stalled: ..." instead. The worker's
+  open findings block the report either way. Resolve the worker's open findings yourself with reasons and remedies
   (`--as unresolved --reason time_budget|env_unavailable`), and tell the user a new run scoped to that
   runtime would cover it. A stalled worker is not restarted in the same run.
 - Record: `dla ledger resolve <O> --as unresolved --reason ... --remedy "start a new run for the <runtime> runtime"`.

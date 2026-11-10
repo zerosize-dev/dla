@@ -2,7 +2,7 @@
 
 Run: `20260101-000000-abcd`
 
-Status: INCOMPLETE (14 open)
+Status: INCOMPLETE (22 open)
 
 Entry: repository
 
@@ -30,6 +30,14 @@ Coverage: not measured
 - **intake.consent**: checklist item intake.consent is unanswered: Which intrusive steps has the user allowed, and are raw values permitted in evidence? Fix: `dla ledger resolve intake.consent --status answered --evidence E1`
 - **intake.budget**: checklist item intake.budget is unanswered: How much wall-clock time may the investigation use? Fix: `dla ledger resolve intake.budget --status answered --evidence E1`
 - **20260101-000000-abcd**: run is incomplete: workers did not finish: rust (slice ends at line 3). Fix: `let the unfinished workers end (dla --worker <name> ledger done), then dla ledger merge`
+- **20260101-000000-abcd**: no consent is recorded for this run. Fix: `dla consent --tiers 1,2`
+- **20260101-000000-abcd**: no probe evidence is recorded. Fix: `dla probe`
+- **jvm/census**: no census has run for runtime jvm. Fix: `dla census --lang jvm`
+- **jvm/sweep**: no sweep has run for runtime jvm. Fix: `dla sweep --lang jvm`
+- **rust/census**: no census has run for runtime rust. Fix: `dla census --lang rust`
+- **rust/sweep**: no sweep has run for runtime rust. Fix: `dla sweep --lang rust`
+- **rust**: slice of worker rust has 4 line(s) and 3 merged. Fix: `dla ledger merge`
+- **rust**: slice of worker rust ends in a torn line (the worker was killed mid-write). Fix: `dla ledger merge`
 
 ## Workers
 

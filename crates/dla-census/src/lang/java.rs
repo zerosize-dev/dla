@@ -489,4 +489,21 @@ mod tests {
         let block = r.iter().find(|h| h.line == 6).unwrap();
         assert_eq!(block.name.as_deref(), Some("BLOCK"));
     }
+
+    #[test]
+    fn a_local_in_a_static_block_does_not_own_the_holder() {
+        let r = run(
+            "package p;\nclass A {\n  static final Object KEEP;\n  static {\n    ThreadLocal<X> tmp = null;\n    tmp = new ThreadLocal<>();\n    ThreadLocal<X> other;\n    other = ThreadLocal.withInitial(Y::new);\n    Other.field = new ThreadLocal<>();\n    A.KEEP = new ThreadLocal<>();\n  }\n}\n",
+        );
+        let at = |line: u32| -> Vec<&str> {
+            r.iter()
+                .filter(|h| h.line == line)
+                .map(|h| h.owner.as_str())
+                .collect()
+        };
+        assert_eq!(at(6), ["p.A.<clinit>"], "an earlier local declaration");
+        assert_eq!(at(8), ["p.A.<clinit>"], "declared without a value");
+        assert_eq!(at(9), ["p.A.<clinit>"], "another class's field");
+        assert_eq!(at(10), ["p.A.KEEP"], "this class's field by its name");
+    }
 }

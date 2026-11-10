@@ -236,8 +236,6 @@ fn write_hook_allows_other_paths() {
         p.path().join("src").join("a.rs"),
         p.path().join("report.md"),
         p.path().join("notes").join("ledger.md"),
-        r.join("series").join("S1.json"),
-        r.join("gate").join("final.json"),
     ] {
         let out = p.hook(
             &["write-hook"],
@@ -245,12 +243,123 @@ fn write_hook_allows_other_paths() {
         );
         assert!(out.allowed(), "{}: {out:?}", f.display());
     }
+    // The harness driver is the file the skill has the model edit.
+    for f in [
+        r.join("harness")
+            .join("H1")
+            .join("driver")
+            .join("DlaHarness.java"),
+        r.join("harness")
+            .join("H12")
+            .join("driver")
+            .join("dla_harness.py"),
+        r.join("harness")
+            .join("H2")
+            .join("driver")
+            .join("sub")
+            .join("x.go"),
+    ] {
+        for tool in ["Write", "Edit"] {
+            let out = p.hook(
+                &["write-hook"],
+                &write_json(tool, &f.to_string_lossy(), p.path()),
+            );
+            assert!(out.allowed(), "{tool} {}: {out:?}", f.display());
+        }
+    }
     // A tool the hook does not know is not its business.
     let out = p.hook(
         &["write-hook"],
         &pre("WebFetch", json!({"url": "https://x"}), p.path()),
     );
     assert!(out.allowed(), "{out:?}");
+}
+
+/// Files `dla` generates and the gates read. No seal covers them, so the hook does.
+fn generated_files(p: &P) -> Vec<PathBuf> {
+    let r = p.run_dir();
+    vec![
+        r.join("series").join("S1.json"),
+        r.join("trend").join("T1.json"),
+        r.join("gate").join("final.json"),
+        r.join("integrity").join("state.json.seal"),
+        r.join("bundle").join("F1").join("index.json"),
+        r.join("intervene").join("I1.json"),
+        r.join("alloc").join("A1.json"),
+        r.join("raw").join("growth.json"),
+        r.join("harness").join("H1").join("harness.json"),
+        r.join("harness").join("H1").join("out").join("samples.csv"),
+        r.join("harness")
+            .join("H1")
+            .join("work")
+            .join("src")
+            .join("a.py"),
+        r.join("harness").join("H1").join("agent").join("agent.jar"),
+        r.join("harness").join("H1").join("drivers").join("x.py"),
+        r.join("harness").join("H1").join("driver"),
+        r.join("harness").join("Hx").join("driver").join("x.py"),
+        r.join("harness")
+            .join("H1")
+            .join("driver")
+            .join("..")
+            .join("harness.json"),
+        r.join("probe").join("probe.json"),
+        r.join("ledger.lock"),
+        p.path().join(".dla").join("current"),
+    ]
+}
+
+#[test]
+fn write_hook_denies_the_generated_files_the_gates_read_but_not_the_driver() {
+    let p = project("symptom");
+    for tool in ["Write", "Edit", "NotebookEdit"] {
+        for f in generated_files(&p) {
+            let out = p.hook(
+                &["write-hook"],
+                &write_json(tool, &f.to_string_lossy(), p.path()),
+            );
+            assert!(out.denied(), "{tool} {}: {out:?}", f.display());
+        }
+    }
+    // The driver, by a relative path and through `..`, stays editable.
+    let run = p.run_id.clone();
+    for rel in [
+        format!(".dla/{run}/harness/H1/driver/dla_harness.py"),
+        format!("src/../.dla/{run}/harness/H3/driver/DlaHarness.java"),
+    ] {
+        let out = p.hook(&["write-hook"], &write_json("Write", &rel, p.path()));
+        assert!(out.allowed(), "{rel}: {out:?}");
+    }
+}
+
+#[test]
+fn bash_hook_denies_writes_to_the_generated_files_but_not_to_the_driver() {
+    let p = project("symptom");
+    let run = p.run_id.clone();
+    let d = format!(".dla/{run}");
+    for cmd in [
+        format!("echo '{{}}' > {d}/trend/T1.json"),
+        format!("cp /tmp/x {d}/series/S1.json"),
+        format!("sed -i 's/1/2/' {d}/gate/final.json"),
+        format!("python3 -c \"open('{d}/intervene/I1.json','w').write('x')\""),
+        format!("tee {d}/bundle/F1/index.json < /tmp/x"),
+        format!("echo x > {d}/harness/H1/work/a.py"),
+        format!("echo x > {d}/harness/H1/driver/../harness.json"),
+        format!("cp /tmp/x {d}/harness/H1/driver/a.py {d}/trend/T1.json"),
+    ] {
+        let out = p.hook(&["bash-hook"], &bash_json(&cmd, p.path()));
+        assert!(out.denied(), "{cmd}: {out:?}");
+    }
+    for cmd in [
+        format!("cat > {d}/harness/H1/driver/dla_harness.py <<'EOF'\nx = 1\nEOF"),
+        format!("cp /tmp/x {d}/harness/H2/driver/dla_harness.py"),
+        format!("sed -i 's/a/b/' {d}/harness/H1/driver/DlaHarness.java"),
+        // Reading a generated file is not writing it.
+        format!("cat {d}/trend/T1.json"),
+    ] {
+        let out = p.hook(&["bash-hook"], &bash_json(&cmd, p.path()));
+        assert!(out.allowed(), "{cmd}: {out:?}");
+    }
 }
 
 #[test]
@@ -614,7 +723,7 @@ fn stop_hook_blocks_while_the_final_gate_fails_then_allows_when_it_passes() {
 }
 
 #[test]
-fn three_blocks_with_no_ledger_change_stamp_the_run_incomplete() {
+fn three_stop_attempts_with_no_ledger_change_stamp_the_run_incomplete() {
     let p = project("symptom");
     let first = p.hook(&["stop-hook"], &stop_json(p.path()));
     assert_eq!(first.json()["decision"], "block");
@@ -629,7 +738,9 @@ fn three_blocks_with_no_ledger_change_stamp_the_run_incomplete() {
     assert_eq!(st["status"], "incomplete");
     let why = st["incomplete_reason"].as_str().unwrap();
     assert!(
-        why.starts_with("stop hook blocked 3 times with no ledger change: "),
+        why.starts_with(
+            "stop hook let the stop through after 3 stop attempts with no ledger change: "
+        ),
         "{why}"
     );
     assert!(why.contains("intake.target"), "{why}");
@@ -638,7 +749,7 @@ fn three_blocks_with_no_ledger_change_stamp_the_run_incomplete() {
     assert_eq!(out.status.code(), Some(0));
     let md = String::from_utf8(out.stdout).unwrap();
     assert!(md.contains("Status: INCOMPLETE"), "{md}");
-    assert!(md.contains("stop hook blocked 3 times"), "{md}");
+    assert!(md.contains("3 stop attempts with no ledger change"), "{md}");
     assert!(!md.contains("Fix: `dla run init`"), "{md}");
     assert!(md.contains("the stop hook stamped this run"), "{md}");
     // A stamped run is not governed any more.
@@ -763,6 +874,28 @@ fn subagent_stop_gates_the_worker_named_in_its_transcript() {
     // The run itself is untouched.
     assert_eq!(st["status"], "active");
     assert_eq!(st["stop_blocks"].as_u64().unwrap_or(0), 0);
+}
+
+#[test]
+fn a_siblings_slice_writes_do_not_reset_a_stuck_workers_counter() {
+    let p = project("repository");
+    p.ok(&["run", "dispatch", "--workers", "jvm,go"]);
+    let t = tempfile::tempdir().unwrap();
+    let tr = transcript(t.path(), &["dla --worker jvm ledger add --origin census"]);
+    let stop = |p: &P| p.hook(&["stop-hook", "--subagent"], &subagent_json(p.path(), &tr));
+    assert_eq!(stop(&p).json()["decision"], "block");
+    // The go worker keeps writing to its own slice between the jvm worker's attempts.
+    let wrote = p
+        .dla()
+        .args(["--worker", "go", "ledger", "done"])
+        .output()
+        .unwrap();
+    assert_eq!(wrote.status.code(), Some(0), "{wrote:?}");
+    assert_eq!(stop(&p).json()["decision"], "block");
+    assert_eq!(p.state()["worker_stop"]["jvm"]["blocks"], 2);
+    let third = stop(&p);
+    assert!(third.allowed(), "{third:?}");
+    assert!(third.stderr.contains("stalled"), "{third:?}");
 }
 
 #[test]

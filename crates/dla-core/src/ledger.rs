@@ -1804,6 +1804,14 @@ impl Ledger {
             .and_then(|r| r.merged.as_ref())
             .map_or(0, |m| m.lines)
     }
+    /// True when the last merge of `worker`'s slice saw its torn final line and dropped it.
+    pub fn merged_torn_tail(&self, worker: &str) -> bool {
+        self.index
+            .slices
+            .get(worker)
+            .and_then(|r| r.merged.as_ref())
+            .is_some_and(|m| m.torn_tail)
+    }
     /// The finding `id` was merged into as a duplicate, if it is one.
     pub fn merged_into(&self, id: &FindingId) -> Option<&FindingId> {
         self.index.merged_into.get(id)

@@ -4,8 +4,8 @@
 //! review the diff by hand.
 
 use dla_core::{
-    CoverageManifest, Ledger, RunView,
-    state::{RunState, RunStatus, now_utc},
+    AnswerStatus, ChecklistAnswer, CoverageManifest, Ledger, RunView, UnresolvedReason,
+    state::{Consent, ConsentGiver, EntryPath, RunState, RunStatus, now_utc},
 };
 use dla_report::render_markdown;
 use serde_json::json;
@@ -27,6 +27,33 @@ fn view(fixture: &str, coverage: Option<CoverageManifest>) -> RunView {
         Ledger::from_text(&text).unwrap(),
         coverage,
     )
+}
+
+/// A symptom run with no findings, every checklist item dispositioned and consent recorded:
+/// the final gate has nothing to list.
+fn gate_complete_view() -> RunView {
+    let mut ledger = Ledger::from_text("").unwrap();
+    for e in ledger.checklist() {
+        ledger
+            .answer_checklist(ChecklistAnswer {
+                item: e.item.id,
+                status: AnswerStatus::Unresolved,
+                evidence: vec![],
+                note: None,
+                reason: Some(UnresolvedReason::ToolMissing),
+                remedy: Some("no target".into()),
+            })
+            .unwrap();
+    }
+    let mut st = state("20260101-000000-abcd");
+    st.entry = EntryPath::Symptom;
+    st.consent = Some(Consent {
+        tiers: vec![1],
+        raw_values: false,
+        given_by: ConsentGiver::User,
+        recorded_at: now_utc(),
+    });
+    RunView::new(st, ledger, None)
 }
 
 fn coverage() -> CoverageManifest {
@@ -158,9 +185,10 @@ fn coverage_line_reports_iterations_and_exercised_entry_points() {
 
 #[test]
 fn complete_header_and_sections_in_order() {
-    let md = render_markdown(&view("complete", None));
+    let md = render_markdown(&gate_complete_view());
     assert!(md.starts_with("# DLA report\n\nRun: `20260101-000000-abcd`\n\nStatus: COMPLETE\n"));
     assert!(!md.contains("## Open items"));
+    let md = render_markdown(&view("complete", None));
     assert!(md.contains("Residual: not measured"));
     let order = [
         "## Findings",
@@ -292,11 +320,39 @@ fn evidence_index_has_raw_pointer_and_source() {
 fn empty_ledger_renders_every_section() {
     let v = RunView::new(state("r1"), Ledger::from_text("").unwrap(), None);
     let md = render_markdown(&v);
-    assert!(md.contains("Status: INCOMPLETE (8 open)"));
+    assert!(md.contains("Status: INCOMPLETE ("));
+    assert!(md.contains("no consent is recorded"));
     assert!(md.contains("No findings to report."));
     assert!(md.contains("No evidence recorded."));
     assert!(md.contains("No coverage manifest recorded."));
     assert!(md.ends_with('\n'));
+}
+
+#[test]
+fn status_follows_the_final_gate() {
+    use dla_core::gate::{GateTarget, missing};
+    // Everything dispositioned, but a residual over its threshold has no resolved open item:
+    // `gate check --final` and `run status` list it, so the report must not say COMPLETE.
+    let mut v = gate_complete_view();
+    v.coverage = Some(
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "workers": {},
+            "residual": [{"region": "heap", "total_slope": 10.0, "attributed_slope": 2.0,
+                "residual": 8.0, "unit": "MB/h", "threshold": 1.0}]
+        }))
+        .unwrap(),
+    );
+    let gate = missing(&v, GateTarget::Final, None);
+    assert_eq!(gate.len(), 1, "{gate:?}");
+    let md = render_markdown(&v);
+    assert!(md.contains("Status: INCOMPLETE (1 open)"), "{md}");
+    assert!(md.contains("residual growth in heap"), "{md}");
+    // The open list is the gate's list.
+    for m in &gate {
+        let fix = m.fix.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(md.contains(&fix), "{md}");
+    }
 }
 
 #[test]
@@ -305,7 +361,7 @@ fn aborted_run_is_incomplete() {
     v.state.status = RunStatus::Aborted;
     v.state.incomplete_reason = Some("user stopped".into());
     let md = render_markdown(&v);
-    assert!(md.contains("Status: INCOMPLETE (1 open)"));
+    assert!(md.contains("Status: INCOMPLETE ("));
     assert!(md.contains("run is aborted: user stopped"));
 }
 

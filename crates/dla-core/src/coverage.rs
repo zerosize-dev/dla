@@ -307,10 +307,9 @@ impl CoverageManifest {
     /// Writes the manifest to `<run_dir>/coverage.json` atomically and seals it.
     pub fn save(&self, run_dir: &Path) -> Result<(), Error> {
         let guard = crate::integrity::Guard::new(run_dir, COVERAGE_FILE);
-        write_atomic(
-            &run_dir.join(COVERAGE_FILE),
-            to_pretty_json(self).as_bytes(),
-        )?;
+        let text = to_pretty_json(self);
+        guard.expect(text.as_bytes());
+        write_atomic(&run_dir.join(COVERAGE_FILE), text.as_bytes())?;
         guard.seal()?;
         Ok(())
     }

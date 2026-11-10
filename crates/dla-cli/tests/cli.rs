@@ -80,6 +80,16 @@ fn fixture_project() -> tempfile::TempDir {
     for f in ["state.json", "ledger.jsonl"] {
         fs::copy(fixture_dir().join(f), run_dir.join(f)).unwrap();
     }
+    // A symptom run with consent recorded has nothing for the final gate to ask beyond the
+    // ledger: the report's status is the gate's.
+    let state_path = run_dir.join("state.json");
+    let mut state: Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["entry"] = Value::from("symptom");
+    state["consent"] = serde_json::json!({
+        "tiers": [1], "raw_values": false, "given_by": "user",
+        "recorded_at": "2026-01-02T03:05:00Z"
+    });
+    fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
     dir
 }
 

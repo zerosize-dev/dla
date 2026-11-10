@@ -2,7 +2,7 @@
 
 Run: `20260101-000000-abcd`
 
-Status: COMPLETE
+Status: INCOMPLETE (7 open)
 
 Entry: repository
 
@@ -13,6 +13,16 @@ Findings: 3 enumerated, 3 dispositioned; confirmed 1, strong 0, refuted 2, suspe
 Residual: not measured
 
 Coverage: go 8000 iterations, 2 of 3 entry points exercised
+
+## Open items
+
+- **20260101-000000-abcd**: no consent is recorded for this run. Fix: `dla consent --tiers 1,2`
+- **20260101-000000-abcd**: no probe evidence is recorded. Fix: `dla probe`
+- **go/census**: no census has run for runtime go. Fix: `dla census --lang go`
+- **go/sweep**: no sweep has run for runtime go. Fix: `dla sweep --lang go`
+- **python/census**: no census has run for runtime python. Fix: `dla census --lang python`
+- **python/sweep**: no sweep has run for runtime python. Fix: `dla sweep --lang python`
+- **F1**: finding F1 is confirmed and has no stored explanation. Fix: `dla ledger explain F1 --tag inferred --adds FILE:LINE --removal never --text "<site, holder, who adds, why nothing removes>"`
 
 ## Findings
 

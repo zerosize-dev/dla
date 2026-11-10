@@ -39,7 +39,8 @@ Capture with the harness, then read the files (`references/backends.md` has ever
 - Memcheck XML from separate runs is a run-length series (runs of different length), not dumps of
   one process. Heaptrack text is rounded (about 1%); folded `-F` files are exact bytes without counts.
 - A definitely-lost block has no holder (nothing points at it), so attribution is by allocation site,
-  not by a vgdb holder. Two findings at one site (a detector and a census finding) are
+  not by a vgdb holder. Record the holder kind `native-handle/global-ref` for it (`ledger annotate F
+  --holder native-handle/global-ref`): `ledger confirm` needs a holder and the L-HANDLE label accepts only that kind. Two findings at one site (a detector and a census finding) are
   both tied: `candidates` lists every one, `tie` names the `--finding` one if it is among them, else the
   first by id. `ambiguous` holds only type matches that hit several findings.
 - The vgdb chain runs only when the harness starts the program directly. With a wrapper

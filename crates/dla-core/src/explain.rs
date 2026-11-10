@@ -93,16 +93,30 @@ pub fn markers(removal: RemovalClaim) -> &'static [&'static str] {
     }
 }
 
-/// True when `text` names `site` as `path:line` or `basename:line`.
+/// True when `text` names `site` as `path:line` or `basename:line`. The match must not continue
+/// into a longer line number (`F.java:42` does not name `F.java:4`) and must not start inside a
+/// longer file name (`XF.java:4` does not name `F.java:4`).
 pub fn names_site(text: &str, site: &str) -> bool {
-    if text.contains(site) {
+    if contains_bounded(text, site) {
         return true;
     }
     let Some((file, line)) = site.rsplit_once(':') else {
         return false;
     };
     let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
-    text.contains(&format!("{base}:{line}"))
+    contains_bounded(text, &format!("{base}:{line}"))
+}
+
+fn contains_bounded(text: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
+    text.match_indices(needle).any(|(i, m)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + m.len()..].chars().next();
+        !before.is_some_and(word) && !after.is_some_and(|c| c.is_ascii_digit())
+    })
 }
 
 fn last_components(owner: &str, n: usize) -> String {
@@ -590,4 +604,23 @@ pub fn structured_line(rec: &FindingExplained) -> String {
         s.push_str(&format!("; evidence: {e}"));
     }
     s
+}
+
+#[cfg(test)]
+mod site_tests {
+    use super::names_site;
+
+    #[test]
+    fn a_line_number_matches_only_whole() {
+        assert!(names_site("puts at Cache.java:4 first", "src/Cache.java:4"));
+        assert!(names_site("puts at src/Cache.java:4.", "src/Cache.java:4"));
+        assert!(!names_site("puts at Cache.java:42", "src/Cache.java:4"));
+        assert!(!names_site("see src/Cache.java:42", "src/Cache.java:4"));
+        assert!(!names_site("see XCache.java:4", "src/Cache.java:4"));
+        assert!(names_site(
+            "see a Cache.java:42 and Cache.java:4",
+            "Cache.java:4"
+        ));
+        assert!(!names_site("W.java:120", "W.java:12"));
+    }
 }

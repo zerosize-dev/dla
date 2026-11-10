@@ -2,11 +2,18 @@
 //!
 //! The bundle holds copies of the raw files behind the finding's growth, retention,
 //! allocation and discriminator evidence, an index of those evidence records, and code
-//! excerpts around up to four project frames that the bundled evidence names (allocation
-//! stacks, retention paths, column sites). It never holds the finding's own site, the
+//! excerpts around up to four project frames that the bundled allocation and retention
+//! evidence names. It never holds the finding's own site, the finding id, the
 //! hypothesis, the refutation condition, the archetype or suggestion, the label, the
 //! explanation, the origin, or annotation notes: those keys are removed from every JSON
-//! file it contains, and the excerpts are never chosen from the finding's site field.
+//! file it contains.
+//!
+//! Growth columns are tied to a finding by a site, a finding id or a candidate list, and
+//! their names can embed a site (`alloc@src/a.js:7`). Every JSON object that names a
+//! `column` loses those tie keys, a name is cut at `@`, and in growth records the
+//! finding's site, writers and id are also replaced in every string. Excerpts come from
+//! allocation and retention frames only: a growth frame is the tied site, and the verifier
+//! has to find the site from the stacks and paths.
 
 use std::{
     fs,
@@ -90,6 +97,55 @@ const CLASSES: [EvidenceClass; 4] = [
     EvidenceClass::Allocation,
     EvidenceClass::Discriminator,
 ];
+
+/// Keys of a column object that tie it to a finding.
+const TIE_KEYS: [&str; 6] = ["site", "finding", "candidates", "tie", "tied", "ambiguous"];
+
+/// Cuts a column name at `@`: `alloc@src/a.js:7` -> `alloc`.
+fn bare_name(name: &str) -> &str {
+    name.split_once('@').map_or(name, |(base, _)| base)
+}
+
+/// Removes the tie keys from every object that names a `column`, cuts site-bearing column
+/// names and object keys at `@`, and with `needles` replaces them in every string.
+pub fn scrub_ties(v: &mut Value, needles: &[String]) {
+    match v {
+        Value::Object(o) => {
+            if o.contains_key("column") {
+                o.retain(|k, _| !TIE_KEYS.contains(&k.as_str()));
+            }
+            for key in ["column", "name"] {
+                if let Some(Value::String(s)) = o.get_mut(key)
+                    && s.contains('@')
+                {
+                    *s = bare_name(s).to_owned();
+                }
+            }
+            if o.keys().any(|k| k.contains('@')) {
+                let old = std::mem::take(o);
+                for (k, x) in old {
+                    let mut key = bare_name(&k).to_owned();
+                    let mut n = 1;
+                    while o.contains_key(&key) {
+                        n += 1;
+                        key = format!("{}#{n}", bare_name(&k));
+                    }
+                    o.insert(key, x);
+                }
+            }
+            o.values_mut().for_each(|x| scrub_ties(x, needles));
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| scrub_ties(x, needles)),
+        Value::String(s) => {
+            for n in needles {
+                if !n.is_empty() && s.contains(n.as_str()) {
+                    *s = s.replace(n.as_str(), "<redacted>");
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Removes every [`FORBIDDEN_KEYS`] entry from `v`, at any depth.
 pub fn strip_forbidden(v: &mut Value) {
@@ -379,9 +435,10 @@ fn excerpts_for(project: &Path, candidates: &[(String, usize)]) -> (Vec<String>,
 }
 
 /// A raw file's bytes as the bundle keeps them: JSON is stripped of forbidden keys.
-fn bundle_bytes(raw: &[u8], is_json_name: bool) -> Vec<u8> {
+fn bundle_bytes(raw: &[u8], is_json_name: bool, needles: &[String]) -> Vec<u8> {
     if is_json_name && let Ok(mut v) = serde_json::from_slice::<Value>(raw) {
         strip_forbidden(&mut v);
+        scrub_ties(&mut v, needles);
         return to_pretty_json(&v).into_bytes();
     }
     raw.to_vec()
@@ -475,6 +532,14 @@ fn build(
         }
         write_atomic(&path, bytes).map_err(Failure::from)
     };
+    // What a growth record must not show: the finding's id, site and writers.
+    let mut redact: Vec<String> = vec![id.to_string()];
+    if let Some(f) = ledger.finding(id) {
+        redact.extend(f.site.clone());
+    }
+    redact.extend(ledger.recorded_sites(id).0);
+    redact.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    redact.dedup();
     let mut copied = 0usize;
     let mut omitted: Vec<String> = Vec::new();
     let mut records: Vec<Value> = Vec::new();
@@ -486,6 +551,9 @@ fn build(
         };
         let mut result = e.result.clone();
         strip_forbidden(&mut result);
+        let growth = e.kind.class() == EvidenceClass::Growth;
+        let needles: &[String] = if growth { &redact } else { &[] };
+        scrub_ties(&mut result, needles);
         let mut here: Vec<(String, usize)> = Vec::new();
         frames_in_value(&result, &mut here);
         let mut rec = Map::new();
@@ -512,7 +580,7 @@ fn build(
                 omitted.push(format!("{eid}: {raw} is over {MAX_COPY_BYTES} bytes"));
             } else {
                 let bytes = fs::read(&src).map_err(|e| io_fail(&src, e))?;
-                let kept = bundle_bytes(&bytes, raw.ends_with(".json"));
+                let kept = bundle_bytes(&bytes, raw.ends_with(".json"), needles);
                 frames_in_bytes(&kept, &mut here);
                 write(&name, &kept)?;
                 rec.insert("file".into(), json!(name));
@@ -520,11 +588,11 @@ fn build(
             }
         }
         records.push(Value::Object(rec));
+        // Growth and discriminator frames are the tied site: no excerpt from them.
         let rank = match e.kind.class() {
             EvidenceClass::Allocation => 0,
             EvidenceClass::Retention => 1,
-            EvidenceClass::Growth => 2,
-            _ => 3,
+            _ => continue,
         };
         named.push((rank, here));
     }
@@ -535,7 +603,6 @@ fn build(
         write("excerpt.txt", texts.join("\n").as_bytes())?;
     }
     let mut index = json!({
-        "finding": id.to_string(),
         "excerpt": (!frames.is_empty()).then_some("excerpt.txt"),
         "frames": frames,
         "evidence": records,
@@ -581,6 +648,27 @@ mod tests {
         });
         strip_forbidden(&mut v);
         assert_eq!(v, json!({"a": 1, "nested": {"keep": [{"n": 2}]}}));
+    }
+
+    #[test]
+    fn tie_keys_and_site_bearing_names_are_scrubbed() {
+        let mut v = json!({
+            "passed": [{"column": "alloc@src/a.js:7", "site": "src/a.js:7", "finding": "F1",
+                        "tie": {"rule": "site", "key": "src/a.js:7"}}],
+            "values": {"alloc@src/a.js:7": [1, 2], "alloc@src/b.js:9": [3]},
+            "needed": "tie src/a.js:7 to jvm/F1",
+            "alloc": {"site": "kept.js:3"},
+        });
+        scrub_ties(&mut v, &["src/a.js:7".to_owned(), "jvm/F1".to_owned()]);
+        let t = v.to_string();
+        assert!(
+            !t.contains("a.js") && !t.contains("jvm/F1") && !t.contains('@'),
+            "{t}"
+        );
+        assert_eq!(v["values"].as_object().unwrap().len(), 2, "{t}");
+        assert_eq!(v["passed"], json!([{"column": "alloc"}]));
+        // A site key outside a column object is allocation evidence and stays.
+        assert_eq!(v["alloc"]["site"], "kept.js:3");
     }
 
     #[test]

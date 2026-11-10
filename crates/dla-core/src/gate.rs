@@ -23,9 +23,9 @@ use crate::{
     view::{BlockingItem, BlockingKind, RunView, status},
 };
 
-/// Start of the `incomplete_reason` the stop hook writes when it let a run stop after three
-/// blocks with no change to the ledger.
-pub const STOP_BLOCKED_REASON: &str = "stop hook blocked";
+/// Start of the `incomplete_reason` the stop hook writes when it let a run stop at the
+/// third stop attempt with no change to the ledger (the first two were blocked).
+pub const STOP_BLOCKED_REASON: &str = "stop hook let the stop through after";
 
 /// How many missing items `dla gate check` prints; the full list goes to a file.
 pub const SHOWN_MISSING: usize = 5;
@@ -552,9 +552,36 @@ fn evidence_for_column(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> Opti
         .map(|e| e.evidence_id.to_string())
 }
 
+/// True for a column that measures the whole process or a runtime total (`os.*`, `cgroup.*`,
+/// `fd.*`, `jvm.*`, `go.*`, `node.*`, `py.*` and `native.*` totals, `metric:*/total`, the gap
+/// split). Such a column is never tied to a finding (the tie rule): no single holder or site
+/// explains it. A site-group column (`name@file:line`), a holder or probe column and a
+/// per-type count are not whole-process columns.
+pub fn is_whole_process(name: &str) -> bool {
+    let base = name.strip_suffix(".pre_gc").unwrap_or(name);
+    if base.contains('@') {
+        return false;
+    }
+    if base.starts_with("jvm.class:") || base.starts_with("py.type:") {
+        return false;
+    }
+    if base.starts_with("metric:") {
+        return base.ends_with("/total");
+    }
+    [
+        "os.", "cgroup.", "fd.", "gap.", "jvm.", "go.", "node.", "py.", "native.",
+    ]
+    .iter()
+    .any(|p| base.starts_with(p))
+}
+
 /// The findings tied to a trend column: the one it was probed for, its candidates, and
-/// the findings that cite the growth evidence `dla trend` wrote for it.
+/// the findings that cite the growth evidence `dla trend` wrote for it. A whole-process
+/// column has none.
 fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec<&'a Finding> {
+    if is_whole_process(&c.name) {
+        return Vec::new();
+    }
     let mut ids: Vec<FindingId> = Vec::new();
     ids.extend(c.finding.iter().cloned());
     ids.extend(c.candidates.iter().cloned());
@@ -601,8 +628,10 @@ fn trend_number(id: &str) -> Option<u64> {
     id.strip_prefix('T')?.parse().ok()
 }
 
-/// True when a later trend of the same series analysed the column again: the newer
-/// measurement is the one the gate holds the column to.
+/// True when a later trend of the same series analysed the column again and that newer
+/// measurement is itself non-flat: the gate holds the column to the newer trend. A later
+/// trend in which the column is flat (a shorter window, other options) does not retire the
+/// older growth.
 fn superseded(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
     let Some(mine) = trend_number(&t.id) else {
         return false;
@@ -610,7 +639,42 @@ fn superseded(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
     view.trends.iter().any(|u| {
         u.series == t.series
             && trend_number(&u.id).is_some_and(|n| n > mine)
-            && u.columns.iter().any(|d| d.name == c.name)
+            && u.columns.iter().any(|d| d.name == c.name && non_flat(d))
+    })
+}
+
+/// True when the residual accounting covers a whole-process column: `dla gap --residual`
+/// wrote rows, and the rows of the column's region (all rows for a column of no region) are
+/// under their threshold or have a resolved open item.
+fn residual_covers(view: &RunView, c: &ColumnTrend) -> bool {
+    use crate::{finding::Region, series::SeriesRegion};
+    let Some(cov) = &view.coverage else {
+        return false;
+    };
+    if cov.residual.is_empty() {
+        return false;
+    }
+    let region = match crate::series::column_meta(&c.name).region {
+        SeriesRegion::Heap => Some(Region::Heap),
+        SeriesRegion::OffHeap => Some(Region::OffHeap),
+        SeriesRegion::NonHeap => Some(Region::NonHeap),
+        SeriesRegion::Process => None,
+    };
+    let own: Vec<_> = cov
+        .residual
+        .iter()
+        .filter(|r| region.is_none_or(|g| r.region == g))
+        .collect();
+    let rows = if own.is_empty() {
+        cov.residual.iter().collect()
+    } else {
+        own
+    };
+    rows.iter().all(|r| {
+        r.residual <= r.threshold
+            || r.open_item
+                .as_ref()
+                .is_some_and(|id| residual_item_resolved(view, id, &r.region.to_string()))
     })
 }
 
@@ -643,6 +707,32 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     // covered by a resolved open item.
     for t in &view.trends {
         for c in t.columns.iter().filter(|c| non_flat(c)) {
+            if is_whole_process(&c.name) {
+                // Never tied to a finding. The classify stage leaves it to the final gate,
+                // which takes the residual accounting or an open item.
+                if !is_final
+                    || residual_covers(view, c)
+                    || superseded(view, t, c)
+                    || covered_by_open_item(view, t, c)
+                {
+                    continue;
+                }
+                out.add(
+                    "trend_column",
+                    format!("{}:{}", t.id, c.name),
+                    format!(
+                        "column {} of {} ({}) measures the whole process, is not flat and is never tied to a finding; it is accounted for by the residual rows, which are missing or over their threshold without a resolved open item",
+                        c.name,
+                        t.id,
+                        c.shape_name()
+                    ),
+                    format!(
+                        "dla gap {} --residual   (rows under the threshold, or over it with a resolved open item, account for the column)",
+                        t.series
+                    ),
+                );
+                continue;
+            }
             let tied = tied_findings(view, t, c);
             let ok = if is_final {
                 tied.iter().any(|f| f.state.is_dispositioned())
@@ -920,7 +1010,12 @@ fn final_items(view: &RunView, out: &mut Out) {
             "dla ledger merge",
         );
     }
-    for s in view.slices.iter().filter(|s| s.torn_tail) {
+    // A torn line a merge has already seen and dropped is accounted for.
+    for s in view.slices.iter().filter(|s| {
+        s.torn_tail
+            && !(view.ledger.merged_torn_tail(&s.worker)
+                && view.ledger.merged_lines(&s.worker) == s.lines)
+    }) {
         out.add(
             "slice",
             s.worker.clone(),

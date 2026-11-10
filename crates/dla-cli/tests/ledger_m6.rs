@@ -665,9 +665,24 @@ fn all_bundle_text(dir: &Path) -> String {
     all
 }
 
+/// Adds a sibling of F1 that cites E5 (the retention record), so F1's bundle carries it.
+fn cite_retention(e: &Env) {
+    let mut l = reload(e);
+    let mut nf = NewFinding::new(
+        Origin::parse("hypothesis").unwrap(),
+        vec!["E5".parse().unwrap()],
+    );
+    nf.sibling_of = Some("F1".parse().unwrap());
+    nf.hypothesis = Some("N-SCALE".into());
+    nf.refute_if = Some("memory stays after load falls".into());
+    l.add_finding(nf).unwrap();
+    write_ledger(e, &l);
+}
+
 #[test]
 fn a_labelled_explained_verified_findings_bundle_shows_none_of_that() {
     let e = env();
+    cite_retention(&e);
     let src: String = (1..=60).map(|n| format!("int line{n};\n")).collect();
     fs::write(e.project.path().join("a.go"), &src).unwrap();
     // Not named by any evidence: must never become an excerpt.
@@ -757,12 +772,40 @@ fn a_labelled_explained_verified_findings_bundle_shows_none_of_that() {
     ] {
         assert!(index.get(key).is_none(), "{key} in {index}");
     }
-    // The excerpt is the frame the bundled evidence names (the tied column's site), not
-    // the finding's own site field.
-    assert_eq!(index["frames"], json!(["a.go:1"]), "{index}");
+    // The excerpt is the frame the bundled retention evidence names, not the tied growth
+    // column's site and not the finding's own site field.
+    assert_eq!(index["frames"], json!(["a.go:2"]), "{index}");
     let excerpt = fs::read_to_string(dir.join("excerpt.txt")).unwrap();
-    assert!(excerpt.starts_with("a.go:1 (lines 1-21)"), "{excerpt}");
+    assert!(excerpt.starts_with("a.go:2 (lines 1-22)"), "{excerpt}");
     assert!(!excerpt.contains("z.go"));
+}
+
+#[test]
+fn a_tied_growth_record_leaves_no_site_or_finding_id_in_the_bundle() {
+    let e = env();
+    cite_retention(&e);
+    let src: String = (1..=60).map(|n| format!("int line{n};\n")).collect();
+    fs::write(e.project.path().join("a.go"), &src).unwrap();
+    // E4 is growth evidence whose column is tied to F1 by site `a.go:1` and by finding id.
+    let v = ok(&e, &["bundle", "F1"]);
+    let dir = e.project.path().join(v["dir"].as_str().unwrap());
+    let all = all_bundle_text(&dir);
+    assert!(all.contains("probe:CACHE"), "the column stays: {all}");
+    for secret in ["a.go:1\"", "a.go:1 ", "\"F1\"", "tie"] {
+        assert!(!all.contains(secret), "{secret} in the bundle: {all}");
+    }
+    let index: Value = serde_json::from_slice(&fs::read(dir.join("index.json")).unwrap()).unwrap();
+    assert!(index.get("finding").is_none(), "{index}");
+    let growth = index["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "growth-series")
+        .unwrap();
+    let col = &growth["result"]["passed"][0];
+    for key in ["site", "finding", "candidates", "tie", "tied"] {
+        assert!(col.get(key).is_none(), "{key} in {col}");
+    }
 }
 
 #[test]

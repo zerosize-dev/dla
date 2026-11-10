@@ -207,7 +207,7 @@ pub fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<usize> {
         if meta.is_symlink() {
             #[cfg(unix)]
             {
-                std::os::unix::fs::symlink(fs::read_link(&from)?, &to)?;
+                std::os::unix::fs::symlink(repointed_link(src, dest, &from)?, &to)?;
                 copied += 1;
             }
             continue;
@@ -216,6 +216,26 @@ pub fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<usize> {
         copied += 1;
     }
     Ok(copied)
+}
+
+/// The text of the link `from` (inside `src`) for its copy in `dest`: an absolute target
+/// inside `src` is re-pointed into `dest`, so the copy never leads back to the original.
+#[cfg(unix)]
+fn repointed_link(src: &Path, dest: &Path, from: &Path) -> std::io::Result<PathBuf> {
+    let target = fs::read_link(from)?;
+    if !target.is_absolute() {
+        return Ok(target);
+    }
+    let mut roots = vec![src.to_path_buf()];
+    if let Ok(c) = src.canonicalize() {
+        roots.push(c);
+    }
+    for root in roots {
+        if let Ok(inside) = target.strip_prefix(&root) {
+            return Ok(dest.join(inside));
+        }
+    }
+    Ok(target)
 }
 
 /// Copies the project into `dest` (created). The `.dla` directory is never copied.
@@ -322,6 +342,24 @@ pub fn copy_project_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_tree_repoints_an_absolute_link_into_the_copy() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("H1").join("work");
+        fs::create_dir_all(src.join("real")).unwrap();
+        fs::write(src.join("real/F.java"), "x").unwrap();
+        std::os::unix::fs::symlink(src.join("real"), src.join("linkdir")).unwrap();
+        let dest = d.path().join("H2").join("work");
+        copy_tree(&src, &dest).unwrap();
+        let to = fs::read_link(dest.join("linkdir")).unwrap();
+        assert_eq!(
+            to,
+            dest.join("real"),
+            "the copy must not lead back to the original"
+        );
+    }
 
     #[test]
     fn walk_copy_skips_build_outputs_and_dla() {

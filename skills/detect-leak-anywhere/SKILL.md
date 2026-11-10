@@ -34,7 +34,7 @@ DLA diagnoses memory leaks. It measures, attributes and reports, and it never ed
 
 ## Non-negotiables (MUST)
 
-1. Never edit project source, and never write under `.dla/` by hand. State moves only through `dla` commands; each protected file carries an integrity seal, so a hand edit is detected and the report says INCOMPLETE.
+1. Never edit project source, and never write under `.dla/` by hand, except the harness driver file `dla harness gen --driver` tells you to edit (`.dla/<run>/harness/H<n>/driver/`). State moves only through `dla` commands. The ledger, slices, state, coverage manifest and report carry integrity seals, so a hand edit is detected and the report says INCOMPLETE; the write hook also refuses every other file under `.dla/` (trend, series, gate, bundle, intervene, harness output, evidence), which no seal covers.
 2. Ask the consent question once for the whole run (tiers in `references/safety-and-effects.md`). A command above the consented tier is refused; never work around a refusal by running the tool yourself.
 3. An archetype row or a detector hit only opens a hypothesis. Only `dla ledger test`, then `confirm`, makes a finding. `label` and `strong` need the evidence the ledger names, and DLA never picks a label for you.
 4. Each growth series gets a non-leak sibling (`N-*`) and every hypothesis states what would refute it.
@@ -88,8 +88,8 @@ UNCLASSIFIED is a result, not a failure. When no archetype fits, or the evidence
 
 - `dla gate check --final` passes, or every open item has a reason and a next step (`dla ledger resolve ... --as unresolved --reason <r> --remedy "<text>"`). Every confirmed leak has an explanation and a verification record.
 - If `dla report` shows INCOMPLETE, say so plainly and list what is still open. Never write "done" over it.
-- A Stop hook may block your stop while `gate check --final` fails. Do not rely on it: it lets go after three blocks with no change and stamps the run INCOMPLETE, and older Claude Code versions do not run it at all.
-- Never edit `.dla` files to make a check pass. The integrity seals detect it, the report names it, and `dla run reseal --reason` is for a change made outside `dla` that you disclose.
+- A Stop hook may block your stop while `gate check --final` fails. Do not rely on it: it blocks the first two stop attempts, lets the third go if nothing changed in the ledger, and stamps the run INCOMPLETE, and older Claude Code versions do not run it at all.
+- Never edit `.dla` files to make a check pass. The write hook refuses them (the harness driver excepted), the integrity seals on the protected files detect an edit that gets past it, the report names it, and `dla run reseal --reason` is for a change made outside `dla` that you disclose.
 - DLA does not call a leak confirmed because a pattern looks familiar. When it suggests a repair it names only the class of repair, for example deregistering the listener on dispose.
 
 ## Router: pick the entry path before anything else
@@ -99,8 +99,8 @@ The target is what the request names (a path, a pid or port, dump files). Otherw
 | Path | When | Start with | Stages |
 |---|---|---|---|
 | repository | a source tree in the working directory, or a path/repo given | `dla run init --entry repository [--scope module\|service --scope-path <dir> --exclude <p>]` | all (stages.md 1-9) |
-| process | a pid, process name or port of a running local process | `dla run init --entry process` | 1 (consent tier 2+), 2, 4 with `dla sample --pid` / `dla attach`, 5-9 |
-| artifact | heap dump files, no live process | `dla run init --entry artifact --artifact <path>...` | 1, 6 (`dla summarize heap-graph` once over ALL dumps), 5, 8, 9 |
+| process | a pid, process name or port of a running local process | `dla run init --entry process` | 1 (consent tier 2+), 2, 3 (`dla census` and `dla sweep` for the runtime; the gates require both), 4 with `dla sample --pid` / `dla attach`, 5-9 |
+| artifact | heap dump files, no live process | `dla run init --entry artifact --artifact <path>...` | 1, 6 (`dla summarize heap-graph` once over ALL dumps), `dla gate check --stage classify` (it unlocks `references/<lang>-archetypes.md` and `known-leaks.md`), 5, 8, 9 |
 | symptom | only "memory grows", nothing named and no source here | ask once, then re-route; else stop as above | 1, then the path the answer picks |
 
 Add `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` to `dla run init`. Per-path rules (process consent tiers, artifact series rules, scope) are in `references/stages.md`; failures and the INCOMPLETE stamp in `references/recovery.md`; hooks and integrity in `references/safety-and-effects.md`; per-runtime notes in `references/<jvm|go|rust|node|python|native>.md`; the summarize backends and `dla intervene` in `references/backends.md`; the records and report lines in `references/evidence-and-report.md`.

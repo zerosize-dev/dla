@@ -36,7 +36,10 @@ read; a `dhat-rs` JSON file goes to `alloc-stack-diff` too. Commands, rows and w
 - Rust allocator and library frames (`alloc::`, `with_capacity`, `grow_one`) are skipped when the
   site is chosen, so the site is the first project frame. They are never learned as writers.
 - A leak held by a static collection, interner or registry is the vgdb `holder:` case; a leak whose
-  blocks are unreachable is definitely lost and attributes by site only.
+  blocks are unreachable is definitely lost and attributes by site only. Its holder kind is
+  `native-handle/global-ref` (L-OWNERSHIP, a raw pointer nobody frees) or `cycle-only` (L-CYCLE,
+  an `Rc` cycle); record it with `ledger annotate F --holder <kind> --evidence E..`, as `ledger confirm` and
+  `ledger label` need it.
 - A Rust `cdylib` that a JVM project loads through JNI is measured from the JVM worker with the shim, and
   `dla correlate H1` there ties its native site to a managed finding (`references/backends.md`, Correlate).
   Record the Rust-side census finding of the same site as the cause's location; do not confirm it from

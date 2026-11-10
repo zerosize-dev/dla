@@ -564,7 +564,7 @@ fn bundle_carries_site_excerpt_and_evidence_without_labels() {
         .add_evidence(evidence(
             EvidenceKind::AllocStack,
             Authority::Live,
-            json!({"frames": 3}),
+            json!({"frames": 3, "stack": ["Cache.put(src/Cache.java:31)"]}),
             Some("series/S2.json"),
         ))
         .unwrap();
@@ -592,15 +592,15 @@ fn bundle_carries_site_excerpt_and_evidence_without_labels() {
     );
     let excerpt = fs::read_to_string(bundle.join("excerpt.txt")).unwrap();
     assert!(
-        excerpt.starts_with("src/Cache.java:30 (lines 10-50)"),
+        excerpt.starts_with("src/Cache.java:31 (lines 11-51)"),
         "{excerpt}"
     );
-    assert!(excerpt.contains(">    30  int line30;"));
+    assert!(excerpt.contains(">    31  int line31;"));
 
     let index: Value =
         serde_json::from_slice(&fs::read(bundle.join("index.json")).unwrap()).unwrap();
     assert!(index.get("site").is_none(), "{index}");
-    assert_eq!(index["frames"], json!(["src/Cache.java:30"]));
+    assert_eq!(index["frames"], json!(["src/Cache.java:31"]));
     let recs = index["evidence"].as_array().unwrap();
     assert_eq!(recs.len(), 2);
     assert_eq!(recs[0]["kind"], "growth-series");
@@ -608,7 +608,7 @@ fn bundle_carries_site_excerpt_and_evidence_without_labels() {
     assert_eq!(
         recs[0]["result"],
         json!({"gate": "pass", "inner": {},
-        "passed": [{"column": "probe:CACHE", "site": "src/Cache.java:30"}]})
+        "passed": [{"column": "probe:CACHE"}]})
     );
     assert!(
         recs[1].get("file").is_none(),

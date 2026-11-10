@@ -355,6 +355,34 @@ fn present(t: &ColumnTrend) -> bool {
     t.n > 0
 }
 
+/// The kind part of a column name that embeds an identity: the text before `@` of a site
+/// group (`alloc@Foo.java:41`), or the prefix of a holder or probe column.
+fn column_kind(name: &str) -> Option<&str> {
+    if let Some((base, _)) = name.split_once('@') {
+        return Some(base);
+    }
+    ["probe:", "holder:"]
+        .into_iter()
+        .find(|p| name.starts_with(p))
+}
+
+/// A column of the treated series that looks like the control column under another name:
+/// the same kind, not a column the control series had. A moved site line or a renamed
+/// owner produces one; the growth was then renamed, not removed.
+fn renamed_twin<'a>(
+    control: &str,
+    control_columns: &[ColumnTrend],
+    treated: &'a [ColumnTrend],
+) -> Option<&'a str> {
+    let kind = column_kind(control)?;
+    treated
+        .iter()
+        .filter(|t| present(t) && t.name != control)
+        .filter(|t| column_kind(&t.name) == Some(kind))
+        .find(|t| !control_columns.iter().any(|c| c.name == t.name))
+        .map(|t| t.name.as_str())
+}
+
 /// Fits the evidence `result` in [`MAX_RESULT_BYTES`] by shortening the site list.
 fn fit(mut v: Value) -> Value {
     for keep in [8usize, 4, 2, 1, 0] {
@@ -532,10 +560,21 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
                 .trend
                 .iter()
                 .find(|c| c.name == ctl.column.name && present(c));
-            let other_columns = m
-                .trend
-                .iter()
-                .any(|c| c.name != ctl.column.name && present(c));
+            let twin = if col.is_none() {
+                renamed_twin(&ctl.column.name, &ctl.report.columns, &m.trend)
+            } else {
+                None
+            };
+            if let Some(t) = twin {
+                limitations.push(format!(
+                    "the treated series has {t} where the control had {}: the edit renamed the column (a moved site line or a renamed owner), so the growth is not shown removed",
+                    ctl.column.name
+                ));
+            }
+            let other_columns = twin.is_none()
+                && m.trend
+                    .iter()
+                    .any(|c| c.name != ctl.column.name && present(c));
             effect = judge_intervention(
                 &ctl_view,
                 &Treated {
@@ -691,5 +730,49 @@ fn next_commands(
                 ctl.growth
             )]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn col(name: &str) -> ColumnTrend {
+        serde_json::from_value(json!({
+            "name": name, "unit": "count", "kind": "counter", "region": "heap",
+            "n": 8, "noise": 0.0, "rise": 0.0, "shape": "flat", "gate": "fail"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_moved_site_or_renamed_owner_is_a_twin_not_a_removal() {
+        let control = vec![col("alloc@src/Foo.java:41"), col("os.rss")];
+        let ctl = "alloc@src/Foo.java:41";
+        // The comment line above the writer moved the site.
+        let treated = vec![col("alloc@src/Foo.java:42"), col("os.rss")];
+        assert_eq!(
+            renamed_twin(ctl, &control, &treated),
+            Some("alloc@src/Foo.java:42")
+        );
+        // The writer is gone: only columns the control had remain.
+        assert_eq!(renamed_twin(ctl, &control, &[col("os.rss")]), None);
+        // A column the control also had is another holder, not a twin.
+        let two = vec![col("alloc@src/Foo.java:41"), col("alloc@src/Bar.java:9")];
+        assert_eq!(
+            renamed_twin(ctl, &two, &[col("alloc@src/Bar.java:9")]),
+            None
+        );
+        // A renamed owner under probe columns.
+        let c = vec![col("probe:com.x.Cache.items")];
+        assert_eq!(
+            renamed_twin(
+                "probe:com.x.Cache.items",
+                &c,
+                &[col("probe:com.x.Store.items")]
+            ),
+            Some("probe:com.x.Store.items")
+        );
+        assert_eq!(renamed_twin("os.rss", &control, &treated), None);
     }
 }

@@ -428,6 +428,12 @@ impl Adapter for ShimStackGroups {
             && !h.contains("\"types\":[")
     }
     fn run(&self, ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
+        shim_run(ctx, Op::TypeHistogramDiff, inputs, opts)
+    }
+}
+
+fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
+    {
         let tc = ctx.tc;
         let mut limits: BTreeSet<String> = BTreeSet::new();
         let mut captures: Vec<ShimCapture> = Vec::new();
@@ -494,7 +500,7 @@ impl Adapter for ShimStackGroups {
                 .stdin(Stdio::null())
                 .output()
                 .is_err();
-        let mut out = run_diff(ctx, opts, captures, ordered_by, limits)?;
+        let mut out = run_diff(ctx, op, opts, captures, ordered_by, limits)?;
         if addr2line_gap {
             out.coverage.push(CoverageRow {
                 worker: "native".to_owned(),
@@ -520,6 +526,7 @@ struct Row {
 
 fn run_diff(
     ctx: &Ctx<'_>,
+    op: Op,
     opts: &Opts,
     captures: Vec<ShimCapture>,
     ordered_by: &'static str,
@@ -573,6 +580,43 @@ fn run_diff(
             .is_ok()
     };
     let mono: Vec<&Row> = ranked.iter().copied().filter(|r| monotone(r)).collect();
+
+    // ---- the stacks that grow, and the findings their first project frame ties to (rule 2
+    // of the tie rule: the finding's own site or one of its recorded writers)
+    let alloc = op == Op::AllocStackDiff;
+    let mut ledger_ref = ctx.ledger()?;
+    let ledger = &mut *ledger_ref;
+    let who = tie::Who::new(tc.worker.as_deref(), None);
+    let mut picked: Vec<&Row> = Vec::new();
+    if n >= rule::MIN_DUMPS {
+        // The monotone stacks first, then the largest.
+        picked = mono.clone();
+        for r in &ranked {
+            if picked.len() >= TRACKED {
+                break;
+            }
+            if !picked.iter().any(|p| std::ptr::eq(*p, *r)) {
+                picked.push(r);
+            }
+        }
+        picked.truncate(TRACKED);
+    }
+    let resolved: Vec<tie::Resolved> = picked
+        .iter()
+        .map(|r| {
+            let matches: Vec<_> = r
+                .site
+                .as_deref()
+                .map(|site| {
+                    tie::findings_at_site(ledger, &who, site)
+                        .into_iter()
+                        .map(|f| (f, tie::TieReason::site(site)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            tie::resolve(matches, opts.finding.as_ref())
+        })
+        .collect();
 
     // ---- raw file
     let (hid, hrel) = emit::next_histogram(tc)?;
@@ -637,8 +681,44 @@ fn run_diff(
     }
     let mut result = list.finish();
     result["monotone"] = json!(mono.len());
+    if alloc {
+        // The ties of the growing stacks, stated in the record itself: `dla ledger label`
+        // counts an allocation-stack record for the findings named here (the ties the
+        // growth columns get below, by site) and for no other.
+        let mut rows: Vec<Value> = Vec::new();
+        let mut ids: Vec<FindingId> = Vec::new();
+        for (r, rs) in picked.iter().zip(&resolved) {
+            let Some((f, why)) = &rs.tie else { continue };
+            if !monotone(r) || rows.len() >= 8 {
+                continue;
+            }
+            let mut all: Vec<FindingId> = std::iter::once(f.clone())
+                .chain(rs.also.iter().cloned())
+                .collect();
+            all.sort();
+            all.dedup();
+            rows.push(json!({
+                "stack": clip(&red.name(&r.label), 40),
+                "finding": f,
+                "candidates": all,
+                "tie": why.to_json(),
+            }));
+            ids.extend(all);
+        }
+        ids.sort();
+        ids.dedup();
+        if let Some(first) = ids.first() {
+            result["finding"] = json!(first);
+            result["candidates"] = json!(ids);
+            result["ties"] = json!(rows);
+        }
+    }
     let mut spec = EvidenceSpec::new(
-        EvidenceKind::HistogramDiff,
+        if alloc {
+            EvidenceKind::AllocStack
+        } else {
+            EvidenceKind::HistogramDiff
+        },
         "shim-stack-groups",
         env!("CARGO_PKG_VERSION"),
         result,
@@ -666,8 +746,6 @@ fn run_diff(
             "up to {unattributed} live bytes sit in stacks with no frame in the project: they have no site and tie to nothing"
         ));
     }
-    let mut ledger_ref = ctx.ledger()?;
-    let ledger = &mut *ledger_ref;
     let diff_ev: Recorded = ctx.record(ledger, spec, &signal, &raw)?;
     let mut out = AdapterOut {
         raw: Some(raw.clone()),
@@ -704,31 +782,9 @@ fn run_diff(
         return Ok(out);
     }
 
-    // ---- series and growth: the monotone stacks first, then the largest
-    let mut picked: Vec<&Row> = mono.clone();
-    for r in &ranked {
-        if picked.len() >= TRACKED {
-            break;
-        }
-        if !picked.iter().any(|p| std::ptr::eq(*p, *r)) {
-            picked.push(r);
-        }
-    }
-    picked.truncate(TRACKED);
-    let who = tie::Who::new(tc.worker.as_deref(), None);
+    // ---- series and growth
     let mut tracks: Vec<growth::Track> = Vec::new();
-    for r in &picked {
-        let matches: Vec<_> = r
-            .site
-            .as_deref()
-            .map(|site| {
-                tie::findings_at_site(ledger, &who, site)
-                    .into_iter()
-                    .map(|f| (f, tie::TieReason::site(site)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let r_tie = tie::resolve(matches, opts.finding.as_ref());
+    for (r, r_tie) in picked.iter().zip(resolved) {
         let mut t = growth::Track {
             name: format!("stack:{}", clip(&red.name(&r.label), 100)),
             unit: Unit::Bytes,
@@ -770,7 +826,12 @@ fn run_diff(
             signal,
             tool: "shim-stack-groups",
             authority,
-            command: "dla summarize type-histogram-diff".into(),
+            command: if alloc {
+                "dla summarize alloc-stack-diff"
+            } else {
+                "dla summarize type-histogram-diff"
+            }
+            .into(),
             source_kind: SeriesSourceKind::Dump,
             runtime: None,
             limitations: spec_limits(&limits),
@@ -817,6 +878,35 @@ fn run_diff(
     out.evidence.push(g.evidence);
     out.body = body;
     Ok(out)
+}
+
+/// The shim's exit records as an `alloc-stack-diff` input: the same stacks, keyed and tied
+/// the same way (by site only), recorded as allocation-stack evidence so that a native
+/// leak's stacks can back a label that asks for one.
+pub struct ShimAllocStacks;
+
+impl Adapter for ShimAllocStacks {
+    fn name(&self) -> &'static str {
+        "shim-alloc-stacks"
+    }
+    fn op(&self) -> Op {
+        Op::AllocStackDiff
+    }
+    fn runtime(&self) -> &'static str {
+        "native"
+    }
+    fn tool_class(&self) -> &'static str {
+        tool_class::ALLOC_SHIM
+    }
+    fn formats(&self) -> &'static str {
+        ShimStackGroups.formats()
+    }
+    fn sniff(&self, input: &Input) -> bool {
+        ShimStackGroups.sniff(input)
+    }
+    fn run(&self, ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
+        shim_run(ctx, Op::AllocStackDiff, inputs, opts)
+    }
 }
 
 fn spec_limits(limits: &BTreeSet<String>) -> Vec<String> {

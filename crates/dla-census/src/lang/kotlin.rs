@@ -19,12 +19,16 @@ enum Frame {
     Object,
     Class,
     Fun,
+    /// An `init { .. }` block of a class or object.
+    Init,
     Other,
 }
 
 struct Pats {
     header: Regex,
     companion: Regex,
+    init: Regex,
+    store: Regex,
     fun: Regex,
     prop: Regex,
     calls: Vec<(Regex, &'static str, Holder, Region)>,
@@ -41,6 +45,8 @@ fn pats() -> &'static Pats {
         Pats {
             header: Regex::new(r"^\s*(?:(?:private|public|internal|protected|data|sealed|open|abstract|enum|inner|annotation|value)\s+)*(object|class|interface)\s+(\w+)").expect("static"),
             companion: Regex::new(r"^\s*(?:private\s+|public\s+)?companion\s+object\b").expect("static"),
+            init: Regex::new(r"^\s*init\s*\{").expect("static"),
+            store: Regex::new(r"^\s*(?:init\s*\{\s*)?(?:this\.)?([A-Za-z_]\w*)\s*=[^=]").expect("static"),
             fun: Regex::new(r"^\s*(?:(?:private|public|internal|protected|override|open|suspend|inline|operator|abstract)\s+)*fun\b").expect("static"),
             prop: Regex::new(r"^\s*(?:(?:private|public|internal|protected|override|lateinit|const|open|abstract)\s+)*(val|var)\s+(\w+)\s*(?::\s*([^=]+?))?\s*(?:(?:by\s+\w+|=)\s*(.*))?$").expect("static"),
             calls: vec![
@@ -73,6 +79,9 @@ pub fn holders(cx: &mut Cx<'_>) {
     let prefix = cx.owner_prefix();
     let mut stack: Vec<(Frame, i32, String)> = Vec::new();
     let mut pending: Option<(Frame, String)> = None;
+    // Locals declared so far in the current `init` block: an assignment to one of them is
+    // not a property store.
+    let mut init_locals: Vec<String> = Vec::new();
     let mut depth = 0i32;
     let mut out: Vec<Raw> = Vec::new();
     for (i, raw_line) in cx.file.text.lines().enumerate() {
@@ -83,7 +92,14 @@ pub fn holders(cx: &mut Cx<'_>) {
             continue;
         }
         let top = stack.last().map_or(Frame::Other, |s| s.0);
-        let in_fun = stack.iter().any(|s| s.0 == Frame::Fun);
+        let in_fun = stack
+            .iter()
+            .any(|s| matches!(s.0, Frame::Fun | Frame::Init))
+            || p.init.is_match(line);
+        let in_init = top == Frame::Init || p.init.is_match(line);
+        if in_init && let Some(c) = p.assign.captures(line) {
+            init_locals.push(c[1].to_owned());
+        }
         if p.companion.is_match(line) {
             pending = Some((Frame::Object, "Companion".into()));
         } else if let Some(c) = p.header.captures(line) {
@@ -93,6 +109,9 @@ pub fn holders(cx: &mut Cx<'_>) {
                 Frame::Class
             };
             pending = Some((f, c[2].to_owned()));
+        } else if p.init.is_match(line) {
+            pending = Some((Frame::Init, String::new()));
+            init_locals.clear();
         } else if p.fun.is_match(line) {
             pending = Some((Frame::Fun, String::new()));
         } else if !in_fun
@@ -155,18 +174,32 @@ pub fn holders(cx: &mut Cx<'_>) {
             if re.is_match(line) {
                 let path: Vec<&str> = stack
                     .iter()
-                    .filter(|s| s.0 != Frame::Other)
+                    .filter(|s| !matches!(s.0, Frame::Other | Frame::Init))
                     .map(|s| s.2.as_str())
                     .collect();
+                // `held = ThreadLocal<X>()` in an `init` block stores into the property
+                // `held` (unless it names a local the block declared).
+                let stored = in_init
+                    .then(|| p.store.captures(line))
+                    .flatten()
+                    .map(|c| c[1].to_owned())
+                    .filter(|n| !init_locals.contains(n) && !p.assign.is_match(line));
+                let class_path = path.join(".");
+                let owner_path = match &stored {
+                    Some(n) => format!("{class_path}.{n}"),
+                    None => class_path,
+                };
                 let mut r = Raw::new(
                     kind,
                     *holder,
                     *region,
                     &cx.file.rel,
                     ln,
-                    join_owner(&prefix, &path.join(".")),
+                    join_owner(&prefix, &owner_path),
                 );
-                if let Some(a) = p.assign.captures(line) {
+                if let Some(n) = &stored {
+                    r = r.tracking(n, Scope::Project, false);
+                } else if let Some(a) = p.assign.captures(line) {
                     r = r.tracking(&a[1], Scope::File, false);
                 }
                 out.push(r);
@@ -231,5 +264,52 @@ mod tests {
                 (14, "a.b.top".into(), "static/global"),
             ]
         );
+    }
+
+    fn run_kt(src: &str) -> Vec<(u32, String, String, Option<String>)> {
+        let f = SourceFile {
+            rel: "A.kt".into(),
+            text: src.into(),
+            lang: Lang::Kotlin,
+            is_test: false,
+        };
+        let info = ProjectInfo::default();
+        let mut cx = Cx::new(&f, &info);
+        holders(&mut cx);
+        cx.out
+            .iter()
+            .map(|h| {
+                (
+                    h.line,
+                    h.owner.clone(),
+                    h.holder.as_str().to_owned(),
+                    h.name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn companion_object_and_init_block_stores_are_owned_by_their_property() {
+        let got = run_kt(
+            "package p\nclass A {\n    companion object {\n        val TL = ThreadLocal.withInitial { ArrayList<String>() }\n        val BUS = Bus()\n    }\n    private val held = ThreadLocal<X>()\n    private var late: ThreadLocal<X>? = null\n    init {\n        late = ThreadLocal<X>()\n        val tmp = ThreadLocal<X>()\n        var scratch: ThreadLocal<X>? = null\n        scratch = ThreadLocal<X>()\n    }\n}\nobject O {\n    val CB = Callbacks()\n    var slot: ThreadLocal<X>? = null\n    init { slot = ThreadLocal<X>() }\n}\n",
+        );
+        let at = |line: u32| -> Vec<(&str, Option<&str>)> {
+            got.iter()
+                .filter(|h| h.0 == line)
+                .map(|h| (h.1.as_str(), h.3.as_deref()))
+                .collect()
+        };
+        // Property initializers: the property, with the companion or object in the path.
+        assert_eq!(at(4), [("p.A.Companion.TL", Some("TL"))]);
+        assert_eq!(at(7), [("p.A.held", Some("held"))]);
+        assert_eq!(at(17), [("p.O.CB", Some("CB"))]);
+        // An init block stores into the property it names.
+        assert_eq!(at(10), [("p.A.late", Some("late"))]);
+        assert_eq!(at(19), [("p.O.slot", Some("slot"))]);
+        // A local of the block is no property: the holder keeps the class path.
+        assert_eq!(at(11), [("p.A", Some("tmp"))]);
+        assert_eq!(at(13), [("p.A", None)]);
+        assert!(got.iter().all(|h| !h.1.contains("<clinit>")), "{got:?}");
     }
 }

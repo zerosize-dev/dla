@@ -423,24 +423,49 @@ fn put_line(m: Option<&Method>, class: &str, field: &str) -> Option<u32> {
         .and_then(|i| m.line_at(i.pc))
 }
 
-/// The field of `class` that the statement of the instruction at `pc` stores into: the
-/// first `putstatic`/`putfield` of the class after it, on the same source line. A holder
-/// created in a static or instance initializer is held by that field (`SEGMENTS` of
+/// True when a method descriptor returns an object or an array.
+fn returns_reference(desc: &str) -> bool {
+    desc.rsplit_once(')')
+        .is_some_and(|(_, r)| r.starts_with(['L', '[']))
+}
+
+/// The field of `class` that the allocation at `insns[at]` is stored into. A holder created
+/// in a static or instance initializer is held by that field (`SEGMENTS` of
 /// `static final ThreadLocal<..> SEGMENTS = ThreadLocal.withInitial(..)`), and the field
 /// is what a heap dump names.
-fn stored_field<'a>(m: &'a Method, class: &str, pc: u32) -> Option<&'a str> {
-    let line = m.line_at(pc)?;
-    m.insns
-        .iter()
-        .filter(|i| i.pc > pc)
-        .find_map(|i| match &i.op {
-            Op::PutStatic(o, n) | Op::PutField(o, n)
-                if o == class && m.line_at(i.pc) == Some(line) =>
-            {
-                Some(n.as_str())
+///
+/// Only the kept instructions are known, not the operand stack, so the value is followed
+/// by what can carry it: its own constructor, a further `new`, and calls that return an
+/// object (a factory chain or a builder). A call that returns nothing or a primitive
+/// (`list.add(new T())`, `t.start()`) consumes the value, and a store into a field of
+/// another class takes it elsewhere: then the store on the line is not this allocation's
+/// and the answer is `None` (the owner stays the initializer). The same holds when the
+/// line ends before a store.
+fn stored_field<'a>(m: &'a Method, class: &str, at: usize) -> Option<&'a str> {
+    let start = m.insns.get(at)?;
+    let line = m.line_at(start.pc)?;
+    let ctor_of = match &start.op {
+        Op::New(c) => Some(c.as_str()),
+        _ => None,
+    };
+    if ctor_of.is_none() && !matches!(&start.op, Op::Invoke(_, _, d, _) if returns_reference(d)) {
+        return None;
+    }
+    for i in &m.insns[at + 1..] {
+        if m.line_at(i.pc) != Some(line) {
+            return None;
+        }
+        match &i.op {
+            Op::PutStatic(o, n) | Op::PutField(o, n) => {
+                return (o == class).then_some(n.as_str());
             }
-            _ => None,
-        })
+            Op::Invoke(o, n, _, _) if n == "<init>" && ctor_of == Some(o.as_str()) => {}
+            Op::Invoke(_, _, d, _) if returns_reference(d) => {}
+            Op::New(_) => {}
+            Op::Invoke(..) => return None,
+        }
+    }
+    None
 }
 
 fn method_calls(
@@ -457,14 +482,14 @@ fn method_calls(
     // field it is stored into when there is one, else the class's initializer.
     let initializer = in_clinit || m.name == "<init>";
     let method_owner = format!("{class_dotted}.{}", m.name);
-    for i in &m.insns {
+    for (idx, i) in m.insns.iter().enumerate() {
         let callee = match &i.op {
             Op::New(cl) => format!("new {}", dotted(cl)),
             Op::Invoke(o, n, _, _) => format!("{}.{n}", dotted(o)),
             _ => continue,
         };
         let line = m.line_at(i.pc).unwrap_or(1);
-        let field = initializer.then(|| stored_field(m, class, i.pc)).flatten();
+        let field = initializer.then(|| stored_field(m, class, idx)).flatten();
         let owner = field.map_or_else(|| method_owner.clone(), |f| format!("{class_dotted}.{f}"));
         if let Some(rule) = table.iter().find(|r| r.re.is_match(&callee)) {
             let mut raw = Raw::new(
@@ -685,6 +710,56 @@ mod tests {
                 .iter()
                 .any(|r| r.kind == "thread-local" && r.owner == "billing.RenderContext.<clinit>"),
             "{other:?}"
+        );
+        // A call that consumes the value ends the chain: the store after it, on the same
+        // line, is another statement's.
+        let two = init_class(
+            "<clinit>",
+            vec![
+                Op::New("java/lang/Thread".into()),
+                Op::Invoke(
+                    "java/lang/Thread".into(),
+                    "<init>".into(),
+                    "()V".into(),
+                    true,
+                ),
+                Op::Invoke(
+                    "java/util/List".into(),
+                    "add".into(),
+                    "(Ljava/lang/Object;)Z".into(),
+                    true,
+                ),
+                Op::PutStatic("billing/RenderContext".into(), "SEGMENTS".into()),
+            ],
+            vec![(0, 8)],
+        );
+        let t: Vec<&Raw> = two.iter().filter(|r| r.kind == "thread").collect();
+        assert!(
+            !t.is_empty()
+                && t.iter()
+                    .all(|r| r.owner == "billing.RenderContext.<clinit>"),
+            "{two:?}"
+        );
+        // The allocation that is stored, on a line with another statement after it.
+        let both = init_class(
+            "<clinit>",
+            vec![
+                Op::New("java/lang/ThreadLocal".into()),
+                Op::Invoke(
+                    "java/lang/ThreadLocal".into(),
+                    "<init>".into(),
+                    "()V".into(),
+                    true,
+                ),
+                Op::PutStatic("billing/RenderContext".into(), "SEGMENTS".into()),
+                Op::Invoke("java/util/List".into(), "clear".into(), "()V".into(), true),
+            ],
+            vec![(0, 8)],
+        );
+        assert!(
+            both.iter()
+                .any(|r| r.owner == "billing.RenderContext.SEGMENTS"),
+            "{both:?}"
         );
         // A constructor stores into an instance field.
         let ctor = init_class(

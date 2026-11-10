@@ -163,7 +163,28 @@ fn editable(rel: &str, owned: &BTreeSet<String>) -> Res<()> {
     Ok(())
 }
 
+/// Refuses a path that crosses a symlink inside `work/`: a link in a clone can lead back to
+/// the original harness, and a write through it would edit the original.
+fn no_link_in_path(work: &Path, rel: &str) -> Res<()> {
+    let mut p = work.to_path_buf();
+    for c in rel.split('/') {
+        p.push(c);
+        if fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(refuse(
+                codes::SCOPE,
+                format!(
+                    "{rel} goes through a symbolic link ({c}); an edit through a link could reach files outside the scratch copy"
+                ),
+                "the real path of the file, without symbolic links",
+                "name the file by its real path under the project root".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn read_work(work: &Path, rel: &str) -> Res<String> {
+    no_link_in_path(work, rel)?;
     let path = work.join(rel);
     fs::read_to_string(&path).map_err(|e| {
         refuse(
@@ -281,6 +302,31 @@ fn not_statement(site: &Site, e: &StatementError) -> Failure {
     )
 }
 
+/// Refuses a hunk that would rename what the control column is named after: it moves a
+/// recorded writer line (site columns embed `file:line`). The treated series would then
+/// carry the column under another name and look like the growth was removed. A renamed owner
+/// (probe columns embed it) is caught after the run, where a renamed twin makes the result
+/// invalid.
+fn keeps_identity(rel: &str, h: &diff::HunkSite, anchors: &Anchors) -> Res<()> {
+    if h.removed != h.added
+        && let Some(w) = anchors
+            .writers
+            .iter()
+            .find(|w| w.file == rel && (w.line as usize) > h.last)
+    {
+        return Err(refuse(
+            codes::SCOPE,
+            format!(
+                "the hunk at {rel}:{} adds or removes lines above the recorded writer {w}, which moves its line number; the control column is named after that line",
+                h.first
+            ),
+            "an edit that keeps the line numbers of the recorded writers",
+            "replace the statement on its own line instead (same number of lines), or put the added lines after the last recorded writer".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Plans `--patch`: files under `work/` only, hunks near a recorded site, at most
 /// [`MAX_CHANGED_LINES`] changed lines, clean apply.
 pub fn patch_plan(
@@ -302,6 +348,14 @@ pub fn patch_plan(
     let mut changed = 0;
     for p in &patches {
         let rel = safe_rel(&p.path)?;
+        if files.iter().any(|f: &FileEdit| f.rel == rel) {
+            return Err(refuse(
+                codes::PATCH,
+                format!("two sections of the diff name {rel}"),
+                "one section per file",
+                "merge the hunks of that file under one `---`/`+++` header".to_owned(),
+            ));
+        }
         editable(&rel, owned)?;
         let old = read_work(work, &rel)?;
         let applied = diff::apply(&old, p).map_err(|why| {
@@ -314,6 +368,7 @@ pub fn patch_plan(
         })?;
         for h in &applied.sites {
             changed += h.removed + h.added;
+            keeps_identity(&rel, h, anchors)?;
             let near = anchors.near.iter().any(|a| {
                 a.file == rel
                     && (a.line as usize) + NEAR_LINES >= h.first
@@ -373,6 +428,7 @@ pub fn patch_plan(
 /// file is not what the plan read.
 pub fn apply_plan(work: &Path, plan: &Plan) -> Res<()> {
     for f in &plan.files {
+        no_link_in_path(work, &f.rel)?;
         let path: PathBuf = work.join(&f.rel);
         let now =
             fs::read_to_string(&path).map_err(|e| Failure::from(dla_core::Error::io(&path, e)))?;
@@ -540,6 +596,70 @@ mod tests {
             code_of(patch_plan(d.path(), &none, &anchors(), &diff_at(45))),
             codes::SCOPE
         );
+    }
+
+    #[test]
+    fn a_patch_that_moves_a_recorded_writer_line_is_refused() {
+        let body: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        let d = work(&[("a.py", &body)]);
+        let none = BTreeSet::new();
+        // One line added at line 2, above the writer at 3.
+        let above = "--- a/a.py\n+++ b/a.py\n@@ -2,1 +2,2 @@\n+# note\n line 2\n";
+        assert_eq!(
+            code_of(patch_plan(d.path(), &none, &anchors(), above)),
+            codes::SCOPE
+        );
+        // The same insertion below the last writer (line 20) keeps every writer line.
+        let below = "--- a/a.py\n+++ b/a.py\n@@ -21,1 +21,2 @@\n line 21\n+# note\n";
+        assert!(patch_plan(d.path(), &none, &anchors(), below).is_ok());
+    }
+
+    #[test]
+    fn two_headers_of_one_file_are_one_file() {
+        let body: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        let d = work(&[("a.py", &body)]);
+        let none = BTreeSet::new();
+        let two = "--- a/./a.py\n+++ ./a.py\n@@ -3,1 +3,1 @@\n-line 3\n+LINE 3\n--- a/a.py\n+++ b/a.py\n@@ -5,1 +5,1 @@\n-line 5\n+LINE 5\n";
+        let p = patch_plan(d.path(), &none, &anchors(), two).unwrap();
+        assert_eq!(p.files.len(), 1);
+        assert!(p.files[0].new.contains("LINE 3") && p.files[0].new.contains("LINE 5"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_through_a_symlink_is_refused() {
+        let d = work(&[("real/F.py", SRC), ("a.py", SRC)]);
+        std::os::unix::fs::symlink(d.path().join("real"), d.path().join("linkdir")).unwrap();
+        std::os::unix::fs::symlink(d.path().join("real/F.py"), d.path().join("l.py")).unwrap();
+        let none = BTreeSet::new();
+        let a = Anchors {
+            writers: vec![
+                Site::parse("linkdir/F.py:4").unwrap(),
+                Site::parse("l.py:4").unwrap(),
+            ],
+            ..anchors()
+        };
+        for site in ["linkdir/F.py:4", "l.py:4"] {
+            let r = stub_plan(d.path(), &none, &a, &[site.to_owned()]);
+            assert_eq!(code_of(r), codes::SCOPE, "{site}");
+        }
+        let p = stub_plan(
+            d.path(),
+            &none,
+            &Anchors {
+                writers: vec![Site::parse("a.py:4").unwrap()],
+                ..anchors()
+            },
+            &["a.py:4".to_owned()],
+        )
+        .unwrap();
+        std::fs::remove_file(d.path().join("a.py")).unwrap();
+        std::os::unix::fs::symlink(d.path().join("real/F.py"), d.path().join("a.py")).unwrap();
+        assert_eq!(
+            apply_plan(d.path(), &p).unwrap_err().refusal.code,
+            codes::SCOPE
+        );
+        assert_eq!(fs::read_to_string(d.path().join("real/F.py")).unwrap(), SRC);
     }
 
     #[test]

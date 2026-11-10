@@ -462,24 +462,37 @@ fn dla_dir_of(found: &Found) -> String {
     )))))
 }
 
-/// Denies a path under `<project>/.dla/` that names a protected run file.
+/// True for `<run>/harness/H<n>/driver/<file>`: the one place under `.dla/` where the skill
+/// has the model edit a file (the generated driver whose `DLA-HOOK` bodies it fills in).
+/// `rest` is the path below `.dla/`, with `/` separators and no `..`.
+fn editable_rest(rest: &str) -> bool {
+    let comps: Vec<&str> = rest.split('/').collect();
+    comps.len() >= 5
+        && comps
+            .iter()
+            .all(|c| !c.is_empty() && *c != "." && *c != "..")
+        && comps[1] == "harness"
+        && comps[2]
+            .strip_prefix('H')
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        && comps[3] == "driver"
+}
+
+/// Denies a path under `<project>/.dla/` that is not a driver file. Everything else there is
+/// written by `dla`: the ledger, the state, the coverage manifest and the report (sealed),
+/// and the files the gates read (`trend/`, `series/`, `gate/`, `integrity/`, `bundle/`,
+/// `intervene/`, the harness output and every evidence file), which no seal covers.
 fn protected_path(path: &str, input: &Input, found: &Found) -> Option<String> {
     let norm = normalize(path, &cwd_of(input, &found.project));
     let dla_dir = dla_dir_of(found);
     let rest = norm.strip_prefix(&format!("{dla_dir}/"))?;
+    if editable_rest(rest) {
+        return None;
+    }
     let name = base_name(rest);
-    let comps: Vec<&str> = rest.split('/').collect();
-    let in_integrity = comps.len() >= 2 && comps[1] == "integrity";
-    let protected = matches!(
-        name,
-        "report.md" | "state.json" | "coverage.json" | "current"
-    ) || name.starts_with("ledger")
-        || in_integrity;
-    protected.then(|| {
-        format!(
-            "{name} under .dla/ is written by dla only. Use the dla commands (dla ledger ..., dla report, dla run ...); a file edited by hand fails the integrity check and the report says INCOMPLETE."
-        )
-    })
+    Some(format!(
+        "{name} under .dla/ is written by dla only. Use the dla commands (dla ledger ..., dla report, dla run ...). The only files there you edit are the harness driver files (.dla/<run>/harness/H<n>/driver/). Protected run files edited by hand fail the integrity check and the report says INCOMPLETE; the files the gates read (trend, series, gate, bundle, intervene, harness output) are not sealed, so an edit there is refused here."
+    ))
 }
 
 // ----------------------------------------------------------- Bash, writing
@@ -527,6 +540,32 @@ fn mentions_dla(s: &str) -> bool {
         from = at + 4;
     }
     false
+}
+
+/// True when every word of the segment that names `.dla` points at a driver file (see
+/// [`editable_rest`]).
+fn only_driver_paths(seg: &str) -> bool {
+    let mut any = false;
+    for w in seg.split_whitespace() {
+        let w = w
+            .trim_matches(['"', '\'', '>', '<', '(', ')'])
+            .replace('\\', "/");
+        if !mentions_dla(&w) {
+            continue;
+        }
+        any = true;
+        let Some(i) = w.rfind(".dla/") else {
+            return false;
+        };
+        let leading = &w[..i];
+        if leading.contains("..") || !(leading.is_empty() || leading.ends_with('/')) {
+            return false;
+        }
+        if !editable_rest(&w[i + 5..]) {
+            return false;
+        }
+    }
+    any
 }
 
 /// Targets of `>` and `>>` redirections in a segment.
@@ -580,9 +619,11 @@ fn bash_write(cmd: &str, found: &Found) -> Option<String> {
     let _ = found;
     for seg in segments(cmd) {
         let from_dla = is_dla_word(first_word(seg));
-        let bad_redirect = redirect_targets(seg).iter().any(|t| mentions_dla(t));
+        let bad_redirect = redirect_targets(seg)
+            .iter()
+            .any(|t| mentions_dla(t) && !only_driver_paths(t));
         let mut bad = bad_redirect;
-        if !from_dla && !bad && mentions_dla(seg) {
+        if !from_dla && !bad && mentions_dla(seg) && !only_driver_paths(seg) {
             let lower = seg.to_ascii_lowercase();
             let words: Vec<String> = lower.split_whitespace().map(word_basename).collect();
             bad = words.iter().any(|w| WRITE_WORDS.contains(&w.as_str()))
@@ -671,13 +712,21 @@ fn check_read(input: &Input, tool: &str, found: &Found) -> Option<String> {
 
 // ------------------------------------------------------------------ stop
 
-fn digest_of(view: &RunView, missing: &[Missing]) -> String {
+/// What "no change" means for a stop attempt: the ledger lines, the slice lines and the
+/// missing items. A worker's digest counts its own slice only, so a sibling's writes do not
+/// reset its counter.
+fn digest_of(view: &RunView, missing: &[Missing], worker: Option<&str>) -> String {
     let mut ids: Vec<String> = missing
         .iter()
         .map(|m| format!("{}:{}", m.kind, m.id))
         .collect();
     ids.sort();
-    let slice_lines: u64 = view.slices.iter().map(|s| s.lines).sum();
+    let slice_lines: u64 = view
+        .slices
+        .iter()
+        .filter(|s| worker.is_none_or(|w| s.worker == w))
+        .map(|s| s.lines)
+        .sum();
     let mut h = Sha256::new();
     h.update(format!("{}:{slice_lines}:", view.ledger.lines().len()));
     h.update(ids.join(","));
@@ -749,7 +798,7 @@ fn stop_core(found: &Found) -> Result<HookOut, String> {
     if missing.is_empty() {
         return Ok(HookOut::allow());
     }
-    let digest = digest_of(&view, &missing);
+    let digest = digest_of(&view, &missing, None);
     let ids: Vec<String> = missing.iter().take(5).map(|m| m.id.clone()).collect();
     let stamped = RunState::update(&found.run_dir, |s| {
         let n = if s.stop_block_digest.as_deref() == Some(digest.as_str()) {
@@ -762,7 +811,7 @@ fn stop_core(found: &Found) -> Result<HookOut, String> {
         if n >= STOP_LIMIT {
             s.status = RunStatus::Incomplete;
             s.incomplete_reason = Some(format!(
-                "{} {STOP_LIMIT} times with no ledger change: {}",
+                "{} {STOP_LIMIT} stop attempts with no ledger change: {}",
                 gate::STOP_BLOCKED_REASON,
                 ids.join(", ")
             ));
@@ -774,7 +823,7 @@ fn stop_core(found: &Found) -> Result<HookOut, String> {
         return Ok(HookOut {
             stdout: String::new(),
             stderr: format!(
-                "dla gate: the stop was blocked {STOP_LIMIT} times with no change to the ledger; the run is stamped INCOMPLETE and the stop is allowed"
+                "dla gate: {STOP_LIMIT} stop attempts with no change to the ledger; the run is stamped INCOMPLETE and the stop is allowed"
             ),
             code: 0,
         });
@@ -789,7 +838,7 @@ fn stop_worker(found: &Found, worker: &str) -> Result<HookOut, String> {
     if missing.is_empty() {
         return Ok(HookOut::allow());
     }
-    let digest = digest_of(&view, &missing);
+    let digest = digest_of(&view, &missing, Some(worker));
     // Release the slice lock before the state update.
     drop(view);
     let stalled = RunState::update(&found.run_dir, |s| {
@@ -811,7 +860,7 @@ fn stop_worker(found: &Found, worker: &str) -> Result<HookOut, String> {
         return Ok(HookOut {
             stdout: String::new(),
             stderr: format!(
-                "dla gate: worker {worker} was blocked {STOP_LIMIT} times with no change; it is marked stalled and may stop"
+                "dla gate: worker {worker} made {STOP_LIMIT} stop attempts with no change; it is marked stalled and may stop"
             ),
             code: 0,
         });

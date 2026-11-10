@@ -1334,3 +1334,70 @@ fn unknown_fields_are_still_refused_on_v3_lines() {
     assert_eq!(r.code, codes::MALFORMED);
     assert!(r.message.contains("wrker"));
 }
+
+// ---------------------------------------------------------------- stalled workers
+
+fn mark_stalled(dir: &std::path::Path, w: &str) {
+    RunState::update(dir, |s| {
+        s.workers.iter_mut().find(|e| e.name == w).unwrap().stalled = true;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn merge_opens_an_item_for_a_stalled_worker_that_ended_with_open_findings() {
+    let dir = new_run(&["jvm", "go"]);
+    for w in ["jvm", "go"] {
+        let mut l = slice(dir.path(), w);
+        candidate_in_slice(&mut l, &format!("{w}.src:1"), Holder::StaticGlobal);
+        l.finish_slice().unwrap();
+    }
+    mark_stalled(dir.path(), "jvm");
+    let rep = merge(dir.path()).unwrap();
+    assert_eq!(rep.stalled, ["jvm"]);
+    let main = Ledger::load(dir.path()).unwrap();
+    let items: Vec<_> = main
+        .open_items()
+        .filter(|o| o.item.text.starts_with("worker jvm stalled"))
+        .collect();
+    assert_eq!(items.len(), 1);
+    assert!(
+        !main
+            .open_items()
+            .any(|o| o.item.text.starts_with("worker go"))
+    );
+    // Safe to repeat.
+    assert!(merge(dir.path()).unwrap().stalled.is_empty());
+    let main = Ledger::load(dir.path()).unwrap();
+    assert_eq!(
+        main.open_items()
+            .filter(|o| o.item.text.starts_with("worker jvm stalled"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_stalled_worker_with_nothing_left_open_gets_no_item() {
+    let dir = new_run(&["jvm"]);
+    let mut l = slice(dir.path(), "jvm");
+    l.finish_slice().unwrap();
+    mark_stalled(dir.path(), "jvm");
+    assert!(merge(dir.path()).unwrap().stalled.is_empty());
+}
+
+#[test]
+fn a_stalled_worker_that_did_not_finish_says_so_in_its_item() {
+    let dir = new_run(&["jvm"]);
+    let mut l = slice(dir.path(), "jvm");
+    candidate_in_slice(&mut l, "a.go:1", Holder::StaticGlobal);
+    mark_stalled(dir.path(), "jvm");
+    merge(dir.path()).unwrap();
+    let main = Ledger::load(dir.path()).unwrap();
+    assert!(
+        main.open_items()
+            .any(|o| o.item.text.starts_with("worker jvm did not finish")
+                && o.item.text.contains("stalled")),
+    );
+}

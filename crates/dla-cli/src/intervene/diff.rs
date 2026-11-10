@@ -64,10 +64,17 @@ pub struct Applied {
     pub sites: Vec<HunkSite>,
 }
 
+/// The path without `a/` or `b/` and without any leading `./`, so the same file written two
+/// ways is one key.
 fn strip_prefix(path: &str) -> &str {
-    path.strip_prefix("a/")
+    let mut p = path
+        .strip_prefix("a/")
         .or_else(|| path.strip_prefix("b/"))
-        .unwrap_or(path)
+        .unwrap_or(path);
+    while let Some(rest) = p.strip_prefix("./") {
+        p = rest;
+    }
+    p
 }
 
 /// The path on a `---` or `+++` line: up to the first tab, quotes removed.
@@ -182,7 +189,10 @@ pub fn parse(text: &str) -> Result<Vec<FilePatch>, String> {
             return Err(format!("no hunks for {path}"));
         }
         match out.iter_mut().find(|f| f.path == path) {
-            Some(f) => f.hunks.extend(hunks),
+            Some(f) => {
+                f.hunks.extend(hunks);
+                f.hunks.sort_by_key(|h| h.old_start);
+            }
             None => out.push(FilePatch { path, hunks }),
         }
     }

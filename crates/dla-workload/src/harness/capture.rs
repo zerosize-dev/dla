@@ -749,6 +749,14 @@ pub fn shim_dump_commands(
             "dla summarize type-histogram-diff {}",
             paths.join(" ")
         ));
+        // The same stacks as allocation-stack evidence (a label such as L-HANDLE asks for
+        // that kind); the first series only, to keep the list short.
+        if cmds.len() == 1 {
+            cmds.push(format!(
+                "dla summarize alloc-stack-diff {}",
+                paths.join(" ")
+            ));
+        }
         i = j;
     }
     cmds
@@ -1152,7 +1160,13 @@ mod tests {
         )
         .unwrap();
         let cmds = shim_dump_commands(&d, "H1", &|p| format!("r/{p}"));
-        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        assert_eq!(cmds.len(), 2, "{cmds:?}");
+        assert!(
+            cmds[1].starts_with(
+                "dla summarize alloc-stack-diff r/harness/H1/out/p1-native/shim-dump.jsonl"
+            ),
+            "{cmds:?}"
+        );
         let c = &cmds[0];
         assert!(
             c.starts_with(

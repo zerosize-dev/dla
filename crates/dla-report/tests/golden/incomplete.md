@@ -2,7 +2,7 @@
 
 Run: `20260101-000000-abcd`
 
-Status: INCOMPLETE (4 open)
+Status: INCOMPLETE (11 open)
 
 Entry: repository
 
@@ -20,6 +20,13 @@ Coverage: jvm no iterations, 1 of 2 entry points exercised
 - **F2**: finding F2 is under_test and has no disposition. Fix: `dla ledger resolve F2 --as unresolved --reason time_budget --remedy "<text>"`
 - **O1**: open item O1: Residual heap growth unexplained | pipe. Fix: `dla ledger resolve O1 --as unresolved --reason time_budget --remedy "<text>"`
 - **intake.budget**: checklist item intake.budget is unanswered: How much wall-clock time may the investigation use? Fix: `dla ledger resolve intake.budget --status answered --evidence E1`
+- **20260101-000000-abcd**: no consent is recorded for this run. Fix: `dla consent --tiers 1,2`
+- **20260101-000000-abcd**: no probe evidence is recorded. Fix: `dla probe`
+- **jvm/census**: no census has run for runtime jvm. Fix: `dla census --lang jvm`
+- **jvm/sweep**: no sweep has run for runtime jvm. Fix: `dla sweep --lang jvm`
+- **F2**: finding F2 is under test and has no result. Fix: `dla ledger confirm F2 or dla ledger refute F2 (with --evidence)`
+- **F2**: finding F2 has no non-leak sibling hypothesis. Fix: `dla ledger add --sibling-of F2 --origin hypothesis --hypothesis N-WARM --refute-if "<result>" --evidence E..`
+- **off-heap**: residual growth in off-heap (6.000 MB/h, threshold 1.000) has no resolved open item. Fix: `dla gap --residual then resolve the open item it raises`
 
 ## Findings
 

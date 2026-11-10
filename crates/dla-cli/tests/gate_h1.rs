@@ -208,63 +208,187 @@ fn finding_citing(r: &Run, evidence: &str) -> String {
     l.findings().last().unwrap().id.to_string()
 }
 
+/// A trend whose columns are `(name, flat)`.
+fn write_trend_shapes(r: &Run, id: &str, series: &str, columns: &[(&str, bool)]) {
+    let dir = r.run_dir().join("trend");
+    fs::create_dir_all(&dir).unwrap();
+    let cols: Vec<Value> = columns
+        .iter()
+        .map(|(name, flat)| {
+            let mut c = column(name);
+            if *flat {
+                c["shape"] = json!("flat");
+                c["gate"] = json!("fail");
+                c["rise"] = json!(0.0);
+            }
+            c
+        })
+        .collect();
+    let doc = json!({
+        "schema_version": 1, "id": id, "series": series,
+        "thresholds": serde_json::to_value(dla_stats::GateThresholds::default()).unwrap(),
+        "columns": cols,
+    });
+    fs::write(dir.join(format!("{id}.json")), doc.to_string()).unwrap();
+}
+
 #[test]
 fn a_trend_replaced_by_a_later_trend_of_the_series_needs_no_disposition_of_its_own() {
     let r = init("repository");
     // T1 is what `dla alloc-test` wrote: no growth evidence names it.
-    write_trend(&r, "T1", "S1", &["probe:CACHE", "os.rss"]);
+    write_trend(&r, "T1", "S1", &["probe:CACHE", "go.heap_live"]);
     let m = r.missing(&["--stage", "classify"]);
     assert_eq!(
         trend_columns(&m),
-        ["T1:os.rss", "T1:probe:CACHE"].map(String::from)
+        ["T1:probe:CACHE"].map(String::from),
+        "a whole-process column is left to the final gate"
     );
-    let full: Value =
-        serde_json::from_str(&fs::read_to_string(r.run_dir().join("gate/classify.json")).unwrap())
-            .unwrap();
-    let item = full["missing"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|m| m["id"] == "T1:os.rss")
+    let m = r.missing(&["--final"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T1:go.heap_live", "T1:probe:CACHE"].map(String::from)
+    );
+    let item = r
+        .items(&["--stage", "classify"])
+        .into_iter()
+        .find(|m| m["id"] == "T1:probe:CACHE")
         .unwrap();
     assert_eq!(item["fix"], "dla trend S1", "{item}");
     // The fix writes a new trend of the series and growth evidence for its columns.
-    write_trend(&r, "T2", "S1", &["probe:CACHE", "os.rss"]);
-    let m = r.missing(&["--stage", "classify"]);
+    write_trend(&r, "T2", "S1", &["probe:CACHE", "go.heap_live"]);
+    let m = r.missing(&["--final"]);
     assert_eq!(
         trend_columns(&m),
-        ["T2:os.rss", "T2:probe:CACHE"].map(String::from),
+        ["T2:go.heap_live", "T2:probe:CACHE"].map(String::from),
         "the old trend is replaced, the new one is held to the rule"
     );
     // A later trend that dropped a column does not release it.
-    write_trend(&r, "T3", "S1", &["os.rss"]);
+    write_trend(&r, "T3", "S1", &["go.heap_live"]);
+    let m = r.missing(&["--final"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T2:probe:CACHE", "T3:go.heap_live"].map(String::from)
+    );
+    // A trend of another series is not replaced by it.
+    write_trend(&r, "T4", "S9", &["probe:OTHER"]);
+    let m = r.missing(&["--stage", "classify"]);
+    assert!(
+        trend_columns(&m).contains(&"T4:probe:OTHER".to_owned()),
+        "{m:?}"
+    );
+}
+
+#[test]
+fn a_flat_re_trend_does_not_retire_an_older_growing_column() {
+    let r = init("repository");
+    write_trend(&r, "T1", "S1", &["probe:CACHE"]);
+    // The series was trended again over a shorter window: the column is flat there.
+    write_trend_shapes(&r, "T2", "S1", &[("probe:CACHE", true)]);
     let m = r.missing(&["--stage", "classify"]);
     assert_eq!(
         trend_columns(&m),
-        ["T2:probe:CACHE", "T3:os.rss"].map(String::from)
+        ["T1:probe:CACHE"].map(String::from),
+        "the older growth stays held to the gate: {m:?}"
     );
-    // A trend of another series is not replaced by it.
-    write_trend(&r, "T4", "S9", &["os.rss"]);
+    // A later trend in which the column is still growing does take over.
+    write_trend(&r, "T3", "S1", &["probe:CACHE"]);
     let m = r.missing(&["--stage", "classify"]);
-    assert!(trend_columns(&m).contains(&"T4:os.rss".to_owned()), "{m:?}");
+    assert_eq!(trend_columns(&m), ["T3:probe:CACHE"].map(String::from));
+    // The older column is released once a finding is tied to it (the other way out).
+    let r = init("repository");
+    write_trend(&r, "T1", "S1", &["probe:CACHE"]);
+    write_trend_shapes(&r, "T2", "S1", &[("probe:CACHE", true)]);
+    let disc = alloc_discriminator(&r, "T1", &["probe:CACHE"]);
+    finding_citing(&r, &disc);
+    assert!(trend_columns(&r.missing(&["--stage", "classify"])).is_empty());
+}
+
+#[test]
+fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
+    let r = init("repository");
+    write_trend(
+        &r,
+        "T1",
+        "S1",
+        &["probe:CACHE", "os.rss", "cgroup.current", "go.heap_live"],
+    );
+    // The discriminator lists every column, the whole-process ones too.
+    let disc = alloc_discriminator(
+        &r,
+        "T1",
+        &["probe:CACHE", "os.rss", "cgroup.current", "go.heap_live"],
+    );
+    let f = finding_citing(&r, &disc);
+    // Classify: probe:CACHE is tied to the finding; the others are not asked for.
+    assert!(trend_columns(&r.missing(&["--stage", "classify"])).is_empty());
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    // Final: the finding is dispositioned, but a finding that cites the discriminator does
+    // not account for os.rss, cgroup.current or go.heap_live.
+    let items = r.items(&["--final"]);
+    let mut ids: Vec<&str> = items
+        .iter()
+        .filter(|m| m["kind"] == "trend_column")
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["T1:cgroup.current", "T1:go.heap_live", "T1:os.rss"]);
+    let item = items.iter().find(|m| m["id"] == "T1:os.rss").unwrap();
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .contains("dla gap S1 --residual"),
+        "{item}"
+    );
+    assert!(
+        item["description"].as_str().unwrap().contains("residual"),
+        "{item}"
+    );
+    // Residual rows under their threshold account for them.
+    let row = |residual: f64| dla_core::coverage::ResidualRow {
+        region: dla_core::finding::Region::Heap,
+        total_slope: 10.0,
+        attributed_slope: 10.0 - residual,
+        residual,
+        unit: "bytes/iteration".into(),
+        threshold: 1.0,
+        open_item: None,
+    };
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row(0.5)])).unwrap();
+    let m = r.missing(&["--final"]);
+    assert!(trend_columns(&m).is_empty(), "{m:?}");
+    // A row over its threshold without a resolved open item does not.
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row(8.0)])).unwrap();
+    let m = r.missing(&["--final"]);
+    assert!(trend_columns(&m).contains(&"T1:os.rss".to_owned()), "{m:?}");
 }
 
 #[test]
 fn an_alloc_test_trend_is_dispositioned_through_the_discriminator_a_finding_cites() {
     let r = init("repository");
-    write_trend(&r, "T1", "S1", &["probe:CACHE", "os.rss"]);
+    write_trend(&r, "T1", "S1", &["probe:CACHE", "probe:OTHER"]);
     // The discriminator tested probe:CACHE only.
     let disc = alloc_discriminator(&r, "T1", &["probe:CACHE"]);
     let m = r.missing(&["--stage", "classify"]);
     assert_eq!(
         trend_columns(&m),
-        ["T1:os.rss", "T1:probe:CACHE"].map(String::from),
+        ["T1:probe:CACHE", "T1:probe:OTHER"].map(String::from),
         "evidence nobody cites ties nothing"
     );
     let f = finding_citing(&r, &disc);
     // Classify: tied to a finding. Final: the finding needs its disposition.
     let m = r.missing(&["--stage", "classify"]);
-    assert_eq!(trend_columns(&m), ["T1:os.rss".to_owned()], "{m:?}");
+    assert_eq!(trend_columns(&m), ["T1:probe:OTHER".to_owned()], "{m:?}");
     let m = r.missing(&["--final"]);
     assert!(
         trend_columns(&m).contains(&"T1:probe:CACHE".to_owned()),
@@ -284,15 +408,15 @@ fn an_alloc_test_trend_is_dispositioned_through_the_discriminator_a_finding_cite
     let m = r.missing(&["--final"]);
     assert_eq!(
         trend_columns(&m),
-        ["T1:os.rss".to_owned()],
+        ["T1:probe:OTHER".to_owned()],
         "the untested column is not released: {m:?}"
     );
     // The fix for it leads to a state that passes: `dla trend S1` replaces T1.
-    write_trend(&r, "T2", "S1", &["probe:CACHE", "os.rss"]);
+    write_trend(&r, "T2", "S1", &["probe:CACHE", "probe:OTHER"]);
     let m = r.missing(&["--final"]);
     assert_eq!(
         trend_columns(&m),
-        ["T2:os.rss", "T2:probe:CACHE"].map(String::from)
+        ["T2:probe:CACHE", "T2:probe:OTHER"].map(String::from)
     );
 }
 

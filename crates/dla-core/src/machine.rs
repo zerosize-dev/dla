@@ -581,7 +581,7 @@ fn signal_text(e: &EvidenceRecord) -> String {
             e.evidence_id,
             s.tool,
             s.class,
-            &s.source_sha256[..12.min(s.source_sha256.len())]
+            s.source_sha256.chars().take(12).collect::<String>()
         ),
         None => format!("{} (no signal)", e.evidence_id),
     }

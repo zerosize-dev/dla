@@ -319,12 +319,35 @@ pub fn status(view: &RunView) -> ReportStatus {
         });
     }
     for t in &view.tamper {
+        // A write killed before its seal is not an edit: a merge (or the worker's next
+        // write) settles it.
+        let interrupted = view
+            .run_dir
+            .as_deref()
+            .is_some_and(|d| crate::integrity::interrupted(d, &t.file));
+        let (what, fix) = if interrupted {
+            (
+                "a dla write of this file was interrupted before it was sealed",
+                "dla ledger merge (a worker's own dla ledger done also settles its slice)"
+                    .to_owned(),
+            )
+        } else {
+            (
+                "",
+                "restore the file from a copy, or, if the change is intended, dla run reseal --reason \"<why the file changed outside dla>\""
+                    .to_owned(),
+            )
+        };
+        let note = if what.is_empty() {
+            String::new()
+        } else {
+            format!(" ({what})")
+        };
         blocking.push(BlockingItem {
             kind: BlockingKind::Integrity,
             id: t.file.clone(),
-            description: format!("tamper: {}", t.describe()),
-            fix: "restore the file from a copy, or, if the change is intended, dla run reseal --reason \"<why the file changed outside dla>\""
-                .to_owned(),
+            description: format!("tamper: {}{note}", t.describe()),
+            fix,
         });
     }
     ReportStatus {

@@ -842,17 +842,17 @@ impl Analysis<'_> {
         out
     }
 
-    /// The static field that holds object `target`, the first by class and field name when
-    /// several do.
+    /// The static field that holds object `target`; `None` when no static field does or
+    /// when several different ones do (an alias): the owner is then not known, and picking
+    /// one by name would credit the value to a holder that may not be its owner.
     fn static_field_of(&mut self, target: u32) -> Option<(u32, u64)> {
-        let hits: Vec<(u32, u64)> = self
+        let mut hits = self
             .statics_out
             .iter()
             .filter(|&&(_, _, t)| t == target)
-            .map(|&(c, n, _)| (c, n))
-            .collect();
-        hits.into_iter()
-            .min_by_key(|&(c, n)| (self.class_names[c as usize].clone(), self.strs.get(n)))
+            .map(|&(c, n, _)| (c, n));
+        let first = hits.next()?;
+        hits.all(|h| h == first).then_some(first)
     }
 
     fn thread_name(&mut self, obj: u32) -> Option<String> {
@@ -1394,9 +1394,15 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
     // field, and taken out of the thread that holds them.
     let mut tl_sub: BTreeMap<usize, (u64, u32)> = BTreeMap::new();
     let mut tl_field: BTreeMap<u32, Option<(u32, u64)>> = BTreeMap::new();
+    // One value held by two entries of a thread (two ThreadLocals, or `threadLocals` and
+    // `inheritableThreadLocals`) is counted once, for the first entry with a known field.
+    let mut tl_done: std::collections::BTreeSet<(usize, u32)> = std::collections::BTreeSet::new();
     for &(si, tl, v, in_thread) in &tl_owned {
         let field = *tl_field.entry(tl).or_insert_with(|| an.static_field_of(tl));
         let Some((class, name)) = field else { continue };
+        if !tl_done.insert((si, v)) {
+            continue;
+        }
         if in_thread {
             let e = tl_sub.entry(si).or_default();
             e.0 += an.ret[v as usize];

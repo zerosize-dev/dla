@@ -453,7 +453,9 @@ impl RunState {
     /// Writes `<run_dir>/state.json` atomically (temp file, then rename) and seals it.
     pub fn save(&self, run_dir: &Path) -> Result<(), Error> {
         let guard = crate::integrity::Guard::new(run_dir, STATE_FILE);
-        write_atomic(&run_dir.join(STATE_FILE), to_pretty_json(self).as_bytes())?;
+        let text = to_pretty_json(self);
+        guard.expect(text.as_bytes());
+        write_atomic(&run_dir.join(STATE_FILE), text.as_bytes())?;
         guard.seal()?;
         Ok(())
     }

@@ -74,6 +74,10 @@ pub struct MergeReport {
     pub total_lines: BTreeMap<String, u64>,
     /// Workers whose slice ended in a torn line that was dropped.
     pub torn_tail: Vec<String>,
+    /// Stalled workers that ended their slice with findings or items still open (an item
+    /// was opened for each).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stalled: Vec<String>,
     /// Findings folded together by this run.
     pub duplicates: Vec<Duplicate>,
     /// Open items this run raised for disagreeing workers.
@@ -146,6 +150,9 @@ fn has_open_item(ledger: &Ledger, starts_with: &str) -> bool {
 /// Merges every slice of the run in `run_dir` into its main ledger and applies the
 /// cross-worker gate. See the module docs.
 pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
+    // A slice or the ledger left behind by a write killed before its seal is dla's own
+    // doing, not an edit: seal it as it is before the merge reads it.
+    crate::integrity::settle(run_dir)?;
     let state = RunState::load(run_dir)?;
     let mut main = Ledger::load(run_dir)?;
 
@@ -156,6 +163,7 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
         merged_lines: BTreeMap::new(),
         total_lines: BTreeMap::new(),
         torn_tail: Vec::new(),
+        stalled: Vec::new(),
         duplicates: Vec::new(),
         contradictions: Vec::new(),
         unfinished: Vec::new(),
@@ -205,7 +213,8 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
         }
         slice_facts.insert(w.clone(), (n as u64, done));
         let before = usize::try_from(main.merged_lines(w)).unwrap_or(usize::MAX);
-        if n > before {
+        let torn_unseen = cut.torn.is_some() && !main.merged_torn_tail(w);
+        if n > before || torn_unseen {
             let merged = SliceMerged {
                 worker: w.clone(),
                 lines: n as u64,
@@ -336,6 +345,32 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
                     },
                 )?;
             }
+            // The stop gate let the worker go after three attempts with its work still
+            // open, and it then ended its slice: say so, once.
+            let stalled = state.worker(w).is_some_and(|e| e.stalled);
+            let mine = |id: &str| id.split_once('/').is_some_and(|(p, _)| p == w);
+            let left = main
+                .findings()
+                .filter(|f| {
+                    mine(&f.id.to_string())
+                        && main.merged_into(&f.id).is_none()
+                        && !f.state.is_dispositioned()
+                })
+                .count()
+                + main
+                    .open_items()
+                    .filter(|o| o.resolution.is_none() && mine(&o.item.id.to_string()))
+                    .count();
+            if stalled && left > 0 && !has_open_item(&main, &format!("worker {w} stalled")) {
+                main.open_item_add(
+                    &format!(
+                        "worker {w} stalled: the stop gate let it go after repeated stop attempts with no change, and {left} of its findings or items are still open"
+                    ),
+                    None,
+                    MERGE_BY,
+                )?;
+                report.stalled.push(w.clone());
+            }
             continue;
         }
         let over = state.worker(w).is_some_and(|e| now > e.deadline);
@@ -352,8 +387,13 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
         });
         // Resolved items count: a core that closed it has accepted the worker's end.
         if !has_open_item(&main, &format!("worker {w} did not finish")) {
+            let stalled = if state.worker(w).is_some_and(|e| e.stalled) {
+                ", stalled: the stop gate let it go"
+            } else {
+                ""
+            };
             main.open_item_add(
-                &format!("worker {w} did not finish (slice ends at line {lines})"),
+                &format!("worker {w} did not finish (slice ends at line {lines}{stalled})"),
                 None,
                 MERGE_BY,
             )?;

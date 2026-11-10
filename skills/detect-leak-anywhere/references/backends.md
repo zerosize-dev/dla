@@ -90,7 +90,8 @@ format. Mixed formats in one call are refused as `mixed-formats` and the refusal
 - JFR is a sample of old objects, not a census. Counts are small and noisy, so a short run or a small
   leak often fails the gate; use a larger `--step` before concluding anything.
 - `valgrind-memcheck` and `heaptrack` tie by allocation site (first project frame). A definitely-lost
-  block has no holder, so attribution is by site only; `valgrind-vgdb` gives a holder (a static data
+  block has no holder, so attribution is by site only (record the holder kind the archetype row names:
+  `native-handle/global-ref` for L-HANDLE and L-OWNERSHIP, `cycle-only` for L-CYCLE); `valgrind-vgdb` gives a holder (a static data
   symbol) when a root points at the block.
 - Node: `node-heapsnapshot` names holders from a snapshot series of one process (3 or more): a module
   variable or global property is `static/global`, a timer callback or event listener table is

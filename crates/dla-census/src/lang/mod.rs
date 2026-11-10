@@ -279,10 +279,12 @@ pub fn class_path(n: Node<'_>, src: &str, lang: Lang) -> String {
 /// in a constructor (which may be a parameter or a local).
 fn initializer_store(call: Node<'_>, src: &str) -> Option<String> {
     let mut is_static = false;
+    let mut block = None;
     for a in ancestors(call) {
         match a.kind() {
             "static_initializer" => {
                 is_static = true;
+                block = Some(a);
                 break;
             }
             "constructor_declaration" => break,
@@ -309,17 +311,48 @@ fn initializer_store(call: Node<'_>, src: &str) -> Option<String> {
                 let word = last_word(left)?;
                 let qualified = left.contains('.');
                 let ok = if is_static {
-                    true
+                    // `NAME = ..` or `Cls.NAME = ..` of an enclosing class; a name the
+                    // block declares itself is a local, and `obj.NAME` is another object's.
+                    if qualified {
+                        let qual = left.rsplit_once('.').map_or("", |(q, _)| q);
+                        let cls = class_path(call, src, Lang::Java);
+                        let q = qual.rsplit('.').next().unwrap_or("");
+                        !q.is_empty() && cls.split('.').any(|c| c == q)
+                    } else {
+                        !block.is_some_and(|b| declares_local(b, word, src))
+                    }
                 } else {
                     left.starts_with("this.")
                 };
-                return (ok && (qualified || is_static)).then(|| word.to_owned());
+                return ok.then(|| word.to_owned());
             }
             "parenthesized_expression" | "cast_expression" => cur = p,
             _ => return None,
         }
     }
     None
+}
+
+/// True when `block` declares a local variable, a catch parameter, a loop variable or a
+/// resource called `name`.
+fn declares_local(block: Node<'_>, name: &str, src: &str) -> bool {
+    let mut stack = vec![block];
+    while let Some(n) = stack.pop() {
+        let named = match n.kind() {
+            "variable_declarator"
+            | "formal_parameter"
+            | "catch_formal_parameter"
+            | "resource"
+            | "enhanced_for_statement" => n.child_by_field_name("name"),
+            _ => None,
+        };
+        if named.is_some_and(|c| text(c, src) == name) {
+            return true;
+        }
+        let mut cur = n.walk();
+        stack.extend(n.children(&mut cur));
+    }
+    false
 }
 
 /// The variable a call's result is stored in, when the call is the right-hand side of

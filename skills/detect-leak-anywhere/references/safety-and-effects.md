@@ -81,23 +81,28 @@ first run of a harness you did not just generate.
 ## Hooks and integrity
 
 The plugin ships hooks that make the rules above harder to break by accident. They are a guard rail.
-The guarantee is the integrity seals inside `dla` (`references/evidence-and-report.md`, Integrity): a
-protected file that changed outside `dla` is detected by `gate check`, `report` and `run status`, and
-the report says INCOMPLETE and names it.
+The seals inside `dla` (`references/evidence-and-report.md`, Integrity) cover five kinds of file: the
+ledger, the worker slices, `state.json`, `coverage.json` and `report.md`. A sealed file that changed
+outside `dla` is detected by `gate check`, `report` and `run status`, and the report says INCOMPLETE and
+names it. The seals do not cover the other files `dla` generates and the gates read (`trend/`, `series/`,
+`gate/`, `bundle/`, `intervene/`, `alloc/`, harness output and the evidence files under the run
+directory). For those the write hook is the only barrier: it refuses `Write`, `Edit` and `NotebookEdit`
+of anything under `.dla/` except the harness driver files, and the Bash hook refuses a Bash command that
+writes there. A route the hooks miss (see below) edits them without a trace, so never take one.
 
 What the hooks do (all call `dla gate <subcommand>`; with no active run they allow everything, and a run that is complete, incomplete or aborted is not active):
 
 | Hook | Where it is declared | What it blocks |
 |---|---|---|
-| `write-hook` | SKILL.md frontmatter (core session) and `hooks/hooks.json` (also inside workers) | `Write`, `Edit` and `NotebookEdit` of `report.md`, `state.json`, `coverage.json`, `ledger*.jsonl` and `integrity/` under `.dla/` |
+| `write-hook` | SKILL.md frontmatter (core session) and `hooks/hooks.json` (also inside workers) | `Write`, `Edit` and `NotebookEdit` of any file under `.dla/` except the harness driver files (`.dla/<run>/harness/H<n>/driver/`): the sealed run files (`report.md`, `state.json`, `coverage.json`, `ledger*.jsonl`) and the files the gates read that no seal covers (`integrity/`, `trend/`, `series/`, `gate/`, `bundle/`, `intervene/`, `alloc/`, `probe/`, harness output and evidence files) |
 | `read-hook` | the same two places | `Read` of `*-archetypes.md`, `known-leaks.md`, `archetypes.toml` and `known-leaks.toml` until `dla gate check --stage classify` has passed (for the core, or for the worker whose subagent reads: `dla --worker <name> gate check --stage classify`); in the core session also `Grep` and `Glob` naming them |
-| `bash-hook` | SKILL.md frontmatter only | a Bash command that names `.dla/` with a write form (`>`, `tee`, `sed -i`, `cp`, `mv`, `rm`, `truncate`, an interpreter one-liner, `dd`) or that reads an archetype file before the classify gate; commands that start with `dla` are allowed. Best effort on the command text |
+| `bash-hook` | SKILL.md frontmatter only | a Bash command that names `.dla/` with a write form (a driver file excepted) (`>`, `tee`, `sed -i`, `cp`, `mv`, `rm`, `truncate`, an interpreter one-liner, `dd`) or that reads an archetype file before the classify gate; commands that start with `dla` are allowed. Best effort on the command text |
 | `stop-hook` | SKILL.md frontmatter (the core's Stop) | the end of the turn while `dla gate check --final` fails; it prints the first missing items and their fixes |
 | `stop-hook --subagent` | `hooks/hooks.json`, matcher `^dla:worker$` (SubagentStop) | a worker's stop while its slice is not done and dispositioned |
 
 Plugin agents ignore `hooks:` in their own frontmatter, which is why the worker hooks are in
 `hooks/hooks.json`. The PreToolUse hooks deny with `onFailure: block`, so a crashing hook denies the
-call. A stop hook never fails closed: after three blocks in a row with no change in the ledger it lets the
+call. A stop hook never fails closed: it blocks the first two stop attempts, and at the third with no change in the ledger it lets the
 stop through, marks the run (or the worker) INCOMPLETE (stalled), and says why. Claude Code also ends a turn
 after eight stop-hook continuations in a row; the count resets when Claude calls a tool.
 

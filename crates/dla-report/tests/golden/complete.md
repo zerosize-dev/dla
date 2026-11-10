@@ -2,7 +2,7 @@
 
 Run: `20260101-000000-abcd`
 
-Status: COMPLETE
+Status: INCOMPLETE (5 open)
 
 Entry: repository
 
@@ -13,6 +13,14 @@ Findings: 3 enumerated, 3 dispositioned; confirmed 1, strong 0, refuted 1, suspe
 Residual: not measured
 
 Coverage: not measured
+
+## Open items
+
+- **20260101-000000-abcd**: no consent is recorded for this run. Fix: `dla consent --tiers 1,2`
+- **20260101-000000-abcd**: no probe evidence is recorded. Fix: `dla probe`
+- **20260101-000000-abcd**: coverage.json has no runtime row: no runtime was detected or probed. Fix: `dla probe`
+- **F1**: finding F1 has no non-leak sibling hypothesis. Fix: `dla ledger add --sibling-of F1 --origin hypothesis --hypothesis N-WARM --refute-if "<result>" --evidence E..`
+- **F1**: finding F1 is confirmed and has no stored explanation. Fix: `dla ledger explain F1 --tag inferred --adds FILE:LINE --removal never --text "<site, holder, who adds, why nothing removes>"`
 
 ## Findings
 

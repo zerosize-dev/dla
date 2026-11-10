@@ -4,6 +4,14 @@
 //! last wrote it. [`verify`] reports every file that no longer matches. Hooks are a guard
 //! rail; the seals are what makes an out-of-band edit visible.
 //!
+//! A write and its seal are two steps, so a process killed between them leaves a file that
+//! does not match its seal. Every guarded write therefore leaves a `<file>.pending` marker in
+//! `integrity/` until its seal is written. When a marker is found, the file is accepted (and
+//! sealed again by the next `dla` write, or by `dla ledger merge`) only if the difference is
+//! provably `dla`'s own interrupted write: the sealed content is still the file's prefix
+//! (appended files), or the file is exactly the content the writer announced (rewritten
+//! files). Any other difference stays a mismatch.
+//!
 //! The protected files are `ledger.jsonl`, `ledger.<worker>.jsonl`, `state.json`,
 //! `coverage.json` and `report.md`. Every writer seals right after its write, under the
 //! lock that guarded the write. A run without an `integrity/` directory (written before
@@ -33,6 +41,9 @@ use crate::{
 pub const INTEGRITY_DIR: &str = "integrity";
 /// Suffix of a seal file.
 pub const SEAL_SUFFIX: &str = ".seal";
+
+/// Suffix of the marker a guarded write leaves until its seal is written.
+pub const PENDING_SUFFIX: &str = ".pending";
 
 /// The seal of one protected file.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
@@ -118,6 +129,90 @@ fn seal_path(run_dir: &Path, file: &str) -> PathBuf {
     dir(run_dir).join(format!("{file}{SEAL_SUFFIX}"))
 }
 
+fn pending_path(run_dir: &Path, file: &str) -> PathBuf {
+    dir(run_dir).join(format!("{file}{PENDING_SUFFIX}"))
+}
+
+/// Length and SHA-256 of the first `n` bytes of a file, or `None` when it is shorter.
+fn measure_prefix(path: &Path, n: u64) -> Option<String> {
+    let mut f = fs::File::open(path).ok()?.take(n);
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut len = 0u64;
+    loop {
+        let k = f.read(&mut buf).ok()?;
+        if k == 0 {
+            break;
+        }
+        hasher.update(&buf[..k]);
+        len += k as u64;
+    }
+    (len == n).then(|| hex::encode(hasher.finalize()))
+}
+
+/// True when `file` differs from its seal only because a `dla` write was interrupted: a
+/// `.pending` marker exists and the file is the sealed content plus more, or exactly the
+/// content the interrupted writer announced.
+fn is_interrupted_write(run_dir: &Path, file: &str) -> bool {
+    let Ok(marker) = fs::read_to_string(pending_path(run_dir, file)) else {
+        return false;
+    };
+    let path = run_dir.join(file);
+    let Ok((len, sha)) = measure(&path) else {
+        return false;
+    };
+    if marker
+        .trim()
+        .strip_prefix("expect ")
+        .is_some_and(|want| want == sha)
+    {
+        return true;
+    }
+    // A file never sealed counts as sealed empty: its creation was the interrupted write.
+    let sp = seal_path(run_dir, file);
+    let seal = if sp.exists() {
+        match read_seal(&sp) {
+            Some(s) => (s.len, s.sha256),
+            None => return false,
+        }
+    } else {
+        (0, hex::encode(Sha256::digest(b"")))
+    };
+    len >= seal.0 && measure_prefix(&path, seal.0).is_some_and(|p| p == seal.1)
+}
+
+/// True when `file` does not match its seal because a `dla` write was killed before it
+/// was sealed. `dla ledger merge` and the next `dla` write of the file settle it.
+pub fn interrupted(run_dir: &Path, file: &str) -> bool {
+    is_sealed_run(run_dir)
+        && is_interrupted_write(run_dir, file)
+        && match (
+            read_seal(&seal_path(run_dir, file)),
+            measure(&run_dir.join(file)),
+        ) {
+            (Some(s), Ok((len, sha))) => s.len != len || s.sha256 != sha,
+            (None, Ok(_)) => true,
+            _ => false,
+        }
+}
+
+/// Seals every protected file whose only difference from its seal is an interrupted `dla`
+/// write, and clears the markers of the others that match. Returns the files sealed.
+pub fn settle(run_dir: &Path) -> Result<Vec<String>, Error> {
+    let mut sealed = Vec::new();
+    if !is_sealed_run(run_dir) {
+        return Ok(sealed);
+    }
+    for f in existing_protected(run_dir) {
+        if interrupted(run_dir, &f) {
+            seal_file(run_dir, &f)?;
+            sealed.push(f.clone());
+        }
+        let _ = fs::remove_file(pending_path(run_dir, &f));
+    }
+    Ok(sealed)
+}
+
 /// Length and SHA-256 of a file, read in one pass.
 fn measure(path: &Path) -> std::io::Result<(u64, String)> {
     let mut f = fs::File::open(path)?;
@@ -170,17 +265,23 @@ pub struct Guard {
 
 impl Guard {
     /// Checks `file` against its seal. A file that does not exist and has no seal is
-    /// intact (its first write); in an unsealed run everything is.
+    /// intact (its first write); in an unsealed run everything is. A file left behind by
+    /// an interrupted `dla` write (see the module docs) is intact too. Leaves the
+    /// `.pending` marker that [`Guard::seal`] removes.
     pub fn new(run_dir: &Path, file: &str) -> Self {
         let intact = if !is_sealed_run(run_dir) {
             true
         } else {
             let path = run_dir.join(file);
-            match (read_seal(&seal_path(run_dir, file)), measure(&path)) {
+            let matches = match (read_seal(&seal_path(run_dir, file)), measure(&path)) {
                 (Some(s), Ok((len, sha))) => s.len == len && s.sha256 == sha,
                 (None, Err(_)) => !seal_path(run_dir, file).exists(),
                 _ => false,
-            }
+            };
+            let intact = matches || is_interrupted_write(run_dir, file);
+            // Best effort: without the marker a killed write is a plain mismatch.
+            let _ = fs::write(pending_path(run_dir, file), "");
+            intact
         };
         Self {
             run_dir: run_dir.to_path_buf(),
@@ -189,13 +290,26 @@ impl Guard {
         }
     }
 
+    /// For a writer that replaces the whole file: records the hash of the content about to
+    /// be written, so that a kill between the write and the seal can be told from an edit.
+    pub fn expect(&self, content: &[u8]) {
+        if self.intact && is_sealed_run(&self.run_dir) {
+            let _ = fs::write(
+                pending_path(&self.run_dir, &self.file),
+                format!("expect {}", hex::encode(Sha256::digest(content))),
+            );
+        }
+    }
+
     /// Seals the file as it is now when it was intact before the write.
     pub fn seal(self) -> Result<Option<Seal>, Error> {
-        if self.intact {
-            seal_file(&self.run_dir, &self.file)
+        let sealed = if self.intact {
+            seal_file(&self.run_dir, &self.file)?
         } else {
-            Ok(None)
-        }
+            None
+        };
+        let _ = fs::remove_file(pending_path(&self.run_dir, &self.file));
+        Ok(sealed)
     }
 }
 
