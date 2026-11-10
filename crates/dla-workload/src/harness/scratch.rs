@@ -189,6 +189,35 @@ fn keeps_for_build(scope: &Scope, rel: &Path, slash: &str) -> bool {
     dir.len() < root.len() && root[..dir.len()] == *dir
 }
 
+/// Copies the scratch tree `src` into `dest` (created) without build outputs: the
+/// directories of [`SKIP_ANYWHERE`] wherever they are, and the root-level ones of
+/// [`SKIP_DIRS`]. Symlinks are recreated as they are on Unix and skipped elsewhere.
+/// `dla intervene` clones a harness's `work/` this way. Returns the files copied.
+pub fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<usize> {
+    fs::create_dir_all(dest)?;
+    let (files, _left_out) = walk_files(src);
+    let mut copied = 0;
+    for rel in files {
+        let from = src.join(&rel);
+        let to = dest.join(&rel);
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let meta = fs::symlink_metadata(&from)?;
+        if meta.is_symlink() {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(fs::read_link(&from)?, &to)?;
+                copied += 1;
+            }
+            continue;
+        }
+        fs::copy(&from, &to)?;
+        copied += 1;
+    }
+    Ok(copied)
+}
+
 /// Copies the project into `dest` (created). The `.dla` directory is never copied.
 pub fn copy_project(project: &Path, dest: &Path) -> std::io::Result<CopyReport> {
     copy_project_scoped(project, dest, None)
@@ -315,6 +344,36 @@ mod tests {
         assert!(dest.join("src/b.rs").is_file());
         assert!(!dest.join("target").exists() && !dest.join(".dla").exists());
         assert!(r.gaps.iter().any(|g| g.contains("target")), "{:?}", r.gaps);
+    }
+
+    #[test]
+    fn copy_tree_drops_build_outputs_and_keeps_sources() {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("work");
+        for f in [
+            "main.go",
+            "pkg/a/a.go",
+            "target/debug/x",
+            "build/classes/A.class",
+            "pkg/__pycache__/m.pyc",
+            "node_modules/m/i.js",
+            "pkg/build/B.java",
+        ] {
+            let path = w.join(f);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, f).unwrap();
+        }
+        let dest = d.path().join("clone");
+        assert_eq!(copy_tree(&w, &dest).unwrap(), 3);
+        assert_eq!(
+            fs::read_to_string(dest.join("pkg/a/a.go")).unwrap(),
+            "pkg/a/a.go"
+        );
+        // A package named `build` below the root is source.
+        assert!(dest.join("pkg/build/B.java").is_file());
+        for gone in ["target", "build", "node_modules", "pkg/__pycache__"] {
+            assert!(!dest.join(gone).exists(), "{gone}");
+        }
     }
 
     #[test]

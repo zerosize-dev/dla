@@ -1,6 +1,31 @@
 ---
 name: detect-leak-anywhere
 description: Diagnose memory leaks in any runtime. Use when someone reports growing memory, a rising RSS, an out-of-memory kill or OOMKilled pod, a heap that never shrinks, a slow leak, file descriptor or thread growth, or asks to find, prove or rule out a leak in JVM/Kotlin, Go, Rust, Node.js/TypeScript, Python or native/FFI code, in a repository, a running process or captured heap dumps. Diagnosis only; it never edits project source.
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit|NotebookEdit"
+      hooks:
+        - type: command
+          command: "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate write-hook"
+          timeout: 10
+          onFailure: block
+    - matcher: "Read|Grep|Glob"
+      hooks:
+        - type: command
+          command: "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate read-hook"
+          timeout: 10
+          onFailure: block
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate bash-hook"
+          timeout: 10
+          onFailure: block
+  Stop:
+    - hooks:
+        - type: command
+          command: "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate stop-hook"
+          timeout: 10
 ---
 
 # Detect Leak Anywhere (DLA)

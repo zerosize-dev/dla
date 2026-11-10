@@ -41,7 +41,7 @@ use crate::{
 #[path = "trend/against.rs"]
 mod against;
 #[path = "trend/analysis.rs"]
-mod analysis;
+pub(crate) mod analysis;
 #[path = "trend/candidates.rs"]
 mod candidates;
 #[path = "trend/summary.rs"]

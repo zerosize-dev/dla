@@ -1,6 +1,9 @@
 //! Run state: `.dla/<run-id>/state.json`, rewritten atomically by dla only.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use schemars::JsonSchema;
@@ -339,6 +342,33 @@ pub struct RunState {
     /// Digest (ledger length plus hash of the missing-item ids) of the last stop-hook block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_block_digest: Option<String>,
+    /// The same counter for each worker's SubagentStop hook, by worker name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub worker_stop: BTreeMap<String, StopCounter>,
+}
+
+/// Consecutive stop-hook blocks with an unchanged digest.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default, PartialEq, Eq)]
+pub struct StopCounter {
+    /// Blocks in a row with this digest.
+    pub blocks: u32,
+    /// Digest of the last block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+impl StopCounter {
+    /// Counts one more failing stop attempt with `digest`: the same digest as the last one
+    /// adds to the count, a different one starts again at 1. Returns the new count.
+    pub fn bump(&mut self, digest: &str) -> u32 {
+        if self.digest.as_deref() == Some(digest) {
+            self.blocks = self.blocks.saturating_add(1);
+        } else {
+            self.blocks = 1;
+            self.digest = Some(digest.to_owned());
+        }
+        self.blocks
+    }
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -399,6 +429,7 @@ impl RunState {
             stages_passed: Vec::new(),
             stop_blocks: 0,
             stop_block_digest: None,
+            worker_stop: BTreeMap::new(),
         })
     }
 
@@ -413,9 +444,12 @@ impl RunState {
         load_versioned(&run_dir.join(STATE_FILE), Artifact::State)
     }
 
-    /// Writes `<run_dir>/state.json` atomically (temp file, then rename).
+    /// Writes `<run_dir>/state.json` atomically (temp file, then rename) and seals it.
     pub fn save(&self, run_dir: &Path) -> Result<(), Error> {
-        write_atomic(&run_dir.join(STATE_FILE), to_pretty_json(self).as_bytes())
+        let guard = crate::integrity::Guard::new(run_dir, STATE_FILE);
+        write_atomic(&run_dir.join(STATE_FILE), to_pretty_json(self).as_bytes())?;
+        guard.seal()?;
+        Ok(())
     }
 
     /// Read-modify-write of `state.json`: loads the current state, applies `f` and
@@ -434,6 +468,25 @@ impl RunState {
             state.save(run_dir)?;
             Ok(out)
         })
+    }
+
+    /// True when `dla gate check --stage` passed for `stage`.
+    pub fn stage_passed(&self, stage: Stage) -> bool {
+        self.stages_passed.contains(&stage)
+    }
+
+    /// Records a passing `gate check --stage` and moves `stage` on to the next gated one.
+    pub fn record_stage_passed(&mut self, stage: Stage) {
+        if !self.stages_passed.contains(&stage) {
+            self.stages_passed.push(stage);
+        }
+        let next = Stage::ALL
+            .get(stage.rank() + 1)
+            .copied()
+            .filter(|n| n.rank() > self.stage.rank());
+        if let Some(n) = next {
+            self.stage = n;
+        }
     }
 
     /// The registered worker named `name`.

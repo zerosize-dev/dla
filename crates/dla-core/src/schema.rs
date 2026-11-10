@@ -10,7 +10,9 @@ use crate::{
     detectors::DetectorFile,
     evidence::EvidenceRecord,
     finding::Finding,
+    gate::GateReport,
     harness::{HarnessDump, HarnessManifest},
+    integrity::Seal,
     known_leaks::KnownLeaksFile,
     probe::ProbeReport,
     record::LedgerLine,
@@ -43,6 +45,8 @@ pub fn all() -> Vec<(&'static str, Schema)> {
         ("trend", schema_for!(TrendReport)),
         ("harness-manifest", schema_for!(HarnessManifest)),
         ("harness-dump", schema_for!(HarnessDump)),
+        ("gate-report", schema_for!(GateReport)),
+        ("integrity-seal", schema_for!(Seal)),
     ]
 }
 

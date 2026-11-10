@@ -7,11 +7,13 @@
 //! and the `classify` module docs (re-exported as [`classify()`], [`gate()`], [`analyze()`]) for the shape rules and the gate.
 
 mod classify;
+pub mod intervene;
 pub mod normal;
 pub mod trend;
 mod types;
 
 pub use classify::{Analysis, analyze, classify, gate, gate_counter};
+pub use intervene::{ColumnView, Effect, Guards, Treated, judge_intervention};
 pub use trend::{every_delta, half_split, mann_kendall, noise, theil_sen};
 pub use types::{
     EveryDelta, GateThresholds, GateVerdict, HalfSplit, MannKendall, TheilSen, TrendShape,

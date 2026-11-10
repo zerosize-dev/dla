@@ -127,6 +127,13 @@
       "format": "uint32",
       "minimum": 0
     },
+    "worker_stop": {
+      "description": "The same counter for each worker's SubagentStop hook, by worker name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/StopCounter"
+      }
+    },
     "workers": {
       "description": "Workers registered by `dla run dispatch`.",
       "type": "array",
@@ -498,6 +505,28 @@
           "type": "string",
           "const": "report"
         }
+      ]
+    },
+    "StopCounter": {
+      "description": "Consecutive stop-hook blocks with an unchanged digest.",
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "description": "Blocks in a row with this digest.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "digest": {
+          "description": "Digest of the last block.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "blocks"
       ]
     },
     "WorkerEntry": {

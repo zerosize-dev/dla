@@ -35,6 +35,7 @@ pub fn render_markdown(view: &RunView) -> String {
     if !st.complete {
         open_items(&mut out, &st);
     }
+    integrity(&mut out, view);
     workers(&mut out, view);
     findings(&mut out, view);
     merged_duplicates(&mut out, view);
@@ -342,6 +343,34 @@ fn open_items(out: &mut String, st: &dla_core::ReportStatus) {
             "- **{}**: {d}{stop} Fix: {}",
             inline(&b.id),
             code(&b.fix)
+        );
+    }
+    out.push('\n');
+}
+
+/// Reseals recorded in the ledger, and a note when `report.md` was edited after the last
+/// render. Nothing is printed for a run with neither.
+fn integrity(out: &mut String, view: &RunView) {
+    let reseals = view.ledger.reseals();
+    if reseals.is_empty() && !view.report_modified {
+        return;
+    }
+    out.push_str("## Integrity\n\n");
+    for r in reseals {
+        let _ = writeln!(
+            out,
+            "- Resealed {}: {}",
+            r.files
+                .iter()
+                .map(|f| code(f))
+                .collect::<Vec<_>>()
+                .join(", "),
+            inline(&r.reason)
+        );
+    }
+    if view.report_modified {
+        out.push_str(
+            "- `report.md` was modified after it was rendered; this report replaces it.\n",
         );
     }
     out.push('\n');

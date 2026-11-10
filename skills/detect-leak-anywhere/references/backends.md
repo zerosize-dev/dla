@@ -143,6 +143,21 @@ rules. Run it in the managed worker (`dla --run <id> --worker jvm correlate H1`)
 harness with no boundary, or no series with shim columns, is refused and the refusal names the fix. PyO3,
 N-API and cgo boundaries are detected and reported by `dla probe`, but the shim measures JNI only.
 
+## Intervene: does the growth go away?
+
+`dla intervene <H> --finding F (--stub-writer FILE:LINE... | --patch FILE.diff) [--rerun-control]` clones
+harness H, edits the clone's scratch copy, builds and runs the control's points on it and judges the column the
+finding was confirmed on. It is the second class of evidence that works on every runtime. The project and H are
+never changed. `--stub-writer` replaces a recorded writer of F (or F's site) that is a standalone call,
+expression or assignment statement with the language's no-op; `--patch` takes a unified diff of files under
+`work/` (not tests, driver or agent files), hunks within 10 lines of a recorded writer, remover, the site or the
+owner declaration, at most 40 changed lines. One record of kind `intervention` (authority test) is written with
+the effect: `growth-removed` (then `dla ledger strong F --evidence <id>`), `growth-remains` or `inconclusive`
+(recorded, never a refutation: another writer may exist) or `invalid` (a guard failed, for example the stub
+stopped the build). A column that is missing from the treated series counts as removed only when the rest of the
+series is there. Native and Rust harnesses have no holder probes, so the column is an allocator-shim site group
+or an os column; an edit away from the allocating statement may not move an os column past the gate.
+
 ## Known leaks
 
 `dla probe` checks `data/known-leaks.toml` (documented behavior of a runtime or library that looks like a

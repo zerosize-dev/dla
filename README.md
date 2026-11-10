@@ -244,7 +244,7 @@ https URL, a `file://` URL or a plain directory path.
 
 | Component | Minimum | Why |
 |---|---|---|
-| Claude Code | 2.1.94 | Plugin `bin/` on the `PATH` (2.1.91), plugin options (2.1.83), `CLAUDE_PLUGIN_DATA` (2.1.78), and skill hooks in plugins actually running (2.1.94). Use 2.1.143 or later for the documented Stop-hook continuation cap |
+| Claude Code | 2.1.94 | Plugin `bin/` on the `PATH` (2.1.91), plugin options (2.1.83), `CLAUDE_PLUGIN_DATA` (2.1.78), and skill hooks in plugins actually running (2.1.94). Use 2.1.143 or later for the documented Stop-hook continuation cap. Use 2.1.295 or later so that a failing gate hook blocks the call (`onFailure: block`); on older versions a gate hook that cannot run lets the call through (fail open), and only the integrity seals below still catch an edited run file |
 | Node.js | 20 LTS (18 works) | Needed only for memlab-based Node heap analysis. memlab's browser driver requires Node 18; 20 or 22 is recommended |
 | JDK | 21 | Needed only for Eclipse MAT heap analysis on JVM targets (MAT 1.17 requires Java 21) |
 | Rust | 1.89 stable | Only for building from source (edition 2024) |
@@ -252,6 +252,34 @@ https URL, a `file://` URL or a plain directory path.
 Node and a JDK are not needed to install or run the plugin. They are needed when a run uses the
 corresponding analysis tool, and DLA reports the tool as missing, with an install hint, when it
 cannot find it.
+
+## Gates, hooks and integrity
+
+`dla gate check --stage <s>` and `dla gate check --final` list what a stage or the whole run
+still lacks, with the command that fixes each item, and exit non-zero when something is missing.
+A passing stage is recorded in `state.json`; the archetype and known-leak tables stay closed to
+the model until the `classify` stage has passed.
+
+The plugin enforces three things with hooks. The skill's frontmatter hooks cover the main
+session: a write gate (`Write`, `Edit`, `NotebookEdit`) that refuses the protected files under
+`.dla/` (`ledger*`, `state.json`, `coverage.json`, `report.md`, `integrity/`), a read gate
+(`Read`, `Grep`, `Glob`) for the archetype tables before `classify`, a `Bash` gate that applies
+both checks to the command text, and a `Stop` hook that blocks the end of the turn while
+`dla gate check --final` fails. `hooks/hooks.json` repeats the write and read gates with `if`
+filters, so they also reach the worker subagents (plugin agents ignore hooks in their own
+frontmatter), and adds a `SubagentStop` hook for `dla:worker`. After three blocks with no change to
+the ledger the stop hook lets the session end and stamps the run `INCOMPLETE`.
+
+Hooks are a guard rail. The `Bash` gate is best effort, `Grep` can still reach a directory, and
+an `@file` mention inserts a file with no tool call. The guarantee is inside `dla`: every write of
+`ledger.jsonl`, the worker slices, `state.json`, `coverage.json` and `report.md` is sealed in
+`integrity/`, and `dla gate check`, `dla report` and `dla run status` verify the seals. A file
+edited outside `dla` makes the report `INCOMPLETE` with the file named, and
+`dla run reseal --reason "<why>"` is the one way to accept the change (it is recorded in the
+ledger and listed in the report). A run written before the seals existed is reported as
+unsealed, which is not tampering.
+
+Gate hooks need Claude Code 2.1.295 or later to fail closed (see Minimum versions).
 
 ## Runs, `.dla/` and `.gitignore`
 
@@ -295,7 +323,7 @@ builds and verifies the five targets but publishes nothing.
 .claude-plugin/   plugin and marketplace manifests
 skills/           the detect-leak-anywhere skill and its references
 agents/           worker and verifier subagents
-hooks/            SessionStart hook and downloader
+hooks/            SessionStart hook and downloader, SubagentStop and PreToolUse gates
 bin/dla           shim that locates and runs the binary
 crates/           Rust workspace (dla-core, dla-report, dla-cli, ...)
 schemas/          generated JSON Schemas

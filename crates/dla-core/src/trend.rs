@@ -126,6 +126,26 @@ impl TrendReport {
         serde_json::from_value(doc).map_err(|e| malformed(e.to_string()))
     }
 
+    /// Every readable `trend/T<n>.json` of the run, in numeric order. A file that cannot be
+    /// read is skipped.
+    pub fn load_all(run_dir: &Path) -> Vec<Self> {
+        let Ok(entries) = fs::read_dir(run_dir.join(TREND_DIR)) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<(u32, String)> = entries
+            .filter_map(Result::ok)
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let id = name.strip_suffix(".json")?.to_owned();
+                numbered('T', &id).map(|n| (n, id))
+            })
+            .collect();
+        ids.sort();
+        ids.into_iter()
+            .filter_map(|(_, id)| Self::load(run_dir, &id).ok())
+            .collect()
+    }
+
     /// Writes `<run_dir>/trend/<id>.json` atomically.
     pub fn save(&self, run_dir: &Path) -> Result<PathBuf, Error> {
         let path = Self::path_in(run_dir, &self.id);

@@ -75,7 +75,7 @@ const SAMPLE_INTERVAL: Duration = Duration::from_millis(100);
 /// Default size of the repeated key space of a driver.
 const DEFAULT_REPEAT: u64 = 64;
 /// File in the harness directory recording the build that was done.
-const BUILD_MARKER: &str = ".built";
+pub const BUILD_MARKER: &str = ".built";
 /// Detector hits kept.
 const MAX_DETECTORS: usize = 50;
 

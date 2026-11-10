@@ -239,6 +239,7 @@ fn record_ran(
     }
     let enumerated = added + skipped;
     let mut cov = BackendCoverage::ran(Some(version), enumerated);
+    cov.duplicates = skipped;
     if !limitations.is_empty() {
         cov.reason = Some(short(&limitations.join("; ")));
     }

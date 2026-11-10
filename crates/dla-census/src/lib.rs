@@ -34,6 +34,7 @@ pub mod jvm_class;
 pub mod lang;
 pub mod model;
 pub mod parse;
+pub mod statement;
 pub mod usage;
 pub mod vocab;
 pub mod walk;
@@ -167,12 +168,11 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
 
     let enumerated = u64::try_from(entries.len()).unwrap_or(u64::MAX);
     record_out_of_scope(ctx, lang, out_of_scope)?;
+    let duplicates = writer.skipped();
     CoverageManifest::update(&ctx.run_dir, |m| {
-        m.set_backend(
-            lang.as_str(),
-            "census",
-            BackendCoverage::ran(Some(env!("CARGO_PKG_VERSION").to_owned()), enumerated),
-        );
+        let mut cov = BackendCoverage::ran(Some(env!("CARGO_PKG_VERSION").to_owned()), enumerated);
+        cov.duplicates = duplicates;
+        m.set_backend(lang.as_str(), "census", cov);
     })
     .map_err(|e| e.to_refusal())?;
 

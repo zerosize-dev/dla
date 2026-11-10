@@ -15,6 +15,7 @@ mod ctx;
 mod fail;
 mod gap_cmd;
 mod gate_cmd;
+mod gate_hooks;
 mod git;
 mod gitignore;
 mod harness_cmd;
@@ -131,6 +132,14 @@ enum Command {
 enum Output {
     Json(Value),
     Markdown(String),
+    /// Markdown printed in full, with a non-zero exit (a report that names a tamper).
+    MarkdownFailing(String),
+    /// Exact stdout, stderr and exit code (hooks, a failing gate check).
+    Raw {
+        stdout: String,
+        stderr: String,
+        code: u8,
+    },
 }
 
 fn dispatch(cli: Cli) -> Res<Output> {
@@ -145,7 +154,14 @@ fn dispatch(cli: Cli) -> Res<Output> {
         Command::Report => {
             let r = report::run(&ctx()?)?;
             eprintln!("report: {} sha256={}", r.path, r.sha256);
-            Ok(Output::Markdown(r.markdown))
+            for t in &r.tamper {
+                eprintln!("tamper: {}", t.describe());
+            }
+            if r.tamper.is_empty() {
+                Ok(Output::Markdown(r.markdown))
+            } else {
+                Ok(Output::MarkdownFailing(r.markdown))
+            }
         }
         Command::Consent(a) => {
             let ctx = ctx()?;
@@ -194,8 +210,29 @@ fn dispatch(cli: Cli) -> Res<Output> {
         Command::Correlate(a) => {
             correlate_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
         }
-        Command::Gate(c) => gate_cmd::run(&ctx, c).map(Output::Json),
-        Command::Intervene(a) => intervene_cmd::run(&ctx()?, a).map(Output::Json),
+        Command::Gate(c) => gate_cmd::run(project, &ctx, c).map(|o| match o {
+            gate_cmd::GateOut::Json(v) => Output::Json(v),
+            gate_cmd::GateOut::Raw {
+                stdout,
+                stderr,
+                code,
+            } => Output::Raw {
+                stdout,
+                stderr,
+                code,
+            },
+        }),
+        Command::Intervene(a) => {
+            intervene_cmd::run(&ctx()?, &project_root(project)?, data, a).map(Output::Json)
+        }
+    }
+}
+
+fn print_markdown(md: &str) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(md.as_bytes());
+    if !md.ends_with('\n') {
+        let _ = stdout.write_all(b"\n");
     }
 }
 
@@ -336,12 +373,29 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Output::Markdown(md)) => {
-            let mut stdout = std::io::stdout().lock();
-            let _ = stdout.write_all(md.as_bytes());
-            if !md.ends_with('\n') {
-                let _ = stdout.write_all(b"\n");
-            }
+            print_markdown(&md);
             ExitCode::SUCCESS
+        }
+        Ok(Output::Raw {
+            stdout,
+            stderr,
+            code,
+        }) => {
+            if !stdout.is_empty() {
+                let mut out = std::io::stdout().lock();
+                let _ = out.write_all(stdout.as_bytes());
+                if !stdout.ends_with('\n') {
+                    let _ = out.write_all(b"\n");
+                }
+            }
+            if !stderr.is_empty() {
+                eprintln!("{stderr}");
+            }
+            ExitCode::from(code)
+        }
+        Ok(Output::MarkdownFailing(md)) => {
+            print_markdown(&md);
+            ExitCode::from(2)
         }
         Err(f) => {
             print_json(json!({"ok": false, "error": f.refusal}));

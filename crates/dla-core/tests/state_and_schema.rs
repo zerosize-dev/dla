@@ -174,7 +174,9 @@ fn schema_export_is_complete_and_deterministic() {
             "series",
             "trend",
             "harness-manifest",
-            "harness-dump"
+            "harness-dump",
+            "gate-report",
+            "integrity-seal"
         ]
     );
     let first: Vec<String> = all.iter().map(|(_, s)| schema::render(s)).collect();

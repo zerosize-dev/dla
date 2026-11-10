@@ -1,16 +1,40 @@
 //! Stage and final gates: `dla gate check`.
 //!
 //! [`evaluate`] is a pure function of a [`RunView`]: the same list feeds `dla gate check`,
-//! the stop hooks and `dla run status`. This is the skeleton: it reuses [`crate::view::status`]
-//! until the gate package (M6 package D) adds the stage requirements.
+//! the stop hooks and `dla run status`, so there is one source of truth for what is still
+//! missing. Stages are cumulative: `--stage X` also requires everything the stages before
+//! it require. `--final` requires everything the report needs.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use dla_stats::{GateVerdict, TrendShape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{state::Stage, view::RunView};
+use crate::{
+    checklist::AnswerStatus,
+    coverage::{BackendStatus, CoverageManifest},
+    evidence::EvidenceKind,
+    finding::{Finding, FindingState, Polarity},
+    ids::FindingId,
+    series::ColumnKind,
+    state::{EntryPath, Stage},
+    trend::{ColumnTrend, TrendReport},
+    view::{BlockingItem, BlockingKind, RunView, status},
+};
+
+/// Start of the `incomplete_reason` the stop hook writes when it let a run stop after three
+/// blocks with no change to the ledger.
+pub const STOP_BLOCKED_REASON: &str = "stop hook blocked";
 
 /// How many missing items `dla gate check` prints; the full list goes to a file.
 pub const SHOWN_MISSING: usize = 5;
+
+/// A run the `dla` rules do not govern before it has a ledger of its own: artifact and
+/// symptom runs have no probe, sweep or series.
+fn probes_and_sweeps(view: &RunView) -> bool {
+    matches!(view.state.entry, EntryPath::Repository | EntryPath::Process)
+}
 
 /// What a gate checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,32 +81,830 @@ impl GateTarget {
             GateTarget::Final => "final",
         }
     }
+
+    /// True when the target includes the requirements of `stage`.
+    fn includes(self, stage: Stage) -> bool {
+        match self {
+            GateTarget::Stage(s) => s.rank() >= stage.rank(),
+            GateTarget::Final => true,
+        }
+    }
+}
+
+/// The stored file for the full list: `gate/<name>.json` relative to the run directory.
+pub fn pointer_for(target: GateTarget) -> String {
+    format!("gate/{}.json", target.name())
 }
 
 /// Evaluates a gate on `view`. `worker` limits the check to one worker's slice.
-///
-/// Skeleton: every target returns what [`crate::view::status`] blocks on.
 pub fn evaluate(view: &RunView, target: GateTarget, worker: Option<&str>) -> GateReport {
-    let _ = worker;
-    let all: Vec<Missing> = crate::view::status(view)
-        .blocking
-        .into_iter()
-        .map(|b| Missing {
-            kind: serde_json::to_value(b.kind)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_default(),
-            id: b.id,
-            description: b.description,
-            fix: b.fix,
-        })
-        .collect();
-    let name = target.name();
+    let all = missing(view, target, worker);
     GateReport {
         ok: all.is_empty(),
-        stage: name.to_owned(),
+        stage: target.name().to_owned(),
         missing_total: all.len(),
         missing: all.into_iter().take(SHOWN_MISSING).collect(),
-        pointer: format!("gate/{name}.json"),
+        pointer: pointer_for(target),
     }
+}
+
+fn kind_name(k: BlockingKind) -> String {
+    serde_json::to_value(k)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn from_blocking(b: BlockingItem) -> Missing {
+    Missing {
+        kind: kind_name(b.kind),
+        id: b.id,
+        description: b.description,
+        fix: b.fix,
+    }
+}
+
+struct Out(Vec<Missing>);
+
+impl Out {
+    fn add(
+        &mut self,
+        kind: &str,
+        id: impl Into<String>,
+        description: impl Into<String>,
+        fix: impl Into<String>,
+    ) {
+        self.0.push(Missing {
+            kind: kind.to_owned(),
+            id: id.into(),
+            description: description.into(),
+            fix: fix.into(),
+        });
+    }
+}
+
+/// The full list of what a gate still needs, in a stable order: the blockers of
+/// [`status`] first (findings, open items, checklist, run), then the stage and final
+/// requirements.
+pub fn missing(view: &RunView, target: GateTarget, worker: Option<&str>) -> Vec<Missing> {
+    match worker {
+        Some(w) => worker_missing(view, target, w),
+        None => core_missing(view, target),
+    }
+}
+
+fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
+    let mut out = Out(Vec::new());
+    let is_final = target == GateTarget::Final;
+    let base = status(view).blocking;
+    for b in base {
+        let keep = is_final
+            || match b.kind {
+                BlockingKind::Run | BlockingKind::ChecklistItem | BlockingKind::Integrity => true,
+                BlockingKind::Finding | BlockingKind::OpenItem => false,
+            };
+        if keep {
+            out.0.push(from_blocking(b));
+        }
+    }
+    if target.includes(Stage::Intake) {
+        intake(view, &mut out);
+    }
+    if target.includes(Stage::Probe) && probes_and_sweeps(view) {
+        probe(view, &mut out);
+    }
+    if target.includes(Stage::Sweep) && probes_and_sweeps(view) {
+        sweep(view, &mut out);
+    }
+    if target.includes(Stage::Classify) {
+        classify(view, is_final, &mut out);
+    }
+    if target.includes(Stage::Confirm) {
+        confirm(view, &mut out);
+    }
+    if target.includes(Stage::Attribute) {
+        attribute(view, &mut out);
+    }
+    if target.includes(Stage::RuleOut) {
+        rule_out(view, &mut out);
+    }
+    if is_final {
+        final_items(view, &mut out);
+    }
+    out.0
+}
+
+// ------------------------------------------------------------------- intake
+
+fn intake(view: &RunView, out: &mut Out) {
+    // (d) the checklist, re-validated at gate time: the cited evidence must exist in the
+    // merged ledger, an unresolved answer needs its reason and remedy.
+    for c in &view.checklist {
+        let Some(a) = &c.answer else { continue };
+        let id = c.item.id.clone();
+        match a.status {
+            AnswerStatus::Answered | AnswerStatus::Partial => {
+                if a.evidence.is_empty() {
+                    out.add(
+                        "checklist_item",
+                        id.clone(),
+                        format!("checklist item {id} is {} and cites no evidence", a.status),
+                        format!("dla ledger resolve {id} --status answered --evidence E1"),
+                    );
+                    continue;
+                }
+                if let Some(bad) = a
+                    .evidence
+                    .iter()
+                    .find(|e| view.ledger.evidence_by_id(e).is_none())
+                {
+                    out.add(
+                        "checklist_item",
+                        id.clone(),
+                        format!("checklist item {id} cites {bad}, which is not in the ledger"),
+                        format!("dla ledger resolve {id} --status answered --evidence E1"),
+                    );
+                }
+            }
+            AnswerStatus::Unresolved => {
+                if a.reason.is_none() || a.remedy.as_deref().is_none_or(|r| r.trim().is_empty()) {
+                    out.add(
+                        "checklist_item",
+                        id.clone(),
+                        format!("checklist item {id} is unresolved without a reason and a remedy"),
+                        format!(
+                            "dla ledger resolve {id} --status unresolved --reason tool_missing --remedy \"<text>\""
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    let consent_unresolved = view
+        .checklist
+        .iter()
+        .find(|c| c.item.id == "intake.consent")
+        .and_then(|c| c.answer.as_ref())
+        .is_some_and(|a| a.status == AnswerStatus::Unresolved);
+    if view.state.consent.is_none() && !consent_unresolved {
+        out.add(
+            "consent",
+            view.state.run_id.clone(),
+            "no consent is recorded for this run",
+            "dla consent --tiers 1,2",
+        );
+    }
+}
+
+// -------------------------------------------------------------------- probe
+
+fn probe(view: &RunView, out: &mut Out) {
+    if !view
+        .ledger
+        .evidence()
+        .any(|e| e.kind == EvidenceKind::Probe)
+    {
+        out.add(
+            "probe",
+            view.state.run_id.clone(),
+            "no probe evidence is recorded",
+            "dla probe",
+        );
+    }
+    let workers = view.coverage.as_ref().map_or(0, |c| c.workers.len());
+    // No runtime was detected: the answer to `intake.runtimes` may say so as unresolved.
+    let runtimes_unresolved = view
+        .checklist
+        .iter()
+        .find(|c| c.item.id == "intake.runtimes")
+        .and_then(|c| c.answer.as_ref())
+        .is_some_and(|a| a.status == AnswerStatus::Unresolved);
+    if workers == 0 && !runtimes_unresolved {
+        out.add(
+            "coverage",
+            view.state.run_id.clone(),
+            "coverage.json has no runtime row: no runtime was detected or probed",
+            "dla probe",
+        );
+    }
+    if let Some(cov) = &view.coverage {
+        for (w, wc) in &cov.workers {
+            for (b, bc) in &wc.backends {
+                let silent = match bc.status {
+                    BackendStatus::Ran => false,
+                    BackendStatus::Blocked => {
+                        bc.reason.as_deref().is_none_or(|r| r.trim().is_empty())
+                    }
+                    BackendStatus::Missing => {
+                        bc.reason.as_deref().is_none_or(|r| r.trim().is_empty())
+                            && bc
+                                .install_hint
+                                .as_deref()
+                                .is_none_or(|r| r.trim().is_empty())
+                    }
+                };
+                if silent {
+                    out.add(
+                        "coverage",
+                        format!("{w}/{b}"),
+                        format!(
+                            "backend {b} of {w} is {} with no reason or install hint",
+                            bc.status
+                        ),
+                        format!("dla sweep --lang {w}"),
+                    );
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------------- sweep
+
+fn sweep(view: &RunView, out: &mut Out) {
+    let Some(cov) = &view.coverage else { return };
+    for (w, wc) in &cov.workers {
+        if !wc.backends.contains_key("census") {
+            out.add(
+                "coverage",
+                format!("{w}/census"),
+                format!("no census has run for runtime {w}"),
+                format!("dla census --lang {w}"),
+            );
+        }
+        // The built-in `dla` rules run in every sweep, so their row says a sweep happened.
+        if !wc.backends.contains_key("dla") {
+            out.add(
+                "coverage",
+                format!("{w}/sweep"),
+                format!("no sweep has run for runtime {w}"),
+                format!("dla sweep --lang {w}"),
+            );
+        }
+    }
+    for a in accounting(view).iter().filter(|a| a.hits > a.enumerated) {
+        out.add(
+            "accounting",
+            format!("{}/{}", a.worker, a.backend),
+            format!(
+                "backend {} of {} reported {} hit(s) and the ledger accounts for {} (hits without a candidate)",
+                a.backend, a.worker, a.hits, a.enumerated
+            ),
+            format!("dla sweep --lang {}   (a hit needs a candidate or a recorded duplicate)", a.worker),
+        );
+    }
+}
+
+// ---------------------------------------------------------------- accounting
+
+/// Disposition accounting of one backend of one worker, derived from the ledger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendAccount {
+    /// The coverage worker key (the runtime).
+    pub worker: String,
+    /// The backend (`census` for the census).
+    pub backend: String,
+    /// What the backend reported in `coverage.json` (hits).
+    pub hits: u64,
+    /// Findings of this backend plus recorded duplicates.
+    pub enumerated: u64,
+    /// Those in a dispositioned state; a duplicate counts when its twin does.
+    pub dispositioned: u64,
+    /// The findings of this backend that are not dispositioned.
+    pub open: Vec<FindingId>,
+}
+
+fn backend_of(origin: &str) -> Option<String> {
+    if origin == "census" {
+        return Some("census".to_owned());
+    }
+    let rest = origin.strip_prefix("detector:")?;
+    Some(rest.split_once('/').map_or(rest, |(b, _)| b).to_owned())
+}
+
+/// The coverage worker key of a finding: the runtime of its worker prefix, else the
+/// `lang` of the sweep or census evidence it cites, else the only worker there is.
+fn worker_key(view: &RunView, cov: &CoverageManifest, f: &Finding) -> Option<String> {
+    if let Some(p) = f.id.prefix() {
+        let rt = view.state.worker(p).map_or(p, |w| w.runtime.as_str());
+        return Some(rt.to_owned());
+    }
+    for e in &f.supports {
+        if let Some(rec) = view.ledger.evidence_by_id(e)
+            && matches!(
+                rec.kind,
+                EvidenceKind::StaticHit | EvidenceKind::CensusHolder
+            )
+            && let Some(l) = rec.result.get("lang").and_then(|v| v.as_str())
+        {
+            return Some(l.to_owned());
+        }
+    }
+    (cov.workers.len() == 1)
+        .then(|| cov.workers.keys().next().cloned())
+        .flatten()
+}
+
+/// The accounting of every sweep and census backend in `coverage.json`: findings with
+/// that origin backend plus recorded duplicates against the findings that are dispositioned.
+/// Backends that are not a source of findings (sampling, harness tools) are not listed.
+pub fn accounting(view: &RunView) -> Vec<BackendAccount> {
+    let Some(cov) = &view.coverage else {
+        return Vec::new();
+    };
+    // Which (runtime, backend) pairs produced hit evidence at all.
+    let mut sources: BTreeSet<(String, String)> = BTreeSet::new();
+    for e in view.ledger.evidence() {
+        let lang = e.result.get("lang").and_then(|v| v.as_str());
+        match (e.kind, lang) {
+            (EvidenceKind::StaticHit, Some(l)) => {
+                sources.insert((l.to_owned(), e.tool.name.clone()));
+            }
+            (EvidenceKind::CensusHolder, Some(l)) => {
+                sources.insert((l.to_owned(), "census".to_owned()));
+            }
+            _ => {}
+        }
+    }
+    // (runtime, backend) -> (findings, dispositioned findings, open ids)
+    let mut by: BTreeMap<(String, String), (u64, u64, Vec<FindingId>)> = BTreeMap::new();
+    for f in view.ledger.findings() {
+        let Some(backend) = backend_of(f.origin.as_str()) else {
+            continue;
+        };
+        let Some(w) = worker_key(view, cov, f) else {
+            continue;
+        };
+        let twin = view.ledger.merged_into(&f.id);
+        let disp = match twin {
+            Some(c) => view
+                .ledger
+                .finding(c)
+                .is_some_and(|c| c.state.is_dispositioned()),
+            None => f.state.is_dispositioned(),
+        };
+        let slot = by.entry((w, backend)).or_default();
+        slot.0 += 1;
+        if disp {
+            slot.1 += 1;
+        } else {
+            slot.2.push(f.id.clone());
+        }
+    }
+    let mut out = Vec::new();
+    for (w, wc) in &cov.workers {
+        for (b, bc) in &wc.backends {
+            let key = (w.clone(), b.clone());
+            if !sources.contains(&key) {
+                continue;
+            }
+            let (n, d, open) = by.remove(&key).unwrap_or_default();
+            // A duplicate counts as dispositioned when its twin does; a backend with an
+            // open finding cannot say which twin that is, so none is counted then.
+            let dup_disp = if open.is_empty() { bc.duplicates } else { 0 };
+            out.push(BackendAccount {
+                worker: w.clone(),
+                backend: b.clone(),
+                hits: bc.enumerated,
+                enumerated: n + bc.duplicates,
+                dispositioned: d + dup_disp,
+                open,
+            });
+        }
+    }
+    out
+}
+
+/// Writes the derived `dispositioned` counts into `coverage.json`.
+pub fn write_back_accounting(
+    run_dir: &std::path::Path,
+    accounts: &[BackendAccount],
+) -> Result<(), crate::error::Error> {
+    if accounts.is_empty() {
+        return Ok(());
+    }
+    let current = CoverageManifest::load(run_dir)?;
+    let unchanged = current.as_ref().is_some_and(|m| {
+        accounts.iter().all(|a| {
+            m.workers
+                .get(&a.worker)
+                .and_then(|w| w.backends.get(&a.backend))
+                .is_some_and(|b| b.dispositioned == a.dispositioned)
+        })
+    });
+    if unchanged {
+        return Ok(());
+    }
+    CoverageManifest::update(run_dir, |m| {
+        for a in accounts {
+            if let Some(b) = m
+                .workers
+                .get_mut(&a.worker)
+                .and_then(|w| w.backends.get_mut(&a.backend))
+            {
+                b.dispositioned = a.dispositioned;
+            }
+        }
+    })?;
+    Ok(())
+}
+
+// ----------------------------------------------------------------- classify
+
+/// A trend column that is not flat: its gate passed, or its shape is steady or stair.
+pub fn non_flat(c: &ColumnTrend) -> bool {
+    c.gate == GateVerdict::Pass || matches!(c.shape, TrendShape::Steady | TrendShape::Stair)
+}
+
+fn evidence_for_column(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> Option<String> {
+    let want = match c.kind {
+        ColumnKind::Gauge => EvidenceKind::GrowthSeries,
+        ColumnKind::Counter => EvidenceKind::UnitCountSeries,
+    };
+    view.ledger
+        .evidence()
+        .filter(|e| e.kind == want)
+        .find(|e| e.result.get("trend").and_then(|v| v.as_str()) == Some(t.id.as_str()))
+        .map(|e| e.evidence_id.to_string())
+}
+
+/// The findings tied to a trend column: the one it was probed for, its candidates, and
+/// the findings that cite the growth evidence `dla trend` wrote for it.
+fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec<&'a Finding> {
+    let mut ids: Vec<FindingId> = Vec::new();
+    ids.extend(c.finding.iter().cloned());
+    ids.extend(c.candidates.iter().cloned());
+    if let Some(ev) = evidence_for_column(view, t, c)
+        && let Ok(eid) = ev.parse::<crate::ids::EvidenceId>()
+    {
+        ids.extend(
+            view.ledger
+                .findings()
+                .filter(|f| f.supports.contains(&eid))
+                .map(|f| f.id.clone()),
+        );
+    }
+    ids.sort();
+    ids.dedup();
+    ids.iter().filter_map(|i| view.ledger.finding(i)).collect()
+}
+
+/// True when a resolved open item mentions the column and its trend or series.
+fn covered_by_open_item(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
+    view.ledger.open_items().any(|o| {
+        o.resolution.is_some()
+            && o.item.text.contains(&c.name)
+            && (o.item.text.contains(&t.id) || o.item.text.contains(&t.series))
+    })
+}
+
+fn classify(view: &RunView, is_final: bool, out: &mut Out) {
+    if !probes_and_sweeps(view) {
+        return;
+    }
+    // Every series was analysed.
+    let analysed: BTreeSet<&str> = view.trends.iter().map(|t| t.series.as_str()).collect();
+    for s in &view.series_ids {
+        if !analysed.contains(s.as_str()) {
+            out.add(
+                "series",
+                s.clone(),
+                format!("series {s} has no trend analysis"),
+                format!("dla trend {s}"),
+            );
+        }
+    }
+    // (c) every non-flat column is tied to a finding (dispositioned for the final gate) or
+    // covered by a resolved open item.
+    for t in &view.trends {
+        for c in t.columns.iter().filter(|c| non_flat(c)) {
+            let tied = tied_findings(view, t, c);
+            let ok = if is_final {
+                tied.iter().any(|f| f.state.is_dispositioned())
+            } else {
+                !tied.is_empty()
+            };
+            if ok || covered_by_open_item(view, t, c) {
+                continue;
+            }
+            let fix = match evidence_for_column(view, t, c) {
+                Some(e) => format!(
+                    "dla ledger add --origin growth-series --evidence {e}   # column {}",
+                    c.name
+                ),
+                None => format!("dla trend {}", t.series),
+            };
+            let why = if tied.is_empty() {
+                "is tied to no finding"
+            } else {
+                "is tied only to findings that have no disposition"
+            };
+            out.add(
+                "trend_column",
+                format!("{}:{}", t.id, c.name),
+                format!(
+                    "column {} of {} ({}) is not flat and {why}",
+                    c.name,
+                    t.id,
+                    c.shape_name()
+                ),
+                fix,
+            );
+        }
+    }
+}
+
+trait ShapeName {
+    fn shape_name(&self) -> String;
+}
+
+impl ShapeName for ColumnTrend {
+    fn shape_name(&self) -> String {
+        serde_json::to_value(self.shape)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    }
+}
+
+// ------------------------------------------------------------------ confirm
+
+fn confirm(view: &RunView, out: &mut Out) {
+    for f in view.ledger.findings() {
+        if view.ledger.merged_into(&f.id).is_some() {
+            continue;
+        }
+        if f.state == FindingState::UnderTest {
+            out.add(
+                "finding",
+                f.id.to_string(),
+                format!("finding {} is under test and has no result", f.id),
+                format!(
+                    "dla ledger confirm {}   or   dla ledger refute {}   (with --evidence)",
+                    f.id, f.id
+                ),
+            );
+        }
+    }
+    // A finding tied to growth that passed the gate must have been tested.
+    for t in &view.trends {
+        for c in t.columns.iter().filter(|c| c.gate == GateVerdict::Pass) {
+            for f in tied_findings(view, t, c) {
+                if f.state == FindingState::Candidate && view.ledger.merged_into(&f.id).is_none() {
+                    out.add(
+                        "finding",
+                        f.id.to_string(),
+                        format!(
+                            "finding {} is tied to growth that passed the gate ({} of {}) and was never tested",
+                            f.id, c.name, t.id
+                        ),
+                        format!(
+                            "dla ledger test {}   or   dla ledger resolve {} --as unresolved --reason not_exercised --remedy \"<text>\"",
+                            f.id, f.id
+                        ),
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- attribute
+
+fn is_leak_side(f: &Finding) -> bool {
+    f.polarity() == Polarity::Leak
+}
+
+fn confirmed_leaks(view: &RunView) -> impl Iterator<Item = &Finding> {
+    view.ledger.findings().filter(|f| {
+        matches!(f.state, FindingState::Confirmed | FindingState::Strong)
+            && is_leak_side(f)
+            && view.ledger.merged_into(&f.id).is_none()
+    })
+}
+
+fn attribute(view: &RunView, out: &mut Out) {
+    for f in confirmed_leaks(view) {
+        let has_where = f.site.is_some() || f.owner.is_some();
+        if f.holder.is_none() || !has_where {
+            let mut missing = Vec::new();
+            if f.holder.is_none() {
+                missing.push("a holder");
+            }
+            if !has_where {
+                missing.push("a site or owner");
+            }
+            out.add(
+                "attribution",
+                f.id.to_string(),
+                format!(
+                    "finding {} is {} and has no {}",
+                    f.id,
+                    f.state,
+                    missing.join(" and ")
+                ),
+                format!(
+                    "dla ledger annotate {} --holder <kind> --owner <field> --evidence E..",
+                    f.id
+                ),
+            );
+        }
+    }
+}
+
+// ------------------------------------------------------------------ rule out
+
+fn rule_out(view: &RunView, out: &mut Out) {
+    for f in view.ledger.findings() {
+        if view.ledger.merged_into(&f.id).is_some()
+            || !is_leak_side(f)
+            || !matches!(
+                f.state,
+                FindingState::Confirmed | FindingState::Strong | FindingState::UnderTest
+            )
+        {
+            continue;
+        }
+        let root = f.root_id();
+        let siblings: Vec<&Finding> = view
+            .ledger
+            .findings()
+            .filter(|s| s.parent.as_ref() == Some(&root) && s.polarity() == Polarity::NonLeak)
+            .collect();
+        if siblings.is_empty() {
+            out.add(
+                "rule_out",
+                f.id.to_string(),
+                format!("finding {} has no non-leak sibling hypothesis", f.id),
+                format!(
+                    "dla ledger add --sibling-of {root} --origin hypothesis --hypothesis N-WARM --refute-if \"<result>\" --evidence E.."
+                ),
+            );
+            continue;
+        }
+        for s in siblings.iter().filter(|s| !s.state.is_dispositioned()) {
+            out.add(
+                "rule_out",
+                s.id.to_string(),
+                format!(
+                    "sibling {} ({}) of {} has no disposition",
+                    s.id,
+                    s.hypothesis.as_deref().unwrap_or("N-*"),
+                    f.id
+                ),
+                format!("dla alloc-test <harness> --finding {root}   then   dla ledger refute {} --evidence <discriminator id>", s.id),
+            );
+        }
+    }
+}
+
+// -------------------------------------------------------------------- final
+
+fn final_items(view: &RunView, out: &mut Out) {
+    // (b) per backend: every hit has a candidate and every candidate a disposition. The
+    // undispositioned findings themselves are listed by `status`.
+    for a in accounting(view) {
+        if a.hits <= a.enumerated && a.dispositioned != a.enumerated && a.open.is_empty() {
+            out.add(
+                "accounting",
+                format!("{}/{}", a.worker, a.backend),
+                format!(
+                    "backend {} of {}: {} of {} enumerated item(s) are dispositioned",
+                    a.backend, a.worker, a.dispositioned, a.enumerated
+                ),
+                "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"",
+            );
+        }
+    }
+    // (e) residual rows over their threshold have a resolved open item.
+    if let Some(cov) = &view.coverage {
+        for r in cov.residual.iter().filter(|r| r.residual > r.threshold) {
+            let resolved = r.open_item.as_ref().is_some_and(|id| {
+                view.ledger
+                    .open_item(id)
+                    .is_some_and(|o| o.resolution.is_some())
+            });
+            if !resolved {
+                out.add(
+                    "residual",
+                    r.region.to_string(),
+                    format!(
+                        "residual growth in {} ({:.3} {}, threshold {:.3}) has no resolved open item",
+                        r.region, r.residual, r.unit, r.threshold
+                    ),
+                    "dla gap --residual   then resolve the open item it raises",
+                );
+            }
+        }
+    }
+    // Every confirmed or strong leak-side finding is explained (schema 6 ledgers).
+    for f in confirmed_leaks(view) {
+        if view.ledger.explanation(&f.id).is_none() {
+            out.add(
+                "explanation",
+                f.id.to_string(),
+                format!("finding {} is {} and has no stored explanation", f.id, f.state),
+                format!(
+                    "dla ledger explain {} --tag inferred --adds FILE:LINE --removal never --text \"<site, holder, who adds, why nothing removes>\"",
+                    f.id
+                ),
+            );
+        }
+    }
+    // No slice left unmerged, no torn tail.
+    for s in view.unmerged_slices() {
+        out.add(
+            "slice",
+            s.worker.clone(),
+            format!(
+                "slice of worker {} has {} line(s) and {} merged",
+                s.worker,
+                s.lines,
+                view.ledger.merged_lines(&s.worker)
+            ),
+            "dla ledger merge",
+        );
+    }
+    for s in view.slices.iter().filter(|s| s.torn_tail) {
+        out.add(
+            "slice",
+            s.worker.clone(),
+            format!(
+                "slice of worker {} ends in a torn line (the worker was killed mid-write)",
+                s.worker
+            ),
+            "dla ledger merge",
+        );
+    }
+}
+
+// ------------------------------------------------------------------- worker
+
+/// The gate for one worker's slice: its own findings and open items are dispositioned,
+/// the backends it ran account for their hits, and for the final target its slice is done.
+fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
+    let mut out = Out(Vec::new());
+    let mine = |id: &str| id.split_once('/').is_some_and(|(p, _)| p == w);
+    for b in status(view).blocking {
+        let keep = match b.kind {
+            BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
+            BlockingKind::ChecklistItem | BlockingKind::Integrity => false,
+            BlockingKind::Run => true,
+        };
+        if keep {
+            out.0.push(from_blocking(b));
+        }
+    }
+    // Time budget: the worker's own deadline and the run's.
+    let now = crate::state::now_utc();
+    let deadline = view
+        .state
+        .worker(w)
+        .map(|e| (format!("worker {w}"), e.deadline));
+    for (who, at) in deadline
+        .into_iter()
+        .chain([("run".to_owned(), view.state.budget.deadline)])
+    {
+        if now > at {
+            out.add(
+                "run",
+                view.state.run_id.clone(),
+                format!(
+                    "the {who} time budget is spent (deadline {}); no new stage may start",
+                    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                ),
+                format!(
+                    "dla --worker {w} ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\", then dla --worker {w} ledger done"
+                ),
+            );
+            break;
+        }
+    }
+    let runtime = view.state.worker(w).map_or(w, |e| e.runtime.as_str());
+    for a in accounting(view).into_iter().filter(|a| a.worker == runtime) {
+        if a.hits > a.enumerated {
+            out.add(
+                "accounting",
+                format!("{}/{}", a.worker, a.backend),
+                format!(
+                    "backend {} reported {} hit(s) and the ledger accounts for {}",
+                    a.backend, a.hits, a.enumerated
+                ),
+                format!("dla --worker {w} sweep --lang {}", a.worker),
+            );
+        }
+    }
+    if target == GateTarget::Final {
+        let done = view.slices.iter().any(|s| s.worker == w && s.done)
+            || view.ledger.slice_info(w).is_some_and(|s| s.done.is_some());
+        if !done {
+            out.add(
+                "slice",
+                w.to_owned(),
+                format!("worker {w} has not ended its slice"),
+                format!("dla --worker {w} ledger done"),
+            );
+        }
+    }
+    out.0
 }

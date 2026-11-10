@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Seal",
+  "description": "The seal of one protected file.",
+  "type": "object",
+  "properties": {
+    "len": {
+      "description": "Length in bytes.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "sha256": {
+      "description": "SHA-256, lowercase hex.",
+      "type": "string"
+    },
+    "written_at": {
+      "description": "When the seal was written.",
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "len",
+    "sha256",
+    "written_at"
+  ]
+}

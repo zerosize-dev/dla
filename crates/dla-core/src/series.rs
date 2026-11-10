@@ -275,6 +275,25 @@ pub fn next_number(dir: &Path, prefix: char, suffix: &str, dirs: bool) -> u32 {
         + 1
 }
 
+/// The IDs (`S1`, `S2`, ...) of the series files in `<run_dir>/series/` that hold content,
+/// in numeric order. A reserved but unwritten placeholder does not count.
+pub fn list_ids(run_dir: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(run_dir.join(SERIES_DIR)) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<(u32, String)> = entries
+        .filter_map(Result::ok)
+        .filter(|e| crate::fsutil::is_written(&e.path()))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let id = name.strip_suffix(".json")?.to_owned();
+            numbered('S', &id).map(|n| (n, id))
+        })
+        .collect();
+    ids.sort();
+    ids.into_iter().map(|(_, id)| id).collect()
+}
+
 fn invalid(why: impl Into<String>) -> Refusal {
     Refusal::new(
         codes::INVALID_SERIES,

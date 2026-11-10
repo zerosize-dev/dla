@@ -11,6 +11,89 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Write(**/.dla/**)",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate write-hook",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(**/.dla/**)",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate write-hook",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "NotebookEdit(**/.dla/**)",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate write-hook",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Read(**/*-archetypes.md)",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate read-hook",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "if": "Read(**/known-leaks.md)",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate read-hook",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "if": "Read(**/archetypes.toml)",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate read-hook",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "if": "Read(**/known-leaks.toml)",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate read-hook",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^dla:worker$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/dla\" gate stop-hook --subagent",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

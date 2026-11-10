@@ -1525,6 +1525,7 @@ impl Ledger {
             .create_new(true)
             .open(&path)
             .map_err(|e| Error::io(&path, e))?;
+        crate::integrity::seal_file(run_dir, LEDGER_FILE)?;
         Ok(Self::empty(Some(path), entry_of(run_dir)))
     }
 
@@ -2052,6 +2053,17 @@ impl Ledger {
             new_lines.push(line);
         }
         if let Some(path) = &self.path {
+            // The write and its seal go together under one lock: the main ledger's own
+            // lock, or the slice lock the handle already holds.
+            let run_dir = path.parent().map(Path::to_path_buf);
+            let _seal_lock = match (&run_dir, self.slice.is_some()) {
+                (Some(d), false) => crate::integrity::lock_ledger(d)?,
+                _ => None,
+            };
+            let guard = match (&run_dir, path.file_name().and_then(|n| n.to_str())) {
+                (Some(d), Some(name)) => Some(crate::integrity::Guard::new(d, name)),
+                _ => None,
+            };
             let cut_torn = self
                 .slice
                 .as_ref()
@@ -2087,6 +2099,9 @@ impl Ledger {
             f.write_all(text.as_bytes())
                 .and_then(|()| f.sync_data())
                 .map_err(|e| Error::io(path, e))?;
+            if let Some(g) = guard {
+                g.seal()?;
+            }
             self.ends_with_newline = true;
             if let Some(sm) = &mut self.slice {
                 sm.torn_pending = false;

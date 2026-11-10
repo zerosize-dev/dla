@@ -20,13 +20,6 @@ use dla_core::{
     archetypes::{self, PRODUCED_KINDS},
 };
 
-/// Kinds listed as produced although no source writes them yet.
-///
-/// `intervention` is written by `dla intervene`, which M6 package C implements; until
-/// that package lands the command is a stub. Remove this entry when it does: the test
-/// then requires a real producer, and fails if there is none.
-const ALLOWED_UNTIL_PACKAGE_C: [EvidenceKind; 1] = [EvidenceKind::Intervention];
-
 const CRATES: [&str; 5] = [
     "dla-cli",
     "dla-backends",
@@ -93,7 +86,7 @@ fn listed_kinds_have_a_producer_and_unlisted_kinds_have_none() {
         let found = produced_in_sources(&src, k);
         if listed.contains(&k) {
             assert!(
-                found || ALLOWED_UNTIL_PACKAGE_C.contains(&k),
+                found,
                 "{k} is in PRODUCED_KINDS but no non-test source writes it"
             );
         } else {
@@ -102,18 +95,6 @@ fn listed_kinds_have_a_producer_and_unlisted_kinds_have_none() {
                 "{k} is written by a source but missing from PRODUCED_KINDS"
             );
         }
-    }
-}
-
-#[test]
-fn the_allow_list_is_only_for_kinds_without_a_producer() {
-    let src = non_test_sources();
-    for &k in &ALLOWED_UNTIL_PACKAGE_C {
-        // When package C lands this fails; remove the entry then.
-        assert!(
-            !produced_in_sources(&src, k),
-            "{k} now has a producer: remove it from ALLOWED_UNTIL_PACKAGE_C"
-        );
     }
 }
 

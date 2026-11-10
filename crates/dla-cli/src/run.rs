@@ -11,6 +11,7 @@ use dla_core::{
     evidence::{
         Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, NewEvidence, Source, Tool,
     },
+    gate::{self, GateTarget},
     state::{self, EntryPath, STATE_FILE, Scope, ScopeKind},
     status,
 };
@@ -296,6 +297,8 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
     // the cleanup below can only ever remove a directory this call created.
     std::fs::create_dir(&ctx.run_dir).map_err(|e| dla_core::Error::io(&ctx.run_dir, e))?;
     let built = (|| -> Res<u64> {
+        // Sealed from the first write: every protected file of a new run has a seal.
+        dla_core::integrity::init_dir(&ctx.run_dir)?;
         st.save(&ctx.run_dir)?;
         let mut ledger = Ledger::create(&ctx.run_dir)?;
         let commit = git::head_commit(&project).unwrap_or_else(|| root_text.clone());
@@ -383,22 +386,28 @@ fn headless_consent() -> Res<Option<state::Consent>> {
 
 /// Runs `dla run status`.
 pub fn run_status(ctx: &Ctx) -> Res<Value> {
-    let (view, rs) = match ctx.worker.as_deref() {
+    let worker = ctx.worker.as_deref();
+    let (view, rs) = match worker {
         Some(w) => worker_status(ctx, w)?,
         None => {
             let view = RunView::load(&ctx.run_dir)?;
-            let rs = status(&view);
-            (view, rs)
+            let mut rs = status(&view);
+            // One source of truth: the blocking list is what `dla gate check --final` lists.
+            let missing = gate::missing(&view, GateTarget::Final, None);
+            rs.complete = missing.is_empty();
+            (view, StatusParts { rs, missing })
         }
     };
-    let total = rs.blocking.len();
-    let shown: Vec<_> = rs.blocking.iter().take(3).collect();
+    let StatusParts { rs, missing } = rs;
+    let total = missing.len();
+    let shown: Vec<_> = missing.iter().take(3).collect();
     let revisit = revisit_entries(&view, ctx.worker.as_deref());
     let revisit_total = revisit.len();
     let mut out = json!({
         "ok": true,
         "run_id": view.state.run_id,
         "stage": view.state.stage.as_str(),
+        "stages_passed": view.state.stages_passed.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         "status": view.state.status.as_str(),
         "complete": rs.complete,
         "counts": rs.counts,
@@ -407,7 +416,14 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         "record": ctx.pointer(STATE_FILE),
         "ledger": ctx.pointer(dla_core::state::LEDGER_FILE),
         "report": view.state.report.as_ref().map(|r| r.path.clone()),
+        "tamper": view.tamper.iter().take(5).map(|t| json!({"file": t.file, "kind": t.kind, "description": t.describe()})).collect::<Vec<_>>(),
     });
+    if view.unsealed_run {
+        out["unsealed_run"] = json!(true);
+    }
+    if view.report_modified {
+        out["report_modified"] = json!(true);
+    }
     if let (Value::Object(o), Value::Object(extra)) =
         (&mut out, workers::status_parts(ctx, &view.state))
     {
@@ -463,23 +479,23 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     Ok(out)
 }
 
+/// The counts of `status` and the blocking list `dla gate check --final` would print.
+struct StatusParts {
+    rs: dla_core::view::ReportStatus,
+    missing: Vec<gate::Missing>,
+}
+
 /// The status view of one worker: its slice replayed over the main ledger, with only
 /// what the worker itself must act on in `blocking`: its own findings and open items
-/// (IDs carry `<worker>/`) and the run-level items (an aborted run, a spent time
-/// budget). The checklist and other workers' items belong to the core.
-fn worker_status(ctx: &Ctx, w: &str) -> Res<(RunView, dla_core::view::ReportStatus)> {
-    use dla_core::view::{BlockingItem, BlockingKind};
-    let state = RunState::load(&ctx.run_dir)?;
-    let ledger = Ledger::load_for(&ctx.run_dir, Some(w))?;
-    let coverage = dla_core::CoverageManifest::load(&ctx.run_dir)?;
-    let view = RunView::new(state, ledger, coverage);
+/// (IDs carry `<worker>/`), the backends it ran, and the run-level items (an aborted
+/// run, a spent time budget). The checklist and other workers' items belong to the core.
+/// Ending the slice (`ledger done`) is not listed: the worker has not done it yet.
+fn worker_status(ctx: &Ctx, w: &str) -> Res<(RunView, StatusParts)> {
+    let view = RunView::load_for(&ctx.run_dir, Some(w))?;
     let mut rs = status(&view);
+    let mut missing = gate::missing(&view, GateTarget::Final, Some(w));
+    missing.retain(|m| m.kind != "slice");
     let mine = |id: &str| id.split_once('/').is_some_and(|(p, _)| p == w);
-    rs.blocking.retain(|b| match b.kind {
-        BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
-        BlockingKind::ChecklistItem => false,
-        BlockingKind::Run => true,
-    });
     // The counts describe this worker's slice, not the whole run.
     let mut counts = dla_core::view::StatusCounts::default();
     for f in view.ledger.findings().filter(|f| mine(&f.id.to_string())) {
@@ -496,38 +512,10 @@ fn worker_status(ctx: &Ctx, w: &str) -> Res<(RunView, dla_core::view::ReportStat
             FindingState::Unresolved => slot.unresolved += 1,
         }
     }
-    counts.open_items = rs
-        .blocking
-        .iter()
-        .filter(|b| b.kind == BlockingKind::OpenItem)
-        .count();
+    counts.open_items = missing.iter().filter(|b| b.kind == "open_item").count();
     rs.counts = counts;
-    let now = state::now_utc();
-    let deadline = view
-        .state
-        .worker(w)
-        .map(|e| (format!("worker {w}"), e.deadline));
-    for (who, at) in deadline
-        .into_iter()
-        .chain([("run".to_owned(), view.state.budget.deadline)])
-    {
-        if now > at {
-            rs.blocking.push(BlockingItem {
-                kind: BlockingKind::Run,
-                id: view.state.run_id.clone(),
-                description: format!(
-                    "the {who} time budget is spent (deadline {}); no new stage may start",
-                    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-                ),
-                fix: format!(
-                    "dla --worker {w} ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\", then dla --worker {w} ledger done"
-                ),
-            });
-            break;
-        }
-    }
-    rs.complete = rs.blocking.is_empty();
-    Ok((view, rs))
+    rs.complete = missing.is_empty();
+    Ok((view, StatusParts { rs, missing }))
 }
 
 /// At most this many `revisit` entries are listed; `revisit_total` has the real count.

@@ -772,7 +772,14 @@ fn dla_run_environment_selects_the_run() {
 
 #[test]
 fn end_to_end_run_reaches_complete() {
-    let (dir, id) = fresh_run();
+    // A symptom run has no probe or sweep stage, so the final gate asks for the checklist
+    // and the dispositions only.
+    let dir = tempfile::tempdir().unwrap();
+    let init = ok(
+        dir.path(),
+        &["run", "init", "--session-id", "t", "--entry", "symptom"],
+    );
+    let id = init["run_id"].as_str().unwrap().to_owned();
     let p = dir.path();
     let st = ok(p, &["run", "status"]);
     assert_eq!(st["counts"]["checklist_missing"], 8);
@@ -836,6 +843,10 @@ fn end_to_end_run_reaches_complete() {
             "write a harness",
         ],
     );
+    let st = ok(p, &["run", "status"]);
+    assert_eq!(st["complete"], false);
+    assert_eq!(st["blocking"][0]["kind"], "consent");
+    ok(p, &["consent", "--tiers", "1,2"]);
     let st = ok(p, &["run", "status"]);
     assert_eq!(st["complete"], true);
     let out = dla(p).arg("report").output().unwrap();

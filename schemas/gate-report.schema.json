@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GateReport",
+  "description": "The result of a gate.",
+  "type": "object",
+  "properties": {
+    "missing": {
+      "description": "The first [`SHOWN_MISSING`] items; the full list is in `<run>/gate/<stage>.json`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Missing"
+      }
+    },
+    "missing_total": {
+      "description": "Number of missing items in total.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "ok": {
+      "description": "True when nothing is missing.",
+      "type": "boolean"
+    },
+    "pointer": {
+      "description": "Where the full list is.",
+      "type": "string"
+    },
+    "stage": {
+      "description": "The stage name, or `final`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "stage",
+    "missing_total",
+    "missing",
+    "pointer"
+  ],
+  "$defs": {
+    "Missing": {
+      "description": "One thing that keeps a gate from passing.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Short description.",
+          "type": "string"
+        },
+        "fix": {
+          "description": "The command that clears it.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The finding, open item, checklist item or run ID the item is about.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "What kind of item (`finding`, `open_item`, `checklist_item`, `run`, `coverage`, ...).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "description",
+        "fix"
+      ]
+    }
+  }
+}

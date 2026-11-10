@@ -1,6 +1,6 @@
 //! The run as a report sees it, and the completeness gate.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -10,9 +10,11 @@ use crate::{
     coverage::CoverageManifest,
     error::Error,
     finding::FindingState,
+    integrity::{self, Tamper},
     ledger::Ledger,
     slice::{self, SliceSummary},
-    state::{RunState, RunStatus},
+    state::{REPORT_FILE, RunState, RunStatus},
+    trend::TrendReport,
 };
 
 /// Everything the report and `dla run status` need.
@@ -28,6 +30,19 @@ pub struct RunView {
     pub checklist: Vec<ChecklistEntry>,
     /// The slice files present in the run directory (empty for a view built in memory).
     pub slices: Vec<SliceSummary>,
+    /// The run directory, for a view loaded from disk.
+    pub run_dir: Option<PathBuf>,
+    /// The trend reports (`trend/T<n>.json`), oldest first.
+    pub trends: Vec<TrendReport>,
+    /// The series files present (`S1`, `S2`, ...), for a view loaded from disk.
+    pub series_ids: Vec<String>,
+    /// Protected files other than `report.md` that no longer match their seal.
+    pub tamper: Vec<Tamper>,
+    /// True when `report.md` differs from the seal `dla` wrote at render time.
+    pub report_modified: bool,
+    /// True when the run has no `integrity/` directory (written before schema 6): nothing
+    /// is sealed, which is not tampering.
+    pub unsealed_run: bool,
 }
 
 impl RunView {
@@ -40,6 +55,12 @@ impl RunView {
             coverage,
             checklist,
             slices: Vec::new(),
+            run_dir: None,
+            trends: Vec::new(),
+            series_ids: Vec::new(),
+            tamper: Vec::new(),
+            report_modified: false,
+            unsealed_run: false,
         }
     }
 
@@ -56,7 +77,41 @@ impl RunView {
         let ledger = Ledger::load(run_dir)?;
         let coverage = CoverageManifest::load(run_dir)?;
         let slices = slice::summaries(run_dir)?;
-        Ok(Self::new(state, ledger, coverage).with_slices(slices))
+        Ok(Self::new(state, ledger, coverage)
+            .with_slices(slices)
+            .with_disk_facts(run_dir))
+    }
+
+    /// Worker mode: `worker`'s slice replayed on top of the main ledger (see
+    /// [`Ledger::load_for`]). `None` loads the whole run.
+    pub fn load_for(run_dir: &Path, worker: Option<&str>) -> Result<Self, Error> {
+        let Some(w) = worker else {
+            return Self::load(run_dir);
+        };
+        let state = RunState::load(run_dir)?;
+        let ledger = Ledger::load_for(run_dir, Some(w))?;
+        let coverage = CoverageManifest::load(run_dir)?;
+        let slices = slice::summaries(run_dir)?;
+        Ok(Self::new(state, ledger, coverage)
+            .with_slices(slices)
+            .with_disk_facts(run_dir))
+    }
+
+    /// Adds what lives next to the ledger: the trend reports, the series files and the
+    /// integrity check.
+    pub fn with_disk_facts(mut self, run_dir: &Path) -> Self {
+        self.run_dir = Some(run_dir.to_path_buf());
+        self.trends = TrendReport::load_all(run_dir);
+        self.series_ids = crate::series::list_ids(run_dir);
+        self.unsealed_run = !integrity::is_sealed_run(run_dir);
+        for t in integrity::verify(run_dir) {
+            if t.file == REPORT_FILE {
+                self.report_modified = true;
+            } else {
+                self.tamper.push(t);
+            }
+        }
+        self
     }
 
     /// Slices that hold lines the main ledger has not merged yet.
@@ -80,6 +135,8 @@ pub enum BlockingKind {
     ChecklistItem,
     /// The run is aborted or incomplete.
     Run,
+    /// A protected file no longer matches the seal `dla` wrote.
+    Integrity,
 }
 
 /// One thing that must be dispositioned, with the command that does it.
@@ -172,6 +229,24 @@ pub struct ReportStatus {
 
 const RESOLVE_FINDING: &str = "--as unresolved --reason time_budget --remedy \"<text>\"";
 
+/// The fix text for a run that is aborted or incomplete, by the reason it was stamped.
+fn incomplete_fix(view: &RunView) -> String {
+    let reason = view.state.incomplete_reason.as_deref().unwrap_or("");
+    if view.state.status == RunStatus::Incomplete
+        && reason.starts_with(crate::merge::UNFINISHED_REASON)
+    {
+        "let the unfinished workers end (dla --worker <name> ledger done), then dla ledger merge"
+            .to_owned()
+    } else if view.state.status == RunStatus::Incomplete
+        && reason.starts_with(crate::gate::STOP_BLOCKED_REASON)
+    {
+        "the stop hook stamped this run: the report lists what was still open. Disposition those items (dla ledger resolve <F> --as unresolved --reason <reason> --remedy \"<text>\") and run dla report, or dla run init to start a new run"
+            .to_owned()
+    } else {
+        "dla run init".to_owned()
+    }
+}
+
 /// Applies the gate: COMPLETE iff nothing blocks. An `unresolved` finding with a
 /// valid reason does not block. A finding merged into another worker's (`finding_merged`)
 /// is neither enumerated nor dispositioned: its twin carries it.
@@ -240,18 +315,16 @@ pub fn status(view: &RunView) -> ReportStatus {
             kind: BlockingKind::Run,
             id: view.state.run_id.clone(),
             description: format!("run is {}{why}", view.state.status),
-            fix: if view.state.status == RunStatus::Incomplete
-                && view
-                    .state
-                    .incomplete_reason
-                    .as_deref()
-                    .is_some_and(|r| r.starts_with(crate::merge::UNFINISHED_REASON))
-            {
-                "let the unfinished workers end (dla --worker <name> ledger done), then dla ledger merge"
-                    .to_owned()
-            } else {
-                "dla run init".to_owned()
-            },
+            fix: incomplete_fix(view),
+        });
+    }
+    for t in &view.tamper {
+        blocking.push(BlockingItem {
+            kind: BlockingKind::Integrity,
+            id: t.file.clone(),
+            description: format!("tamper: {}", t.describe()),
+            fix: "restore the file from a copy, or, if the change is intended, dla run reseal --reason \"<why the file changed outside dla>\""
+                .to_owned(),
         });
     }
     ReportStatus {
