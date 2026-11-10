@@ -1,0 +1,206 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E10-T1.json",
+      "id": "E10",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 10,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "native.live_blocks",
+            "lo": 40.46,
+            "p": 0.0000248,
+            "ratio": 1.002,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 40.54,
+            "unit": "count"
+          },
+          {
+            "column": "native.live_blocks",
+            "lo": 40.46,
+            "p": 0.0000248,
+            "ratio": 1.002,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 40.54,
+            "unit": "count"
+          },
+          {
+            "column": "native.live_blocks",
+            "lo": 11.35,
+            "p": 0.0000248,
+            "ratio": 0.9969,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 11.38,
+            "unit": "count"
+          },
+          {
+            "column": "native.live_blocks",
+            "lo": 92.27,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 92.45,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 10,
+          "steady": 4
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "8a3433e415bed5dd0bcf8ee56f948541a6e4037bef5b5ab22aaab2fb2924337e",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "rust:main:src/main.rs"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E15-A3.json",
+      "id": "E15",
+      "kind": "discriminator",
+      "result": {
+        "column": "native.live_blocks",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 71270.0,
+              "extra_slope": 40.49,
+              "main_slope": 40.54,
+              "noise": 13.34,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 71270.0,
+              "extra_slope": 40.49,
+              "main_slope": 40.54,
+              "noise": 13.34,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 19980.0,
+              "extra_slope": 11.36,
+              "main_slope": 11.38,
+              "noise": 16.83,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 6488000.0,
+              "extra_slope": 4213.0,
+              "main_slope": 4216.0,
+              "noise": 3459.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 831700.0,
+              "extra_slope": 540.1,
+              "main_slope": 540.8,
+              "noise": 753.4,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 785000.0,
+              "extra_slope": 509.7,
+              "main_slope": 511.2,
+              "noise": 409.2,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 20040000.0,
+              "extra_slope": 13010.0,
+              "main_slope": 11330.0,
+              "noise": 2022000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 44290000.0,
+              "before": 44290000.0,
+              "drop": -4096.0,
+              "growth": 38870000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim",
+        "series": "S7",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T5",
+        "truncated": 2
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "src.section.Section.parent"
+}

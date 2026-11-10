@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "symptom-no-target",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 15.719,
+  "usage": {
+    "input_tokens": 10,
+    "output_tokens": 1016,
+    "cache_read_input_tokens": 117095,
+    "cache_creation_input_tokens": 16368
+  },
+  "cost_usd": 0.08736149999999998,
+  "num_turns": 5,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T17:24:16Z",
+  "error": null,
+  "stop_blocks": 0
+}

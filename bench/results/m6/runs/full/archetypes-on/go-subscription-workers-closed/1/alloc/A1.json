@@ -1,0 +1,127 @@
+{
+  "basis": "every column that passed the gate in the latest trend of the harness, and os.rss",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "go.heap_live",
+      "plateau": {
+        "extra_rise": 1256.0,
+        "extra_slope": 0.4077,
+        "main_slope": 0.9939,
+        "noise": 557.5,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 3904.0,
+        "pre_rise": 71720.0,
+        "verdict": "headroom"
+      },
+      "name": "go.heap_objects",
+      "plateau": {
+        "extra_rise": 1129.0,
+        "extra_slope": 0.3667,
+        "main_slope": 0.9939,
+        "noise": 557.5,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 168900.0,
+        "before": 167700.0,
+        "drop": -1160.0,
+        "growth": 13260.0,
+        "kind": "free-os-memory",
+        "verdict": "retained"
+      },
+      "supports": [
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -1283000.0,
+        "extra_slope": -416.6,
+        "main_slope": 99.74,
+        "noise": 508600.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 5374000.0,
+        "before": 7201000.0,
+        "drop": 1827000.0,
+        "growth": -8192.0,
+        "kind": "free-os-memory",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 209.5,
+        "noise": 133600.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "primary": null,
+  "purge": "free-os-memory",
+  "series": "S3",
+  "supports": [
+    "N-WARM",
+    "N-HWM",
+    "N-HEADROOM"
+  ],
+  "trend": "T3"
+}

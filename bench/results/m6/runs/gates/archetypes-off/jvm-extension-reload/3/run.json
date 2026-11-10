@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "jvm-extension-reload",
+  "ablation": "gates",
+  "archetypes": "off",
+  "run": 3,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 333.416,
+  "usage": {
+    "input_tokens": 78,
+    "output_tokens": 14117,
+    "cache_read_input_tokens": 2022734,
+    "cache_creation_input_tokens": 64950
+  },
+  "cost_usd": 0.6033994,
+  "num_turns": 43,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T19:38:53Z",
+  "error": null,
+  "stop_blocks": 0
+}

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "id": "S5",
+  "source": {
+    "kind": "dump",
+    "command": "dla summarize heap-graph"
+  },
+  "axis": "dump",
+  "warmup": 0,
+  "columns": [
+    {
+      "name": "holder:static:std.sys.pal.unix.stack_overflow.thread_info.THREAD_INFO",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "valgrind-vgdb"
+    },
+    {
+      "name": "holder:static:std.sys.pal.unix.stack_overflow.thread_info.THREAD_INFO.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "valgrind-vgdb"
+    }
+  ],
+  "points": [
+    {
+      "x": 1.0,
+      "t_ms": 0,
+      "values": [
+        544.0,
+        1.0
+      ]
+    },
+    {
+      "x": 2.0,
+      "t_ms": 0,
+      "values": [
+        544.0,
+        1.0
+      ]
+    },
+    {
+      "x": 3.0,
+      "t_ms": 0,
+      "values": [
+        544.0,
+        1.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "x is the point number in capture order; t_ms is the time since the first capture where the inputs record one",
+    "each point comes from a separate point of one process; a figure absent from a point has no value at that point"
+  ]
+}

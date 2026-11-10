@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "jvm",
+  "mode": "command",
+  "workload": "jvm:main:build.sh:run",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "sh",
+      "./build.sh",
+      "run",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "JAVA_TOOL_OPTIONS",
+        "-javaagent:/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-invoice-render/2/project/.dla/20261110-191255-bafe/harness/H1/agent/dla-agent.jar -XX:NativeMemoryTracking=summary"
+      ]
+    ]
+  },
+  "iter_arg": "{n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 1110,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F2",
+      "target": {
+        "kind": "jvm-static",
+        "class": "billing.InvoiceFeed",
+        "field": "SKUS"
+      },
+      "site": "src/billing/InvoiceFeed.java:9"
+    },
+    {
+      "id": "P2",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-static",
+        "class": "billing.InvoiceFeed",
+        "field": "NAMES"
+      },
+      "site": "src/billing/InvoiceFeed.java:10"
+    },
+    {
+      "id": "P3",
+      "finding": "F7",
+      "target": {
+        "kind": "jvm-static",
+        "class": "billing.TaxTable",
+        "field": "RATES"
+      },
+      "site": "src/billing/TaxTable.java:7"
+    },
+    {
+      "id": "P4",
+      "finding": "F1",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.Invoice"
+      },
+      "site": "src/billing/Invoice.java:6"
+    },
+    {
+      "id": "P5",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.InvoiceFeed"
+      }
+    },
+    {
+      "id": "P6",
+      "finding": "F4",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.InvoiceService"
+      },
+      "site": "src/billing/InvoiceService.java:17"
+    },
+    {
+      "id": "P7",
+      "finding": "F5",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.InvoiceService$WorkerFactory"
+      },
+      "site": "src/billing/InvoiceService.java:58"
+    },
+    {
+      "id": "P8",
+      "finding": "F6",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.RenderContext"
+      },
+      "site": "src/billing/RenderContext.java:8"
+    },
+    {
+      "id": "P9",
+      "finding": "F7",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.TaxTable"
+      },
+      "site": "src/billing/TaxTable.java:7"
+    }
+  ],
+  "agent": "jvm-agent",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p1-native/capture/86/heap-1.hprof",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 1110.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 7940821,
+      "ms": 30,
+      "captured_at": "2026-11-10T19:13:31Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-native/capture/86/histogram-1.txt",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 1110.0,
+      "role": "class histogram",
+      "bytes": 76112,
+      "ms": 14,
+      "captured_at": "2026-11-10T19:13:31Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p2-native/capture/191/histogram-1.txt",
+      "label": "p2-native",
+      "seq": 1,
+      "x": 2220.0,
+      "role": "class histogram",
+      "bytes": 76210,
+      "ms": 32,
+      "captured_at": "2026-11-10T19:13:35Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p3-native/capture/297/histogram-1.txt",
+      "label": "p3-native",
+      "seq": 1,
+      "x": 3330.0,
+      "role": "class histogram",
+      "bytes": 76210,
+      "ms": 37,
+      "captured_at": "2026-11-10T19:13:39Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p4-native/capture/403/heap-1.hprof",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 4440.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 12932648,
+      "ms": 37,
+      "captured_at": "2026-11-10T19:13:44Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p4-native/capture/403/histogram-1.txt",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 4440.0,
+      "role": "class histogram",
+      "bytes": 76210,
+      "ms": 19,
+      "captured_at": "2026-11-10T19:13:44Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p5-native/capture/509/histogram-1.txt",
+      "label": "p5-native",
+      "seq": 1,
+      "x": 5550.0,
+      "role": "class histogram",
+      "bytes": 76210,
+      "ms": 36,
+      "captured_at": "2026-11-10T19:13:48Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p6-native/capture/615/heap-1.hprof",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 6660.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 16290293,
+      "ms": 46,
+      "captured_at": "2026-11-10T19:13:53Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p6-native/capture/615/histogram-1.txt",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 6660.0,
+      "role": "class histogram",
+      "bytes": 76210,
+      "ms": 21,
+      "captured_at": "2026-11-10T19:13:53Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p7-native/capture/721/histogram-1.txt",
+      "label": "p7-native",
+      "seq": 1,
+      "x": 7770.0,
+      "role": "class histogram",
+      "bytes": 76217,
+      "ms": 35,
+      "captured_at": "2026-11-10T19:13:58Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p8-native/capture/827/histogram-1.txt",
+      "label": "p8-native",
+      "seq": 1,
+      "x": 8880.0,
+      "role": "class histogram",
+      "bytes": 76217,
+      "ms": 38,
+      "captured_at": "2026-11-10T19:14:03Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H1/out/p9-native/capture/933/heap-1.hprof",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 9990.0,
+      "role": "heap dump (HPROF)",
+      "bytes": 21493600,
+      "ms": 54,
+      "captured_at": "2026-11-10T19:14:07Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p9-native/capture/933/histogram-1.txt",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 9990.0,
+      "role": "class histogram",
+      "bytes": 76210,
+      "ms": 25,
+      "captured_at": "2026-11-10T19:14:07Z"
+    }
+  ]
+}

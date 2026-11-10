@@ -1,0 +1,71 @@
+kotlin/shop/Native.kt:10 (lines 1-16)
+      1  package shop.codec
+      2  
+      3  /** Bindings to the frame codec in libcodec (native/src/lib.rs). */
+      4  object Native {
+      5      init {
+      6          System.loadLibrary("codec")
+      7      }
+      8  
+      9      @JvmStatic external fun open(data: ByteArray): Long
+>    10      @JvmStatic external fun checksum(handle: Long): Long
+     11      @JvmStatic external fun size(handle: Long): Int
+     12      @JvmStatic external fun lines(handle: Long): Int
+     13      @JvmStatic external fun close(handle: Long)
+     14      @JvmStatic external fun live(): Int
+     15      @JvmStatic external fun liveBytes(): Long
+     16  }
+
+kotlin/shop/Native.kt:11 (lines 1-16)
+      1  package shop.codec
+      2  
+      3  /** Bindings to the frame codec in libcodec (native/src/lib.rs). */
+      4  object Native {
+      5      init {
+      6          System.loadLibrary("codec")
+      7      }
+      8  
+      9      @JvmStatic external fun open(data: ByteArray): Long
+     10      @JvmStatic external fun checksum(handle: Long): Long
+>    11      @JvmStatic external fun size(handle: Long): Int
+     12      @JvmStatic external fun lines(handle: Long): Int
+     13      @JvmStatic external fun close(handle: Long)
+     14      @JvmStatic external fun live(): Int
+     15      @JvmStatic external fun liveBytes(): Long
+     16  }
+
+kotlin/shop/Native.kt:12 (lines 1-16)
+      1  package shop.codec
+      2  
+      3  /** Bindings to the frame codec in libcodec (native/src/lib.rs). */
+      4  object Native {
+      5      init {
+      6          System.loadLibrary("codec")
+      7      }
+      8  
+      9      @JvmStatic external fun open(data: ByteArray): Long
+     10      @JvmStatic external fun checksum(handle: Long): Long
+     11      @JvmStatic external fun size(handle: Long): Int
+>    12      @JvmStatic external fun lines(handle: Long): Int
+     13      @JvmStatic external fun close(handle: Long)
+     14      @JvmStatic external fun live(): Int
+     15      @JvmStatic external fun liveBytes(): Long
+     16  }
+
+kotlin/shop/Native.kt:13 (lines 1-16)
+      1  package shop.codec
+      2  
+      3  /** Bindings to the frame codec in libcodec (native/src/lib.rs). */
+      4  object Native {
+      5      init {
+      6          System.loadLibrary("codec")
+      7      }
+      8  
+      9      @JvmStatic external fun open(data: ByteArray): Long
+     10      @JvmStatic external fun checksum(handle: Long): Long
+     11      @JvmStatic external fun size(handle: Long): Int
+     12      @JvmStatic external fun lines(handle: Long): Int
+>    13      @JvmStatic external fun close(handle: Long)
+     14      @JvmStatic external fun live(): Int
+     15      @JvmStatic external fun liveBytes(): Long
+     16  }

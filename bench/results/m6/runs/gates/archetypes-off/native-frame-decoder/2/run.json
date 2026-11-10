@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "native-frame-decoder",
+  "ablation": "gates",
+  "archetypes": "off",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 112.033,
+  "usage": {
+    "input_tokens": 58,
+    "output_tokens": 7697,
+    "cache_read_input_tokens": 1404203,
+    "cache_creation_input_tokens": 57134
+  },
+  "cost_usd": 0.4460423,
+  "num_turns": 30,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T18:49:12Z",
+  "error": null,
+  "stop_blocks": 0
+}

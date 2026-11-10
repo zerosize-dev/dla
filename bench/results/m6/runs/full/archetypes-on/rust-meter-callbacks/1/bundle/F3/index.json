@@ -1,0 +1,179 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E10-T1.json",
+      "id": "E10",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 10,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "native.live_blocks",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "native.live_blocks",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "native.live_blocks",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "native.live_blocks",
+            "lo": 3.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 3.0,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 10,
+          "steady": 4
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "a3204414828e48911e62ab120c7306199e47c39619ac4b03db2e273653702de7",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "rust:main:src/main.rs"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E11-A1.json",
+      "id": "E11",
+      "kind": "discriminator",
+      "result": {
+        "column": "native.live_blocks",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 1760.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 86240.0,
+              "extra_slope": 56.0,
+              "main_slope": 56.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 6511000.0,
+              "extra_slope": 4228.0,
+              "main_slope": 4358.0,
+              "noise": 38570.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 19510000.0,
+              "before": 19500000.0,
+              "drop": -8192.0,
+              "growth": 15180000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 6511000.0,
+              "extra_slope": 4228.0,
+              "main_slope": 4358.0,
+              "noise": 38570.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 19510000.0,
+              "before": 19500000.0,
+              "drop": -8192.0,
+              "growth": 15180000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.peak_bytes",
+            "plateau": {
+              "extra_rise": 6414000.0,
+              "extra_slope": 4165.0,
+              "main_slope": 4165.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "src.session.Session.open"
+}

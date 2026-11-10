@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-203449-97cd",
+  "session_id": "0c906432-44b9-4dc0-a926-5a1bc352383c",
+  "project_root": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project",
+  "created_at": "2026-11-10T20:34:49Z",
+  "dla_version": "0.1.0",
+  "stage": "confirm",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T20:34:49Z"
+  },
+  "budget": {
+    "seconds": 1800,
+    "started_at": "2026-11-10T20:34:49Z",
+    "deadline": "2026-11-10T21:04:49Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T20:35:11Z",
+      "kind": "harness",
+      "command": "cargo build --release --bin outline-service",
+      "started_at": "2026-11-10T20:35:12Z",
+      "stopped_at": "2026-11-10T20:35:12Z",
+      "role": "started"
+    },
+    {
+      "pid": 44,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 220",
+      "started_at": "2026-11-10T20:35:12Z",
+      "stopped_at": "2026-11-10T20:35:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 48,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 440",
+      "started_at": "2026-11-10T20:35:13Z",
+      "stopped_at": "2026-11-10T20:35:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 52,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 660",
+      "started_at": "2026-11-10T20:35:14Z",
+      "stopped_at": "2026-11-10T20:35:14Z",
+      "role": "started"
+    },
+    {
+      "pid": 56,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 880",
+      "started_at": "2026-11-10T20:35:15Z",
+      "stopped_at": "2026-11-10T20:35:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 60,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 1100",
+      "started_at": "2026-11-10T20:35:16Z",
+      "stopped_at": "2026-11-10T20:35:18Z",
+      "role": "started"
+    },
+    {
+      "pid": 64,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 1320",
+      "started_at": "2026-11-10T20:35:18Z",
+      "stopped_at": "2026-11-10T20:35:20Z",
+      "role": "started"
+    },
+    {
+      "pid": 68,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 1540",
+      "started_at": "2026-11-10T20:35:20Z",
+      "stopped_at": "2026-11-10T20:35:22Z",
+      "role": "started"
+    },
+    {
+      "pid": 72,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 1760",
+      "started_at": "2026-11-10T20:35:22Z",
+      "stopped_at": "2026-11-10T20:35:24Z",
+      "role": "started"
+    },
+    {
+      "pid": 76,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 1980",
+      "started_at": "2026-11-10T20:35:25Z",
+      "stopped_at": "2026-11-10T20:35:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2200",
+      "started_at": "2026-11-10T20:35:35Z",
+      "stopped_at": "2026-11-10T20:35:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 23,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2420",
+      "started_at": "2026-11-10T20:35:38Z",
+      "stopped_at": "2026-11-10T20:35:42Z",
+      "role": "started"
+    },
+    {
+      "pid": 27,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2640",
+      "started_at": "2026-11-10T20:35:42Z",
+      "stopped_at": "2026-11-10T20:35:46Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2860",
+      "started_at": "2026-11-10T20:35:46Z",
+      "stopped_at": "2026-11-10T20:35:49Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3080",
+      "started_at": "2026-11-10T20:35:50Z",
+      "stopped_at": "2026-11-10T20:35:54Z",
+      "role": "started"
+    },
+    {
+      "pid": 39,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3300",
+      "started_at": "2026-11-10T20:35:54Z",
+      "stopped_at": "2026-11-10T20:35:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 43,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3520",
+      "started_at": "2026-11-10T20:35:58Z",
+      "stopped_at": "2026-11-10T20:36:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 47,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3740",
+      "started_at": "2026-11-10T20:36:03Z",
+      "stopped_at": "2026-11-10T20:36:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "start_time": "2026-11-10T20:36:31Z",
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2200",
+      "started_at": "2026-11-10T20:36:32Z",
+      "stopped_at": "2026-11-10T20:36:35Z",
+      "role": "started"
+    },
+    {
+      "pid": 30,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2420",
+      "started_at": "2026-11-10T20:36:35Z",
+      "stopped_at": "2026-11-10T20:36:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2640",
+      "started_at": "2026-11-10T20:36:39Z",
+      "stopped_at": "2026-11-10T20:36:42Z",
+      "role": "started"
+    },
+    {
+      "pid": 38,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2860",
+      "started_at": "2026-11-10T20:36:42Z",
+      "stopped_at": "2026-11-10T20:36:46Z",
+      "role": "started"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3080",
+      "started_at": "2026-11-10T20:36:46Z",
+      "stopped_at": "2026-11-10T20:36:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 46,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3300",
+      "started_at": "2026-11-10T20:36:50Z",
+      "stopped_at": "2026-11-10T20:36:55Z",
+      "role": "started"
+    },
+    {
+      "pid": 50,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3520",
+      "started_at": "2026-11-10T20:36:55Z",
+      "stopped_at": "2026-11-10T20:37:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 54,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3740",
+      "started_at": "2026-11-10T20:37:00Z",
+      "stopped_at": "2026-11-10T20:37:05Z",
+      "role": "started"
+    },
+    {
+      "pid": 75,
+      "start_time": "2026-11-10T20:37:04Z",
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2200",
+      "started_at": "2026-11-10T20:37:05Z",
+      "stopped_at": "2026-11-10T20:37:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 80,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2420",
+      "started_at": "2026-11-10T20:37:08Z",
+      "stopped_at": "2026-11-10T20:37:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 84,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2640",
+      "started_at": "2026-11-10T20:37:11Z",
+      "stopped_at": "2026-11-10T20:37:15Z",
+      "role": "started"
+    },
+    {
+      "pid": 88,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2860",
+      "started_at": "2026-11-10T20:37:15Z",
+      "stopped_at": "2026-11-10T20:37:19Z",
+      "role": "started"
+    },
+    {
+      "pid": 92,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3080",
+      "started_at": "2026-11-10T20:37:19Z",
+      "stopped_at": "2026-11-10T20:37:23Z",
+      "role": "started"
+    },
+    {
+      "pid": 96,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3300",
+      "started_at": "2026-11-10T20:37:23Z",
+      "stopped_at": "2026-11-10T20:37:28Z",
+      "role": "started"
+    },
+    {
+      "pid": 100,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3520",
+      "started_at": "2026-11-10T20:37:28Z",
+      "stopped_at": "2026-11-10T20:37:33Z",
+      "role": "started"
+    },
+    {
+      "pid": 104,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3740",
+      "started_at": "2026-11-10T20:37:33Z",
+      "stopped_at": "2026-11-10T20:37:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 125,
+      "start_time": "2026-11-10T20:37:37Z",
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2200",
+      "started_at": "2026-11-10T20:37:38Z",
+      "stopped_at": "2026-11-10T20:37:41Z",
+      "role": "started"
+    },
+    {
+      "pid": 130,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2420",
+      "started_at": "2026-11-10T20:37:41Z",
+      "stopped_at": "2026-11-10T20:37:44Z",
+      "role": "started"
+    },
+    {
+      "pid": 134,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2640",
+      "started_at": "2026-11-10T20:37:45Z",
+      "stopped_at": "2026-11-10T20:37:48Z",
+      "role": "started"
+    },
+    {
+      "pid": 138,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 2860",
+      "started_at": "2026-11-10T20:37:48Z",
+      "stopped_at": "2026-11-10T20:37:52Z",
+      "role": "started"
+    },
+    {
+      "pid": 142,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3080",
+      "started_at": "2026-11-10T20:37:52Z",
+      "stopped_at": "2026-11-10T20:37:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 146,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3300",
+      "started_at": "2026-11-10T20:37:57Z",
+      "stopped_at": "2026-11-10T20:38:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 150,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3520",
+      "started_at": "2026-11-10T20:38:01Z",
+      "stopped_at": "2026-11-10T20:38:06Z",
+      "role": "started"
+    },
+    {
+      "pid": 154,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-tree-parent-links/1/project/.dla/20261110-203449-97cd/harness/H1/work/target/release/outline-service --iterations 3740",
+      "started_at": "2026-11-10T20:38:06Z",
+      "stopped_at": "2026-11-10T20:38:11Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "f6ce7f0558dffd4dbda5c5b977601a1a",
+  "report": {
+    "path": ".dla/20261110-203449-97cd/report.md",
+    "sha256": "6f641980eb7b2136a236a476092789a8db955e3a3faddc48f2021caa6a317174",
+    "rendered_at": "2026-11-10T20:39:36Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep",
+    "classify"
+  ]
+}

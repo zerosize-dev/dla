@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "id": "T19",
+  "series": "S18",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "gap.accounted",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "candidates": [],
+      "n": 8,
+      "mk": {
+        "s": 5,
+        "var_s": 45.0,
+        "z": 0.5962847939999439,
+        "p_increasing": 0.2754924937925468,
+        "tau": 0.17857142857142858
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 41031871.0,
+        "lo": 0.0,
+        "hi": 148.94545454545454
+      },
+      "halves": {
+        "first": -99.2969696969697,
+        "second": 248.24242424242425
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "gap.unexplained",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 8,
+      "mk": {
+        "s": 28,
+        "var_s": 65.33333333333333,
+        "z": 3.340383700311406,
+        "p_increasing": 0.0000248015873015873,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 11097.987878787879,
+        "intercept": 48354454.33333333,
+        "lo": 9436.315151515151,
+        "hi": 12222.836363636363
+      },
+      "halves": {
+        "first": 9046.88484848485,
+        "second": 10446.351515151515,
+        "ratio": 1.1546904476076143
+      },
+      "noise": 1185194.3936000073,
+      "rise": 34181802.666666664,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    }
+  ]
+}

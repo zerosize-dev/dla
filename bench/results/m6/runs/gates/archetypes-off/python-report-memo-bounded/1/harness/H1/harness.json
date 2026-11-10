@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "python",
+  "mode": "command",
+  "workload": "python:main:reports/load.py",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "python3",
+      "-m",
+      "reports.load",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "PYTHONPATH",
+        "/root/.cache/dla-bench/m6/gates/archetypes-off/python-report-memo-bounded/1/project/.dla/20261110-183145-a1fb/harness/H1/agent"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 3000,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F2",
+      "target": {
+        "kind": "py-attr",
+        "module": "reports.builder",
+        "qualname": "ReportBuilder.category_totals"
+      },
+      "site": "reports/builder.py:14"
+    },
+    {
+      "id": "P2",
+      "target": {
+        "kind": "py-module",
+        "module": "reports.builder"
+      }
+    }
+  ],
+  "agent": "py-sitecustomize",
+  "detectors": [
+    "-W error::ResourceWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p1-native/capture/16/py-1.alloc.json",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 3000.0,
+      "role": "tracemalloc live bytes by allocation stack",
+      "bytes": 63051,
+      "ms": 1083,
+      "captured_at": "2026-11-10T18:32:21Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-native/capture/16/py-1.types.json",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 3000.0,
+      "role": "python object counts by type",
+      "bytes": 7069,
+      "ms": 6,
+      "captured_at": "2026-11-10T18:32:21Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p2-native/capture/19/py-1.types.json",
+      "label": "p2-native",
+      "seq": 1,
+      "x": 6000.0,
+      "role": "python object counts by type",
+      "bytes": 7068,
+      "ms": 1,
+      "captured_at": "2026-11-10T18:32:29Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p3-native/capture/22/py-1.types.json",
+      "label": "p3-native",
+      "seq": 1,
+      "x": 9000.0,
+      "role": "python object counts by type",
+      "bytes": 7069,
+      "ms": 2,
+      "captured_at": "2026-11-10T18:32:41Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p4-native/capture/26/py-1.alloc.json",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 12000.0,
+      "role": "tracemalloc live bytes by allocation stack",
+      "bytes": 63050,
+      "ms": 990,
+      "captured_at": "2026-11-10T18:33:47Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p4-native/capture/26/py-1.types.json",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 12000.0,
+      "role": "python object counts by type",
+      "bytes": 7069,
+      "ms": 6,
+      "captured_at": "2026-11-10T18:33:47Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p5-native/capture/29/py-1.types.json",
+      "label": "p5-native",
+      "seq": 1,
+      "x": 15000.0,
+      "role": "python object counts by type",
+      "bytes": 7069,
+      "ms": 1,
+      "captured_at": "2026-11-10T18:34:08Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p6-native/capture/32/py-1.alloc.json",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 18000.0,
+      "role": "tracemalloc live bytes by allocation stack",
+      "bytes": 63051,
+      "ms": 1098,
+      "captured_at": "2026-11-10T18:35:44Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p6-native/capture/32/py-1.types.json",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 18000.0,
+      "role": "python object counts by type",
+      "bytes": 7069,
+      "ms": 5,
+      "captured_at": "2026-11-10T18:35:44Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p7-native/capture/35/py-1.types.json",
+      "label": "p7-native",
+      "seq": 1,
+      "x": 21000.0,
+      "role": "python object counts by type",
+      "bytes": 7069,
+      "ms": 2,
+      "captured_at": "2026-11-10T18:36:12Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p8-native/capture/38/py-1.types.json",
+      "label": "p8-native",
+      "seq": 1,
+      "x": 24000.0,
+      "role": "python object counts by type",
+      "bytes": 7069,
+      "ms": 2,
+      "captured_at": "2026-11-10T18:37:03Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p9-native/capture/41/py-1.alloc.json",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 27000.0,
+      "role": "tracemalloc live bytes by allocation stack",
+      "bytes": 63052,
+      "ms": 1165,
+      "captured_at": "2026-11-10T18:39:38Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p9-native/capture/41/py-1.types.json",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 27000.0,
+      "role": "python object counts by type",
+      "bytes": 7070,
+      "ms": 6,
+      "captured_at": "2026-11-10T18:39:38Z"
+    }
+  ]
+}

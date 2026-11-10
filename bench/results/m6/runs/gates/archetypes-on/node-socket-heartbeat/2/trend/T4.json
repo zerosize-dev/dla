@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "id": "T4",
+  "series": "S4",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "group:handle/Timeout@src/heartbeat.js:15",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "finding": "F1",
+      "candidates": [
+        "F1"
+      ],
+      "n": 4,
+      "mk": {
+        "s": 6,
+        "var_s": 8.666666666666666,
+        "z": 1.6984155512168937,
+        "p_increasing": 0.041666666666666664,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 1136.6666666666665,
+        "intercept": -641.6666666666663,
+        "lo": 880.0,
+        "hi": 1320.0
+      },
+      "halves": {
+        "first": 1320.0,
+        "second": 1320.0,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 3,
+        "all_at_least_one": true,
+        "min": 880.0,
+        "max": 1320.0
+      },
+      "noise": 135.90499999999977,
+      "rise": 3409.9999999999995,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "metric:node.tracked/Timeout",
+      "unit": "count",
+      "kind": "counter",
+      "region": "non-heap",
+      "candidates": [],
+      "n": 4,
+      "mk": {
+        "s": 6,
+        "var_s": 8.666666666666666,
+        "z": 1.6984155512168937,
+        "p_increasing": 0.041666666666666664,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 1136.6666666666665,
+        "intercept": -641.6666666666663,
+        "lo": 880.0,
+        "hi": 1320.0
+      },
+      "halves": {
+        "first": 1320.0,
+        "second": 1320.0,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 3,
+        "all_at_least_one": true,
+        "min": 880.0,
+        "max": 1320.0
+      },
+      "noise": 135.90499999999977,
+      "rise": 3409.9999999999995,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "basis": "the primary column of the region of F6",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "os.threads",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 34630000.0,
+        "extra_slope": 11240.0,
+        "main_slope": 20620.0,
+        "noise": 3263000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 173800000.0,
+        "before": 174100000.0,
+        "drop": 262100.0,
+        "growth": 103100000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 34180000.0,
+        "extra_slope": 11100.0,
+        "main_slope": 20450.0,
+        "noise": 2475000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F6",
+  "harness": "H1",
+  "id": "A3",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S8",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "os.threads",
+  "purge": "gc",
+  "series": "S9",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T7"
+}

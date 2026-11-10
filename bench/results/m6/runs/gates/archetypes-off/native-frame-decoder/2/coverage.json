@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "native": {
+      "runtime": "native",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 4,
+          "dispositioned": 4,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 1,
+          "dispositioned": 1,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/checksum.c::crc32_of",
+          "src/checksum.c::crc32_update",
+          "src/decoder.c::decode_frame",
+          "src/decoder.c::frame_release",
+          "src/decoder.c::frame_status_name",
+          "src/rle.c::rle_encode",
+          "src/rle.c::rle_expand",
+          "src/synth.c::synth_init",
+          "src/synth.c::synth_next",
+          "src/synth.c::synth_rand"
+        ],
+        "exercised": [],
+        "not_exercisable": [
+          {
+            "entry": "src/decoder.c::frame_status_name",
+            "reason": "no_harness"
+          }
+        ]
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 1103.2103896103897,
+      "attributed_slope": 1103.2103896103897,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 275.80259740259737
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 1079.0787878787878,
+      "attributed_slope": 0.0,
+      "residual": 1079.0787878787878,
+      "unit": "bytes/n",
+      "threshold": 269.76969696969695,
+      "open_item": "O1"
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 1079.1845730027549,
+      "attributed_slope": 0.0,
+      "residual": 1079.1845730027549,
+      "unit": "bytes/n",
+      "threshold": 269.7961432506887,
+      "open_item": "O1"
+    },
+    {
+      "series": "S4",
+      "region": "heap",
+      "total_slope": 1079.0787878787878,
+      "attributed_slope": 0.0,
+      "residual": 1079.0787878787878,
+      "unit": "bytes/n",
+      "threshold": 269.76969696969695,
+      "open_item": "O1"
+    },
+    {
+      "series": "S5",
+      "region": "heap",
+      "total_slope": 1079.1845730027549,
+      "attributed_slope": 0.0,
+      "residual": 1079.1845730027549,
+      "unit": "bytes/n",
+      "threshold": 269.7961432506887,
+      "open_item": "O2"
+    }
+  ],
+  "blind_spots": [
+    {
+      "runtime": "native",
+      "text": "the allocator shim does not record which entry points ran"
+    }
+  ]
+}

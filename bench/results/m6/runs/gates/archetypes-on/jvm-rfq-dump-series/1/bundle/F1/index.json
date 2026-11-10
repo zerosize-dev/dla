@@ -1,0 +1,107 @@
+{
+  "evidence": [
+    {
+      "authority": "dump",
+      "file": "evidence/E5-rfq-b04d-400a2c3b.json",
+      "id": "E5",
+      "kind": "retention-path",
+      "result": {
+        "file": "dumps/rfq-b04d.hprof.gz",
+        "holders": [
+          {
+            "dominated": 40502,
+            "holder_kind": "static/global",
+            "key": "static:quotes.RfqDesk.OPEN",
+            "retained": 2372832
+          },
+          {
+            "dominated": 5277,
+            "holder_kind": "native-handle/global-ref",
+            "key": "jni-global:java.lang.Object[]",
+            "retained": 252408
+          },
+          {
+            "dominated": 833,
+            "holder_kind": "static/global",
+            "key": "static:jdk.internal.loader.BuiltinClassLoader.packageToModule",
+            "retained": 34864
+          }
+        ],
+        "objects": 75033,
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "400a2c3bae52023a3f5560de49d8f25d800fedb73733448dac38bf7819339edd",
+          "tool": "dla-hprof"
+        },
+        "timestamp_ms": 1794150521354,
+        "truncated": false
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E6-S1.json",
+      "id": "E6",
+      "kind": "growth-series",
+      "result": {
+        "axis": "dump",
+        "failed": 31,
+        "gate": "pass",
+        "n": 3,
+        "passed": [
+          {
+            "column": "holder:static:quotes.RfqDesk.OPEN",
+            "holder_kind": "static/global",
+            "last_over_first": 1.01,
+            "owner": "quotes.RfqDesk.OPEN",
+            "region": "heap",
+            "shape": "steady",
+            "slope": 792288,
+            "unit": "bytes"
+          }
+        ],
+        "reasons": [],
+        "series": "S1",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "cfd1976fdc25fc5ba19a05461ee7ad7b240803b8f56bf60dafc481afcc07c41b",
+          "tool": "dla-hprof"
+        }
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E7-S1.json",
+      "id": "E7",
+      "kind": "discriminator",
+      "result": {
+        "bytes": [
+          788256,
+          1576448,
+          2372832
+        ],
+        "column": "holder:static:quotes.RfqDesk.OPEN",
+        "counts": [
+          13502,
+          27002,
+          40502
+        ],
+        "dumps": 3,
+        "favors": "leak",
+        "reason": "retained bytes and count grew over every interval",
+        "series": "S1",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "cfd1976fdc25fc5ba19a05461ee7ad7b240803b8f56bf60dafc481afcc07c41b",
+          "tool": "dla-hprof"
+        },
+        "supports": [
+          "leak"
+        ],
+        "test": "dump-plateau"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "quotes.RfqDesk.OPEN"
+}

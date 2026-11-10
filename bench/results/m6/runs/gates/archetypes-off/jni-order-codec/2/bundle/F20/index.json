@@ -1,0 +1,229 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E14-T1.json",
+      "id": "E14",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 25,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "native.live_blocks",
+            "lo": 0.125,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.125,
+            "unit": "count"
+          },
+          {
+            "column": "probe:shop.codec.Audit.trail",
+            "lo": 2.625,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.625,
+            "unit": "count"
+          },
+          {
+            "column": "probe:shop.codec.Audit.trail.size",
+            "lo": 0.8749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:byte[].count",
+            "lo": 1.748,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.75,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.String.count",
+            "lo": 0.8734,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.8749,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:shop.codec.Entry.count",
+            "lo": 0.8749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 22,
+          "insufficient": 1,
+          "spike": 1,
+          "stair": 1,
+          "steady": 6
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "f4a8b051db74b6a2a6507d96618c49c9e580355b2664afddc91d99f66aaf959b",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E15-A1.json",
+      "id": "E15",
+      "kind": "discriminator",
+      "result": {
+        "column": "native.live_blocks",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 2220.0,
+              "extra_slope": 0.125,
+              "main_slope": 0.125,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 47770000.0,
+              "extra_slope": 3074.0,
+              "main_slope": 3074.0,
+              "noise": 9115.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "non-leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 0.0,
+              "extra_slope": 0.0,
+              "main_slope": 0.0,
+              "noise": 0.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "non-leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 0.0,
+              "extra_slope": 0.0,
+              "main_slope": 0.0,
+              "noise": 0.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "non-leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 0.0,
+              "extra_slope": 0.0,
+              "main_slope": 0.0,
+              "noise": 0.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 181900.0,
+              "extra_slope": 11.71,
+              "main_slope": 9.456,
+              "noise": 47430.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 91810000.0,
+              "extra_slope": 5908.0,
+              "main_slope": 6940.0,
+              "noise": 11040000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 306800000.0,
+              "before": 313300000.0,
+              "drop": 6496000.0,
+              "growth": 206000000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2",
+        "truncated": 2
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "native.src.lib.FRAMES"
+}

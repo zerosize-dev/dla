@@ -1,0 +1,92 @@
+{
+  "basis": "the columns at its site of F2",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "go.goroutines@internal/notify/subscription.go:33",
+      "plateau": {
+        "extra_rise": 3520.0,
+        "extra_slope": 1.0,
+        "main_slope": 1.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 52920000.0,
+        "extra_slope": 17180.0,
+        "main_slope": 17740.0,
+        "noise": 5138000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 68820000.0,
+        "before": 110900000.0,
+        "drop": 42060000.0,
+        "growth": 102400000.0,
+        "kind": "free-os-memory",
+        "verdict": "partial"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 58790000.0,
+        "extra_slope": 19090.0,
+        "main_slope": 18980.0,
+        "noise": 4594000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "free-os-memory",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F2",
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "primary": "go.goroutines@internal/notify/subscription.go:33",
+  "purge": "free-os-memory",
+  "series": "S3",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T3"
+}

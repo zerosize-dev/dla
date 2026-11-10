@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-170333-ec6f",
+  "session_id": "fc21873c-7cb0-4d9c-96b6-832b20909f31",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-on/python-report-memo/2/project",
+  "created_at": "2026-11-10T17:03:33Z",
+  "dla_version": "0.1.0",
+  "stage": "gate",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T17:03:33Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T17:03:33Z",
+    "deadline": "2026-11-10T18:03:33Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T17:03:50Z",
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 440",
+      "started_at": "2026-11-10T17:03:50Z",
+      "stopped_at": "2026-11-10T17:03:55Z",
+      "role": "started"
+    },
+    {
+      "pid": 13,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 880",
+      "started_at": "2026-11-10T17:03:55Z",
+      "stopped_at": "2026-11-10T17:03:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 16,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 1320",
+      "started_at": "2026-11-10T17:03:57Z",
+      "stopped_at": "2026-11-10T17:04:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 1760",
+      "started_at": "2026-11-10T17:04:00Z",
+      "stopped_at": "2026-11-10T17:04:15Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 2200",
+      "started_at": "2026-11-10T17:04:15Z",
+      "stopped_at": "2026-11-10T17:04:20Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 2640",
+      "started_at": "2026-11-10T17:04:20Z",
+      "stopped_at": "2026-11-10T17:04:41Z",
+      "role": "started"
+    },
+    {
+      "pid": 28,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 3080",
+      "started_at": "2026-11-10T17:04:41Z",
+      "stopped_at": "2026-11-10T17:04:47Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 3520",
+      "started_at": "2026-11-10T17:04:47Z",
+      "stopped_at": "2026-11-10T17:04:54Z",
+      "role": "started"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 3960",
+      "started_at": "2026-11-10T17:04:54Z",
+      "stopped_at": "2026-11-10T17:05:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 37,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-10T17:05:26Z",
+      "stopped_at": "2026-11-10T17:05:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 4400",
+      "started_at": "2026-11-10T17:05:35Z",
+      "stopped_at": "2026-11-10T17:05:43Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 4840",
+      "started_at": "2026-11-10T17:05:43Z",
+      "stopped_at": "2026-11-10T17:05:51Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "start_time": "2026-11-10T17:05:34Z",
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 5280",
+      "started_at": "2026-11-10T17:05:51Z",
+      "stopped_at": "2026-11-10T17:06:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 29,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 5720",
+      "started_at": "2026-11-10T17:06:01Z",
+      "stopped_at": "2026-11-10T17:06:12Z",
+      "role": "started"
+    },
+    {
+      "pid": 32,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 6160",
+      "started_at": "2026-11-10T17:06:12Z",
+      "stopped_at": "2026-11-10T17:06:22Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 6600",
+      "started_at": "2026-11-10T17:06:23Z",
+      "stopped_at": "2026-11-10T17:06:34Z",
+      "role": "started"
+    },
+    {
+      "pid": 38,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 7040",
+      "started_at": "2026-11-10T17:06:35Z",
+      "stopped_at": "2026-11-10T17:06:47Z",
+      "role": "started"
+    },
+    {
+      "pid": 41,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations 7480",
+      "started_at": "2026-11-10T17:06:47Z",
+      "stopped_at": "2026-11-10T17:07:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 45,
+      "kind": "harness",
+      "command": "python3 -m reports.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-10T17:07:01Z",
+      "stopped_at": "2026-11-10T17:07:02Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "f61895cc9143d0e3a51f66c5bd54648c",
+  "report": {
+    "path": ".dla/20261110-170333-ec6f/report.md",
+    "sha256": "109a2ac5b18f753ba258b37ad7a9013ba9b82f804d998b73c4c28876a88dc2a8",
+    "rendered_at": "2026-11-10T17:08:18Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep",
+    "classify",
+    "rule_out"
+  ]
+}

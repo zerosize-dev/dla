@@ -1,0 +1,140 @@
+{
+  "basis": "its probe column of F5",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "probe:shop.OrderCache.ORDERS_BY_ID",
+      "plateau": {
+        "extra_rise": 59940.0,
+        "extra_slope": 6.75,
+        "main_slope": 6.75,
+        "noise": 2.002,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "probe:shop.OrderCache.ORDERS_BY_ID.bytes",
+      "plateau": {
+        "extra_rise": 3809000.0,
+        "extra_slope": 490.2,
+        "main_slope": 490.2,
+        "noise": 154.2,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "probe:shop.OrderCache.ORDERS_BY_ID.size",
+      "plateau": {
+        "extra_rise": 7770.0,
+        "extra_slope": 0.875,
+        "main_slope": 0.875,
+        "noise": 0.3336,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 6150000.0,
+        "extra_slope": 791.5,
+        "main_slope": 1355.0,
+        "noise": 2181000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 77450000.0,
+        "before": 78270000.0,
+        "drop": 819200.0,
+        "growth": 12970000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 6150000.0,
+        "extra_slope": 791.5,
+        "main_slope": 1168.0,
+        "noise": 1368000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 77750000.0,
+        "before": 78270000.0,
+        "drop": 516100.0,
+        "growth": 3928000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F5",
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S4",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "probe:shop.OrderCache.ORDERS_BY_ID",
+  "purge": "trim-native-heap",
+  "series": "S5",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T6"
+}

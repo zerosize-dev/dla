@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "python",
+  "mode": "command",
+  "workload": "python:main:outlines/load.py",
+  "scratch": "harness/H1/work",
+  "run": {
+    "argv": [
+      "python3",
+      "-m",
+      "outlines.load",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "PYTHONPATH",
+        "/root/.cache/dla-bench/m6/full/archetypes-on/python-graph-churn/1/project/.dla/20261110-200345-31ef/harness/H1/agent"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F1",
+      "target": {
+        "kind": "py-module",
+        "module": "outlines.parser"
+      },
+      "site": "outlines/parser.py:25"
+    }
+  ],
+  "agent": "py-sitecustomize",
+  "detectors": [
+    "-W error::ResourceWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-native/capture/9/py-1.nonheap.json",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "bytes": 456,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:04:32Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-native/capture/9/py-1.types.json",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "python object counts by type",
+      "bytes": 7518,
+      "ms": 4,
+      "captured_at": "2026-11-10T20:04:32Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p2-native/capture/13/py-1.types.json",
+      "label": "p2-native",
+      "seq": 1,
+      "x": 880.0,
+      "role": "python object counts by type",
+      "bytes": 6946,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:04:35Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p3-native/capture/16/py-1.types.json",
+      "label": "p3-native",
+      "seq": 1,
+      "x": 1320.0,
+      "role": "python object counts by type",
+      "bytes": 6946,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:04:39Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p4-native/capture/19/py-1.nonheap.json",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 1760.0,
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "bytes": 459,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:05:01Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p4-native/capture/19/py-1.types.json",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 1760.0,
+      "role": "python object counts by type",
+      "bytes": 7520,
+      "ms": 5,
+      "captured_at": "2026-11-10T20:05:01Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p5-native/capture/22/py-1.types.json",
+      "label": "p5-native",
+      "seq": 1,
+      "x": 2200.0,
+      "role": "python object counts by type",
+      "bytes": 6946,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:05:08Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p6-native/capture/25/py-1.nonheap.json",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 2640.0,
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "bytes": 459,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:05:41Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p6-native/capture/25/py-1.types.json",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 2640.0,
+      "role": "python object counts by type",
+      "bytes": 7520,
+      "ms": 5,
+      "captured_at": "2026-11-10T20:05:41Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p7-native/capture/28/py-1.types.json",
+      "label": "p7-native",
+      "seq": 1,
+      "x": 3080.0,
+      "role": "python object counts by type",
+      "bytes": 6946,
+      "ms": 2,
+      "captured_at": "2026-11-10T20:05:51Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p8-native/capture/31/py-1.types.json",
+      "label": "p8-native",
+      "seq": 1,
+      "x": 3520.0,
+      "role": "python object counts by type",
+      "bytes": 6947,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:06:02Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p9-native/capture/34/py-1.nonheap.json",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "bytes": 459,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:06:50Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p9-native/capture/34/py-1.types.json",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "python object counts by type",
+      "bytes": 7520,
+      "ms": 6,
+      "captured_at": "2026-11-10T20:06:50Z"
+    }
+  ]
+}

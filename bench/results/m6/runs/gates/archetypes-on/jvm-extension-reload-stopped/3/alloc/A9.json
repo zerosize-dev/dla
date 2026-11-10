@@ -1,0 +1,100 @@
+{
+  "basis": "named with --column",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "jvm.class:java.lang.Class.count",
+      "plateau": {
+        "extra_rise": -419.0,
+        "extra_slope": -0.05952,
+        "main_slope": 0.00303,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 75900000.0,
+        "extra_slope": 11500.0,
+        "main_slope": 19220.0,
+        "noise": 14210000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 198800000.0,
+        "before": 226800000.0,
+        "drop": 27930000.0,
+        "growth": 142900000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 78280000.0,
+        "extra_slope": 11860.0,
+        "main_slope": 20820.0,
+        "noise": 5832000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 240800000.0,
+        "before": 240800000.0,
+        "drop": 0.0,
+        "growth": 138500000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 16,
+  "favors": "non-leak",
+  "finding": "F7",
+  "harness": "H1",
+  "id": "A9",
+  "iterations": 8,
+  "limitations": [
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S18",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": null,
+  "purge": "trim-native-heap",
+  "series": "S19",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T18"
+}

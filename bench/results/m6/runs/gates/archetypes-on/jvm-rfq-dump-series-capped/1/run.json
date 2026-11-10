@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "jvm-rfq-dump-series-capped",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 22.838,
+  "usage": {
+    "input_tokens": 16,
+    "output_tokens": 1449,
+    "cache_read_input_tokens": 228151,
+    "cache_creation_input_tokens": 24723
+  },
+  "cost_usd": 0.1362291,
+  "num_turns": 9,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T16:43:58Z",
+  "error": null,
+  "stop_blocks": 0
+}

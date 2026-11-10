@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "go",
+  "mode": "command",
+  "workload": "go:main:.:./cmd/notifyd",
+  "scratch": "harness/H1/work",
+  "build": {
+    "argv": [
+      "go",
+      "test",
+      "-vet=off",
+      "-count=1",
+      "-run",
+      "^$",
+      "-coverpkg=./...",
+      "./cmd/notifyd"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "run": {
+    "argv": [
+      "go",
+      "test",
+      "-vet=off",
+      "-count=1",
+      "-timeout",
+      "0",
+      "-run",
+      "^TestDLAHarness$",
+      "-coverprofile",
+      "{cov}/{label}.out",
+      "-coverpkg=./...",
+      "./cmd/notifyd"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "DLA_ARGS",
+        "[\"-n\",\"{n}\"]"
+      ]
+    ]
+  },
+  "iter_arg": "-n {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [],
+  "agent": "go-test-wrapper",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "go command mode has no package-variable probes: growth shows in the goroutine groups and runtime totals (use --driver for GoVar probes)"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-native/capture/1181/go-1.goroutine.pb.gz",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "goroutine profile (protobuf)",
+      "bytes": 1277,
+      "ms": 2,
+      "captured_at": "2026-11-10T20:17:04Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-native/capture/1181/go-1.goroutine.txt",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "bytes": 223493,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:17:04Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p1-native/capture/1181/go-1.heap.pb.gz",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 6016,
+      "ms": 2,
+      "captured_at": "2026-11-10T20:17:04Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p4-native/capture/1393/go-1.goroutine.pb.gz",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 1760.0,
+      "role": "goroutine profile (protobuf)",
+      "bytes": 1314,
+      "ms": 3,
+      "captured_at": "2026-11-10T20:17:05Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p4-native/capture/1393/go-1.goroutine.txt",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 1760.0,
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "bytes": 886888,
+      "ms": 2,
+      "captured_at": "2026-11-10T20:17:05Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p4-native/capture/1393/go-1.heap.pb.gz",
+      "label": "p4-native",
+      "seq": 1,
+      "x": 1760.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 5305,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:17:05Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p6-native/capture/1529/go-1.goroutine.pb.gz",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 2640.0,
+      "role": "goroutine profile (protobuf)",
+      "bytes": 1317,
+      "ms": 4,
+      "captured_at": "2026-11-10T20:17:05Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p6-native/capture/1529/go-1.goroutine.txt",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 2640.0,
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "bytes": 1326890,
+      "ms": 16,
+      "captured_at": "2026-11-10T20:17:05Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p6-native/capture/1529/go-1.heap.pb.gz",
+      "label": "p6-native",
+      "seq": 1,
+      "x": 2640.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 5633,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:17:05Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p9-native/capture/1745/go-1.goroutine.pb.gz",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "goroutine profile (protobuf)",
+      "bytes": 1314,
+      "ms": 5,
+      "captured_at": "2026-11-10T20:17:07Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p9-native/capture/1745/go-1.goroutine.txt",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "bytes": 1993488,
+      "ms": 10,
+      "captured_at": "2026-11-10T20:17:07Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H1/out/p9-native/capture/1745/go-1.heap.pb.gz",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 5530,
+      "ms": 1,
+      "captured_at": "2026-11-10T20:17:07Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p9-native-leak/capture/2948/go-1.goroutineleak.txt",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "goroutineleak profile (debug=2)",
+      "bytes": 2034358,
+      "ms": 22,
+      "captured_at": "2026-11-10T20:17:19Z"
+    }
+  ]
+}

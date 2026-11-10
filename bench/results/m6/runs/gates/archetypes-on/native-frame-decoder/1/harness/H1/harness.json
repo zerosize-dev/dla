@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "native",
+  "mode": "command",
+  "workload": "native:main:Makefile",
+  "scratch": "harness/H1/work",
+  "build": {
+    "argv": [
+      "make"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "run": {
+    "argv": [
+      "./framedec",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "LD_PRELOAD",
+        "/root/.cache/dla-bench/m6/gates/archetypes-on/native-frame-decoder/1/project/.dla/20261110-160749-1848/harness/H1/agent/libdlashim.so"
+      ],
+      [
+        "DLA_SHIM_ONLY",
+        "framedec"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [],
+  "agent": "alloc-shim",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p1-native/vgdb-1-leak.txt",
+      "label": "p1-native",
+      "seq": 2,
+      "x": 440.0,
+      "role": "vgdb leak_check answer",
+      "bytes": 594,
+      "captured_at": "2026-11-10T16:08:36Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p1-native/vgdb-2-blocks.txt",
+      "label": "p1-native",
+      "seq": 3,
+      "x": 440.0,
+      "role": "vgdb block_list answer",
+      "bytes": 939,
+      "captured_at": "2026-11-10T16:08:36Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p1-native/vgdb-3-who.txt",
+      "label": "p1-native",
+      "seq": 4,
+      "x": 440.0,
+      "role": "vgdb who_points_at walk",
+      "bytes": 125,
+      "captured_at": "2026-11-10T16:08:36Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p1-native/valgrind.xml",
+      "label": "p1-native",
+      "seq": 1,
+      "x": 440.0,
+      "role": "valgrind memcheck XML",
+      "bytes": 2605,
+      "ms": 1152,
+      "captured_at": "2026-11-10T16:08:36Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p5-native/vgdb-1-leak.txt",
+      "label": "p5-native",
+      "seq": 2,
+      "x": 2200.0,
+      "role": "vgdb leak_check answer",
+      "bytes": 906,
+      "captured_at": "2026-11-10T16:08:38Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p5-native/vgdb-2-blocks.txt",
+      "label": "p5-native",
+      "seq": 3,
+      "x": 2200.0,
+      "role": "vgdb block_list answer",
+      "bytes": 3622,
+      "captured_at": "2026-11-10T16:08:38Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p5-native/vgdb-3-who.txt",
+      "label": "p5-native",
+      "seq": 4,
+      "x": 2200.0,
+      "role": "vgdb who_points_at walk",
+      "bytes": 125,
+      "captured_at": "2026-11-10T16:08:38Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p5-native/valgrind.xml",
+      "label": "p5-native",
+      "seq": 1,
+      "x": 2200.0,
+      "role": "valgrind memcheck XML",
+      "bytes": 3855,
+      "ms": 2343,
+      "captured_at": "2026-11-10T16:08:38Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p9-native/vgdb-1-leak.txt",
+      "label": "p9-native",
+      "seq": 2,
+      "x": 3960.0,
+      "role": "vgdb leak_check answer",
+      "bytes": 906,
+      "captured_at": "2026-11-10T16:08:41Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p9-native/vgdb-2-blocks.txt",
+      "label": "p9-native",
+      "seq": 3,
+      "x": 3960.0,
+      "role": "vgdb block_list answer",
+      "bytes": 6232,
+      "captured_at": "2026-11-10T16:08:41Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p9-native/vgdb-3-who.txt",
+      "label": "p9-native",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "vgdb who_points_at walk",
+      "bytes": 125,
+      "captured_at": "2026-11-10T16:08:41Z"
+    },
+    {
+      "kind": "valgrind",
+      "path": "harness/H1/out/p9-native/valgrind.xml",
+      "label": "p9-native",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "valgrind memcheck XML",
+      "bytes": 3855,
+      "ms": 3147,
+      "captured_at": "2026-11-10T16:08:41Z"
+    }
+  ]
+}

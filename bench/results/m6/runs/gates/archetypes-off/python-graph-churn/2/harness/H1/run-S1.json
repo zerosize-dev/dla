@@ -1,0 +1,269 @@
+{
+  "captures": [
+    {
+      "bytes": 64087,
+      "captured_at": "2026-11-10T18:51:33Z",
+      "kind": "alloc",
+      "label": "p1-native",
+      "ms": 1112,
+      "path": "harness/H1/out/p1-native/capture/9/py-1.alloc.json",
+      "role": "tracemalloc live bytes by allocation stack",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 456,
+      "captured_at": "2026-11-10T18:51:33Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 1,
+      "path": "harness/H1/out/p1-native/capture/9/py-1.nonheap.json",
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 7518,
+      "captured_at": "2026-11-10T18:51:33Z",
+      "kind": "histogram",
+      "label": "p1-native",
+      "ms": 6,
+      "path": "harness/H1/out/p1-native/capture/9/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 6946,
+      "captured_at": "2026-11-10T18:51:36Z",
+      "kind": "histogram",
+      "label": "p2-native",
+      "ms": 1,
+      "path": "harness/H1/out/p2-native/capture/13/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 880.0
+    },
+    {
+      "bytes": 6946,
+      "captured_at": "2026-11-10T18:51:40Z",
+      "kind": "histogram",
+      "label": "p3-native",
+      "ms": 1,
+      "path": "harness/H1/out/p3-native/capture/16/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 1320.0
+    },
+    {
+      "bytes": 64070,
+      "captured_at": "2026-11-10T18:52:02Z",
+      "kind": "alloc",
+      "label": "p4-native",
+      "ms": 1214,
+      "path": "harness/H1/out/p4-native/capture/19/py-1.alloc.json",
+      "role": "tracemalloc live bytes by allocation stack",
+      "seq": 1,
+      "x": 1760.0
+    },
+    {
+      "bytes": 459,
+      "captured_at": "2026-11-10T18:52:02Z",
+      "kind": "nonheap",
+      "label": "p4-native",
+      "ms": 2,
+      "path": "harness/H1/out/p4-native/capture/19/py-1.nonheap.json",
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "seq": 1,
+      "x": 1760.0
+    },
+    {
+      "bytes": 7520,
+      "captured_at": "2026-11-10T18:52:02Z",
+      "kind": "histogram",
+      "label": "p4-native",
+      "ms": 5,
+      "path": "harness/H1/out/p4-native/capture/19/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 1760.0
+    },
+    {
+      "bytes": 6946,
+      "captured_at": "2026-11-10T18:52:09Z",
+      "kind": "histogram",
+      "label": "p5-native",
+      "ms": 2,
+      "path": "harness/H1/out/p5-native/capture/22/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 2200.0
+    },
+    {
+      "bytes": 64070,
+      "captured_at": "2026-11-10T18:52:40Z",
+      "kind": "alloc",
+      "label": "p6-native",
+      "ms": 1209,
+      "path": "harness/H1/out/p6-native/capture/25/py-1.alloc.json",
+      "role": "tracemalloc live bytes by allocation stack",
+      "seq": 1,
+      "x": 2640.0
+    },
+    {
+      "bytes": 459,
+      "captured_at": "2026-11-10T18:52:40Z",
+      "kind": "nonheap",
+      "label": "p6-native",
+      "ms": 1,
+      "path": "harness/H1/out/p6-native/capture/25/py-1.nonheap.json",
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "seq": 1,
+      "x": 2640.0
+    },
+    {
+      "bytes": 7520,
+      "captured_at": "2026-11-10T18:52:40Z",
+      "kind": "histogram",
+      "label": "p6-native",
+      "ms": 5,
+      "path": "harness/H1/out/p6-native/capture/25/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 2640.0
+    },
+    {
+      "bytes": 6946,
+      "captured_at": "2026-11-10T18:52:50Z",
+      "kind": "histogram",
+      "label": "p7-native",
+      "ms": 1,
+      "path": "harness/H1/out/p7-native/capture/28/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 3080.0
+    },
+    {
+      "bytes": 6947,
+      "captured_at": "2026-11-10T18:53:01Z",
+      "kind": "histogram",
+      "label": "p8-native",
+      "ms": 1,
+      "path": "harness/H1/out/p8-native/capture/31/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 3520.0
+    },
+    {
+      "bytes": 64088,
+      "captured_at": "2026-11-10T18:53:48Z",
+      "kind": "alloc",
+      "label": "p9-native",
+      "ms": 1271,
+      "path": "harness/H1/out/p9-native/capture/34/py-1.alloc.json",
+      "role": "tracemalloc live bytes by allocation stack",
+      "seq": 1,
+      "x": 3960.0
+    },
+    {
+      "bytes": 459,
+      "captured_at": "2026-11-10T18:53:48Z",
+      "kind": "nonheap",
+      "label": "p9-native",
+      "ms": 1,
+      "path": "harness/H1/out/p9-native/capture/34/py-1.nonheap.json",
+      "role": "threads, asyncio tasks and resource warnings by creation site",
+      "seq": 1,
+      "x": 3960.0
+    },
+    {
+      "bytes": 7520,
+      "captured_at": "2026-11-10T18:53:48Z",
+      "kind": "histogram",
+      "label": "p9-native",
+      "ms": 5,
+      "path": "harness/H1/out/p9-native/capture/34/py-1.types.json",
+      "role": "python object counts by type",
+      "seq": 1,
+      "x": 3960.0
+    }
+  ],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-native"
+    },
+    {
+      "code": 0,
+      "label": "p2-native"
+    },
+    {
+      "code": 0,
+      "label": "p3-native"
+    },
+    {
+      "code": 0,
+      "label": "p4-native"
+    },
+    {
+      "code": 0,
+      "label": "p5-native"
+    },
+    {
+      "code": 0,
+      "label": "p6-native"
+    },
+    {
+      "code": 0,
+      "label": "p7-native"
+    },
+    {
+      "code": 0,
+      "label": "p8-native"
+    },
+    {
+      "code": 0,
+      "label": "p9-native"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "p1-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p4-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p6-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "p9-native: alloc capture failed: memray is not installed in this interpreter (/usr/local/bin/python3); pip install memray there to add its live-at-exit report",
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)"
+  ],
+  "logs": [
+    "harness/H1/logs/p1-native.log",
+    "harness/H1/logs/p2-native.log",
+    "harness/H1/logs/p3-native.log",
+    "harness/H1/logs/p4-native.log",
+    "harness/H1/logs/p5-native.log",
+    "harness/H1/logs/p6-native.log",
+    "harness/H1/logs/p7-native.log",
+    "harness/H1/logs/p8-native.log",
+    "harness/H1/logs/p9-native.log",
+    "harness/H1/logs/detect.log"
+  ],
+  "mode": "command",
+  "modes": [
+    "native"
+  ],
+  "points": 9,
+  "processes": 10,
+  "series": [
+    "S1"
+  ],
+  "tool": null,
+  "units": 3520,
+  "x_range": [
+    440.0,
+    3960.0
+  ]
+}

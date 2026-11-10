@@ -1,0 +1,69 @@
+{
+  "basis": "the primary column of the region of F6",
+  "columns": [
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 1789000.0,
+        "extra_slope": 230.3,
+        "main_slope": 239.1,
+        "noise": 794400.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 69440000.0,
+        "before": 70580000.0,
+        "drop": 1143000.0,
+        "growth": 8176000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 4241000.0,
+        "extra_slope": 545.8,
+        "main_slope": 239.1,
+        "noise": 1205000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 73220000.0,
+        "before": 73220000.0,
+        "drop": 0.0,
+        "growth": 10820000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "inconclusive",
+  "finding": "F6",
+  "harness": "H1",
+  "id": "A8",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S16",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "os.rss",
+  "purge": "trim-native-heap",
+  "series": "S17",
+  "supports": [],
+  "trend": "T18"
+}

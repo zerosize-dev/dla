@@ -1,0 +1,75 @@
+{
+  "basis": "the primary column of the region of F4",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 76270000.0,
+        "extra_slope": 11560.0,
+        "main_slope": 23280.0,
+        "noise": 14560000.0,
+        "verdict": "inconclusive"
+      },
+      "purge": {
+        "after": 212700000.0,
+        "before": 238100000.0,
+        "drop": 25440000.0,
+        "growth": 168300000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 88710000.0,
+        "extra_slope": 13440.0,
+        "main_slope": 20510.0,
+        "noise": 15580000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 252800000.0,
+        "before": 252800000.0,
+        "drop": 0.0,
+        "growth": 176800000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 16,
+  "favors": "leak",
+  "finding": "F4",
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S6",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "os.rss",
+  "purge": "trim-native-heap",
+  "series": "S7",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T7"
+}

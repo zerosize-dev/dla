@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-190124-30a6",
+  "session_id": "e25bfb23-c094-430f-8ecf-9884b2f155bb",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-billing-private-repo/2/project",
+  "created_at": "2026-11-10T19:01:24Z",
+  "dla_version": "0.1.0",
+  "stage": "classify",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T19:01:24Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T19:01:24Z",
+    "deadline": "2026-11-10T20:01:24Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T19:01:45Z",
+      "kind": "harness",
+      "command": "mvn -q -o compile",
+      "started_at": "2026-11-10T19:01:45Z",
+      "stopped_at": "2026-11-10T19:01:47Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "e1e21498fa2072c00992bc545e9d9806",
+  "report": {
+    "path": ".dla/20261110-190124-30a6/report.md",
+    "sha256": "67129ecfc42580d2dee6cb61440d6643fe4933d6a1a7eefa828ff27853f1bff1",
+    "rendered_at": "2026-11-10T19:01:51Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep"
+  ]
+}

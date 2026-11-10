@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "node-price-board",
+  "ablation": "gates",
+  "archetypes": "off",
+  "run": 3,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 115.049,
+  "usage": {
+    "input_tokens": 56,
+    "output_tokens": 7589,
+    "cache_read_input_tokens": 1339904,
+    "cache_creation_input_tokens": 54158
+  },
+  "cost_usd": 0.42662440000000007,
+  "num_turns": 30,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T19:22:07Z",
+  "error": null,
+  "stop_blocks": 0
+}

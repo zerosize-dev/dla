@@ -1,0 +1,405 @@
+{
+  "schema_version": 1,
+  "id": "T10",
+  "series": "S4",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "stack:new",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "site": "src/window.rs:22",
+      "finding": "F4",
+      "candidates": [
+        "F4"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 3604480.0,
+        "intercept": -2703360.0,
+        "lo": 3604480.0,
+        "hi": 3604480.0
+      },
+      "halves": {
+        "first": 3604480.0,
+        "second": 3604480.0,
+        "ratio": 1.0
+      },
+      "noise": 0.0,
+      "rise": 7208960.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05"
+      ]
+    },
+    {
+      "name": "stack:new.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "site": "src/window.rs:22",
+      "finding": "F4",
+      "candidates": [
+        "F4"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 880.0,
+        "intercept": -660.0,
+        "lo": 880.0,
+        "hi": 880.0
+      },
+      "halves": {
+        "first": 880.0,
+        "second": 880.0,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": true,
+        "min": 880.0,
+        "max": 880.0
+      },
+      "noise": 0.0,
+      "rise": 1760.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:open",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "finding": "F2",
+      "candidates": [
+        "F2"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 49280.0,
+        "intercept": -36960.0,
+        "lo": 49280.0,
+        "hi": 49280.0
+      },
+      "halves": {
+        "first": 49280.0,
+        "second": 49280.0,
+        "ratio": 1.0
+      },
+      "noise": 0.0,
+      "rise": 98560.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05"
+      ]
+    },
+    {
+      "name": "stack:open.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "finding": "F2",
+      "candidates": [
+        "F2"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 880.0,
+        "intercept": -660.0,
+        "lo": 880.0,
+        "hi": 880.0
+      },
+      "halves": {
+        "first": 880.0,
+        "second": 880.0,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": true,
+        "min": 880.0,
+        "max": 880.0
+      },
+      "noise": 0.0,
+      "rise": 1760.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:open#2",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "site": "src/window.rs:9",
+      "finding": "F5",
+      "candidates": [
+        "F5"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 11440.0,
+        "intercept": -8580.0,
+        "lo": 11440.0,
+        "hi": 11440.0
+      },
+      "halves": {
+        "first": 11440.0,
+        "second": 11440.0,
+        "ratio": 1.0
+      },
+      "noise": 0.0,
+      "rise": 22880.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05"
+      ]
+    },
+    {
+      "name": "stack:open#2.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "site": "src/window.rs:9",
+      "finding": "F5",
+      "candidates": [
+        "F5"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 880.0,
+        "intercept": -660.0,
+        "lo": 880.0,
+        "hi": 880.0
+      },
+      "halves": {
+        "first": 880.0,
+        "second": 880.0,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": true,
+        "min": 880.0,
+        "max": 880.0
+      },
+      "noise": 0.0,
+      "rise": 1760.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:call_once<fn(&str) -> alloc::boxed::Box<str, alloc::alloc::Global>, (&st...",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 4.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:call_once<fn(&str) -> alloc::boxed::Box<str, alloc::alloc::Global>, (&st....count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:std::sys::pal::unix::stack_overflow::thread_info::set_current_info",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 544.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:std::sys::pal::unix::stack_overflow::thread_info::set_current_info.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    }
+  ]
+}

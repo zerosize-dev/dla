@@ -1,0 +1,116 @@
+{
+  "basis": "every column that passed the gate in the latest trend of the harness, and os.rss",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "jvm.nmt_committed",
+      "plateau": {
+        "extra_rise": 7493000.0,
+        "extra_slope": 2433.0,
+        "main_slope": 52430.0,
+        "noise": 16770000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 16550000.0,
+        "extra_slope": 5374.0,
+        "main_slope": 15980.0,
+        "noise": 11890000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 178700000.0,
+        "before": 195300000.0,
+        "drop": 16600000.0,
+        "growth": 104100000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": true
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_data",
+      "plateau": {
+        "extra_rise": 7221000.0,
+        "extra_slope": 2344.0,
+        "main_slope": 60170.0,
+        "noise": 24260000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 300600000.0,
+        "before": 300700000.0,
+        "drop": 122900.0,
+        "growth": 127000000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 29900000.0,
+        "extra_slope": 9709.0,
+        "main_slope": 21490.0,
+        "noise": 14140000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 205300000.0,
+        "before": 205300000.0,
+        "drop": 0.0,
+        "growth": 97000000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "inconclusive",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "cgroup.*: /proc/21/cgroup unreadable (No such file or directory (os error 2))",
+    "os.fds: /proc/21/fd unreadable (No such file or directory (os error 2))",
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S2",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": null,
+  "purge": "trim-native-heap",
+  "series": "S3",
+  "supports": [],
+  "trend": "T2"
+}

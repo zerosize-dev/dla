@@ -1,0 +1,96 @@
+{
+  "evidence": [
+    {
+      "authority": "dump",
+      "file": "evidence/E16-S2.json",
+      "id": "E16",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 29,
+        "gate": "pass",
+        "n": 4,
+        "n_values": [
+          440.0,
+          1760.0,
+          2640.0,
+          3960.0
+        ],
+        "passed": [
+          {
+            "column": "holder:static:.dla.20261110-202843-d773.harness.H1.work.src.scheduler.shared",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 5011701,
+            "unit": "bytes"
+          },
+          {
+            "column": "holder:field:.dla.20261110-202843-d773.harness.H1.work.src.scheduler.RetryScheduler.latest",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 5011275,
+            "unit": "bytes"
+          },
+          {
+            "column": "holder:field:Object.rows",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 4722331,
+            "unit": "bytes"
+          }
+        ],
+        "reasons": [],
+        "series": "S2",
+        "series_kind": "per-point",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "d0ec02fc99bce6dbaa1329ca67963d622522c760a34c577250e953f604cdbc03",
+          "tool": "dla-v8-snapshot"
+        }
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E18-S2.json",
+      "id": "E18",
+      "kind": "discriminator",
+      "result": {
+        "bytes": [
+          1891088,
+          7521688,
+          11283832,
+          16924912
+        ],
+        "column": "holder:field:.dla.20261110-202843-d773.harness.H1.work.src.scheduler.RetryScheduler.latest",
+        "counts": [
+          51367,
+          204139,
+          306212,
+          459271
+        ],
+        "dumps": 4,
+        "favors": "leak",
+        "reason": "retained bytes and count grew over every interval",
+        "series": "S2",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "d0ec02fc99bce6dbaa1329ca67963d622522c760a34c577250e953f604cdbc03",
+          "tool": "dla-v8-snapshot"
+        },
+        "supports": [
+          "leak"
+        ],
+        "test": "dump-plateau"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "src.scheduler.RetryScheduler.latest"
+}

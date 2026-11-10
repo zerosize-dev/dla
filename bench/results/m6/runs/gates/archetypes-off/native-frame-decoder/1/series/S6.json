@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "id": "S6",
+  "source": {
+    "kind": "gap",
+    "harness": "H1",
+    "workload": "native:main:Makefile",
+    "mode": "native",
+    "runtime": "native",
+    "command": "./framedec --iterations {n}",
+    "derived_from": "S3"
+  },
+  "axis": "n",
+  "warmup": 0,
+  "columns": [
+    {
+      "name": "gap.accounted",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    },
+    {
+      "name": "gap.unexplained",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    }
+  ],
+  "points": [
+    {
+      "x": 4400.0,
+      "t_ms": 578,
+      "values": [
+        4887552.0,
+        3111936.0
+      ]
+    },
+    {
+      "x": 4840.0,
+      "t_ms": 641,
+      "values": [
+        5331968.0,
+        3150848.0
+      ]
+    },
+    {
+      "x": 5280.0,
+      "t_ms": 636,
+      "values": [
+        5700608.0,
+        3208192.0
+      ]
+    },
+    {
+      "x": 5720.0,
+      "t_ms": 765,
+      "values": [
+        6144000.0,
+        3211264.0
+      ]
+    },
+    {
+      "x": 6160.0,
+      "t_ms": 787,
+      "values": [
+        6733824.0,
+        3235840.0
+      ]
+    },
+    {
+      "x": 6600.0,
+      "t_ms": 936,
+      "values": [
+        7179264.0,
+        3294208.0
+      ]
+    },
+    {
+      "x": 7040.0,
+      "t_ms": 964,
+      "values": [
+        7733248.0,
+        3297280.0
+      ]
+    },
+    {
+      "x": 7480.0,
+      "t_ms": 978,
+      "values": [
+        8183808.0,
+        3321856.0
+      ]
+    }
+  ],
+  "events": [
+    {
+      "after_point": 7,
+      "kind": "purge:trim",
+      "detail": "{\"after\":{\"os.rss\":11489280.0,\"os.rss_anon\":9281536.0,\"os.rss_file\":2207744.0,\"os.rss_shmem\":0.0,\"os.swap\":0.0,\"os.threads\":1.0,\"os.vm_data\":11554816.0,\"os.vm_hwm\":11489280.0},\"before\":{\"os.fds\":3.0,\"os.rss\":11505664.0,\"os.rss_anon\":9297920.0,\"os.rss_file\":2207744.0,\"os.rss_shmem\":0.0,\"os.swap\":0.0,\"os.threads\":1.0,\"os.vm_data\":11620352.0,\"os.vm_hwm\":11505664.0},\"kind\":\"trim\"}"
+    }
+  ],
+  "limitations": [
+    "4096 live bytes sit in allocations with no frame in the project (library-internal or without debug info)"
+  ]
+}

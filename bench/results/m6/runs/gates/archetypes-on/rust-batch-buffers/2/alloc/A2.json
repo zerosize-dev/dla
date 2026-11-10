@@ -1,0 +1,96 @@
+{
+  "basis": "named with --column",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -15770.0,
+        "extra_slope": -20.48,
+        "main_slope": 44.99,
+        "noise": 7439.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 7033000.0,
+        "before": 10870000.0,
+        "drop": 3838000.0,
+        "growth": 0.0,
+        "kind": "trim",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -43010.0,
+        "extra_slope": -55.85,
+        "main_slope": 37.24,
+        "noise": 18220.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 18690000.0,
+        "before": 18690000.0,
+        "drop": 0.0,
+        "growth": -65540.0,
+        "kind": "trim",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "native.peak_bytes",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F1",
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "548 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "points 1 to 9 come from S1; the extra points from S4",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "trim",
+  "series": "S5",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T3"
+}

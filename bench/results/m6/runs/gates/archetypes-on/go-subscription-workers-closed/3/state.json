@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-174631-170d",
+  "session_id": "0d43f4b4-1b39-4413-883e-71f2d4f57548",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-on/go-subscription-workers-closed/3/project",
+  "created_at": "2026-11-10T17:46:31Z",
+  "dla_version": "0.1.0",
+  "stage": "gate",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T17:46:31Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T17:46:31Z",
+    "deadline": "2026-11-10T18:46:31Z"
+  },
+  "processes": [
+    {
+      "pid": 21,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -run ^$ -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:02Z",
+      "stopped_at": "2026-11-10T17:47:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 1146,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p1-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:08Z",
+      "stopped_at": "2026-11-10T17:47:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 1215,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p2-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:08Z",
+      "stopped_at": "2026-11-10T17:47:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 1282,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p3-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:08Z",
+      "stopped_at": "2026-11-10T17:47:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 1352,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p4-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:08Z",
+      "stopped_at": "2026-11-10T17:47:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 1424,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p5-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:08Z",
+      "stopped_at": "2026-11-10T17:47:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 1495,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p6-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:09Z",
+      "stopped_at": "2026-11-10T17:47:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 1563,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p7-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:09Z",
+      "stopped_at": "2026-11-10T17:47:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 1627,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p8-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:09Z",
+      "stopped_at": "2026-11-10T17:47:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 1702,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p9-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:09Z",
+      "stopped_at": "2026-11-10T17:47:10Z",
+      "role": "started"
+    },
+    {
+      "pid": 1773,
+      "kind": "harness",
+      "command": "GOTOOLCHAIN=go1.27.0 go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/{label}.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:10Z",
+      "stopped_at": "2026-11-10T17:47:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 14,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p10-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:49Z",
+      "stopped_at": "2026-11-10T17:47:49Z",
+      "role": "started"
+    },
+    {
+      "pid": 88,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p11-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:49Z",
+      "stopped_at": "2026-11-10T17:47:49Z",
+      "role": "started"
+    },
+    {
+      "pid": 162,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p12-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:49Z",
+      "stopped_at": "2026-11-10T17:47:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 231,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p13-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:50Z",
+      "stopped_at": "2026-11-10T17:47:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 301,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p14-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:50Z",
+      "stopped_at": "2026-11-10T17:47:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 372,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p15-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:50Z",
+      "stopped_at": "2026-11-10T17:47:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 437,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p16-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:50Z",
+      "stopped_at": "2026-11-10T17:47:51Z",
+      "role": "started"
+    },
+    {
+      "pid": 510,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p17-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:51Z",
+      "stopped_at": "2026-11-10T17:47:51Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p10-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:57Z",
+      "stopped_at": "2026-11-10T17:47:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 79,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p11-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:57Z",
+      "stopped_at": "2026-11-10T17:47:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 153,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p12-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:57Z",
+      "stopped_at": "2026-11-10T17:47:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 216,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p13-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:58Z",
+      "stopped_at": "2026-11-10T17:47:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 288,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p14-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:58Z",
+      "stopped_at": "2026-11-10T17:47:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 353,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p15-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:58Z",
+      "stopped_at": "2026-11-10T17:47:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 422,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p16-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:58Z",
+      "stopped_at": "2026-11-10T17:47:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 498,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p17-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:47:58Z",
+      "stopped_at": "2026-11-10T17:47:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 1884,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p10-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:00Z",
+      "stopped_at": "2026-11-10T17:48:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 1959,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p11-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:00Z",
+      "stopped_at": "2026-11-10T17:48:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 2031,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p12-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:01Z",
+      "stopped_at": "2026-11-10T17:48:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 2094,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p13-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:01Z",
+      "stopped_at": "2026-11-10T17:48:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 2166,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p14-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:01Z",
+      "stopped_at": "2026-11-10T17:48:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 2234,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p15-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:01Z",
+      "stopped_at": "2026-11-10T17:48:02Z",
+      "role": "started"
+    },
+    {
+      "pid": 2301,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p16-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:02Z",
+      "stopped_at": "2026-11-10T17:48:02Z",
+      "role": "started"
+    },
+    {
+      "pid": 2361,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p17-native.out -coverpkg=./... ./cmd/notifyd",
+      "started_at": "2026-11-10T17:48:02Z",
+      "stopped_at": "2026-11-10T17:48:02Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "ff75905f97fbbc1d204079a729b9d072",
+  "report": {
+    "path": ".dla/20261110-174631-170d/report.md",
+    "sha256": "6d410e04702dab5e92f854f3b2bfd17db51c1f0665f742b7a4d228d5360edd0a",
+    "rendered_at": "2026-11-10T17:48:46Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep",
+    "rule_out"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "files": [
+    {
+      "path": "evidence/E12-T1.json",
+      "sha256": "80a5a862ffce6838191bef5875c352b48638b7d55f351501ace8928e982242dd"
+    },
+    {
+      "path": "evidence/E18-A2.json",
+      "sha256": "f0237a5e984d363731d160473480380d6997857ba7710444f3004ff2d2bc8b2d"
+    },
+    {
+      "path": "index.json",
+      "sha256": "e55d08d45e4b17398678f81db11b2502a1fd82d3a16570a38cd4200bb145d763"
+    }
+  ]
+}

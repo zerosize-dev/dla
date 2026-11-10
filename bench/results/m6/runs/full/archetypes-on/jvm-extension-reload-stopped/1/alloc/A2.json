@@ -1,0 +1,147 @@
+{
+  "basis": "its probe column of F3",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "probe:reports.EventBus.LISTENERS",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "probe:reports.EventBus.LISTENERS.bytes",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "probe:reports.EventBus.LISTENERS.size",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 30440000.0,
+        "extra_slope": 9884.0,
+        "main_slope": 20660.0,
+        "noise": 10790000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 169100000.0,
+        "before": 192300000.0,
+        "drop": 23220000.0,
+        "growth": 98880000.0,
+        "kind": "trim-native-heap",
+        "verdict": "partial"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 35230000.0,
+        "extra_slope": 11440.0,
+        "main_slope": 21640.0,
+        "noise": 12890000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 202700000.0,
+        "before": 202700000.0,
+        "drop": 0.0,
+        "growth": 93770000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F3",
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S4",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "probe:reports.EventBus.LISTENERS",
+  "purge": "trim-native-heap",
+  "series": "S5",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T4"
+}

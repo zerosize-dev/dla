@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "id": "H2",
+  "runtime": "node",
+  "mode": "driver",
+  "workload": "node:script:package.json:load",
+  "scratch": "harness/H2/work",
+  "run": {
+    "argv": [
+      "node",
+      "/root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H2/driver/dla-harness.js"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "NODE_OPTIONS",
+        "--require /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H2/agent/dla-preload.js"
+      ],
+      [
+        "DLA_AGENT",
+        "/root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H2/agent/dla-preload.js"
+      ],
+      [
+        "NODE_V8_COVERAGE",
+        "{cov}"
+      ]
+    ]
+  },
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "fresh",
+    "repeated"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "target": {
+        "kind": "node-module",
+        "file": "src/gateway.js"
+      }
+    },
+    {
+      "id": "P2",
+      "target": {
+        "kind": "node-module",
+        "file": "src/heartbeat.js"
+      }
+    },
+    {
+      "id": "P3",
+      "target": {
+        "kind": "node-module",
+        "file": "src/loopback.js"
+      }
+    },
+    {
+      "id": "P4",
+      "target": {
+        "kind": "node-module",
+        "file": "src/metrics.js"
+      }
+    },
+    {
+      "id": "P5",
+      "target": {
+        "kind": "node-module",
+        "file": "src/router.js"
+      }
+    },
+    {
+      "id": "P6",
+      "target": {
+        "kind": "node-module",
+        "file": "src/session.js"
+      }
+    }
+  ],
+  "agent": "driver-node",
+  "detectors": [
+    "MaxListenersExceededWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/11/alloc-1.heapprofile",
+      "label": "p1-fresh",
+      "seq": 1,
+      "x": 440.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 48518,
+      "ms": 22,
+      "captured_at": "2026-11-10T17:58:46Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/11/alloc-2.heapprofile",
+      "label": "p1-fresh",
+      "seq": 2,
+      "x": 1760.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 55969,
+      "ms": 36,
+      "captured_at": "2026-11-10T17:58:47Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/11/alloc-3.heapprofile",
+      "label": "p1-fresh",
+      "seq": 3,
+      "x": 2640.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 33845,
+      "ms": 56,
+      "captured_at": "2026-11-10T17:58:48Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/11/alloc-4.heapprofile",
+      "label": "p1-fresh",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 47151,
+      "ms": 62,
+      "captured_at": "2026-11-10T17:58:49Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-fresh/capture/11/heap-1.heapsnapshot",
+      "label": "p1-fresh",
+      "seq": 1,
+      "x": 440.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 9295109,
+      "ms": 257,
+      "captured_at": "2026-11-10T17:58:46Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-fresh/capture/11/heap-2.heapsnapshot",
+      "label": "p1-fresh",
+      "seq": 2,
+      "x": 1760.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 18820646,
+      "ms": 543,
+      "captured_at": "2026-11-10T17:58:47Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-fresh/capture/11/heap-3.heapsnapshot",
+      "label": "p1-fresh",
+      "seq": 3,
+      "x": 2640.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 25214627,
+      "ms": 745,
+      "captured_at": "2026-11-10T17:58:48Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-fresh/capture/11/heap-4.heapsnapshot",
+      "label": "p1-fresh",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 34956370,
+      "ms": 1069,
+      "captured_at": "2026-11-10T17:58:50Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H2/out/p1-fresh/capture/11/resources.json",
+      "label": "p1-fresh",
+      "seq": 5,
+      "x": 3960.0,
+      "role": "active resources by type and creation site",
+      "bytes": 368,
+      "ms": 1,
+      "captured_at": "2026-11-10T17:58:50Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H2/out/p1-fresh/capture/11/scripts.json",
+      "label": "p1-fresh",
+      "seq": 6,
+      "x": 440.0,
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "bytes": 1655,
+      "ms": 0,
+      "captured_at": "2026-11-10T17:58:50Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/19/alloc-1.heapprofile",
+      "label": "p1-repeated",
+      "seq": 1,
+      "x": 440.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 50433,
+      "ms": 17,
+      "captured_at": "2026-11-10T17:58:50Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/19/alloc-2.heapprofile",
+      "label": "p1-repeated",
+      "seq": 2,
+      "x": 1760.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 49892,
+      "ms": 39,
+      "captured_at": "2026-11-10T17:58:51Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/19/alloc-3.heapprofile",
+      "label": "p1-repeated",
+      "seq": 3,
+      "x": 2640.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 33351,
+      "ms": 36,
+      "captured_at": "2026-11-10T17:58:51Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/19/alloc-4.heapprofile",
+      "label": "p1-repeated",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "sampling heap profile (live objects)",
+      "bytes": 43015,
+      "ms": 57,
+      "captured_at": "2026-11-10T17:58:53Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-repeated/capture/19/heap-1.heapsnapshot",
+      "label": "p1-repeated",
+      "seq": 1,
+      "x": 440.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 8933332,
+      "ms": 216,
+      "captured_at": "2026-11-10T17:58:50Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-repeated/capture/19/heap-2.heapsnapshot",
+      "label": "p1-repeated",
+      "seq": 2,
+      "x": 1760.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 17215754,
+      "ms": 436,
+      "captured_at": "2026-11-10T17:58:51Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-repeated/capture/19/heap-3.heapsnapshot",
+      "label": "p1-repeated",
+      "seq": 3,
+      "x": 2640.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 22748909,
+      "ms": 589,
+      "captured_at": "2026-11-10T17:58:52Z"
+    },
+    {
+      "kind": "heap",
+      "path": "harness/H2/out/p1-repeated/capture/19/heap-4.heapsnapshot",
+      "label": "p1-repeated",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "heap snapshot (v8)",
+      "bytes": 31071868,
+      "ms": 790,
+      "captured_at": "2026-11-10T17:58:53Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H2/out/p1-repeated/capture/19/resources.json",
+      "label": "p1-repeated",
+      "seq": 5,
+      "x": 3960.0,
+      "role": "active resources by type and creation site",
+      "bytes": 368,
+      "ms": 0,
+      "captured_at": "2026-11-10T17:58:53Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H2/out/p1-repeated/capture/19/scripts.json",
+      "label": "p1-repeated",
+      "seq": 6,
+      "x": 440.0,
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "bytes": 1655,
+      "ms": 0,
+      "captured_at": "2026-11-10T17:58:53Z"
+    }
+  ]
+}

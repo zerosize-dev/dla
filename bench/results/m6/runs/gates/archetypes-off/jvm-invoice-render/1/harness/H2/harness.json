@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "id": "H2",
+  "runtime": "jvm",
+  "mode": "command",
+  "workload": "jvm:main:build.sh:run",
+  "scratch": "harness/H2/work",
+  "run": {
+    "argv": [
+      "sh",
+      "./build.sh",
+      "run",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "JAVA_TOOL_OPTIONS",
+        "-javaagent:/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-invoice-render/1/project/.dla/20261110-183727-3c4f/harness/H2/agent/dla-agent.jar -XX:NativeMemoryTracking=summary"
+      ]
+    ]
+  },
+  "iter_arg": "{n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 1110,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F2",
+      "target": {
+        "kind": "jvm-static",
+        "class": "billing.InvoiceFeed",
+        "field": "SKUS"
+      },
+      "site": "src/billing/InvoiceFeed.java:9"
+    },
+    {
+      "id": "P2",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-static",
+        "class": "billing.InvoiceFeed",
+        "field": "NAMES"
+      },
+      "site": "src/billing/InvoiceFeed.java:10"
+    },
+    {
+      "id": "P3",
+      "finding": "F7",
+      "target": {
+        "kind": "jvm-static",
+        "class": "billing.TaxTable",
+        "field": "RATES"
+      },
+      "site": "src/billing/TaxTable.java:7"
+    },
+    {
+      "id": "P4",
+      "finding": "F1",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.Invoice"
+      },
+      "site": "src/billing/Invoice.java:6"
+    },
+    {
+      "id": "P5",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.InvoiceFeed"
+      }
+    },
+    {
+      "id": "P6",
+      "finding": "F4",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.InvoiceService"
+      },
+      "site": "src/billing/InvoiceService.java:17"
+    },
+    {
+      "id": "P7",
+      "finding": "F5",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.InvoiceService$WorkerFactory"
+      },
+      "site": "src/billing/InvoiceService.java:58"
+    },
+    {
+      "id": "P8",
+      "finding": "F6",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.RenderContext"
+      },
+      "site": "src/billing/RenderContext.java:8"
+    },
+    {
+      "id": "P9",
+      "finding": "F7",
+      "target": {
+        "kind": "jvm-class",
+        "class": "billing.TaxTable"
+      },
+      "site": "src/billing/TaxTable.java:7"
+    }
+  ],
+  "agent": "jvm-agent",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "timeout_secs": 300
+}

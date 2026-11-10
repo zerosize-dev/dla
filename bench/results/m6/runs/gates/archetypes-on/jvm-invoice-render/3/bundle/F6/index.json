@@ -1,0 +1,180 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 27,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "probe:billing.RenderContext.SEGMENTS",
+            "lo": 12.5,
+            "p": 0.0000248,
+            "ratio": 0.9993,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 12.53,
+            "unit": "count"
+          },
+          {
+            "column": "probe:billing.RenderContext.SEGMENTS.size",
+            "lo": 12.5,
+            "p": 0.0000248,
+            "ratio": 0.9993,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 12.53,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:byte[].count",
+            "lo": 12.5,
+            "p": 0.0000248,
+            "ratio": 0.9997,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 12.54,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.String.count",
+            "lo": 12.5,
+            "p": 0.0000248,
+            "ratio": 0.9997,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 12.54,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 26,
+          "spike": 1,
+          "steady": 4
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "2b62965c9bcbc4783e6b369b1d53a1406932916b0cf807b744f25428a0272f9b",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E12-A1.json",
+      "id": "E12",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:billing.RenderContext.SEGMENTS",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:billing.RenderContext.SEGMENTS",
+            "plateau": {
+              "extra_rise": 111200.0,
+              "extra_slope": 12.53,
+              "main_slope": 12.53,
+              "noise": 93.59,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:billing.RenderContext.SEGMENTS.bytes",
+            "plateau": {
+              "extra_rise": 9667000.0,
+              "extra_slope": 1244.0,
+              "main_slope": 1247.0,
+              "noise": 18450.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:billing.RenderContext.SEGMENTS.size",
+            "plateau": {
+              "extra_rise": 111200.0,
+              "extra_slope": 12.53,
+              "main_slope": 12.53,
+              "noise": 93.59,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "inconclusive",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 43050000.0,
+              "extra_slope": 5540.0,
+              "main_slope": 6947.0,
+              "noise": 29730000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 182900000.0,
+              "before": 197100000.0,
+              "drop": 14170000.0,
+              "growth": 86710000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "inconclusive",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 64270000.0,
+              "extra_slope": 8271.0,
+              "main_slope": 4191.0,
+              "noise": 30930000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 243900000.0,
+              "before": 243900000.0,
+              "drop": 0.0,
+              "growth": 131600000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "billing.RenderContext.SEGMENTS"
+}

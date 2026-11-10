@@ -1,0 +1,404 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-174436-34a9",
+  "session_id": "263a23a3-349c-408a-b1e5-379cf67e64c2",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project",
+  "created_at": "2026-11-10T17:44:36Z",
+  "dla_version": "0.1.0",
+  "stage": "confirm",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T17:44:36Z"
+  },
+  "budget": {
+    "seconds": 1200,
+    "started_at": "2026-11-10T17:44:36Z",
+    "deadline": "2026-11-10T18:04:36Z"
+  },
+  "processes": [
+    {
+      "pid": 21,
+      "kind": "harness",
+      "command": "cargo build --release --bin meter-gateway",
+      "started_at": "2026-11-10T17:44:58Z",
+      "stopped_at": "2026-11-10T17:44:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 52,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 220",
+      "started_at": "2026-11-10T17:44:59Z",
+      "stopped_at": "2026-11-10T17:44:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 56,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 440",
+      "started_at": "2026-11-10T17:44:59Z",
+      "stopped_at": "2026-11-10T17:44:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 60,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 660",
+      "started_at": "2026-11-10T17:44:59Z",
+      "stopped_at": "2026-11-10T17:44:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 64,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 880",
+      "started_at": "2026-11-10T17:44:59Z",
+      "stopped_at": "2026-11-10T17:44:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 68,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 1100",
+      "started_at": "2026-11-10T17:44:59Z",
+      "stopped_at": "2026-11-10T17:44:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 72,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 1320",
+      "started_at": "2026-11-10T17:44:59Z",
+      "stopped_at": "2026-11-10T17:44:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 76,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 1540",
+      "started_at": "2026-11-10T17:45:00Z",
+      "stopped_at": "2026-11-10T17:45:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 80,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 1760",
+      "started_at": "2026-11-10T17:45:00Z",
+      "stopped_at": "2026-11-10T17:45:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 84,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 1980",
+      "started_at": "2026-11-10T17:45:00Z",
+      "stopped_at": "2026-11-10T17:45:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2200",
+      "started_at": "2026-11-10T17:45:10Z",
+      "stopped_at": "2026-11-10T17:45:10Z",
+      "role": "started"
+    },
+    {
+      "pid": 23,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2420",
+      "started_at": "2026-11-10T17:45:11Z",
+      "stopped_at": "2026-11-10T17:45:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 27,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2640",
+      "started_at": "2026-11-10T17:45:11Z",
+      "stopped_at": "2026-11-10T17:45:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2860",
+      "started_at": "2026-11-10T17:45:11Z",
+      "stopped_at": "2026-11-10T17:45:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3080",
+      "started_at": "2026-11-10T17:45:11Z",
+      "stopped_at": "2026-11-10T17:45:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 39,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3300",
+      "started_at": "2026-11-10T17:45:11Z",
+      "stopped_at": "2026-11-10T17:45:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 43,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3520",
+      "started_at": "2026-11-10T17:45:11Z",
+      "stopped_at": "2026-11-10T17:45:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 47,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3740",
+      "started_at": "2026-11-10T17:45:11Z",
+      "stopped_at": "2026-11-10T17:45:12Z",
+      "role": "started"
+    },
+    {
+      "pid": 10,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 220",
+      "started_at": "2026-11-10T17:45:43Z",
+      "stopped_at": "2026-11-10T17:45:44Z",
+      "role": "started"
+    },
+    {
+      "pid": 16,
+      "start_time": "2026-11-10T17:45:42Z",
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 1100",
+      "started_at": "2026-11-10T17:45:44Z",
+      "stopped_at": "2026-11-10T17:45:45Z",
+      "role": "started"
+    },
+    {
+      "pid": 24,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 1980",
+      "started_at": "2026-11-10T17:45:45Z",
+      "stopped_at": "2026-11-10T17:45:46Z",
+      "role": "started"
+    },
+    {
+      "pid": 24,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2200",
+      "started_at": "2026-11-10T17:46:16Z",
+      "stopped_at": "2026-11-10T17:46:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 28,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2420",
+      "started_at": "2026-11-10T17:46:16Z",
+      "stopped_at": "2026-11-10T17:46:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 32,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2640",
+      "started_at": "2026-11-10T17:46:16Z",
+      "stopped_at": "2026-11-10T17:46:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 36,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2860",
+      "started_at": "2026-11-10T17:46:16Z",
+      "stopped_at": "2026-11-10T17:46:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 40,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3080",
+      "started_at": "2026-11-10T17:46:17Z",
+      "stopped_at": "2026-11-10T17:46:17Z",
+      "role": "started"
+    },
+    {
+      "pid": 44,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3300",
+      "started_at": "2026-11-10T17:46:17Z",
+      "stopped_at": "2026-11-10T17:46:17Z",
+      "role": "started"
+    },
+    {
+      "pid": 48,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3520",
+      "started_at": "2026-11-10T17:46:17Z",
+      "stopped_at": "2026-11-10T17:46:17Z",
+      "role": "started"
+    },
+    {
+      "pid": 52,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3740",
+      "started_at": "2026-11-10T17:46:17Z",
+      "stopped_at": "2026-11-10T17:46:17Z",
+      "role": "started"
+    },
+    {
+      "pid": 10,
+      "start_time": "2026-11-10T17:46:24Z",
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2200",
+      "started_at": "2026-11-10T17:46:25Z",
+      "stopped_at": "2026-11-10T17:46:25Z",
+      "role": "started"
+    },
+    {
+      "pid": 15,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2420",
+      "started_at": "2026-11-10T17:46:25Z",
+      "stopped_at": "2026-11-10T17:46:25Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2640",
+      "started_at": "2026-11-10T17:46:25Z",
+      "stopped_at": "2026-11-10T17:46:25Z",
+      "role": "started"
+    },
+    {
+      "pid": 23,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2860",
+      "started_at": "2026-11-10T17:46:25Z",
+      "stopped_at": "2026-11-10T17:46:25Z",
+      "role": "started"
+    },
+    {
+      "pid": 27,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3080",
+      "started_at": "2026-11-10T17:46:25Z",
+      "stopped_at": "2026-11-10T17:46:25Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3300",
+      "started_at": "2026-11-10T17:46:26Z",
+      "stopped_at": "2026-11-10T17:46:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3520",
+      "started_at": "2026-11-10T17:46:26Z",
+      "stopped_at": "2026-11-10T17:46:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 39,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3740",
+      "started_at": "2026-11-10T17:46:26Z",
+      "stopped_at": "2026-11-10T17:46:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 50,
+      "start_time": "2026-11-10T17:46:25Z",
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2200",
+      "started_at": "2026-11-10T17:46:26Z",
+      "stopped_at": "2026-11-10T17:46:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 55,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2420",
+      "started_at": "2026-11-10T17:46:26Z",
+      "stopped_at": "2026-11-10T17:46:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 59,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2640",
+      "started_at": "2026-11-10T17:46:26Z",
+      "stopped_at": "2026-11-10T17:46:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 63,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 2860",
+      "started_at": "2026-11-10T17:46:27Z",
+      "stopped_at": "2026-11-10T17:46:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 67,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3080",
+      "started_at": "2026-11-10T17:46:27Z",
+      "stopped_at": "2026-11-10T17:46:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 71,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3300",
+      "started_at": "2026-11-10T17:46:27Z",
+      "stopped_at": "2026-11-10T17:46:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 75,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3520",
+      "started_at": "2026-11-10T17:46:27Z",
+      "stopped_at": "2026-11-10T17:46:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 79,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/gates/archetypes-on/rust-meter-callbacks/3/project/.dla/20261110-174436-34a9/harness/H1/work/target/release/meter-gateway --iterations 3740",
+      "started_at": "2026-11-10T17:46:27Z",
+      "stopped_at": "2026-11-10T17:46:27Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "c521a74127a75367d8b9ada956ea06cf",
+  "report": {
+    "path": ".dla/20261110-174436-34a9/report.md",
+    "sha256": "6c8b42ecea5af117c65fd8ecc6da732347be873e84f80e5b9d1bfd271231bad6",
+    "rendered_at": "2026-11-10T17:47:29Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep",
+    "classify"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "path": "evidence/jvm_E10-C1.json",
+      "sha256": "232d873115dccc53b9faca7e6f44a8941246a62d8f65ce4dec4a26eb43ac6f9f"
+    },
+    {
+      "path": "evidence/jvm_E12-T2.json",
+      "sha256": "b87e8bf5155a98af469126f0a0c09d8e3c3a7c1a0d40ff4c0f017f0a2f16fac0"
+    },
+    {
+      "path": "evidence/jvm_E14-A2.json",
+      "sha256": "17f09842d39b9abbae8caafcbdcc8d2659acb74a47708eb671e87219d0da98f5"
+    },
+    {
+      "path": "excerpt.txt",
+      "sha256": "4a4e1d204dade347fddfd9920590a0b18b1c66f0e50c2fd6810985f220de3d45"
+    },
+    {
+      "path": "index.json",
+      "sha256": "d65b5eb00ba8073b817da862688ce449d6b9d1ebfac0a433413a3b8a83d3847e"
+    }
+  ]
+}

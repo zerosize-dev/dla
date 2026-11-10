@@ -1,0 +1,145 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 14,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "node.listeners",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "node.timers",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "node.listeners",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "node.timers",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 5,
+          "insufficient": 9,
+          "steady": 4
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "6b52b29b4f5641eb4681e1787e14296268d3fac05787d40f119648a6cdd25258",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "node:script:package.json:load"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E12-A1.json",
+      "id": "E12",
+      "kind": "discriminator",
+      "result": {
+        "column": "node.timers",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "node.timers",
+            "plateau": {
+              "extra_rise": 3520.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 36220000.0,
+              "extra_slope": 11760.0,
+              "main_slope": 19740.0,
+              "noise": 1908000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 177300000.0,
+              "before": 176100000.0,
+              "drop": -1290000.0,
+              "growth": 105600000.0,
+              "kind": "gc",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 36650000.0,
+              "extra_slope": 11900.0,
+              "main_slope": 19270.0,
+              "noise": 1044000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "gc",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": []
+}

@@ -1,0 +1,149 @@
+{
+  "basis": "the primary column of the region of jvm/F2",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 48040000.0,
+        "pre_rise": 56310000.0,
+        "verdict": "none"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 22570000.0,
+        "extra_slope": 1452.0,
+        "main_slope": 1451.0,
+        "noise": 182000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 88240000.0,
+        "extra_slope": 5678.0,
+        "main_slope": 6318.0,
+        "noise": 6443000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 311900000.0,
+        "before": 312700000.0,
+        "drop": 790500.0,
+        "growth": 193400000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 67680000.0,
+        "extra_slope": 4355.0,
+        "main_slope": 6454.0,
+        "noise": 20560000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 312500000.0,
+        "before": 312700000.0,
+        "drop": 221200.0,
+        "growth": -55880000.0,
+        "kind": "trim-native-heap",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "native.peak_bytes",
+      "plateau": {
+        "extra_rise": 52420000.0,
+        "extra_slope": 3373.0,
+        "main_slope": 3263.0,
+        "noise": 11990000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "jvm/F2",
+  "harness": "H1",
+  "id": "A4",
+  "iterations": 8,
+  "limitations": [
+    "native.live_bytes@native/src/lib.rs:40 is Java_shop_codec_Native_open, the native method shop.codec.Native.open declared at kotlin/shop/Native.kt:9 (61430816 B live at the last point)",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "allocator shim: raw_sites lists the largest 1024 stacks only; smaller live stacks are omitted",
+    "allocator shim: more than 4096 distinct allocation stacks; the rest is counted in shim.overflow_*",
+    "47165612 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "21751582 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "33148084 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "45501391 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "24778564 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "39716848 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "31820397 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "22557142 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "39486001 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "dropped 15 per-type columns (cap of 64, lowest growth first)",
+    "native.live_bytes@native/src/lib.rs:40 is Java_shop_codec_Native_open, the native method shop.codec.Native.open declared at kotlin/shop/Native.kt:9 (116025056 B live at the last point)",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "allocator shim: raw_sites lists the largest 1024 stacks only; smaller live stacks are omitted",
+    "31814778 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "35695608 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "21305002 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "20689490 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "31274555 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "32323118 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "31521086 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "allocator shim: purge kind is not supported by the allocator shim (supported: trim, jemalloc)",
+    "26976106 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "dropped 8 per-type columns (cap of 64, lowest growth first)",
+    "points 1 to 9 come from S1; the extra points from S9",
+    "8 columns beyond the 64 the series allows were dropped",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: JNI library codec is measured: the allocator shim is preloaded into java (DLA_SHIM_ONLY=java) and the cdylib is built with line tables, so native stack groups resolve to source lines",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "jvm.heap_used",
+  "purge": "trim-native-heap",
+  "series": "S10",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T6"
+}

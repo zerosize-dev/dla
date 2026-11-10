@@ -1,0 +1,135 @@
+{
+  "captures": [
+    {
+      "bytes": 7409,
+      "captured_at": "2026-11-10T18:46:11Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 3,
+      "path": "harness/H2/out/p1-fresh/capture/148/go-1.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 11410,
+      "captured_at": "2026-11-10T18:46:13Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 2,
+      "path": "harness/H2/out/p1-fresh/capture/148/go-2.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 12233,
+      "captured_at": "2026-11-10T18:46:15Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 2,
+      "path": "harness/H2/out/p1-fresh/capture/148/go-3.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 12940,
+      "captured_at": "2026-11-10T18:46:18Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 9,
+      "path": "harness/H2/out/p1-fresh/capture/148/go-4.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 6353,
+      "captured_at": "2026-11-10T18:46:19Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 1,
+      "path": "harness/H2/out/p1-repeated/capture/217/go-1.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 10780,
+      "captured_at": "2026-11-10T18:46:22Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 3,
+      "path": "harness/H2/out/p1-repeated/capture/217/go-2.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 12017,
+      "captured_at": "2026-11-10T18:46:24Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 5,
+      "path": "harness/H2/out/p1-repeated/capture/217/go-3.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 12436,
+      "captured_at": "2026-11-10T18:46:27Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 3,
+      "path": "harness/H2/out/p1-repeated/capture/217/go-4.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 4,
+      "x": 3960.0
+    }
+  ],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-fresh"
+    },
+    {
+      "code": 0,
+      "label": "p1-repeated"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "harness": "H2",
+  "limitations": [
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "no Go coverage profile was written to cov/"
+  ],
+  "logs": [
+    "harness/H2/logs/build.log",
+    "harness/H2/logs/p1-fresh.log",
+    "harness/H2/logs/p1-repeated.log"
+  ],
+  "mode": "driver",
+  "modes": [
+    "fresh",
+    "repeated"
+  ],
+  "points": 9,
+  "processes": 2,
+  "series": [
+    "S3",
+    "S4"
+  ],
+  "tool": null,
+  "units": 3520,
+  "x_range": [
+    440.0,
+    3960.0
+  ]
+}

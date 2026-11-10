@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "id": "T4",
+  "series": "S4",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "stack:decode_frame",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "finding": "F3",
+      "candidates": [
+        "F3"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 2053109.5,
+        "intercept": -1577051.5,
+        "lo": 1960837.0,
+        "hi": 2145382.0
+      },
+      "halves": {
+        "first": 2145382.0,
+        "second": 1960837.0,
+        "ratio": 0.9139803540814643
+      },
+      "noise": 0.0,
+      "rise": 4106219.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05"
+      ]
+    },
+    {
+      "name": "stack:decode_frame.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "finding": "F3",
+      "candidates": [
+        "F3"
+      ],
+      "n": 3,
+      "mk": {
+        "s": 3,
+        "var_s": 3.6666666666666665,
+        "z": 1.044465935734187,
+        "p_increasing": 0.16666666666666666,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 1760.0,
+        "intercept": -1320.0,
+        "lo": 1760.0,
+        "hi": 1760.0
+      },
+      "halves": {
+        "first": 1760.0,
+        "second": 1760.0,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": true,
+        "min": 1760.0,
+        "max": 1760.0
+      },
+      "noise": 0.0,
+      "rise": 3520.0,
+      "shape": "steady",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:main",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 4198.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:main.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    }
+  ]
+}

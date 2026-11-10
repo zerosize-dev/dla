@@ -1,0 +1,459 @@
+{
+  "captures": [
+    {
+      "bytes": 813,
+      "captured_at": "2026-11-10T16:46:40Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 0,
+      "path": "harness/H1/out/p1-native/capture/9/classloader-stats.txt",
+      "role": "class loader statistics",
+      "seq": 2,
+      "x": 2220.0
+    },
+    {
+      "bytes": 13454210,
+      "captured_at": "2026-11-10T16:46:40Z",
+      "kind": "heap",
+      "label": "p1-native",
+      "ms": 37,
+      "path": "harness/H1/out/p1-native/capture/9/heap-1.hprof",
+      "role": "heap dump (HPROF)",
+      "seq": 1,
+      "x": 2220.0
+    },
+    {
+      "bytes": 90522,
+      "captured_at": "2026-11-10T16:46:40Z",
+      "kind": "histogram",
+      "label": "p1-native",
+      "ms": 20,
+      "path": "harness/H1/out/p1-native/capture/9/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 2220.0
+    },
+    {
+      "bytes": 4299,
+      "captured_at": "2026-11-10T16:46:40Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 0,
+      "path": "harness/H1/out/p1-native/capture/9/nmt-diff.txt",
+      "role": "native memory change since baseline",
+      "seq": 4,
+      "x": 2220.0
+    },
+    {
+      "bytes": 4751,
+      "captured_at": "2026-11-10T16:46:40Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 0,
+      "path": "harness/H1/out/p1-native/capture/9/nmt-summary.txt",
+      "role": "native memory summary",
+      "seq": 3,
+      "x": 2220.0
+    },
+    {
+      "bytes": 259449,
+      "captured_at": "2026-11-10T16:46:40Z",
+      "kind": "jfr",
+      "label": "p1-native",
+      "path": "harness/H1/out/p1-native/capture/9/recording.jfr",
+      "role": "flight recording with old-object samples",
+      "seq": 1,
+      "x": 2220.0
+    },
+    {
+      "bytes": 6280,
+      "captured_at": "2026-11-10T16:46:40Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 20,
+      "path": "harness/H1/out/p1-native/capture/9/threads.json",
+      "role": "thread dump (json)",
+      "seq": 1,
+      "x": 2220.0
+    },
+    {
+      "bytes": 75677,
+      "captured_at": "2026-11-10T16:46:48Z",
+      "kind": "histogram",
+      "label": "p2-native",
+      "ms": 23,
+      "path": "harness/H1/out/p2-native/capture/172/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 4440.0
+    },
+    {
+      "bytes": 75677,
+      "captured_at": "2026-11-10T16:46:56Z",
+      "kind": "histogram",
+      "label": "p3-native",
+      "ms": 33,
+      "path": "harness/H1/out/p3-native/capture/283/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 6660.0
+    },
+    {
+      "bytes": 813,
+      "captured_at": "2026-11-10T16:47:06Z",
+      "kind": "nonheap",
+      "label": "p4-native",
+      "ms": 8,
+      "path": "harness/H1/out/p4-native/capture/392/classloader-stats.txt",
+      "role": "class loader statistics",
+      "seq": 2,
+      "x": 8880.0
+    },
+    {
+      "bytes": 23350580,
+      "captured_at": "2026-11-10T16:47:06Z",
+      "kind": "heap",
+      "label": "p4-native",
+      "ms": 44,
+      "path": "harness/H1/out/p4-native/capture/392/heap-1.hprof",
+      "role": "heap dump (HPROF)",
+      "seq": 1,
+      "x": 8880.0
+    },
+    {
+      "bytes": 90522,
+      "captured_at": "2026-11-10T16:47:06Z",
+      "kind": "histogram",
+      "label": "p4-native",
+      "ms": 41,
+      "path": "harness/H1/out/p4-native/capture/392/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 8880.0
+    },
+    {
+      "bytes": 4299,
+      "captured_at": "2026-11-10T16:47:06Z",
+      "kind": "nonheap",
+      "label": "p4-native",
+      "ms": 0,
+      "path": "harness/H1/out/p4-native/capture/392/nmt-diff.txt",
+      "role": "native memory change since baseline",
+      "seq": 4,
+      "x": 8880.0
+    },
+    {
+      "bytes": 4743,
+      "captured_at": "2026-11-10T16:47:06Z",
+      "kind": "nonheap",
+      "label": "p4-native",
+      "ms": 1,
+      "path": "harness/H1/out/p4-native/capture/392/nmt-summary.txt",
+      "role": "native memory summary",
+      "seq": 3,
+      "x": 8880.0
+    },
+    {
+      "bytes": 288255,
+      "captured_at": "2026-11-10T16:47:06Z",
+      "kind": "jfr",
+      "label": "p4-native",
+      "path": "harness/H1/out/p4-native/capture/392/recording.jfr",
+      "role": "flight recording with old-object samples",
+      "seq": 1,
+      "x": 8880.0
+    },
+    {
+      "bytes": 6282,
+      "captured_at": "2026-11-10T16:47:06Z",
+      "kind": "nonheap",
+      "label": "p4-native",
+      "ms": 25,
+      "path": "harness/H1/out/p4-native/capture/392/threads.json",
+      "role": "thread dump (json)",
+      "seq": 1,
+      "x": 8880.0
+    },
+    {
+      "bytes": 75677,
+      "captured_at": "2026-11-10T16:47:13Z",
+      "kind": "histogram",
+      "label": "p5-native",
+      "ms": 23,
+      "path": "harness/H1/out/p5-native/capture/510/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 11100.0
+    },
+    {
+      "bytes": 813,
+      "captured_at": "2026-11-10T16:47:21Z",
+      "kind": "nonheap",
+      "label": "p6-native",
+      "ms": 0,
+      "path": "harness/H1/out/p6-native/capture/621/classloader-stats.txt",
+      "role": "class loader statistics",
+      "seq": 2,
+      "x": 13320.0
+    },
+    {
+      "bytes": 29881555,
+      "captured_at": "2026-11-10T16:47:21Z",
+      "kind": "heap",
+      "label": "p6-native",
+      "ms": 42,
+      "path": "harness/H1/out/p6-native/capture/621/heap-1.hprof",
+      "role": "heap dump (HPROF)",
+      "seq": 1,
+      "x": 13320.0
+    },
+    {
+      "bytes": 90522,
+      "captured_at": "2026-11-10T16:47:21Z",
+      "kind": "histogram",
+      "label": "p6-native",
+      "ms": 26,
+      "path": "harness/H1/out/p6-native/capture/621/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 13320.0
+    },
+    {
+      "bytes": 4300,
+      "captured_at": "2026-11-10T16:47:21Z",
+      "kind": "nonheap",
+      "label": "p6-native",
+      "ms": 0,
+      "path": "harness/H1/out/p6-native/capture/621/nmt-diff.txt",
+      "role": "native memory change since baseline",
+      "seq": 4,
+      "x": 13320.0
+    },
+    {
+      "bytes": 4755,
+      "captured_at": "2026-11-10T16:47:21Z",
+      "kind": "nonheap",
+      "label": "p6-native",
+      "ms": 0,
+      "path": "harness/H1/out/p6-native/capture/621/nmt-summary.txt",
+      "role": "native memory summary",
+      "seq": 3,
+      "x": 13320.0
+    },
+    {
+      "bytes": 293894,
+      "captured_at": "2026-11-10T16:47:21Z",
+      "kind": "jfr",
+      "label": "p6-native",
+      "path": "harness/H1/out/p6-native/capture/621/recording.jfr",
+      "role": "flight recording with old-object samples",
+      "seq": 1,
+      "x": 13320.0
+    },
+    {
+      "bytes": 6282,
+      "captured_at": "2026-11-10T16:47:21Z",
+      "kind": "nonheap",
+      "label": "p6-native",
+      "ms": 11,
+      "path": "harness/H1/out/p6-native/capture/621/threads.json",
+      "role": "thread dump (json)",
+      "seq": 1,
+      "x": 13320.0
+    },
+    {
+      "bytes": 75677,
+      "captured_at": "2026-11-10T16:47:28Z",
+      "kind": "histogram",
+      "label": "p7-native",
+      "ms": 20,
+      "path": "harness/H1/out/p7-native/capture/739/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 15540.0
+    },
+    {
+      "bytes": 75677,
+      "captured_at": "2026-11-10T16:47:36Z",
+      "kind": "histogram",
+      "label": "p8-native",
+      "ms": 25,
+      "path": "harness/H1/out/p8-native/capture/848/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 17760.0
+    },
+    {
+      "bytes": 813,
+      "captured_at": "2026-11-10T16:47:46Z",
+      "kind": "nonheap",
+      "label": "p9-native",
+      "ms": 1,
+      "path": "harness/H1/out/p9-native/capture/960/classloader-stats.txt",
+      "role": "class loader statistics",
+      "seq": 2,
+      "x": 19980.0
+    },
+    {
+      "bytes": 39804069,
+      "captured_at": "2026-11-10T16:47:46Z",
+      "kind": "heap",
+      "label": "p9-native",
+      "ms": 75,
+      "path": "harness/H1/out/p9-native/capture/960/heap-1.hprof",
+      "role": "heap dump (HPROF)",
+      "seq": 1,
+      "x": 19980.0
+    },
+    {
+      "bytes": 90427,
+      "captured_at": "2026-11-10T16:47:46Z",
+      "kind": "histogram",
+      "label": "p9-native",
+      "ms": 34,
+      "path": "harness/H1/out/p9-native/capture/960/histogram-1.txt",
+      "role": "class histogram",
+      "seq": 1,
+      "x": 19980.0
+    },
+    {
+      "bytes": 4339,
+      "captured_at": "2026-11-10T16:47:46Z",
+      "kind": "nonheap",
+      "label": "p9-native",
+      "ms": 0,
+      "path": "harness/H1/out/p9-native/capture/960/nmt-diff.txt",
+      "role": "native memory change since baseline",
+      "seq": 4,
+      "x": 19980.0
+    },
+    {
+      "bytes": 4748,
+      "captured_at": "2026-11-10T16:47:46Z",
+      "kind": "nonheap",
+      "label": "p9-native",
+      "ms": 0,
+      "path": "harness/H1/out/p9-native/capture/960/nmt-summary.txt",
+      "role": "native memory summary",
+      "seq": 3,
+      "x": 19980.0
+    },
+    {
+      "bytes": 302636,
+      "captured_at": "2026-11-10T16:47:46Z",
+      "kind": "jfr",
+      "label": "p9-native",
+      "path": "harness/H1/out/p9-native/capture/960/recording.jfr",
+      "role": "flight recording with old-object samples",
+      "seq": 1,
+      "x": 19980.0
+    },
+    {
+      "bytes": 6282,
+      "captured_at": "2026-11-10T16:47:46Z",
+      "kind": "nonheap",
+      "label": "p9-native",
+      "ms": 16,
+      "path": "harness/H1/out/p9-native/capture/960/threads.json",
+      "role": "thread dump (json)",
+      "seq": 1,
+      "x": 19980.0
+    }
+  ],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-native"
+    },
+    {
+      "code": 0,
+      "label": "p2-native"
+    },
+    {
+      "code": 0,
+      "label": "p3-native"
+    },
+    {
+      "code": 0,
+      "label": "p4-native"
+    },
+    {
+      "code": 0,
+      "label": "p5-native"
+    },
+    {
+      "code": 0,
+      "label": "p6-native"
+    },
+    {
+      "code": 0,
+      "label": "p7-native"
+    },
+    {
+      "code": 0,
+      "label": "p8-native"
+    },
+    {
+      "code": 0,
+      "label": "p9-native"
+    }
+  ],
+  "ffi_sites": [
+    {
+      "live_bytes": 61430816,
+      "method": "shop.codec.Native.open",
+      "site": "native/src/lib.rs:40"
+    }
+  ],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: JNI library codec is measured: the allocator shim is preloaded into java (DLA_SHIM_ONLY=java) and the cdylib is built with line tables, so native stack groups resolve to source lines",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "command-mode heap dumps come from separate processes: dla summarize heap-graph compares dumps of one process only, so use a driver (dla harness gen --driver) for a dump series",
+    "--capture alloc is not written by jvm harnesses",
+    "native.live_bytes@native/src/lib.rs:40 is Java_shop_codec_Native_open, the native method shop.codec.Native.open declared at kotlin/shop/Native.kt:9 (61430816 B live at the last point)",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "allocator shim: raw_sites lists the largest 1024 stacks only; smaller live stacks are omitted",
+    "allocator shim: more than 4096 distinct allocation stacks; the rest is counted in shim.overflow_*",
+    "43845090 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "22310547 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "31706220 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "46024992 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "21670916 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "49715763 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "30568617 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "20603120 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "43903528 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "dropped 15 per-type columns (cap of 64, lowest growth first)"
+  ],
+  "logs": [
+    "harness/H1/logs/p1-native.log",
+    "harness/H1/logs/p2-native.log",
+    "harness/H1/logs/p3-native.log",
+    "harness/H1/logs/p4-native.log",
+    "harness/H1/logs/p5-native.log",
+    "harness/H1/logs/p6-native.log",
+    "harness/H1/logs/p7-native.log",
+    "harness/H1/logs/p8-native.log",
+    "harness/H1/logs/p9-native.log"
+  ],
+  "mode": "command",
+  "modes": [
+    "native"
+  ],
+  "points": 9,
+  "processes": 9,
+  "series": [
+    "S1"
+  ],
+  "tool": null,
+  "units": 17760,
+  "x_range": [
+    2220.0,
+    19980.0
+  ]
+}

@@ -1,0 +1,395 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 23,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "probe:shop.OrderCache.ORDERS_BY_ID",
+            "lo": 6.749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 6.75,
+            "unit": "count"
+          },
+          {
+            "column": "probe:shop.OrderCache.ORDERS_BY_ID.size",
+            "lo": 0.8748,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.util.ImmutableCollections$ListN.count",
+            "lo": 0.7495,
+            "p": 0.0000248,
+            "ratio": 0.9994,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.7501,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:shop.Order$Line.count",
+            "lo": 3.25,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 3.25,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:shop.Order.count",
+            "lo": 0.8748,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 18,
+          "plateau": 1,
+          "steady": 9
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "e9f270db2061451c4aed8949a221adb78d881e740ed8ac678dc48bb8ecfca2c6",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E12-A1.json",
+      "id": "E12",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:shop.OrderCache.ORDERS_BY_ID",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:shop.OrderCache.ORDERS_BY_ID",
+            "plateau": {
+              "extra_rise": 59940.0,
+              "extra_slope": 6.75,
+              "main_slope": 6.75,
+              "noise": 2.002,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:shop.OrderCache.ORDERS_BY_ID.bytes",
+            "plateau": {
+              "extra_rise": 3809000.0,
+              "extra_slope": 490.2,
+              "main_slope": 490.2,
+              "noise": 154.2,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:shop.OrderCache.ORDERS_BY_ID.size",
+            "plateau": {
+              "extra_rise": 7770.0,
+              "extra_slope": 0.875,
+              "main_slope": 0.875,
+              "noise": 0.3336,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "non-leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 7369000.0,
+              "extra_slope": 948.4,
+              "main_slope": 1538.0,
+              "noise": 5173000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 76620000.0,
+              "before": 81470000.0,
+              "drop": 4854000.0,
+              "growth": 1741000.0,
+              "kind": "trim-native-heap",
+              "verdict": "released"
+            }
+          },
+          {
+            "favors": "non-leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 7304000.0,
+              "extra_slope": 940.1,
+              "main_slope": 1259.0,
+              "noise": 4258000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 80970000.0,
+              "before": 81470000.0,
+              "drop": 499700.0,
+              "growth": -16460000.0,
+              "kind": "trim-native-heap",
+              "verdict": "no-growth"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E17-heap-1-63bd3461.json",
+      "id": "E17",
+      "kind": "retention-path",
+      "result": {
+        "file": ".dla/20261110-180431-3e20/harness/H1/out/p1-native/capture/139/heap-1.hprof",
+        "holders": [
+          {
+            "dominated": 11249,
+            "holder_kind": "static/global",
+            "key": "static:shop.OrderCache.ORDERS_BY_ID",
+            "retained": 559432
+          },
+          {
+            "dominated": 14,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.StringPool.cache",
+            "retained": 262696
+          },
+          {
+            "dominated": 6907,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.MetadataRepository.instance",
+            "retained": 230752
+          }
+        ],
+        "objects": 111196,
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "63bd3461ef4413597e1efbd9b906753fb0dd184d04f94c28252509495414a011",
+          "tool": "dla-hprof"
+        },
+        "timestamp_ms": 1794333913159,
+        "truncated": false,
+        "via": [
+          {
+            "by": "root",
+            "dominated": 9210,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.TypeLibrary.types",
+            "retained": 274520
+          },
+          {
+            "by": "root",
+            "dominated": 1905,
+            "holder_kind": "static/global",
+            "key": "static:java.lang.management.ManagementFactory.platformMBeanServer",
+            "retained": 80704
+          }
+        ]
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E18-heap-1-c198b0a8.json",
+      "id": "E18",
+      "kind": "retention-path",
+      "result": {
+        "file": ".dla/20261110-180431-3e20/harness/H1/out/p4-native/capture/440/heap-1.hprof",
+        "holders": [
+          {
+            "dominated": 44958,
+            "holder_kind": "static/global",
+            "key": "static:shop.OrderCache.ORDERS_BY_ID",
+            "retained": 2235984
+          },
+          {
+            "dominated": 14,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.StringPool.cache",
+            "retained": 262696
+          },
+          {
+            "dominated": 6907,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.MetadataRepository.instance",
+            "retained": 230752
+          }
+        ],
+        "objects": 145170,
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "c198b0a88c3c13c6c34d488a5b97915d83a6e7e7d35f32a4b932bdfb9e4e1490",
+          "tool": "dla-hprof"
+        },
+        "timestamp_ms": 1794333919461,
+        "truncated": false,
+        "via": [
+          {
+            "by": "root",
+            "dominated": 9210,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.TypeLibrary.types",
+            "retained": 274520
+          },
+          {
+            "by": "root",
+            "dominated": 1905,
+            "holder_kind": "static/global",
+            "key": "static:java.lang.management.ManagementFactory.platformMBeanServer",
+            "retained": 80704
+          }
+        ]
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E19-heap-1-7f936380.json",
+      "id": "E19",
+      "kind": "retention-path",
+      "result": {
+        "file": ".dla/20261110-180431-3e20/harness/H1/out/p6-native/capture/644/heap-1.hprof",
+        "holders": [
+          {
+            "dominated": 67440,
+            "holder_kind": "static/global",
+            "key": "static:shop.OrderCache.ORDERS_BY_ID",
+            "retained": 3337896
+          },
+          {
+            "dominated": 14,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.StringPool.cache",
+            "retained": 262696
+          },
+          {
+            "dominated": 6907,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.MetadataRepository.instance",
+            "retained": 230752
+          }
+        ],
+        "objects": 167417,
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "7f9363800b2cc0bf93abf544afe3ab07dab179a5bfe06f030fcaef4b7fca6322",
+          "tool": "dla-hprof"
+        },
+        "timestamp_ms": 1794333924264,
+        "truncated": false,
+        "via": [
+          {
+            "by": "root",
+            "dominated": 9210,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.TypeLibrary.types",
+            "retained": 274520
+          },
+          {
+            "by": "root",
+            "dominated": 1905,
+            "holder_kind": "static/global",
+            "key": "static:java.lang.management.ManagementFactory.platformMBeanServer",
+            "retained": 80704
+          }
+        ]
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E20-heap-1-ee386754.json",
+      "id": "E20",
+      "kind": "retention-path",
+      "result": {
+        "file": ".dla/20261110-180431-3e20/harness/H1/out/p9-native/capture/945/heap-1.hprof",
+        "holders": [
+          {
+            "dominated": 101159,
+            "holder_kind": "static/global",
+            "key": "static:shop.OrderCache.ORDERS_BY_ID",
+            "retained": 5023200
+          },
+          {
+            "dominated": 14,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.StringPool.cache",
+            "retained": 262696
+          },
+          {
+            "dominated": 6907,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.MetadataRepository.instance",
+            "retained": 230752
+          }
+        ],
+        "objects": 201136,
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "ee3867543684443eb8acc14c6b097a466ad560877ec356a3bac81b2be99016e8",
+          "tool": "dla-hprof"
+        },
+        "timestamp_ms": 1794333932241,
+        "truncated": false,
+        "via": [
+          {
+            "by": "root",
+            "dominated": 9210,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.TypeLibrary.types",
+            "retained": 274520
+          }
+        ]
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "shop.OrderCache.ORDERS_BY_ID"
+}

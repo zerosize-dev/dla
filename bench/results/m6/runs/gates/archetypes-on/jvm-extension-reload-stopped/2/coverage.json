@@ -1,0 +1,423 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 3,
+          "dispositioned": 3,
+          "duplicates": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-heap": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-histogram": {
+          "status": "ran",
+          "enumerated": 9,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-jfr": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-nonheap": {
+          "status": "ran",
+          "enumerated": 16,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "jcmd-class-histogram": {
+          "status": "ran",
+          "enumerated": 906,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "spotbugs": {
+          "status": "ran",
+          "reason": "no auxiliary classpath: library calls are not modelled",
+          "version": "unknown",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "ext/ledger/LedgerExtension.java::LedgerExtension.name",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.round",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.start",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.stop",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.total",
+          "ext/ledger/LedgerExtension.java::Tally.onEvent",
+          "src/reports/EventBus.java::EventBus.listenerCount",
+          "src/reports/EventBus.java::EventBus.publish",
+          "src/reports/EventBus.java::EventBus.subscribe",
+          "src/reports/EventBus.java::EventBus.unsubscribe",
+          "src/reports/Extension.java::Extension.name",
+          "src/reports/Extension.java::Extension.start",
+          "src/reports/Extension.java::Extension.stop",
+          "src/reports/Extension.java::Extension.total",
+          "src/reports/ExtensionManager.java::ExtensionManager.current",
+          "src/reports/ExtensionManager.java::ExtensionManager.load",
+          "src/reports/ExtensionManager.java::ExtensionManager.reload",
+          "src/reports/ExtensionManager.java::ExtensionManager.shutdown",
+          "src/reports/Listener.java::Listener.onEvent"
+        ],
+        "exercised": [
+          "ext/ledger/LedgerExtension.java::LedgerExtension.name",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.round",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.start",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.stop",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.total",
+          "ext/ledger/LedgerExtension.java::Tally.onEvent",
+          "src/reports/EventBus.java::EventBus.listenerCount",
+          "src/reports/EventBus.java::EventBus.publish",
+          "src/reports/EventBus.java::EventBus.subscribe",
+          "src/reports/EventBus.java::EventBus.unsubscribe",
+          "src/reports/Extension.java::Extension.name",
+          "src/reports/Extension.java::Extension.start",
+          "src/reports/Extension.java::Extension.stop",
+          "src/reports/Extension.java::Extension.total",
+          "src/reports/ExtensionManager.java::ExtensionManager.current",
+          "src/reports/ExtensionManager.java::ExtensionManager.load",
+          "src/reports/ExtensionManager.java::ExtensionManager.reload",
+          "src/reports/ExtensionManager.java::ExtensionManager.shutdown",
+          "src/reports/Listener.java::Listener.onEvent"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 15.477272727272728,
+      "attributed_slope": 0.0,
+      "residual": 15.477272727272728,
+      "unit": "bytes/n",
+      "threshold": 27.753983181818175
+    },
+    {
+      "series": "S11",
+      "region": "heap",
+      "total_slope": 21.595454545454544,
+      "attributed_slope": 0.0,
+      "residual": 21.595454545454544,
+      "unit": "bytes/n",
+      "threshold": 5.398863636363636,
+      "open_item": "O5"
+    },
+    {
+      "series": "S12",
+      "region": "heap",
+      "total_slope": 15.336363636363636,
+      "attributed_slope": 0.0,
+      "residual": 15.336363636363636,
+      "unit": "bytes/n",
+      "threshold": 6.276789272727272,
+      "open_item": "O5"
+    },
+    {
+      "series": "S13",
+      "region": "heap",
+      "total_slope": 15.192121212121211,
+      "attributed_slope": 0.0,
+      "residual": 15.192121212121211,
+      "unit": "bytes/n",
+      "threshold": 4.987504909090999,
+      "open_item": "O5"
+    },
+    {
+      "series": "S14",
+      "region": "heap",
+      "total_slope": 14.345454545454546,
+      "attributed_slope": 0.0,
+      "residual": 14.345454545454546,
+      "unit": "bytes/n",
+      "threshold": 8.121952363636364,
+      "open_item": "O5"
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 27.29805194805195,
+      "attributed_slope": 0.0,
+      "residual": 27.29805194805195,
+      "unit": "bytes/n",
+      "threshold": 9.456113571428714,
+      "open_item": "O5"
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 18.36753246753247,
+      "attributed_slope": 0.0,
+      "residual": 18.36753246753247,
+      "unit": "bytes/n",
+      "threshold": 11.096779636363614,
+      "open_item": "O5"
+    },
+    {
+      "series": "S4",
+      "region": "heap",
+      "total_slope": 21.29469696969697,
+      "attributed_slope": 0.0,
+      "residual": 21.29469696969697,
+      "unit": "bytes/n",
+      "threshold": 7.277014772727385,
+      "open_item": "O5"
+    },
+    {
+      "series": "S5",
+      "region": "heap",
+      "total_slope": 15.129545454545454,
+      "attributed_slope": 0.0,
+      "residual": 15.129545454545454,
+      "unit": "bytes/n",
+      "threshold": 6.7128084545454545,
+      "open_item": "O5"
+    },
+    {
+      "series": "S6",
+      "region": "heap",
+      "total_slope": 17.25151515151515,
+      "attributed_slope": 0.0,
+      "residual": 17.25151515151515,
+      "unit": "bytes/n",
+      "threshold": 4.3128787878787875,
+      "open_item": "O5"
+    },
+    {
+      "series": "S7",
+      "region": "heap",
+      "total_slope": 15.360714285714286,
+      "attributed_slope": 0.0,
+      "residual": 15.360714285714286,
+      "unit": "bytes/n",
+      "threshold": 4.857007227272593,
+      "open_item": "O5"
+    },
+    {
+      "series": "S8",
+      "region": "heap",
+      "total_slope": 19.88138528138528,
+      "attributed_slope": 0.0,
+      "residual": 19.88138528138528,
+      "unit": "bytes/n",
+      "threshold": 18.18096701298714,
+      "open_item": "O5"
+    },
+    {
+      "series": "S9",
+      "region": "heap",
+      "total_slope": 13.470862470862471,
+      "attributed_slope": 0.0,
+      "residual": 13.470862470862471,
+      "unit": "bytes/n",
+      "threshold": 11.193664559440538,
+      "open_item": "O5"
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": 151.68636363636364,
+      "attributed_slope": 0.0,
+      "residual": 151.68636363636364,
+      "unit": "bytes/n",
+      "threshold": 71.31209727272727,
+      "open_item": "O4"
+    },
+    {
+      "series": "S11",
+      "region": "non-heap",
+      "total_slope": 32.43878787878788,
+      "attributed_slope": 0.0,
+      "residual": 32.43878787878788,
+      "unit": "bytes/n",
+      "threshold": 67.7763850909099,
+      "open_item": "O4"
+    },
+    {
+      "series": "S12",
+      "region": "non-heap",
+      "total_slope": 61.066161616161615,
+      "attributed_slope": 0.0,
+      "residual": 61.066161616161615,
+      "unit": "bytes/n",
+      "threshold": 63.02614966666652,
+      "open_item": "O4"
+    },
+    {
+      "series": "S13",
+      "region": "non-heap",
+      "total_slope": 87.98939393939393,
+      "attributed_slope": 0.0,
+      "residual": 87.98939393939393,
+      "unit": "bytes/n",
+      "threshold": 58.93479409090909,
+      "open_item": "O4"
+    },
+    {
+      "series": "S14",
+      "region": "non-heap",
+      "total_slope": 65.89863636363637,
+      "attributed_slope": 0.0,
+      "residual": 65.89863636363637,
+      "unit": "bytes/n",
+      "threshold": 64.00606589999987,
+      "open_item": "O4"
+    },
+    {
+      "series": "S2",
+      "region": "non-heap",
+      "total_slope": 32.717727272727274,
+      "attributed_slope": 0.0,
+      "residual": 32.717727272727274,
+      "unit": "bytes/n",
+      "threshold": 37.194583090909624,
+      "open_item": "O4"
+    },
+    {
+      "series": "S3",
+      "region": "non-heap",
+      "total_slope": 49.99545454545455,
+      "attributed_slope": 0.0,
+      "residual": 49.99545454545455,
+      "unit": "bytes/n",
+      "threshold": 43.18139890909091,
+      "open_item": "O4"
+    },
+    {
+      "series": "S4",
+      "region": "non-heap",
+      "total_slope": 54.195454545454545,
+      "attributed_slope": 0.0,
+      "residual": 54.195454545454545,
+      "unit": "bytes/n",
+      "threshold": 92.41459772727274,
+      "open_item": "O4"
+    },
+    {
+      "series": "S5",
+      "region": "non-heap",
+      "total_slope": 61.825,
+      "attributed_slope": 0.0,
+      "residual": 61.825,
+      "unit": "bytes/n",
+      "threshold": 75.12064636363635,
+      "open_item": "O4"
+    },
+    {
+      "series": "S6",
+      "region": "non-heap",
+      "total_slope": -14.274545454545454,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 30.00012218181737,
+      "open_item": "O4"
+    },
+    {
+      "series": "S7",
+      "region": "non-heap",
+      "total_slope": 30.80378787878788,
+      "attributed_slope": 0.0,
+      "residual": 30.80378787878788,
+      "unit": "bytes/n",
+      "threshold": 54.857323181818394,
+      "open_item": "O4"
+    },
+    {
+      "series": "S8",
+      "region": "non-heap",
+      "total_slope": 35.86363636363636,
+      "attributed_slope": 0.0,
+      "residual": 35.86363636363636,
+      "unit": "bytes/n",
+      "threshold": 85.57971545454544,
+      "open_item": "O4"
+    },
+    {
+      "series": "S9",
+      "region": "non-heap",
+      "total_slope": 50.07818181818182,
+      "attributed_slope": 0.0,
+      "residual": 50.07818181818182,
+      "unit": "bytes/n",
+      "threshold": 45.85573974545417,
+      "open_item": "O4"
+    }
+  ],
+  "blind_spots": []
+}

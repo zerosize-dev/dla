@@ -1,0 +1,96 @@
+{
+  "captures": [],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-native"
+    },
+    {
+      "code": 0,
+      "label": "p2-native"
+    },
+    {
+      "code": 0,
+      "label": "p3-native"
+    },
+    {
+      "code": 0,
+      "label": "p4-native"
+    },
+    {
+      "code": 0,
+      "label": "p5-native"
+    },
+    {
+      "code": 0,
+      "label": "p6-native"
+    },
+    {
+      "code": 0,
+      "label": "p7-native"
+    },
+    {
+      "code": 0,
+      "label": "p8-native"
+    },
+    {
+      "code": 0,
+      "label": "p9-native"
+    }
+  ],
+  "ffi_sites": [
+    {
+      "live_bytes": 61430816,
+      "method": "shop.codec.Native.open",
+      "site": "native/src/lib.rs:40"
+    }
+  ],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: JNI library codec is measured: the allocator shim is preloaded into java (DLA_SHIM_ONLY=java) and the cdylib is built with line tables, so native stack groups resolve to source lines",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "native.live_bytes@native/src/lib.rs:40 is Java_shop_codec_Native_open, the native method shop.codec.Native.open declared at kotlin/shop/Native.kt:9 (61430816 B live at the last point)",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "allocator shim: raw_sites lists the largest 1024 stacks only; smaller live stacks are omitted",
+    "29436338 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "20305298 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "32303746 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "31976002 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "20551099 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "31699009 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "25078443 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "29013374 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "31251751 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "dropped 15 per-type columns (cap of 64, lowest growth first)"
+  ],
+  "logs": [
+    "harness/H1/logs/p1-native.log",
+    "harness/H1/logs/p2-native.log",
+    "harness/H1/logs/p3-native.log",
+    "harness/H1/logs/p4-native.log",
+    "harness/H1/logs/p5-native.log",
+    "harness/H1/logs/p6-native.log",
+    "harness/H1/logs/p7-native.log",
+    "harness/H1/logs/p8-native.log",
+    "harness/H1/logs/p9-native.log"
+  ],
+  "mode": "command",
+  "modes": [
+    "native"
+  ],
+  "points": 9,
+  "processes": 9,
+  "series": [
+    "S1"
+  ],
+  "tool": null,
+  "units": 17760,
+  "x_range": [
+    2220.0,
+    19980.0
+  ]
+}

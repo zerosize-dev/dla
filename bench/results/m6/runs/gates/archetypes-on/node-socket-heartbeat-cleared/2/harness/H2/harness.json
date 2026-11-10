@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "id": "H2",
+  "runtime": "node",
+  "mode": "command",
+  "workload": "node:script:package.json:load",
+  "scratch": "harness/H2/work",
+  "run": {
+    "argv": [
+      "node",
+      "load.js",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "NODE_OPTIONS",
+        "--require /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/2/project/.dla/20261110-171316-172b/harness/H2/agent/dla-preload.js"
+      ],
+      [
+        "NODE_V8_COVERAGE",
+        "{cov}"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "target": {
+        "kind": "node-module",
+        "file": "src/gateway.js"
+      }
+    },
+    {
+      "id": "P2",
+      "target": {
+        "kind": "node-module",
+        "file": "src/heartbeat.js"
+      }
+    },
+    {
+      "id": "P3",
+      "target": {
+        "kind": "node-module",
+        "file": "src/loopback.js"
+      }
+    },
+    {
+      "id": "P4",
+      "target": {
+        "kind": "node-module",
+        "file": "src/metrics.js"
+      }
+    },
+    {
+      "id": "P5",
+      "target": {
+        "kind": "node-module",
+        "file": "src/router.js"
+      }
+    },
+    {
+      "id": "P6",
+      "target": {
+        "kind": "node-module",
+        "file": "src/session.js"
+      }
+    }
+  ],
+  "agent": "node-preload",
+  "detectors": [
+    "MaxListenersExceededWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300
+}

@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "go": {
+      "runtime": "go",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 5,
+          "dispositioned": 5,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "golangci-lint": {
+          "status": "ran",
+          "version": "2.5.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "goroutineleak": {
+          "status": "ran",
+          "version": "go1.24.7",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "govet": {
+          "status": "ran",
+          "version": "1.24.7",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-alloc": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "staticcheck": {
+          "status": "ran",
+          "version": "2025.1.1",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "internal/render/batch.go::NewRenderer",
+          "internal/render/batch.go::Renderer.RenderBatch",
+          "internal/render/invoice.go::Invoice.Total",
+          "internal/render/pool.go::BufferPool.Get",
+          "internal/render/pool.go::BufferPool.Put",
+          "internal/render/pool.go::BufferPool.Stats",
+          "internal/render/pool.go::NewBufferPool",
+          "internal/workload/workload.go::MakeBatch",
+          "internal/workload/workload.go::NewRNG",
+          "internal/workload/workload.go::NewRenderer",
+          "internal/workload/workload.go::Run"
+        ],
+        "exercised": [
+          "internal/render/batch.go::NewRenderer",
+          "internal/render/batch.go::Renderer.RenderBatch",
+          "internal/render/invoice.go::Invoice.Total",
+          "internal/render/pool.go::BufferPool.Get",
+          "internal/render/pool.go::BufferPool.Put",
+          "internal/render/pool.go::NewBufferPool",
+          "internal/workload/workload.go::MakeBatch",
+          "internal/workload/workload.go::NewRNG",
+          "internal/workload/workload.go::Run"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 2.7363636363636363,
+      "attributed_slope": 0.0,
+      "residual": 2.7363636363636363,
+      "unit": "bytes/n",
+      "threshold": 1.8859827272727272,
+      "open_item": "O2"
+    },
+    {
+      "series": "S4",
+      "region": "heap",
+      "total_slope": 1.087012987012987,
+      "attributed_slope": 0.0,
+      "residual": 1.087012987012987,
+      "unit": "bytes/n",
+      "threshold": 1.430887792207774
+    },
+    {
+      "series": "S6",
+      "region": "heap",
+      "total_slope": 0.01818181818181818,
+      "attributed_slope": 0.0,
+      "residual": 0.01818181818181818,
+      "unit": "bytes/n",
+      "threshold": 1.8311072727272728
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S4",
+      "region": "non-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S6",
+      "region": "non-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    }
+  ],
+  "blind_spots": []
+}

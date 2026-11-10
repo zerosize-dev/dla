@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-161112-25ef",
+  "session_id": "2cedafe4-4a9f-4afb-a5e6-d58b5ada99b0",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-on/python-graph-churn/1/project",
+  "created_at": "2026-11-10T16:11:12Z",
+  "dla_version": "0.1.0",
+  "stage": "confirm",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T16:11:12Z"
+  },
+  "budget": {
+    "seconds": 1200,
+    "started_at": "2026-11-10T16:11:12Z",
+    "deadline": "2026-11-10T16:31:12Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T16:11:32Z",
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 440",
+      "started_at": "2026-11-10T16:11:33Z",
+      "stopped_at": "2026-11-10T16:11:40Z",
+      "role": "started"
+    },
+    {
+      "pid": 13,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 880",
+      "started_at": "2026-11-10T16:11:40Z",
+      "stopped_at": "2026-11-10T16:11:43Z",
+      "role": "started"
+    },
+    {
+      "pid": 16,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 1320",
+      "started_at": "2026-11-10T16:11:43Z",
+      "stopped_at": "2026-11-10T16:11:49Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 1760",
+      "started_at": "2026-11-10T16:11:49Z",
+      "stopped_at": "2026-11-10T16:12:15Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 2200",
+      "started_at": "2026-11-10T16:12:15Z",
+      "stopped_at": "2026-11-10T16:12:23Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 2640",
+      "started_at": "2026-11-10T16:12:23Z",
+      "stopped_at": "2026-11-10T16:12:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 28,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 3080",
+      "started_at": "2026-11-10T16:12:58Z",
+      "stopped_at": "2026-11-10T16:13:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 3520",
+      "started_at": "2026-11-10T16:13:08Z",
+      "stopped_at": "2026-11-10T16:13:19Z",
+      "role": "started"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 3960",
+      "started_at": "2026-11-10T16:13:19Z",
+      "stopped_at": "2026-11-10T16:14:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 37,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-10T16:14:09Z",
+      "stopped_at": "2026-11-10T16:14:10Z",
+      "role": "started"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T16:14:21Z",
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 4400",
+      "started_at": "2026-11-10T16:14:22Z",
+      "stopped_at": "2026-11-10T16:14:36Z",
+      "role": "started"
+    },
+    {
+      "pid": 13,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 4840",
+      "started_at": "2026-11-10T16:14:36Z",
+      "stopped_at": "2026-11-10T16:14:52Z",
+      "role": "started"
+    },
+    {
+      "pid": 16,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 5280",
+      "started_at": "2026-11-10T16:14:52Z",
+      "stopped_at": "2026-11-10T16:15:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 5720",
+      "started_at": "2026-11-10T16:15:08Z",
+      "stopped_at": "2026-11-10T16:15:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 6160",
+      "started_at": "2026-11-10T16:15:26Z",
+      "stopped_at": "2026-11-10T16:15:46Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 6600",
+      "started_at": "2026-11-10T16:15:46Z",
+      "stopped_at": "2026-11-10T16:16:07Z",
+      "role": "started"
+    },
+    {
+      "pid": 28,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 7040",
+      "started_at": "2026-11-10T16:16:07Z",
+      "stopped_at": "2026-11-10T16:16:31Z",
+      "role": "started"
+    },
+    {
+      "pid": 31,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 7480",
+      "started_at": "2026-11-10T16:16:31Z",
+      "stopped_at": "2026-11-10T16:16:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-10T16:16:57Z",
+      "stopped_at": "2026-11-10T16:16:58Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 4400",
+      "started_at": "2026-11-10T16:17:34Z",
+      "stopped_at": "2026-11-10T16:17:48Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 4840",
+      "started_at": "2026-11-10T16:17:48Z",
+      "stopped_at": "2026-11-10T16:18:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 25,
+      "start_time": "2026-11-10T16:17:33Z",
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 5280",
+      "started_at": "2026-11-10T16:18:03Z",
+      "stopped_at": "2026-11-10T16:18:21Z",
+      "role": "started"
+    },
+    {
+      "pid": 29,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 5720",
+      "started_at": "2026-11-10T16:18:21Z",
+      "stopped_at": "2026-11-10T16:18:39Z",
+      "role": "started"
+    },
+    {
+      "pid": 32,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 6160",
+      "started_at": "2026-11-10T16:18:39Z",
+      "stopped_at": "2026-11-10T16:18:59Z",
+      "role": "started"
+    },
+    {
+      "pid": 35,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 6600",
+      "started_at": "2026-11-10T16:18:59Z",
+      "stopped_at": "2026-11-10T16:19:20Z",
+      "role": "started"
+    },
+    {
+      "pid": 38,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 7040",
+      "started_at": "2026-11-10T16:19:20Z",
+      "stopped_at": "2026-11-10T16:19:43Z",
+      "role": "started"
+    },
+    {
+      "pid": 41,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations 7480",
+      "started_at": "2026-11-10T16:19:43Z",
+      "stopped_at": "2026-11-10T16:20:07Z",
+      "role": "started"
+    },
+    {
+      "pid": 45,
+      "kind": "harness",
+      "command": "python3 -m outlines.load --iterations {n} (detector pass)",
+      "started_at": "2026-11-10T16:20:07Z",
+      "stopped_at": "2026-11-10T16:20:09Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "801e7ac4b953063259a929002af6a994",
+  "report": {
+    "path": ".dla/20261110-161112-25ef/report.md",
+    "sha256": "2cb0d2630c4d2ef7360eb496010db0c7775cf93e0606de75b5d57605a0052d65",
+    "rendered_at": "2026-11-10T16:20:31Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep",
+    "classify"
+  ]
+}

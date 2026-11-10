@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 7,
+          "dispositioned": 7,
+          "duplicates": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-heap": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-histogram": {
+          "status": "ran",
+          "enumerated": 9,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "spotbugs": {
+          "status": "ran",
+          "reason": "no auxiliary classpath: library calls are not modelled",
+          "version": "unknown",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/billing/Invoice.java::Invoice.subtotalCents",
+          "src/billing/InvoiceFeed.java::InvoiceFeed.nextBatch",
+          "src/billing/InvoiceFeed.java::InvoiceFeed.nextInvoice",
+          "src/billing/InvoiceLine.java::InvoiceLine.totalCents",
+          "src/billing/InvoiceRenderer.java::InvoiceRenderer.money",
+          "src/billing/InvoiceRenderer.java::InvoiceRenderer.render",
+          "src/billing/InvoiceService.java::InvoiceService.renderBatch",
+          "src/billing/InvoiceService.java::InvoiceService.renderNow",
+          "src/billing/InvoiceService.java::WorkerFactory.newThread",
+          "src/billing/RenderContext.java::RenderContext.append",
+          "src/billing/RenderContext.java::RenderContext.mark",
+          "src/billing/RenderContext.java::RenderContext.textFrom",
+          "src/billing/TaxTable.java::TaxTable.taxCents"
+        ],
+        "exercised": [
+          "src/billing/Invoice.java::Invoice.subtotalCents",
+          "src/billing/InvoiceFeed.java::InvoiceFeed.nextBatch",
+          "src/billing/InvoiceFeed.java::InvoiceFeed.nextInvoice",
+          "src/billing/InvoiceLine.java::InvoiceLine.totalCents",
+          "src/billing/InvoiceRenderer.java::InvoiceRenderer.money",
+          "src/billing/InvoiceRenderer.java::InvoiceRenderer.render",
+          "src/billing/InvoiceService.java::InvoiceService.renderBatch",
+          "src/billing/InvoiceService.java::InvoiceService.renderNow",
+          "src/billing/InvoiceService.java::WorkerFactory.newThread",
+          "src/billing/RenderContext.java::RenderContext.append",
+          "src/billing/RenderContext.java::RenderContext.mark",
+          "src/billing/RenderContext.java::RenderContext.textFrom",
+          "src/billing/TaxTable.java::TaxTable.taxCents"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 8880
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 1273.0204204204206,
+      "attributed_slope": 0.0,
+      "residual": 1273.0204204204206,
+      "unit": "bytes/n",
+      "threshold": 318.25510510510514,
+      "open_item": "O1"
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 1245.1846846846847,
+      "attributed_slope": 0.0,
+      "residual": 1245.1846846846847,
+      "unit": "bytes/n",
+      "threshold": 311.2961711711712,
+      "open_item": "O1"
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 1258.6002574002573,
+      "attributed_slope": 0.0,
+      "residual": 1258.6002574002573,
+      "unit": "bytes/n",
+      "threshold": 314.6500643500643,
+      "open_item": "O1"
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": -5.906906906906906,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 44.23051837837802
+    },
+    {
+      "series": "S2",
+      "region": "non-heap",
+      "total_slope": 36.98558558558558,
+      "attributed_slope": 0.0,
+      "residual": 36.98558558558558,
+      "unit": "bytes/n",
+      "threshold": 68.75485945945945
+    },
+    {
+      "series": "S3",
+      "region": "non-heap",
+      "total_slope": 10.505705705705704,
+      "attributed_slope": 0.0,
+      "residual": 10.505705705705704,
+      "unit": "bytes/n",
+      "threshold": 25.18051401801769
+    }
+  ],
+  "blind_spots": []
+}

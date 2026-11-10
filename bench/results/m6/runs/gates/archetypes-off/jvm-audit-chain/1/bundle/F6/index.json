@@ -1,0 +1,202 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 20,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "probe:gateway.RequestContext.latest",
+            "lo": 3.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 3.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:byte[].count",
+            "lo": 1.992,
+            "p": 0.0000248,
+            "ratio": 0.9948,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.999,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:gateway.RequestContext.count",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.String.count",
+            "lo": 0.9919,
+            "p": 0.0000248,
+            "ratio": 0.9897,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.9989,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 20,
+          "steady": 4
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "c10175d6d585676bc0c65d809c4491567ea2e24a7713c8a8de9aa287993d1dfc",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/E16-S2.json",
+      "id": "E16",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 31,
+        "gate": "pass",
+        "n": 4,
+        "n_values": [
+          1110.0,
+          4440.0,
+          6660.0,
+          9990.0
+        ],
+        "passed": [
+          {
+            "column": "holder:static:gateway.RequestContext.latest",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "owner": "gateway.RequestContext.latest",
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1472107,
+            "unit": "bytes"
+          }
+        ],
+        "reasons": [],
+        "series": "S2",
+        "series_kind": "per-point",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "c50296021b314f085b3227ab389920231e61c97268e059b72f37bec13dc3f5dd",
+          "tool": "dla-hprof"
+        }
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E18-A1.json",
+      "id": "E18",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:gateway.RequestContext.latest",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:gateway.RequestContext.latest",
+            "plateau": {
+              "extra_rise": 26640.0,
+              "extra_slope": 3.0,
+              "main_slope": 3.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:gateway.RequestContext.latest.bytes",
+            "plateau": {
+              "extra_rise": 3864000.0,
+              "extra_slope": 497.3,
+              "main_slope": 497.3,
+              "noise": 5.93,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "non-leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 10010000.0,
+              "extra_slope": 1288.0,
+              "main_slope": 1791.0,
+              "noise": 29300000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 96940000.0,
+              "before": 98980000.0,
+              "drop": 2036000.0,
+              "growth": -22930000.0,
+              "kind": "trim-native-heap",
+              "verdict": "no-growth"
+            }
+          },
+          {
+            "favors": "non-leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 11290000.0,
+              "extra_slope": 1454.0,
+              "main_slope": 1791.0,
+              "noise": 33660000.0,
+              "verdict": "plateau"
+            },
+            "purge": {
+              "after": 98650000.0,
+              "before": 98980000.0,
+              "drop": 327700.0,
+              "growth": -22930000.0,
+              "kind": "trim-native-heap",
+              "verdict": "no-growth"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S4",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "gateway.RequestContext.latest"
+}

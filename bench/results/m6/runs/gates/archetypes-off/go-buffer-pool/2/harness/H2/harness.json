@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "id": "H2",
+  "runtime": "go",
+  "mode": "driver",
+  "workload": "go:main:.:./cmd/invoiced",
+  "scratch": "harness/H2/work",
+  "build": {
+    "argv": [
+      "sh",
+      "-c",
+      "cp -f /root/.cache/dla-bench/m6/gates/archetypes-off/go-buffer-pool/2/project/.dla/20261110-184411-ee6f/harness/H2/driver/zz_dla_driver_test.go /root/.cache/dla-bench/m6/gates/archetypes-off/go-buffer-pool/2/project/.dla/20261110-184411-ee6f/harness/H2/work/internal/workload/zz_dla_driver_test.go && go test -vet=off -count=1 -run '^$' ./internal/workload"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "run": {
+    "argv": [
+      "go",
+      "test",
+      "-vet=off",
+      "-count=1",
+      "-timeout",
+      "0",
+      "-run",
+      "^TestDLADriver$",
+      "./internal/workload"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "fresh",
+    "repeated"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F4",
+      "target": {
+        "kind": "go-var",
+        "package_dir": "internal/workload",
+        "name": "skus"
+      },
+      "site": "internal/workload/workload.go:27"
+    },
+    {
+      "id": "P2",
+      "finding": "F5",
+      "target": {
+        "kind": "go-var",
+        "package_dir": "internal/workload",
+        "name": "descs"
+      },
+      "site": "internal/workload/workload.go:28"
+    }
+  ],
+  "agent": "driver-go",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/148/go-1.heap.pb.gz",
+      "label": "p1-fresh",
+      "seq": 1,
+      "x": 440.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 7409,
+      "ms": 3,
+      "captured_at": "2026-11-10T18:46:11Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/148/go-2.heap.pb.gz",
+      "label": "p1-fresh",
+      "seq": 2,
+      "x": 1760.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 11410,
+      "ms": 2,
+      "captured_at": "2026-11-10T18:46:13Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/148/go-3.heap.pb.gz",
+      "label": "p1-fresh",
+      "seq": 3,
+      "x": 2640.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 12233,
+      "ms": 2,
+      "captured_at": "2026-11-10T18:46:15Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-fresh/capture/148/go-4.heap.pb.gz",
+      "label": "p1-fresh",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 12940,
+      "ms": 9,
+      "captured_at": "2026-11-10T18:46:18Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/217/go-1.heap.pb.gz",
+      "label": "p1-repeated",
+      "seq": 1,
+      "x": 440.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 6353,
+      "ms": 1,
+      "captured_at": "2026-11-10T18:46:19Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/217/go-2.heap.pb.gz",
+      "label": "p1-repeated",
+      "seq": 2,
+      "x": 1760.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 10780,
+      "ms": 3,
+      "captured_at": "2026-11-10T18:46:22Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/217/go-3.heap.pb.gz",
+      "label": "p1-repeated",
+      "seq": 3,
+      "x": 2640.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 12017,
+      "ms": 5,
+      "captured_at": "2026-11-10T18:46:24Z"
+    },
+    {
+      "kind": "alloc",
+      "path": "harness/H2/out/p1-repeated/capture/217/go-4.heap.pb.gz",
+      "label": "p1-repeated",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "bytes": 12436,
+      "ms": 3,
+      "captured_at": "2026-11-10T18:46:27Z"
+    }
+  ]
+}

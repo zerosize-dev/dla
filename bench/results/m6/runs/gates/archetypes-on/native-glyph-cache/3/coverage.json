@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "native": {
+      "runtime": "native",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 13,
+          "dispositioned": 13,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/cache.c::cache_create",
+          "src/cache.c::cache_destroy",
+          "src/cache.c::cache_get_stats",
+          "src/cache.c::cache_lookup",
+          "src/layout.c::layout_run",
+          "src/raster.c::raster_glyph",
+          "src/raster.c::raster_release"
+        ],
+        "exercised": [],
+        "not_exercisable": []
+      },
+      "iterations": 3960
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    }
+  ],
+  "blind_spots": [
+    {
+      "runtime": "native",
+      "text": "the allocator shim does not record which entry points ran"
+    }
+  ]
+}

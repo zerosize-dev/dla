@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "native": {
+      "runtime": "native",
+      "backends": {
+        "heaptrack": {
+          "status": "ran",
+          "enumerated": 1,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [],
+        "exercised": [],
+        "not_exercisable": []
+      }
+    },
+    "rust": {
+      "runtime": "rust",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 2,
+          "dispositioned": 2,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "heaptrack": {
+          "status": "ran",
+          "enumerated": 3,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "rapx": {
+          "status": "blocked",
+          "reason": "cannot copy the project: Permission denied (os error 13)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/feed.rs::batch",
+          "src/feed.rs::batch_len",
+          "src/rollup.rs::Rollup.flush",
+          "src/rollup.rs::Rollup.new",
+          "src/rollup.rs::Rollup.push",
+          "src/sample.rs::Sample.parse",
+          "src/sample.rs::SampleError.fmt",
+          "src/stats.rs::SeriesStats.add",
+          "src/stats.rs::SeriesStats.default",
+          "src/stats.rs::SeriesStats.mean"
+        ],
+        "exercised": [],
+        "not_exercisable": [
+          {
+            "entry": "src/sample.rs::SampleError.fmt",
+            "reason": "no_harness"
+          }
+        ]
+      },
+      "iterations": 880
+    }
+  },
+  "residual": [],
+  "blind_spots": [
+    {
+      "runtime": "rust",
+      "text": "the allocator shim does not record which entry points ran"
+    }
+  ]
+}

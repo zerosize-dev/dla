@@ -1,0 +1,304 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E12-T1.json",
+      "id": "E12",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 4,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "go.heap_live",
+            "lo": 5435.0,
+            "p": 0.0000248,
+            "ratio": 0.9996,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 5441.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "go.heap_objects",
+            "lo": 5435.0,
+            "p": 0.0000248,
+            "ratio": 0.9996,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 5441.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "go.heap_objects.pre_gc",
+            "lo": 5402.0,
+            "p": 0.0000248,
+            "ratio": 0.8523,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 5829.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "go.stacks",
+            "lo": 2085.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 2203.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss",
+            "lo": 7759.0,
+            "p": 0.0000248,
+            "ratio": 0.8805,
+            "region": "process",
+            "shape": "steady",
+            "slope": 8280.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss_anon",
+            "lo": 7759.0,
+            "p": 0.0000248,
+            "ratio": 0.8644,
+            "region": "process",
+            "shape": "steady",
+            "slope": 8260.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.vm_hwm",
+            "lo": 7759.0,
+            "p": 0.0000248,
+            "ratio": 0.8805,
+            "region": "process",
+            "shape": "steady",
+            "slope": 8280.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "go.total",
+            "lo": 7149.0,
+            "p": 0.0005944,
+            "ratio": 1.641,
+            "region": "process",
+            "shape": "steady",
+            "slope": 9533.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.vm_data",
+            "lo": 7149.0,
+            "p": 0.0005944,
+            "ratio": 1.641,
+            "region": "process",
+            "shape": "steady",
+            "slope": 9533.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "go.total.pre_gc",
+            "lo": 6355.0,
+            "p": 0.0008407,
+            "ratio": 1.298,
+            "region": "process",
+            "shape": "steady",
+            "slope": 7626.0,
+            "unit": "bytes"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 4,
+          "steady": 10
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "d568640bb74b7646d6ee1ebe2b946388afda846286324223945d6f45606b7cdf",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "go:main:.:./cmd/notifyd"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E13-T1.json",
+      "id": "E13",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 1,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "go.goroutines",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "go.goroutines",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "go.goroutines.pre_gc",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 1,
+          "steady": 3
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "d568640bb74b7646d6ee1ebe2b946388afda846286324223945d6f45606b7cdf",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "go:main:.:./cmd/notifyd"
+      }
+    },
+    {
+      "authority": "live",
+      "file": "evidence/E15-S2.json",
+      "id": "E15",
+      "kind": "growth-series",
+      "result": {
+        "axis": "dump",
+        "failed": 4,
+        "gate": "pass",
+        "n": 4,
+        "passed": [
+          {
+            "column": "group:goroutine/created:example.com/notifyd/internal/notify.newSubscription",
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1173,
+            "unit": "count"
+          },
+          {
+            "column": "metric:goroutine/total",
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1173,
+            "unit": "count"
+          },
+          {
+            "column": "group:goroutine/wait:select",
+            "region": "non-heap",
+            "shape": "steady",
+            "slope": 1173,
+            "unit": "count"
+          }
+        ],
+        "reasons": [],
+        "series": "S2",
+        "signal": {
+          "class": "runtime-counter",
+          "source_sha256": "88123a92999a3b3f11f031df9f36079b4b9c16f37c12b448cfb8d3e729af5059",
+          "tool": "go-goroutine"
+        }
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E16-A1.json",
+      "id": "E16",
+      "kind": "discriminator",
+      "result": {
+        "column": "go.goroutines",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "go.goroutines",
+            "plateau": {
+              "extra_rise": 3520.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "free-os-memory",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 63200000.0,
+              "extra_slope": 20520.0,
+              "main_slope": 8280.0,
+              "noise": 7278000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 66610000.0,
+              "before": 103600000.0,
+              "drop": 37030000.0,
+              "growth": 94590000.0,
+              "kind": "free-os-memory",
+              "verdict": "partial"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 94110000.0,
+              "extra_slope": 30550.0,
+              "main_slope": 8280.0,
+              "noise": 15230000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "free-os-memory",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "free-os-memory",
+        "series": "S4",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "internal.notify.subscription.newSubscription -> s.run()"
+}

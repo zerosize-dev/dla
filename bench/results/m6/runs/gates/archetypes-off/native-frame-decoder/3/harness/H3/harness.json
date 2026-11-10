@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "H3",
+  "runtime": "native",
+  "mode": "command",
+  "workload": "native:main:Makefile",
+  "scratch": "harness/H3/work",
+  "build": {
+    "argv": [
+      "make"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "run": {
+    "argv": [
+      "./framedec",
+      "--iterations",
+      "{n}"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "LD_PRELOAD",
+        "/root/.cache/dla-bench/m6/gates/archetypes-off/native-frame-decoder/3/project/.dla/20261110-192018-0ca0/harness/H3/agent/libdlashim.so"
+      ],
+      [
+        "DLA_SHIM_ONLY",
+        "framedec"
+      ]
+    ]
+  },
+  "iter_arg": "--iterations {n}",
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "native"
+  ],
+  "probes": [],
+  "agent": "alloc-shim",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300
+}

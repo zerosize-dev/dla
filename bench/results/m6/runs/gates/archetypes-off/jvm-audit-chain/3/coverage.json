@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 7,
+          "dispositioned": 7,
+          "duplicates": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 1,
+          "dispositioned": 1,
+          "duplicates": 0
+        },
+        "dla-hprof": {
+          "status": "ran",
+          "enumerated": 334109,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-heap": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-histogram": {
+          "status": "ran",
+          "enumerated": 9,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "spotbugs": {
+          "status": "ran",
+          "reason": "no auxiliary classpath: library calls are not modelled",
+          "version": "unknown",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/gateway/Gateway.java::Gateway.handle",
+          "src/gateway/Gateway.java::Gateway.served",
+          "src/gateway/Handlers.java::Handler.handle",
+          "src/gateway/Handlers.java::Handlers.balance",
+          "src/gateway/Handlers.java::Handlers.statement",
+          "src/gateway/Handlers.java::Handlers.transfer",
+          "src/gateway/Ledger.java::Ledger.account",
+          "src/gateway/Ledger.java::Ledger.balance",
+          "src/gateway/Ledger.java::Ledger.statement",
+          "src/gateway/Ledger.java::Ledger.transfer",
+          "src/gateway/RequestContext.java::RequestContext.body",
+          "src/gateway/RequestContext.java::RequestContext.caller",
+          "src/gateway/RequestContext.java::RequestContext.microsSincePrevious",
+          "src/gateway/RequestContext.java::RequestContext.open",
+          "src/gateway/RequestContext.java::RequestContext.path",
+          "src/gateway/RequestContext.java::RequestContext.previousPath",
+          "src/gateway/RequestContext.java::RequestContext.sequence",
+          "src/gateway/Response.java::Response.ok",
+          "src/gateway/Response.java::Response.rejected"
+        ],
+        "exercised": [
+          "src/gateway/Gateway.java::Gateway.handle",
+          "src/gateway/Gateway.java::Gateway.served",
+          "src/gateway/Handlers.java::Handler.handle",
+          "src/gateway/Handlers.java::Handlers.balance",
+          "src/gateway/Handlers.java::Handlers.statement",
+          "src/gateway/Handlers.java::Handlers.transfer",
+          "src/gateway/Ledger.java::Ledger.account",
+          "src/gateway/Ledger.java::Ledger.balance",
+          "src/gateway/Ledger.java::Ledger.statement",
+          "src/gateway/Ledger.java::Ledger.transfer",
+          "src/gateway/RequestContext.java::RequestContext.body",
+          "src/gateway/RequestContext.java::RequestContext.caller",
+          "src/gateway/RequestContext.java::RequestContext.microsSincePrevious",
+          "src/gateway/RequestContext.java::RequestContext.open",
+          "src/gateway/RequestContext.java::RequestContext.path",
+          "src/gateway/RequestContext.java::RequestContext.previousPath",
+          "src/gateway/RequestContext.java::RequestContext.sequence",
+          "src/gateway/Response.java::Response.ok",
+          "src/gateway/Response.java::Response.rejected"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 8880
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 509.79981981981985,
+      "attributed_slope": 0.0,
+      "residual": 509.79981981981985,
+      "unit": "bytes/n",
+      "threshold": 127.44995495495496,
+      "open_item": "O1"
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 496.29099099099096,
+      "attributed_slope": 0.0,
+      "residual": 496.29099099099096,
+      "unit": "bytes/n",
+      "threshold": 124.07274774774774,
+      "open_item": "O1"
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 506.41165165165165,
+      "attributed_slope": 0.0,
+      "residual": 506.41165165165165,
+      "unit": "bytes/n",
+      "threshold": 126.60291291291291,
+      "open_item": "O1"
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": 14.131891891891891,
+      "attributed_slope": 0.0,
+      "residual": 14.131891891891891,
+      "unit": "bytes/n",
+      "threshold": 76.68304864864918
+    },
+    {
+      "series": "S2",
+      "region": "non-heap",
+      "total_slope": -6.914414414414415,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 43.15510864864864
+    },
+    {
+      "series": "S3",
+      "region": "non-heap",
+      "total_slope": -12.585379665379666,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 31.708589448648674
+    }
+  ],
+  "blind_spots": []
+}

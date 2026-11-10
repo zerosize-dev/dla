@@ -1,0 +1,120 @@
+{
+  "basis": "the primary column of the region of F4",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "native.live_bytes",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -6144.0,
+        "extra_slope": -4.655,
+        "main_slope": 57.41,
+        "noise": 29350.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 4141000.0,
+        "before": 4837000.0,
+        "drop": 696300.0,
+        "growth": 122900.0,
+        "kind": "trim",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-ALLOC",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -6144.0,
+        "extra_slope": -4.655,
+        "main_slope": 57.41,
+        "noise": 29350.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 4731000.0,
+        "before": 4837000.0,
+        "drop": 106500.0,
+        "growth": -26030000.0,
+        "kind": "trim",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "native.peak_bytes",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 13.95,
+        "noise": 5213.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 4,
+  "favors": "non-leak",
+  "finding": "F4",
+  "harness": "H1",
+  "id": "A5",
+  "iterations": 8,
+  "limitations": [
+    "4096 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "native.live_bytes",
+  "purge": "trim",
+  "series": "S6",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T6"
+}

@@ -1,0 +1,272 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E12-T2.json",
+      "id": "jvm/E12",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 27,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "native.live_blocks",
+            "lo": 0.125,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.125,
+            "unit": "count"
+          },
+          {
+            "column": "probe:shop.codec.Audit.trail",
+            "lo": 2.625,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.625,
+            "unit": "count"
+          },
+          {
+            "column": "probe:shop.codec.Audit.trail.size",
+            "lo": 0.8749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:shop.codec.Entry.count",
+            "lo": 0.8749,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.875,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 22,
+          "insufficient": 1,
+          "plateau": 1,
+          "spike": 1,
+          "steady": 6
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "8787c906f172dfaab8aa287a3b49953d6ca67c2cb3f342c7037096d72d8b4644",
+          "tool": "dla-trend"
+        },
+        "trend": "T2",
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/jvm_E16-heap-1-891c1fc9.json",
+      "id": "jvm/E16",
+      "kind": "retention-path",
+      "result": {
+        "file": ".dla/20261110-192004-7ac4/harness/H1/out/p9-native/capture/959/heap-1.hprof",
+        "holders": [
+          {
+            "dominated": 69930,
+            "holder_kind": "static/global",
+            "key": "static:shop.codec.Audit.trail",
+            "retained": 28684840
+          },
+          {
+            "dominated": 14,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.StringPool.cache",
+            "retained": 262696
+          },
+          {
+            "dominated": 6907,
+            "holder_kind": "static/global",
+            "key": "static:jdk.jfr.internal.MetadataRepository.instance",
+            "retained": 230752
+          }
+        ],
+        "objects": 171209,
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "891c1fc9035741fb6a9a0a9ce60ab3c902315205c29d6d978081eb5efdf9fa67",
+          "tool": "dla-hprof"
+        },
+        "timestamp_ms": 1794338546562,
+        "truncated": false
+      }
+    },
+    {
+      "authority": "dump",
+      "file": "evidence/jvm_E17-S2.json",
+      "id": "jvm/E17",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 31,
+        "gate": "pass",
+        "n": 4,
+        "n_values": [
+          2220.0,
+          8880.0,
+          13320.0,
+          19980.0
+        ],
+        "passed": [
+          {
+            "column": "holder:static:shop.codec.Audit.trail",
+            "holder_kind": "static/global",
+            "last_over_first": 1.0,
+            "owner": "shop.codec.Audit.trail",
+            "region": "heap",
+            "shape": "steady",
+            "slope": 8501451,
+            "unit": "bytes"
+          }
+        ],
+        "reasons": [],
+        "series": "S2",
+        "series_kind": "per-point",
+        "signal": {
+          "class": "dump-parser",
+          "source_sha256": "a97f010c8d308c3874f9a1665e1b8cbb4ebd4079220eb68245cc70afab4d2987",
+          "tool": "dla-hprof"
+        }
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/jvm_E21-A1.json",
+      "id": "jvm/E21",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:shop.codec.Audit.trail",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:shop.codec.Audit.trail",
+            "plateau": {
+              "extra_rise": 46620.0,
+              "extra_slope": 2.625,
+              "main_slope": 2.625,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:shop.codec.Audit.trail.bytes",
+            "plateau": {
+              "extra_rise": 22350000.0,
+              "extra_slope": 1438.0,
+              "main_slope": 1437.0,
+              "noise": 8066.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:shop.codec.Audit.trail.size",
+            "plateau": {
+              "extra_rise": 15540.0,
+              "extra_slope": 0.875,
+              "main_slope": 0.875,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 60160000.0,
+              "extra_slope": 3872.0,
+              "main_slope": 7764.0,
+              "noise": 9263000.0,
+              "verdict": "inconclusive"
+            },
+            "purge": {
+              "after": 307200000.0,
+              "before": 309700000.0,
+              "drop": 2503000.0,
+              "growth": 198800000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "inconclusive",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 42450000.0,
+              "extra_slope": 2732.0,
+              "main_slope": 7771.0,
+              "noise": 10870000.0,
+              "verdict": "inconclusive"
+            },
+            "purge": {
+              "after": 309100000.0,
+              "before": 309700000.0,
+              "drop": 557100.0,
+              "growth": -67510000.0,
+              "kind": "trim-native-heap",
+              "verdict": "no-growth"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.peak_bytes",
+            "plateau": {
+              "extra_rise": 48830000.0,
+              "extra_slope": 3142.0,
+              "main_slope": 4000.0,
+              "noise": 6655000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S5",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T3"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "shop.codec.Audit.trail"
+}

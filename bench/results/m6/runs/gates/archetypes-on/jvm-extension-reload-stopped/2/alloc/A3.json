@@ -1,0 +1,107 @@
+{
+  "basis": "the primary column of the region of F2",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 101400.0,
+        "pre_rise": 103300.0,
+        "verdict": "none"
+      },
+      "name": "jvm.heap_used",
+      "plateau": {
+        "extra_rise": 53130.0,
+        "extra_slope": 17.25,
+        "main_slope": 15.48,
+        "noise": 28490.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 45230000.0,
+        "extra_slope": 14690.0,
+        "main_slope": 15980.0,
+        "noise": 11890000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 176100000.0,
+        "before": 198000000.0,
+        "drop": 21910000.0,
+        "growth": 106900000.0,
+        "kind": "trim-native-heap",
+        "verdict": "partial"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 47560000.0,
+        "extra_slope": 15440.0,
+        "main_slope": 21490.0,
+        "noise": 14140000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 208600000.0,
+        "before": 208600000.0,
+        "drop": 0.0,
+        "growth": 100300000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F2",
+  "harness": "H1",
+  "id": "A3",
+  "iterations": 8,
+  "limitations": [
+    "cgroup.*: /proc/21/cgroup unreadable (No such file or directory (os error 2))",
+    "os.fds: /proc/21/fd unreadable (No such file or directory (os error 2))",
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "probe ledger.LedgerExtension: class not loaded: ledger.LedgerExtension",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S6",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": "jvm.heap_used",
+  "purge": "trim-native-heap",
+  "series": "S7",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T4"
+}

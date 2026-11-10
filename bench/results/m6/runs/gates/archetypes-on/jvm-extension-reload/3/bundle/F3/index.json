@@ -1,0 +1,240 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 4,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "probe:reports.EventBus.LISTENERS",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "probe:reports.EventBus.LISTENERS.size",
+            "lo": 1.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 1.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:byte[].count",
+            "lo": 16.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 16.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.Class$ReflectionData.count",
+            "lo": 2.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.Class.count",
+            "lo": 2.0,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.Object.count",
+            "lo": 8.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 8.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.Object[].count",
+            "lo": 5.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 5.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.String.count",
+            "lo": 15.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 15.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.invoke.MemberName.count",
+            "lo": 2.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.0,
+            "unit": "count"
+          },
+          {
+            "column": "jvm.class:java.lang.ref.SoftReference.count",
+            "lo": 2.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.0,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 4,
+          "steady": 23
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "bdec61306a48307d77022a01fbb906634de3552b908a7340aeffa04e68edd9b1",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "truncated": 13,
+        "workload": "jvm:main:build.sh:run"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E14-A1.json",
+      "id": "E14",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:reports.EventBus.LISTENERS",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:reports.EventBus.LISTENERS",
+            "plateau": {
+              "extra_rise": 3520.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:reports.EventBus.LISTENERS.bytes",
+            "plateau": {
+              "extra_rise": 110900.0,
+              "extra_slope": 36.0,
+              "main_slope": 36.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:reports.EventBus.LISTENERS.size",
+            "plateau": {
+              "extra_rise": 3520.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim-native-heap",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 99070000.0,
+              "extra_slope": 32170.0,
+              "main_slope": 39020.0,
+              "noise": 5502000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 323400000.0,
+              "before": 371500000.0,
+              "drop": 48110000.0,
+              "growth": 292700000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 104900000.0,
+              "extra_slope": 34050.0,
+              "main_slope": 38870.0,
+              "noise": 4851000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 386700000.0,
+              "before": 386700000.0,
+              "drop": 0.0,
+              "growth": 305800000.0,
+              "kind": "trim-native-heap",
+              "verdict": "retained"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim-native-heap",
+        "series": "S4",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "reports.EventBus.LISTENERS"
+}

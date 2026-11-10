@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "id": "H3",
+  "runtime": "node",
+  "mode": "driver",
+  "workload": "node:script:package.json:load",
+  "scratch": "harness/H3/work",
+  "run": {
+    "argv": [
+      "node",
+      "/root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H3/driver/dla-harness.js"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "NODE_OPTIONS",
+        "--require /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H3/agent/dla-preload.js"
+      ],
+      [
+        "DLA_AGENT",
+        "/root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H3/agent/dla-preload.js"
+      ],
+      [
+        "NODE_V8_COVERAGE",
+        "{cov}"
+      ]
+    ]
+  },
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "fresh",
+    "repeated"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "target": {
+        "kind": "node-module",
+        "file": "src/gateway.js"
+      }
+    },
+    {
+      "id": "P2",
+      "target": {
+        "kind": "node-module",
+        "file": "src/heartbeat.js"
+      }
+    },
+    {
+      "id": "P3",
+      "target": {
+        "kind": "node-module",
+        "file": "src/loopback.js"
+      }
+    },
+    {
+      "id": "P4",
+      "target": {
+        "kind": "node-module",
+        "file": "src/metrics.js"
+      }
+    },
+    {
+      "id": "P5",
+      "target": {
+        "kind": "node-module",
+        "file": "src/router.js"
+      }
+    },
+    {
+      "id": "P6",
+      "target": {
+        "kind": "node-module",
+        "file": "src/session.js"
+      }
+    }
+  ],
+  "agent": "driver-node",
+  "detectors": [
+    "MaxListenersExceededWarning"
+  ],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "timeout_secs": 300
+}

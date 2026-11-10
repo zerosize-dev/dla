@@ -1,0 +1,443 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-183211-6aab",
+  "session_id": "0e00e831-8513-4eb3-82d4-5efe744cd756",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-extension-reload-stopped/1/project",
+  "created_at": "2026-11-10T18:32:11Z",
+  "dla_version": "0.1.0",
+  "stage": "classify",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T18:32:11Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T18:32:11Z",
+    "deadline": "2026-11-10T19:32:11Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T18:32:46Z",
+      "kind": "harness",
+      "command": "sh ./build.sh run 440",
+      "started_at": "2026-11-10T18:32:47Z",
+      "stopped_at": "2026-11-10T18:32:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 130,
+      "kind": "harness",
+      "command": "sh ./build.sh run 880",
+      "started_at": "2026-11-10T18:32:50Z",
+      "stopped_at": "2026-11-10T18:32:53Z",
+      "role": "started"
+    },
+    {
+      "pid": 250,
+      "kind": "harness",
+      "command": "sh ./build.sh run 1320",
+      "started_at": "2026-11-10T18:32:53Z",
+      "stopped_at": "2026-11-10T18:32:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 370,
+      "kind": "harness",
+      "command": "sh ./build.sh run 1760",
+      "started_at": "2026-11-10T18:32:57Z",
+      "stopped_at": "2026-11-10T18:33:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 490,
+      "kind": "harness",
+      "command": "sh ./build.sh run 2200",
+      "started_at": "2026-11-10T18:33:00Z",
+      "stopped_at": "2026-11-10T18:33:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 610,
+      "kind": "harness",
+      "command": "sh ./build.sh run 2640",
+      "started_at": "2026-11-10T18:33:03Z",
+      "stopped_at": "2026-11-10T18:33:06Z",
+      "role": "started"
+    },
+    {
+      "pid": 730,
+      "kind": "harness",
+      "command": "sh ./build.sh run 3080",
+      "started_at": "2026-11-10T18:33:06Z",
+      "stopped_at": "2026-11-10T18:33:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 850,
+      "kind": "harness",
+      "command": "sh ./build.sh run 3520",
+      "started_at": "2026-11-10T18:33:09Z",
+      "stopped_at": "2026-11-10T18:33:12Z",
+      "role": "started"
+    },
+    {
+      "pid": 970,
+      "kind": "harness",
+      "command": "sh ./build.sh run 3960",
+      "started_at": "2026-11-10T18:33:12Z",
+      "stopped_at": "2026-11-10T18:33:17Z",
+      "role": "started"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T18:33:20Z",
+      "kind": "harness",
+      "command": "sh ./build.sh run 4400",
+      "started_at": "2026-11-10T18:33:20Z",
+      "stopped_at": "2026-11-10T18:33:25Z",
+      "role": "started"
+    },
+    {
+      "pid": 130,
+      "kind": "harness",
+      "command": "sh ./build.sh run 4840",
+      "started_at": "2026-11-10T18:33:25Z",
+      "stopped_at": "2026-11-10T18:33:29Z",
+      "role": "started"
+    },
+    {
+      "pid": 250,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5280",
+      "started_at": "2026-11-10T18:33:29Z",
+      "stopped_at": "2026-11-10T18:33:34Z",
+      "role": "started"
+    },
+    {
+      "pid": 370,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5720",
+      "started_at": "2026-11-10T18:33:34Z",
+      "stopped_at": "2026-11-10T18:33:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 490,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6160",
+      "started_at": "2026-11-10T18:33:38Z",
+      "stopped_at": "2026-11-10T18:33:43Z",
+      "role": "started"
+    },
+    {
+      "pid": 610,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6600",
+      "started_at": "2026-11-10T18:33:43Z",
+      "stopped_at": "2026-11-10T18:33:47Z",
+      "role": "started"
+    },
+    {
+      "pid": 730,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7040",
+      "started_at": "2026-11-10T18:33:47Z",
+      "stopped_at": "2026-11-10T18:33:52Z",
+      "role": "started"
+    },
+    {
+      "pid": 850,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7480",
+      "started_at": "2026-11-10T18:33:52Z",
+      "stopped_at": "2026-11-10T18:33:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 14,
+      "kind": "harness",
+      "command": "sh ./build.sh run 440",
+      "started_at": "2026-11-10T18:34:14Z",
+      "stopped_at": "2026-11-10T18:34:17Z",
+      "role": "started"
+    },
+    {
+      "pid": 135,
+      "kind": "harness",
+      "command": "sh ./build.sh run 880",
+      "started_at": "2026-11-10T18:34:17Z",
+      "stopped_at": "2026-11-10T18:34:21Z",
+      "role": "started"
+    },
+    {
+      "pid": 255,
+      "kind": "harness",
+      "command": "sh ./build.sh run 1320",
+      "started_at": "2026-11-10T18:34:21Z",
+      "stopped_at": "2026-11-10T18:34:24Z",
+      "role": "started"
+    },
+    {
+      "pid": 375,
+      "kind": "harness",
+      "command": "sh ./build.sh run 1760",
+      "started_at": "2026-11-10T18:34:24Z",
+      "stopped_at": "2026-11-10T18:34:28Z",
+      "role": "started"
+    },
+    {
+      "pid": 496,
+      "kind": "harness",
+      "command": "sh ./build.sh run 2200",
+      "started_at": "2026-11-10T18:34:28Z",
+      "stopped_at": "2026-11-10T18:34:32Z",
+      "role": "started"
+    },
+    {
+      "pid": 616,
+      "kind": "harness",
+      "command": "sh ./build.sh run 2640",
+      "started_at": "2026-11-10T18:34:32Z",
+      "stopped_at": "2026-11-10T18:34:36Z",
+      "role": "started"
+    },
+    {
+      "pid": 737,
+      "kind": "harness",
+      "command": "sh ./build.sh run 3080",
+      "started_at": "2026-11-10T18:34:36Z",
+      "stopped_at": "2026-11-10T18:34:40Z",
+      "role": "started"
+    },
+    {
+      "pid": 857,
+      "kind": "harness",
+      "command": "sh ./build.sh run 3520",
+      "started_at": "2026-11-10T18:34:40Z",
+      "stopped_at": "2026-11-10T18:34:44Z",
+      "role": "started"
+    },
+    {
+      "pid": 977,
+      "kind": "harness",
+      "command": "sh ./build.sh run 3960",
+      "started_at": "2026-11-10T18:34:44Z",
+      "stopped_at": "2026-11-10T18:34:48Z",
+      "role": "started"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T18:34:53Z",
+      "kind": "harness",
+      "command": "sh ./build.sh run 4400",
+      "started_at": "2026-11-10T18:34:53Z",
+      "stopped_at": "2026-11-10T18:34:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 130,
+      "kind": "harness",
+      "command": "sh ./build.sh run 4840",
+      "started_at": "2026-11-10T18:34:57Z",
+      "stopped_at": "2026-11-10T18:35:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 250,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5280",
+      "started_at": "2026-11-10T18:35:00Z",
+      "stopped_at": "2026-11-10T18:35:04Z",
+      "role": "started"
+    },
+    {
+      "pid": 370,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5720",
+      "started_at": "2026-11-10T18:35:04Z",
+      "stopped_at": "2026-11-10T18:35:07Z",
+      "role": "started"
+    },
+    {
+      "pid": 490,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6160",
+      "started_at": "2026-11-10T18:35:07Z",
+      "stopped_at": "2026-11-10T18:35:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 610,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6600",
+      "started_at": "2026-11-10T18:35:11Z",
+      "stopped_at": "2026-11-10T18:35:15Z",
+      "role": "started"
+    },
+    {
+      "pid": 730,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7040",
+      "started_at": "2026-11-10T18:35:15Z",
+      "stopped_at": "2026-11-10T18:35:19Z",
+      "role": "started"
+    },
+    {
+      "pid": 850,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7480",
+      "started_at": "2026-11-10T18:35:19Z",
+      "stopped_at": "2026-11-10T18:35:22Z",
+      "role": "started"
+    },
+    {
+      "pid": 977,
+      "kind": "harness",
+      "command": "sh ./build.sh run 4400",
+      "started_at": "2026-11-10T18:35:22Z",
+      "stopped_at": "2026-11-10T18:35:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 1097,
+      "kind": "harness",
+      "command": "sh ./build.sh run 4840",
+      "started_at": "2026-11-10T18:35:26Z",
+      "stopped_at": "2026-11-10T18:35:29Z",
+      "role": "started"
+    },
+    {
+      "pid": 1217,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5280",
+      "started_at": "2026-11-10T18:35:29Z",
+      "stopped_at": "2026-11-10T18:35:33Z",
+      "role": "started"
+    },
+    {
+      "pid": 1337,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5720",
+      "started_at": "2026-11-10T18:35:33Z",
+      "stopped_at": "2026-11-10T18:35:36Z",
+      "role": "started"
+    },
+    {
+      "pid": 1457,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6160",
+      "started_at": "2026-11-10T18:35:36Z",
+      "stopped_at": "2026-11-10T18:35:40Z",
+      "role": "started"
+    },
+    {
+      "pid": 1577,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6600",
+      "started_at": "2026-11-10T18:35:40Z",
+      "stopped_at": "2026-11-10T18:35:44Z",
+      "role": "started"
+    },
+    {
+      "pid": 1697,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7040",
+      "started_at": "2026-11-10T18:35:44Z",
+      "stopped_at": "2026-11-10T18:35:48Z",
+      "role": "started"
+    },
+    {
+      "pid": 1817,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7480",
+      "started_at": "2026-11-10T18:35:48Z",
+      "stopped_at": "2026-11-10T18:35:52Z",
+      "role": "started"
+    },
+    {
+      "pid": 1943,
+      "kind": "harness",
+      "command": "sh ./build.sh run 4400",
+      "started_at": "2026-11-10T18:35:52Z",
+      "stopped_at": "2026-11-10T18:35:56Z",
+      "role": "started"
+    },
+    {
+      "pid": 2063,
+      "kind": "harness",
+      "command": "sh ./build.sh run 4840",
+      "started_at": "2026-11-10T18:35:56Z",
+      "stopped_at": "2026-11-10T18:36:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 2183,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5280",
+      "started_at": "2026-11-10T18:36:00Z",
+      "stopped_at": "2026-11-10T18:36:04Z",
+      "role": "started"
+    },
+    {
+      "pid": 2303,
+      "kind": "harness",
+      "command": "sh ./build.sh run 5720",
+      "started_at": "2026-11-10T18:36:04Z",
+      "stopped_at": "2026-11-10T18:36:07Z",
+      "role": "started"
+    },
+    {
+      "pid": 2423,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6160",
+      "started_at": "2026-11-10T18:36:07Z",
+      "stopped_at": "2026-11-10T18:36:11Z",
+      "role": "started"
+    },
+    {
+      "pid": 2543,
+      "kind": "harness",
+      "command": "sh ./build.sh run 6600",
+      "started_at": "2026-11-10T18:36:11Z",
+      "stopped_at": "2026-11-10T18:36:15Z",
+      "role": "started"
+    },
+    {
+      "pid": 2663,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7040",
+      "started_at": "2026-11-10T18:36:15Z",
+      "stopped_at": "2026-11-10T18:36:20Z",
+      "role": "started"
+    },
+    {
+      "pid": 2783,
+      "kind": "harness",
+      "command": "sh ./build.sh run 7480",
+      "started_at": "2026-11-10T18:36:20Z",
+      "stopped_at": "2026-11-10T18:36:28Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "78be6dd9b5ecb5e6c86bc5507328bcb9",
+  "report": {
+    "path": ".dla/20261110-183211-6aab/report.md",
+    "sha256": "2c4077c824932e7bc3444396744d81d63445bc6788afd7f273ff0330d61819bd",
+    "rendered_at": "2026-11-10T18:37:11Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep"
+  ]
+}

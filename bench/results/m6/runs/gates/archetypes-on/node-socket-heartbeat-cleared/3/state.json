@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-175727-5f8f",
+  "session_id": "36592ee9-95be-40a9-ac29-9b7a52970845",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project",
+  "created_at": "2026-11-10T17:57:27Z",
+  "dla_version": "0.1.0",
+  "stage": "confirm",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T17:57:27Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T17:57:27Z",
+    "deadline": "2026-11-10T18:57:27Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T17:58:01Z",
+      "kind": "harness",
+      "command": "node load.js --iterations 440",
+      "started_at": "2026-11-10T17:58:02Z",
+      "stopped_at": "2026-11-10T17:58:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 18,
+      "kind": "harness",
+      "command": "node load.js --iterations 880",
+      "started_at": "2026-11-10T17:58:03Z",
+      "stopped_at": "2026-11-10T17:58:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 26,
+      "kind": "harness",
+      "command": "node load.js --iterations 1320",
+      "started_at": "2026-11-10T17:58:03Z",
+      "stopped_at": "2026-11-10T17:58:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "node load.js --iterations 1760",
+      "started_at": "2026-11-10T17:58:03Z",
+      "stopped_at": "2026-11-10T17:58:04Z",
+      "role": "started"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "node load.js --iterations 2200",
+      "started_at": "2026-11-10T17:58:04Z",
+      "stopped_at": "2026-11-10T17:58:04Z",
+      "role": "started"
+    },
+    {
+      "pid": 50,
+      "kind": "harness",
+      "command": "node load.js --iterations 2640",
+      "started_at": "2026-11-10T17:58:04Z",
+      "stopped_at": "2026-11-10T17:58:05Z",
+      "role": "started"
+    },
+    {
+      "pid": 58,
+      "kind": "harness",
+      "command": "node load.js --iterations 3080",
+      "started_at": "2026-11-10T17:58:05Z",
+      "stopped_at": "2026-11-10T17:58:06Z",
+      "role": "started"
+    },
+    {
+      "pid": 66,
+      "kind": "harness",
+      "command": "node load.js --iterations 3520",
+      "started_at": "2026-11-10T17:58:06Z",
+      "stopped_at": "2026-11-10T17:58:07Z",
+      "role": "started"
+    },
+    {
+      "pid": 74,
+      "kind": "harness",
+      "command": "node load.js --iterations 3960",
+      "started_at": "2026-11-10T17:58:07Z",
+      "stopped_at": "2026-11-10T17:58:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 82,
+      "kind": "harness",
+      "command": "node load.js --iterations {n} (detector pass)",
+      "started_at": "2026-11-10T17:58:08Z",
+      "stopped_at": "2026-11-10T17:58:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 11,
+      "kind": "harness",
+      "command": "node /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H2/driver/dla-harness.js",
+      "started_at": "2026-11-10T17:58:46Z",
+      "stopped_at": "2026-11-10T17:58:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "node /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H2/driver/dla-harness.js",
+      "started_at": "2026-11-10T17:58:50Z",
+      "stopped_at": "2026-11-10T17:58:53Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "node /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H2/driver/dla-harness.js",
+      "started_at": "2026-11-10T17:59:19Z",
+      "stopped_at": "2026-11-10T17:59:21Z",
+      "role": "started"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T17:59:28Z",
+      "kind": "harness",
+      "command": "node /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H3/driver/dla-harness.js",
+      "started_at": "2026-11-10T17:59:29Z",
+      "stopped_at": "2026-11-10T17:59:30Z",
+      "role": "started"
+    },
+    {
+      "pid": 19,
+      "kind": "harness",
+      "command": "node /root/.cache/dla-bench/m6/gates/archetypes-on/node-socket-heartbeat-cleared/3/project/.dla/20261110-175727-5f8f/harness/H2/driver/dla-harness.js",
+      "started_at": "2026-11-10T17:59:49Z",
+      "stopped_at": "2026-11-10T17:59:51Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "1399121a3fb6254106833cc10f049fa2",
+  "report": {
+    "path": ".dla/20261110-175727-5f8f/report.md",
+    "sha256": "b1a08f47a9c597af6ad9ee3a37881427717ea744620ebf00ce3b0294425c91bc",
+    "rendered_at": "2026-11-10T18:00:13Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "sweep",
+    "classify"
+  ]
+}

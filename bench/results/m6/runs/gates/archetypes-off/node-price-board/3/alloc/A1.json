@@ -1,0 +1,102 @@
+{
+  "basis": "the primary column of the region of F5",
+  "columns": [
+    {
+      "favors": "leak",
+      "gc": {
+        "post_rise": 66690000.0,
+        "pre_rise": 66200000.0,
+        "verdict": "none"
+      },
+      "name": "node.heap_used",
+      "plateau": {
+        "extra_rise": 31120000.0,
+        "extra_slope": 10100.0,
+        "main_slope": 10110.0,
+        "noise": 20800.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 80160000.0,
+        "before": 80110000.0,
+        "drop": -54110.0,
+        "growth": 70680000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 37020000.0,
+        "extra_slope": 12020.0,
+        "main_slope": 17890.0,
+        "noise": 3393000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 168900000.0,
+        "before": 162600000.0,
+        "drop": -6291000.0,
+        "growth": 96610000.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 37130000.0,
+        "extra_slope": 12050.0,
+        "main_slope": 18270.0,
+        "noise": 2788000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F5",
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S3",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "node.heap_used",
+  "purge": "gc",
+  "series": "S4",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T3"
+}

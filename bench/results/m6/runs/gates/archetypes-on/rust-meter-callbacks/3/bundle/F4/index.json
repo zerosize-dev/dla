@@ -1,0 +1,376 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E9-T1.json",
+      "id": "E9",
+      "kind": "growth-series",
+      "result": {
+        "axis": "n",
+        "failed": 3,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "native.live_bytes",
+            "lo": 56.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 56.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "native.live_bytes",
+            "lo": 4096.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 4096.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "native.live_bytes",
+            "lo": 13.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 13.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "native.live_bytes",
+            "lo": 4165.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 4165.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "native.peak_bytes",
+            "lo": 4165.0,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 4165.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss",
+            "lo": 4273.0,
+            "p": 0.0000248,
+            "ratio": 0.9459,
+            "region": "process",
+            "shape": "steady",
+            "slope": 4361.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.rss_anon",
+            "lo": 4226.0,
+            "p": 0.0000248,
+            "ratio": 0.9269,
+            "region": "process",
+            "shape": "steady",
+            "slope": 4331.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.vm_data",
+            "lo": 4096.0,
+            "p": 0.0000248,
+            "ratio": 0.9762,
+            "region": "process",
+            "shape": "steady",
+            "slope": 4206.0,
+            "unit": "bytes"
+          },
+          {
+            "column": "os.vm_hwm",
+            "lo": 4273.0,
+            "p": 0.0000248,
+            "ratio": 0.9459,
+            "region": "process",
+            "shape": "steady",
+            "slope": 4361.0,
+            "unit": "bytes"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 3,
+          "steady": 9
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "f88d13d68d28c263be8008fd7d53387621b1e80d142c258bcc922e8d5b27e24d",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "rust:main:src/main.rs"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E11-A1.json",
+      "id": "E11",
+      "kind": "discriminator",
+      "result": {
+        "column": "native.live_blocks",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 1760.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 86240.0,
+              "extra_slope": 56.0,
+              "main_slope": 56.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 6440000.0,
+              "extra_slope": 4182.0,
+              "main_slope": 4361.0,
+              "noise": 38710.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 19480000.0,
+              "before": 19470000.0,
+              "drop": -8192.0,
+              "growth": 15170000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 6440000.0,
+              "extra_slope": 4182.0,
+              "main_slope": 4361.0,
+              "noise": 38710.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 19480000.0,
+              "before": 19470000.0,
+              "drop": -8192.0,
+              "growth": 15170000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.peak_bytes",
+            "plateau": {
+              "extra_rise": 6414000.0,
+              "extra_slope": 4165.0,
+              "main_slope": 4165.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    },
+    {
+      "authority": "live",
+      "file": "evidence/E22-S4.json",
+      "id": "E22",
+      "kind": "growth-series",
+      "result": {
+        "axis": "dump",
+        "failed": 2,
+        "gate": "pass",
+        "n": 3,
+        "passed": [
+          {
+            "column": "stack:new",
+            "region": "off-heap",
+            "shape": "steady",
+            "slope": 3604480,
+            "unit": "bytes"
+          },
+          {
+            "column": "stack:open",
+            "region": "off-heap",
+            "shape": "steady",
+            "slope": 49280,
+            "unit": "bytes"
+          },
+          {
+            "column": "stack:open#2",
+            "region": "off-heap",
+            "shape": "steady",
+            "slope": 11440,
+            "unit": "bytes"
+          }
+        ],
+        "reasons": [],
+        "series": "S4",
+        "signal": {
+          "class": "leak-checker",
+          "source_sha256": "ce754f259a94c8f1af40c310a27e8bcfe190d4077f391a4239ddcd62d0ebe2d2",
+          "tool": "valgrind-memcheck"
+        }
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E30-A3.json",
+      "id": "E30",
+      "kind": "discriminator",
+      "result": {
+        "column": "native.live_blocks",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "native.live_blocks",
+            "plateau": {
+              "extra_rise": 1760.0,
+              "extra_slope": 1.0,
+              "main_slope": 1.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.live_bytes",
+            "plateau": {
+              "extra_rise": 6308000.0,
+              "extra_slope": 4096.0,
+              "main_slope": 4096.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 6474000.0,
+              "extra_slope": 4204.0,
+              "main_slope": 4361.0,
+              "noise": 38710.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 19510000.0,
+              "before": 19500000.0,
+              "drop": -8192.0,
+              "growth": 15200000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 6446000.0,
+              "extra_slope": 4186.0,
+              "main_slope": 4361.0,
+              "noise": 38710.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 19510000.0,
+              "before": 19500000.0,
+              "drop": -8192.0,
+              "growth": 15200000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "native.peak_bytes",
+            "plateau": {
+              "extra_rise": 6414000.0,
+              "extra_slope": 4165.0,
+              "main_slope": 4165.0,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim",
+        "series": "S10",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T8"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "Box<Window> leaked by Session::open"
+}

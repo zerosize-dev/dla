@@ -1,0 +1,121 @@
+{
+  "basis": "the columns the trend tied to it of F2",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "probe:src/feed.js:SYMBOLS",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "probe:src/feed.js:SYMBOLS.size",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -63490.0,
+        "extra_slope": -20.61,
+        "main_slope": 1182.0,
+        "noise": 1181000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 58940000.0,
+        "before": 58810000.0,
+        "drop": -131100.0,
+        "growth": 90110.0,
+        "kind": "gc",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -151600.0,
+        "extra_slope": -49.21,
+        "main_slope": 1060.0,
+        "noise": 744200.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": "F2",
+  "harness": "H1",
+  "id": "A3",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S7",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "probe:src/feed.js:SYMBOLS",
+  "purge": "gc",
+  "series": "S8",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T5"
+}

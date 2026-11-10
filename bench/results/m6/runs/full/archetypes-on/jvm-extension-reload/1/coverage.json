@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 3,
+          "dispositioned": 3,
+          "duplicates": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla-hprof": {
+          "status": "ran",
+          "enumerated": 1485647,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-heap": {
+          "status": "ran",
+          "enumerated": 8,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-histogram": {
+          "status": "ran",
+          "enumerated": 18,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-nonheap": {
+          "status": "ran",
+          "enumerated": 8,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "spotbugs": {
+          "status": "ran",
+          "reason": "no auxiliary classpath: library calls are not modelled",
+          "version": "unknown",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [],
+        "exercised": [],
+        "not_exercisable": []
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 13919.929090909092,
+      "attributed_slope": 0.0,
+      "residual": 13919.929090909092,
+      "unit": "bytes/iteration",
+      "threshold": 3479.982272727273,
+      "open_item": "O1"
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 13938.00909090909,
+      "attributed_slope": 0.0,
+      "residual": 13938.00909090909,
+      "unit": "bytes/iteration",
+      "threshold": 3484.5022727272726,
+      "open_item": "O1"
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 13919.888986013986,
+      "attributed_slope": 0.0,
+      "residual": 13919.888986013986,
+      "unit": "bytes/iteration",
+      "threshold": 3479.9722465034965,
+      "open_item": "O1"
+    },
+    {
+      "series": "S4",
+      "region": "heap",
+      "total_slope": 13964.820606060606,
+      "attributed_slope": 0.0,
+      "residual": 13964.820606060606,
+      "unit": "bytes/iteration",
+      "threshold": 3491.2051515151516,
+      "open_item": "O1"
+    },
+    {
+      "series": "S5",
+      "region": "heap",
+      "total_slope": 13960.493939393938,
+      "attributed_slope": 0.0,
+      "residual": 13960.493939393938,
+      "unit": "bytes/iteration",
+      "threshold": 3490.1234848484846,
+      "open_item": "O1"
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": 6956.480303030303,
+      "attributed_slope": 0.0,
+      "residual": 6956.480303030303,
+      "unit": "bytes/iteration",
+      "threshold": 1739.1200757575757,
+      "open_item": "O2"
+    },
+    {
+      "series": "S2",
+      "region": "non-heap",
+      "total_slope": 6956.581515151514,
+      "attributed_slope": 0.0,
+      "residual": 6956.581515151514,
+      "unit": "bytes/iteration",
+      "threshold": 1739.1453787878786,
+      "open_item": "O2"
+    },
+    {
+      "series": "S3",
+      "region": "non-heap",
+      "total_slope": 8305.68686868687,
+      "attributed_slope": 0.0,
+      "residual": 8305.68686868687,
+      "unit": "bytes/iteration",
+      "threshold": 2076.4217171717173,
+      "open_item": "O2"
+    },
+    {
+      "series": "S4",
+      "region": "non-heap",
+      "total_slope": 6977.469393939395,
+      "attributed_slope": 0.0,
+      "residual": 6977.469393939395,
+      "unit": "bytes/iteration",
+      "threshold": 1744.367348484849,
+      "open_item": "O2"
+    },
+    {
+      "series": "S5",
+      "region": "non-heap",
+      "total_slope": 7017.107575757575,
+      "attributed_slope": 0.0,
+      "residual": 7017.107575757575,
+      "unit": "bytes/iteration",
+      "threshold": 1754.276893939394,
+      "open_item": "O2"
+    }
+  ],
+  "blind_spots": []
+}

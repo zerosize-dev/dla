@@ -1,0 +1,140 @@
+{
+  "basis": "the columns the trend tied to it of F2",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "name": "probe:reports.builder.ReportBuilder.category_totals",
+      "plateau": {
+        "extra_rise": -12.0,
+        "extra_slope": -0.004545,
+        "main_slope": 0.002652,
+        "noise": 12.45,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "probe:reports.builder.ReportBuilder.category_totals.bytes",
+      "plateau": {
+        "extra_rise": -965.0,
+        "extra_slope": -0.4386,
+        "main_slope": 0.1492,
+        "noise": 545.6,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "probe:reports.builder.ReportBuilder.category_totals.size",
+      "plateau": {
+        "extra_rise": 0.0,
+        "extra_slope": 0.0,
+        "main_slope": 0.0,
+        "noise": 0.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "inconclusive",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 40960.0,
+        "extra_slope": 18.62,
+        "main_slope": 27.43,
+        "noise": 42510.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 24860000.0,
+        "before": 24320000.0,
+        "drop": -536600.0,
+        "growth": 1769000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 40960.0,
+        "extra_slope": 18.62,
+        "main_slope": 27.43,
+        "noise": 42510.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 24860000.0,
+        "before": 24320000.0,
+        "drop": -536600.0,
+        "growth": -16790000.0,
+        "kind": "trim",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 6,
+  "favors": "non-leak",
+  "finding": "F2",
+  "harness": "H1",
+  "id": "A2",
+  "iterations": 8,
+  "limitations": [
+    "py.traced counts only allocations made after tracemalloc started (interpreter start-up excluded)",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "probe:reports.builder.ReportBuilder.category_totals",
+  "purge": "trim",
+  "series": "S3",
+  "supports": [
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T3"
+}

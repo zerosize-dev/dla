@@ -1,0 +1,221 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E12-T1.json",
+      "id": "E12",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 26,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "probe:reports.builder.ReportBuilder.category_totals",
+            "lo": 36.69,
+            "p": 0.0000248,
+            "ratio": 0.9962,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 36.73,
+            "unit": "count"
+          },
+          {
+            "column": "probe:reports.builder.ReportBuilder.category_totals.size",
+            "lo": 0.8,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.8,
+            "unit": "count"
+          },
+          {
+            "column": "py.gc_objects",
+            "lo": 4.8,
+            "p": 0.0000248,
+            "ratio": 0.9996,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 4.8,
+            "unit": "count"
+          },
+          {
+            "column": "py.gc_objects.pre_gc",
+            "lo": 4.215,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 4.672,
+            "unit": "count"
+          },
+          {
+            "column": "py.type:dict.count",
+            "lo": 0.8,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.8,
+            "unit": "count"
+          },
+          {
+            "column": "py.type:list.count",
+            "lo": 2.4,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 2.4,
+            "unit": "count"
+          },
+          {
+            "column": "py.type:reports.builder.ReportBuilder.count",
+            "lo": 0.8,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.8,
+            "unit": "count"
+          },
+          {
+            "column": "py.type:tuple.count",
+            "lo": 0.8,
+            "p": 0.0000248,
+            "ratio": 1.0,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 0.8,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 16,
+          "insufficient": 9,
+          "spike": 1,
+          "steady": 8
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "19628f3545a4dd7ede374e697d6384d65fea81427b1d6f85849b6654357575b8",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "python:main:reports/load.py"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E13-A1.json",
+      "id": "E13",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:reports.builder.ReportBuilder.category_totals",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:reports.builder.ReportBuilder.category_totals",
+            "plateau": {
+              "extra_rise": 129100.0,
+              "extra_slope": 36.67,
+              "main_slope": 36.73,
+              "noise": 19.08,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:reports.builder.ReportBuilder.category_totals.bytes",
+            "plateau": {
+              "extra_rise": 6937000.0,
+              "extra_slope": 2252.0,
+              "main_slope": 2290.0,
+              "noise": 16000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "probe:reports.builder.ReportBuilder.category_totals.size",
+            "plateau": {
+              "extra_rise": 2816.0,
+              "extra_slope": 0.8,
+              "main_slope": 0.8,
+              "noise": 0.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "trim",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 23030000.0,
+              "extra_slope": 7477.0,
+              "main_slope": 7259.0,
+              "noise": 1033000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 76190000.0,
+              "before": 75630000.0,
+              "drop": -553000.0,
+              "growth": 48660000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 23030000.0,
+              "extra_slope": 7477.0,
+              "main_slope": 7259.0,
+              "noise": 1033000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 76190000.0,
+              "before": 75630000.0,
+              "drop": -553000.0,
+              "growth": 17480000.0,
+              "kind": "trim",
+              "verdict": "retained"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "trim",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "reports.builder.ReportBuilder.category_totals"
+}

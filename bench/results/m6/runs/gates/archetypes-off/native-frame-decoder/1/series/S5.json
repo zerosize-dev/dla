@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "id": "S5",
+  "source": {
+    "kind": "gap",
+    "harness": "H1",
+    "workload": "native:main:Makefile",
+    "mode": "native",
+    "runtime": "native",
+    "command": "./framedec --iterations {n}",
+    "derived_from": "S1"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "gap.accounted",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    },
+    {
+      "name": "gap.unexplained",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    }
+  ],
+  "points": [
+    {
+      "x": 440.0,
+      "t_ms": 49,
+      "values": [
+        468992.0,
+        2537472.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 144,
+      "values": [
+        967680.0,
+        2644992.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 176,
+      "values": [
+        1506304.0,
+        2741248.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 250,
+      "values": [
+        2016256.0,
+        2808832.0
+      ]
+    },
+    {
+      "x": 2200.0,
+      "t_ms": 308,
+      "values": [
+        2505728.0,
+        2872320.0
+      ]
+    },
+    {
+      "x": 2640.0,
+      "t_ms": 371,
+      "values": [
+        2929664.0,
+        2886656.0
+      ]
+    },
+    {
+      "x": 3080.0,
+      "t_ms": 354,
+      "values": [
+        3445760.0,
+        2927616.0
+      ]
+    },
+    {
+      "x": 3520.0,
+      "t_ms": 539,
+      "values": [
+        3952640.0,
+        3018752.0
+      ]
+    },
+    {
+      "x": 3960.0,
+      "t_ms": 467,
+      "values": [
+        4369408.0,
+        3138560.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "4096 live bytes sit in allocations with no frame in the project (library-internal or without debug info)"
+  ]
+}

@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "id": "S8",
+  "source": {
+    "kind": "gap",
+    "harness": "H1",
+    "workload": "jvm:main:build.sh:run",
+    "mode": "native",
+    "runtime": "jvm",
+    "command": "sh ./build.sh run {n}",
+    "derived_from": "S1"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "gap.accounted",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    },
+    {
+      "name": "gap.unexplained",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    }
+  ],
+  "points": [
+    {
+      "x": 2220.0,
+      "t_ms": 893,
+      "values": [
+        133769216.0,
+        -20367360.0
+      ]
+    },
+    {
+      "x": 4440.0,
+      "t_ms": 541,
+      "values": [
+        115694592.0,
+        4486144.0
+      ]
+    },
+    {
+      "x": 6660.0,
+      "t_ms": 503,
+      "values": [
+        117799936.0,
+        9061376.0
+      ]
+    },
+    {
+      "x": 8880.0,
+      "t_ms": 1087,
+      "values": [
+        156471296.0,
+        7974912.0
+      ]
+    },
+    {
+      "x": 11100.0,
+      "t_ms": 575,
+      "values": [
+        139240448.0,
+        24714240.0
+      ]
+    },
+    {
+      "x": 13320.0,
+      "t_ms": 1609,
+      "values": [
+        172826624.0,
+        17903616.0
+      ]
+    },
+    {
+      "x": 15540.0,
+      "t_ms": 850,
+      "values": [
+        222135296.0,
+        -35492864.0
+      ]
+    },
+    {
+      "x": 17760.0,
+      "t_ms": 780,
+      "values": [
+        151878656.0,
+        46777344.0
+      ]
+    },
+    {
+      "x": 19980.0,
+      "t_ms": 1678,
+      "values": [
+        190302208.0,
+        43976704.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "native.live_bytes@native/src/lib.rs:40 is Java_shop_codec_Native_open, the native method shop.codec.Native.open declared at kotlin/shop/Native.kt:9 (61430816 B live at the last point)",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "allocator shim: raw_sites lists the largest 1024 stacks only; smaller live stacks are omitted",
+    "allocator shim: more than 4096 distinct allocation stacks; the rest is counted in shim.overflow_*",
+    "44055830 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "32976350 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "22809397 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "52012378 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "29459135 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "40342024 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "22148918 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "37472775 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "44179337 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "dropped 15 per-type columns (cap of 64, lowest growth first)",
+    "gap.unexplained is negative at 2 point(s): the accounted figure exceeds os.rss (reserved but untouched memory)"
+  ]
+}

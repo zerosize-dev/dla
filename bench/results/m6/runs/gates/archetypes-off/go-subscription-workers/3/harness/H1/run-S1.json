@@ -1,0 +1,411 @@
+{
+  "captures": [
+    {
+      "bytes": 1297,
+      "captured_at": "2026-11-10T19:26:55Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 2,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-1.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 225151,
+      "captured_at": "2026-11-10T19:26:55Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 1,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-1.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 5275,
+      "captured_at": "2026-11-10T19:26:55Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 1,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-1.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 1556,
+      "captured_at": "2026-11-10T19:26:56Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 3,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-2.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 893153,
+      "captured_at": "2026-11-10T19:26:56Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 4,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-2.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 10268,
+      "captured_at": "2026-11-10T19:26:56Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 2,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-2.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 1557,
+      "captured_at": "2026-11-10T19:26:56Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 3,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-3.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 1338423,
+      "captured_at": "2026-11-10T19:26:56Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 9,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-3.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 12260,
+      "captured_at": "2026-11-10T19:26:56Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 2,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-3.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 1282,
+      "captured_at": "2026-11-10T19:26:57Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 6,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-4.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 2005212,
+      "captured_at": "2026-11-10T19:26:57Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 11,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-4.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 13673,
+      "captured_at": "2026-11-10T19:26:57Z",
+      "kind": "alloc",
+      "label": "p1-fresh",
+      "ms": 3,
+      "path": "harness/H1/out/p1-fresh/capture/1051/go-4.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 230839,
+      "captured_at": "2026-11-10T19:27:04Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 3,
+      "path": "harness/H1/out/p1-fresh-leak/capture/2145/go-1.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 912523,
+      "captured_at": "2026-11-10T19:27:04Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 6,
+      "path": "harness/H1/out/p1-fresh-leak/capture/2145/go-2.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 1366603,
+      "captured_at": "2026-11-10T19:27:04Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 21,
+      "path": "harness/H1/out/p1-fresh-leak/capture/2145/go-3.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 2046100,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "nonheap",
+      "label": "p1-fresh",
+      "ms": 17,
+      "path": "harness/H1/out/p1-fresh-leak/capture/2145/go-4.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 1298,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 1,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-1.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 225151,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 0,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-1.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 5298,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 2,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-1.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 1295,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 2,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-2.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 892525,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 4,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-2.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 10978,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 1,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-2.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 1558,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 4,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-3.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 1338423,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 15,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-3.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 12564,
+      "captured_at": "2026-11-10T19:27:05Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 2,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-3.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 1251,
+      "captured_at": "2026-11-10T19:27:06Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 5,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-4.goroutine.pb.gz",
+      "role": "goroutine profile (protobuf)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 2005212,
+      "captured_at": "2026-11-10T19:27:06Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 11,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-4.goroutine.txt",
+      "role": "goroutine dump (debug=2, created-by frames)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 13800,
+      "captured_at": "2026-11-10T19:27:06Z",
+      "kind": "alloc",
+      "label": "p1-repeated",
+      "ms": 2,
+      "path": "harness/H1/out/p1-repeated/capture/2208/go-4.heap.pb.gz",
+      "role": "heap profile (in-use bytes by stack, after GC)",
+      "seq": 4,
+      "x": 3960.0
+    },
+    {
+      "bytes": 231279,
+      "captured_at": "2026-11-10T19:27:06Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 2,
+      "path": "harness/H1/out/p1-repeated-leak/capture/2250/go-1.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 914283,
+      "captured_at": "2026-11-10T19:27:06Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 9,
+      "path": "harness/H1/out/p1-repeated-leak/capture/2250/go-2.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 2,
+      "x": 1760.0
+    },
+    {
+      "bytes": 1369243,
+      "captured_at": "2026-11-10T19:27:07Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 19,
+      "path": "harness/H1/out/p1-repeated-leak/capture/2250/go-3.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 3,
+      "x": 2640.0
+    },
+    {
+      "bytes": 2050058,
+      "captured_at": "2026-11-10T19:27:07Z",
+      "kind": "nonheap",
+      "label": "p1-repeated",
+      "ms": 19,
+      "path": "harness/H1/out/p1-repeated-leak/capture/2250/go-4.goroutineleak.txt",
+      "role": "goroutineleak profile (debug=2)",
+      "seq": 4,
+      "x": 3960.0
+    }
+  ],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-fresh"
+    },
+    {
+      "code": 0,
+      "label": "p1-fresh-leak"
+    },
+    {
+      "code": 0,
+      "label": "p1-repeated"
+    },
+    {
+      "code": 0,
+      "label": "p1-repeated-leak"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "goleak not available offline: the goleak check is skipped"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "the goroutineleak profile comes from a separate pass with GOTOOLCHAIN=go1.27.0 (the project builds with go1.24.7); that pass measures nothing else",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "the goroutineleak profile is not available in go1.24.7",
+    "no Go coverage profile was written to cov/"
+  ],
+  "logs": [
+    "harness/H1/logs/build.log",
+    "harness/H1/logs/p1-fresh.log",
+    "harness/H1/logs/p1-fresh-leak.log",
+    "harness/H1/logs/p1-repeated.log",
+    "harness/H1/logs/p1-repeated-leak.log"
+  ],
+  "mode": "driver",
+  "modes": [
+    "fresh",
+    "repeated"
+  ],
+  "points": 9,
+  "processes": 4,
+  "series": [
+    "S1",
+    "S2"
+  ],
+  "tool": null,
+  "units": 3520,
+  "x_range": [
+    440.0,
+    3960.0
+  ]
+}

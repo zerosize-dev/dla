@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-201554-7cab",
+  "session_id": "cc79007d-dab9-47bb-b767-8b3b600d8f33",
+  "project_root": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project",
+  "created_at": "2026-11-10T20:15:54Z",
+  "dla_version": "0.1.0",
+  "stage": "confirm",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T20:15:54Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T20:15:54Z",
+    "deadline": "2026-11-10T21:15:54Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T20:16:12Z",
+      "kind": "harness",
+      "command": "cargo build --release --bin rollup-agent",
+      "started_at": "2026-11-10T20:16:13Z",
+      "stopped_at": "2026-11-10T20:16:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 42,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 110",
+      "started_at": "2026-11-10T20:16:13Z",
+      "stopped_at": "2026-11-10T20:16:14Z",
+      "role": "started"
+    },
+    {
+      "pid": 67,
+      "kind": "harness",
+      "command": "/usr/bin/heaptrack_print -f /root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/out/p1-native/heaptrack.gz -l -p0 -a0 -T0 -n 200",
+      "started_at": "2026-11-10T20:16:14Z",
+      "stopped_at": "2026-11-10T20:16:15Z",
+      "role": "started"
+    },
+    {
+      "pid": 69,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 550",
+      "started_at": "2026-11-10T20:16:15Z",
+      "stopped_at": "2026-11-10T20:16:18Z",
+      "role": "started"
+    },
+    {
+      "pid": 94,
+      "kind": "harness",
+      "command": "/usr/bin/heaptrack_print -f /root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/out/p5-native/heaptrack.gz -l -p0 -a0 -T0 -n 200",
+      "started_at": "2026-11-10T20:16:18Z",
+      "stopped_at": "2026-11-10T20:16:19Z",
+      "role": "started"
+    },
+    {
+      "pid": 96,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 990",
+      "started_at": "2026-11-10T20:16:19Z",
+      "stopped_at": "2026-11-10T20:16:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 121,
+      "kind": "harness",
+      "command": "/usr/bin/heaptrack_print -f /root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/out/p9-native/heaptrack.gz -l -p0 -a0 -T0 -n 200",
+      "started_at": "2026-11-10T20:16:27Z",
+      "stopped_at": "2026-11-10T20:16:28Z",
+      "role": "started"
+    },
+    {
+      "pid": 123,
+      "kind": "harness",
+      "command": "/usr/bin/heaptrack_print -f /root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/out/p9-native/heaptrack.gz -d /root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/out/p1-native/heaptrack.gz -l -p0 -a0 -T0 -n 200",
+      "started_at": "2026-11-10T20:16:28Z",
+      "stopped_at": "2026-11-10T20:16:30Z",
+      "role": "started"
+    },
+    {
+      "pid": 132,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 110",
+      "started_at": "2026-11-10T20:16:30Z",
+      "stopped_at": "2026-11-10T20:16:33Z",
+      "role": "started"
+    },
+    {
+      "pid": 136,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 220",
+      "started_at": "2026-11-10T20:16:33Z",
+      "stopped_at": "2026-11-10T20:16:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 140,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 330",
+      "started_at": "2026-11-10T20:16:38Z",
+      "stopped_at": "2026-11-10T20:16:46Z",
+      "role": "started"
+    },
+    {
+      "pid": 144,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 440",
+      "started_at": "2026-11-10T20:16:46Z",
+      "stopped_at": "2026-11-10T20:16:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 148,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 550",
+      "started_at": "2026-11-10T20:16:57Z",
+      "stopped_at": "2026-11-10T20:17:10Z",
+      "role": "started"
+    },
+    {
+      "pid": 152,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 660",
+      "started_at": "2026-11-10T20:17:10Z",
+      "stopped_at": "2026-11-10T20:17:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 156,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 770",
+      "started_at": "2026-11-10T20:17:26Z",
+      "stopped_at": "2026-11-10T20:17:43Z",
+      "role": "started"
+    },
+    {
+      "pid": 160,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 880",
+      "started_at": "2026-11-10T20:17:43Z",
+      "stopped_at": "2026-11-10T20:18:03Z",
+      "role": "started"
+    },
+    {
+      "pid": 164,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 990",
+      "started_at": "2026-11-10T20:18:03Z",
+      "stopped_at": "2026-11-10T20:18:26Z",
+      "role": "started"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T20:18:47Z",
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1100",
+      "started_at": "2026-11-10T20:18:47Z",
+      "stopped_at": "2026-11-10T20:19:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 14,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1210",
+      "started_at": "2026-11-10T20:19:13Z",
+      "stopped_at": "2026-11-10T20:19:40Z",
+      "role": "started"
+    },
+    {
+      "pid": 18,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1320",
+      "started_at": "2026-11-10T20:19:40Z",
+      "stopped_at": "2026-11-10T20:20:10Z",
+      "role": "started"
+    },
+    {
+      "pid": 22,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1430",
+      "started_at": "2026-11-10T20:20:10Z",
+      "stopped_at": "2026-11-10T20:20:42Z",
+      "role": "started"
+    },
+    {
+      "pid": 26,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1540",
+      "started_at": "2026-11-10T20:20:42Z",
+      "stopped_at": "2026-11-10T20:21:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 30,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1650",
+      "started_at": "2026-11-10T20:21:17Z",
+      "stopped_at": "2026-11-10T20:21:54Z",
+      "role": "started"
+    },
+    {
+      "pid": 34,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1760",
+      "started_at": "2026-11-10T20:21:54Z",
+      "stopped_at": "2026-11-10T20:22:34Z",
+      "role": "started"
+    },
+    {
+      "pid": 38,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1870",
+      "started_at": "2026-11-10T20:22:34Z",
+      "stopped_at": "2026-11-10T20:23:16Z",
+      "role": "started"
+    },
+    {
+      "pid": 48,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1100",
+      "started_at": "2026-11-10T20:23:17Z",
+      "stopped_at": "2026-11-10T20:23:41Z",
+      "role": "started"
+    },
+    {
+      "pid": 52,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1210",
+      "started_at": "2026-11-10T20:23:41Z",
+      "stopped_at": "2026-11-10T20:24:09Z",
+      "role": "started"
+    },
+    {
+      "pid": 56,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1320",
+      "started_at": "2026-11-10T20:24:09Z",
+      "stopped_at": "2026-11-10T20:24:38Z",
+      "role": "started"
+    },
+    {
+      "pid": 60,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1430",
+      "started_at": "2026-11-10T20:24:38Z",
+      "stopped_at": "2026-11-10T20:25:10Z",
+      "role": "started"
+    },
+    {
+      "pid": 64,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1540",
+      "started_at": "2026-11-10T20:25:11Z",
+      "stopped_at": "2026-11-10T20:25:45Z",
+      "role": "started"
+    },
+    {
+      "pid": 68,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1650",
+      "started_at": "2026-11-10T20:25:45Z",
+      "stopped_at": "2026-11-10T20:26:21Z",
+      "role": "started"
+    },
+    {
+      "pid": 72,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1760",
+      "started_at": "2026-11-10T20:26:21Z",
+      "stopped_at": "2026-11-10T20:27:00Z",
+      "role": "started"
+    },
+    {
+      "pid": 76,
+      "kind": "harness",
+      "command": "/root/.cache/dla-bench/m6/full/archetypes-on/rust-batch-buffers/1/project/.dla/20261110-201554-7cab/harness/H1/work/target/release/rollup-agent --iterations 1870",
+      "started_at": "2026-11-10T20:27:00Z",
+      "stopped_at": "2026-11-10T20:27:39Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "398ce2ab34557400a25932e8471461e1",
+  "report": {
+    "path": ".dla/20261110-201554-7cab/report.md",
+    "sha256": "968524f61c116bd9d66de3a51737a661d719ca0474d13a5938e3d058057400a0",
+    "rendered_at": "2026-11-10T20:27:49Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep",
+    "classify"
+  ]
+}

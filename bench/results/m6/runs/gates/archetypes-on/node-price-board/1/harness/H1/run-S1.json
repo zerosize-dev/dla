@@ -1,0 +1,228 @@
+{
+  "captures": [
+    {
+      "bytes": 40082,
+      "captured_at": "2026-11-10T16:10:22Z",
+      "kind": "alloc",
+      "label": "p1-native",
+      "ms": 23,
+      "path": "harness/H1/out/p1-native/capture/9/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 13194665,
+      "captured_at": "2026-11-10T16:10:22Z",
+      "kind": "heap",
+      "label": "p1-native",
+      "ms": 304,
+      "path": "harness/H1/out/p1-native/capture/9/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 1071,
+      "captured_at": "2026-11-10T16:10:22Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 0,
+      "path": "harness/H1/out/p1-native/capture/9/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 440.0
+    },
+    {
+      "bytes": 126454,
+      "captured_at": "2026-11-10T16:10:23Z",
+      "kind": "alloc",
+      "label": "p5-native",
+      "ms": 75,
+      "path": "harness/H1/out/p5-native/capture/42/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 2200.0
+    },
+    {
+      "bytes": 42480254,
+      "captured_at": "2026-11-10T16:10:24Z",
+      "kind": "heap",
+      "label": "p5-native",
+      "ms": 890,
+      "path": "harness/H1/out/p5-native/capture/42/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 2200.0
+    },
+    {
+      "bytes": 1072,
+      "captured_at": "2026-11-10T16:10:24Z",
+      "kind": "nonheap",
+      "label": "p5-native",
+      "ms": 0,
+      "path": "harness/H1/out/p5-native/capture/42/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 2200.0
+    },
+    {
+      "bytes": 197222,
+      "captured_at": "2026-11-10T16:10:25Z",
+      "kind": "alloc",
+      "label": "p8-native",
+      "ms": 134,
+      "path": "harness/H1/out/p8-native/capture/66/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 3520.0
+    },
+    {
+      "bytes": 64648340,
+      "captured_at": "2026-11-10T16:10:27Z",
+      "kind": "heap",
+      "label": "p8-native",
+      "ms": 1536,
+      "path": "harness/H1/out/p8-native/capture/66/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 3520.0
+    },
+    {
+      "bytes": 1072,
+      "captured_at": "2026-11-10T16:10:27Z",
+      "kind": "nonheap",
+      "label": "p8-native",
+      "ms": 0,
+      "path": "harness/H1/out/p8-native/capture/66/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 3520.0
+    },
+    {
+      "bytes": 287483,
+      "captured_at": "2026-11-10T16:10:28Z",
+      "kind": "alloc",
+      "label": "p12-native",
+      "ms": 173,
+      "path": "harness/H1/out/p12-native/capture/98/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 5280.0
+    },
+    {
+      "bytes": 94221544,
+      "captured_at": "2026-11-10T16:10:30Z",
+      "kind": "heap",
+      "label": "p12-native",
+      "ms": 2167,
+      "path": "harness/H1/out/p12-native/capture/98/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 5280.0
+    },
+    {
+      "bytes": 1072,
+      "captured_at": "2026-11-10T16:10:30Z",
+      "kind": "nonheap",
+      "label": "p12-native",
+      "ms": 0,
+      "path": "harness/H1/out/p12-native/capture/98/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 5280.0
+    }
+  ],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-native"
+    },
+    {
+      "code": 0,
+      "label": "p2-native"
+    },
+    {
+      "code": 0,
+      "label": "p3-native"
+    },
+    {
+      "code": 0,
+      "label": "p4-native"
+    },
+    {
+      "code": 0,
+      "label": "p5-native"
+    },
+    {
+      "code": 0,
+      "label": "p6-native"
+    },
+    {
+      "code": 0,
+      "label": "p7-native"
+    },
+    {
+      "code": 0,
+      "label": "p8-native"
+    },
+    {
+      "code": 0,
+      "label": "p9-native"
+    },
+    {
+      "code": 0,
+      "label": "p10-native"
+    },
+    {
+      "code": 0,
+      "label": "p11-native"
+    },
+    {
+      "code": 0,
+      "label": "p12-native"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "command-mode heap dumps come from separate processes: dla summarize heap-graph compares dumps of one process only, so use a driver (dla harness gen --driver) for a dump series",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted"
+  ],
+  "logs": [
+    "harness/H1/logs/p1-native.log",
+    "harness/H1/logs/p2-native.log",
+    "harness/H1/logs/p3-native.log",
+    "harness/H1/logs/p4-native.log",
+    "harness/H1/logs/p5-native.log",
+    "harness/H1/logs/p6-native.log",
+    "harness/H1/logs/p7-native.log",
+    "harness/H1/logs/p8-native.log",
+    "harness/H1/logs/p9-native.log",
+    "harness/H1/logs/p10-native.log",
+    "harness/H1/logs/p11-native.log",
+    "harness/H1/logs/p12-native.log",
+    "harness/H1/logs/detect.log"
+  ],
+  "mode": "command",
+  "modes": [
+    "native"
+  ],
+  "points": 12,
+  "processes": 13,
+  "series": [
+    "S1"
+  ],
+  "tool": null,
+  "units": 4840,
+  "x_range": [
+    440.0,
+    5280.0
+  ]
+}

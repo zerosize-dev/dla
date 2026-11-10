@@ -1,0 +1,24 @@
+{
+  "files": [
+    {
+      "path": "evidence/jvm_E18-C1.json",
+      "sha256": "df506814d1139101c7c35b490f747d17d8c02f6d753ede6e1f0a3da95c974139"
+    },
+    {
+      "path": "evidence/jvm_E20-T2.json",
+      "sha256": "c6f8205815567f9537d3a8699a98e213d57483ad8b278105cac55bb33222dc01"
+    },
+    {
+      "path": "evidence/jvm_E22-A2.json",
+      "sha256": "9b579af6f0eedeff6a1ac5f881b75bbbef7f34a5299fa062d35fc3f1dc0eb11b"
+    },
+    {
+      "path": "excerpt.txt",
+      "sha256": "4a4e1d204dade347fddfd9920590a0b18b1c66f0e50c2fd6810985f220de3d45"
+    },
+    {
+      "path": "index.json",
+      "sha256": "0b6c3ce6bc84e4278167c7a7e275b604bb36d2762dc2f59abc0c6182a132c8fe"
+    }
+  ]
+}

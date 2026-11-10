@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-191935-f2ce",
+  "session_id": "7a6f3ffc-2a1d-4311-bf9d-6634924f7f15",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-rfq-single-dump/2/project",
+  "created_at": "2026-11-10T19:19:35Z",
+  "dla_version": "0.1.0",
+  "stage": "confirm",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T19:19:35Z"
+  },
+  "budget": {
+    "seconds": 1200,
+    "started_at": "2026-11-10T19:19:35Z",
+    "deadline": "2026-11-10T19:39:35Z"
+  },
+  "processes": [],
+  "redaction_salt": "33580ccba54340a6b3085d2df3c36b25",
+  "report": {
+    "path": ".dla/20261110-191935-f2ce/report.md",
+    "sha256": "262b0cd2cd638297bc60a4c313e51f775d07008ab47f8e7ac8ed60fa2302ee19",
+    "rendered_at": "2026-11-10T19:19:51Z"
+  },
+  "entry": "artifact",
+  "artifacts": [
+    "dumps/rfq-1c9e.hprof.gz"
+  ],
+  "stages_passed": [
+    "classify"
+  ]
+}

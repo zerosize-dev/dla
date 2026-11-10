@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "rust-meter-callbacks",
+  "ablation": "full",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 210.925,
+  "usage": {
+    "input_tokens": 76,
+    "output_tokens": 12898,
+    "cache_read_input_tokens": 2071840,
+    "cache_creation_input_tokens": 67300
+  },
+  "cost_usd": 0.7555699000000003,
+  "num_turns": 40,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T20:23:51Z",
+  "error": null,
+  "stop_blocks": 0
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "python-graph-churn",
+  "ablation": "full",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 729.848,
+  "usage": {
+    "input_tokens": 56,
+    "output_tokens": 6678,
+    "cache_read_input_tokens": 1322571,
+    "cache_creation_input_tokens": 56419
+  },
+  "cost_usd": 0.4248250999999999,
+  "num_turns": 29,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T20:03:39Z",
+  "error": null,
+  "stop_blocks": 0
+}

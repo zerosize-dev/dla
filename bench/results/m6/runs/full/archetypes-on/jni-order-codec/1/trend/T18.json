@@ -1,0 +1,1819 @@
+{
+  "schema_version": 1,
+  "id": "T18",
+  "series": "S9",
+  "thresholds": {
+    "min_points": 8,
+    "alpha": 0.05,
+    "min_half_ratio": 0.5,
+    "noise_multiple": 3.0,
+    "calibrated": false
+  },
+  "columns": [
+    {
+      "name": "stack:Java_shop_codec_Native_open (native/src/lib.rs:40)",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "site": "native/src/lib.rs:40",
+      "finding": "jvm/F19",
+      "candidates": [
+        "jvm/F19"
+      ],
+      "n": 9,
+      "mk": {
+        "s": 36,
+        "var_s": 92.0,
+        "z": 3.6490022459988087,
+        "p_increasing": 2.7557319223985893e-6,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 6824280.0,
+        "intercept": 12296.0,
+        "lo": 6821820.8,
+        "hi": 6826739.2
+      },
+      "halves": {
+        "first": 6824280.0,
+        "second": 6824280.0,
+        "ratio": 1.0
+      },
+      "noise": 0.0,
+      "rise": 54594240.0,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "stack:Java_shop_codec_Native_open (native/src/lib.rs:40).count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "site": "native/src/lib.rs:40",
+      "finding": "jvm/F19",
+      "candidates": [
+        "jvm/F19"
+      ],
+      "n": 9,
+      "mk": {
+        "s": 36,
+        "var_s": 92.0,
+        "z": 3.6490022459988087,
+        "p_increasing": 2.7557319223985893e-6,
+        "tau": 1.0
+      },
+      "sen": {
+        "slope": 277.5,
+        "intercept": 0.5,
+        "lo": 277.4,
+        "hi": 277.6
+      },
+      "halves": {
+        "first": 277.5,
+        "second": 277.5,
+        "ratio": 1.0
+      },
+      "every_delta": {
+        "deltas": 8,
+        "all_at_least_one": true,
+        "min": 277.0,
+        "max": 278.0
+      },
+      "noise": 0.0,
+      "rise": 2220.0,
+      "shape": "steady",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#2",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": 9,
+        "var_s": 15.666666666666666,
+        "z": 2.0211646105596457,
+        "p_increasing": 0.021631363903455325,
+        "tau": 0.9
+      },
+      "sen": {
+        "slope": 26755.63333333333,
+        "intercept": -11466.699999999983,
+        "lo": 0.0,
+        "hi": 32762.0
+      },
+      "halves": {
+        "first": 16381.0,
+        "second": 27301.666666666668,
+        "ratio": 1.6666666666666667
+      },
+      "noise": 13762.33334000002,
+      "rise": 214045.06666666665,
+      "shape": "stair",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "sen lower bound <= 0"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#2.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": 9,
+        "var_s": 15.666666666666666,
+        "z": 2.0211646105596457,
+        "p_increasing": 0.021631363903455325,
+        "tau": 0.9
+      },
+      "sen": {
+        "slope": 0.8166666666666667,
+        "intercept": -0.34999999999999964,
+        "lo": 0.0,
+        "hi": 1.0
+      },
+      "halves": {
+        "first": 0.5,
+        "second": 0.8333333333333334,
+        "ratio": 1.6666666666666667
+      },
+      "every_delta": {
+        "deltas": 4,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 3.0
+      },
+      "noise": 0.42007000000000044,
+      "rise": 6.533333333333333,
+      "shape": "stair",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#3",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 9,
+      "mk": {
+        "s": 4,
+        "var_s": 81.33333333333333,
+        "z": 0.3326495719295578,
+        "p_increasing": 0.3696994096557248,
+        "tau": 0.1111111111111111
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 131048.0,
+        "lo": -21841.333333333332,
+        "hi": 27301.666666666668
+      },
+      "halves": {
+        "first": 20476.25,
+        "second": -16381.0,
+        "ratio": -0.8
+      },
+      "noise": 97145.88239999999,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#3.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 9,
+      "mk": {
+        "s": 4,
+        "var_s": 81.33333333333333,
+        "z": 0.3326495719295578,
+        "p_increasing": 0.3696994096557248,
+        "tau": 0.1111111111111111
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 4.0,
+        "lo": -0.6666666666666666,
+        "hi": 0.8333333333333334
+      },
+      "halves": {
+        "first": 0.625,
+        "second": -0.5,
+        "ratio": -0.8
+      },
+      "every_delta": {
+        "deltas": 8,
+        "all_at_least_one": false,
+        "min": -5.0,
+        "max": 5.0
+      },
+      "noise": 2.9652,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:{closure#0} (native/src/lib.rs:43)",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 9,
+      "mk": {
+        "s": 29,
+        "var_s": 83.66666666666667,
+        "z": 3.0611301717318153,
+        "p_increasing": 0.0011025160355102037,
+        "tau": 0.8055555555555556
+      },
+      "sen": {
+        "slope": 20992.0,
+        "intercept": 16.0,
+        "lo": 10496.0,
+        "hi": 25190.4
+      },
+      "halves": {
+        "first": 18368.0,
+        "second": 24490.666666666664,
+        "ratio": 1.3333333333333333
+      },
+      "noise": 31122.7392,
+      "rise": 167936.0,
+      "shape": "stair",
+      "gate": "pass",
+      "gate_failed": []
+    },
+    {
+      "name": "stack:{closure#0} (native/src/lib.rs:43).count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 9,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 8,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#4",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#4.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "every_delta": {
+        "deltas": 1,
+        "all_at_least_one": true,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#5",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 6,
+      "mk": {
+        "s": 3,
+        "var_s": 23.666666666666668,
+        "z": 0.411113225896519,
+        "p_increasing": 0.34049475617861213,
+        "tau": 0.2
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 81905.0,
+        "lo": -32762.0,
+        "hi": 32762.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": -32762.0
+      },
+      "noise": 24286.470599999997,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#5.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 6,
+      "mk": {
+        "s": 3,
+        "var_s": 23.666666666666668,
+        "z": 0.411113225896519,
+        "p_increasing": 0.34049475617861213,
+        "tau": 0.2
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.5,
+        "lo": -1.0,
+        "hi": 1.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": -1.0
+      },
+      "every_delta": {
+        "deltas": 5,
+        "all_at_least_one": false,
+        "min": -2.0,
+        "max": 2.0
+      },
+      "noise": 0.7413,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#6",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 6,
+      "mk": {
+        "s": 9,
+        "var_s": 21.0,
+        "z": 1.7457431218879391,
+        "p_increasing": 0.04042779918502604,
+        "tau": 0.6
+      },
+      "sen": {
+        "slope": 5460.333333333333,
+        "intercept": 19111.166666666668,
+        "lo": 0.0,
+        "hi": 10920.666666666666
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 8095.4901999999975,
+      "rise": 38222.33333333333,
+      "shape": "stair",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "sen lower bound <= 0",
+        "decaying half-split"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#6.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 6,
+      "mk": {
+        "s": 9,
+        "var_s": 21.0,
+        "z": 1.7457431218879391,
+        "p_increasing": 0.04042779918502604,
+        "tau": 0.6
+      },
+      "sen": {
+        "slope": 0.16666666666666666,
+        "intercept": 0.5833333333333334,
+        "lo": 0.0,
+        "hi": 0.3333333333333333
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 5,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 1.0
+      },
+      "noise": 0.24709999999999993,
+      "rise": 1.1666666666666665,
+      "shape": "stair",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#7",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#7.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#8",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 4,
+      "mk": {
+        "s": -3,
+        "var_s": 7.666666666666667,
+        "z": -0.7223151185146152,
+        "p_increasing": 0.7649496200629355,
+        "tau": -0.5
+      },
+      "sen": {
+        "slope": -32762.0,
+        "intercept": 311239.0,
+        "lo": -81905.0,
+        "hi": 16381.0
+      },
+      "halves": {
+        "first": -81905.0,
+        "second": 16381.0
+      },
+      "noise": 72859.4118,
+      "rise": -163810.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#8.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 4,
+      "mk": {
+        "s": -3,
+        "var_s": 7.666666666666667,
+        "z": -0.7223151185146152,
+        "p_increasing": 0.7649496200629355,
+        "tau": -0.5
+      },
+      "sen": {
+        "slope": -1.0,
+        "intercept": 9.5,
+        "lo": -2.5,
+        "hi": 0.5
+      },
+      "halves": {
+        "first": -2.5,
+        "second": 0.5
+      },
+      "every_delta": {
+        "deltas": 3,
+        "all_at_least_one": false,
+        "min": -5.0,
+        "max": 1.0
+      },
+      "noise": 2.2239,
+      "rise": -5.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#9",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#9.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#10",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#10.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "every_delta": {
+        "deltas": 1,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#11",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#11.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#12",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#12.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#13",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 32762.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#13.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#14",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 4,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 32762.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#14.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 4,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 3,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#15",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": -2,
+        "var_s": 2.6666666666666665,
+        "z": -0.6123724356957945,
+        "p_increasing": 0.72985431269629,
+        "tau": -0.6666666666666666
+      },
+      "sen": {
+        "slope": -6552.4,
+        "intercept": 91733.6,
+        "lo": -32762.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": -32762.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": -32762.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#15.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": -2,
+        "var_s": 2.6666666666666665,
+        "z": -0.6123724356957945,
+        "p_increasing": 0.72985431269629,
+        "tau": -0.6666666666666666
+      },
+      "sen": {
+        "slope": -0.2,
+        "intercept": 2.8,
+        "lo": -1.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": -1.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": false,
+        "min": -1.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": -1.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#16",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 32762.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#16.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 3,
+      "mk": {
+        "s": 0,
+        "var_s": 0.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": 0.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": 0.0
+      },
+      "every_delta": {
+        "deltas": 2,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#17",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#17.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "every_delta": {
+        "deltas": 1,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#18",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#18.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "every_delta": {
+        "deltas": 1,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#19",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#19.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 2,
+      "every_delta": {
+        "deltas": 1,
+        "all_at_least_one": false,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#20",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#20.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#21",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": 0,
+        "var_s": 8.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 32762.0,
+        "lo": -49143.0,
+        "hi": 19657.2
+      },
+      "halves": {
+        "first": 19657.2,
+        "second": -49143.0,
+        "ratio": -2.5
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#21.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": 0,
+        "var_s": 8.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": -1.5,
+        "hi": 0.6
+      },
+      "halves": {
+        "first": 0.6,
+        "second": -1.5,
+        "ratio": -2.5
+      },
+      "every_delta": {
+        "deltas": 4,
+        "all_at_least_one": false,
+        "min": -3.0,
+        "max": 3.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#22",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 4,
+      "mk": {
+        "s": -4,
+        "var_s": 8.666666666666666,
+        "z": -1.0190493307301363,
+        "p_increasing": 0.9583333333333334,
+        "tau": -0.6666666666666666
+      },
+      "sen": {
+        "slope": -27312.416666666664,
+        "intercept": 289515.9166666666,
+        "lo": -65610.0,
+        "hi": 32848.0
+      },
+      "halves": {
+        "first": -65610.0,
+        "second": -49186.0
+      },
+      "noise": 28389.998524999985,
+      "rise": -109249.66666666666,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#22.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 4,
+      "mk": {
+        "s": -5,
+        "var_s": 7.666666666666667,
+        "z": -1.4446302370292303,
+        "p_increasing": 0.9257191125540657,
+        "tau": -0.8333333333333334
+      },
+      "sen": {
+        "slope": -0.7083333333333333,
+        "intercept": 7.458333333333332,
+        "lo": -1.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": -1.0,
+        "second": -1.0
+      },
+      "every_delta": {
+        "deltas": 3,
+        "all_at_least_one": false,
+        "min": -2.0,
+        "max": 0.0
+      },
+      "noise": 0.21621249999999956,
+      "rise": -2.833333333333333,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#23",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 6,
+      "mk": {
+        "s": -1,
+        "var_s": 21.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": -0.06666666666666667
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 49143.0,
+        "lo": -10920.666666666666,
+        "hi": 10920.666666666666
+      },
+      "halves": {
+        "first": 10920.666666666666,
+        "second": 0.0,
+        "ratio": 0.0
+      },
+      "noise": 24286.470599999997,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#23.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 6,
+      "mk": {
+        "s": -1,
+        "var_s": 21.0,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": -0.06666666666666667
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.5,
+        "lo": -0.3333333333333333,
+        "hi": 0.3333333333333333
+      },
+      "halves": {
+        "first": 0.3333333333333333,
+        "second": 0.0,
+        "ratio": 0.0
+      },
+      "every_delta": {
+        "deltas": 5,
+        "all_at_least_one": false,
+        "min": -1.0,
+        "max": 1.0
+      },
+      "noise": 0.7413,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#24",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 7,
+      "mk": {
+        "s": 3,
+        "var_s": 39.666666666666664,
+        "z": 0.3175536744149779,
+        "p_increasing": 0.37541175944950045,
+        "tau": 0.14285714285714285
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 65524.0,
+        "lo": -16401.0,
+        "hi": 21841.333333333332
+      },
+      "halves": {
+        "first": 10920.666666666666,
+        "second": -24581.5,
+        "ratio": -2.2509156950125147
+      },
+      "noise": 59.303999999999995,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#24.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 7,
+      "mk": {
+        "s": 0,
+        "var_s": 34.666666666666664,
+        "z": 0.0,
+        "p_increasing": 0.5,
+        "tau": 0.0
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.0,
+        "lo": -0.5,
+        "hi": 0.6666666666666666
+      },
+      "halves": {
+        "first": 0.3333333333333333,
+        "second": -0.75,
+        "ratio": -2.25
+      },
+      "every_delta": {
+        "deltas": 6,
+        "all_at_least_one": false,
+        "min": -3.0,
+        "max": 2.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#25",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#25.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#26",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": -4,
+        "var_s": 8.0,
+        "z": -1.0606601717798212,
+        "p_increasing": 0.8555778168267575,
+        "tau": -0.4
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 98372.0,
+        "lo": -21870.0,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": -21870.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#26.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": -4,
+        "var_s": 8.0,
+        "z": -1.0606601717798212,
+        "p_increasing": 0.8555778168267575,
+        "tau": -0.4
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.0,
+        "lo": -0.3333333333333333,
+        "hi": 0.0
+      },
+      "halves": {
+        "first": 0.0,
+        "second": -0.3333333333333333
+      },
+      "every_delta": {
+        "deltas": 4,
+        "all_at_least_one": false,
+        "min": -1.0,
+        "max": 0.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#27",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": 2,
+        "var_s": 12.0,
+        "z": 0.2886751345948129,
+        "p_increasing": 0.38641499634222376,
+        "tau": 0.2
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 32762.0,
+        "lo": -32762.0,
+        "hi": 32762.0
+      },
+      "halves": {
+        "first": 16381.0,
+        "second": -10920.666666666666,
+        "ratio": -0.6666666666666666
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#27.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 5,
+      "mk": {
+        "s": 2,
+        "var_s": 12.0,
+        "z": 0.2886751345948129,
+        "p_increasing": 0.38641499634222376,
+        "tau": 0.2
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 1.0,
+        "lo": -1.0,
+        "hi": 1.0
+      },
+      "halves": {
+        "first": 0.5,
+        "second": -0.3333333333333333,
+        "ratio": -0.6666666666666666
+      },
+      "every_delta": {
+        "deltas": 4,
+        "all_at_least_one": false,
+        "min": -1.0,
+        "max": 1.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "spike",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#28",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#28.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#29",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#29.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 1,
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "insufficient",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#30",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 7,
+      "mk": {
+        "s": -6,
+        "var_s": 34.666666666666664,
+        "z": -0.8492077756084468,
+        "p_increasing": 0.802117156327222,
+        "tau": -0.2857142857142857
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 65524.0,
+        "lo": -16381.0,
+        "hi": 8190.5
+      },
+      "halves": {
+        "first": 4095.25,
+        "second": -19111.166666666664,
+        "ratio": -4.666666666666666
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "p >= 0.05",
+        "sen lower bound <= 0",
+        "decaying half-split",
+        "rise <= 3 * noise"
+      ]
+    },
+    {
+      "name": "stack:libjvm.so+0xd004e1#30.count",
+      "unit": "count",
+      "kind": "counter",
+      "region": "off-heap",
+      "candidates": [],
+      "n": 7,
+      "mk": {
+        "s": -6,
+        "var_s": 34.666666666666664,
+        "z": -0.8492077756084468,
+        "p_increasing": 0.802117156327222,
+        "tau": -0.2857142857142857
+      },
+      "sen": {
+        "slope": 0.0,
+        "intercept": 2.0,
+        "lo": -0.5,
+        "hi": 0.25
+      },
+      "halves": {
+        "first": 0.125,
+        "second": -0.5833333333333333,
+        "ratio": -4.666666666666666
+      },
+      "every_delta": {
+        "deltas": 6,
+        "all_at_least_one": false,
+        "min": -2.0,
+        "max": 1.0
+      },
+      "noise": 0.0,
+      "rise": 0.0,
+      "shape": "flat",
+      "gate": "fail",
+      "gate_failed": [
+        "n < 8",
+        "delta < 1"
+      ]
+    }
+  ]
+}

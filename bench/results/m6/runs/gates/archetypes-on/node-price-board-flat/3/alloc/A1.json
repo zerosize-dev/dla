@@ -1,0 +1,108 @@
+{
+  "basis": "no column passed the gate in the latest trend of the harness: the runtime heap (node.heap_used) decides, os.rss is reported",
+  "columns": [
+    {
+      "favors": "non-leak",
+      "gc": {
+        "post_rise": 20.0,
+        "pre_rise": 89900.0,
+        "verdict": "headroom"
+      },
+      "name": "node.heap_used",
+      "plateau": {
+        "extra_rise": -37.8,
+        "extra_slope": -0.01227,
+        "main_slope": 9.076,
+        "noise": 21380.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 4599000.0,
+        "before": 5955000.0,
+        "drop": 1356000.0,
+        "growth": 963800.0,
+        "kind": "gc",
+        "verdict": "released"
+      },
+      "supports": [
+        "N-HEADROOM",
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": -313000.0,
+        "extra_slope": -101.6,
+        "main_slope": 1356.0,
+        "noise": 505000.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": 58750000.0,
+        "before": 58490000.0,
+        "drop": -262100.0,
+        "growth": -12290.0,
+        "kind": "gc",
+        "verdict": "no-growth"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "non-leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": -864500.0,
+        "extra_slope": -280.7,
+        "main_slope": 1361.0,
+        "noise": 721900.0,
+        "verdict": "plateau"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "gc",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "N-WARM",
+        "N-HWM"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "non-leak",
+  "finding": null,
+  "harness": "H1",
+  "id": "A1",
+  "iterations": 8,
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted",
+    "points 1 to 9 come from S1; the extra points from S3",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": null,
+  "purge": "gc",
+  "series": "S4",
+  "supports": [
+    "N-HEADROOM",
+    "N-WARM",
+    "N-HWM"
+  ],
+  "trend": "T3"
+}

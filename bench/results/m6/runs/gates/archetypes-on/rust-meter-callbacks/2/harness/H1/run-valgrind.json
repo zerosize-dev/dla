@@ -1,0 +1,163 @@
+{
+  "captures": [
+    {
+      "bytes": 12897,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p1-native",
+      "path": "harness/H1/out/p1-native/vgdb-1-leak.txt",
+      "role": "vgdb leak_check answer",
+      "seq": 2,
+      "x": 220.0
+    },
+    {
+      "bytes": 2331,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p1-native",
+      "path": "harness/H1/out/p1-native/vgdb-2-blocks.txt",
+      "role": "vgdb block_list answer",
+      "seq": 3,
+      "x": 220.0
+    },
+    {
+      "bytes": 298,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p1-native",
+      "path": "harness/H1/out/p1-native/vgdb-3-who.txt",
+      "role": "vgdb who_points_at walk",
+      "seq": 4,
+      "x": 220.0
+    },
+    {
+      "bytes": 54065,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p1-native",
+      "ms": 842,
+      "path": "harness/H1/out/p1-native/valgrind.xml",
+      "role": "valgrind memcheck XML",
+      "seq": 1,
+      "x": 220.0
+    },
+    {
+      "bytes": 12916,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p5-native",
+      "path": "harness/H1/out/p5-native/vgdb-1-leak.txt",
+      "role": "vgdb leak_check answer",
+      "seq": 2,
+      "x": 1100.0
+    },
+    {
+      "bytes": 2331,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p5-native",
+      "path": "harness/H1/out/p5-native/vgdb-2-blocks.txt",
+      "role": "vgdb block_list answer",
+      "seq": 3,
+      "x": 1100.0
+    },
+    {
+      "bytes": 298,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p5-native",
+      "path": "harness/H1/out/p5-native/vgdb-3-who.txt",
+      "role": "vgdb who_points_at walk",
+      "seq": 4,
+      "x": 1100.0
+    },
+    {
+      "bytes": 54086,
+      "captured_at": "2026-11-10T17:00:00Z",
+      "kind": "valgrind",
+      "label": "p5-native",
+      "ms": 588,
+      "path": "harness/H1/out/p5-native/valgrind.xml",
+      "role": "valgrind memcheck XML",
+      "seq": 1,
+      "x": 1100.0
+    },
+    {
+      "bytes": 12918,
+      "captured_at": "2026-11-10T17:00:01Z",
+      "kind": "valgrind",
+      "label": "p9-native",
+      "path": "harness/H1/out/p9-native/vgdb-1-leak.txt",
+      "role": "vgdb leak_check answer",
+      "seq": 2,
+      "x": 1980.0
+    },
+    {
+      "bytes": 2331,
+      "captured_at": "2026-11-10T17:00:01Z",
+      "kind": "valgrind",
+      "label": "p9-native",
+      "path": "harness/H1/out/p9-native/vgdb-2-blocks.txt",
+      "role": "vgdb block_list answer",
+      "seq": 3,
+      "x": 1980.0
+    },
+    {
+      "bytes": 298,
+      "captured_at": "2026-11-10T17:00:01Z",
+      "kind": "valgrind",
+      "label": "p9-native",
+      "path": "harness/H1/out/p9-native/vgdb-3-who.txt",
+      "role": "vgdb who_points_at walk",
+      "seq": 4,
+      "x": 1980.0
+    },
+    {
+      "bytes": 54087,
+      "captured_at": "2026-11-10T17:00:01Z",
+      "kind": "valgrind",
+      "label": "p9-native",
+      "ms": 672,
+      "path": "harness/H1/out/p9-native/valgrind.xml",
+      "role": "valgrind memcheck XML",
+      "seq": 1,
+      "x": 1980.0
+    }
+  ],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-native"
+    },
+    {
+      "code": 0,
+      "label": "p5-native"
+    },
+    {
+      "code": 0,
+      "label": "p9-native"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "valgrind slows the program down; points 1, 5, 9 of 9 ran under it and no series was written (dla harness run without --tool measures the series)"
+  ],
+  "logs": [
+    "harness/H1/logs/p1-native.log",
+    "harness/H1/logs/p5-native.log",
+    "harness/H1/logs/p9-native.log"
+  ],
+  "mode": "command",
+  "modes": [],
+  "points": 0,
+  "processes": 3,
+  "series": [],
+  "tool": "valgrind",
+  "units": 0,
+  "x_range": null
+}

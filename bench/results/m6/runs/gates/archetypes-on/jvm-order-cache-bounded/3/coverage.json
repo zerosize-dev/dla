@@ -1,0 +1,396 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 4,
+          "dispositioned": 4,
+          "duplicates": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "spotbugs": {
+          "status": "ran",
+          "reason": "no auxiliary classpath: library calls are not modelled",
+          "version": "unknown",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "src/shop/Catalog.java::Catalog.at",
+          "src/shop/Catalog.java::Catalog.size",
+          "src/shop/Order.java::Line.total",
+          "src/shop/Order.java::Order.itemCount",
+          "src/shop/Order.java::Order.totalCents",
+          "src/shop/OrderCache.java::OrderCache.find",
+          "src/shop/OrderCache.java::OrderCache.invalidateAll",
+          "src/shop/OrderCache.java::OrderCache.removeEldestEntry",
+          "src/shop/OrderCache.java::OrderCache.size",
+          "src/shop/OrderCache.java::OrderCache.store",
+          "src/shop/OrderRequest.java::OrderRequest.orderId",
+          "src/shop/OrderService.java::OrderService.place",
+          "src/shop/OrderService.java::OrderService.placed",
+          "src/shop/OrderService.java::OrderService.replayed",
+          "src/shop/PricingService.java::PricingService.price"
+        ],
+        "exercised": [
+          "src/shop/Catalog.java::Catalog.at",
+          "src/shop/Catalog.java::Catalog.size",
+          "src/shop/Order.java::Line.total",
+          "src/shop/Order.java::Order.itemCount",
+          "src/shop/Order.java::Order.totalCents",
+          "src/shop/OrderCache.java::OrderCache.find",
+          "src/shop/OrderCache.java::OrderCache.invalidateAll",
+          "src/shop/OrderCache.java::OrderCache.removeEldestEntry",
+          "src/shop/OrderCache.java::OrderCache.size",
+          "src/shop/OrderCache.java::OrderCache.store",
+          "src/shop/OrderRequest.java::OrderRequest.orderId",
+          "src/shop/OrderService.java::OrderService.place",
+          "src/shop/OrderService.java::OrderService.placed",
+          "src/shop/OrderService.java::OrderService.replayed",
+          "src/shop/PricingService.java::PricingService.price"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 8880
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": -0.06661518661518662,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 182.90652203861003
+    },
+    {
+      "series": "S10",
+      "region": "heap",
+      "total_slope": 0.03783783783783784,
+      "attributed_slope": 0.0,
+      "residual": 0.03783783783783784,
+      "unit": "bytes/n",
+      "threshold": 0.3554805405405405
+    },
+    {
+      "series": "S11",
+      "region": "heap",
+      "total_slope": -0.003153153153153153,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.30887499999999996
+    },
+    {
+      "series": "S12",
+      "region": "heap",
+      "total_slope": 0.012012012012012012,
+      "attributed_slope": 0.0,
+      "residual": 0.012012012012012012,
+      "unit": "bytes/n",
+      "threshold": 0.8136172972973861
+    },
+    {
+      "series": "S13",
+      "region": "heap",
+      "total_slope": -0.026126126126126126,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.4807096756756756
+    },
+    {
+      "series": "S14",
+      "region": "heap",
+      "total_slope": 1.36,
+      "attributed_slope": 0.0,
+      "residual": 1.36,
+      "unit": "bytes/n",
+      "threshold": 1.730577729729836
+    },
+    {
+      "series": "S15",
+      "region": "heap",
+      "total_slope": 0.4425880425880426,
+      "attributed_slope": 0.0,
+      "residual": 0.4425880425880426,
+      "unit": "bytes/n",
+      "threshold": 1.1768516953317065
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 1.0954954954954954,
+      "attributed_slope": 0.0,
+      "residual": 1.0954954954954954,
+      "unit": "bytes/n",
+      "threshold": 1.3738378378378375
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 0.013384813384813383,
+      "attributed_slope": 0.0,
+      "residual": 0.013384813384813383,
+      "unit": "bytes/n",
+      "threshold": 0.31949362162162165
+    },
+    {
+      "series": "S4",
+      "region": "heap",
+      "total_slope": 0.05525525525525526,
+      "attributed_slope": 0.0,
+      "residual": 0.05525525525525526,
+      "unit": "bytes/n",
+      "threshold": 0.5938032432433321
+    },
+    {
+      "series": "S5",
+      "region": "heap",
+      "total_slope": -0.003153153153153153,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.32543737837837833
+    },
+    {
+      "series": "S6",
+      "region": "heap",
+      "total_slope": 0.36996996996997,
+      "attributed_slope": 0.0,
+      "residual": 0.36996996996997,
+      "unit": "bytes/n",
+      "threshold": 0.44039135135130686
+    },
+    {
+      "series": "S7",
+      "region": "heap",
+      "total_slope": 0.017889317889317892,
+      "attributed_slope": 0.0,
+      "residual": 0.017889317889317892,
+      "unit": "bytes/n",
+      "threshold": 0.3093997297296764
+    },
+    {
+      "series": "S8",
+      "region": "heap",
+      "total_slope": 1.1315315315315315,
+      "attributed_slope": 0.0,
+      "residual": 1.1315315315315315,
+      "unit": "bytes/n",
+      "threshold": 2.184402162162162
+    },
+    {
+      "series": "S9",
+      "region": "heap",
+      "total_slope": 0.019939939939939946,
+      "attributed_slope": 0.0,
+      "residual": 0.019939939939939946,
+      "unit": "bytes/n",
+      "threshold": 0.34528106666669567
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": 14.931274131274131,
+      "attributed_slope": 0.0,
+      "residual": 14.931274131274131,
+      "unit": "bytes/n",
+      "threshold": 1088.5977006949806
+    },
+    {
+      "series": "S10",
+      "region": "non-heap",
+      "total_slope": -4.1402402402402405,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 11.695748648648692
+    },
+    {
+      "series": "S11",
+      "region": "non-heap",
+      "total_slope": -2.5,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 12.823154324324324
+    },
+    {
+      "series": "S12",
+      "region": "non-heap",
+      "total_slope": -7.36036036036036,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 38.68326648648649
+    },
+    {
+      "series": "S13",
+      "region": "non-heap",
+      "total_slope": 2.4856713856713855,
+      "attributed_slope": 0.0,
+      "residual": 2.4856713856713855,
+      "unit": "bytes/n",
+      "threshold": 27.931306270270216
+    },
+    {
+      "series": "S14",
+      "region": "non-heap",
+      "total_slope": 15.832432432432432,
+      "attributed_slope": 0.0,
+      "residual": 15.832432432432432,
+      "unit": "bytes/n",
+      "threshold": 72.60389513513512
+    },
+    {
+      "series": "S15",
+      "region": "non-heap",
+      "total_slope": 9.625989625989625,
+      "attributed_slope": 0.0,
+      "residual": 9.625989625989625,
+      "unit": "bytes/n",
+      "threshold": 45.63270376412775
+    },
+    {
+      "series": "S2",
+      "region": "non-heap",
+      "total_slope": 9.1003003003003,
+      "attributed_slope": 0.0,
+      "residual": 9.1003003003003,
+      "unit": "bytes/n",
+      "threshold": 15.526657297297296
+    },
+    {
+      "series": "S3",
+      "region": "non-heap",
+      "total_slope": 4.3147147147147145,
+      "attributed_slope": 0.0,
+      "residual": 4.3147147147147145,
+      "unit": "bytes/n",
+      "threshold": 9.903946090090049
+    },
+    {
+      "series": "S4",
+      "region": "non-heap",
+      "total_slope": -3.1375375375375376,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 18.20945729729721
+    },
+    {
+      "series": "S5",
+      "region": "non-heap",
+      "total_slope": 0.6550836550836551,
+      "attributed_slope": 0.0,
+      "residual": 0.6550836550836551,
+      "unit": "bytes/n",
+      "threshold": 16.68594745945944
+    },
+    {
+      "series": "S6",
+      "region": "non-heap",
+      "total_slope": 12.252852852852854,
+      "attributed_slope": 0.0,
+      "residual": 12.252852852852854,
+      "unit": "bytes/n",
+      "threshold": 18.22014270270266
+    },
+    {
+      "series": "S7",
+      "region": "non-heap",
+      "total_slope": 4.642664092664093,
+      "attributed_slope": 0.0,
+      "residual": 4.642664092664093,
+      "unit": "bytes/n",
+      "threshold": 9.738697567567549
+    },
+    {
+      "series": "S8",
+      "region": "non-heap",
+      "total_slope": 6.345945945945946,
+      "attributed_slope": 0.0,
+      "residual": 6.345945945945946,
+      "unit": "bytes/n",
+      "threshold": 24.031858378378377
+    },
+    {
+      "series": "S9",
+      "region": "non-heap",
+      "total_slope": 5.07027027027027,
+      "attributed_slope": 0.0,
+      "residual": 5.07027027027027,
+      "unit": "bytes/n",
+      "threshold": 18.509259243243243
+    }
+  ],
+  "blind_spots": []
+}

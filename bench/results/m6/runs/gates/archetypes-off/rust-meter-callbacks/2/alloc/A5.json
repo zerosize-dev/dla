@@ -1,0 +1,137 @@
+{
+  "basis": "the columns at its site of F3",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "native.live_blocks@src/session.rs:19",
+      "plateau": {
+        "extra_rise": 1760.0,
+        "extra_slope": 1.0,
+        "main_slope": 1.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "native.live_bytes@src/session.rs:19",
+      "plateau": {
+        "extra_rise": 86240.0,
+        "extra_slope": 56.0,
+        "main_slope": 56.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 6477000.0,
+        "extra_slope": 4206.0,
+        "main_slope": 4331.0,
+        "noise": 45550.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 19470000.0,
+        "before": 19460000.0,
+        "drop": -8192.0,
+        "growth": 15080000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 6477000.0,
+        "extra_slope": 4206.0,
+        "main_slope": 4331.0,
+        "noise": 45550.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 19470000.0,
+        "before": 19460000.0,
+        "drop": -8192.0,
+        "growth": 9847000.0,
+        "kind": "trim",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "native.peak_bytes",
+      "plateau": {
+        "extra_rise": 6414000.0,
+        "extra_slope": 4165.0,
+        "main_slope": 4165.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F3",
+  "harness": "H1",
+  "id": "A5",
+  "iterations": 8,
+  "limitations": [
+    "548 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "primary": "native.live_blocks@src/session.rs:19",
+  "purge": "trim",
+  "series": "S6",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T8"
+}

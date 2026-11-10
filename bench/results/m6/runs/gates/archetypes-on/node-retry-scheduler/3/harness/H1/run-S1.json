@@ -1,0 +1,258 @@
+{
+  "captures": [
+    {
+      "bytes": 36038,
+      "captured_at": "2026-11-10T17:48:13Z",
+      "kind": "alloc",
+      "label": "p1-native",
+      "ms": 23,
+      "path": "harness/H1/out/p1-native/capture/9/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 9511132,
+      "captured_at": "2026-11-10T17:48:13Z",
+      "kind": "heap",
+      "label": "p1-native",
+      "ms": 195,
+      "path": "harness/H1/out/p1-native/capture/9/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 440.0
+    },
+    {
+      "bytes": 365,
+      "captured_at": "2026-11-10T17:48:13Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 0,
+      "path": "harness/H1/out/p1-native/capture/9/resources.json",
+      "role": "active resources by type and creation site",
+      "seq": 5,
+      "x": 440.0
+    },
+    {
+      "bytes": 1403,
+      "captured_at": "2026-11-10T17:48:13Z",
+      "kind": "nonheap",
+      "label": "p1-native",
+      "ms": 0,
+      "path": "harness/H1/out/p1-native/capture/9/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 440.0
+    },
+    {
+      "bytes": 62826,
+      "captured_at": "2026-11-10T17:48:13Z",
+      "kind": "alloc",
+      "label": "p4-native",
+      "ms": 30,
+      "path": "harness/H1/out/p4-native/capture/34/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 1760.0
+    },
+    {
+      "bytes": 19801491,
+      "captured_at": "2026-11-10T17:48:14Z",
+      "kind": "heap",
+      "label": "p4-native",
+      "ms": 503,
+      "path": "harness/H1/out/p4-native/capture/34/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 1760.0
+    },
+    {
+      "bytes": 367,
+      "captured_at": "2026-11-10T17:48:14Z",
+      "kind": "nonheap",
+      "label": "p4-native",
+      "ms": 0,
+      "path": "harness/H1/out/p4-native/capture/34/resources.json",
+      "role": "active resources by type and creation site",
+      "seq": 5,
+      "x": 1760.0
+    },
+    {
+      "bytes": 1404,
+      "captured_at": "2026-11-10T17:48:14Z",
+      "kind": "nonheap",
+      "label": "p4-native",
+      "ms": 0,
+      "path": "harness/H1/out/p4-native/capture/34/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 1760.0
+    },
+    {
+      "bytes": 82311,
+      "captured_at": "2026-11-10T17:48:15Z",
+      "kind": "alloc",
+      "label": "p6-native",
+      "ms": 57,
+      "path": "harness/H1/out/p6-native/capture/50/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 2640.0
+    },
+    {
+      "bytes": 26690934,
+      "captured_at": "2026-11-10T17:48:15Z",
+      "kind": "heap",
+      "label": "p6-native",
+      "ms": 689,
+      "path": "harness/H1/out/p6-native/capture/50/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 2640.0
+    },
+    {
+      "bytes": 368,
+      "captured_at": "2026-11-10T17:48:15Z",
+      "kind": "nonheap",
+      "label": "p6-native",
+      "ms": 0,
+      "path": "harness/H1/out/p6-native/capture/50/resources.json",
+      "role": "active resources by type and creation site",
+      "seq": 5,
+      "x": 2640.0
+    },
+    {
+      "bytes": 1404,
+      "captured_at": "2026-11-10T17:48:15Z",
+      "kind": "nonheap",
+      "label": "p6-native",
+      "ms": 0,
+      "path": "harness/H1/out/p6-native/capture/50/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 2640.0
+    },
+    {
+      "bytes": 112107,
+      "captured_at": "2026-11-10T17:48:17Z",
+      "kind": "alloc",
+      "label": "p9-native",
+      "ms": 68,
+      "path": "harness/H1/out/p9-native/capture/74/alloc-1.heapprofile",
+      "role": "sampling heap profile (live objects)",
+      "seq": 1,
+      "x": 3960.0
+    },
+    {
+      "bytes": 36968371,
+      "captured_at": "2026-11-10T17:48:18Z",
+      "kind": "heap",
+      "label": "p9-native",
+      "ms": 889,
+      "path": "harness/H1/out/p9-native/capture/74/heap-1.heapsnapshot",
+      "role": "heap snapshot (v8)",
+      "seq": 1,
+      "x": 3960.0
+    },
+    {
+      "bytes": 368,
+      "captured_at": "2026-11-10T17:48:18Z",
+      "kind": "nonheap",
+      "label": "p9-native",
+      "ms": 0,
+      "path": "harness/H1/out/p9-native/capture/74/resources.json",
+      "role": "active resources by type and creation site",
+      "seq": 5,
+      "x": 3960.0
+    },
+    {
+      "bytes": 1404,
+      "captured_at": "2026-11-10T17:48:18Z",
+      "kind": "nonheap",
+      "label": "p9-native",
+      "ms": 0,
+      "path": "harness/H1/out/p9-native/capture/74/scripts.json",
+      "role": "script id to url map (sidecar of the heap snapshots)",
+      "seq": 6,
+      "x": 3960.0
+    }
+  ],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-native"
+    },
+    {
+      "code": 0,
+      "label": "p2-native"
+    },
+    {
+      "code": 0,
+      "label": "p3-native"
+    },
+    {
+      "code": 0,
+      "label": "p4-native"
+    },
+    {
+      "code": 0,
+      "label": "p5-native"
+    },
+    {
+      "code": 0,
+      "label": "p6-native"
+    },
+    {
+      "code": 0,
+      "label": "p7-native"
+    },
+    {
+      "code": 0,
+      "label": "p8-native"
+    },
+    {
+      "code": 0,
+      "label": "p9-native"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "command-mode heap dumps come from separate processes: dla summarize heap-graph compares dumps of one process only, so use a driver (dla harness gen --driver) for a dump series",
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted"
+  ],
+  "logs": [
+    "harness/H1/logs/p1-native.log",
+    "harness/H1/logs/p2-native.log",
+    "harness/H1/logs/p3-native.log",
+    "harness/H1/logs/p4-native.log",
+    "harness/H1/logs/p5-native.log",
+    "harness/H1/logs/p6-native.log",
+    "harness/H1/logs/p7-native.log",
+    "harness/H1/logs/p8-native.log",
+    "harness/H1/logs/p9-native.log",
+    "harness/H1/logs/detect.log"
+  ],
+  "mode": "command",
+  "modes": [
+    "native"
+  ],
+  "points": 9,
+  "processes": 10,
+  "series": [
+    "S1"
+  ],
+  "tool": null,
+  "units": 3520,
+  "x_range": [
+    440.0,
+    3960.0
+  ]
+}

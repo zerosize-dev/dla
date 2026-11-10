@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "node-retry-scheduler",
+  "ablation": "gates",
+  "archetypes": "on",
+  "run": 2,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 142.986,
+  "usage": {
+    "input_tokens": 66,
+    "output_tokens": 10401,
+    "cache_read_input_tokens": 1620236,
+    "cache_creation_input_tokens": 68405
+  },
+  "cost_usd": 0.5397856000000001,
+  "num_turns": 36,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T17:02:24Z",
+  "error": null,
+  "stop_blocks": 0
+}

@@ -1,0 +1,126 @@
+{
+  "evidence": [
+    {
+      "authority": "test",
+      "file": "evidence/E11-T1.json",
+      "id": "E11",
+      "kind": "unit-count-series",
+      "result": {
+        "axis": "n",
+        "failed": 22,
+        "gate": "pass",
+        "mode": "native",
+        "n": 8,
+        "passed": [
+          {
+            "column": "probe:src/scheduler.js:shared",
+            "lo": 25.93,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 25.97,
+            "unit": "count"
+          },
+          {
+            "column": "probe:src/scheduler.js:shared.latest",
+            "lo": 25.93,
+            "p": 0.0000248,
+            "ratio": 1.001,
+            "region": "heap",
+            "shape": "steady",
+            "slope": 25.97,
+            "unit": "count"
+          }
+        ],
+        "series": "S1",
+        "shapes": {
+          "flat": 13,
+          "insufficient": 9,
+          "steady": 2
+        },
+        "signal": {
+          "class": "harness-series",
+          "source_sha256": "4ee230933ab2740219f0f3230d3d893fa1ef91878e44b4dec8629749a75d2158",
+          "tool": "dla-trend"
+        },
+        "trend": "T1",
+        "workload": "node:script:package.json:load"
+      }
+    },
+    {
+      "authority": "test",
+      "file": "evidence/E12-A1.json",
+      "id": "E12",
+      "kind": "discriminator",
+      "result": {
+        "column": "probe:src/scheduler.js:shared.latest",
+        "columns": [
+          {
+            "favors": "leak",
+            "name": "probe:src/scheduler.js:shared.latest",
+            "plateau": {
+              "extra_rise": 91220.0,
+              "extra_slope": 25.92,
+              "main_slope": 25.97,
+              "noise": 44.48,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.rss",
+            "plateau": {
+              "extra_rise": 30950000.0,
+              "extra_slope": 10050.0,
+              "main_slope": 8280.0,
+              "noise": 2280000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "after": 114000000.0,
+              "before": 114000000.0,
+              "drop": 0.0,
+              "growth": 52110000.0,
+              "kind": "gc",
+              "verdict": "retained"
+            }
+          },
+          {
+            "favors": "leak",
+            "name": "os.vm_hwm",
+            "plateau": {
+              "extra_rise": 31070000.0,
+              "extra_slope": 10090.0,
+              "main_slope": 8230.0,
+              "noise": 2309000.0,
+              "verdict": "growth-continues"
+            },
+            "purge": {
+              "kind": "gc",
+              "verdict": "not-run"
+            }
+          }
+        ],
+        "extra": 8,
+        "favors": "leak",
+        "harness": "H1",
+        "iterations": 8,
+        "purge_kind": "gc",
+        "series": "S3",
+        "supports": [
+          "leak"
+        ],
+        "test": "plateau+purge",
+        "trend": "T2"
+      }
+    }
+  ],
+  "excerpt": null,
+  "frames": [],
+  "owner": "src.scheduler.RetryScheduler.latest"
+}

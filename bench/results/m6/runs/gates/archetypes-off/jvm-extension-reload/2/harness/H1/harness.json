@@ -1,0 +1,372 @@
+{
+  "schema_version": 1,
+  "id": "H1",
+  "runtime": "jvm",
+  "mode": "driver",
+  "scratch": "harness/H1/work",
+  "build": {
+    "argv": [
+      "sh",
+      "-c",
+      "javac -cp out:/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-extension-reload/2/project/.dla/20261110-190346-8ffa/harness/H1/agent/dla-agent.jar -d out /root/.cache/dla-bench/m6/gates/archetypes-off/jvm-extension-reload/2/project/.dla/20261110-190346-8ffa/harness/H1/driver/DlaLoop.java"
+    ],
+    "cwd": ".",
+    "env": []
+  },
+  "run": {
+    "argv": [
+      "java",
+      "-cp",
+      "out:/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-extension-reload/2/project/.dla/20261110-190346-8ffa/harness/H1/agent/dla-agent.jar",
+      "ledger.DlaLoop"
+    ],
+    "cwd": ".",
+    "env": [
+      [
+        "JAVA_TOOL_OPTIONS",
+        "-javaagent:/root/.cache/dla-bench/m6/gates/archetypes-off/jvm-extension-reload/2/project/.dla/20261110-190346-8ffa/harness/H1/agent/dla-agent.jar -XX:NativeMemoryTracking=summary -XX:StartFlightRecording=filename={out}.jfr,settings=profile"
+      ]
+    ]
+  },
+  "warmup": 1,
+  "iterations": 8,
+  "step": 440,
+  "key_modes": [
+    "fresh",
+    "repeated"
+  ],
+  "probes": [
+    {
+      "id": "P1",
+      "finding": "F1",
+      "target": {
+        "kind": "jvm-static",
+        "class": "ledger.LedgerExtension",
+        "field": "ROUNDING"
+      },
+      "site": "ext/ledger/LedgerExtension.java:11"
+    },
+    {
+      "id": "P2",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-static",
+        "class": "reports.EventBus",
+        "field": "LISTENERS"
+      },
+      "site": "src/reports/EventBus.java:8"
+    },
+    {
+      "id": "P3",
+      "target": {
+        "kind": "jvm-class",
+        "class": "ledger.LedgerExtension"
+      }
+    },
+    {
+      "id": "P4",
+      "finding": "F3",
+      "target": {
+        "kind": "jvm-class",
+        "class": "reports.EventBus"
+      },
+      "site": "src/reports/EventBus.java:8"
+    }
+  ],
+  "agent": "driver-jvm",
+  "detectors": [],
+  "tools": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "junit-platform-console-standalone not used: the plain driver main runs the loop (JUnit variant is generated only when the jar is on the classpath)"
+  ],
+  "timeout_secs": 300,
+  "captures": [
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-fresh/capture/14/classloader-stats.txt",
+      "label": "p1-fresh",
+      "seq": 2,
+      "x": 3960.0,
+      "role": "class loader statistics",
+      "bytes": 444557,
+      "ms": 11,
+      "captured_at": "2026-11-10T19:05:03Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-1.txt",
+      "label": "p1-fresh",
+      "seq": 1,
+      "x": 440.0,
+      "role": "class histogram",
+      "bytes": 114289,
+      "ms": 25,
+      "captured_at": "2026-11-10T19:05:01Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-2.txt",
+      "label": "p1-fresh",
+      "seq": 2,
+      "x": 880.0,
+      "role": "class histogram",
+      "bytes": 142889,
+      "ms": 28,
+      "captured_at": "2026-11-10T19:05:01Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-3.txt",
+      "label": "p1-fresh",
+      "seq": 3,
+      "x": 1320.0,
+      "role": "class histogram",
+      "bytes": 171489,
+      "ms": 35,
+      "captured_at": "2026-11-10T19:05:02Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-4.txt",
+      "label": "p1-fresh",
+      "seq": 4,
+      "x": 1760.0,
+      "role": "class histogram",
+      "bytes": 200089,
+      "ms": 36,
+      "captured_at": "2026-11-10T19:05:02Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-5.txt",
+      "label": "p1-fresh",
+      "seq": 5,
+      "x": 2200.0,
+      "role": "class histogram",
+      "bytes": 228689,
+      "ms": 40,
+      "captured_at": "2026-11-10T19:05:02Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-6.txt",
+      "label": "p1-fresh",
+      "seq": 6,
+      "x": 2640.0,
+      "role": "class histogram",
+      "bytes": 257289,
+      "ms": 40,
+      "captured_at": "2026-11-10T19:05:02Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-7.txt",
+      "label": "p1-fresh",
+      "seq": 7,
+      "x": 3080.0,
+      "role": "class histogram",
+      "bytes": 285889,
+      "ms": 49,
+      "captured_at": "2026-11-10T19:05:03Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-8.txt",
+      "label": "p1-fresh",
+      "seq": 8,
+      "x": 3520.0,
+      "role": "class histogram",
+      "bytes": 314489,
+      "ms": 53,
+      "captured_at": "2026-11-10T19:05:03Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-fresh/capture/14/histogram-9.txt",
+      "label": "p1-fresh",
+      "seq": 9,
+      "x": 3960.0,
+      "role": "class histogram",
+      "bytes": 343089,
+      "ms": 62,
+      "captured_at": "2026-11-10T19:05:03Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-fresh/capture/14/nmt-diff.txt",
+      "label": "p1-fresh",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "native memory change since baseline",
+      "bytes": 4326,
+      "ms": 0,
+      "captured_at": "2026-11-10T19:05:03Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-fresh/capture/14/nmt-summary.txt",
+      "label": "p1-fresh",
+      "seq": 3,
+      "x": 3960.0,
+      "role": "native memory summary",
+      "bytes": 4798,
+      "ms": 0,
+      "captured_at": "2026-11-10T19:05:03Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-fresh/capture/14/threads.json",
+      "label": "p1-fresh",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "thread dump (json)",
+      "bytes": 5628,
+      "ms": 21,
+      "captured_at": "2026-11-10T19:05:03Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-repeated/capture/44/classloader-stats.txt",
+      "label": "p1-repeated",
+      "seq": 2,
+      "x": 3960.0,
+      "role": "class loader statistics",
+      "bytes": 444557,
+      "ms": 5,
+      "captured_at": "2026-11-10T19:05:07Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-1.txt",
+      "label": "p1-repeated",
+      "seq": 1,
+      "x": 440.0,
+      "role": "class histogram",
+      "bytes": 114289,
+      "ms": 18,
+      "captured_at": "2026-11-10T19:05:04Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-2.txt",
+      "label": "p1-repeated",
+      "seq": 2,
+      "x": 880.0,
+      "role": "class histogram",
+      "bytes": 142889,
+      "ms": 38,
+      "captured_at": "2026-11-10T19:05:05Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-3.txt",
+      "label": "p1-repeated",
+      "seq": 3,
+      "x": 1320.0,
+      "role": "class histogram",
+      "bytes": 171489,
+      "ms": 30,
+      "captured_at": "2026-11-10T19:05:05Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-4.txt",
+      "label": "p1-repeated",
+      "seq": 4,
+      "x": 1760.0,
+      "role": "class histogram",
+      "bytes": 200089,
+      "ms": 34,
+      "captured_at": "2026-11-10T19:05:05Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-5.txt",
+      "label": "p1-repeated",
+      "seq": 5,
+      "x": 2200.0,
+      "role": "class histogram",
+      "bytes": 228689,
+      "ms": 41,
+      "captured_at": "2026-11-10T19:05:06Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-6.txt",
+      "label": "p1-repeated",
+      "seq": 6,
+      "x": 2640.0,
+      "role": "class histogram",
+      "bytes": 257289,
+      "ms": 58,
+      "captured_at": "2026-11-10T19:05:06Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-7.txt",
+      "label": "p1-repeated",
+      "seq": 7,
+      "x": 3080.0,
+      "role": "class histogram",
+      "bytes": 285889,
+      "ms": 48,
+      "captured_at": "2026-11-10T19:05:06Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-8.txt",
+      "label": "p1-repeated",
+      "seq": 8,
+      "x": 3520.0,
+      "role": "class histogram",
+      "bytes": 314489,
+      "ms": 47,
+      "captured_at": "2026-11-10T19:05:06Z"
+    },
+    {
+      "kind": "histogram",
+      "path": "harness/H1/out/p1-repeated/capture/44/histogram-9.txt",
+      "label": "p1-repeated",
+      "seq": 9,
+      "x": 3960.0,
+      "role": "class histogram",
+      "bytes": 343089,
+      "ms": 50,
+      "captured_at": "2026-11-10T19:05:07Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-repeated/capture/44/nmt-diff.txt",
+      "label": "p1-repeated",
+      "seq": 4,
+      "x": 3960.0,
+      "role": "native memory change since baseline",
+      "bytes": 4334,
+      "ms": 0,
+      "captured_at": "2026-11-10T19:05:07Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-repeated/capture/44/nmt-summary.txt",
+      "label": "p1-repeated",
+      "seq": 3,
+      "x": 3960.0,
+      "role": "native memory summary",
+      "bytes": 4813,
+      "ms": 0,
+      "captured_at": "2026-11-10T19:05:07Z"
+    },
+    {
+      "kind": "nonheap",
+      "path": "harness/H1/out/p1-repeated/capture/44/threads.json",
+      "label": "p1-repeated",
+      "seq": 1,
+      "x": 3960.0,
+      "role": "thread dump (json)",
+      "bytes": 5628,
+      "ms": 16,
+      "captured_at": "2026-11-10T19:05:07Z"
+    }
+  ]
+}

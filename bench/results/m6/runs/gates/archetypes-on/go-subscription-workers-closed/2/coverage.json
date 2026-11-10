@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "go": {
+      "runtime": "go",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 3,
+          "dispositioned": 3,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "golangci-lint": {
+          "status": "ran",
+          "version": "2.5.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "goroutineleak": {
+          "status": "ran",
+          "version": "go1.24.7",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "govet": {
+          "status": "ran",
+          "version": "1.24.7",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "staticcheck": {
+          "status": "ran",
+          "version": "2025.1.1",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [],
+        "exercised": [],
+        "not_exercisable": []
+      },
+      "iterations": 7040
+    }
+  },
+  "residual": [
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 0.7852272727272728,
+      "attributed_slope": 0.0,
+      "residual": 0.7852272727272728,
+      "unit": "bytes/iteration",
+      "threshold": 0.19897165909090908,
+      "open_item": "O2"
+    },
+    {
+      "series": "S3",
+      "region": "non-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/iteration",
+      "threshold": 0.0
+    }
+  ],
+  "blind_spots": []
+}

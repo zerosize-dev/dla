@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "go": {
+      "runtime": "go",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 3,
+          "dispositioned": 3,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "golangci-lint": {
+          "status": "ran",
+          "version": "2.5.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "goroutineleak": {
+          "status": "ran",
+          "version": "go1.24.7",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "govet": {
+          "status": "ran",
+          "version": "1.24.7",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "staticcheck": {
+          "status": "ran",
+          "version": "2025.1.1",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [],
+        "exercised": [],
+        "not_exercisable": []
+      },
+      "iterations": 7040
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 5441.145454545454,
+      "attributed_slope": 0.0,
+      "residual": 5441.145454545454,
+      "unit": "bytes/iteration",
+      "threshold": 1360.2863636363636,
+      "open_item": "O1"
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 5441.554545454545,
+      "attributed_slope": 0.0,
+      "residual": 5441.554545454545,
+      "unit": "bytes/iteration",
+      "threshold": 1360.3886363636364,
+      "open_item": "O3"
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 5441.839669421488,
+      "attributed_slope": 0.0,
+      "residual": 5441.839669421488,
+      "unit": "bytes/iteration",
+      "threshold": 1360.459917355372,
+      "open_item": "O3"
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": 2122.4727272727273,
+      "attributed_slope": 0.0,
+      "residual": 2122.4727272727273,
+      "unit": "bytes/iteration",
+      "threshold": 530.6181818181818,
+      "open_item": "O2"
+    },
+    {
+      "series": "S2",
+      "region": "non-heap",
+      "total_slope": 2122.4727272727273,
+      "attributed_slope": 0.0,
+      "residual": 2122.4727272727273,
+      "unit": "bytes/iteration",
+      "threshold": 530.6181818181818,
+      "open_item": "O4"
+    },
+    {
+      "series": "S3",
+      "region": "non-heap",
+      "total_slope": 2134.8848484848486,
+      "attributed_slope": 0.0,
+      "residual": 2134.8848484848486,
+      "unit": "bytes/iteration",
+      "threshold": 533.7212121212121,
+      "open_item": "O4"
+    }
+  ],
+  "blind_spots": []
+}

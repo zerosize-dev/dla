@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture": "rust-batch-buffers",
+  "ablation": "full",
+  "archetypes": "on",
+  "run": 1,
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_seconds": 728.662,
+  "usage": {
+    "input_tokens": 38,
+    "output_tokens": 4853,
+    "cache_read_input_tokens": 881662,
+    "cache_creation_input_tokens": 53188
+  },
+  "cost_usd": 0.3495242,
+  "num_turns": 20,
+  "model": "claude-sonnet-5-5",
+  "started_at": "2026-11-10T20:15:49Z",
+  "error": null,
+  "stop_blocks": 0
+}

@@ -1,0 +1,97 @@
+{
+  "basis": "named with --column",
+  "columns": [
+    {
+      "favors": "leak",
+      "name": "probe:reports.EventBus.LISTENERS",
+      "plateau": {
+        "extra_rise": 3520.0,
+        "extra_slope": 1.0,
+        "main_slope": 1.0,
+        "noise": 0.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": null,
+        "before": null,
+        "drop": null,
+        "growth": null,
+        "kind": "trim-native-heap",
+        "verdict": "not-run"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": true
+    },
+    {
+      "favors": "leak",
+      "name": "os.rss",
+      "plateau": {
+        "extra_rise": 108900000.0,
+        "extra_slope": 35360.0,
+        "main_slope": 35420.0,
+        "noise": 1596000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 368800000.0,
+        "before": 385800000.0,
+        "drop": 16950000.0,
+        "growth": 306300000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    },
+    {
+      "favors": "leak",
+      "name": "os.vm_hwm",
+      "plateau": {
+        "extra_rise": 108900000.0,
+        "extra_slope": 35360.0,
+        "main_slope": 35570.0,
+        "noise": 1928000.0,
+        "verdict": "growth-continues"
+      },
+      "purge": {
+        "after": 385500000.0,
+        "before": 385800000.0,
+        "drop": 270300.0,
+        "growth": 304500000.0,
+        "kind": "trim-native-heap",
+        "verdict": "retained"
+      },
+      "supports": [
+        "leak"
+      ],
+      "voting": false
+    }
+  ],
+  "extra": 8,
+  "favors": "leak",
+  "finding": "F5",
+  "harness": "H1",
+  "id": "A3",
+  "iterations": 8,
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "coverage capped at 4000 classes",
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "os.* columns are the measured process's own figures: the sampled process tree (wrapper, build and sibling processes) is not mixed in",
+    "points 1 to 9 come from S1; the extra points from S6",
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "note: the build script compiles and runs the unit tests again at every point; the measured program is the last JVM it starts"
+  ],
+  "primary": null,
+  "purge": "trim-native-heap",
+  "series": "S7",
+  "supports": [
+    "leak"
+  ],
+  "trend": "T8"
+}

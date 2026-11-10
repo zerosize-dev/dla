@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-194001-4649",
+  "session_id": "7bd1f2a4-24f1-4472-a424-fa304ad7cb4e",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-off/native-vendor-codec/3/project",
+  "created_at": "2026-11-10T19:40:01Z",
+  "dla_version": "0.1.0",
+  "stage": "probe",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T19:40:01Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T19:40:01Z",
+    "deadline": "2026-11-10T20:40:01Z"
+  },
+  "processes": [],
+  "redaction_salt": "90c4c6228a5bf0b417428e48f3c1c1bd",
+  "report": {
+    "path": ".dla/20261110-194001-4649/report.md",
+    "sha256": "5578c1d626713ccb701cea63244cb9e36cc24043b6716bb133b16ac106b645fb",
+    "rendered_at": "2026-11-10T19:40:19Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake"
+  ]
+}

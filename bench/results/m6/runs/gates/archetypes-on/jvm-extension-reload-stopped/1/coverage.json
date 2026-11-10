@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "jvm": {
+      "runtime": "jvm",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 3,
+          "dispositioned": 3,
+          "duplicates": 0
+        },
+        "codeql": {
+          "status": "missing",
+          "reason": "codeql is not on PATH or in the tools directory",
+          "install_hint": "dla install codeql",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "detekt": {
+          "status": "ran",
+          "reason": "not applicable: no Kotlin sources",
+          "version": "2.0.0-alpha.6",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "dla-hprof": {
+          "status": "ran",
+          "enumerated": 231537,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "errorprone": {
+          "status": "missing",
+          "reason": "Error Prone jars not found in the tools directory (or DLA_ERRORPRONE_HOME)",
+          "install_hint": "dla install errorprone",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-heap": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-histogram": {
+          "status": "ran",
+          "enumerated": 9,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-nonheap": {
+          "status": "ran",
+          "enumerated": 16,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "jcmd-class-histogram": {
+          "status": "ran",
+          "enumerated": 729,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "sonar": {
+          "status": "missing",
+          "reason": "sonar-scanner is not installed and Sonar rules need a SonarQube or SonarCloud server",
+          "install_hint": "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "spotbugs": {
+          "status": "ran",
+          "reason": "no auxiliary classpath: library calls are not modelled",
+          "version": "unknown",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "valgrind": {
+          "status": "blocked",
+          "reason": "Valgrind is not run on the JVM: the virtual machine's own allocations drown the project's; use the allocator shim, jcmd NMT or `dla attach bpftrace`",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "ext/ledger/LedgerExtension.java::LedgerExtension.name",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.round",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.start",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.stop",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.total",
+          "ext/ledger/LedgerExtension.java::Tally.onEvent",
+          "src/reports/EventBus.java::EventBus.listenerCount",
+          "src/reports/EventBus.java::EventBus.publish",
+          "src/reports/EventBus.java::EventBus.subscribe",
+          "src/reports/EventBus.java::EventBus.unsubscribe",
+          "src/reports/Extension.java::Extension.name",
+          "src/reports/Extension.java::Extension.start",
+          "src/reports/Extension.java::Extension.stop",
+          "src/reports/Extension.java::Extension.total",
+          "src/reports/ExtensionManager.java::ExtensionManager.current",
+          "src/reports/ExtensionManager.java::ExtensionManager.load",
+          "src/reports/ExtensionManager.java::ExtensionManager.reload",
+          "src/reports/ExtensionManager.java::ExtensionManager.shutdown",
+          "src/reports/Listener.java::Listener.onEvent"
+        ],
+        "exercised": [
+          "ext/ledger/LedgerExtension.java::LedgerExtension.name",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.round",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.start",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.stop",
+          "ext/ledger/LedgerExtension.java::LedgerExtension.total",
+          "ext/ledger/LedgerExtension.java::Tally.onEvent",
+          "src/reports/EventBus.java::EventBus.listenerCount",
+          "src/reports/EventBus.java::EventBus.publish",
+          "src/reports/EventBus.java::EventBus.subscribe",
+          "src/reports/EventBus.java::EventBus.unsubscribe",
+          "src/reports/Extension.java::Extension.name",
+          "src/reports/Extension.java::Extension.start",
+          "src/reports/Extension.java::Extension.stop",
+          "src/reports/Extension.java::Extension.total",
+          "src/reports/ExtensionManager.java::ExtensionManager.current",
+          "src/reports/ExtensionManager.java::ExtensionManager.load",
+          "src/reports/ExtensionManager.java::ExtensionManager.reload",
+          "src/reports/ExtensionManager.java::ExtensionManager.shutdown",
+          "src/reports/Listener.java::Listener.onEvent"
+        ],
+        "not_exercisable": []
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 12.828787878787878,
+      "attributed_slope": 0.0,
+      "residual": 12.828787878787878,
+      "unit": "bytes/n",
+      "threshold": 9.24507,
+      "open_item": "O3"
+    },
+    {
+      "series": "S11",
+      "region": "heap",
+      "total_slope": 15.914049586776859,
+      "attributed_slope": 0.0,
+      "residual": 15.914049586776859,
+      "unit": "bytes/n",
+      "threshold": 3.9785123966942146,
+      "open_item": "O3"
+    },
+    {
+      "series": "S5",
+      "region": "heap",
+      "total_slope": 14.781363636363636,
+      "attributed_slope": 0.0,
+      "residual": 14.781363636363636,
+      "unit": "bytes/n",
+      "threshold": 4.4825063181818185,
+      "open_item": "O3"
+    },
+    {
+      "series": "S6",
+      "region": "heap",
+      "total_slope": -2.56969696969697,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 16.77494509090925,
+      "open_item": "O1"
+    },
+    {
+      "series": "S7",
+      "region": "heap",
+      "total_slope": 8.457683982683982,
+      "attributed_slope": 0.0,
+      "residual": 8.457683982683982,
+      "unit": "bytes/n",
+      "threshold": 6.673332450592798,
+      "open_item": "O3"
+    },
+    {
+      "series": "S8",
+      "region": "heap",
+      "total_slope": 5.136363636363637,
+      "attributed_slope": 0.0,
+      "residual": 5.136363636363637,
+      "unit": "bytes/n",
+      "threshold": 18.674983636363635,
+      "open_item": "O1"
+    },
+    {
+      "series": "S9",
+      "region": "heap",
+      "total_slope": 14.151515151515152,
+      "attributed_slope": 0.0,
+      "residual": 14.151515151515152,
+      "unit": "bytes/n",
+      "threshold": 4.02907781818187,
+      "open_item": "O3"
+    },
+    {
+      "series": "S1",
+      "region": "non-heap",
+      "total_slope": 87.19090909090909,
+      "attributed_slope": 0.0,
+      "residual": 87.19090909090909,
+      "unit": "bytes/n",
+      "threshold": 58.19397545454546,
+      "open_item": "O4"
+    },
+    {
+      "series": "S11",
+      "region": "non-heap",
+      "total_slope": 47.21212121212122,
+      "attributed_slope": 0.0,
+      "residual": 47.21212121212122,
+      "unit": "bytes/n",
+      "threshold": 22.18958000000021,
+      "open_item": "O4"
+    },
+    {
+      "series": "S5",
+      "region": "non-heap",
+      "total_slope": 37.63939393939394,
+      "attributed_slope": 0.0,
+      "residual": 37.63939393939394,
+      "unit": "bytes/n",
+      "threshold": 27.30095581818161,
+      "open_item": "O4"
+    },
+    {
+      "series": "S6",
+      "region": "non-heap",
+      "total_slope": 7.88939393939394,
+      "attributed_slope": 0.0,
+      "residual": 7.88939393939394,
+      "unit": "bytes/n",
+      "threshold": 25.990202636364053,
+      "open_item": "O2"
+    },
+    {
+      "series": "S7",
+      "region": "non-heap",
+      "total_slope": 26.08751803751804,
+      "attributed_slope": 0.0,
+      "residual": 26.08751803751804,
+      "unit": "bytes/n",
+      "threshold": 32.09436235177836,
+      "open_item": "O4"
+    },
+    {
+      "series": "S8",
+      "region": "non-heap",
+      "total_slope": -5.4757575757575765,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 84.02106000000043,
+      "open_item": "O2"
+    },
+    {
+      "series": "S9",
+      "region": "non-heap",
+      "total_slope": 36.093333333333334,
+      "attributed_slope": 0.0,
+      "residual": 36.093333333333334,
+      "unit": "bytes/n",
+      "threshold": 50.81885556363619,
+      "open_item": "O4"
+    }
+  ],
+  "blind_spots": []
+}

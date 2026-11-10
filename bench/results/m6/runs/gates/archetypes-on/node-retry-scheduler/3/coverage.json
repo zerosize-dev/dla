@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "workers": {
+    "node": {
+      "runtime": "node",
+      "backends": {
+        "bcc-memleak": {
+          "status": "blocked",
+          "reason": "bcc memleak is not driven by DLA in this version; `dla attach bpftrace` counts mapped bytes per call stack (tier 3, root)",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "census": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 7,
+          "dispositioned": 7,
+          "duplicates": 0
+        },
+        "dla": {
+          "status": "ran",
+          "version": "0.1.0",
+          "enumerated": 1,
+          "dispositioned": 1,
+          "duplicates": 0
+        },
+        "eslint": {
+          "status": "ran",
+          "reason": "rxjs-x rules need rxjs to resolve from the project's node_modules for type information",
+          "version": "10.14.0",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "gpu-nvml": {
+          "status": "blocked",
+          "reason": "GPU memory (NVML, nvidia-smi) is not read by DLA in this version: device memory growth is a blind spot",
+          "enumerated": 0,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-alloc": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-heap": {
+          "status": "ran",
+          "enumerated": 4,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "harness-nonheap": {
+          "status": "ran",
+          "enumerated": 8,
+          "dispositioned": 0,
+          "duplicates": 0
+        },
+        "node-heapsnapshot": {
+          "status": "ran",
+          "enumerated": 1272674,
+          "dispositioned": 0,
+          "duplicates": 0
+        }
+      },
+      "entry_points": {
+        "discovered": [
+          "load.js::makeRandom",
+          "load.js::parseArgs",
+          "load.js::runWorkload",
+          "src/backoff.js::delayFor",
+          "src/backoff.js::hash",
+          "src/clock.js::ManualClock.advance",
+          "src/clock.js::ManualClock.now",
+          "src/endpoint.js::Endpoint.deliver",
+          "src/jobs.js::makeJob",
+          "src/pending.js::PendingList.[Symbol.iterator]",
+          "src/pending.js::PendingList.append",
+          "src/pending.js::PendingList.unlink",
+          "src/scheduler.js::RetryScheduler.attempt",
+          "src/scheduler.js::RetryScheduler.enqueue",
+          "src/scheduler.js::RetryScheduler.recent",
+          "src/scheduler.js::RetryScheduler.stats",
+          "src/scheduler.js::RetryScheduler.submit",
+          "src/scheduler.js::RetryScheduler.tick",
+          "src/scheduler.js::sharedScheduler"
+        ],
+        "exercised": [
+          "load.js::makeRandom",
+          "load.js::parseArgs",
+          "load.js::runWorkload",
+          "src/backoff.js::delayFor",
+          "src/backoff.js::hash",
+          "src/clock.js::ManualClock.advance",
+          "src/clock.js::ManualClock.now",
+          "src/endpoint.js::Endpoint.deliver",
+          "src/jobs.js::makeJob",
+          "src/pending.js::PendingList.append",
+          "src/pending.js::PendingList.unlink",
+          "src/scheduler.js::RetryScheduler.attempt",
+          "src/scheduler.js::RetryScheduler.enqueue",
+          "src/scheduler.js::RetryScheduler.stats",
+          "src/scheduler.js::RetryScheduler.submit",
+          "src/scheduler.js::RetryScheduler.tick",
+          "src/scheduler.js::sharedScheduler"
+        ],
+        "not_exercisable": [
+          {
+            "entry": "src/pending.js::PendingList.[Symbol.iterator]",
+            "reason": "no_harness"
+          }
+        ]
+      },
+      "iterations": 3520
+    }
+  },
+  "residual": [
+    {
+      "series": "S1",
+      "region": "heap",
+      "total_slope": 4287.629999999999,
+      "attributed_slope": 0.0,
+      "residual": 4287.629999999999,
+      "unit": "bytes/n",
+      "threshold": 1071.9074999999998,
+      "open_item": "O1"
+    },
+    {
+      "series": "S10",
+      "region": "heap",
+      "total_slope": 4270.504545454545,
+      "attributed_slope": 0.0,
+      "residual": 4270.504545454545,
+      "unit": "bytes/n",
+      "threshold": 1067.6261363636363,
+      "open_item": "O1"
+    },
+    {
+      "series": "S2",
+      "region": "heap",
+      "total_slope": 4265.812121212121,
+      "attributed_slope": 0.0,
+      "residual": 4265.812121212121,
+      "unit": "bytes/n",
+      "threshold": 1066.4530303030303,
+      "open_item": "O1"
+    },
+    {
+      "series": "S3",
+      "region": "heap",
+      "total_slope": 4270.521103896104,
+      "attributed_slope": 0.0,
+      "residual": 4270.521103896104,
+      "unit": "bytes/n",
+      "threshold": 1067.630275974026,
+      "open_item": "O1"
+    },
+    {
+      "series": "S5",
+      "region": "heap",
+      "total_slope": 4269.571212121213,
+      "attributed_slope": 0.0,
+      "residual": 4269.571212121213,
+      "unit": "bytes/n",
+      "threshold": 1067.3928030303032,
+      "open_item": "O1"
+    },
+    {
+      "series": "S6",
+      "region": "heap",
+      "total_slope": 4271.938888888889,
+      "attributed_slope": 0.0,
+      "residual": 4271.938888888889,
+      "unit": "bytes/n",
+      "threshold": 1067.9847222222222,
+      "open_item": "O1"
+    },
+    {
+      "series": "S7",
+      "region": "heap",
+      "total_slope": 4264.263636363636,
+      "attributed_slope": 0.0,
+      "residual": 4264.263636363636,
+      "unit": "bytes/n",
+      "threshold": 1066.065909090909,
+      "open_item": "O1"
+    },
+    {
+      "series": "S8",
+      "region": "heap",
+      "total_slope": 4270.6797979797975,
+      "attributed_slope": 0.0,
+      "residual": 4270.6797979797975,
+      "unit": "bytes/n",
+      "threshold": 1067.6699494949494,
+      "open_item": "O1"
+    },
+    {
+      "series": "S9",
+      "region": "heap",
+      "total_slope": 4264.522727272728,
+      "attributed_slope": 0.0,
+      "residual": 4264.522727272728,
+      "unit": "bytes/n",
+      "threshold": 1066.130681818182,
+      "open_item": "O1"
+    },
+    {
+      "series": "S1",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S10",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S2",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S3",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S5",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S6",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S7",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S8",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    },
+    {
+      "series": "S9",
+      "region": "off-heap",
+      "total_slope": 0.0,
+      "attributed_slope": 0.0,
+      "residual": 0.0,
+      "unit": "bytes/n",
+      "threshold": 0.0
+    }
+  ],
+  "blind_spots": []
+}

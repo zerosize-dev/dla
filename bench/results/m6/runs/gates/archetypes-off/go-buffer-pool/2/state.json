@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "run_id": "20261110-184411-ee6f",
+  "session_id": "7e0b8eff-a366-4292-8df3-3fadaf3cab1e",
+  "project_root": "/root/.cache/dla-bench/m6/gates/archetypes-off/go-buffer-pool/2/project",
+  "created_at": "2026-11-10T18:44:11Z",
+  "dla_version": "0.1.0",
+  "stage": "gate",
+  "status": "active",
+  "consent": {
+    "tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "raw_values": true,
+    "given_by": "runner",
+    "recorded_at": "2026-11-10T18:44:11Z"
+  },
+  "budget": {
+    "seconds": 3600,
+    "started_at": "2026-11-10T18:44:11Z",
+    "deadline": "2026-11-10T19:44:11Z"
+  },
+  "processes": [
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T18:44:42Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -run ^$ -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:44:43Z",
+      "stopped_at": "2026-11-10T18:44:49Z",
+      "role": "started"
+    },
+    {
+      "pid": 1114,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p1-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:44:50Z",
+      "stopped_at": "2026-11-10T18:44:50Z",
+      "role": "started"
+    },
+    {
+      "pid": 1189,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p2-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:44:51Z",
+      "stopped_at": "2026-11-10T18:44:52Z",
+      "role": "started"
+    },
+    {
+      "pid": 1254,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p3-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:44:52Z",
+      "stopped_at": "2026-11-10T18:44:54Z",
+      "role": "started"
+    },
+    {
+      "pid": 1325,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p4-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:44:54Z",
+      "stopped_at": "2026-11-10T18:44:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 1401,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p5-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:44:57Z",
+      "stopped_at": "2026-11-10T18:45:01Z",
+      "role": "started"
+    },
+    {
+      "pid": 1471,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p6-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:45:01Z",
+      "stopped_at": "2026-11-10T18:45:07Z",
+      "role": "started"
+    },
+    {
+      "pid": 1532,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p7-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:45:07Z",
+      "stopped_at": "2026-11-10T18:45:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 1596,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p8-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:45:13Z",
+      "stopped_at": "2026-11-10T18:45:20Z",
+      "role": "started"
+    },
+    {
+      "pid": 1661,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p9-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:45:20Z",
+      "stopped_at": "2026-11-10T18:45:30Z",
+      "role": "started"
+    },
+    {
+      "pid": 1727,
+      "kind": "harness",
+      "command": "GOTOOLCHAIN=go1.27.0 go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/{label}.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:45:30Z",
+      "stopped_at": "2026-11-10T18:45:47Z",
+      "role": "started"
+    },
+    {
+      "pid": 10,
+      "kind": "harness",
+      "command": "sh -c cp -f /root/.cache/dla-bench/m6/gates/archetypes-off/go-buffer-pool/2/project/.dla/20261110-184411-ee6f/harness/H2/driver/zz_dla_driver_test.go /root/.cache/dla-bench/m6/gates/archetypes-off/go-buffer-pool/2/project/.dla/20261110-184411-ee6f/harness/H2/work/internal/workload/zz_dla_driver_test.go && go test -vet=off -count=1 -run '^$' ./internal/workload",
+      "started_at": "2026-11-10T18:46:10Z",
+      "stopped_at": "2026-11-10T18:46:10Z",
+      "role": "started"
+    },
+    {
+      "pid": 93,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-10T18:46:10Z",
+      "stopped_at": "2026-11-10T18:46:18Z",
+      "role": "started"
+    },
+    {
+      "pid": 156,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-10T18:46:18Z",
+      "stopped_at": "2026-11-10T18:46:27Z",
+      "role": "started"
+    },
+    {
+      "pid": 10,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-10T18:46:34Z",
+      "stopped_at": "2026-11-10T18:46:48Z",
+      "role": "started"
+    },
+    {
+      "pid": 9,
+      "start_time": "2026-11-10T18:47:04Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p10-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:47:05Z",
+      "stopped_at": "2026-11-10T18:47:13Z",
+      "role": "started"
+    },
+    {
+      "pid": 81,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p11-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:47:13Z",
+      "stopped_at": "2026-11-10T18:47:22Z",
+      "role": "started"
+    },
+    {
+      "pid": 145,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p12-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:47:22Z",
+      "stopped_at": "2026-11-10T18:47:32Z",
+      "role": "started"
+    },
+    {
+      "pid": 218,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p13-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:47:32Z",
+      "stopped_at": "2026-11-10T18:47:43Z",
+      "role": "started"
+    },
+    {
+      "pid": 291,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p14-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:47:43Z",
+      "stopped_at": "2026-11-10T18:47:54Z",
+      "role": "started"
+    },
+    {
+      "pid": 364,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p15-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:47:54Z",
+      "stopped_at": "2026-11-10T18:48:07Z",
+      "role": "started"
+    },
+    {
+      "pid": 432,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p16-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:48:07Z",
+      "stopped_at": "2026-11-10T18:48:19Z",
+      "role": "started"
+    },
+    {
+      "pid": 505,
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLAHarness$ -coverprofile {cov}/p17-native.out -coverpkg=./... ./cmd/invoiced",
+      "started_at": "2026-11-10T18:48:19Z",
+      "stopped_at": "2026-11-10T18:48:30Z",
+      "role": "started"
+    },
+    {
+      "pid": 16,
+      "start_time": "2026-11-10T18:48:34Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-10T18:48:35Z",
+      "stopped_at": "2026-11-10T18:48:46Z",
+      "role": "started"
+    },
+    {
+      "pid": 93,
+      "start_time": "2026-11-10T18:48:45Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-10T18:48:46Z",
+      "stopped_at": "2026-11-10T18:48:57Z",
+      "role": "started"
+    },
+    {
+      "pid": 171,
+      "start_time": "2026-11-10T18:48:56Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-10T18:48:57Z",
+      "stopped_at": "2026-11-10T18:49:08Z",
+      "role": "started"
+    },
+    {
+      "pid": 248,
+      "start_time": "2026-11-10T18:49:07Z",
+      "kind": "harness",
+      "command": "go test -vet=off -count=1 -timeout 0 -run ^TestDLADriver$ ./internal/workload",
+      "started_at": "2026-11-10T18:49:08Z",
+      "stopped_at": "2026-11-10T18:49:19Z",
+      "role": "started"
+    }
+  ],
+  "redaction_salt": "5a2d1a748eff1095792eb2054965b4a1",
+  "report": {
+    "path": ".dla/20261110-184411-ee6f/report.md",
+    "sha256": "3aec4f11d0bd7e8abd29d643f62d568f9caf58bd7d1257acf556cf46ffde7e1f",
+    "rendered_at": "2026-11-10T18:49:38Z"
+  },
+  "entry": "repository",
+  "stages_passed": [
+    "intake",
+    "probe",
+    "sweep",
+    "classify",
+    "rule_out"
+  ]
+}

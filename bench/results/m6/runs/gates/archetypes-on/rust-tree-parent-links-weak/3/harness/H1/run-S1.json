@@ -1,0 +1,93 @@
+{
+  "captures": [],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-native"
+    },
+    {
+      "code": 0,
+      "label": "p2-native"
+    },
+    {
+      "code": 0,
+      "label": "p3-native"
+    },
+    {
+      "code": 0,
+      "label": "p4-native"
+    },
+    {
+      "code": 0,
+      "label": "p5-native"
+    },
+    {
+      "code": 0,
+      "label": "p6-native"
+    },
+    {
+      "code": 0,
+      "label": "p7-native"
+    },
+    {
+      "code": 0,
+      "label": "p8-native"
+    },
+    {
+      "code": 0,
+      "label": "p9-native"
+    },
+    {
+      "code": 0,
+      "label": "p10-native"
+    },
+    {
+      "code": 0,
+      "label": "p11-native"
+    },
+    {
+      "code": 0,
+      "label": "p12-native"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "548 live bytes sit in allocations with no frame in the project (library-internal or without debug info)",
+    "exercised entry points are not measured for rust: the allocator shim sees allocations, not calls"
+  ],
+  "logs": [
+    "harness/H1/logs/build.log",
+    "harness/H1/logs/p1-native.log",
+    "harness/H1/logs/p2-native.log",
+    "harness/H1/logs/p3-native.log",
+    "harness/H1/logs/p4-native.log",
+    "harness/H1/logs/p5-native.log",
+    "harness/H1/logs/p6-native.log",
+    "harness/H1/logs/p7-native.log",
+    "harness/H1/logs/p8-native.log",
+    "harness/H1/logs/p9-native.log",
+    "harness/H1/logs/p10-native.log",
+    "harness/H1/logs/p11-native.log",
+    "harness/H1/logs/p12-native.log"
+  ],
+  "mode": "command",
+  "modes": [
+    "native"
+  ],
+  "points": 12,
+  "processes": 12,
+  "series": [
+    "S1"
+  ],
+  "tool": null,
+  "units": 2420,
+  "x_range": [
+    220.0,
+    2640.0
+  ]
+}

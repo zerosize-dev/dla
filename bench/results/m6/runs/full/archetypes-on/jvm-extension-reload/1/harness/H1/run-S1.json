@@ -1,0 +1,46 @@
+{
+  "captures": [],
+  "detectors": [],
+  "exits": [
+    {
+      "code": 0,
+      "label": "p1-fresh"
+    },
+    {
+      "code": 0,
+      "label": "p1-repeated"
+    }
+  ],
+  "ffi_sites": [],
+  "gaps": [
+    "scratch copy: 23 path(s) not copied (not a regular file)",
+    "junit-platform-console-standalone not used: the plain driver main runs the loop (JUnit variant is generated only when the jar is on the classpath)"
+  ],
+  "harness": "H1",
+  "limitations": [
+    "jvm probe bytes are a shallow estimate assuming compressed oops",
+    "no entry points are listed for this runtime: run dla workload discover before the harness to see which ones ran"
+  ],
+  "logs": [
+    "harness/H1/logs/build.log",
+    "harness/H1/logs/p1-fresh.log",
+    "harness/H1/logs/p1-repeated.log"
+  ],
+  "mode": "driver",
+  "modes": [
+    "fresh",
+    "repeated"
+  ],
+  "points": 9,
+  "processes": 2,
+  "series": [
+    "S1",
+    "S2"
+  ],
+  "tool": null,
+  "units": 3520,
+  "x_range": [
+    440.0,
+    3960.0
+  ]
+}

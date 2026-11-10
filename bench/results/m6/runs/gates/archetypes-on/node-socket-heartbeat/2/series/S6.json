@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "id": "S6",
+  "source": {
+    "kind": "gap",
+    "harness": "H1",
+    "workload": "node:script:package.json:load",
+    "mode": "native",
+    "runtime": "node",
+    "command": "node load.js --iterations {n}",
+    "derived_from": "S1"
+  },
+  "axis": "n",
+  "warmup": 1,
+  "columns": [
+    {
+      "name": "gap.accounted",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "process",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    },
+    {
+      "name": "gap.unexplained",
+      "unit": "bytes",
+      "kind": "gauge",
+      "region": "off-heap",
+      "baseline": false,
+      "after_gc": false,
+      "scope": "process",
+      "source": "gap"
+    }
+  ],
+  "points": [
+    {
+      "x": 440.0,
+      "t_ms": 111,
+      "values": [
+        20862131.0,
+        49752909.0
+      ]
+    },
+    {
+      "x": 880.0,
+      "t_ms": 156,
+      "values": [
+        34248895.0,
+        38881089.0
+      ]
+    },
+    {
+      "x": 1320.0,
+      "t_ms": 203,
+      "values": [
+        39033023.0,
+        47564609.0
+      ]
+    },
+    {
+      "x": 1760.0,
+      "t_ms": 358,
+      "values": [
+        60880051.0,
+        34024269.0
+      ]
+    },
+    {
+      "x": 2200.0,
+      "t_ms": 333,
+      "values": [
+        66459839.0,
+        44816193.0
+      ]
+    },
+    {
+      "x": 2640.0,
+      "t_ms": 563,
+      "values": [
+        71791795.0,
+        50805581.0
+      ]
+    },
+    {
+      "x": 3080.0,
+      "t_ms": 470,
+      "values": [
+        75012287.0,
+        48895809.0
+      ]
+    },
+    {
+      "x": 3520.0,
+      "t_ms": 556,
+      "values": [
+        81123519.0,
+        48293697.0
+      ]
+    },
+    {
+      "x": 3960.0,
+      "t_ms": 817,
+      "values": [
+        85931187.0,
+        49023821.0
+      ]
+    }
+  ],
+  "events": [],
+  "limitations": [
+    "function coverage is written by node itself to NODE_V8_COVERAGE",
+    "--capture heap enables the inspector Debugger domain for the run to record script ids; scripts.json is informational (no dla adapter reads it, snapshots name their scripts), and the Debugger adds some overhead",
+    "--capture nonheap tracks resources with async_hooks (init and destroy), which makes promise-heavy targets run up to roughly 10x slower than without the capture; compare timings only between runs that use the same capture",
+    "timer and listener counts cover registrations made through the global/`timers` functions and EventEmitter/EventTarget methods; timers/promises and internal timers are not counted"
+  ]
+}
