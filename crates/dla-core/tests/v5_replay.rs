@@ -1,4 +1,6 @@
-//! Every ledger committed under `bench/results/*/runs` was written at schema 1 to 5.
+//! A sample of the ledgers the M1 to M5 benchmark runs wrote (schema 1 to 5, core ledgers
+//! and worker slices), kept under `tests/data/old-ledgers` after the raw benchmark runs were
+//! deleted.
 //! The schema 6 build must replay all of them without error and to the same state: the
 //! digest of each replay (findings, evidence count, open items, merges) is compared with
 //! `tests/data/v5_replay.txt`, computed once with the build before schema 6.
@@ -67,13 +69,13 @@ fn replay(p: &Path) -> Result<Ledger, String> {
 
 #[test]
 fn committed_benchmark_ledgers_replay_to_their_recorded_state() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/results");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/old-ledgers");
     let mut files = Vec::new();
     for set in fs::read_dir(&root).unwrap().flatten() {
         collect(&set.path().join("runs"), &mut files);
     }
     files.sort();
-    assert!(!files.is_empty(), "no ledgers under bench/results");
+    assert!(!files.is_empty(), "no ledgers under tests/data/old-ledgers");
     let mut got = String::new();
     for f in &files {
         let rel = f

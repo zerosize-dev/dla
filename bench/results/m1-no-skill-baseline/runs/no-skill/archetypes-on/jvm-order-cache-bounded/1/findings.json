@@ -1,5 +1,0 @@
-{"findings": [{"site": "src/shop/OrderCache.java:10", "holder": "static/global", "region": "heap", "verdict": "not-a-leak",
-"mechanism": "Static access-ordered LinkedHashMap of orders keyed by id; looks like an unbounded cache that grows with every order.",
-"cause": "Bounded: removeEldestEntry evicts once size() > CAPACITY (1000), so entries and their Order/notes strings are released.",
-"evidence": "Ran shop.Main with 400000 requests (-Xmx256m, System.gc() at each checkpoint): cached orders stayed at 1000 and heap in use was flat (2323 KB, 2035, 2034, 2034 KB) while 350000 distinct orders were placed.",
-"discriminator": "Cache size plateaus at exactly 1000 and post-GC heap is flat across 4 checkpoints over 400k requests; eviction hook caps the map."}]}

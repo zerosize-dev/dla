@@ -138,6 +138,10 @@ did not repeat in the three runs above. The smoke results are not kept.
 
 ## Reproduce the grading
 
+The raw runs were deleted after grading (see "Keeping results" in `bench/README.md`);
+`metrics.json` and `table.md` are the record. The commands below need the runs.
+
+
 ```
 dla-bench grade bench/results/m5-gates --out /tmp/rust.json
 python3 bench/runner/grade.py bench/results/m5-gates --out /tmp/py.json

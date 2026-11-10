@@ -3,3 +3,4 @@ target/
 bench/results/**/transcript.jsonl
 bench/results/**/stderr.log
 __pycache__/
+bench/results/*/runs/

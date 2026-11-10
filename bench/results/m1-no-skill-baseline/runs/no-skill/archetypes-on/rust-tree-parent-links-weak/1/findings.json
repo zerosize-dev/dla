@@ -1,5 +1,0 @@
-{"findings": [{"site": "src/section.rs:10", "holder": "cycle-only", "region": "heap", "verdict": "not-a-leak",
-"mechanism": "Section tree has parent<->child links, the usual Rc cycle suspect; the parent link is RefCell<Weak<Section>> and only the child->parent direction is Weak, so ownership is strictly top-down.",
-"cause": "no cycle: Section::append stores Rc::downgrade(parent); children hold strong Rc only downward. parser::parse's `open` stack and Parsed.root are dropped at end of Service::handle, freeing the whole tree (also on the EmptyTitle error path).",
-"evidence": "Read all sources (Service keeps only two u64 counters, no caches/statics). Built release and ran --iterations 1000, 10000, 100000: peak RSS (ru_maxrss) was 13436 KB for all three, i.e. flat, not growing with documents processed.",
-"discriminator": "Parent back-link is Weak (src/section.rs:10, :27), and peak RSS stays constant at ~13.4 MB from 1k to 100k documents."}]}

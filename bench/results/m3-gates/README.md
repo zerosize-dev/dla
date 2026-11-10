@@ -126,6 +126,10 @@ weaken. CI runs it on every push.
 
 ## Reproduce the grading
 
+The raw runs were deleted after grading (see "Keeping results" in `bench/README.md`);
+`metrics.json` and `table.md` are the record. The commands below need the runs.
+
+
 ```
 dla-bench grade bench/results/m3-gates --out /tmp/rust.json
 python3 bench/runner/grade.py bench/results/m3-gates --out /tmp/py.json

@@ -1,9 +1,0 @@
-{"findings":[{"site":"src/section.rs:28","holder":"cycle-only","region":"heap","verdict":"leak-confirmed",
-"mechanism":"Section::append stores a strong Rc to the parent in child.parent while the parent holds the child strongly in children. Every parent/child pair is a reference cycle, so when parser::parse's Parsed (root Rc) is dropped at the end of Service::handle the counts never reach zero and the whole section tree of each document (including error-path partial trees) is never freed. Nothing else references them, so they are unreachable garbage.",
-"cause":"Rc parent back-link should be Weak<Section> (RefCell<Weak<Section>>, upgrade() in parent()).",
-"evidence":"Built release and ran outline-service --iterations N, measuring max RSS: 1000 docs=12.9MB, 5000=34.4MB, 20000=130MB, 40000=258MB; linear, about 6.4KB per document, though the service retains no per-request state (Service only holds two counters).",
-"discriminator":""},
-{"site":"src/service.rs:14","holder":"static/global","region":"heap","verdict":"not-a-leak",
-"mechanism":"Service struct holds only handled/rejected u64 counters; no collection grows.",
-"cause":"","evidence":"Read the code: no container fields, caches or statics anywhere in the crate; toc::render and the listing String are local and freed per request.",
-"discriminator":"Service has only two u64 fields, so its size is constant regardless of documents processed; the growth is entirely from the Section Rc cycle."}]}

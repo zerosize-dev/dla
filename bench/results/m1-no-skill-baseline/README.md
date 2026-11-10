@@ -84,6 +84,10 @@ need taxonomy labels, which a run without the skill does not give;
 
 ## Reproduce the grading
 
+The raw runs were deleted after grading (see "Keeping results" in `bench/README.md`);
+`metrics.json` and `table.md` are the record. The commands below need the runs.
+
+
 ```
 dla-bench grade bench/results/m1-no-skill-baseline --out /tmp/rust.json
 python3 bench/runner/grade.py bench/results/m1-no-skill-baseline --out /tmp/py.json

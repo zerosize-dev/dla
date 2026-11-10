@@ -1,5 +1,0 @@
-{"findings": [{"site": "src/section.rs:10", "holder": "cycle-only", "region": "heap", "verdict": "not-a-leak",
-"mechanism": "Section tree has parent<->child links, which would be an Rc cycle, but the parent link is a Weak and only children hold strong Rc.",
-"cause": "parent back-link is Weak<Section> (section.rs:10, set via Rc::downgrade at :31), so dropping Parsed.root frees the whole tree",
-"evidence": "Built release and ran --iterations 1000, 20000, 200000, 1000000; peak RSS (ru_maxrss) was flat at ~12.9 MB in every run. Service holds only two u64 counters; no statics, caches, thread-locals or registrations exist in the code (380 lines read in full).",
-"discriminator": "Peak RSS does not grow with document count (12.9 MB at 1k and at 1M documents); parent is Weak so no strong cycle exists."}]}

@@ -221,6 +221,15 @@ when `is_error` is true or `subtype` is not `success`. A run that hit
 `--max-turns` exits 1 and counts as errored in the usage block, its findings
 are still graded.
 
+### Keeping results
+
+Raw runs are working material: a benchmark is run, graded, summarized and then deleted.
+`<out>/runs/` is git-ignored. What stays in `bench/results/<name>/` is the record of what the
+run proved: `README.md` (the setup, the comparison and the failures, written from the runs),
+`metrics.json` and `table.md`. Grade and summarize before deleting the runs: a deleted run
+cannot be regraded. The ledgers the schema-replay test needs are kept as test data
+(`crates/dla-core/tests/data/old-ledgers`), not as results.
+
 ## Grade, compare, table
 
 ```
