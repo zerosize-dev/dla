@@ -567,3 +567,76 @@ fn the_entry_path_is_read_from_state_json_when_a_ledger_is_loaded() {
 
 #[allow(dead_code)]
 fn _assert_rules_are_object_safe(_: &dyn TransitionRules) {}
+
+// ------------------------------------------------------------------------ explain
+
+const ARTIFACT_TEXT: &str = "Entries are added to com.acme.Cache.entries, a static/global map, by code the dump cannot show; no remover found in the dump.";
+
+fn artifact_explain(
+    entry: EntryPath,
+    adds: &[&str],
+    removal: dla_core::RemovalClaim,
+    tag: dla_core::finding::ExplanationTag,
+    evidence: Option<EvidenceId>,
+) -> Result<(), Error> {
+    let mut l = run(entry);
+    let f = finding(&mut l, OWNER, HOLDER, true);
+    if entry != EntryPath::Artifact {
+        let mut a = dla_core::FindingAnnotation::new(f.clone());
+        a.site = Some("a.go:1".into());
+        l.annotate_record(a).unwrap();
+    }
+    under_test(&mut l, &f, E_HARNESS).unwrap();
+    confirm(&mut l, &f, &[E_GROWTH_DUMP]).unwrap();
+    let adds: Vec<String> = adds.iter().map(|s| (*s).to_owned()).collect();
+    l.explain(
+        &f,
+        tag,
+        &adds,
+        removal,
+        None,
+        evidence.as_ref(),
+        ARTIFACT_TEXT,
+        &[],
+        &[],
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn an_artifact_finding_is_explained_without_a_writer_and_without_adds() {
+    use dla_core::{RemovalClaim as R, finding::ExplanationTag as T};
+    // The owner stands in for the site, no writer is recorded, no --adds is given.
+    artifact_explain(EntryPath::Artifact, &[], R::NotFound, T::Inferred, None).unwrap();
+    // Only `not-found` can be stated: a dump shows no remover.
+    for removal in [R::Never, R::Conditional, R::WrongKey, R::Unreachable] {
+        let e = refusal(artifact_explain(
+            EntryPath::Artifact,
+            &[],
+            removal,
+            T::Inferred,
+            None,
+        ));
+        assert_eq!(e.code, "explain-remover", "{removal}: {e}");
+        assert!(e.fix.contains("--removal not-found"), "{}", e.fix);
+    }
+    // Observed rests on a retention path; a growth record is not enough here.
+    let e = refusal(artifact_explain(
+        EntryPath::Artifact,
+        &[],
+        R::NotFound,
+        T::Observed,
+        Some(eid(E_GROWTH_DUMP)),
+    ));
+    assert_eq!(e.code, "explain-tag", "{e}");
+    assert!(e.message.contains("retention path"), "{e}");
+    // Repository runs are unchanged: a writer is required and so are the adding sites.
+    let e = refusal(artifact_explain(
+        EntryPath::Repository,
+        &[],
+        R::NotFound,
+        T::Inferred,
+        None,
+    ));
+    assert_eq!(e.code, "explain-no-writer", "{e}");
+}

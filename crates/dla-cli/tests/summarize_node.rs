@@ -672,6 +672,32 @@ fn fewer_than_three_snapshots_give_the_evidence_and_say_what_is_missing() {
 }
 
 #[test]
+fn retention_path_holders_state_the_kind_of_their_retention_root() {
+    let p = Project::new();
+    let files = retry(&p);
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let growth = &p.evidence("growth-series")[0];
+    for r in p.evidence("retention-path") {
+        let holders = r["result"]["holders"].as_array().unwrap();
+        assert!(!holders.is_empty());
+        for h in holders {
+            assert!(h["holder_kind"].is_string(), "{h}");
+            // The same value the growth column of that holder carries.
+            let col = format!("holder:{}", h["key"].as_str().unwrap());
+            if let Some(c) = growth["result"]["passed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["column"] == col.as_str())
+            {
+                assert_eq!(c["holder_kind"], h["holder_kind"], "{c} {h}");
+            }
+        }
+    }
+}
+
+#[test]
 fn holders_are_redacted_in_the_summaries_and_the_series() {
     let p = Project::new();
     let files = retry(&p);

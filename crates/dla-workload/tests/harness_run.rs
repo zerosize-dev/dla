@@ -829,6 +829,74 @@ fn jvm_agent_probe_measures_threadlocal_values_on_pooled_threads() {
     assert!(!passes(ctl, probe), "the trimmed lists stay short");
 }
 
+/// A `ThreadLocal` that no live thread holds a value of is not a measurement of zero: the
+/// values may sit in virtual threads, a finished thread or nowhere yet, and a column of
+/// zeros would read as a flat series. The probe abstains: no column, the reason in the
+/// limitations, and no stale `--add-opens` hint.
+#[test]
+fn jvm_agent_probe_abstains_when_no_live_thread_holds_a_threadlocal_value() {
+    if !have(&["java", "javac", "jar"]) {
+        return;
+    }
+    let fx = fixture("", &["jvm"], &[1]);
+    fs::write(
+        fx.work.join("Idle.java"),
+        "import java.util.*;\npublic class Idle {\n  static final ThreadLocal<List<String>> TL = ThreadLocal.withInitial(ArrayList::new);\n  public static void main(String[] a) throws Exception { Thread.sleep(200); }\n}\n",
+    )
+    .unwrap();
+    let jar = build_jvm_agent(&fx);
+    let mut m = manifest(
+        Runtime::Jvm,
+        &["java", "-cp", "out", "Idle", "{n}"],
+        vec![(
+            s("JAVA_TOOL_OPTIONS"),
+            format!("-javaagent:{}", jar.display()),
+        )],
+        1000,
+    );
+    m.build = Some(spec(&[
+        "sh",
+        "-c",
+        "rm -rf out && mkdir out && javac -d out Idle.java",
+    ]));
+    m.agent = AgentKind::JvmAgent;
+    m.probes = vec![ProbeSpec {
+        id: s("P1"),
+        finding: None,
+        target: ProbeTarget::JvmStatic {
+            class: s("Idle"),
+            field: s("TL"),
+        },
+        site: None,
+    }];
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let series = load(&fx, &out, 0);
+    assert!(
+        series
+            .columns
+            .iter()
+            .all(|c| !c.name.starts_with("probe:Idle.TL")),
+        "an empty measurement is no column: {:?}",
+        series.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+    let said: Vec<&String> = out
+        .limitations
+        .iter()
+        .filter(|l| l.contains("Idle.TL"))
+        .collect();
+    assert!(
+        said.iter()
+            .any(|l| l.contains("no live platform thread holds a value")),
+        "{:?}",
+        out.limitations
+    );
+    assert!(
+        said.iter()
+            .all(|l| !l.contains("--add-opens needed") && !l.contains("(needs --add-opens"))
+    );
+}
+
 #[test]
 fn a_hung_point_is_killed_at_the_timeout_and_the_run_is_refused_with_the_log() {
     if !have(&["sh"]) {

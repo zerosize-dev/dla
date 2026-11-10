@@ -8,7 +8,7 @@
 //! Layouts read (the `result` of each producer):
 //!
 //! * `dla-hprof` `retention-path`: `holders[].key` and `via[].key`
-//!   (`static:<Class>.<field>`, `field:<Decl>.<field>`).
+//!   (`static:<Class>.<field>`, `field:<Decl>.<field>`, `thread-local:<Class>.<field>`).
 //! * `dla-v8-snapshot` `retention-path`: `holders[].key` (`static:<module>.<name>`).
 //! * `valgrind-vgdb` `retention-path`: `alloc` (`function (file:line)`), `root` and `path[]`.
 //! * `alloc-stack`: `top[].root` (the root holder of a sampled path, JFR OldObjectSample).
@@ -31,7 +31,13 @@ use crate::{
 /// names no field (`thread:main`, `jni-global:...`).
 fn key_owner(key: &str) -> Option<String> {
     let k = key.trim();
-    let k = k.strip_prefix("field:").unwrap_or(k);
+    // `field:<Decl>.<f>` is an instance field; `thread-local:<Class>.<f>` is the static
+    // field whose `ThreadLocal` the values hang from (dla-hprof writes it for the values
+    // held by live threads). Both name the field, as `static:` does.
+    let k = k
+        .strip_prefix("field:")
+        .or_else(|| k.strip_prefix("thread-local:"))
+        .unwrap_or(k);
     canonical(k)
 }
 
@@ -168,9 +174,10 @@ pub fn names_holder(record: &EvidenceRecord, finding: &Finding) -> bool {
 }
 
 /// The holder kind a retention record states for the holder it names, when it states one
-/// (a `holder_kind` member of the matching `holders` entry). The readers write none
-/// today, so this is `None` for their records; a record that does state one must agree
-/// with the finding's holder before the finding becomes strong.
+/// (a `holder_kind` member of the matching `holders` or `via` entry). `dla-hprof` and
+/// `dla-v8-snapshot` write it on every holder entry, the same value their growth columns
+/// carry; a record of another tool states none and gives `None`. A record that states
+/// one must agree with the finding's holder before the finding becomes strong.
 pub fn named_holder_kind(record: &EvidenceRecord, finding: &Finding) -> Option<Holder> {
     let owner = finding.owner.as_deref()?;
     ["holders", "via"].iter().find_map(|l| {
@@ -336,6 +343,45 @@ mod tests {
         assert!(names_holder(&r, &finding(Some("Registry.entries"), None)));
         assert!(!names_holder(&r, &finding(Some("Other.trail"), None)));
         assert!(!names_holder(&r, &finding(None, Some("src/A.java:4"))));
+    }
+
+    #[test]
+    fn a_thread_local_holder_key_names_its_static_field() {
+        let r = rec(
+            EvidenceKind::RetentionPath,
+            Authority::Dump,
+            "dla-hprof",
+            json!({"holders": [
+                {"key": "thread-local:billing.RenderContext.SEGMENTS", "holder_kind": "thread-local"},
+                {"key": "thread:pool-1-thread-3"}]}),
+        );
+        assert!(names_holder(
+            &r,
+            &finding(Some("billing.RenderContext.SEGMENTS"), None)
+        ));
+        assert!(names_holder(
+            &r,
+            &finding(Some("RenderContext.SEGMENTS"), None)
+        ));
+        assert!(!names_holder(
+            &r,
+            &finding(Some("billing.RenderContext.OTHER"), None)
+        ));
+        // A thread holder names no field.
+        let t = rec(
+            EvidenceKind::RetentionPath,
+            Authority::Dump,
+            "dla-hprof",
+            json!({"holders": [{"key": "thread:RenderContext.SEGMENTS"}]}),
+        );
+        assert!(!names_holder(
+            &t,
+            &finding(Some("billing.RenderContext.SEGMENTS"), None)
+        ));
+        assert_eq!(
+            named_holder_kind(&r, &finding(Some("RenderContext.SEGMENTS"), None)),
+            Some(Holder::ThreadLocal)
+        );
     }
 
     #[test]

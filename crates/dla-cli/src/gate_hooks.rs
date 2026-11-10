@@ -146,6 +146,13 @@ struct Input {
     tool_input: Option<Value>,
     #[serde(default)]
     agent_transcript_path: Option<String>,
+    /// Set on every hook call made inside a subagent (absent in the main session).
+    #[serde(default)]
+    agent_id: Option<String>,
+    /// The main session's transcript. A subagent's own transcript sits next to it, see
+    /// [`subagent_transcript`].
+    #[serde(default)]
+    transcript_path: Option<String>,
 }
 
 impl Input {
@@ -424,6 +431,7 @@ fn pre_tool(
             .as_ref()
             .filter(|s| s.status == RunStatus::Active)
         && !state.stage_passed(Stage::Classify)
+        && !worker_passed_classify(input, state)
         && let Some(why) = check_read(input, tool, &found)
     {
         return Ok(HookOut::deny(&why));
@@ -600,6 +608,38 @@ fn bash_write(cmd: &str, found: &Found) -> Option<String> {
 fn locked_name(s: &str) -> bool {
     let lower = s.to_ascii_lowercase().replace('\\', "/");
     LOCKED_SUFFIXES.iter().any(|n| lower.contains(n))
+}
+
+/// The transcript of the subagent a PreToolUse call runs in. SubagentStop names it
+/// (`agent_transcript_path`); a PreToolUse call carries only `agent_id` and the main
+/// session's `transcript_path`, and the subagent's file is
+/// `<dir of the main transcript>/<its stem>/subagents/agent-<agent_id>.jsonl` (the layout
+/// the Claude Code reference shows for SubagentStop; see docs/VERIFY.md).
+fn subagent_transcript(input: &Input) -> Option<PathBuf> {
+    if let Some(p) = input.agent_transcript_path.as_deref() {
+        return Some(expand_home(p));
+    }
+    let id = input.agent_id.as_deref().filter(|i| !i.is_empty())?;
+    let main = expand_home(input.transcript_path.as_deref()?);
+    let stem = main.file_stem()?;
+    let name = if id.starts_with("agent-") {
+        format!("{id}.jsonl")
+    } else {
+        format!("agent-{id}.jsonl")
+    };
+    Some(main.parent()?.join(stem).join("subagents").join(name))
+}
+
+/// True when the call runs in a subagent whose worker passed the classify gate itself
+/// (`dla --worker <name> gate check --stage classify`). The worker is found as the
+/// SubagentStop gate finds it: the last `--worker <name>` on a `dla` command of the
+/// subagent's transcript. A call that is not in a subagent, or whose worker cannot be
+/// identified, gets the core's rule.
+fn worker_passed_classify(input: &Input, state: &RunState) -> bool {
+    input.agent_id.is_some()
+        && subagent_transcript(input)
+            .and_then(|p| worker_from_transcript(&p.to_string_lossy()))
+            .is_some_and(|w| state.worker_stage_passed(&w, Stage::Classify))
 }
 
 const READ_REASON: &str = "The archetype and known-leak tables unlock after the classify gate, so that the first hypotheses come from the evidence and not from a list. Run `dla gate check --stage classify`; it lists what is still missing.";

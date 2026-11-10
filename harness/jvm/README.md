@@ -51,8 +51,11 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   `inheritableThreadLocals` maps (`size`: the collection, map or array length, summed; `reachable`
   and `bytes`: one walk from all the values). The agent opens `java.lang` to its own module with
   `Instrumentation.redefineModule` (the effect of `--add-opens java.base/java.lang=ALL-UNNAMED`);
-  when the maps still cannot be read the probe abstains: `error` is set, no column is written, and
-  the reason is a limitation, so an empty measurement never refutes the finding.
+  when the maps still cannot be read, or can be read but no live platform thread holds a value of
+  this `ThreadLocal`, the probe abstains: `error` is set, no column is written, and the reason is a
+  limitation, so an empty measurement never refutes the finding. (No value is not a measurement
+  of zero: the values may sit in virtual threads, which `Thread.getAllStackTraces` does not list,
+  in a thread that has ended, or not exist yet.)
 - `purge`: `trim-native-heap` runs the `systemTrimNativeHeap` diagnostic command and records the
   `os.*` values before and after; `gc` records the values before the forced collection and after.
 

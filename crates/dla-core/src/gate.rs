@@ -321,9 +321,32 @@ fn probe(view: &RunView, out: &mut Out) {
 
 // -------------------------------------------------------------------- sweep
 
+/// The runtimes `dla probe` detected from the project's sources and build files, over
+/// every probe of the run. `None` when no probe evidence names any (the probe gate says
+/// so): every runtime with a coverage row is then held to the sweep.
+fn probed_runtimes(view: &RunView) -> Option<BTreeSet<String>> {
+    let found: BTreeSet<String> = view
+        .ledger
+        .evidence()
+        .filter(|e| e.kind == EvidenceKind::Probe)
+        .filter_map(|e| e.result.get("runtimes").and_then(|v| v.as_array()))
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    (!found.is_empty()).then_some(found)
+}
+
 fn sweep(view: &RunView, out: &mut Out) {
     let Some(cov) = &view.coverage else { return };
-    for (w, wc) in &cov.workers {
+    // A capture tool (valgrind, heaptrack) adds the `native` runtime to the coverage of a
+    // Rust or JVM project: only a runtime the probe found in the sources needs its own
+    // census and sweep.
+    let probed = probed_runtimes(view);
+    for (w, wc) in cov
+        .workers
+        .iter()
+        .filter(|(w, _)| probed.as_ref().is_none_or(|p| p.contains(*w)))
+    {
         if !wc.backends.contains_key("census") {
             out.add(
                 "coverage",
@@ -333,6 +356,7 @@ fn sweep(view: &RunView, out: &mut Out) {
             );
         }
         // The built-in `dla` rules run in every sweep, so their row says a sweep happened.
+        // `dla probe` does not write that row: it is not a sweep.
         if !wc.backends.contains_key("dla") {
             out.add(
                 "coverage",
@@ -544,9 +568,50 @@ fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec
                 .map(|f| f.id.clone()),
         );
     }
+    // `dla alloc-test` writes a trend for its plateau and purge test and a discriminator
+    // that names the trend and the columns it tested: a finding that cites that
+    // discriminator is tied to the columns it names.
+    for e in view.ledger.evidence().filter(|e| {
+        e.kind == EvidenceKind::Discriminator
+            && e.result.get("trend").and_then(|v| v.as_str()) == Some(t.id.as_str())
+            && e.result
+                .get("columns")
+                .and_then(|v| v.as_array())
+                .is_some_and(|cols| {
+                    cols.iter()
+                        .any(|x| x.get("name").and_then(|n| n.as_str()) == Some(c.name.as_str()))
+                })
+    }) {
+        ids.extend(
+            view.ledger
+                .findings()
+                .filter(|f| {
+                    f.supports.contains(&e.evidence_id) || f.contradicts.contains(&e.evidence_id)
+                })
+                .map(|f| f.id.clone()),
+        );
+    }
     ids.sort();
     ids.dedup();
     ids.iter().filter_map(|i| view.ledger.finding(i)).collect()
+}
+
+/// The number in a trend id (`T3` is 3).
+fn trend_number(id: &str) -> Option<u64> {
+    id.strip_prefix('T')?.parse().ok()
+}
+
+/// True when a later trend of the same series analysed the column again: the newer
+/// measurement is the one the gate holds the column to.
+fn superseded(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
+    let Some(mine) = trend_number(&t.id) else {
+        return false;
+    };
+    view.trends.iter().any(|u| {
+        u.series == t.series
+            && trend_number(&u.id).is_some_and(|n| n > mine)
+            && u.columns.iter().any(|d| d.name == c.name)
+    })
 }
 
 /// True when a resolved open item mentions the column and its trend or series.
@@ -584,7 +649,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
             } else {
                 !tied.is_empty()
             };
-            if ok || covered_by_open_item(view, t, c) {
+            if ok || superseded(view, t, c) || covered_by_open_item(view, t, c) {
                 continue;
             }
             let fix = match evidence_for_column(view, t, c) {
@@ -760,6 +825,30 @@ fn rule_out(view: &RunView, out: &mut Out) {
 
 // -------------------------------------------------------------------- final
 
+/// True when the open item a residual row names is resolved. A worker raises `O1` in its
+/// slice and the merge renames it `<worker>/O1`, while the coverage row keeps the plain
+/// id: an unprefixed id also matches the same number under a worker prefix when that
+/// item is about the same region and resolved.
+fn residual_item_resolved(view: &RunView, id: &crate::ids::OpenItemId, region: &str) -> bool {
+    if view
+        .ledger
+        .open_item(id)
+        .is_some_and(|o| o.resolution.is_some())
+    {
+        return true;
+    }
+    if id.prefix().is_some() {
+        return false;
+    }
+    let tag = format!(" in {region} (");
+    view.ledger.open_items().any(|o| {
+        o.item.id.prefix().is_some()
+            && o.item.id.number() == id.number()
+            && o.resolution.is_some()
+            && o.item.text.contains(&tag)
+    })
+}
+
 fn final_items(view: &RunView, out: &mut Out) {
     // (b) per backend: every hit has a candidate and every candidate a disposition. The
     // undispositioned findings themselves are listed by `status`.
@@ -779,11 +868,10 @@ fn final_items(view: &RunView, out: &mut Out) {
     // (e) residual rows over their threshold have a resolved open item.
     if let Some(cov) = &view.coverage {
         for r in cov.residual.iter().filter(|r| r.residual > r.threshold) {
-            let resolved = r.open_item.as_ref().is_some_and(|id| {
-                view.ledger
-                    .open_item(id)
-                    .is_some_and(|o| o.resolution.is_some())
-            });
+            let resolved = r
+                .open_item
+                .as_ref()
+                .is_some_and(|id| residual_item_resolved(view, id, &r.region.to_string()));
             if !resolved {
                 out.add(
                     "residual",
@@ -804,10 +892,17 @@ fn final_items(view: &RunView, out: &mut Out) {
                 "explanation",
                 f.id.to_string(),
                 format!("finding {} is {} and has no stored explanation", f.id, f.state),
-                format!(
-                    "dla ledger explain {} --tag inferred --adds FILE:LINE --removal never --text \"<site, holder, who adds, why nothing removes>\"",
-                    f.id
-                ),
+                if view.state.entry == EntryPath::Artifact {
+                    format!(
+                        "dla ledger explain {} --tag inferred --removal not-found --text \"<owner, holder, what adds to it, no remover found>\"   (an artifact run has no source: no --adds)",
+                        f.id
+                    )
+                } else {
+                    format!(
+                        "dla ledger explain {} --tag inferred --adds FILE:LINE --removal never --text \"<site, holder, who adds, why nothing removes>\"",
+                        f.id
+                    )
+                },
             );
         }
     }

@@ -85,17 +85,26 @@ requirements of that stage and everything before it, prints up to five missing i
 that fixes each (the full list is in `gate/<stage>.json` under the run), and exits non-zero while
 something is missing. A passing check records the stage in the run state. `--final` checks everything
 the report needs. In a worker, `dla --run <id> --worker <name> gate check ...` checks the worker's
-slice and records nothing.
+slice. A passing stage check of a worker is recorded under the worker's name, not for the run; the read hook
+uses it to open the archetype tables to that worker's subagent after `--stage classify`.
 
 | Stage | Passes when |
 |---|---|
 | intake | the eight `intake.*` items are answered with evidence, or unresolved with a reason and a remedy; consent is recorded |
 | probe | probe evidence exists; each runtime has a coverage row; every backend row says ran, blocked or missing with a reason |
-| sweep | a sweep and a census ran for each runtime; every hit has a candidate or a recorded duplicate |
-| classify | every series has a trend analysis; every non-flat trend column is tied to a finding or covered by a resolved open item. **Passing it unlocks `references/<lang>-archetypes.md` and `known-leaks.md`**: until then the read hook denies them, so the first hypotheses come from the evidence and not from a list |
+| sweep | a sweep and a census ran for each runtime the probe found in the project's sources (a capture tool such as valgrind or heaptrack adds the `native` coverage row, which needs neither unless the probe found native sources; `dla probe` alone is not a sweep); every hit has a candidate or a recorded duplicate |
+| classify | every series has a trend analysis; every non-flat trend column is tied to a finding or covered by a resolved open item (see below). **Passing it unlocks `references/<lang>-archetypes.md` and `known-leaks.md`**: until then the read hook denies them, so the first hypotheses come from the evidence and not from a list |
 | confirm | no finding is left under test without a result, and none tied to growth that passed is left untested |
 | attribute | every confirmed or strong finding has a holder and a site (an owner on an artifact run) |
 | rule_out | every leak-side finding has a non-leak sibling, and no sibling is left without a disposition |
+
+Which trend columns the classify gate holds: the newest trend of each series. A column of an older trend of
+the same series is replaced when a later trend of that series analysed a column of the same name, so
+`dla trend S3` after `dla alloc-test` moves the gate to the new trend; the new trend's columns need the
+`dla ledger add --origin growth-series --evidence E..` finding the gate prints. `dla alloc-test` writes a trend
+for its plateau and purge test and a `discriminator` that names the trend and the columns it tested: a finding
+that cites that discriminator (`--evidence`) ties those columns, and the final gate wants it dispositioned. A
+column the discriminator did not test is not covered by it.
 
 ## 1. Intake checklist
 

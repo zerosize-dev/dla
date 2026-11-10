@@ -1015,6 +1015,12 @@ fn a_via_holder_is_listed_followed_in_the_series_and_tied_by_its_owner() {
 /// Two pooled threads whose `ThreadLocal` (held by the static `shop.Ctx.BUF`) holds a buffer of
 /// `n` kilobytes each, as the entries of their `threadLocals` maps.
 fn thread_local_dump(ts: u64, n: usize) -> Vec<u8> {
+    thread_local_dump_with(ts, n, 0)
+}
+
+/// As [`thread_local_dump`], with `big` static fields of other classes (`shop.Big<k>.DATA`)
+/// that each keep 400 KB alive, so they are the largest holders of every dump.
+fn thread_local_dump_with(ts: u64, n: usize, big: usize) -> Vec<u8> {
     let mut b = B::new(8, ts);
     let obj = b.declare("java.lang.Object");
     let class_cls = b.declare("java.lang.Class");
@@ -1044,6 +1050,11 @@ fn thread_local_dump(ts: u64, n: usize) -> Vec<u8> {
         let tname = b.java_string(string, name);
         let t = b.instance(thread, &[F::Id(tname), F::Id(m), F::Id(0)]);
         b.root(0x08, t, i as u32 + 1, 5);
+    }
+    for k in 0..big {
+        let cls = b.declare(&format!("shop.Big{k}"));
+        let data = b.byte_array(&vec![7u8; 400_000]);
+        b.class_dump(cls, obj, loader, 0, &[], &[("DATA", data)]);
     }
     b.class_dump(obj, 0, 0, 0, &[], &[]);
     b.class_dump(class_cls, obj, 0, 0, &[], &[]);
@@ -1139,4 +1150,96 @@ fn via_holders_on_one_dump_are_listed_and_a_series_needs_three() {
     assert_eq!(v["via_holders"][0]["key"], "static:shop.Waiters.gates");
     assert_eq!(v["gate"], "fail");
     assert!(p.evidence("growth-series").is_empty());
+}
+
+fn thread_local_files(p: &Project, big: usize) -> Vec<String> {
+    [20, 40, 60]
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            p.put(
+                &format!("dumps/d{i}.hprof"),
+                &thread_local_dump_with(T0 + 30_000 * i as u64, *n, big),
+            )
+        })
+        .collect()
+}
+
+fn holder_keys(r: &Value) -> Vec<&str> {
+    r["result"]["holders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["key"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn retention_paths_state_the_holder_kind_of_each_holder() {
+    let p = Project::new();
+    let files = thread_local_files(&p, 0);
+    heap_graph(&p, &files, &[]);
+    let r = p.evidence("retention-path");
+    assert_eq!(r.len(), 3);
+    let holders = r[2]["result"]["holders"].as_array().unwrap();
+    assert!(!holders.is_empty());
+    for h in holders {
+        assert!(
+            h["holder_kind"].is_string(),
+            "every holder entry states its kind: {h}"
+        );
+    }
+    let tl = holders
+        .iter()
+        .find(|h| h["key"] == "thread-local:shop.Ctx.BUF")
+        .unwrap_or_else(|| panic!("{:?}", holders));
+    assert_eq!(tl["holder_kind"], "thread-local");
+}
+
+#[test]
+fn the_holder_a_finding_names_is_in_every_retention_path_record_even_when_small() {
+    let p = Project::new();
+    p.put(
+        "src/shop/Ctx.java",
+        b"package shop;\n\nfinal class Ctx {\n    // the leak\n    static final ThreadLocal<Buffer> BUF = new ThreadLocal<>();\n}\n",
+    );
+    let f = census_finding(&p, "shop.Ctx.BUF", "src/shop/Ctx.java:5", &[]);
+    let files = thread_local_files(&p, 3);
+    // Without --finding the three largest holders are the other classes'.
+    heap_graph(&p, &files, &[]);
+    for r in p.evidence("retention-path") {
+        assert!(
+            !holder_keys(&r).contains(&"thread-local:shop.Ctx.BUF"),
+            "{r}"
+        );
+    }
+    // With --finding the holder it resolved to is named by every dump's record.
+    let q = Project::new();
+    q.put(
+        "src/shop/Ctx.java",
+        b"package shop;\n\nfinal class Ctx {\n    // the leak\n    static final ThreadLocal<Buffer> BUF = new ThreadLocal<>();\n}\n",
+    );
+    let g = census_finding(&q, "shop.Ctx.BUF", "src/shop/Ctx.java:5", &[]);
+    assert_eq!(f, g);
+    let files = thread_local_files(&q, 3);
+    let v = heap_graph(&q, &files, &["--finding", &g]);
+    assert_eq!(v["tied"], json!([g]), "{v}");
+    let recs = q.evidence("retention-path");
+    assert_eq!(recs.len(), 3);
+    for r in &recs {
+        let keys = holder_keys(r);
+        assert!(keys.contains(&"thread-local:shop.Ctx.BUF"), "{r}");
+        assert!(keys.len() <= 4, "the largest three and the finding's: {r}");
+        assert!(
+            serde_json::to_string(&r["result"]).unwrap().len() <= 2048,
+            "{r}"
+        );
+        let h = r["result"]["holders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["key"] == "thread-local:shop.Ctx.BUF")
+            .unwrap();
+        assert_eq!(h["holder_kind"], "thread-local");
+    }
 }

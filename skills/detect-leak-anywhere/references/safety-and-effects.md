@@ -85,12 +85,12 @@ The guarantee is the integrity seals inside `dla` (`references/evidence-and-repo
 protected file that changed outside `dla` is detected by `gate check`, `report` and `run status`, and
 the report says INCOMPLETE and names it.
 
-What the hooks do (all call `dla gate <subcommand>`; with no active run they allow everything):
+What the hooks do (all call `dla gate <subcommand>`; with no active run they allow everything, and a run that is complete, incomplete or aborted is not active):
 
 | Hook | Where it is declared | What it blocks |
 |---|---|---|
 | `write-hook` | SKILL.md frontmatter (core session) and `hooks/hooks.json` (also inside workers) | `Write`, `Edit` and `NotebookEdit` of `report.md`, `state.json`, `coverage.json`, `ledger*.jsonl` and `integrity/` under `.dla/` |
-| `read-hook` | the same two places | `Read` of `*-archetypes.md`, `known-leaks.md`, `archetypes.toml` and `known-leaks.toml` until `dla gate check --stage classify` has passed; in the core session also `Grep` and `Glob` naming them |
+| `read-hook` | the same two places | `Read` of `*-archetypes.md`, `known-leaks.md`, `archetypes.toml` and `known-leaks.toml` until `dla gate check --stage classify` has passed (for the core, or for the worker whose subagent reads: `dla --worker <name> gate check --stage classify`); in the core session also `Grep` and `Glob` naming them |
 | `bash-hook` | SKILL.md frontmatter only | a Bash command that names `.dla/` with a write form (`>`, `tee`, `sed -i`, `cp`, `mv`, `rm`, `truncate`, an interpreter one-liner, `dd`) or that reads an archetype file before the classify gate; commands that start with `dla` are allowed. Best effort on the command text |
 | `stop-hook` | SKILL.md frontmatter (the core's Stop) | the end of the turn while `dla gate check --final` fails; it prints the first missing items and their fixes |
 | `stop-hook --subagent` | `hooks/hooks.json`, matcher `^dla:worker$` (SubagentStop) | a worker's stop while its slice is not done and dispositioned |
@@ -100,6 +100,10 @@ Plugin agents ignore `hooks:` in their own frontmatter, which is why the worker 
 call. A stop hook never fails closed: after three blocks in a row with no change in the ledger it lets the
 stop through, marks the run (or the worker) INCOMPLETE (stalled), and says why. Claude Code also ends a turn
 after eight stop-hook continuations in a row; the count resets when Claude calls a tool.
+
+Once a run is complete, incomplete or aborted the hooks allow everything: they guard a run that is in
+progress, and `dla` takes no part in what is written afterwards. The seals are what keep the result honest
+then: `report`, `gate check` and `run status` still compare every protected file with its seal.
 
 What the hooks cannot stop:
 

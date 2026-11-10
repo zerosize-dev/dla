@@ -552,8 +552,12 @@ public final class DlaDump {
      * A ThreadLocal field is measured through its per-thread values: the sum over all live threads
      * of the value this ThreadLocal holds in the thread's threadLocals and inheritableThreadLocals
      * maps (size: collection, map or array length; reachable and bytes: one bounded walk from all
-     * the values). When the thread maps cannot be read the probe abstains with an error and adds a
-     * limitation, so an empty measurement never refutes.
+     * the values). The probe abstains (an error, no figures, a limitation) in two cases, so that an
+     * empty measurement never refutes: when the thread maps cannot be read, and when they can be
+     * read but no live platform thread holds a value of this ThreadLocal. The second is not a
+     * measurement of zero: the values may sit in virtual threads (not listed by
+     * Thread.getAllStackTraces), may be held by a thread that has ended, or may not have been
+     * created yet, and a column of zeros would read as a flat series that clears the field.
      */
     private static Map<String, Object> threadLocalProbe(String id, Field f, String path, ThreadLocal<?> tl,
             List<String> lim) {
@@ -566,6 +570,12 @@ public final class DlaDump {
                         values.add(v);
                     }
                 }
+            }
+            if (values.isEmpty()) {
+                String why = "no live platform thread holds a value of this ThreadLocal: nothing measured";
+                lim.add("probe " + path + ": " + why
+                    + " (virtual threads are not listed; a removed value or an ended thread leaves none)");
+                return probeRecord(id, f.getName(), path, null, 0, 0, null, why);
             }
             long sum = 0;
             boolean sized = false;
@@ -585,7 +595,9 @@ public final class DlaDump {
             return probeRecord(id, f.getName(), path, sized ? Long.valueOf(sum) : null, w.count, w.bytes, null, null);
         } catch (Throwable t) {
             String why = "thread-local values unreadable: " + t;
-            lim.add("probe " + path + ": " + why + " (needs --add-opens java.base/java.lang)");
+            lim.add("probe " + path + ": " + why
+                + " (the agent opens java.base/java.lang itself with Instrumentation.redefineModule;"
+                + " it failed here, or this JDK keeps the thread maps elsewhere)");
             return probeRecord(id, f.getName(), path, null, 0, 0, null, why);
         }
     }

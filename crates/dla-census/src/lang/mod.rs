@@ -93,7 +93,18 @@ impl<'a> Cx<'a> {
             return;
         };
         let (path, range) = describe(node, self.src(), self.file.lang);
-        let owner = join_owner(&self.owner_prefix(), &path);
+        // A holder created in a static or instance initializer is owned by the field it
+        // is stored into, never by the compiler-named `<clinit>` or a constructor.
+        let stored = (rule.assigned && self.file.lang == Lang::Java)
+            .then(|| initializer_store(node, self.src()))
+            .flatten();
+        let owner = match &stored {
+            Some(f) => join_owner(
+                &self.owner_prefix(),
+                &join_owner(&class_path(node, self.src(), self.file.lang), f),
+            ),
+            None => join_owner(&self.owner_prefix(), &path),
+        };
         let mut raw = Raw::new(
             rule.kind,
             rule.holder,
@@ -102,7 +113,9 @@ impl<'a> Cx<'a> {
             ast::line(node),
             owner,
         );
-        if rule.assigned {
+        if let Some(f) = &stored {
+            raw = raw.tracking(f, Scope::Project, false);
+        } else if rule.assigned {
             if let Some((n, member)) = assigned_name(node, self.src()) {
                 let scope = if member {
                     Scope::Project
@@ -258,6 +271,55 @@ pub fn class_path(n: Node<'_>, src: &str, lang: Lang) -> String {
         .collect();
     names.reverse();
     names.join(".")
+}
+
+/// Java: the field a call's result is assigned to when the call sits in a static
+/// initializer block (`SEGMENTS = ..` or `Foo.SEGMENTS = ..`) or a constructor
+/// (`this.segments = ..`); `None` anywhere else, for a local variable and for a bare name
+/// in a constructor (which may be a parameter or a local).
+fn initializer_store(call: Node<'_>, src: &str) -> Option<String> {
+    let mut is_static = false;
+    for a in ancestors(call) {
+        match a.kind() {
+            "static_initializer" => {
+                is_static = true;
+                break;
+            }
+            "constructor_declaration" => break,
+            "method_declaration"
+            | "lambda_expression"
+            | "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration" => {
+                return None;
+            }
+            _ => {}
+        }
+    }
+    if !is_static && !ancestors(call).any(|a| a.kind() == "constructor_declaration") {
+        return None;
+    }
+    let mut cur = call;
+    for _ in 0..4 {
+        let p = cur.parent()?;
+        match p.kind() {
+            "assignment_expression" => {
+                let left = text(p.child_by_field_name("left")?, src).trim();
+                let word = last_word(left)?;
+                let qualified = left.contains('.');
+                let ok = if is_static {
+                    true
+                } else {
+                    left.starts_with("this.")
+                };
+                return (ok && (qualified || is_static)).then(|| word.to_owned());
+            }
+            "parenthesized_expression" | "cast_expression" => cur = p,
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// The variable a call's result is stored in, when the call is the right-hand side of

@@ -488,8 +488,15 @@ fn needed(n: usize) -> String {
     )
 }
 
+/// A holder as the output and the retention-path evidence show it, with the kind of its
+/// retention root (the value its growth column carries as `holder_kind`).
 fn top_json(v: &View) -> Value {
-    json!({"key": clip(&v.key, CLIP), "retained": v.retained, "dominated": v.count})
+    json!({
+        "key": clip(&v.key, CLIP),
+        "retained": v.retained,
+        "dominated": v.count,
+        "holder_kind": v.holder,
+    })
 }
 
 fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {

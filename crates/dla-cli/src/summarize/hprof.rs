@@ -175,8 +175,36 @@ fn clip(s: &str, n: usize) -> String {
     }
 }
 
+/// A holder as the output and the retention-path evidence show it. `holder_kind` is the
+/// kind the dump shows (the same value the growth columns carry), so a record that names
+/// the holder of a finding also says what kind of holder it is.
 fn top_json(h: &Holder) -> Value {
-    json!({"key": h.key, "retained": h.retained, "dominated": h.dominated_count})
+    json!({
+        "key": h.key,
+        "retained": h.retained,
+        "dominated": h.dominated_count,
+        "holder_kind": observed_holder(h),
+    })
+}
+
+/// The `holders` of a dump's retention-path evidence: the largest `n`, and the holder the
+/// finding named with `--finding` (`bound`) when the dump has it and it is not among
+/// them. A finding's holder is rarely among the largest of a process; without its entry
+/// no retention record of the run would name it. The bound holder is kept when the
+/// result must be cut to fit, the smallest of the largest go first.
+fn evidence_holders(summary: &HeapSummary, n: usize, bound: Option<&str>) -> Vec<Value> {
+    let mut top: Vec<&Holder> = summary.holders.iter().take(n).collect();
+    if let Some(key) = bound
+        && !top.iter().any(|h| h.key == key)
+        && let Some(h) = summary
+            .holders
+            .iter()
+            .chain(&summary.tracked)
+            .find(|h| h.key == key)
+    {
+        top.push(h);
+    }
+    top.into_iter().map(top_json).collect()
 }
 
 fn finding_holder(h: &Holder) -> FindingHolder {
@@ -269,12 +297,17 @@ fn via_json(summary: &HeapSummary, n: usize) -> Vec<Value> {
         .iter()
         .take(n)
         .map(|v| {
-            json!({
+            let mut j = json!({
                 "key": clip(&v.key, 100),
                 "retained": v.retained,
                 "dominated": v.dominated_count,
                 "by": clip(&v.dominator, 40),
-            })
+            });
+            // A via holder is tracked under its own key once added (see `add_via_holders`).
+            if let Some(h) = summary.tracked.iter().find(|h| h.key == v.key) {
+                j["holder_kind"] = json!(observed_holder(h));
+            }
+            j
         })
         .collect()
 }
@@ -454,23 +487,38 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             rel: d.summary_file.clone(),
             sha256: emit::sha_hex(body.as_bytes()),
         };
-        let top: Vec<Value> = d
-            .summary
-            .holders
-            .iter()
-            .take(EVIDENCE_HOLDERS)
-            .map(top_json)
-            .collect();
+        let bound_key = bound.as_ref().map(|(_, k)| k.as_str());
         let mut result = json!({
             "file": d.rel,
             "timestamp_ms": d.summary.header.timestamp_ms,
             "objects": d.summary.counts.objects,
             "truncated": d.summary.truncated,
-            "holders": top,
+            "holders": evidence_holders(&d.summary, EVIDENCE_HOLDERS, bound_key),
         });
         let via = via_json(&d.summary, EVIDENCE_VIA);
         if !via.is_empty() {
             result["via"] = json!(via);
+        }
+        // Bounded: drop the smallest of the largest holders, then the via holders, until
+        // the record fits; the holder the finding named stays.
+        while dla_core::evidence::result_size(&result) > emit::RESULT_BUDGET {
+            let keep_bound = bound_key.unwrap_or("");
+            let holders = result["holders"].as_array().cloned().unwrap_or_default();
+            if let Some(at) = holders
+                .iter()
+                .rposition(|h| h["key"].as_str() != Some(keep_bound))
+                .filter(|_| holders.len() > 1)
+            {
+                if let Some(a) = result["holders"].as_array_mut() {
+                    a.remove(at);
+                }
+            } else if result.get("via").is_some() {
+                if let Some(o) = result.as_object_mut() {
+                    o.remove("via");
+                }
+            } else {
+                break;
+            }
         }
         let mut spec = EvidenceSpec::new(
             EvidenceKind::RetentionPath,

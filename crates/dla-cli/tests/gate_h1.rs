@@ -1,0 +1,514 @@
+//! Final-gate items a normal run could not meet: the trends `dla alloc-test` writes, the
+//! residual open item of a merged ledger, the explanation of an artifact finding, the
+//! runtimes a capture tool introduces, the sweep row a probe creates, and the archetype
+//! tables for a worker.
+
+use std::{fs, path::Path};
+
+use assert_cmd::Command;
+use dla_core::{
+    Authority, EvidenceKind, Ledger, NewEvidence, NewFinding, Origin, Source, Tool,
+    evidence::{EvidenceCoverage, Signal},
+};
+use serde_json::{Value, json};
+
+pub struct Run {
+    pub dir: tempfile::TempDir,
+    pub run_id: String,
+}
+
+#[derive(Debug)]
+pub struct Out {
+    pub code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub json: Value,
+}
+
+pub fn base(project: &Path) -> Command {
+    let mut c = Command::cargo_bin("dla").unwrap();
+    for var in [
+        "DLA_RUN",
+        "DLA_WORKER",
+        "DLA_ARCHETYPES",
+        "CLAUDE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_PROJECT_DIR",
+        "DLA_CONSENT_TIERS",
+        "DLA_CONSENT_RAW_VALUES",
+    ] {
+        c.env_remove(var);
+    }
+    c.arg("--project").arg(project);
+    c
+}
+
+impl Run {
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+    pub fn run_dir(&self) -> std::path::PathBuf {
+        self.path().join(".dla").join(&self.run_id)
+    }
+    pub fn run(&self, args: &[&str]) -> Out {
+        let o = base(self.path()).args(args).output().unwrap();
+        let stdout = String::from_utf8(o.stdout).unwrap();
+        Out {
+            code: o.status.code().unwrap(),
+            json: serde_json::from_str(&stdout).unwrap_or(Value::Null),
+            stdout,
+            stderr: String::from_utf8(o.stderr).unwrap(),
+        }
+    }
+    pub fn ok(&self, args: &[&str]) -> Value {
+        let o = self.run(args);
+        assert_eq!(o.code, 0, "{args:?}: {} {}", o.stdout, o.stderr);
+        o.json
+    }
+    /// Every item the gate lists, from the full file.
+    pub fn items(&self, target: &[&str]) -> Vec<Value> {
+        let mut args = vec!["gate", "check"];
+        args.extend_from_slice(target);
+        let o = self.run(&args);
+        let name = o.json["stage"].as_str().unwrap().to_owned();
+        let full: Value = serde_json::from_str(
+            &fs::read_to_string(self.run_dir().join("gate").join(format!("{name}.json"))).unwrap(),
+        )
+        .unwrap();
+        full["missing"].as_array().unwrap().clone()
+    }
+    /// `(kind, id)` of every item the gate lists (the full file, not the first five).
+    pub fn missing(&self, target: &[&str]) -> Vec<(String, String)> {
+        let mut args = vec!["gate", "check"];
+        args.extend_from_slice(target);
+        let o = self.run(&args);
+        let name = o.json["stage"].as_str().unwrap().to_owned();
+        let full: Value = serde_json::from_str(
+            &fs::read_to_string(self.run_dir().join("gate").join(format!("{name}.json"))).unwrap(),
+        )
+        .unwrap();
+        full["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                (
+                    m["kind"].as_str().unwrap().to_owned(),
+                    m["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+}
+
+pub fn init(entry: &str) -> Run {
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = vec!["run", "init", "--session-id", "t", "--entry", entry];
+    if entry == "artifact" {
+        fs::create_dir_all(dir.path().join("dumps")).unwrap();
+        for d in ["dumps/h1.hprof", "dumps/h2.hprof"] {
+            fs::write(dir.path().join(d), b"JAVA PROFILE 1.0.2").unwrap();
+            args.extend(["--artifact", d]);
+        }
+    }
+    let o = base(dir.path())
+        .env("DLA_CONSENT_TIERS", "1,2")
+        .args(&args)
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["ok"], true, "{v}");
+    Run {
+        run_id: v["run_id"].as_str().unwrap().to_owned(),
+        dir,
+    }
+}
+
+pub fn evidence(
+    kind: EvidenceKind,
+    authority: Authority,
+    tool: &str,
+    class: &str,
+    src: &str,
+    mut result: Value,
+) -> NewEvidence {
+    result["signal"] = Signal::new(tool, class, src).to_value();
+    NewEvidence {
+        source: Source::Repo {
+            commit: "abc".into(),
+            path: None,
+        },
+        tool: Tool {
+            name: tool.into(),
+            version: "0".into(),
+        },
+        authority,
+        kind,
+        result,
+        raw: None,
+        coverage: EvidenceCoverage::default(),
+        limitations: vec![],
+        unknowns: vec![],
+    }
+}
+
+// ------------------------------------------------------------ trends of alloc-test
+
+fn column(name: &str) -> Value {
+    json!({"name": name, "unit": "bytes", "kind": "gauge", "region": "heap", "n": 10,
+           "noise": 1.0, "rise": 900.0, "shape": "steady", "gate": "pass"})
+}
+
+fn write_trend(r: &Run, id: &str, series: &str, columns: &[&str]) {
+    let dir = r.run_dir().join("trend");
+    fs::create_dir_all(&dir).unwrap();
+    let doc = json!({
+        "schema_version": 1, "id": id, "series": series,
+        "thresholds": serde_json::to_value(dla_stats::GateThresholds::default()).unwrap(),
+        "columns": columns.iter().map(|c| column(c)).collect::<Vec<_>>(),
+    });
+    fs::write(dir.join(format!("{id}.json")), doc.to_string()).unwrap();
+}
+
+fn trend_columns(m: &[(String, String)]) -> Vec<String> {
+    let mut v: Vec<String> = m
+        .iter()
+        .filter(|(k, _)| k == "trend_column")
+        .map(|(_, id)| id.clone())
+        .collect();
+    v.sort();
+    v
+}
+
+/// The discriminator `dla alloc-test` writes for the trend it wrote.
+fn alloc_discriminator(r: &Run, trend: &str, columns: &[&str]) -> String {
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    let ev = evidence(
+        EvidenceKind::Discriminator,
+        Authority::Test,
+        "dla",
+        "x",
+        "alloc",
+        json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"], "finding": null,
+               "trend": trend, "series": "S1",
+               "columns": columns.iter().map(|c| json!({"name": c})).collect::<Vec<_>>()}),
+    );
+    l.add_evidence(ev).unwrap();
+    l.evidence().last().unwrap().evidence_id.to_string()
+}
+
+fn finding_citing(r: &Run, evidence: &str) -> String {
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    let mut nf = NewFinding::new(
+        Origin::parse("hypothesis").unwrap(),
+        vec![evidence.parse().unwrap()],
+    );
+    nf.site = Some("a.go:1".into());
+    l.add_finding(nf).unwrap();
+    l.findings().last().unwrap().id.to_string()
+}
+
+#[test]
+fn a_trend_replaced_by_a_later_trend_of_the_series_needs_no_disposition_of_its_own() {
+    let r = init("repository");
+    // T1 is what `dla alloc-test` wrote: no growth evidence names it.
+    write_trend(&r, "T1", "S1", &["probe:CACHE", "os.rss"]);
+    let m = r.missing(&["--stage", "classify"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T1:os.rss", "T1:probe:CACHE"].map(String::from)
+    );
+    let full: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir().join("gate/classify.json")).unwrap())
+            .unwrap();
+    let item = full["missing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "T1:os.rss")
+        .unwrap();
+    assert_eq!(item["fix"], "dla trend S1", "{item}");
+    // The fix writes a new trend of the series and growth evidence for its columns.
+    write_trend(&r, "T2", "S1", &["probe:CACHE", "os.rss"]);
+    let m = r.missing(&["--stage", "classify"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T2:os.rss", "T2:probe:CACHE"].map(String::from),
+        "the old trend is replaced, the new one is held to the rule"
+    );
+    // A later trend that dropped a column does not release it.
+    write_trend(&r, "T3", "S1", &["os.rss"]);
+    let m = r.missing(&["--stage", "classify"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T2:probe:CACHE", "T3:os.rss"].map(String::from)
+    );
+    // A trend of another series is not replaced by it.
+    write_trend(&r, "T4", "S9", &["os.rss"]);
+    let m = r.missing(&["--stage", "classify"]);
+    assert!(trend_columns(&m).contains(&"T4:os.rss".to_owned()), "{m:?}");
+}
+
+#[test]
+fn an_alloc_test_trend_is_dispositioned_through_the_discriminator_a_finding_cites() {
+    let r = init("repository");
+    write_trend(&r, "T1", "S1", &["probe:CACHE", "os.rss"]);
+    // The discriminator tested probe:CACHE only.
+    let disc = alloc_discriminator(&r, "T1", &["probe:CACHE"]);
+    let m = r.missing(&["--stage", "classify"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T1:os.rss", "T1:probe:CACHE"].map(String::from),
+        "evidence nobody cites ties nothing"
+    );
+    let f = finding_citing(&r, &disc);
+    // Classify: tied to a finding. Final: the finding needs its disposition.
+    let m = r.missing(&["--stage", "classify"]);
+    assert_eq!(trend_columns(&m), ["T1:os.rss".to_owned()], "{m:?}");
+    let m = r.missing(&["--final"]);
+    assert!(
+        trend_columns(&m).contains(&"T1:probe:CACHE".to_owned()),
+        "{m:?}"
+    );
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    let m = r.missing(&["--final"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T1:os.rss".to_owned()],
+        "the untested column is not released: {m:?}"
+    );
+    // The fix for it leads to a state that passes: `dla trend S1` replaces T1.
+    write_trend(&r, "T2", "S1", &["probe:CACHE", "os.rss"]);
+    let m = r.missing(&["--final"]);
+    assert_eq!(
+        trend_columns(&m),
+        ["T2:os.rss", "T2:probe:CACHE"].map(String::from)
+    );
+}
+
+// -------------------------------------------------- residual item of a merged ledger
+
+#[test]
+fn a_residual_row_naming_a_workers_open_item_matches_the_prefixed_item_after_the_merge() {
+    use dla_core::{Resolution, UnresolvedReason};
+    let r = init("repository");
+    r.ok(&["run", "dispatch", "--workers", "jvm"]);
+    // The worker raises O1 for a residual in its slice and resolves it; the coverage row
+    // the worker wrote names the plain id.
+    {
+        let mut l = Ledger::load_for(&r.run_dir(), Some("jvm")).unwrap();
+        l.open_item_add(
+            "unexplained growth: 5.0 MiB in heap (S1); add a hypothesis or record it unresolved",
+            None,
+            "dla-gap",
+        )
+        .unwrap();
+        l.resolve_open_item(
+            &"O1".parse().unwrap(),
+            Resolution::Unresolved {
+                reason: UnresolvedReason::NotExercised,
+                remedy: "profile the native side".into(),
+            },
+        )
+        .unwrap();
+    }
+    r.ok(&["ledger", "merge"]);
+    let l = Ledger::load(&r.run_dir()).unwrap();
+    assert!(
+        l.open_item(&"jvm/O1".parse().unwrap())
+            .is_some_and(|o| o.resolution.is_some()),
+        "the merge renames the item"
+    );
+    // The core's own O1 (whatever it is) is not the worker's item.
+    assert!(
+        l.open_item(&"O1".parse().unwrap())
+            .is_none_or(|o| o.resolution.is_none() || !o.item.text.contains("heap")),
+    );
+    r.ok(&["probe"]);
+    let path = r.run_dir().join("coverage.json");
+    let mut cov: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    cov["residual"] = json!([{"region": "heap", "total_slope": 9.0, "attributed_slope": 4.0,
+        "residual": 5.0, "unit": "MiB", "threshold": 1.0, "open_item": "O1"}]);
+    fs::write(&path, cov.to_string()).unwrap();
+    let m = r.missing(&["--final"]);
+    assert!(!m.iter().any(|(k, _)| k == "residual"), "{m:?}");
+    // A residual in another region is not covered by the item.
+    cov["residual"][0]["region"] = json!("off-heap");
+    fs::write(&path, cov.to_string()).unwrap();
+    let m = r.missing(&["--final"]);
+    assert!(
+        m.iter().any(|(k, id)| k == "residual" && id == "off-heap"),
+        "{m:?}"
+    );
+}
+
+// --------------------------------------------------- explanation on an artifact run
+
+#[test]
+fn the_final_gate_explanation_of_an_artifact_finding_can_be_met() {
+    let r = init("artifact");
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    let add = |l: &mut Ledger, kind, auth, class: &str, src: &str, result: Value| {
+        l.add_evidence(evidence(kind, auth, "t", class, src, result))
+            .unwrap();
+        l.evidence().last().unwrap().evidence_id.clone()
+    };
+    let growth = add(
+        &mut l,
+        EvidenceKind::GrowthSeries,
+        Authority::Dump,
+        "x",
+        "s1",
+        json!({"trend": "T1", "series": "S1", "n": 3, "gate": "pass", "failed": 0,
+        "passed": [{"column": "holder:static:com.acme.Cache.entries", "region": "heap", "shape": "steady"}]}),
+    );
+    let disc = add(
+        &mut l,
+        EvidenceKind::Discriminator,
+        Authority::Dump,
+        "x",
+        "s2",
+        json!({"test": "dump-plateau", "favors": "leak", "supports": ["leak"], "finding": null}),
+    );
+    let workload = add(
+        &mut l,
+        EvidenceKind::Workload,
+        Authority::Test,
+        "x",
+        "s3",
+        json!({"harness": "H1", "mode": "command", "runtime": "jvm"}),
+    );
+    let mut nf = NewFinding::new(
+        Origin::parse("growth-series").unwrap(),
+        vec![growth.clone()],
+    );
+    nf.owner = Some("com.acme.Cache.entries".into());
+    nf.holder = Some(dla_core::finding::Holder::StaticGlobal);
+    l.add_finding(nf).unwrap();
+    let mut nf = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![growth.clone()]);
+    nf.sibling_of = Some("F1".parse().unwrap());
+    nf.hypothesis = Some("N-WARM".into());
+    nf.refute_if = Some("growth continues".into());
+    l.add_finding(nf).unwrap();
+    let id = |s: &str| -> dla_core::FindingId { s.parse().unwrap() };
+    use dla_core::FindingState as S;
+    l.transition(&id("F1.n1"), S::Refuted, None, None, vec![disc], "t")
+        .unwrap();
+    l.transition(&id("F1"), S::UnderTest, None, None, vec![workload], "t")
+        .unwrap();
+    l.transition(&id("F1"), S::Confirmed, None, None, vec![growth], "t")
+        .unwrap();
+    drop(l);
+
+    let m = r.items(&["--final"]);
+    let item = m
+        .iter()
+        .find(|x| x["kind"] == "explanation")
+        .unwrap_or_else(|| panic!("{m:?}"));
+    let fix = item["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("--removal not-found") && !fix.contains("--adds FILE:LINE"),
+        "{fix}"
+    );
+    // The fix works as printed: no writer is recorded and none is needed.
+    let text = "Entries are added to com.acme.Cache.entries, a static/global map; no remover found in the dump, so it only grows.";
+    let v = r.ok(&[
+        "ledger",
+        "explain",
+        "F1",
+        "--tag",
+        "inferred",
+        "--removal",
+        "not-found",
+        "--text",
+        text,
+    ]);
+    assert_eq!(v["removal"], "not-found");
+    assert!(
+        !r.missing(&["--final"])
+            .iter()
+            .any(|(k, _)| k == "explanation")
+    );
+    // A removal the dump cannot show is refused.
+    let o = r.run(&[
+        "ledger",
+        "explain",
+        "F1",
+        "--tag",
+        "inferred",
+        "--removal",
+        "never",
+        "--text",
+        text,
+    ]);
+    assert_eq!(o.code, 2, "{o:?}");
+}
+
+// ------------------------------------------------------- the sweep stage, per runtime
+
+const PY: &str = "_seen = []\n\ndef handle(req):\n    _seen.append(req)\n    return len(_seen)\n";
+
+fn ids(m: &[(String, String)]) -> Vec<String> {
+    m.iter()
+        .filter(|(k, _)| k == "coverage")
+        .map(|(_, id)| id.clone())
+        .collect()
+}
+
+#[test]
+fn a_probe_does_not_count_as_a_sweep() {
+    let r = init("repository");
+    fs::write(r.path().join("app.py"), PY).unwrap();
+    r.ok(&["probe"]);
+    // The probe wrote the runtime row and the tool rows, not the built-in rules' row.
+    let m = r.missing(&["--stage", "sweep"]);
+    assert_eq!(
+        ids(&m),
+        ["python/census", "python/sweep"].map(String::from),
+        "{m:?}"
+    );
+    r.ok(&["sweep", "--lang", "python"]);
+    let m = r.missing(&["--stage", "sweep"]);
+    assert_eq!(ids(&m), ["python/census".to_owned()], "{m:?}");
+    r.ok(&["census", "--lang", "python"]);
+    assert!(ids(&r.missing(&["--stage", "sweep"])).is_empty());
+}
+
+#[test]
+fn a_capture_tool_does_not_make_its_runtime_need_a_census_and_a_sweep() {
+    let r = init("repository");
+    fs::write(r.path().join("app.py"), PY).unwrap();
+    r.ok(&["probe"]);
+    r.ok(&["sweep", "--lang", "python"]);
+    r.ok(&["census", "--lang", "python"]);
+    // A valgrind capture of the Python project's native extension adds `native`.
+    let path = r.run_dir().join("coverage.json");
+    let mut cov: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    cov["workers"]["native"] = json!({"runtime": "native", "backends": {
+        "valgrind-memcheck": {"status": "ran", "enumerated": 5, "dispositioned": 0}}});
+    fs::write(&path, cov.to_string()).unwrap();
+    let m = r.missing(&["--stage", "sweep"]);
+    assert!(ids(&m).is_empty(), "{m:?}");
+    // A runtime the probe found in the sources is still held to the sweep.
+    fs::write(r.path().join("main.c"), "int main(void) { return 0; }\n").unwrap();
+    r.ok(&["probe"]);
+    let found = Ledger::load(&r.run_dir())
+        .unwrap()
+        .evidence()
+        .filter(|e| e.kind == EvidenceKind::Probe)
+        .flat_map(|e| e.result["runtimes"].as_array().unwrap().clone())
+        .any(|v| v == "native");
+    assert!(found, "the probe should detect the C source");
+    let m = r.missing(&["--stage", "sweep"]);
+    assert!(ids(&m).contains(&"native/census".to_owned()), "{m:?}");
+}

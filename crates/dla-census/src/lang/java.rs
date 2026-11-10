@@ -461,4 +461,32 @@ mod tests {
         assert_eq!(r[1].name.as_deref(), Some("t"));
         assert_eq!(r[1].owner, "A.f");
     }
+
+    #[test]
+    fn a_holder_created_in_an_initializer_is_owned_by_its_field() {
+        let r = run(
+            "package p;\nclass A {\n  static final ThreadLocal<List<String>> DECL = ThreadLocal.withInitial(ArrayList::new);\n  static final ThreadLocal<List<String>> BLOCK;\n  static {\n    BLOCK = ThreadLocal.withInitial(ArrayList::new);\n  }\n  private final ThreadLocal<X> held;\n  A() {\n    this.held = new ThreadLocal<>();\n  }\n  void f() {\n    ThreadLocal<X> local = new ThreadLocal<>();\n  }\n}\n",
+        );
+        let at = |line: u32| -> Vec<&str> {
+            r.iter()
+                .filter(|h| h.line == line)
+                .map(|h| h.owner.as_str())
+                .collect()
+        };
+        assert_eq!(at(3), ["p.A.DECL"]);
+        assert_eq!(
+            at(6),
+            ["p.A.BLOCK"],
+            "static block: the field, not <clinit>"
+        );
+        assert_eq!(
+            at(10),
+            ["p.A.held"],
+            "constructor: the field, not the constructor"
+        );
+        assert_eq!(at(13), ["p.A.f"], "a local variable keeps its method");
+        assert!(r.iter().all(|h| !h.owner.contains("<clinit>")), "{r:?}");
+        let block = r.iter().find(|h| h.line == 6).unwrap();
+        assert_eq!(block.name.as_deref(), Some("BLOCK"));
+    }
 }

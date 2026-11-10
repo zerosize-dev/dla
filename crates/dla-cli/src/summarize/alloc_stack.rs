@@ -127,6 +127,72 @@ fn not_enough() -> Failure {
     )
 }
 
+/// The findings a stack ties to by the tie rule, before any candidate is added: the
+/// finding whose owner is the stack's root holder, or, for a stack with no root path
+/// (heaptrack, dhat, valgrind), the finding at its first project frame (its own site or
+/// a recorded writer).
+fn stack_matches(
+    ledger: &dla_core::Ledger,
+    who: &tie::Who,
+    holders: &[String],
+    s: &Stack,
+) -> Vec<(FindingId, tie::TieReason)> {
+    let mut matches: Vec<(FindingId, tie::TieReason)> = Vec::new();
+    if let Some(o) = root_owner(&s.root_path).as_deref() {
+        // The stack names its holder: only that holder's finding.
+        for f in tie::findings_by_holder(ledger, who, o, holders, None) {
+            matches.push((f, tie::TieReason::holder(o)));
+        }
+    } else if s.root_path.is_empty()
+        && let Some(site) = &s.site
+    {
+        // No holder named: the first project frame ties by the finding's own site or its
+        // recorded writers.
+        for f in tie::findings_at_site(ledger, who, site) {
+            matches.push((f, tie::TieReason::site(site)));
+        }
+    }
+    matches
+}
+
+/// Ties the stack evidence states: stacks shown at most.
+const STATED_TIES: usize = 3;
+
+/// The `finding`, `candidates` and `ties` of a stack evidence: for each growing stack
+/// (it passes the dump-series rule) that the tie rule ties to a finding, the stack, the
+/// finding(s) and why (`rule`, matched `key`). It is the tie the growth column of the same
+/// call gets, written where `dla ledger label` reads it, so an allocation-stack record
+/// counts for the finding its stack was tied to and for no other. Nothing is written for
+/// a stack that ties to nothing, or that matches several findings by type or short name.
+fn stated_ties(stacks: &[(&Stack, tie::Resolved)]) -> Option<(Value, Vec<FindingId>)> {
+    let mut rows: Vec<Value> = Vec::new();
+    let mut ids: Vec<FindingId> = Vec::new();
+    for (s, r) in stacks {
+        let Some((f, why)) = &r.tie else { continue };
+        if rows.len() >= STATED_TIES {
+            break;
+        }
+        let mut all: Vec<FindingId> = std::iter::once(f.clone())
+            .chain(r.also.iter().cloned())
+            .collect();
+        all.sort();
+        all.dedup();
+        rows.push(json!({
+            "stack": clip(&s.label, 40),
+            "finding": f,
+            "candidates": all,
+            "tie": why.to_json(),
+        }));
+        ids.extend(all);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    ids.sort();
+    ids.dedup();
+    Some((json!(rows), ids))
+}
+
 /// Runs the diff (or, for one profile, the leak-at-exit view).
 pub fn run_diff(
     ctx: &Ctx<'_>,
@@ -345,6 +411,39 @@ pub fn run_diff_with(
     });
     let raw = emit::write_raw(tc, &arel, &raw_value)?;
 
+    // ---- the stacks followed (decided before anything is recorded, so the stack
+    // evidence can state the ties the growth columns are given)
+    let monotone = |s: &Stack| {
+        rule::gate(&Observed {
+            bytes: s.live_bytes.clone(),
+            counts: if s.live_blocks.iter().flatten().any(|b| *b > 0) {
+                s.live_blocks.clone()
+            } else {
+                s.live_bytes.clone()
+            },
+        })
+        .is_ok()
+    };
+    let mut held: Vec<&Stack> = totals.values().collect();
+    held.sort_by_key(|s| std::cmp::Reverse((monotone(s), delta(&s.live_bytes))));
+    held.truncate(TRACKED_HOLDERS);
+    let mut picked: Vec<&Stack> = held;
+    picked.extend(ranked.iter().copied().filter(|s| monotone(s)));
+    for s in &ranked {
+        if picked.len() >= TRACKED {
+            break;
+        }
+        if !picked.iter().any(|p| std::ptr::eq(*p, *s)) {
+            picked.push(s);
+        }
+    }
+    picked.truncate(TRACKED);
+    let who = tie::Who::new(tc.worker.as_deref(), origin.runtime);
+    let holders: Vec<String> = picked
+        .iter()
+        .filter_map(|s| root_owner(&s.root_path))
+        .collect();
+
     // ---- the alloc-stack evidence
     let shas: Vec<&str> = captures.iter().map(|c| c.sha256.as_str()).collect();
     let signal = Signal::new(origin.tool, origin.class, &emit::combined_sha(&shas));
@@ -365,12 +464,38 @@ pub fn run_diff_with(
         }
         v
     };
+    let mut ledger_ref = ctx.ledger()?;
+    let ledger = &mut *ledger_ref;
     let mut base = Map::new();
     base.insert("mode".into(), json!(if n == 1 { "single" } else { "diff" }));
     base.insert("captures".into(), json!(n));
     base.insert("live".into(), json!(has_live));
     base.insert("sampled".into(), json!(sampled));
     base.insert("stacks".into(), json!(stacks.len()));
+    // The ties of the growing stacks, stated in the record itself: `dla ledger label`
+    // counts an allocation-stack record for the findings named here (strictly the ties
+    // the growth columns get below), where a stack with no root path names no holder.
+    let growing = n >= rule::MIN_DUMPS && has_live && !origin.windowed;
+    let tied_stacks: Vec<(&Stack, tie::Resolved)> = if growing {
+        picked
+            .iter()
+            .filter(|s| monotone(s))
+            .map(|s| {
+                let r = tie::resolve(
+                    stack_matches(ledger, &who, &holders, s),
+                    opts.finding.as_ref(),
+                );
+                (*s, r)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if let Some((rows, ids)) = stated_ties(&tied_stacks) {
+        base.insert("finding".into(), json!(ids[0]));
+        base.insert("candidates".into(), json!(ids));
+        base.insert("ties".into(), rows);
+    }
     let mut list = emit::Bounded::new(base, "top", emit::RESULT_BUDGET - 120);
     for s in ranked.iter().take(8) {
         let d = if has_live {
@@ -411,8 +536,6 @@ pub fn run_diff_with(
         spec.limitations
             .push("the profile is sampled: counts and bytes are estimates".into());
     }
-    let mut ledger_ref = ctx.ledger()?;
-    let ledger = &mut *ledger_ref;
     let stack_ev: Recorded = ctx.record(ledger, spec, &signal, &raw)?;
 
     let mut out = AdapterOut {
@@ -473,55 +596,11 @@ pub fn run_diff_with(
     }
 
     // ---- series and growth
-    let monotone = |s: &Stack| {
-        rule::gate(&Observed {
-            bytes: s.live_bytes.clone(),
-            counts: if s.live_blocks.iter().flatten().any(|b| *b > 0) {
-                s.live_blocks.clone()
-            } else {
-                s.live_bytes.clone()
-            },
-        })
-        .is_ok()
-    };
-    let mut held: Vec<&Stack> = totals.values().collect();
-    held.sort_by_key(|s| std::cmp::Reverse((monotone(s), delta(&s.live_bytes))));
-    held.truncate(TRACKED_HOLDERS);
-    let mut picked: Vec<&Stack> = held;
-    picked.extend(ranked.iter().copied().filter(|s| monotone(s)));
-    for s in &ranked {
-        if picked.len() >= TRACKED {
-            break;
-        }
-        if !picked.iter().any(|p| std::ptr::eq(*p, *s)) {
-            picked.push(s);
-        }
-    }
-    picked.truncate(TRACKED);
     let mut tracks: Vec<growth::Track> = Vec::new();
     let mut new_candidates: Vec<CandidateRow> = Vec::new();
-    let who = tie::Who::new(tc.worker.as_deref(), origin.runtime);
-    let holders: Vec<String> = picked
-        .iter()
-        .filter_map(|s| root_owner(&s.root_path))
-        .collect();
     for s in &picked {
         let owner = root_owner(&s.root_path);
-        let mut matches: Vec<(FindingId, tie::TieReason)> = Vec::new();
-        if let Some(o) = owner.as_deref() {
-            // The stack names its holder: only that holder's finding.
-            for f in tie::findings_by_holder(ledger, &who, o, &holders, None) {
-                matches.push((f, tie::TieReason::holder(o)));
-            }
-        } else if s.root_path.is_empty()
-            && let Some(site) = &s.site
-        {
-            // No holder named (heaptrack, dhat, valgrind): the first project frame ties
-            // by the finding's own site or its recorded writers.
-            for f in tie::findings_at_site(ledger, &who, site) {
-                matches.push((f, tie::TieReason::site(site)));
-            }
-        }
+        let mut matches = stack_matches(ledger, &who, &holders, s);
         // A passing stack that names an owner no finding has: a candidate, on a run with
         // source and a declaration the resolver finds.
         if matches.is_empty()

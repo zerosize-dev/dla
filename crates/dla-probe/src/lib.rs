@@ -335,6 +335,11 @@ fn bounded(full: serde_json::Value, counts: &serde_json::Value) -> serde_json::V
 fn record_coverage(ctx: &ToolCtx, r: &ProbeReport) -> Result<(), Refusal> {
     CoverageManifest::update(&ctx.run_dir, |m| {
         for t in &r.tools {
+            // The built-in rules are always available; their row says that a sweep ran
+            // (the stage gate reads it), so only `dla sweep` writes it.
+            if t.name == "dla" {
+                continue;
+            }
             let key = t.runtime.as_str();
             let keep = m
                 .workers

@@ -336,6 +336,11 @@ pub struct RunState {
     /// by a passing gate check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages_passed: Vec<Stage>,
+    /// The stages each worker passed with `dla --worker <name> gate check --stage <s>`. A
+    /// worker's own checks never touch `stages_passed`: the read hook lets a subagent read
+    /// the archetype tables once its worker passed `classify` here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub worker_stages_passed: BTreeMap<String, Vec<Stage>>,
     /// Consecutive stop-hook blocks with an unchanged ledger digest.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub stop_blocks: u32,
@@ -427,6 +432,7 @@ impl RunState {
             artifacts: Vec::new(),
             workers: Vec::new(),
             stages_passed: Vec::new(),
+            worker_stages_passed: BTreeMap::new(),
             stop_blocks: 0,
             stop_block_digest: None,
             worker_stop: BTreeMap::new(),
@@ -486,6 +492,24 @@ impl RunState {
             .filter(|n| n.rank() > self.stage.rank());
         if let Some(n) = next {
             self.stage = n;
+        }
+    }
+
+    /// True when the worker's own `gate check --stage` passed for `stage`.
+    pub fn worker_stage_passed(&self, worker: &str, stage: Stage) -> bool {
+        self.worker_stages_passed
+            .get(worker)
+            .is_some_and(|v| v.contains(&stage))
+    }
+
+    /// Records a passing `--worker <worker> gate check --stage`.
+    pub fn record_worker_stage_passed(&mut self, worker: &str, stage: Stage) {
+        let v = self
+            .worker_stages_passed
+            .entry(worker.to_owned())
+            .or_default();
+        if !v.contains(&stage) {
+            v.push(stage);
         }
     }
 

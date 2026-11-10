@@ -19,7 +19,9 @@
 //! * an intervention: it tested the finding, removed the growth and has no false guard;
 //! * kinds whose result names no finding (census, static hit, histogram, non-heap,
 //!   should-be-dead, residual): `finding`/`candidates` in the result, or citation by the
-//!   finding or its family.
+//!   finding itself (its origin and the moves up to its confirmation). A sibling's or the
+//!   root's citation does not make a record count: the family is the default pool of
+//!   candidates for `--evidence`, not a tie.
 //!
 //! Never "the same run". A record of authority `static` counts only as `static-hit` or
 //! `census-holder`.
@@ -282,6 +284,13 @@ fn tie(
     }
 }
 
+/// The records the finding itself cites (its origin and every move that cited evidence,
+/// confirmation included). A record of a kind whose result names no finding counts for
+/// the finding only through this list, never because a sibling or the root cites it.
+fn own_cited(f: &Finding) -> Vec<EvidenceId> {
+    f.supports.clone()
+}
+
 /// The evidence the finding and its family cite, in order, without repeats.
 fn default_pool(findings: &dyn FindingLookup, f: &Finding) -> Vec<EvidenceId> {
     let mut out: Vec<EvidenceId> = Vec::new();
@@ -437,7 +446,7 @@ pub fn plan(
         return Err(r);
     }
     let subs = subjects(findings, f);
-    let cited = default_pool(findings, f);
+    let cited = own_cited(f);
     let nonleak = label.starts_with("N-").then_some(label);
     let explicit = !input.evidence.is_empty();
     let pool: Vec<EvidenceId> = if explicit {
@@ -747,7 +756,7 @@ pub fn check(
         ));
     }
     let subs = subjects(findings, f);
-    let cited = default_pool(findings, f);
+    let cited = own_cited(f);
     let nonleak = rec.label.starts_with("N-").then_some(rec.label.as_str());
     let mut by_kind: BTreeMap<EvidenceKind, Vec<EvidenceId>> = BTreeMap::new();
     for e in &rec.satisfied.evidence {
@@ -838,7 +847,7 @@ pub fn suggest(
         )
     })?;
     let subs = subjects(findings, f);
-    let cited = default_pool(findings, f);
+    let cited = own_cited(f);
     // Everything the finding cites, then every other record of the ledger: whether one
     // counts is the tie rule's to say.
     let mut pool = default_pool(findings, f);

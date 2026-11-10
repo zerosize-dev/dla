@@ -103,7 +103,8 @@ fn probe_writes_report_evidence_and_coverage_with_missing_hints() {
         go["staticcheck"].install_hint.as_deref(),
         Some("dla install staticcheck")
     );
-    assert_eq!(go["dla"].status, BackendStatus::Ran);
+    // The built-in rules have no row until a sweep runs them.
+    assert!(!go.contains_key("dla"));
     let py = &cov.workers["python"].backends;
     assert_eq!(py["ruff"].install_hint.as_deref(), Some("dla install ruff"));
     assert_eq!(py["codeql"].status, BackendStatus::Missing);

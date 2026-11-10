@@ -373,7 +373,7 @@ impl Index {
             Record::FindingExplained(x) => {
                 self.require_schema6(record, version)?;
                 self.check_worker_evidence(x.evidence.as_slice())?;
-                explain::check(self, self, x)
+                explain::check(self, self, x, self.entry == EntryPath::Artifact)
             }
             Record::IntegrityResealed(r) => {
                 self.require_schema6(record, version)?;
@@ -2426,6 +2426,7 @@ impl Ledger {
                 text,
                 writers: &writers,
                 removers: &removers,
+                artifact: self.index.entry == EntryPath::Artifact,
             },
         )?;
         self.append(Record::FindingExplained(rec))

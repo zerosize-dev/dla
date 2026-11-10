@@ -48,6 +48,9 @@ pub struct ExplainInput<'a> {
     pub writers: &'a [String],
     /// Removers recorded for the finding (annotations and census), `file:line`.
     pub removers: &'a [String],
+    /// The run is an artifact run: there is no source, so no writer can be known and the
+    /// adding sites may be left out (see [`check`]).
+    pub artifact: bool,
 }
 
 fn refuse(code: &str, message: String, missing: impl Into<String>, fix: String) -> Refusal {
@@ -158,6 +161,7 @@ fn structural(
     evidence: &dyn EvidenceLookup,
     findings: &dyn FindingLookup,
     rec: &FindingExplained,
+    artifact: bool,
 ) -> Result<(), Refusal> {
     let id = &rec.finding;
     let f = findings.finding(id).ok_or_else(|| {
@@ -262,7 +266,20 @@ fn structural(
             fix(""),
         ));
     }
-    if rec.adds.is_empty() {
+    if artifact && rec.removal != RemovalClaim::NotFound {
+        return Err(refuse(
+            codes::EXPLAIN_REMOVER,
+            format!(
+                "{id} is on an artifact run: a dump holds no source, so no remover can be shown; the removal is {} and only not-found can be stated",
+                rec.removal
+            ),
+            "--removal not-found",
+            format!(
+                "dla ledger explain {id} --tag inferred --removal not-found --text \"<owner, holder, what adds, no remover found>\""
+            ),
+        ));
+    }
+    if rec.adds.is_empty() && !artifact {
         return Err(refuse(
             codes::EXPLAIN_ADDS,
             format!("the explanation of {id} names no site that adds to the holder"),
@@ -280,7 +297,7 @@ fn structural(
             ));
         }
     }
-    if !rec.adds.iter().any(|a| names_site(text, a)) {
+    if !rec.adds.is_empty() && !rec.adds.iter().any(|a| names_site(text, a)) {
         return Err(refuse(
             codes::EXPLAIN_ADDS,
             format!(
@@ -359,6 +376,20 @@ fn structural(
             ));
         }
         (ExplanationTag::Observed, Some(e)) => {
+            if artifact
+                && evidence
+                    .evidence(e)
+                    .is_some_and(|r| r.kind != EvidenceKind::RetentionPath)
+            {
+                return Err(refuse(
+                    codes::EXPLAIN_TAG,
+                    format!(
+                        "{id}: on an artifact run observed rests on a retention path, and {e} is not one"
+                    ),
+                    "a retention path naming the holder, or --tag inferred",
+                    format!("dla ledger explain {id} --tag inferred ..."),
+                ));
+            }
             observed_gap(evidence, f, e).map_err(|why| {
                 refuse(
                     codes::EXPLAIN_TAG,
@@ -396,12 +427,16 @@ fn structural(
 }
 
 /// The replay check of a `finding_explained` line.
+///
+/// On an artifact run (`artifact`) there is no source: the adding sites may be empty, and
+/// the only removal that can be stated is `not-found`.
 pub fn check(
     evidence: &dyn EvidenceLookup,
     findings: &dyn FindingLookup,
     rec: &FindingExplained,
+    artifact: bool,
 ) -> Result<(), Refusal> {
-    structural(evidence, findings, rec)
+    structural(evidence, findings, rec, artifact)
 }
 
 /// Builds the record for `input`, or the refusal that names the missing part.
@@ -425,7 +460,7 @@ pub fn plan(
             adds.push(a.clone());
         }
     }
-    if adds.is_empty() {
+    if adds.is_empty() && !input.artifact {
         adds = input.writers.to_vec();
     }
     let rec = FindingExplained {
@@ -440,7 +475,7 @@ pub fn plan(
     // The cheapest fix first: a writer must be recorded at all; then the shape of the
     // record and its text; then what the recorded sites say.
     structural_state(findings, id)?;
-    if input.writers.is_empty() {
+    if input.writers.is_empty() && !input.artifact {
         return Err(refuse(
             codes::EXPLAIN_NO_WRITER,
             format!(
@@ -450,9 +485,10 @@ pub fn plan(
             format!("dla ledger annotate {id} --writer <file:line>"),
         ));
     }
-    structural(evidence, findings, &rec)?;
+    structural(evidence, findings, &rec, input.artifact)?;
     for a in &rec.adds {
-        let known = input.writers.contains(a) || f.site.as_deref() == Some(a.as_str());
+        let known =
+            input.artifact || input.writers.contains(a) || f.site.as_deref() == Some(a.as_str());
         if !known {
             return Err(refuse(
                 codes::EXPLAIN_ADDS,

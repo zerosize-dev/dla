@@ -138,6 +138,19 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     }
     if report.ok
         && let GateTarget::Stage(s) = target
+        && let Some(w) = worker
+    {
+        // A worker's passing check is its own: the core's stages stay as they are. The read
+        // hook uses it to let the worker's subagent read the archetype tables.
+        RunState::update(&ctx.run_dir, |st| {
+            st.record_worker_stage_passed(w, s);
+            Ok(())
+        })?;
+        out["recorded"] = json!(true);
+        out["worker_stage"] = json!(s.as_str());
+    }
+    if report.ok
+        && let GateTarget::Stage(s) = target
         && worker.is_none()
     {
         // Release the replayed view's files before the state is rewritten.

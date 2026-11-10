@@ -239,12 +239,17 @@ struct Found {
 /// Sorts the holders and drops repeats of one declaration. Coroutine captures share the
 /// suspension point line and holder class, so their owner (the spilled field) is part
 /// of the identity.
+///
+/// Of several holders on one line the one owned by a field wins over one owned by a
+/// compiler-named initializer (`Foo.<clinit>`), whatever the names sort like.
 fn sort_dedup(raws: &mut Vec<Raw>) {
+    let synthetic = |r: &Raw| r.owner.ends_with(".<clinit>") || r.owner.ends_with(".<init>");
     raws.sort_by(|a, b| {
-        (&a.file, a.line, a.holder.as_str(), &a.owner).cmp(&(
+        (&a.file, a.line, a.holder.as_str(), synthetic(a), &a.owner).cmp(&(
             &b.file,
             b.line,
             b.holder.as_str(),
+            synthetic(b),
             &b.owner,
         ))
     });

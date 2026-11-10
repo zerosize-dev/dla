@@ -146,6 +146,15 @@ impl Project {
             .unwrap()
     }
 
+    /// The `result` of the allocation-stack evidence the last summarize wrote.
+    fn alloc_stack_result(&self) -> Value {
+        self.ledger()
+            .into_iter()
+            .rfind(|l| l["type"] == "evidence" && l["kind"] == "alloc-stack")
+            .unwrap()["result"]
+            .clone()
+    }
+
     fn writers(&self, finding: &str) -> Vec<String> {
         self.ledger()
             .iter()
@@ -206,6 +215,51 @@ fn memcheck_stacks_tie_by_their_first_project_frame_and_by_nothing_else() {
     // The leak kind and the stack are in the raw file.
     let raw = fs::read_to_string(p.run_dir.join(v["raw"]["path"].as_str().unwrap())).unwrap();
     assert!(raw.contains("definitely-lost"), "{raw}");
+}
+
+#[test]
+fn the_alloc_stack_record_states_the_tie_its_growing_stack_got() {
+    // The valgrind stacks have no root path and the census finding has an owner no stack
+    // names: the stack ties by its first project frame, and the record says so, so that
+    // `dla ledger label` counts it for that finding.
+    let p = Project::new();
+    let f = p.finding("src.decoder.decode_frame", "src/decoder.c:29");
+    let other = p.finding("src.main.main", "src/main.c:33");
+    let files = p.fixture("valgrind-memcheck", &MEMCHECK);
+    let v = summarize(&p, "alloc-stack-diff", &files);
+    assert_eq!(v["tied"], serde_json::json!([f]), "{v}");
+    let r = p.alloc_stack_result();
+    assert_eq!(r["finding"], f.as_str(), "{r}");
+    assert_eq!(r["candidates"], serde_json::json!([f]), "{r}");
+    assert_eq!(r["ties"][0]["finding"], f.as_str(), "{r}");
+    assert_eq!(r["ties"][0]["tie"]["rule"], "site", "{r}");
+    assert_eq!(r["ties"][0]["tie"]["key"], "src/decoder.c:29", "{r}");
+    assert!(!r.to_string().contains(&format!("\"{other}\"")), "{r}");
+    // `--finding` of a finding no stack ties to forces nothing into the record.
+    let q = Project::new();
+    q.finding("src.decoder.decode_frame", "src/decoder.c:29");
+    let o = q.finding("src.main.main", "src/main.c:33");
+    let files = q.fixture("valgrind-memcheck", &MEMCHECK);
+    let mut args = vec!["summarize", "alloc-stack-diff", "--finding", o.as_str()];
+    args.extend(files.iter().map(String::as_str));
+    ok(q.path(), &args);
+    let r = q.alloc_stack_result();
+    assert!(r.get("finding").is_none() && r.get("ties").is_none(), "{r}");
+    assert!(r.get("candidates").is_none(), "{r}");
+    // Two findings at one exact site are one place: both are named.
+    let t = Project::new();
+    let f1 = t.finding("src.decoder.decode_frame", "src/decoder.c:29");
+    let f2 = t.finding("src.decoder.other", "src/decoder.c:29");
+    let files = t.fixture("valgrind-memcheck", &MEMCHECK);
+    summarize(&t, "alloc-stack-diff", &files);
+    let r = t.alloc_stack_result();
+    assert_eq!(r["candidates"], serde_json::json!([f1, f2]), "{r}");
+    // One profile has no growth column and no tie.
+    let u = Project::new();
+    u.finding("src.decoder.decode_frame", "src/decoder.c:29");
+    let one = u.fixture("valgrind-memcheck", &MEMCHECK[..1]);
+    summarize(&u, "alloc-stack-diff", &one);
+    assert!(u.alloc_stack_result().get("ties").is_none());
 }
 
 #[test]

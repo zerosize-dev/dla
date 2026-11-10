@@ -127,6 +127,16 @@
       "format": "uint32",
       "minimum": 0
     },
+    "worker_stages_passed": {
+      "description": "The stages each worker passed with `dla --worker <name> gate check --stage <s>`. A\nworker's own checks never touch `stages_passed`: the read hook lets a subagent read\nthe archetype tables once its worker passed `classify` here.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/Stage"
+        }
+      }
+    },
     "worker_stop": {
       "description": "The same counter for each worker's SubagentStop hook, by worker name.",
       "type": "object",

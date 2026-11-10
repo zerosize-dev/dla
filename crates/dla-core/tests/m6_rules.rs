@@ -272,6 +272,112 @@ fn the_holder_must_fit_the_archetype() {
     label(&mut l, &f, "L-COLLECT", &[E_GROWTH_PASS, r]).unwrap();
 }
 
+/// An allocation-stack record as `dla summarize alloc-stack-diff` writes it for a profile
+/// with no root path (heaptrack, valgrind): the stacks name no holder, and the record
+/// states the findings its growing stacks were tied to.
+fn alloc_stack_tied_to(finding: Option<&str>, src: &str) -> dla_core::evidence::NewEvidence {
+    let mut r = json!({"mode": "diff", "captures": 3, "live": true,
+        "top": [{"at": "grow", "site": "a.go:1", "d_bytes": 4096}]});
+    if let Some(f) = finding {
+        r["finding"] = json!(f);
+        r["candidates"] = json!([f]);
+        r["ties"] = json!([{"stack": "grow", "finding": f, "candidates": [f],
+            "tie": {"rule": "site", "key": "a.go:1"}}]);
+    }
+    signed(
+        EvidenceKind::AllocStack,
+        Authority::Live,
+        "heaptrack",
+        "alloc-profiler",
+        src,
+        r,
+    )
+}
+
+#[test]
+fn an_alloc_stack_record_counts_for_the_findings_its_stated_ties_name_only() {
+    let (mut l, f, _) = leak();
+    // The record names F1 as the finding of its growing stack: the evidence is met, and
+    // only the holder (static/global is not a handle) is refused.
+    let tied = push(&mut l, alloc_stack_tied_to(Some("F1"), "ee"));
+    let e = refusal(label(&mut l, &f, "L-HANDLE", &[E_GROWTH_PASS, tied]));
+    assert_eq!(e.code, m6::LABEL_HOLDER, "{}", e.message);
+    // A record that states no tie (no root path, no finding) or another finding's tie
+    // does not count, whatever its stack sites are.
+    for (finding, src) in [(None, "ff"), (Some("F9"), "gg")] {
+        let other = push(&mut l, alloc_stack_tied_to(finding, src));
+        let e = refusal(label(&mut l, &f, "L-HANDLE", &[E_GROWTH_PASS, other]));
+        assert_eq!(e.code, m6::LABEL_EVIDENCE_MISSING, "{}", e.message);
+        assert!(e.message.contains("names no holder"), "{}", e.message);
+    }
+}
+
+/// A table whose only leak archetype rests on a record whose result names no finding.
+const CENSUS_TABLE: &str = r#"
+[L-COLLECT]
+holders = ["static/global"]
+regions = ["heap"]
+requires = [["growth-series", "census-holder"]]
+disconfirm = ["N-WARM"]
+repair = ["clear-reference"]
+summary = "A collection gains entries and nothing removes them."
+
+[N-WARM]
+requires = [["growth-series", "discriminator"]]
+disconfirm = []
+summary = "Growth that levels off after warm-up."
+"#;
+
+fn census_record(src: &str) -> dla_core::evidence::NewEvidence {
+    signed(
+        EvidenceKind::CensusHolder,
+        Authority::Static,
+        "dla-census",
+        "static-scan",
+        src,
+        json!({"holders": 7, "by_holder": {"static/global": 3}}),
+    )
+}
+
+#[test]
+fn a_record_that_names_no_finding_counts_through_the_findings_own_citation_only() {
+    let t = Table::parse(CENSUS_TABLE, "census table").unwrap();
+    let lab = |l: &mut Ledger, f: &FindingId, ev: &[u32]| {
+        let ev: Vec<_> = ev.iter().map(|n| eid(*n)).collect();
+        l.label(f, "L-COLLECT", &ev, None, Archetypes::On(&t))
+    };
+    // Cited by the refuted sibling F1.n1 (its family), not by F1.
+    let mut l = m3_ledger();
+    let f = add_leak(&mut l);
+    let n = add_sibling(&mut l, &f, "N-WARM");
+    let by_sibling = push(&mut l, census_record("c1"));
+    go(&mut l, &n, S::Refuted, &[E_DISC_LEAK, by_sibling]);
+    go(&mut l, &f, S::UnderTest, &[E_HARNESS]);
+    go(&mut l, &f, S::Confirmed, &[E_GROWTH_PASS]);
+    for ev in [vec![E_GROWTH_PASS, by_sibling], vec![]] {
+        let e = refusal(lab(&mut l, &f, &ev));
+        assert_eq!(e.code, m6::LABEL_EVIDENCE_MISSING, "{}", e.message);
+        assert!(
+            e.message.contains("census-holder") || e.message.contains("does not cite"),
+            "{}",
+            e.message
+        );
+    }
+    // Cited by F1 itself on its confirmation: counts, by default too.
+    let mut l = m3_ledger();
+    let f = add_leak(&mut l);
+    let n = add_sibling(&mut l, &f, "N-WARM");
+    let own = push(&mut l, census_record("c2"));
+    go(&mut l, &n, S::Refuted, &[E_DISC_LEAK]);
+    go(&mut l, &f, S::UnderTest, &[E_HARNESS]);
+    go(&mut l, &f, S::Confirmed, &[E_GROWTH_PASS, own]);
+    let line = lab(&mut l, &f, &[E_GROWTH_PASS, own]).unwrap();
+    assert_eq!(
+        record_of(&line).satisfied.kinds,
+        ["growth-series", "census-holder"]
+    );
+}
+
 #[test]
 fn a_disconfirm_sibling_that_is_not_refuted_blocks_the_label() {
     let mut l = m3_ledger();

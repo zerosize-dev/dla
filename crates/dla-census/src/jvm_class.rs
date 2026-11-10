@@ -411,7 +411,7 @@ fn class_holders(c: &ClassFile, file: &str, text: &str, info: &ProjectInfo, out:
                 format!("{class_dotted}.{}", m.name),
             ));
         }
-        method_calls(m, file, text, &class_dotted, out);
+        method_calls(m, &c.name, file, text, &class_dotted, out);
     }
 }
 
@@ -423,10 +423,40 @@ fn put_line(m: Option<&Method>, class: &str, field: &str) -> Option<u32> {
         .and_then(|i| m.line_at(i.pc))
 }
 
-fn method_calls(m: &Method, file: &str, text: &str, class_dotted: &str, out: &mut Vec<Raw>) {
+/// The field of `class` that the statement of the instruction at `pc` stores into: the
+/// first `putstatic`/`putfield` of the class after it, on the same source line. A holder
+/// created in a static or instance initializer is held by that field (`SEGMENTS` of
+/// `static final ThreadLocal<..> SEGMENTS = ThreadLocal.withInitial(..)`), and the field
+/// is what a heap dump names.
+fn stored_field<'a>(m: &'a Method, class: &str, pc: u32) -> Option<&'a str> {
+    let line = m.line_at(pc)?;
+    m.insns
+        .iter()
+        .filter(|i| i.pc > pc)
+        .find_map(|i| match &i.op {
+            Op::PutStatic(o, n) | Op::PutField(o, n)
+                if o == class && m.line_at(i.pc) == Some(line) =>
+            {
+                Some(n.as_str())
+            }
+            _ => None,
+        })
+}
+
+fn method_calls(
+    m: &Method,
+    class: &str,
+    file: &str,
+    text: &str,
+    class_dotted: &str,
+    out: &mut Vec<Raw>,
+) {
     let table = call_table();
     let in_clinit = m.name == "<clinit>";
-    let owner = format!("{class_dotted}.{}", m.name);
+    // `<clinit>` and `<init>` are compiler names: the owner of what they create is the
+    // field it is stored into when there is one, else the class's initializer.
+    let initializer = in_clinit || m.name == "<init>";
+    let method_owner = format!("{class_dotted}.{}", m.name);
     for i in &m.insns {
         let callee = match &i.op {
             Op::New(cl) => format!("new {}", dotted(cl)),
@@ -434,6 +464,8 @@ fn method_calls(m: &Method, file: &str, text: &str, class_dotted: &str, out: &mu
             _ => continue,
         };
         let line = m.line_at(i.pc).unwrap_or(1);
+        let field = initializer.then(|| stored_field(m, class, i.pc)).flatten();
+        let owner = field.map_or_else(|| method_owner.clone(), |f| format!("{class_dotted}.{f}"));
         if let Some(rule) = table.iter().find(|r| r.re.is_match(&callee)) {
             let mut raw = Raw::new(
                 rule.kind,
@@ -443,7 +475,9 @@ fn method_calls(m: &Method, file: &str, text: &str, class_dotted: &str, out: &mu
                 line,
                 owner.clone(),
             );
-            if let Some(n) = assigned_on_line(text, line).filter(|_| rule.assigned) {
+            if let Some(f) = field {
+                raw = raw.tracking(f, Scope::Project, false);
+            } else if let Some(n) = assigned_on_line(text, line).filter(|_| rule.assigned) {
                 raw = raw.tracking(&n, Scope::File, false);
             }
             out.push(raw);
@@ -560,5 +594,111 @@ mod tests {
         let out = kotlin_object(&[]);
         let owners: Vec<&str> = out.iter().map(|r| r.owner.as_str()).collect();
         assert_eq!(owners, ["shop.Audit.INSTANCE"]);
+    }
+
+    fn init_class(method: &str, insns: Vec<Op>, lines: Vec<(u16, u16)>) -> Vec<Raw> {
+        use crate::classfile::{Field, Insn};
+        let st = ACC_STATIC;
+        let c = ClassFile {
+            name: "billing/RenderContext".into(),
+            source_file: Some("RenderContext.java".into()),
+            fields: vec![
+                Field {
+                    access: st,
+                    name: "SEGMENTS".into(),
+                    descriptor: "Ljava/lang/ThreadLocal;".into(),
+                },
+                Field {
+                    access: 0,
+                    name: "held".into(),
+                    descriptor: "Ljava/lang/ThreadLocal;".into(),
+                },
+            ],
+            methods: vec![Method {
+                access: st,
+                name: method.into(),
+                descriptor: "()V".into(),
+                insns: insns
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, op)| Insn {
+                        pc: u32::try_from(k).unwrap() * 3,
+                        op,
+                    })
+                    .collect(),
+                lines,
+            }],
+            ..ClassFile::default()
+        };
+        let mut out = Vec::new();
+        let mut raws = Vec::new();
+        class_holders(
+            &c,
+            "src/billing/RenderContext.java",
+            "",
+            &ProjectInfo::default(),
+            &mut raws,
+        );
+        out.extend(raws);
+        out
+    }
+
+    #[test]
+    fn a_thread_local_made_in_clinit_is_owned_by_the_field_it_is_stored_in() {
+        let with_init = Op::Invoke(
+            "java/lang/ThreadLocal".into(),
+            "withInitial".into(),
+            "(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;".into(),
+            false,
+        );
+        let out = init_class(
+            "<clinit>",
+            vec![
+                with_init.clone(),
+                Op::PutStatic("billing/RenderContext".into(), "SEGMENTS".into()),
+            ],
+            vec![(0, 8)],
+        );
+        let tl: Vec<(&str, u32)> = out
+            .iter()
+            .filter(|r| r.kind == "thread-local")
+            .map(|r| (r.owner.as_str(), r.line))
+            .collect();
+        assert!(tl.iter().all(|(o, _)| !o.contains('<')), "{tl:?}");
+        assert!(
+            tl.iter()
+                .any(|(o, l)| *o == "billing.RenderContext.SEGMENTS" && *l == 8),
+            "{tl:?}"
+        );
+        // The call on another line than the store is no store into the field: it stays
+        // owned by the initializer.
+        let other = init_class(
+            "<clinit>",
+            vec![
+                with_init.clone(),
+                Op::PutStatic("billing/RenderContext".into(), "SEGMENTS".into()),
+            ],
+            vec![(0, 8), (3, 9)],
+        );
+        assert!(
+            other
+                .iter()
+                .any(|r| r.kind == "thread-local" && r.owner == "billing.RenderContext.<clinit>"),
+            "{other:?}"
+        );
+        // A constructor stores into an instance field.
+        let ctor = init_class(
+            "<init>",
+            vec![
+                with_init,
+                Op::PutField("billing/RenderContext".into(), "held".into()),
+            ],
+            vec![(0, 12)],
+        );
+        assert!(ctor.iter().all(|r| !r.owner.contains('<')), "{ctor:?}");
+        assert!(
+            ctor.iter().any(|r| r.owner == "billing.RenderContext.held"),
+            "{ctor:?}"
+        );
     }
 }

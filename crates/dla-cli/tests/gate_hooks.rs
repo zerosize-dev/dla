@@ -510,6 +510,78 @@ fn read_hook_allows_everything_without_a_run() {
     assert!(out.allowed(), "{out:?}");
 }
 
+/// A PreToolUse call made inside a subagent: `agent_id` and the main session's transcript.
+fn pre_in_subagent(path: &str, cwd: &Path, main_transcript: &Path, agent_id: &str) -> String {
+    let mut v: Value = serde_json::from_str(&read_json(path, cwd)).unwrap();
+    v["transcript_path"] = json!(main_transcript);
+    v["agent_id"] = json!(agent_id);
+    v["agent_type"] = json!("dla:worker");
+    v.to_string()
+}
+
+/// Writes `<main dir>/<stem>/subagents/agent-<id>.jsonl` with one Bash call per command.
+fn subagent_transcript_file(main: &Path, id: &str, commands: &[&str]) {
+    let dir = main.with_extension("").join("subagents");
+    fs::create_dir_all(&dir).unwrap();
+    let t = transcript(&dir, commands);
+    fs::rename(t, dir.join(format!("agent-{id}.jsonl"))).unwrap();
+}
+
+#[test]
+fn read_hook_opens_the_tables_to_a_subagent_whose_worker_passed_classify() {
+    let p = project("repository");
+    p.ok(&["run", "dispatch", "--workers", "jvm,go"]);
+    let t = tempfile::tempdir().unwrap();
+    let main = t.path().join("session.jsonl");
+    let table = p
+        .path()
+        .join("skills/detect-leak-anywhere/references/jvm-archetypes.md");
+    let table = table.to_string_lossy().into_owned();
+    subagent_transcript_file(&main, "aaa", &["dla --worker jvm run status", "ls"]);
+    subagent_transcript_file(&main, "bbb", &["dla --worker go run status"]);
+    subagent_transcript_file(&main, "ccc", &["ls", "echo --worker jvm"]);
+    let call = |id: &str| {
+        p.hook(
+            &["read-hook"],
+            &pre_in_subagent(&table, p.path(), &main, id),
+        )
+    };
+    // Nothing has passed classify yet.
+    assert!(call("aaa").denied());
+
+    // The jvm worker's own check passes: it is recorded for the worker, not for the run.
+    let v = p.ok(&["--worker", "jvm", "gate", "check", "--stage", "classify"]);
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["recorded"], true);
+    let st = p.state();
+    assert_eq!(st["worker_stages_passed"]["jvm"], json!(["classify"]));
+    assert!(st.get("stages_passed").is_none(), "{st}");
+
+    // Its subagent may read; another worker's subagent, a subagent whose worker cannot be
+    // named, the core session, and an unknown agent file still may not.
+    assert!(call("aaa").allowed());
+    assert!(call("bbb").denied());
+    assert!(call("ccc").denied());
+    assert!(call("zzz").denied());
+    assert!(
+        p.hook(&["read-hook"], &read_json(&table, p.path()))
+            .denied()
+    );
+    // SubagentStop-style field: the transcript named directly.
+    let direct = main.with_extension("").join("subagents/agent-aaa.jsonl");
+    let mut v: Value = serde_json::from_str(&read_json(&table, p.path())).unwrap();
+    v["agent_id"] = json!("aaa");
+    v["agent_transcript_path"] = json!(direct);
+    assert!(p.hook(&["read-hook"], &v.to_string()).allowed());
+    // The bash hook applies the same rule.
+    let mut b: Value = serde_json::from_str(&bash_json(&format!("cat {table}"), p.path())).unwrap();
+    b["transcript_path"] = json!(main);
+    b["agent_id"] = json!("aaa");
+    assert!(p.hook(&["bash-hook"], &b.to_string()).allowed());
+    b["agent_id"] = json!("bbb");
+    assert!(p.hook(&["bash-hook"], &b.to_string()).denied());
+}
+
 // ------------------------------------------------------------------ stop hook
 
 #[test]
