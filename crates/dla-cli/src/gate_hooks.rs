@@ -904,10 +904,11 @@ mod tests {
             normalize("C:\\proj\\.dla\\run\\..\\run\\state.json", "C:\\proj"),
             "c:/proj/.dla/run/state.json"
         );
-        assert_eq!(
-            normalize("a/./b/../c", "/nonexistent-root"),
-            "/nonexistent-root/a/c"
-        );
+        // On Windows a rooted path without a drive gets the current drive.
+        let rel = normalize("a/./b/../c", "/nonexistent-root");
+        assert!(rel.ends_with("/nonexistent-root/a/c"), "{rel}");
+        #[cfg(unix)]
+        assert_eq!(rel, "/nonexistent-root/a/c");
     }
 
     #[test]

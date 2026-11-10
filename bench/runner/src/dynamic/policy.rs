@@ -1062,6 +1062,7 @@ mod tests {
 
     // ---- against a stand-in dla
 
+    #[cfg(unix)]
     const FAKE: &str = r#"
 . ./fake.env
 shift 2
@@ -1112,6 +1113,7 @@ case "$1 $2" in
 esac
 "#;
 
+    #[cfg(unix)]
     const GATE1: &str = r#"{"missing":[
       {"kind":"checklist_item","id":"intake.target","description":"d","fix":"dla ledger resolve intake.target --status answered --evidence E1"},
       {"kind":"series","id":"S2","description":"d","fix":"dla trend S2"},
@@ -1120,10 +1122,12 @@ esac
       {"kind":"trend_column","id":"T2:os.rss","description":"d","fix":"dla trend S3"},
       {"kind":"explanation","id":"F9","description":"d","fix":"dla ledger explain F9 ..."}]}"#;
 
+    #[cfg(unix)]
     const GATE2: &str = r#"{"missing":[
       {"kind":"trend_column","id":"T2:os.rss","description":"d","fix":"dla trend S3"},
       {"kind":"explanation","id":"F9","description":"d","fix":"dla ledger explain F9 ..."}]}"#;
 
+    #[cfg(unix)]
     const LEDGER: &str = concat!(
         r#"{"type":"evidence","evidence_id":"E5","kind":"workload","authority":"test","result":{"harness":"H1","series":["S1"]}}"#,
         "\n",
@@ -1139,6 +1143,7 @@ esac
         "\n",
     );
 
+    #[cfg(unix)]
     fn expected(cause: &str, holder: &str) -> Expected {
         toml::from_str(&format!(
             r#"
@@ -1162,6 +1167,7 @@ cause = "{cause}"
     }
 
     /// Runs `run` against the stand-in; the row and the calls it made.
+    #[cfg(unix)]
     fn drive_fake(
         expected: &Expected,
         off: bool,
@@ -1171,6 +1177,7 @@ cause = "{cause}"
     }
 
     /// Like [`drive_fake`], with the items the gate names on its second answer.
+    #[cfg(unix)]
     fn drive_fake_with(
         expected: &Expected,
         off: bool,
@@ -1232,6 +1239,7 @@ cause = "{cause}"
         (std::mem::take(&mut fx.row), calls)
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_shipped_row_is_labelled_with_its_cause() {
         let (row, calls) = drive_fake(&expected("L-COLLECT", "container-field"), false, &[]);
@@ -1253,6 +1261,7 @@ cause = "{cause}"
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_refused_label_of_a_shipped_row_is_a_failure() {
         let (row, _) = drive_fake(
@@ -1273,6 +1282,7 @@ cause = "{cause}"
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn with_archetypes_off_the_label_must_be_refused_with_archetypes_off() {
         let e = expected("L-COLLECT", "container-field");
@@ -1309,6 +1319,7 @@ cause = "{cause}"
         assert!(row.failures.is_empty() || row.failures.iter().all(|f| !f.contains("suggest")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_refusal_for_missing_evidence_is_followed_through_its_printed_fix() {
         let e = expected("L-COLLECT", "container-field");
@@ -1397,6 +1408,7 @@ cause = "{cause}"
         assert!(summarize_ops_in("dla gap   or   dla intervene <H> --finding F1").is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn unclassified_needs_a_note_and_is_allowed_with_archetypes_off() {
         for off in [false, true] {
@@ -1413,6 +1425,7 @@ cause = "{cause}"
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_row_without_a_shipped_prose_row_and_a_wrong_holder_are_not_tried() {
         let (row, calls) = drive_fake(&expected("L-STALE", "container-field"), false, &[]);
@@ -1424,6 +1437,7 @@ cause = "{cause}"
         assert!(row.failures.iter().all(|f| !f.starts_with("label ")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_label_comes_after_the_explanation_and_the_intervention() {
         let (_, calls) = drive_fake(&expected("L-COLLECT", "container-field"), false, &[]);
@@ -1433,6 +1447,7 @@ cause = "{cause}"
         assert!(pos("ledger label F1 --as L-COLLECT") < pos("gate check --final"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_finding_without_a_writer_gets_its_site_as_the_writer_then_an_explanation() {
         let (row, calls) = drive_fake(&expected("L-COLLECT", "container-field"), false, &[]);
@@ -1458,6 +1473,7 @@ cause = "{cause}"
         assert!(!calls.contains("explain F9"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_refused_explanation_is_a_failure() {
         let (row, _) = drive_fake(
@@ -1474,6 +1490,7 @@ cause = "{cause}"
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn intervene_stubs_the_writers_on_the_confirming_harness_and_strong_follows() {
         let (row, calls) = drive_fake(&expected("L-COLLECT", "container-field"), false, &[]);
@@ -1488,6 +1505,7 @@ cause = "{cause}"
         assert_eq!(row.policy.strong[0].result, "no eligible record");
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_close_out_follows_the_commands_the_gate_names_and_reports_the_rest() {
         let (row, calls) = drive_fake(
@@ -1523,6 +1541,7 @@ cause = "{cause}"
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_gate_that_passes_after_the_close_out_is_not_a_gap() {
         let (row, _) = drive_fake(&expected("L-COLLECT", "container-field"), false, &[]);
@@ -1531,6 +1550,7 @@ cause = "{cause}"
         assert_eq!(g.rounds, 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_item_the_policy_cannot_fix_fails_the_fixture_and_is_named() {
         let gate2 = r#"{"missing":[
