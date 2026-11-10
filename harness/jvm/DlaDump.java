@@ -534,6 +534,9 @@ public final class DlaDump {
         try {
             f.setAccessible(true);
             Object v = f.get(null);
+            if (v instanceof ThreadLocal<?> tl) {
+                return threadLocalProbe(id, f, path, tl, lim);
+            }
             Long size = sizeOf(v);
             long[] w = walk(v);
             if (w[2] != 0) {
@@ -543,6 +546,78 @@ public final class DlaDump {
         } catch (Throwable t) {
             return probeRecord(id, f.getName(), path, null, 0, 0, null, t.toString());
         }
+    }
+
+    /**
+     * A ThreadLocal field is measured through its per-thread values: the sum over all live threads
+     * of the value this ThreadLocal holds in the thread's threadLocals and inheritableThreadLocals
+     * maps (size: collection, map or array length; reachable and bytes: one bounded walk from all
+     * the values). When the thread maps cannot be read the probe abstains with an error and adds a
+     * limitation, so an empty measurement never refutes.
+     */
+    private static Map<String, Object> threadLocalProbe(String id, Field f, String path, ThreadLocal<?> tl,
+            List<String> lim) {
+        try {
+            List<Object> values = new ArrayList<>();
+            for (Thread t : Thread.getAllStackTraces().keySet()) {
+                for (String mapField : new String[] {"threadLocals", "inheritableThreadLocals"}) {
+                    Object v = threadLocalValue(t, mapField, tl);
+                    if (v != null) {
+                        values.add(v);
+                    }
+                }
+            }
+            long sum = 0;
+            boolean sized = false;
+            Walker w = new Walker();
+            for (Object v : values) {
+                Long s = sizeOf(v);
+                if (s != null) {
+                    sum += s;
+                    sized = true;
+                }
+                w.add(v);
+            }
+            w.run();
+            if (w.truncated) {
+                lim.add("probe " + path + " walk truncated at " + MAX_OBJECTS + " objects");
+            }
+            return probeRecord(id, f.getName(), path, sized ? Long.valueOf(sum) : null, w.count, w.bytes, null, null);
+        } catch (Throwable t) {
+            String why = "thread-local values unreadable: " + t;
+            lim.add("probe " + path + ": " + why + " (needs --add-opens java.base/java.lang)");
+            return probeRecord(id, f.getName(), path, null, 0, 0, null, why);
+        }
+    }
+
+    /** The value of tl in thread t's map (null when absent); throws when the JDK internals are closed. */
+    private static Object threadLocalValue(Thread t, String mapField, ThreadLocal<?> tl) throws Exception {
+        Field mf = Thread.class.getDeclaredField(mapField);
+        mf.setAccessible(true);
+        Object map = mf.get(t);
+        if (map == null) {
+            return null;
+        }
+        Field tf = map.getClass().getDeclaredField("table");
+        tf.setAccessible(true);
+        Object[] table = (Object[]) tf.get(map);
+        if (table == null) {
+            return null;
+        }
+        Field vf = null;
+        for (Object e : table) {
+            if (e == null) {
+                continue;
+            }
+            if (vf == null) {
+                vf = e.getClass().getDeclaredField("value");
+                vf.setAccessible(true);
+            }
+            if (((java.lang.ref.Reference<?>) e).get() == tl) {
+                return vf.get(e);
+            }
+        }
+        return null;
     }
 
     private static Map<String, Object> probeRecord(String id, String name, String path, Long size, long reachable,

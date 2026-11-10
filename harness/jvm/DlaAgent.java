@@ -17,6 +17,7 @@ public final class DlaAgent {
                 return;
             }
             DlaDump.setInstrumentation(inst);
+            openThreadLocals(inst);
             if (DlaCapture.enabled()) {
                 java.util.List<String> lim = new java.util.ArrayList<>();
                 DlaCapture.start(lim);
@@ -51,6 +52,24 @@ public final class DlaAgent {
             }
         } catch (Throwable ignored) {
             // the agent must never crash the target
+        }
+    }
+
+    /**
+     * Opens java.lang to the agent's module so the probes can read the per-thread ThreadLocal maps
+     * (the same effect as --add-opens java.base/java.lang=ALL-UNNAMED). Failure only means that
+     * ThreadLocal probes abstain.
+     */
+    private static void openThreadLocals(Instrumentation inst) {
+        try {
+            Module base = Object.class.getModule();
+            Module self = DlaAgent.class.getModule();
+            if (!base.isOpen("java.lang", self)) {
+                inst.redefineModule(base, java.util.Set.of(), java.util.Map.of(),
+                    java.util.Map.of("java.lang", java.util.Set.of(self)), java.util.Set.of(), java.util.Map.of());
+            }
+        } catch (Throwable ignored) {
+            // the ThreadLocal probe abstains when the maps cannot be read
         }
     }
 }

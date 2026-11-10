@@ -557,7 +557,15 @@ struct Syn {
 }
 
 enum Src {
-    Static { class: u32, name: u64 },
+    Static {
+        class: u32,
+        name: u64,
+    },
+    /// The values of a static `ThreadLocal` field on live threads.
+    ThreadLocal {
+        class: u32,
+        name: u64,
+    },
     Syn(usize),
     Other(u8),
 }
@@ -566,6 +574,8 @@ struct Cand {
     retained: u64,
     node: u32,
     src: Src,
+    /// Objects of `node` already attributed to thread-local holders.
+    sub_cnt: u32,
 }
 
 struct Analysis<'a> {
@@ -778,6 +788,71 @@ impl Analysis<'_> {
             }
             _ => "~".into(),
         }
+    }
+
+    /// The `(ThreadLocal object, value)` pairs in a thread object's `threadLocals` and
+    /// `inheritableThreadLocals` maps (`ThreadLocalMap.table[i]` entries: the entry's
+    /// `referent` is the ThreadLocal, which no strong edge reaches). Needs the id table.
+    fn thread_local_values(&mut self, thread: u32) -> Vec<(u32, u32)> {
+        let mut out = Vec::new();
+        let Some((tc, tdata)) = self.read_instance(thread) else {
+            return out;
+        };
+        for field in ["threadLocals", "inheritableThreadLocals"] {
+            let Some(slot) = self.slot_named(tc, field, Some("java.lang.Thread")) else {
+                continue;
+            };
+            if slot.ty != 2 {
+                continue;
+            }
+            let Some(map) = self.find(self.id_at(&tdata, slot.off)) else {
+                continue;
+            };
+            let Some((mc, mdata)) = self.read_instance(map) else {
+                continue;
+            };
+            let Some(ts) = self.slot_named(mc, "table", None) else {
+                continue;
+            };
+            let Some(table) = self.find(self.id_at(&mdata, ts.off)) else {
+                continue;
+            };
+            if self.kinds[table as usize] != K_OBJARR {
+                continue;
+            }
+            let entries: Vec<u32> = self.g.succ(table).to_vec();
+            for e in entries {
+                let Some((ec, edata)) = self.read_instance(e) else {
+                    continue;
+                };
+                let value = self.slot_named(ec, "value", None);
+                let referent = self.slot_named(ec, "referent", Some("java.lang.ref.Reference"));
+                let (Some(value), Some(referent)) = (value, referent) else {
+                    continue;
+                };
+                let tl = self.find(self.id_at(&edata, referent.off));
+                let v = self.find(self.id_at(&edata, value.off));
+                if let (Some(tl), Some(v)) = (tl, v)
+                    && self.kinds[v as usize] != K_CLASS
+                {
+                    out.push((tl, v));
+                }
+            }
+        }
+        out
+    }
+
+    /// The static field that holds object `target`, the first by class and field name when
+    /// several do.
+    fn static_field_of(&mut self, target: u32) -> Option<(u32, u64)> {
+        let hits: Vec<(u32, u64)> = self
+            .statics_out
+            .iter()
+            .filter(|&&(_, _, t)| t == target)
+            .map(|&(c, n, _)| (c, n))
+            .collect();
+        hits.into_iter()
+            .min_by_key(|&(c, n)| (self.class_names[c as usize].clone(), self.strs.get(n)))
     }
 
     fn thread_name(&mut self, obj: u32) -> Option<String> {
@@ -1121,6 +1196,8 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
     other.dedup();
     let mut syn_succ: Vec<Vec<u32>> = Vec::new();
     let mut syns: Vec<Syn> = Vec::new();
+    // (thread syn index, ThreadLocal object, value, thread object) read from the threads' maps
+    let mut tl_raw: Vec<(usize, u32, u32, u32)> = Vec::new();
     for (serial, t) in &threads {
         let mut succ: Vec<u32> = t.obj.into_iter().chain(t.locals.iter().copied()).collect();
         succ.sort_unstable();
@@ -1146,6 +1223,11 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
                     let file = an.strs.get(fr.file);
                     context.push(format!("{class}.{method}({file}:{})", fr.line));
                 }
+            }
+        }
+        if let Some(obj) = t.obj {
+            for (tl, v) in an.thread_local_values(obj) {
+                tl_raw.push((syns.len(), tl, v, obj));
             }
         }
         syns.push(Syn {
@@ -1193,6 +1275,31 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
         ));
     }
     let (ret, cnt) = retained(&an.g, &dom, &shallow);
+    // Thread-local values that only their thread keeps alive. A pooled thread is also reached
+    // through its executor, so it is often dominated by the super root and not by its own
+    // synthetic root: the values count when their dominator chain reaches the thread object
+    // (or the synthetic root), and only the latter case is part of the thread's retained size.
+    let tl_owned: Vec<(usize, u32, u32, bool)> = tl_raw
+        .iter()
+        .filter_map(|&(si, tl, v, obj)| {
+            let thread = (n + si) as u32;
+            let mut cur = v;
+            for _ in 0..64 {
+                let p = dom.idom[cur as usize];
+                if p == thread {
+                    return Some((si, tl, v, true));
+                }
+                if p == obj {
+                    return Some((si, tl, v, dom.idom[obj as usize] == thread));
+                }
+                if p == NONE || p == cur {
+                    return None;
+                }
+                cur = p;
+            }
+            None
+        })
+        .collect();
     let nn = an.g.nodes();
     let mut kidc = vec![0u32; nn];
     let mut heavy = vec![NONE; nn];
@@ -1280,14 +1387,36 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
             retained: an.ret[target as usize],
             node: target,
             src: Src::Static { class, name },
+            sub_cnt: 0,
+        });
+    }
+    // Thread-local values held through a static `ThreadLocal` field are attributed to that
+    // field, and taken out of the thread that holds them.
+    let mut tl_sub: BTreeMap<usize, (u64, u32)> = BTreeMap::new();
+    let mut tl_field: BTreeMap<u32, Option<(u32, u64)>> = BTreeMap::new();
+    for &(si, tl, v, in_thread) in &tl_owned {
+        let field = *tl_field.entry(tl).or_insert_with(|| an.static_field_of(tl));
+        let Some((class, name)) = field else { continue };
+        if in_thread {
+            let e = tl_sub.entry(si).or_default();
+            e.0 += an.ret[v as usize];
+            e.1 += an.cnt[v as usize];
+        }
+        cands.push(Cand {
+            retained: an.ret[v as usize],
+            node: v,
+            src: Src::ThreadLocal { class, name },
+            sub_cnt: 0,
         });
     }
     for i in 0..an.syns.len() {
         let node = (n + i) as u32;
+        let (sub_ret, sub_cnt) = tl_sub.get(&i).copied().unwrap_or((0, 0));
         cands.push(Cand {
-            retained: an.ret[node as usize],
+            retained: an.ret[node as usize].saturating_sub(sub_ret),
             node,
             src: Src::Syn(i),
+            sub_cnt,
         });
     }
     for &(kind, node) in &other {
@@ -1295,6 +1424,7 @@ pub(crate) fn analyze(path: &Path, p: &Params) -> Result<HeapSummary, HprofError
             retained: an.ret[node as usize],
             node,
             src: Src::Other(kind),
+            sub_cnt: 0,
         });
     }
     cands.sort_by(|a, b| b.retained.cmp(&a.retained).then(a.node.cmp(&b.node)));
@@ -1364,6 +1494,13 @@ impl Analysis<'_> {
                     self.strs.get(name)
                 )
             }
+            Src::ThreadLocal { class, name } => {
+                format!(
+                    "thread-local:{}.{}",
+                    deproxy::normalize(&self.class_names[class as usize]),
+                    self.strs.get(name)
+                )
+            }
             Src::Syn(i) => {
                 let s = &self.syns[i];
                 if s.kind == HolderKind::JniGlobal {
@@ -1385,6 +1522,12 @@ impl Analysis<'_> {
         let (kind, raw_owner, field, context) = match c.src {
             Src::Static { class, name } => (
                 HolderKind::Static,
+                self.class_names[class as usize].clone(),
+                Some(self.strs.get(name)),
+                Vec::new(),
+            ),
+            Src::ThreadLocal { class, name } => (
+                HolderKind::ThreadLocal,
                 self.class_names[class as usize].clone(),
                 Some(self.strs.get(name)),
                 Vec::new(),
@@ -1419,7 +1562,7 @@ impl Analysis<'_> {
             raw_owner_class,
             field,
             retained: c.retained,
-            dominated_count: u64::from(self.cnt[c.node as usize]),
+            dominated_count: u64::from(self.cnt[c.node as usize].saturating_sub(c.sub_cnt)),
             path: Vec::new(),
             accumulation: None,
             context,
@@ -1442,6 +1585,14 @@ impl Analysis<'_> {
                 ));
             }
             HolderKind::Thread => path.push(format!("root thread {}", h.owner_class)),
+            HolderKind::ThreadLocal => {
+                path.push(format!(
+                    "root thread-local {}.{}",
+                    h.owner_class,
+                    h.field.as_deref().unwrap_or("?")
+                ));
+                path.push(format!("thread-local value -> {}", self.node_class(node)));
+            }
             HolderKind::JniGlobal => path.push(format!("root jni-global {}", h.owner_class)),
             HolderKind::Instance => {
                 path.push(format!("root {}", h.key));

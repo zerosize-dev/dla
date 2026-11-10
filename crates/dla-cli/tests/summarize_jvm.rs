@@ -1012,6 +1012,112 @@ fn a_via_holder_is_listed_followed_in_the_series_and_tied_by_its_owner() {
     assert!(vals[0] < vals[1] && vals[1] < vals[2], "{vals:?}");
 }
 
+/// Two pooled threads whose `ThreadLocal` (held by the static `shop.Ctx.BUF`) holds a buffer of
+/// `n` kilobytes each, as the entries of their `threadLocals` maps.
+fn thread_local_dump(ts: u64, n: usize) -> Vec<u8> {
+    let mut b = B::new(8, ts);
+    let obj = b.declare("java.lang.Object");
+    let class_cls = b.declare("java.lang.Class");
+    let string = b.declare("java.lang.String");
+    let thread = b.declare("java.lang.Thread");
+    let obj_arr = b.declare("[Ljava/lang/Object;");
+    let byte_arr = b.declare("[B");
+    let reference = b.declare("java.lang.ref.Reference");
+    let weak = b.declare("java.lang.ref.WeakReference");
+    let entry = b.declare("java.lang.ThreadLocal$ThreadLocalMap$Entry");
+    let map = b.declare("java.lang.ThreadLocal$ThreadLocalMap");
+    let tl_cls = b.declare("java.lang.ThreadLocal");
+    let buf_cls = b.declare("shop.Buffer");
+    let ctx = b.declare("shop.Ctx");
+    let loader_cls = b.declare("jdk.internal.loader.ClassLoaders$AppClassLoader");
+    let loader = b.instance(loader_cls, &[]);
+    b.class_dump(loader_cls, obj, 0, 8, &[], &[]);
+    let tl = b.instance(tl_cls, &[]);
+    for (i, name) in ["pool-1", "pool-2"].into_iter().enumerate() {
+        // `n` segments of 1 KB: the object count grows with the values, as for a list.
+        let segs: Vec<u64> = (0..n).map(|_| b.byte_array(&vec![i as u8; 1024])).collect();
+        let payload = b.obj_array(obj_arr, &segs);
+        let value = b.instance(buf_cls, &[F::Id(payload)]);
+        let e = b.instance(entry, &[F::Id(value), F::Id(tl)]);
+        let table = b.obj_array(obj_arr, &[e]);
+        let m = b.instance(map, &[F::Id(table)]);
+        let tname = b.java_string(string, name);
+        let t = b.instance(thread, &[F::Id(tname), F::Id(m), F::Id(0)]);
+        b.root(0x08, t, i as u32 + 1, 5);
+    }
+    b.class_dump(obj, 0, 0, 0, &[], &[]);
+    b.class_dump(class_cls, obj, 0, 0, &[], &[]);
+    b.class_dump(
+        string,
+        obj,
+        0,
+        0,
+        &[("value", T_OBJ), ("coder", T_BYTE), ("hash", 10)],
+        &[],
+    );
+    b.class_dump(
+        thread,
+        obj,
+        0,
+        0,
+        &[
+            ("name", T_OBJ),
+            ("threadLocals", T_OBJ),
+            ("inheritableThreadLocals", T_OBJ),
+        ],
+        &[],
+    );
+    b.class_dump(obj_arr, obj, 0, 0, &[], &[]);
+    b.class_dump(byte_arr, obj, 0, 0, &[], &[]);
+    b.class_dump(reference, obj, 0, 0, &[("referent", T_OBJ)], &[]);
+    b.class_dump(weak, reference, 0, 0, &[], &[]);
+    b.class_dump(entry, weak, 0, 0, &[("value", T_OBJ)], &[]);
+    b.class_dump(map, obj, 0, 0, &[("table", T_OBJ)], &[]);
+    b.class_dump(tl_cls, obj, 0, 0, &[], &[]);
+    b.class_dump(buf_cls, obj, loader, 0, &[("payload", T_OBJ)], &[]);
+    b.class_dump(ctx, obj, loader, 0, &[], &[("BUF", tl)]);
+    b.finish(2)
+}
+
+#[test]
+fn thread_local_values_on_pooled_threads_tie_to_the_static_field_and_report_thread_local() {
+    let p = Project::new();
+    p.put(
+        "src/shop/Ctx.java",
+        b"package shop;\n\nfinal class Ctx {\n    // the leak\n    static final ThreadLocal<Buffer> BUF = new ThreadLocal<>();\n}\n",
+    );
+    let f = census_finding(&p, "shop.Ctx.BUF", "src/shop/Ctx.java:5", &[]);
+    let files: Vec<String> = [20, 40, 60]
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            p.put(
+                &format!("dumps/d{i}.hprof"),
+                &thread_local_dump(T0 + 30_000 * i as u64, *n),
+            )
+        })
+        .collect();
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["tied"], json!([f]), "{v}");
+    let g = &p.evidence("growth-series")[0];
+    let col = g["result"]["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["column"] == "holder:thread-local:shop.Ctx.BUF")
+        .unwrap_or_else(|| panic!("{g}"));
+    assert_eq!(col["finding"], f.as_str());
+    assert_eq!(col["tie"]["rule"], "holder");
+    assert_eq!(col["holder_kind"], "thread-local");
+    // No thread holder was added as a second candidate for the same values.
+    assert!(
+        p.findings().iter().all(|x| x["origin"] == "census"),
+        "{:?}",
+        p.findings()
+    );
+}
+
 #[test]
 fn a_via_holder_without_a_finding_becomes_a_candidate_with_the_declaration_site() {
     let p = Project::new();

@@ -771,6 +771,64 @@ fn jvm_agent_heap_and_probe_show_the_order_cache_leak() {
     );
 }
 
+/// A static `ThreadLocal` field is measured through the values it has on the live threads:
+/// the pooled workers of `jvm-invoice-render` keep every segment they rendered, the trimmed
+/// control cuts its lists back, and the ThreadLocal object itself is flat in both.
+#[test]
+fn jvm_agent_probe_measures_threadlocal_values_on_pooled_threads() {
+    if !have(&["java", "javac", "jar"]) {
+        return;
+    }
+    let mut results = Vec::new();
+    for name in ["jvm-invoice-render", "jvm-invoice-render-trimmed"] {
+        let fx = fixture(name, &["jvm"], &[1]);
+        let jar = build_jvm_agent(&fx);
+        let mut m = manifest(
+            Runtime::Jvm,
+            &["java", "-cp", "out", "billing.Main", "{n}"],
+            vec![(
+                s("JAVA_TOOL_OPTIONS"),
+                format!(
+                    "-javaagent:{} -XX:NativeMemoryTracking=summary",
+                    jar.display()
+                ),
+            )],
+            1000,
+        );
+        m.build = Some(spec(&[
+            "sh",
+            "-c",
+            "rm -rf out && mkdir out && javac -d out src/billing/*.java",
+        ]));
+        m.agent = AgentKind::JvmAgent;
+        m.probes = vec![ProbeSpec {
+            id: s("P1"),
+            finding: None,
+            target: ProbeTarget::JvmStatic {
+                class: s("billing.RenderContext"),
+                field: s("SEGMENTS"),
+            },
+            site: Some(s("src/billing/RenderContext.java:8")),
+        }];
+        write_manifest(&fx, &m);
+        let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+        results.push(load(&fx, &out, 0));
+    }
+    let probe = "probe:billing.RenderContext.SEGMENTS";
+    let leak = &results[0];
+    assert!(passes(leak, probe), "the pooled workers' lists grow");
+    assert!(passes(leak, &format!("{probe}.bytes")));
+    // Every invoice adds about a dozen segments to the list of the worker that rendered it.
+    let sizes = post(leak, &format!("{probe}.size"));
+    let (first, last) = (sizes.first().unwrap(), sizes.last().unwrap());
+    assert!(
+        (last.1 - first.1) / (last.0 - first.0) > 5.0,
+        "segments per invoice in {sizes:?}"
+    );
+    let ctl = &results[1];
+    assert!(!passes(ctl, probe), "the trimmed lists stay short");
+}
+
 #[test]
 fn a_hung_point_is_killed_at_the_timeout_and_the_run_is_refused_with_the_log() {
     if !have(&["sh"]) {

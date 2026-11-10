@@ -10,13 +10,12 @@ buffer, `RenderContext.SEGMENTS`, a `ThreadLocal<List<String>>`
 (`src/billing/RenderContext.java:8`; the append is line 13). A render takes a mark
 (the list length when it starts) and reads back only the segments after the mark,
 so the output of one invoice never contains another. Nothing ever shortens the
-list again. The request loop (`Main`, the process's main thread, which stays blocked in
-`System.exit` while the JVM shuts down) calls the service for every invoice, so the
-thread's list keeps every segment of every invoice it has rendered (about 10
-strings, 1.2 KB, per invoice). The values are reachable through
-`Thread.threadLocals` of the long-lived thread. Pooled worker threads would behave
-the same; the fixture renders on the calling thread because a heap-graph walk
-attributes the contents of a pooled thread's map to no holder (see Dynamic result).
+list again. `InvoiceService` renders on a fixed pool of 4 worker threads that
+lives as long as the service (daemon threads, never shut down; they are alive at
+every checkpoint and when the exit-time dump is written). Each worker's list keeps
+every segment of every invoice that worker has rendered (about 10 strings, 1.2 KB,
+per invoice). The values are reachable through `Thread.threadLocals` of the
+long-lived pooled threads.
 
 Background: "Each thread holds an implicit reference to its copy of a thread-local
 variable as long as the thread is alive and the `ThreadLocal` instance is
@@ -42,27 +41,34 @@ of each run, `java -cp out billing.Main N`):
 
 | invoices | heap in use after GC |
 |---|---|
-| 600   | 2406 KB |
-| 2000  | 4096 KB |
-| 8000  | 11405 KB |
-| 32000 | 43073 KB |
+| 600   | 2435 KB |
+| 2000  | 4111 KB |
+| 8000  | 11615 KB |
+| 32000 | 40872 KB |
 
-Slope about 1.3 KB per invoice, linear in the iteration count (2000 to 32000:
-38977 KB over 30000 invoices); no plateau. The 32000-invoice run takes a few
+Slope about 1.2 KB per invoice, linear in the iteration count (2000 to 32000:
+36761 KB over 30000 invoices); no plateau. The 32000-invoice run takes a few
 seconds.
 
 ## Dynamic result
 
-`dla-bench dynamic --only jvm-invoice-render` (pinned binaries): the decoy passes;
-the trap is not confirmed. The harness runs and the heap-graph summary does find the
-leak: it adds a finding with holder `thread-local`, owner `thread:main`, and a
-discriminator that favors leak (retained bytes of `thread:main` 1389240, 5571024,
-8375008, 12556112 over 4 dumps, gate pass). The in-process probes cannot see it: the
-census finds `RenderContext.SEGMENTS` and its probe measures the `ThreadLocal`
-object, which is flat, so the policy refutes that finding (`favors non-leak`). The
-finding that the heap-graph step adds is left `unresolved` by the policy, which adds
-the refuted sibling and the test only for findings that a passing growth column ties
-before the summarize step.
+`dla-bench dynamic --only jvm-invoice-render` (pinned binaries): the trap's leak
+is confirmed and the decoy is not.
+
+- The in-process probe of the static field `RenderContext.SEGMENTS` measures the
+  `ThreadLocal` through its values: the sum over the 4 live worker threads of the
+  list each holds in `threadLocals` (about 12.5 segments, 1.2 KB, per invoice). That
+  column passes the trend gate, the alloc-test favors leak, the N-WARM sibling is
+  refuted and the finding is confirmed.
+- `dla summarize heap-graph` over the driver's 4 heap dumps reports the holder
+  `thread-local:billing.RenderContext.SEGMENTS` (holder kind `thread-local`, owner the
+  static field that holds the `ThreadLocal`), retained bytes 1393848, 5561736,
+  8321800 and 12542416, gate pass. It ties to the census finding by holder identity
+  and the confirmation cites it, so the leak is dump backed. The pooled threads are
+  also reached through their executor, so no thread dominates its own values; the
+  reader finds them through each thread's `threadLocals` map.
+- The decoy (`jvm-invoice-render-trimmed`): the probe stays flat, the heap-graph gate
+  fails and nothing is confirmed.
 
 ## Minimal edit to the control
 

@@ -184,6 +184,7 @@ fn finding_holder(h: &Holder) -> FindingHolder {
         HolderKind::Static => FindingHolder::StaticGlobal,
         HolderKind::JniGlobal => FindingHolder::NativeHandleGlobalRef,
         HolderKind::Instance => FindingHolder::ContainerField,
+        HolderKind::ThreadLocal => FindingHolder::ThreadLocal,
         HolderKind::Thread => {
             let on_thread_local = h.path.iter().any(|p| p.contains("ThreadLocal"))
                 || h.accumulation
@@ -215,7 +216,9 @@ fn observed_holder(h: &Holder) -> FindingHolder {
 /// the key.
 fn owner_of(h: &Holder) -> String {
     match (h.kind, &h.field) {
-        (HolderKind::Static, Some(f)) => format!("{}.{f}", h.owner_class),
+        (HolderKind::Static | HolderKind::ThreadLocal, Some(f)) => {
+            format!("{}.{f}", h.owner_class)
+        }
         (HolderKind::Instance, Some(f)) if h.key.starts_with("field:") => {
             format!("{}.{f}", h.owner_class)
         }
@@ -591,11 +594,16 @@ fn bound_holder(ledger: &Ledger, f: &FindingId, dumps: &[Dump]) -> Res<(FindingI
     };
     let last = &dumps[dumps.len() - 1].summary;
     let canon = dla_core::attribution::canonical(&owner);
-    let exact: Vec<&Holder> = last
+    let mut exact: Vec<&Holder> = last
         .tracked
         .iter()
         .filter(|h| h.key == owner || owner_of(h) == owner || format!("static:{owner}") == h.key)
         .collect();
+    // A static ThreadLocal field is both a static holder (the small ThreadLocal object) and a
+    // thread-local holder (its values on live threads): the values are what grows.
+    if exact.iter().any(|h| h.kind == HolderKind::ThreadLocal) {
+        exact.retain(|h| h.kind == HolderKind::ThreadLocal);
+    }
     let normalized: Vec<&Holder> = last
         .tracked
         .iter()
@@ -1198,6 +1206,20 @@ mod tests {
         let root = holder("instance:x>y", HolderKind::Instance, "y", None);
         assert_eq!(owner_of(&root), "instance:x>y");
         assert_eq!(finding_holder(&inst), FindingHolder::ContainerField);
+    }
+
+    #[test]
+    fn thread_local_values_are_owned_by_the_static_field_and_report_thread_local() {
+        let h = holder(
+            "thread-local:shop.Ctx.BUF",
+            HolderKind::ThreadLocal,
+            "shop.Ctx",
+            Some("BUF"),
+        );
+        // The owner is the static field, so it ties to a census finding with that owner.
+        assert_eq!(owner_of(&h), "shop.Ctx.BUF");
+        assert_eq!(finding_holder(&h), FindingHolder::ThreadLocal);
+        assert_eq!(observed_holder(&h), FindingHolder::ThreadLocal);
     }
 
     #[test]

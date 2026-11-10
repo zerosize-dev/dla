@@ -49,15 +49,17 @@ Slope about 9.9 KB per update, linear in the iteration count. Workload:
 
 ## Dynamic result
 
-`dla-bench dynamic --only node-price-board` (pinned binaries): the decoy passes; the
-trap is not confirmed. The heap snapshots do show the leak: the heap-graph summary
-(gate pass) ties the census finding for `Board.latest` and annotates its holder as
-`closure/continuation`. A closure chain is invisible to the in-process probes (they
-walk object properties, not closure contexts), so no passing growth column is tied
-to that finding before the summarize step, and the policy, which adds the refuted
-sibling and the test only for such findings, leaves it a candidate. With a module
-level `latest` binding instead of the `Board` field the probe for it is flat and
-the policy refutes the finding.
+`dla-bench dynamic --only node-price-board` (pinned binaries): the trap's leak is
+confirmed and the decoy is not. A closure chain is invisible to the in-process probes
+(they walk object properties, not closure contexts), so no passing growth column is
+tied to the census finding for `Board.latest` before the summarize step. The
+heap-graph summary over the 4 snapshots (gate pass) ties it by holder identity and
+annotates its holder as `closure/continuation`. The policy then drives a finding that
+a summarize call ties like one that a harness column ties: it adds the N-WARM sibling,
+tests the finding, refutes the sibling with the `favors leak` discriminator of the
+heap-graph call and confirms the finding citing the call's growth evidence. A finding
+that is already refuted is never driven again. The decoy (`node-price-board-flat`) has
+no passing column and nothing is confirmed.
 
 ## Minimal edit to the control
 

@@ -9,7 +9,8 @@ it holds at most the segments of the largest single invoice.
 Same code as `jvm-invoice-render`, except that `InvoiceRenderer.render` calls
 `RenderContext.truncate(mark)` after it has read its text, which removes the
 segments the render appended. The `ThreadLocal<List<String>>` on the long-lived
-request thread looks as suspicious as in the trap, and the list keeps its backing array
+pooled worker threads (a fixed pool of 4, alive at every checkpoint and at the dumps)
+looks as suspicious as in the trap, and each list keeps its backing array
 (a few dozen slots at most) for the life of the thread, which is a high-water
 mark and not growth. A run that reports a confirmed growth here is a false alarm.
 
@@ -55,10 +56,10 @@ cd project && ./build.sh run 8000
 
 | invoices | heap in use after GC |
 |---|---|
-| 600   | 1663 KB |
-| 2000  | 1658 KB |
-| 8000  | 1663 KB |
-| 32000 | 1668 KB |
+| 600   | 1692 KB |
+| 2000  | 1687 KB |
+| 8000  | 1692 KB |
+| 32000 | 1697 KB |
 
-The trap gives 2406, 4096, 11405 and 43073 KB. The control is flat from the first
+The trap gives 2435, 4111, 11615 and 40872 KB. The control is flat from the first
 checkpoint; the slope of the second half is zero.

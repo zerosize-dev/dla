@@ -330,6 +330,17 @@ The policy, per fixture (repository entry, one runtime):
      most 2048 bytes; every tied passing column carries a `tie` reason.
      A refusal (for example `tool-missing`) is logged, not a failure; it
      still counts for the size check, and a crash or non-JSON output fails.
+   - A finding that a summarize call's passing growth column ties, and that is
+     still a candidate (a census finding whose in-process probe saw nothing,
+     such as a closure context, or one the summarize step added), is driven
+     like a harness-tied finding: `ledger add --sibling-of F` (N-WARM) citing
+     the call's growth evidence, `ledger test F` with the workload of the
+     harness, `ledger refute` of the sibling with the call's `favors leak`
+     discriminator, then `ledger confirm F` citing the growth evidence and the
+     call's evidence. Only a finding with a site (an owner on an artifact run)
+     that no other driven finding shares is driven. A finding that is not a
+     candidate (a refuted one stays refuted) or that has no discriminator
+     favoring leak is left alone. This confirms `node-price-board` L1.
    - Each held-back `ledger confirm` cites the trend evidence and, when a
      summarize call's passing growth column is tied (with a reason) to the
      finding, that call's evidence (its histogram, allocation or retention
@@ -538,8 +549,6 @@ column observed `static/global`.
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
 | `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census gives the `setInterval` timer finding the holder `blocked-stack` and the policy keeps it. The per-point heap-graph run observes `registration-table` for the column of `Session.recent` (the sessions are held through the loopback socket events) and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding, so there is no observed holder to correct it with. `node-resources` ties the timer group to the finding by site only. |
-| `jvm-invoice-render` | `leak L1 (src/billing/RenderContext.java:13) is not confirmed` | Temporary (M6, in progress): the in-process probe measures the `ThreadLocal` object, which is flat, so the census finding is refuted before the heap-graph step ties the thread-local values. |
-| `node-price-board` | `leak L1 (src/board.js:15) is not confirmed` | Temporary (M6, in progress): closure contexts are invisible to the in-process probes, and the policy does not yet drive a finding tied only by the heap-graph step to confirmation. |
 
 `jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
 workers, one merged ledger with both slices, merged coverage): the driver fails

@@ -39,6 +39,15 @@ pub(super) struct Pending {
     pub evidence: String,
 }
 
+/// What a passing summarize call tied: the findings, the evidence the call wrote, its growth
+/// evidence, and the `favors leak` discriminators it wrote (finding, evidence).
+struct Tied {
+    set: BTreeSet<String>,
+    evidence: Vec<String>,
+    growth: String,
+    discs: Vec<(String, String)>,
+}
+
 /// One adapter of `dla summarize --list`.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Adapter {
@@ -393,13 +402,14 @@ pub(super) fn correlate(fx: &mut Fx, harness: &str) {
 pub(super) fn run(fx: &mut Fx, grew: &[(String, String)]) {
     let pending = std::mem::take(&mut fx.pending);
     let mut tied: Vec<(BTreeSet<String>, Vec<String>)> = Vec::new();
+    let mut late: Vec<(String, Tied)> = Vec::new();
     if !grew.is_empty() {
         let adapters = list_adapters(fx);
-        let mut cmds: Vec<String> = Vec::new();
+        let mut cmds: Vec<(String, String)> = Vec::new();
         for (h, rt) in grew {
             for c in capture(fx, h, rt, &adapters) {
-                if !cmds.contains(&c) {
-                    cmds.push(c);
+                if !cmds.iter().any(|(x, _)| *x == c) {
+                    cmds.push((c, h.clone()));
                 }
             }
         }
@@ -410,19 +420,94 @@ pub(super) fn run(fx: &mut Fx, grew: &[(String, String)]) {
             ));
             cmds.truncate(MAX_COMMANDS);
         }
-        for cmd in &cmds {
+        for (cmd, harness) in &cmds {
             if let Some(t) = summarize(fx, cmd) {
-                tied.push(t);
+                tied.push((t.set.clone(), t.evidence.clone()));
+                late.push((harness.clone(), t));
             }
         }
     }
+    drive_tied(fx, &late, &pending, &tied);
     for p in pending {
         confirm(fx, &p, &tied);
     }
 }
 
+/// A finding that a passing growth column of a summarize call is tied to, and that no harness
+/// step took (a census finding whose in-process probe saw nothing, such as a closure context,
+/// or a finding the summarize step added): driven like a harness-tied finding. The N-WARM
+/// sibling is added, the finding tested with the workload of the harness, the sibling refuted
+/// with the call's `favors leak` discriminator, and the finding confirmed citing the call's
+/// growth evidence. A finding that is not a candidate (a refuted one stays refuted), has no
+/// discriminator that favors leak, or has no site on a repository run is left alone.
+fn drive_tied(
+    fx: &mut Fx,
+    late: &[(String, Tied)],
+    pending: &[Pending],
+    tied: &[(BTreeSet<String>, Vec<String>)],
+) {
+    let artifact = fx.plan.entry == crate::model::Entry::Artifact;
+    let mut taken: BTreeSet<String> = pending.iter().map(|p| p.finding.clone()).collect();
+    for (harness, t) in late {
+        for f in &t.set {
+            if taken.contains(f) {
+                continue;
+            }
+            let view = fx.view();
+            let Some(fnd) = view.finding(f) else { continue };
+            if fnd.state != "candidate" || fnd.is_nonleak() {
+                continue;
+            }
+            let located = if artifact {
+                fnd.owner.is_some()
+            } else {
+                fnd.site.is_some()
+            };
+            let Some((_, disc)) = t.discs.iter().find(|(x, _)| x == f) else {
+                continue;
+            };
+            let same_site = fnd.site.as_ref().is_some_and(|site| {
+                taken
+                    .iter()
+                    .filter_map(|x| view.finding(x))
+                    .any(|x| x.site.as_ref() == Some(site))
+            });
+            if !located || same_site {
+                continue;
+            }
+            taken.insert(f.clone());
+            let Some(sib) = super::add_sibling(fx, f, "N-WARM", &t.growth) else {
+                fx.step(format!(
+                    "{f} via summarize: could not add the N-WARM sibling"
+                ));
+                continue;
+            };
+            if !super::test_finding(fx, harness, f) {
+                fx.step(format!("{f} via summarize: ledger test refused"));
+                continue;
+            }
+            let r = fx.call(&["ledger", "refute", &sib, "--evidence", disc]);
+            if !r.ok {
+                fx.step(format!(
+                    "{f} via summarize: sibling {sib} not refuted by {disc} ({})",
+                    r.code()
+                ));
+                continue;
+            }
+            fx.step(format!(
+                "{f} via summarize: sibling {sib} refuted by {disc}, confirmation next"
+            ));
+            let p = Pending {
+                finding: f.clone(),
+                evidence: t.growth.clone(),
+            };
+            confirm(fx, &p, tied);
+        }
+    }
+}
+
 /// Runs one printed command and checks it; returns what it tied.
-fn summarize(fx: &mut Fx, cmd: &str) -> Option<(BTreeSet<String>, Vec<String>)> {
+fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
     let words = split_command(cmd);
     if words.first().map(String::as_str) != Some("dla")
         || words.get(1).map(String::as_str) != Some("summarize")
@@ -467,13 +552,32 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<(BTreeSet<String>, Vec<String>)> 
                 fx.row.summarize_evidence.push(id);
             }
         }
-        let t = tied_findings(&out, &view);
+        let t = tied_findings(&out, &view).map(|(set, evidence)| Tied {
+            set,
+            evidence,
+            growth: out.json["growth_evidence"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            discs: out.json["discriminators"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|d| d["favors"].as_str() == Some("leak"))
+                .filter_map(|d| {
+                    Some((
+                        d["finding"].as_str()?.to_owned(),
+                        d["evidence"].as_str()?.to_owned(),
+                    ))
+                })
+                .collect(),
+        });
         fx.step(format!(
             "{op} via {backend}: gate {}, tied {}",
             out.json["gate"].as_str().unwrap_or("-"),
             t.as_ref().map_or_else(
                 || "none".to_owned(),
-                |(s, _)| s.iter().cloned().collect::<Vec<_>>().join(",")
+                |t| t.set.iter().cloned().collect::<Vec<_>>().join(",")
             )
         ));
         t
@@ -847,6 +951,11 @@ case "$1 $2" in
   echo '{"type":"evidence","evidence_id":"E1","kind":"histogram-diff","authority":"live","result":{}}' >> $R/ledger.jsonl
   echo '{"type":"evidence","evidence_id":"E2","kind":"growth-series","authority":"live","result":{"gate":"pass","passed":[{"column":"type:X",'"$tie"'"finding":"F1"}]}}' >> $R/ledger.jsonl
   echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"pass","growth_evidence":"E2","raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
+"ledger add")
+  echo '{"ok":true,"id":"F2.n1"}';;
+"ledger refute")
+  if [ -n "$FAKE_NO_REFUTE" ]; then echo '{"ok":false,"error":{"code":"not-refutable"}}'; exit 2; fi
+  echo '{"ok":true}';;
 "ledger confirm")
   if [ -n "$FAKE_CRASH_CONFIRM" ]; then echo "thread main panicked" >&2; exit 101; fi
   echo '{"ok":true}';;
@@ -927,6 +1036,113 @@ esac
         // The held-back confirmation cites the trend evidence and the tied call's evidence.
         assert_eq!(lines[3], "ledger confirm F1 --evidence E0,E1,E2");
         assert_eq!(lines.len(), 4);
+    }
+
+    /// `drive_tied` against the stand-in: the ledger holds the given finding records.
+    #[cfg(unix)]
+    fn drive_late(
+        ledger: &str,
+        env: &[(&str, &str)],
+        discs: &[(&str, &str)],
+    ) -> (FixtureRow, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("dla");
+        fs::write(&bin, format!("#!/bin/sh\n{FAKE_DLA}")).unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        let project = t.path().join("project");
+        fs::create_dir_all(project.join(".dla/R1")).unwrap();
+        fs::write(project.join(".dla/current"), "R1\n").unwrap();
+        fs::write(project.join(".dla/R1/ledger.jsonl"), ledger).unwrap();
+        let log = t.path().join("calls.log");
+        let mut settings = format!("FAKE_LOG='{}'\nFAKE_SHA='x'\n", log.display());
+        for (k, v) in env {
+            settings.push_str(&format!("{k}='{v}'\n"));
+        }
+        fs::write(project.join("fake.env"), settings).unwrap();
+        let mut fx = Fx {
+            plan: super::super::Plan {
+                entry: crate::model::Entry::Repository,
+                runtimes: 1,
+                artifacts: Vec::new(),
+            },
+            bin: &bin,
+            project,
+            plugin_root: t.path(),
+            data_dir: t.path().join("data"),
+            log_dir: t.path().join("logs"),
+            seq: 0,
+            row: FixtureRow::default(),
+            timeout: std::time::Duration::from_secs(30),
+            timed_out: false,
+            worker: None,
+            path_dir: None,
+            unset_vars: Vec::new(),
+            pending: Vec::new(),
+        };
+        let tied = Tied {
+            set: ["F1", "F2", "F3", "F4"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+            evidence: vec!["E7".into(), "E8".into()],
+            growth: "E7".into(),
+            discs: discs
+                .iter()
+                .map(|(f, e)| ((*f).to_owned(), (*e).to_owned()))
+                .collect(),
+        };
+        let sets = [(tied.set.clone(), tied.evidence.clone())];
+        drive_tied(&mut fx, &[("H1".to_owned(), tied)], &[], &sets);
+        let calls = fs::read_to_string(&log).unwrap_or_default();
+        (std::mem::take(&mut fx.row), calls)
+    }
+
+    #[cfg(unix)]
+    const LATE_LEDGER: &str = concat!(
+        r#"{"type":"evidence","evidence_id":"E5","kind":"workload","authority":"test","result":{"harness":"H1"}}"#,
+        "\n",
+        r#"{"type":"finding_added","finding":{"id":"F1","origin":"census","site":"src/a.js:7","owner":"a.A.x"}}"#,
+        "\n",
+        r#"{"type":"finding_added","finding":{"id":"F2","origin":"growth-series","owner":"mangled.owner"}}"#,
+        "\n",
+        r#"{"type":"finding_added","finding":{"id":"F3","origin":"census","site":"src/b.js:9"}}"#,
+        "\n",
+        r#"{"type":"transition","finding":"F3","from":"candidate","to":"refuted","evidence":["E6"]}"#,
+        "\n",
+        r#"{"type":"finding_added","finding":{"id":"F4","origin":"census","site":"src/c.js:3"}}"#,
+        "\n",
+    );
+
+    #[cfg(unix)]
+    #[test]
+    fn a_candidate_tied_by_a_summarize_call_is_driven_to_confirmation() {
+        // F1 is a located candidate with a leak discriminator: sibling, test, refute, confirm.
+        // F2 has no site, F3 is refuted (it stays refuted), F4 has no discriminator.
+        let (row, calls) = drive_late(
+            LATE_LEDGER,
+            &[],
+            &[("F1", "E8"), ("F2", "E8"), ("F3", "E8")],
+        );
+        assert!(row.failures.is_empty(), "{:?}", row.failures);
+        let lines: Vec<&str> = calls.lines().collect();
+        assert!(
+            lines[0].starts_with("ledger add --sibling-of F1 "),
+            "{lines:?}"
+        );
+        assert!(lines[0].ends_with("--evidence E7"), "{lines:?}");
+        assert_eq!(lines[1], "ledger test F1 --evidence E5");
+        assert_eq!(lines[2], "ledger refute F2.n1 --evidence E8");
+        assert_eq!(lines[3], "ledger confirm F1 --evidence E7,E8");
+        assert_eq!(lines.len(), 4, "{lines:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sibling_the_discriminator_cannot_refute_blocks_the_confirmation() {
+        let (row, calls) = drive_late(LATE_LEDGER, &[("FAKE_NO_REFUTE", "1")], &[("F1", "E8")]);
+        assert!(!calls.contains("ledger confirm"), "{calls}");
+        assert!(row.failures.is_empty(), "{:?}", row.failures);
     }
 
     #[cfg(unix)]

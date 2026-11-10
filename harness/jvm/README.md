@@ -46,6 +46,13 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   reference fields of application classes; it counts but does not descend into enums, strings,
   boxed numbers and references, and skips `Class`, `ClassLoader`, `Thread`, reflection, `Module`
   and `java.lang.invoke` objects. A class that is not loaded gives `error: "class not loaded: ..."`.
+  A static field whose value is a `ThreadLocal` (or subclass) is measured through its values: the
+  sum over all live threads of the value it holds in the thread's `threadLocals` and
+  `inheritableThreadLocals` maps (`size`: the collection, map or array length, summed; `reachable`
+  and `bytes`: one walk from all the values). The agent opens `java.lang` to its own module with
+  `Instrumentation.redefineModule` (the effect of `--add-opens java.base/java.lang=ALL-UNNAMED`);
+  when the maps still cannot be read the probe abstains: `error` is set, no column is written, and
+  the reason is a limitation, so an empty measurement never refutes the finding.
 - `purge`: `trim-native-heap` runs the `systemTrimNativeHeap` diagnostic command and records the
   `os.*` values before and after; `gc` records the values before the forced collection and after.
 

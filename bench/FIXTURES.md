@@ -221,9 +221,9 @@ New pairs for the archetype rows that had none, plus the decoy for the native ro
 | ID | Runtime | Category | Pair | Mechanism (for authors; never in the code) |
 |---|---|---|---|---|
 | `native-frame-decoder-freed` | native | decoy-control | `native-frame-decoder` | Same code with `free` on the checksum-mismatch path (`N-WARM`: peak resident size flat from the first frames) |
-| `jvm-invoice-render` | jvm | archetype-leak | `jvm-invoice-render-trimmed` | Per-invoice text segments appended to a `ThreadLocal<List<String>>` on pooled worker threads and never removed (`L-TLS`, holder `thread-local`) |
+| `jvm-invoice-render` | jvm | archetype-leak | `jvm-invoice-render-trimmed` | Per-invoice text segments appended to a `ThreadLocal<List<String>>` on the threads of a fixed worker pool and never removed (`L-TLS`, holder `thread-local`) |
 | `jvm-invoice-render-trimmed` | jvm | decoy-control | `jvm-invoice-render` | Same code that cuts the per-thread list back after each render (`N-HWM`) |
-| `jvm-extension-reload` | jvm | archetype-leak | `jvm-extension-reload-stopped` | Each reload makes a new class loader and the old extension stays subscribed on a static event bus, so old loaders and classes stay reachable (`L-UNLOAD`, holder `static/global`) |
+| `jvm-extension-reload` | jvm | archetype-leak | `jvm-extension-reload-stopped` | Each reload makes a new class loader and the old extension stays subscribed on a static event bus, so old loaders and classes stay reachable (`L-UNLOAD`, holder `registration-table`) |
 | `jvm-extension-reload-stopped` | jvm | decoy-control | `jvm-extension-reload` | Same code that stops the old extension on reload; old loaders are collected and their classes unloaded (`N-WARM`) |
 | `node-price-board` | node | archetype-leak | `node-price-board-flat` | Two closures share one V8 context; the method stored on each snapshot keeps the context, which holds the previous snapshot, so the whole chain stays reachable (`L-CAPTURE`, holder `closure/continuation`) |
 | `node-price-board-flat` | node | decoy-control | `node-price-board` | Same code where the closure captures a number, not the previous snapshot (`N-WARM`) |

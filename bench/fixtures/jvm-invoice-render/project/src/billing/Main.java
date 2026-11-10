@@ -2,7 +2,10 @@ package billing;
 
 import java.util.List;
 
-/** Load driver: renders the given number of invoices in batches and reports heap use. */
+/**
+ * Load driver: renders the given number of invoices in batches and reports heap use. The pool's
+ * daemon workers are still alive when the program returns from main.
+ */
 public final class Main {
     private static final int BATCH = 200;
 
@@ -23,7 +26,6 @@ public final class Main {
                 nextReport += Math.max(1, total / 4);
             }
         }
-        System.exit(0);
     }
 
     private static long usedKb() {

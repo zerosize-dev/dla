@@ -75,6 +75,10 @@ pub enum HolderKind {
     /// Any other root object, named by the chain of labels from the root.
     #[serde(rename = "instance")]
     Instance,
+    /// The values a static `ThreadLocal` field has on live threads (read from each thread's
+    /// `threadLocals` map). The owner class and field are those of the static field.
+    #[serde(rename = "thread-local")]
+    ThreadLocal,
 }
 
 impl HolderKind {
@@ -85,6 +89,7 @@ impl HolderKind {
             Self::Thread => "thread",
             Self::JniGlobal => "jni-global",
             Self::Instance => "instance",
+            Self::ThreadLocal => "thread-local",
         }
     }
 }
@@ -102,7 +107,7 @@ pub struct Accumulation {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Holder {
     /// Stable across dumps of one process: `static:<class>.<field>`, `thread:<name>`,
-    /// `jni-global:<class>`, else `instance:<root kind>><class>`.
+    /// `jni-global:<class>`, `thread-local:<class>.<field>`, else `instance:<root kind>><class>`.
     pub key: String,
     /// Root kind.
     pub kind: HolderKind,

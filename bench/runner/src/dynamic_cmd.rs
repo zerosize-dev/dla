@@ -195,16 +195,6 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
         failure: "leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table",
         reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The per-point heap-graph run now observes `registration-table` for the column of `Session.recent` and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding itself (the sessions it keeps alive are held through the loopback socket events, not through a timer entry in the snapshots), and node-resources ties the timer group to the finding by site only, so no observed holder is available to correct the timer finding",
     },
-    ExpectedFailure {
-        fixture: "jvm-invoice-render",
-        failure: "leak L1 (src/billing/RenderContext.java:13) is not confirmed",
-        reason: "the in-process probe measures the ThreadLocal object, which is flat, so the census finding is refuted before the heap-graph step ties the thread-local values; fixed in the M6 fixture-support package",
-    },
-    ExpectedFailure {
-        fixture: "node-price-board",
-        failure: "leak L1 (src/board.js:15) is not confirmed",
-        reason: "closure contexts are invisible to the in-process probes, and the policy does not yet drive a finding tied only by the heap-graph step to confirmation; fixed in the M6 fixture-support package",
-    },
 ];
 
 fn is_zero(n: &usize) -> bool {
