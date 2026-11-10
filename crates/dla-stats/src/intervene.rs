@@ -62,8 +62,10 @@ pub struct ColumnView {
 pub struct Treated {
     /// The column of the control's name; `None` when the treated series has no such column.
     pub column: Option<ColumnView>,
-    /// True when the treated series has its other columns (the agent or shim worked), so a
-    /// missing column means the edit removed what wrote it.
+    /// True when the same source as the control column (the in-process agent or the allocator
+    /// shim) still produced columns in the treated run, so a missing column means the edit
+    /// removed what wrote it. Operating-system columns (`os.*`, `cgroup.*`) never set it, and
+    /// `--patch` runs never set it: a patch can rename an owner or move a site.
     pub other_columns: bool,
 }
 
@@ -112,8 +114,8 @@ impl Guards {
 /// | Condition | Effect |
 /// |---|---|
 /// | any guard false, or the control has no positive slope | `Invalid` |
-/// | treated column absent, other columns present | `GrowthRemoved` |
-/// | treated column absent, nothing else present | `Invalid` |
+/// | treated column absent, same-source columns present (`--stub-writer` only) | `GrowthRemoved` |
+/// | treated column absent otherwise (patch, whole-process proof only) | `Invalid` |
 /// | treated gate fails, shape flat or plateau, slope <= 0.2 x control slope or interval low end <= 0 | `GrowthRemoved` |
 /// | treated gate passes, slope >= 0.5 x control slope | `GrowthRemains` |
 /// | otherwise | `Inconclusive` |

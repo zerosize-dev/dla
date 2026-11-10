@@ -264,8 +264,8 @@ pub struct WorkerEntry {
     pub status: WorkerStatus,
     /// Slice file name inside the run directory: `ledger.<name>.jsonl`.
     pub slice: String,
-    /// The SubagentStop gate blocked the worker three times with no ledger change and let
-    /// it stop; merge turns its unfinished work into an open item.
+    /// The worker made three failing stop attempts in a row with no ledger change and the
+    /// SubagentStop gate let it stop; merge turns its unfinished work into an open item.
     #[serde(default, skip_serializing_if = "is_false")]
     pub stalled: bool,
 }
@@ -341,10 +341,10 @@ pub struct RunState {
     /// the archetype tables once its worker passed `classify` here.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub worker_stages_passed: BTreeMap<String, Vec<Stage>>,
-    /// Consecutive stop-hook blocks with an unchanged ledger digest.
+    /// Consecutive failing stop attempts with an unchanged ledger digest.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub stop_blocks: u32,
-    /// Digest (ledger length plus hash of the missing-item ids) of the last stop-hook block.
+    /// Digest (ledger length plus hash of the missing-item ids) of the last failing stop attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_block_digest: Option<String>,
     /// The same counter for each worker's SubagentStop hook, by worker name.
@@ -352,12 +352,12 @@ pub struct RunState {
     pub worker_stop: BTreeMap<String, StopCounter>,
 }
 
-/// Consecutive stop-hook blocks with an unchanged digest.
+/// Consecutive failing stop attempts with an unchanged digest.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default, PartialEq, Eq)]
 pub struct StopCounter {
-    /// Blocks in a row with this digest.
+    /// Failing stop attempts in a row with this digest.
     pub blocks: u32,
-    /// Digest of the last block.
+    /// Digest of the last failing stop attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
 }

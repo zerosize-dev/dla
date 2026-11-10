@@ -140,6 +140,11 @@ fn is_zero(n: &u64) -> bool {
 /// Growth left unattributed in one region.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct ResidualRow {
+    /// The series the row was computed for (`S3`). The gate counts a row for a column only
+    /// when it names the series the column's trend analysed; an older row without it
+    /// covers nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
     /// Memory region.
     pub region: Region,
     /// Total growth slope.
@@ -284,13 +289,20 @@ impl CoverageManifest {
         list.dedup();
     }
 
-    /// Replaces the residual rows of the regions named by `rows`; rows of other regions
-    /// stay. The result is ordered by region.
+    /// Replaces the residual rows of the regions and series named by `rows`; rows of other
+    /// regions, and rows of the same region for another series, stay. A row without a
+    /// series is replaced by any row of its region. The result is ordered by region and
+    /// series.
     pub fn set_residual(&mut self, rows: Vec<ResidualRow>) {
-        self.residual
-            .retain(|old| rows.iter().all(|new| new.region != old.region));
+        self.residual.retain(|old| {
+            rows.iter().all(|new| {
+                new.region != old.region
+                    || (old.series.is_some() && new.series.is_some() && old.series != new.series)
+            })
+        });
         self.residual.extend(rows);
-        self.residual.sort_by_key(|r| r.region);
+        self.residual
+            .sort_by(|a, b| (a.region, &a.series).cmp(&(b.region, &b.series)));
     }
 
     /// Declares a blind spot of a runtime's tooling, once.
@@ -408,6 +420,7 @@ mod tests {
 
     fn row(region: Region, residual: f64) -> ResidualRow {
         ResidualRow {
+            series: None,
             region,
             total_slope: 10.0,
             attributed_slope: 10.0 - residual,
@@ -416,6 +429,27 @@ mod tests {
             threshold: 2.5,
             open_item: None,
         }
+    }
+
+    #[test]
+    fn residual_rows_are_replaced_per_region_and_series() {
+        let mut m = CoverageManifest::new(None);
+        let on = |series: &str, residual: f64| ResidualRow {
+            series: Some(series.to_owned()),
+            ..row(Region::Heap, residual)
+        };
+        m.set_residual(vec![on("S1", 1.0)]);
+        m.set_residual(vec![on("S2", 2.0)]);
+        assert_eq!(m.residual.len(), 2);
+        m.set_residual(vec![on("S1", 3.0)]);
+        assert_eq!(m.residual.len(), 2);
+        assert_eq!(m.residual[0].residual, 3.0);
+        // A row that records no series replaces, and is replaced by, any row of its region.
+        m.set_residual(vec![row(Region::Heap, 9.0)]);
+        assert_eq!(m.residual.len(), 1);
+        m.set_residual(vec![on("S1", 4.0)]);
+        assert_eq!(m.residual.len(), 1);
+        assert_eq!(m.residual[0].series.as_deref(), Some("S1"));
     }
 
     #[test]

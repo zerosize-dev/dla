@@ -213,30 +213,6 @@ pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
         reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The per-point heap-graph run now observes `registration-table` for the column of `Session.recent` and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding itself (the sessions it keeps alive are held through the loopback socket events, not through a timer entry in the snapshots), and node-resources ties the timer group to the finding by site only, so no observed holder is available to correct the timer finding",
         needs_archetypes: false,
     },
-    ExpectedFailure {
-        fixture: "jvm-extension-reload",
-        failure: "leak L1 (L-UNLOAD) label refused label-evidence-missing",
-        reason: "L-UNLOAD needs growth plus non-heap, or a retention path, tied to the finding at the event-bus registry. The class-loader columns of `summarize non-heap` tie to no finding (they carry no holder, site or type of a heap field), and `summarize heap-graph --finding` finds the registry (its discriminator names `static:reports.EventBus.LISTENERS`) while the per-dump retention-path records list only the largest holders (`LedgerExtension.ROUNDING`, JFR internals), so no retention-path record names the finding's holder. A defect of the tie rule or of the records, not of the policy",
-        needs_archetypes: true,
-    },
-    ExpectedFailure {
-        fixture: "jvm-invoice-render",
-        failure: "leak L1 (L-TLS) label refused label-evidence-missing",
-        reason: "L-TLS needs a retention path tied to the finding. The finding's owner is the class initializer frame (`billing.RenderContext.<clinit>`), so `summarize heap-graph --finding` is refused `holder-not-found` (the dump's holder is `thread-local:billing.RenderContext.SEGMENTS`), `ledger annotate --owner` cannot replace an owner that is set, and the histogram records name another finding. A defect of the owner the census or probe records, not of the policy",
-        needs_archetypes: true,
-    },
-    ExpectedFailure {
-        fixture: "rust-meter-callbacks",
-        failure: "leak L1 (L-OWNERSHIP) label refused label-evidence-missing",
-        reason: "L-OWNERSHIP needs growth plus an allocation stack, or an intervention, tied to the finding. An alloc-stack record ties only through the root key of its stacks against the finding's owner; valgrind and heaptrack stacks carry no root and the detector finding (`rust-into-raw-unpaired`) has no owner, so `summarize alloc-stack-diff --finding` ties the growth column (by site) while the alloc-stack record stays untied. The intervention alternative is refused `intervene-not-statement`: the site is a `let` declaration, and a diff needs reading the code",
-        needs_archetypes: true,
-    },
-    ExpectedFailure {
-        fixture: "jni-order-codec",
-        failure: "leak L1 (L-HANDLE) label refused label-evidence-missing",
-        reason: "The native leak (the correlation candidate at the native site) needs growth plus an allocation stack, or a unit-count series plus a retention path, tied to it. Same cause as `rust-meter-callbacks`: the alloc-stack records of the shim and the profiles tie only through a root key against an owner, which the candidate does not have. L2 (Kotlin) is labelled",
-        needs_archetypes: true,
-    },
 ];
 
 fn is_zero(n: &usize) -> bool {
@@ -2696,12 +2672,12 @@ mod tests {
 
     #[test]
     fn archetypes_off_leaves_out_the_entries_about_labels() {
-        let on = expected_failures(false);
-        let off = expected_failures(true);
-        assert_eq!(on.len(), EXPECTED_FAILURES.len());
-        assert_eq!(on.len() - off.len(), 4);
-        assert!(off.iter().all(|e| !e.failure.contains("label refused")));
-        // The flag follows the text: a label failure needs archetypes and nothing else does.
+        // No label failure is listed any more; the machinery stays for a future entry.
+        assert_eq!(
+            expected_failures(false).len(),
+            expected_failures(true).len(),
+            "an entry that needs archetypes is listed: add the test back"
+        );
         for e in EXPECTED_FAILURES {
             assert_eq!(
                 e.needs_archetypes,
@@ -2710,26 +2686,26 @@ mod tests {
                 e.failure
             );
         }
-        // With archetypes off a fixture that only had the label failure just passes.
+        let entry = ExpectedFailure {
+            fixture: "fx",
+            failure: "leak L1 (L-TLS) label refused label-evidence-missing",
+            reason: "because",
+            needs_archetypes: true,
+        };
+        let list = [entry];
+        let on: Vec<_> = list.to_vec();
+        let off: Vec<_> = list
+            .iter()
+            .copied()
+            .filter(|e| !e.needs_archetypes)
+            .collect();
+        assert_eq!((on.len(), off.len()), (1, 0));
         let mut r = FixtureRow {
-            id: "jvm-invoice-render".into(),
+            id: "fx".into(),
             ..FixtureRow::default()
         };
         apply_expected_failures(&mut r, &off);
         assert!(r.failures.is_empty() && r.xfail.is_none());
-    }
-
-    #[test]
-    fn the_jni_fixture_has_only_the_label_of_its_native_leak_left() {
-        let jni: Vec<&str> = EXPECTED_FAILURES
-            .iter()
-            .filter(|e| e.fixture == "jni-order-codec")
-            .map(|e| e.failure)
-            .collect();
-        assert_eq!(
-            jni,
-            ["leak L1 (L-HANDLE) label refused label-evidence-missing"]
-        );
     }
 
     #[test]

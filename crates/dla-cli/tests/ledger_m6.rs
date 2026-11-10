@@ -809,6 +809,85 @@ fn a_tied_growth_record_leaves_no_site_or_finding_id_in_the_bundle() {
 }
 
 #[test]
+fn no_bundled_record_names_the_finding_or_its_site_outside_frame_fields() {
+    let e = env();
+    let src: String = (1..=60).map(|n| format!("int line{n};\n")).collect();
+    fs::write(e.project.path().join("a.go"), &src).unwrap();
+    fs::create_dir_all(e.run_dir.join("raw")).unwrap();
+    fs::write(e.run_dir.join("raw/hist.json"), r#"{"finding":"F1","candidates":["F1"],"rows":[{"class":"Item","where":"a.go:1","note":"F1 grows"}]}"#).unwrap();
+    fs::write(
+        e.run_dir.join("raw/alloc.json"),
+        r#"{"finding":"F1","stacks":[{"site":"a.go:1","note":"F1","frames":[{"function":"grow","file":"a.go","line":2}]}]}"#,
+    )
+    .unwrap();
+    let mut l = reload(&e);
+    let mut add =
+        |kind: EvidenceKind, auth: Authority, src: &str, result: Value, raw: Option<&str>| {
+            let mut n = evidence(kind, auth, "t", "x", src, result);
+            n.raw = raw.map(str::to_owned);
+            l.add_evidence(n).unwrap();
+        };
+    add(
+        EvidenceKind::Discriminator,
+        Authority::Test,
+        "d1",
+        json!({"test": "plateau", "favors": "leak", "supports": ["leak"],
+               "basis": "F1 at a.go:1", "limitations": ["a.go:1 only; F1 untested"]}),
+        None,
+    );
+    add(
+        EvidenceKind::HistogramDiff,
+        Authority::Live,
+        "h1",
+        json!({"finding": "F1", "candidates": ["F1"], "top": [{"class": "Item", "site": "a.go:1"}],
+               "ties": [{"stack": "x", "finding": "F1"}]}),
+        Some("raw/hist.json"),
+    );
+    add(
+        EvidenceKind::AllocStack,
+        Authority::Live,
+        "a1",
+        json!({"finding": "F1", "candidates": ["F1"], "ties": [{"finding": "F1"}],
+               "top": [{"at": "grow", "site": "a.go:1"}],
+               "stacks": [{"site": "a.go:1", "frames": [{"function": "grow", "file": "a.go", "line": 2}]}]}),
+        Some("raw/alloc.json"),
+    );
+    let mut nf = NewFinding::new(
+        Origin::parse("hypothesis").unwrap(),
+        vec![
+            "E5".parse().unwrap(),
+            "E6".parse().unwrap(),
+            "E7".parse().unwrap(),
+            "E8".parse().unwrap(),
+        ],
+    );
+    nf.sibling_of = Some("F1".parse().unwrap());
+    nf.hypothesis = Some("N-SCALE".into());
+    nf.refute_if = Some("memory stays after load falls".into());
+    l.add_finding(nf).unwrap();
+    write_ledger(&e, &l);
+    let v = ok(&e, &["bundle", "F1"]);
+    let dir = e.project.path().join(v["dir"].as_str().unwrap());
+    let all = all_bundle_text(&dir);
+    assert!(all.contains("Item") && all.contains("grow"), "{all}");
+    for secret in [
+        "F1",
+        "a.go:1",
+        "basis",
+        "candidates",
+        "\"ties\"",
+        "\"finding\"",
+    ] {
+        assert!(!all.contains(secret), "{secret} in the bundle: {all}");
+    }
+    // The structured allocation frame stays.
+    assert!(
+        all.contains("\"file\": \"a.go\"") && all.contains("\"line\": 2"),
+        "{all}"
+    );
+}
+
+#[test]
 fn no_evidence_frame_means_no_excerpt_even_with_a_site() {
     let e = env();
     fs::write(e.project.path().join("z.go"), "package z\n".repeat(30)).unwrap();

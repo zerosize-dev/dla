@@ -26,6 +26,7 @@ first; `--backend <name>` forces one.
 | `alloc-stack-diff` | Go | `go-pprof-heap` | `go-<n>.heap.pb.gz` (heap profile, stacks) | none | none |
 | `alloc-stack-diff` | Python | `py-tracemalloc` | `py-<n>.alloc.json` | none | none |
 | `alloc-stack-diff` | Python | `py-memray` | `py-<n>.memray.json` (needs memray in the target's interpreter to capture) | none to read | none |
+| `alloc-stack-diff` | native | `shim-alloc-stacks` | shim `dump.jsonl` of command-mode points (the same stacks as `shim-stack-groups`, recorded as allocation-stack evidence) | `addr2line` for project sites | `addr2line` |
 | `alloc-stack-diff` | native | `valgrind-memcheck` | memcheck XML (`valgrind.xml`) | none to read; valgrind to capture | `valgrind` (harness) |
 | `alloc-stack-diff` | native | `heaptrack` | `heaptrack_print` text, a `-d` diff, `-F` folded files; raw `heaptrack.*.gz`/`.zst` | `heaptrack_print` for raw recordings only | `heaptrack_print` (raw), `heaptrack` (harness) |
 | `alloc-stack-diff` | native | `dhat` | valgrind DHAT or dhat-rs JSON (live at exit) | none | none |

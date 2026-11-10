@@ -232,6 +232,7 @@ fn anchors(ctx: &Ctx, project: &Path, ledger: &Ledger, f: &Finding) -> plan::Anc
         finding: f.id.to_string(),
         writers: sites_of(&writers),
         near: sites_of(&near),
+        owner: f.owner.clone(),
     }
 }
 
@@ -381,6 +382,36 @@ fn renamed_twin<'a>(
         .filter(|t| column_kind(&t.name) == Some(kind))
         .find(|t| !control_columns.iter().any(|c| c.name == t.name))
         .map(|t| t.name.as_str())
+}
+
+/// Columns read from the operating system or derived from it for the whole process or
+/// container: they exist whatever the edit did, so they never prove the run worked. The
+/// agent's own totals (`jvm.heap_used`, `go.heap_live`) do: only a running agent writes them.
+fn whole_process(name: &str) -> bool {
+    ["os.", "cgroup.", "fd.", "gap."]
+        .into_iter()
+        .any(|p| name.starts_with(p))
+}
+
+/// True when the same source as the control column (the in-process agent or the allocator
+/// shim) still produced a column in the treated run, so a missing control column means the
+/// edit removed what wrote it. `treated` lists `(name, source, has data)` per treated
+/// column. Whole-process columns (`os.*`, `cgroup.*`, `fd.*`, `gap.*`: read from the operating system, not by the agent or shim) never count, and a
+/// control that is itself one has no source to prove anything.
+fn source_alive(
+    control: &str,
+    control_source: Option<&str>,
+    treated: &[(&str, &str, bool)],
+) -> bool {
+    if whole_process(control) {
+        return false;
+    }
+    let Some(src) = control_source else {
+        return false;
+    };
+    treated
+        .iter()
+        .any(|(n, s, there)| *there && *n != control && !whole_process(n) && *s == src)
 }
 
 /// Fits the evidence `result` in [`MAX_RESULT_BYTES`] by shortening the site list.
@@ -571,10 +602,41 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
                     ctl.column.name
                 ));
             }
-            let other_columns = twin.is_none()
-                && m.trend
+            let source_alive = twin.is_none() && col.is_none() && {
+                let control_source = ctl
+                    .series
+                    .columns
                     .iter()
-                    .any(|c| c.name != ctl.column.name && present(c));
+                    .find(|c| c.name == ctl.column.name)
+                    .map(|c| c.source.as_str());
+                let treated_cols: Vec<(&str, &str, bool)> = m
+                    .series
+                    .columns
+                    .iter()
+                    .map(|sc| {
+                        let there = m.trend.iter().any(|t| t.name == sc.name && present(t));
+                        (sc.name.as_str(), sc.source.as_str(), there)
+                    })
+                    .collect();
+                source_alive(&ctl.column.name, control_source, &treated_cols)
+            };
+            let other_columns = if a.patch.is_some() {
+                if col.is_none() && twin.is_none() {
+                    limitations.push(format!(
+                        "the treated series lacks the control column {}: a patch can rename an owner or move a site, so a patch must keep the measured column to be judged",
+                        ctl.column.name
+                    ));
+                }
+                false
+            } else {
+                if col.is_none() && twin.is_none() && !source_alive {
+                    limitations.push(format!(
+                        "the treated series lacks the control column {} and no column of the same source (the in-process agent or the allocator shim) was produced, so the run does not show the writer was removed",
+                        ctl.column.name
+                    ));
+                }
+                source_alive
+            };
             effect = judge_intervention(
                 &ctl_view,
                 &Treated {
@@ -774,5 +836,60 @@ mod tests {
             Some("probe:com.x.Store.items")
         );
         assert_eq!(renamed_twin("os.rss", &control, &treated), None);
+    }
+
+    #[test]
+    fn a_missing_column_is_removal_only_when_the_same_source_still_worked() {
+        let agent = Some("jvm-agent");
+        let treated =
+            |extra: &[(&'static str, &'static str)]| -> Vec<(&'static str, &'static str, bool)> {
+                let mut v = vec![
+                    ("os.rss", "proc-status", true),
+                    ("cgroup.current", "cgroup", true),
+                ];
+                v.extend(extra.iter().map(|(n, s)| (*n, *s, true)));
+                v
+            };
+        for control in [
+            "stack:shop.Cache.put",
+            "type:shop.Item",
+            "alloc@src/Foo.java:41",
+            "probe:shop.Cache.items",
+            "holder:shop.Cache.items",
+        ] {
+            // The agent still produced another column: the writer is gone.
+            let t = treated(&[("probe:shop.Other.items", "jvm-agent")]);
+            assert!(source_alive(control, agent, &t), "{control}");
+            // A total written by the same agent shows the agent ran.
+            let total = treated(&[("jvm.heap_used", "jvm-agent")]);
+            assert!(source_alive(control, agent, &total), "{control}");
+            // Only whole-process columns, or another source: no proof.
+            assert!(!source_alive(control, agent, &treated(&[])), "{control}");
+            let other = treated(&[("go.heap_live", "go-harness")]);
+            assert!(!source_alive(control, agent, &other), "{control}");
+            // A same-source column without data does not count.
+            let empty = vec![("probe:shop.Other.items", "jvm-agent", false)];
+            assert!(!source_alive(control, agent, &empty), "{control}");
+        }
+        // The shim family: os.* and fd.* never count, an allocator column does.
+        let shim = Some("shim");
+        let only_os = vec![("os.rss", "shim", true), ("fd.socket", "shim", true)];
+        assert!(!source_alive("alloc@src/a.c:9", shim, &only_os));
+        let with_site = vec![("alloc@src/b.c:3", "shim", true)];
+        assert!(source_alive("alloc@src/a.c:9", shim, &with_site));
+        let totals = vec![("native.live_bytes", "shim", true)];
+        assert!(source_alive("alloc@src/a.c:9", shim, &totals));
+    }
+
+    #[test]
+    fn an_os_rss_only_control_is_never_proven_removed() {
+        let t = vec![
+            ("os.rss", "proc-status", true),
+            ("os.fds", "proc-fd", true),
+            ("jvm.heap_used", "proc-status", true),
+        ];
+        assert!(!source_alive("os.rss", Some("proc-status"), &t));
+        assert!(!source_alive("cgroup.current", Some("cgroup"), &t));
+        assert!(!source_alive("alloc@a.c:1", None, &t));
     }
 }

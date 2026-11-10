@@ -530,6 +530,20 @@ fn suggestions(
                     next.push(format!("dla alloc-test {h} --finding {root}"));
                 }
             }
+            None if dla_core::gate::is_whole_process(&c.name) => {
+                // The gate never ties a whole-process column to a finding: the residual
+                // accounting covers it, so a `ledger add` would open a finding that can
+                // never be tied.
+                let hint = format!(
+                    "dla gap {} --residual   # column {} measures the whole process: account for it with the residual rows",
+                    series.id, c.name
+                );
+                if !next.contains(&hint)
+                    && next.iter().filter(|n| n.starts_with("dla gap ")).count() < 1
+                {
+                    next.push(hint);
+                }
+            }
             None if unbound < 3 => {
                 unbound += 1;
                 let mut cmd = format!("dla ledger add --origin growth-series --evidence {e}");

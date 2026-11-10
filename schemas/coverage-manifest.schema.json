@@ -244,6 +244,13 @@
           "type": "number",
           "format": "double"
         },
+        "series": {
+          "description": "The series the row was computed for (`S3`). The gate counts a row for a column only\nwhen it names the series the column's trend analysed; an older row without it\ncovers nothing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "threshold": {
           "description": "Threshold above which the residual must be explained.",
           "type": "number",

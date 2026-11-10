@@ -644,14 +644,21 @@ fn superseded(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
 }
 
 /// True when the residual accounting covers a whole-process column: `dla gap --residual`
-/// wrote rows, and the rows of the column's region (all rows for a column of no region) are
-/// under their threshold or have a resolved open item.
-fn residual_covers(view: &RunView, c: &ColumnTrend) -> bool {
+/// wrote rows for the series the column's trend analysed (`series`; a row that does not
+/// record its series covers nothing), and the rows of the column's region (all of that
+/// series' rows for a column of no region) are under their threshold or have a resolved
+/// open item.
+fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
     use crate::{finding::Region, series::SeriesRegion};
     let Some(cov) = &view.coverage else {
         return false;
     };
-    if cov.residual.is_empty() {
+    let all: Vec<_> = cov
+        .residual
+        .iter()
+        .filter(|r| r.series.as_deref() == Some(series))
+        .collect();
+    if all.is_empty() {
         return false;
     }
     let region = match crate::series::column_meta(&c.name).region {
@@ -660,16 +667,12 @@ fn residual_covers(view: &RunView, c: &ColumnTrend) -> bool {
         SeriesRegion::NonHeap => Some(Region::NonHeap),
         SeriesRegion::Process => None,
     };
-    let own: Vec<_> = cov
-        .residual
+    let own: Vec<_> = all
         .iter()
+        .copied()
         .filter(|r| region.is_none_or(|g| r.region == g))
         .collect();
-    let rows = if own.is_empty() {
-        cov.residual.iter().collect()
-    } else {
-        own
-    };
+    let rows = if own.is_empty() { all } else { own };
     rows.iter().all(|r| {
         r.residual <= r.threshold
             || r.open_item
@@ -711,7 +714,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 // Never tied to a finding. The classify stage leaves it to the final gate,
                 // which takes the residual accounting or an open item.
                 if !is_final
-                    || residual_covers(view, c)
+                    || residual_covers(view, &t.series, c)
                     || superseded(view, t, c)
                     || covered_by_open_item(view, t, c)
                 {

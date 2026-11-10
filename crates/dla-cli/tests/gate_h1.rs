@@ -356,6 +356,7 @@ fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
     );
     // Residual rows under their threshold account for them.
     let row = |residual: f64| dla_core::coverage::ResidualRow {
+        series: Some("S1".into()),
         region: dla_core::finding::Region::Heap,
         total_slope: 10.0,
         attributed_slope: 10.0 - residual,
@@ -371,6 +372,25 @@ fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
     dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row(8.0)])).unwrap();
     let m = r.missing(&["--final"]);
     assert!(trend_columns(&m).contains(&"T1:os.rss".to_owned()), "{m:?}");
+    // Rows computed for another series, or rows that record no series, cover nothing.
+    for series in [Some("S9".to_owned()), None] {
+        let other = dla_core::coverage::ResidualRow { series, ..row(0.5) };
+        dla_core::CoverageManifest::update(&r.run_dir(), |m| {
+            m.residual.clear();
+            m.set_residual(vec![other.clone()]);
+        })
+        .unwrap();
+        let m = r.missing(&["--final"]);
+        assert!(trend_columns(&m).contains(&"T1:os.rss".to_owned()), "{m:?}");
+    }
+    // The rows of the analysed series cover it again.
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| {
+        m.residual.clear();
+        m.set_residual(vec![row(0.5)]);
+    })
+    .unwrap();
+    let m = r.missing(&["--final"]);
+    assert!(trend_columns(&m).is_empty(), "{m:?}");
 }
 
 #[test]

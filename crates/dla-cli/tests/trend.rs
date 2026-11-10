@@ -118,6 +118,51 @@ fn flat(v: f64) -> Vec<f64> {
 }
 
 #[test]
+fn a_whole_process_column_is_hinted_to_the_residual_accounting_not_ledger_add() {
+    let pr = project();
+    let p = pr.dir.path();
+    write_series(
+        &pr,
+        "S1",
+        "fresh",
+        &[
+            ("os.rss", "gauge", "process", None, rising(2.0e7, 4.0e5)),
+            (
+                "probe:Cache.entries",
+                "counter",
+                "process",
+                None,
+                rising(10.0, 25.0),
+            ),
+        ],
+    );
+    let t = ok(p, &["trend", "S1"]);
+    let passed: Vec<&str> = t["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["column"].as_str().unwrap())
+        .collect();
+    assert!(passed.contains(&"os.rss"), "{t}");
+    let next: Vec<&str> = t["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    assert!(
+        next.iter().any(|n| n.starts_with("dla gap S1 --residual")),
+        "{next:?}"
+    );
+    // The unbound probe column still gets the ledger hint; the whole-process one does not.
+    assert!(
+        next.iter()
+            .all(|n| !(n.contains("growth-series") && n.contains("os.rss"))),
+        "{next:?}"
+    );
+}
+
+#[test]
 fn a_leak_goes_from_trend_to_confirmed() {
     let pr = project();
     let p = pr.dir.path();

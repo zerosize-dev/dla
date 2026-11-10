@@ -470,9 +470,45 @@ fn explanation_text(
     }
 }
 
+/// The explanation of an artifact finding: a dump holds no source, so only the owner, the
+/// holder and the absence of a remover can be stated.
+fn artifact_explain(fx: &mut Fx, id: &str, holder: &str, owner: &str) -> Out {
+    let text = format!(
+        "{owner} is the {holder} holder that keeps the entries of {id} alive; the dump shows no code, and no remover found for it."
+    );
+    fx.call_quiet(&[
+        "ledger",
+        "explain",
+        id,
+        "--tag",
+        "inferred",
+        "--removal",
+        "not-found",
+        "--text",
+        &text,
+    ])
+}
+
 fn explain_all(fx: &mut Fx, ts: &[Target], row: &mut PolicyRow) {
     for t in ts {
         let id = t.f.id.clone();
+        if t.f.site.is_none()
+            && let (Some(owner), Some(holder)) = (t.f.owner.clone(), t.f.holder.clone())
+        {
+            let o = artifact_explain(fx, &id, &holder, &owner);
+            let result = if o.ok { "ok".to_owned() } else { refusal(&o) };
+            if !o.ok {
+                fx.row
+                    .failures
+                    .push(format!("explain of {id} {}", refusal(&o)));
+            }
+            row.explains.push(Note {
+                finding: id,
+                detail: "artifact: owner and holder, no remover found".to_owned(),
+                result,
+            });
+            continue;
+        }
         let (Some(site), Some(holder)) = (t.f.site.clone(), t.f.holder.clone()) else {
             row.explains.push(Note {
                 finding: id,
@@ -771,49 +807,11 @@ fn items_of(fx: &Fx, out: &Out) -> Vec<Item> {
         .collect()
 }
 
-/// The gate items the policy cannot reach, with the reason; the rest it can.
-fn known_gap(item: &Item, view: &View, run_dir: &Path) -> Option<&'static str> {
-    match item.kind.as_str() {
-        // The merged `coverage.json` names the open item of a worker's slice without the
-        // worker prefix (`O1`), the merged ledger resolved it as `<worker>/O1`: the lookup of
-        // the final gate misses it.
-        "residual" => {
-            let missed = read_residual_item(run_dir, &item.id).is_some_and(|oi| {
-                !oi.contains('/')
-                    && view
-                        .resolved_items
-                        .iter()
-                        .any(|r| r.ends_with(&format!("/{oi}")))
-            });
-            missed.then_some(
-                "the merged coverage.json names the open item without its worker prefix, so the gate does not find the item the merged ledger resolved",
-            )
-        }
-        // An artifact run has no source file: no writer can be recorded for the finding,
-        // and the gate wants an explanation, which wants a writer.
-        "explanation" => view
-            .finding(&item.id)
-            .filter(|f| f.site.is_none())
-            .map(|_| "the finding has no site (artifact run), so no writer can be recorded and `ledger explain` cannot be accepted"),
-        // The columns of a trend `dla alloc-test` ran internally: no growth evidence names
-        // that trend, so no finding can be tied to it, and the offered fix (`dla trend`)
-        // writes a new trend and leaves this one untied.
-        "trend_column" if item.fix.starts_with("dla trend ") => Some(
-            "the column belongs to a trend without growth evidence in the ledger (an alloc-test control run); `dla trend <series>` writes a new trend and leaves it untied",
-        ),
-        _ => None,
-    }
-}
-
-/// The open item `coverage.json` names for the residual row of `region`.
-fn read_residual_item(run_dir: &Path, region: &str) -> Option<String> {
-    let v: Value =
-        serde_json::from_str(&fs::read_to_string(run_dir.join("coverage.json")).ok()?).ok()?;
-    v["residual"].as_array()?.iter().find_map(|r| {
-        (r["region"].as_str() == Some(region))
-            .then(|| r["open_item"].as_str().map(str::to_owned))
-            .flatten()
-    })
+/// The gate items the policy cannot reach, with the reason. None: every item the gate prints
+/// is followed; an item left over is a failure of the fixture. The list is kept (and shown in
+/// the JSON as `known_gaps`) so that a gap can be named again if DLA cannot satisfy an item.
+fn known_gap(_item: &Item, _view: &View, _run_dir: &Path) -> Option<&'static str> {
+    None
 }
 
 /// A candidate that a detector or the census found, or that cites static evidence: the only
@@ -833,7 +831,10 @@ fn has_static_evidence(view: &View, id: &str) -> bool {
 
 /// Splits the fix text at the comment the gate appends (`   # column os.rss`).
 fn fix_command(fix: &str) -> &str {
-    fix.split(" #").next().unwrap_or(fix).trim()
+    // The gate adds a comment after a `#` or, for the residual command, a parenthesis
+    // set off by spaces.
+    let cut = fix.split(" #").next().unwrap_or(fix);
+    cut.split("   (").next().unwrap_or(cut).trim()
 }
 
 fn run_dla_line(fx: &mut Fx, line: &str) -> Out {
@@ -901,6 +902,33 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                 } else {
                     "unresolved"
                 },
+                if o.ok { "ok".to_owned() } else { refusal(&o) }
+            ))
+        }
+        "explanation" => {
+            let f = fx.view().finding(&item.id).cloned()?;
+            let (None, Some(owner), Some(holder)) = (f.site, f.owner, f.holder) else {
+                return None;
+            };
+            if !tried.insert(format!("explain {}", item.id)) {
+                return None;
+            }
+            let o = artifact_explain(fx, &item.id, &holder, &owner);
+            Some(format!(
+                "explain {} (artifact): {}",
+                item.id,
+                if o.ok { "ok".to_owned() } else { refusal(&o) }
+            ))
+        }
+        "trend_column" if cmd.starts_with("dla trend ") || cmd.starts_with("dla gap ") => {
+            // The gate asks for the trend of the series, or for the residual rows of a
+            // whole-process column; the next round prints the follow-up.
+            if !tried.insert(cmd.clone()) {
+                return None;
+            }
+            let o = run_dla_line(fx, &cmd);
+            Some(format!(
+                "{cmd}: {}",
                 if o.ok { "ok".to_owned() } else { refusal(&o) }
             ))
         }
@@ -1462,15 +1490,15 @@ cause = "{cause}"
             .expect("explain");
         assert!(annotate < explain);
         assert_eq!(row.policy.explains[0].result, "ok");
-        // F9 has no site: nothing to explain it with.
+        // F9 has an owner and no site (an artifact finding): the owner and holder are named
+        // and no remover was found.
+        assert_eq!(row.policy.explains[1].result, "ok");
         assert!(
-            row.policy.explains[1]
-                .result
-                .starts_with("not tried: no site"),
-            "{:?}",
-            row.policy.explains
+            calls.lines().any(|l| l.starts_with(
+                "ledger explain F9 --tag inferred --removal not-found --text app.Other.table is the static/global holder"
+            )),
+            "{calls}"
         );
-        assert!(!calls.contains("explain F9"));
     }
 
     #[cfg(unix)]
@@ -1527,18 +1555,17 @@ cause = "{cause}"
         assert!(c(
             "ledger resolve F12 --as unresolved --reason not_exercised"
         ));
-        // The column of a trend without evidence and the finding without a site cannot be
-        // reached: reported as gaps, not as a failure.
+        // The gate's own fixes are followed, the artifact explanation included. The stand-in
+        // gate never passes, so what it still names is missing, not a known gap.
+        assert!(c("trend S3"));
+        assert!(c(
+            "ledger explain F9 --tag inferred --removal not-found --text "
+        ));
         let g = row.policy.gate.as_ref().unwrap();
-        assert!(!g.passed && g.ok, "{g:?}");
+        assert!(!g.passed && !g.ok, "{g:?}");
         assert_eq!(g.first_missing, 6);
-        assert_eq!(g.known_gaps.len(), 2, "{:?}", g.known_gaps);
-        assert!(g.missing.is_empty());
-        assert!(
-            row.failures.iter().all(|f| !f.starts_with("gate check")),
-            "{:?}",
-            row.failures
-        );
+        assert!(g.known_gaps.is_empty(), "{:?}", g.known_gaps);
+        assert_eq!(g.missing.len(), 2);
     }
 
     #[cfg(unix)]
@@ -1564,14 +1591,13 @@ cause = "{cause}"
         );
         let g = row.policy.gate.as_ref().unwrap();
         assert!(!g.passed && !g.ok, "{g:?}");
-        assert_eq!(g.missing.len(), 1);
         assert!(g.missing[0].starts_with("accounting jvm/census: backend census"));
-        assert_eq!(g.known_gaps.len(), 1, "the finding without a site is a gap");
+        assert!(g.known_gaps.is_empty());
         assert!(
             row.failures
                 .iter()
                 .any(|f| f
-                    .starts_with("gate check --final: 1 item(s) missing: accounting jvm/census")),
+                    .starts_with("gate check --final: 2 item(s) missing: accounting jvm/census")),
             "{:?}",
             row.failures
         );
@@ -1601,6 +1627,12 @@ cause = "{cause}"
             "dla ledger add --origin growth-series --evidence E11"
         );
         assert_eq!(fix_command("dla trend S2"), "dla trend S2");
+        assert_eq!(
+            fix_command(
+                "dla gap S3 --residual   (rows under the threshold, or over it with a resolved open item, account for the column)"
+            ),
+            "dla gap S3 --residual"
+        );
     }
 
     #[test]

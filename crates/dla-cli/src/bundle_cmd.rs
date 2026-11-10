@@ -9,11 +9,13 @@
 //! file it contains.
 //!
 //! Growth columns are tied to a finding by a site, a finding id or a candidate list, and
-//! their names can embed a site (`alloc@src/a.js:7`). Every JSON object that names a
-//! `column` loses those tie keys, a name is cut at `@`, and in growth records the
-//! finding's site, writers and id are also replaced in every string. Excerpts come from
-//! allocation and retention frames only: a growth frame is the tied site, and the verifier
-//! has to find the site from the stacks and paths.
+//! their names can embed a site (`alloc@src/a.js:7`). Every record and raw copy is
+//! scrubbed alike: the `finding`, `candidates`, `ties`, `tie`, `tied` and `basis` keys go
+//! at every depth, a column object loses its tie keys, a column name is cut at `@`, and the
+//! finding id (with and without the worker prefix), its site and its recorded writers are
+//! replaced in every string, except in the structured frame fields of allocation stacks and
+//! retention paths, which are raw evidence the verifier reads. Excerpts come from those
+//! frames only: the verifier has to find the site from the stacks and paths.
 
 use std::{
     fs,
@@ -101,16 +103,97 @@ const CLASSES: [EvidenceClass; 4] = [
 /// Keys of a column object that tie it to a finding.
 const TIE_KEYS: [&str; 6] = ["site", "finding", "candidates", "tie", "tied", "ambiguous"];
 
+/// Keys dropped from every object of every bundled record and raw copy: they state which
+/// finding a record belongs to or why it was tied to it.
+const DROP_KEYS: [&str; 6] = ["finding", "candidates", "ties", "tie", "tied", "basis"];
+
+/// Keys whose subtree is the structured frame evidence of an allocation stack or a
+/// retention path: raw evidence the verifier must read, so the finding's site and writers
+/// are not replaced inside it (the finding id still is).
+const FRAME_KEYS: [&str; 8] = [
+    "frames",
+    "root_path",
+    "path",
+    "paths",
+    "retention_path",
+    "retention_paths",
+    "chain",
+    "via",
+];
+
+/// What a bundled record must not show: the finding's id (with and without the worker
+/// prefix) and its site and recorded writers.
+#[derive(Debug, Clone, Default)]
+pub struct Needles {
+    /// Finding ids, replaced as whole tokens.
+    pub ids: Vec<String>,
+    /// Sites and writers (`file:line`), replaced wherever they occur.
+    pub sites: Vec<String>,
+}
+
+/// The replacement text.
+const REDACTED: &str = "<redacted>";
+
 /// Cuts a column name at `@`: `alloc@src/a.js:7` -> `alloc`.
 fn bare_name(name: &str) -> &str {
     name.split_once('@').map_or(name, |(base, _)| base)
 }
 
-/// Removes the tie keys from every object that names a `column`, cuts site-bearing column
-/// names and object keys at `@`, and with `needles` replaces them in every string.
-pub fn scrub_ties(v: &mut Value, needles: &[String]) {
+/// Replaces `id` where it is a whole token (no letter or digit on either side).
+fn replace_token(s: &str, id: &str) -> String {
+    if id.is_empty() || !s.contains(id) {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find(id) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + id.len()..].chars().next();
+        let edge = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
+        out.push_str(&rest[..at]);
+        if edge(before) && edge(after) {
+            out.push_str(REDACTED);
+        } else {
+            out.push_str(id);
+        }
+        rest = &rest[at + id.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `s` without the finding id and, unless `keep_sites`, without the site and writers.
+fn redact_text(s: &str, n: &Needles, keep_sites: bool) -> String {
+    let mut out = s.to_owned();
+    for id in &n.ids {
+        out = replace_token(&out, id);
+    }
+    if !keep_sites {
+        for site in n.sites.iter().filter(|x| !x.is_empty()) {
+            if out.contains(site.as_str()) {
+                out = out.replace(site.as_str(), REDACTED);
+            }
+        }
+    }
+    out
+}
+
+/// Scrubs one bundled JSON value:
+///
+/// * the [`DROP_KEYS`] go at every depth, and the tie keys of every object that names a
+///   `column`;
+/// * site-bearing column names and object keys are cut at `@`;
+/// * the finding id is replaced in every string and key;
+/// * the site and the recorded writers are replaced in every string and key, except under
+///   a [`FRAME_KEYS`] key when `frames_exempt` (allocation and retention records).
+pub fn scrub_ties(v: &mut Value, needles: &Needles, frames_exempt: bool) {
+    scrub_in(v, needles, frames_exempt, false);
+}
+
+fn scrub_in(v: &mut Value, n: &Needles, frames_exempt: bool, in_frames: bool) {
     match v {
         Value::Object(o) => {
+            o.retain(|k, _| !DROP_KEYS.contains(&k.as_str()));
             if o.contains_key("column") {
                 o.retain(|k, _| !TIE_KEYS.contains(&k.as_str()));
             }
@@ -121,26 +204,34 @@ pub fn scrub_ties(v: &mut Value, needles: &[String]) {
                     *s = bare_name(s).to_owned();
                 }
             }
-            if o.keys().any(|k| k.contains('@')) {
+            let renamed = o
+                .keys()
+                .any(|k| k.contains('@') || redact_text(k, n, in_frames) != *k);
+            if renamed {
                 let old = std::mem::take(o);
                 for (k, x) in old {
-                    let mut key = bare_name(&k).to_owned();
-                    let mut n = 1;
+                    let base = redact_text(bare_name(&k), n, in_frames);
+                    let mut key = base.clone();
+                    let mut i = 1;
                     while o.contains_key(&key) {
-                        n += 1;
-                        key = format!("{}#{n}", bare_name(&k));
+                        i += 1;
+                        key = format!("{base}#{i}");
                     }
                     o.insert(key, x);
                 }
             }
-            o.values_mut().for_each(|x| scrub_ties(x, needles));
+            for (k, x) in o.iter_mut() {
+                let frames = in_frames || (frames_exempt && FRAME_KEYS.contains(&k.as_str()));
+                scrub_in(x, n, frames_exempt, frames);
+            }
         }
-        Value::Array(a) => a.iter_mut().for_each(|x| scrub_ties(x, needles)),
+        Value::Array(a) => a
+            .iter_mut()
+            .for_each(|x| scrub_in(x, n, frames_exempt, in_frames)),
         Value::String(s) => {
-            for n in needles {
-                if !n.is_empty() && s.contains(n.as_str()) {
-                    *s = s.replace(n.as_str(), "<redacted>");
-                }
+            let t = redact_text(s, n, in_frames);
+            if t != *s {
+                *s = t;
             }
         }
         _ => {}
@@ -434,14 +525,20 @@ fn excerpts_for(project: &Path, candidates: &[(String, usize)]) -> (Vec<String>,
     (texts, frames)
 }
 
-/// A raw file's bytes as the bundle keeps them: JSON is stripped of forbidden keys.
-fn bundle_bytes(raw: &[u8], is_json_name: bool, needles: &[String]) -> Vec<u8> {
+/// A raw file's bytes as the bundle keeps them: JSON is stripped of forbidden keys and
+/// scrubbed; other text loses the finding id (and the site and writers unless the record is
+/// frame evidence, whose text cannot be split into frame and other fields); bytes that are
+/// not text are kept.
+fn bundle_bytes(raw: &[u8], is_json_name: bool, needles: &Needles, frames_exempt: bool) -> Vec<u8> {
     if is_json_name && let Ok(mut v) = serde_json::from_slice::<Value>(raw) {
         strip_forbidden(&mut v);
-        scrub_ties(&mut v, needles);
+        scrub_ties(&mut v, needles, frames_exempt);
         return to_pretty_json(&v).into_bytes();
     }
-    raw.to_vec()
+    match std::str::from_utf8(raw) {
+        Ok(text) => redact_text(text, needles, frames_exempt).into_bytes(),
+        Err(_) => raw.to_vec(),
+    }
 }
 
 fn files_under(dir: &Path, base: &Path, out: &mut Vec<(String, PathBuf)>) -> std::io::Result<()> {
@@ -532,14 +629,20 @@ fn build(
         }
         write_atomic(&path, bytes).map_err(Failure::from)
     };
-    // What a growth record must not show: the finding's id, site and writers.
-    let mut redact: Vec<String> = vec![id.to_string()];
+    // What no bundled record may show: the finding's id (with and without the worker
+    // prefix), its site and its recorded writers.
+    let mut needles = Needles {
+        ids: vec![id.to_string(), id.reprefixed(None).to_string()],
+        sites: Vec::new(),
+    };
     if let Some(f) = ledger.finding(id) {
-        redact.extend(f.site.clone());
+        needles.sites.extend(f.site.clone());
     }
-    redact.extend(ledger.recorded_sites(id).0);
-    redact.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    redact.dedup();
+    needles.sites.extend(ledger.recorded_sites(id).0);
+    for list in [&mut needles.ids, &mut needles.sites] {
+        list.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        list.dedup();
+    }
     let mut copied = 0usize;
     let mut omitted: Vec<String> = Vec::new();
     let mut records: Vec<Value> = Vec::new();
@@ -551,9 +654,12 @@ fn build(
         };
         let mut result = e.result.clone();
         strip_forbidden(&mut result);
-        let growth = e.kind.class() == EvidenceClass::Growth;
-        let needles: &[String] = if growth { &redact } else { &[] };
-        scrub_ties(&mut result, needles);
+        // Allocation and retention records keep the site in their structured frame fields.
+        let frames_exempt = matches!(
+            e.kind.class(),
+            EvidenceClass::Allocation | EvidenceClass::Retention
+        );
+        scrub_ties(&mut result, &needles, frames_exempt);
         let mut here: Vec<(String, usize)> = Vec::new();
         frames_in_value(&result, &mut here);
         let mut rec = Map::new();
@@ -580,7 +686,7 @@ fn build(
                 omitted.push(format!("{eid}: {raw} is over {MAX_COPY_BYTES} bytes"));
             } else {
                 let bytes = fs::read(&src).map_err(|e| io_fail(&src, e))?;
-                let kept = bundle_bytes(&bytes, raw.ends_with(".json"), needles);
+                let kept = bundle_bytes(&bytes, raw.ends_with(".json"), &needles, frames_exempt);
                 frames_in_bytes(&kept, &mut here);
                 write(&name, &kept)?;
                 rec.insert("file".into(), json!(name));
@@ -659,7 +765,14 @@ mod tests {
             "needed": "tie src/a.js:7 to jvm/F1",
             "alloc": {"site": "kept.js:3"},
         });
-        scrub_ties(&mut v, &["src/a.js:7".to_owned(), "jvm/F1".to_owned()]);
+        scrub_ties(
+            &mut v,
+            &Needles {
+                ids: vec!["jvm/F1".to_owned()],
+                sites: vec!["src/a.js:7".to_owned()],
+            },
+            false,
+        );
         let t = v.to_string();
         assert!(
             !t.contains("a.js") && !t.contains("jvm/F1") && !t.contains('@'),
@@ -780,5 +893,92 @@ mod tests {
         assert_eq!(got, ["m1.py:5", "m2.py:5", "m3.py:5", "m4.py:5"]);
         let (texts, got) = excerpts_for(root, &[]);
         assert!(texts.is_empty() && got.is_empty());
+    }
+
+    fn needles() -> Needles {
+        Needles {
+            ids: vec!["jvm/F3".to_owned(), "F3".to_owned()],
+            sites: vec![
+                "src/Cache.java:41".to_owned(),
+                "src/Cache.java:57".to_owned(),
+            ],
+        }
+    }
+
+    #[test]
+    fn every_record_loses_ids_sites_and_the_drop_keys() {
+        let mut disc = json!({
+            "test": "plateau", "finding": "jvm/F3", "basis": "site src/Cache.java:41",
+            "limitations": ["F3 grows at src/Cache.java:41", "jvm/F3.n1 unchanged"],
+            "supports": ["leak"],
+        });
+        let mut hist = json!({
+            "ties": [{"stack": "x", "finding": "F3"}], "candidates": ["F3"],
+            "top": [{"class": "Item", "site": "src/Cache.java:57"}],
+        });
+        for v in [&mut disc, &mut hist] {
+            strip_forbidden(v);
+            scrub_ties(v, &needles(), false);
+            let t = v.to_string();
+            for bad in [
+                "F3",
+                "Cache.java:41",
+                "Cache.java:57",
+                "basis",
+                "candidates",
+            ] {
+                assert!(!t.contains(bad), "{bad} in {t}");
+            }
+        }
+        // A bigger number is not the id.
+        let mut v = json!({"note": "F31 and AF3 and F3."});
+        scrub_ties(&mut v, &needles(), false);
+        assert_eq!(v["note"], "F31 and AF3 and <redacted>.");
+    }
+
+    #[test]
+    fn frame_fields_of_allocation_and_retention_keep_the_site() {
+        let mut alloc = json!({
+            "finding": "F3", "candidates": ["F3"], "ties": [{"stack": "s"}],
+            "top": [{"at": "put", "site": "src/Cache.java:41", "root": "static"}],
+            "stacks": [{"label": "L", "site": "src/Cache.java:41",
+                "frames": [{"function": "put", "file": "src/Cache.java", "line": 41}],
+                "root_path": ["static src/Cache.java:41"]}],
+            "needed": "tie src/Cache.java:41 to F3",
+        });
+        scrub_ties(&mut alloc, &needles(), true);
+        let t = alloc.to_string();
+        assert!(
+            !t.contains("F3") && !t.contains("candidates") && !t.contains("ties"),
+            "{t}"
+        );
+        assert_eq!(alloc["top"][0]["site"], "<redacted>");
+        assert_eq!(alloc["needed"], "tie <redacted> to <redacted>");
+        assert_eq!(alloc["stacks"][0]["site"], "<redacted>");
+        assert_eq!(alloc["stacks"][0]["frames"][0]["line"], 41);
+        assert_eq!(alloc["stacks"][0]["frames"][0]["file"], "src/Cache.java");
+        assert_eq!(
+            alloc["stacks"][0]["root_path"][0],
+            "static src/Cache.java:41"
+        );
+    }
+
+    #[test]
+    fn raw_text_copies_lose_the_finding_id() {
+        let raw = b"F3 leaks at src/Cache.java:41\n";
+        let plain = bundle_bytes(raw, false, &needles(), false);
+        assert_eq!(
+            String::from_utf8(plain).unwrap(),
+            "<redacted> leaks at <redacted>\n"
+        );
+        let frames = bundle_bytes(raw, false, &needles(), true);
+        assert_eq!(
+            String::from_utf8(frames).unwrap(),
+            "<redacted> leaks at src/Cache.java:41\n"
+        );
+        assert_eq!(
+            bundle_bytes(&[0xff, 0x46, 0x33], false, &needles(), false),
+            [0xff, 0x46, 0x33]
+        );
     }
 }

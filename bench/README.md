@@ -594,12 +594,11 @@ listed text is reported as `xfail: <reason>` in the table and in the JSON
 a listed fixture passes (remove the entry) or fails with any other text or with an
 additional failure (a regression must not hide behind the entry).
 
-The last full run (`dla-bench dynamic --parallel 2`, release binaries, M6): 28 of 34
-fixtures pass and 6 are expected failures: `node-socket-heartbeat` and `rust-tree-parent-links`
-(the policy cannot read the code) and four fixtures whose label cannot be reached
-(`jvm-extension-reload`, `jvm-invoice-render`, `rust-meter-callbacks`, `jni-order-codec`; the evidence the row
-requires cannot be tied to the finding, a defect of the ledger rules or of the records and not of
-the policy). The four label entries apply with archetypes on only. `node-retry-scheduler` passes: the policy runs the
+The last full run (`dla-bench dynamic --parallel 2`, release binaries, M6 after the fix rounds): 32 of 34
+fixtures pass and 2 are expected failures: `node-socket-heartbeat` and `rust-tree-parent-links`
+(the policy cannot read the code). The four fixtures whose label could not be reached before the fix rounds
+(`jvm-extension-reload`, `jvm-invoice-render`, `rust-meter-callbacks`, `jni-order-codec`) pass and their entries are removed. The
+`needs_archetypes` flag of an entry stays for a future label entry. `node-retry-scheduler` passes: the policy runs the
 `dla ledger annotate F --holder H --evidence E` command that `needed` prints for the finding of
 `RetryScheduler.latest`, and for any other tied finding whose set holder differs from the one observed
 (`needed` names the first tied finding only), and the ledger accepts it because the growth evidence's passing
@@ -610,10 +609,6 @@ column observed `static/global`.
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
 | `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census gives the `setInterval` timer finding the holder `blocked-stack` and the policy keeps it. The per-point heap-graph run observes `registration-table` for the column of `Session.recent` (the sessions are held through the loopback socket events) and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding, so there is no observed holder to correct it with. `node-resources` ties the timer group to the finding by site only. |
-| `jvm-extension-reload` | `leak L1 (L-UNLOAD) label refused label-evidence-missing` | L-UNLOAD needs growth plus non-heap, or a retention path, tied to the finding at the event-bus registry. The class-loader columns of `summarize non-heap` tie to no finding (they carry no holder, site or type of a heap field), and `summarize heap-graph --finding` finds the registry (its discriminator names `static:reports.EventBus.LISTENERS`) while the per-dump retention-path records list only the largest holders (`LedgerExtension.ROUNDING`, JFR internals), so no retention-path record names the finding's holder. A defect of the tie rule or of the records, not of the policy |
-| `jvm-invoice-render` | `leak L1 (L-TLS) label refused label-evidence-missing` | L-TLS needs a retention path tied to the finding. The finding's owner is the class initializer frame (`billing.RenderContext.<clinit>`), so `summarize heap-graph --finding` is refused `holder-not-found` (the dump's holder is `thread-local:billing.RenderContext.SEGMENTS`), `ledger annotate --owner` cannot replace an owner that is set, and the histogram records name another finding. A defect of the owner the census or probe records, not of the policy |
-| `rust-meter-callbacks` | `leak L1 (L-OWNERSHIP) label refused label-evidence-missing` | L-OWNERSHIP needs growth plus an allocation stack, or an intervention, tied to the finding. An alloc-stack record ties only through the root key of its stacks against the finding's owner; valgrind and heaptrack stacks carry no root and the detector finding (`rust-into-raw-unpaired`) has no owner, so `summarize alloc-stack-diff --finding` ties the growth column (by site) while the alloc-stack record stays untied. The intervention alternative is refused `intervene-not-statement`: the site is a `let` declaration, and a diff needs reading the code |
-| `jni-order-codec` | `leak L1 (L-HANDLE) label refused label-evidence-missing` | The native leak (the correlation candidate at the native site) needs growth plus an allocation stack, or a unit-count series plus a retention path, tied to it. Same cause as `rust-meter-callbacks`: the alloc-stack records of the shim and the profiles tie only through a root key against an owner, which the candidate does not have. L2 (Kotlin) is labelled |
 
 `jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
 workers, one merged ledger with both slices, merged coverage): the driver fails
@@ -625,105 +620,106 @@ has been confirmed since M4 (probe columns tie to the finding with that owner).
 
 ### M6 dynamic results
 
-`dla-bench dynamic --parallel 2` on the 34 fixtures with release binaries, archetypes on (28 pass, 6
-expected failures, 0 failures) and off (32 pass, 2 expected failures, 0 failures). The columns are the
+`dla-bench dynamic --parallel 2` on the 34 fixtures with release binaries, archetypes on (32 pass, 2
+expected failures, 0 failures) and off (33 pass, 1 flaky failure, 2 expected failures, see below). The columns are the
 M6 steps of the policy: the label of the matched expected leak, the explanation, `dla intervene
 --stub-writer` (informational), `dla ledger strong` (informational) and `dla gate check --final`
-(`pass`; `gaps` means the gate passes except for items the policy cannot reach, listed in
-`gate.known_gaps` of the JSON: 27 fixtures name the columns of the trend that `dla alloc-test` writes,
-`jni-order-codec` the residual item of a merged ledger, `jvm-rfq-dump-series` the explanation of an
-artifact finding; `docs/VERIFY.md` has the evidence). `x2` is two findings; `unmatched` is a confirmed
-finding that matches no expected leak. Decoys and impossible fixtures confirm nothing, so they have
-no step except the gate.
+(`pass`; `gaps` would mean the gate passes except for items the policy cannot reach, listed in
+`gate.known_gaps` of the JSON; there are none). The policy follows every fix the gate prints: `dla trend <S>` and then
+the `ledger add --origin growth-series` it prints for a trend column, `dla gap <S> --residual` for a whole-process
+column, and `ledger explain F --tag inferred --removal not-found --text ...` for an artifact finding. `x2` is two findings; `unmatched` is a confirmed
+finding that matches no expected leak; `not tried (holder)` is a finding whose holder differs from the expected one;
+`not tried (worker harness)` is an intervention the policy does not run on a worker's harness. Decoys and impossible
+fixtures confirm nothing, so they have no step except the gate.
 
 Archetypes on:
 
 | fixture | result | label | explain | intervene | strong | final gate |
 |---|---|---|---|---|---|---|
 | `go-buffer-pool` | pass | - | - | - | - | pass |
-| `go-subscription-workers` | pass | ok | ok | refused intervene-not-statement | no eligible record | gaps |
-| `go-subscription-workers-closed` | pass | - | - | - | - | gaps |
-| `jni-order-codec` | xfail | ok; refused label-evidence-missing | ok x2 | not tried x2 | ok; refused strong-second-class-missing x3 | gaps |
-| `jvm-audit-chain` | pass | ok | ok | invalid | ok | gaps |
+| `go-subscription-workers` | pass | ok | ok | refused intervene-not-statement | no eligible record | pass |
+| `go-subscription-workers-closed` | pass | - | - | - | - | pass |
+| `jni-order-codec` | pass | ok x2 | ok x2 | not tried (worker harness) x2 | ok; refused strong-second-class-missing x3 | pass |
+| `jvm-audit-chain` | pass | ok | ok | invalid | ok | pass |
 | `jvm-billing-private-repo` | pass | - | - | - | - | pass |
-| `jvm-extension-reload` | xfail | refused label-evidence-missing | ok | invalid | refused strong-second-class-missing x3 | gaps |
-| `jvm-extension-reload-stopped` | pass | - | - | - | - | gaps |
-| `jvm-invoice-render` | xfail | refused label-evidence-missing | ok | invalid | refused strong-second-class-missing x3 | gaps |
-| `jvm-invoice-render-trimmed` | pass | - | - | - | - | gaps |
-| `jvm-order-cache` | pass | ok | ok | invalid | ok | gaps |
-| `jvm-order-cache-bounded` | pass | - | - | - | - | gaps |
-| `jvm-rfq-dump-series` | pass | ok | not tried | - | refused strong-not-independent x3 | gaps |
+| `jvm-extension-reload` | pass | ok | ok | invalid | refused strong-holder-mismatch x3 | pass |
+| `jvm-extension-reload-stopped` | pass | - | - | - | - | pass |
+| `jvm-invoice-render` | pass | ok | ok | invalid | ok | pass |
+| `jvm-invoice-render-trimmed` | pass | - | - | - | - | pass |
+| `jvm-order-cache` | pass | ok | ok | invalid | ok | pass |
+| `jvm-order-cache-bounded` | pass | - | - | - | - | pass |
+| `jvm-rfq-dump-series` | pass | ok | ok | - | refused strong-not-independent x3 | pass |
 | `jvm-rfq-dump-series-capped` | pass | - | - | - | - | pass |
 | `jvm-rfq-single-dump` | pass | - | - | - | - | pass |
-| `native-frame-decoder` | pass | ok | ok | refused intervene-not-statement | ok | gaps |
-| `native-frame-decoder-freed` | pass | - | - | - | - | gaps |
-| `native-glyph-cache` | pass | - | - | - | - | gaps |
+| `native-frame-decoder` | pass | ok | ok | refused intervene-not-statement | ok | pass |
+| `native-frame-decoder-freed` | pass | - | - | - | - | pass |
+| `native-glyph-cache` | pass | - | - | - | - | pass |
 | `native-vendor-codec` | pass | - | - | - | - | pass |
-| `node-price-board` | pass | ok | ok | refused intervene-no-control | refused strong-not-independent x3 | gaps |
-| `node-price-board-flat` | pass | - | - | - | - | gaps |
-| `node-retry-scheduler` | pass | ok; unmatched | ok x2 | growth-removed; refused intervene-not-statement | ok x2 | gaps |
-| `node-socket-heartbeat` | xfail | not tried (holder); unmatched x3 | ok x4 | refused intervene-not-statement; growth-removed; refused intervene-no-control x2 | refused strong-second-class-missing x3; ok; refused strong-not-independent x6 | gaps |
-| `node-socket-heartbeat-cleared` | pass | - | - | - | - | gaps |
-| `python-graph-churn` | pass | - | - | - | - | gaps |
-| `python-ingest-two-leaks` | pass | ok x2 | ok x2 | growth-removed x2 | ok x2 | gaps |
-| `python-report-memo` | pass | ok | ok | refused intervene-not-statement | no eligible record | gaps |
-| `python-report-memo-bounded` | pass | - | - | - | - | gaps |
-| `rust-batch-buffers` | pass | - | - | - | - | gaps |
-| `rust-meter-callbacks` | xfail | refused label-evidence-missing | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
-| `rust-meter-callbacks-reclaimed` | pass | - | - | - | - | gaps |
-| `rust-tree-parent-links` | xfail | unmatched | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
-| `rust-tree-parent-links-weak` | pass | - | - | - | - | gaps |
+| `node-price-board` | pass | ok | ok | refused intervene-no-control | refused strong-not-independent x3 | pass |
+| `node-price-board-flat` | pass | - | - | - | - | pass |
+| `node-retry-scheduler` | pass | ok; unmatched | ok x2 | growth-removed; refused intervene-not-statement | ok x2 | pass |
+| `node-socket-heartbeat` | xfail | not tried (holder); unmatched x3 | ok x4 | refused intervene-not-statement; growth-removed; refused intervene-no-control x2 | refused strong-second-class-missing x3; ok; refused strong-not-independent x6 | pass |
+| `node-socket-heartbeat-cleared` | pass | - | - | - | - | pass |
+| `python-graph-churn` | pass | - | - | - | - | pass |
+| `python-ingest-two-leaks` | pass | ok x2 | ok x2 | growth-removed x2 | ok x2 | pass |
+| `python-report-memo` | pass | ok | ok | refused intervene-not-statement | no eligible record | pass |
+| `python-report-memo-bounded` | pass | - | - | - | - | pass |
+| `rust-batch-buffers` | pass | - | - | - | - | pass |
+| `rust-meter-callbacks` | pass | ok | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | pass |
+| `rust-meter-callbacks-reclaimed` | pass | - | - | - | - | pass |
+| `rust-tree-parent-links` | xfail | unmatched | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | pass |
+| `rust-tree-parent-links-weak` | pass | - | - | - | - | pass |
 | `symptom-no-target` | pass | - | - | - | - | pass |
 
 Archetypes off. Every label of a shipped row was refused with `archetypes-off` (12), the three
-`UNCLASSIFIED` labels were accepted, `--suggest` said `off` for every confirmed finding, and nothing
-else changed: the same leaks are confirmed with the same holders, the same explanations are accepted
-and the final gate ends the same (counts of refuted decoy findings and some intervention outcomes
-differ from run to run). The four fixtures whose label cannot be reached with archetypes on pass here,
-because their expected failure is a label failure.
+`UNCLASSIFIED` labels were accepted, and nothing else changed: the same leaks are confirmed with the same holders, the
+same explanations are accepted and the final gate passes everywhere. The first full run had one failure,
+`go-buffer-pool` (`no rule-out on a non-leak fixture`): the alloc-test on `go.heap_live` was inconclusive (once a
+false `leak`) on a non-leak fixture, so the candidate stayed unresolved. Four more runs of that fixture with archetypes off gave 2 failures and 2
+passes, and four with archetypes on gave none (nor did the full run), so the flake may depend on the archetypes setting; the row below is from one of the passing runs. See `docs/VERIFY.md`.
 
 | fixture | result | label | explain | intervene | strong | final gate |
 |---|---|---|---|---|---|---|
-| `go-buffer-pool` | pass | - | - | - | - | gaps |
-| `go-subscription-workers` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | no eligible record | gaps |
-| `go-subscription-workers-closed` | pass | - | - | - | - | gaps |
-| `jni-order-codec` | pass | refused archetypes-off (expected) x2 | ok x2 | not tried x2 | ok; refused strong-second-class-missing x3 | gaps |
-| `jvm-audit-chain` | pass | ok | ok | refused intervene-not-statement | ok | gaps |
+| `go-buffer-pool` | pass | - | - | - | - | pass |
+| `go-subscription-workers` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | no eligible record | pass |
+| `go-subscription-workers-closed` | pass | - | - | - | - | pass |
+| `jni-order-codec` | pass | refused archetypes-off (expected) x2 | ok x2 | not tried (worker harness) x2 | ok; refused strong-second-class-missing x3 | pass |
+| `jvm-audit-chain` | pass | ok | ok | invalid | ok | pass |
 | `jvm-billing-private-repo` | pass | - | - | - | - | pass |
-| `jvm-extension-reload` | pass | refused archetypes-off (expected) | ok | invalid | refused strong-second-class-missing x3 | gaps |
-| `jvm-extension-reload-stopped` | pass | - | - | - | - | gaps |
-| `jvm-invoice-render` | pass | refused archetypes-off (expected) | ok | invalid | refused strong-second-class-missing x3 | gaps |
-| `jvm-invoice-render-trimmed` | pass | - | - | - | - | gaps |
-| `jvm-order-cache` | pass | refused archetypes-off (expected) | ok | invalid | ok | gaps |
-| `jvm-order-cache-bounded` | pass | - | - | - | - | gaps |
-| `jvm-rfq-dump-series` | pass | refused archetypes-off (expected) | not tried | - | refused strong-not-independent x3 | gaps |
+| `jvm-extension-reload` | pass | refused archetypes-off (expected) | ok | invalid | refused strong-second-class-missing x3 | pass |
+| `jvm-extension-reload-stopped` | pass | - | - | - | - | pass |
+| `jvm-invoice-render` | pass | refused archetypes-off (expected) | ok | invalid | ok | pass |
+| `jvm-invoice-render-trimmed` | pass | - | - | - | - | pass |
+| `jvm-order-cache` | pass | refused archetypes-off (expected) | ok | invalid | ok | pass |
+| `jvm-order-cache-bounded` | pass | - | - | - | - | pass |
+| `jvm-rfq-dump-series` | pass | refused archetypes-off (expected) | ok | - | refused strong-not-independent x3 | pass |
 | `jvm-rfq-dump-series-capped` | pass | - | - | - | - | pass |
 | `jvm-rfq-single-dump` | pass | - | - | - | - | pass |
-| `native-frame-decoder` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | ok | gaps |
+| `native-frame-decoder` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | ok | pass |
 | `native-frame-decoder-freed` | pass | - | - | - | - | pass |
-| `native-glyph-cache` | pass | - | - | - | - | gaps |
+| `native-glyph-cache` | pass | - | - | - | - | pass |
 | `native-vendor-codec` | pass | - | - | - | - | pass |
-| `node-price-board` | pass | refused archetypes-off (expected) | ok | refused intervene-no-control | refused strong-not-independent x3 | gaps |
-| `node-price-board-flat` | pass | - | - | - | - | gaps |
-| `node-retry-scheduler` | pass | ok; unmatched | ok x2 | growth-removed; refused intervene-not-statement | ok x2 | gaps |
-| `node-socket-heartbeat` | xfail | not tried (holder); unmatched x3 | ok x4 | refused intervene-not-statement; growth-removed; refused intervene-no-control x2 | refused strong-second-class-missing x3; ok; refused strong-not-independent x6 | gaps |
-| `node-socket-heartbeat-cleared` | pass | - | - | - | - | gaps |
-| `python-graph-churn` | pass | - | - | - | - | gaps |
-| `python-ingest-two-leaks` | pass | ok; refused archetypes-off (expected) | ok x2 | growth-removed x2 | ok x2 | gaps |
-| `python-report-memo` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | no eligible record | gaps |
-| `python-report-memo-bounded` | pass | - | - | - | - | gaps |
+| `node-price-board` | pass | refused archetypes-off (expected) | ok | refused intervene-no-control | refused strong-not-independent x3 | pass |
+| `node-price-board-flat` | pass | - | - | - | - | pass |
+| `node-retry-scheduler` | pass | ok; unmatched | ok x2 | growth-removed; refused intervene-not-statement | ok x2 | pass |
+| `node-socket-heartbeat` | xfail | not tried (holder); unmatched x3 | ok x4 | refused intervene-not-statement; growth-removed; refused intervene-no-control x2 | refused strong-second-class-missing x3; ok; refused strong-not-independent x6 | pass |
+| `node-socket-heartbeat-cleared` | pass | - | - | - | - | pass |
+| `python-graph-churn` | pass | - | - | - | - | pass |
+| `python-ingest-two-leaks` | pass | ok; refused archetypes-off (expected) | ok x2 | growth-removed x2 | ok x2 | pass |
+| `python-report-memo` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | no eligible record | pass |
+| `python-report-memo-bounded` | pass | - | - | - | - | pass |
 | `rust-batch-buffers` | pass | - | - | - | - | pass |
-| `rust-meter-callbacks` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
-| `rust-meter-callbacks-reclaimed` | pass | - | - | - | - | gaps |
-| `rust-tree-parent-links` | xfail | unmatched | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | gaps |
-| `rust-tree-parent-links-weak` | pass | - | - | - | - | gaps |
+| `rust-meter-callbacks` | pass | refused archetypes-off (expected) | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | pass |
+| `rust-meter-callbacks-reclaimed` | pass | - | - | - | - | pass |
+| `rust-tree-parent-links` | xfail | unmatched | ok | refused intervene-not-statement | refused strong-second-class-missing x3 | pass |
+| `rust-tree-parent-links-weak` | pass | - | - | - | - | pass |
 | `symptom-no-target` | pass | - | - | - | - | pass |
 
-Totals (on / off): labels accepted 11 / 3 (UNCLASSIFIED) with 4 / 0 refused for missing evidence and 0 / 12
-refused `archetypes-off`; explanations accepted 20 / 20; interventions `growth-removed` 4 / 4,
-`invalid` 4 / 3 (JVM harness exits 1 once the stubbed writer is gone, see `docs/VERIFY.md`),
-refused `intervene-not-statement` 7 / 8 and `intervene-no-control` 3 / 3; `strong` reached 9 / 9;
-final gate passed 6 / 7, gaps only 28 / 27, missing 0 / 0.
+Totals (on / off): labels accepted 15 / 3 (UNCLASSIFIED) with 0 / 0 refused for missing evidence and 0 / 12
+refused `archetypes-off`; explanations accepted 21 / 21; interventions `growth-removed` 4 / 4,
+`invalid` 4 / 4 (JVM harness exits 1 once the stubbed writer is gone, see `docs/VERIFY.md`),
+refused `intervene-not-statement` 7 / 7 and `intervene-no-control` 3 / 3; `strong` reached 10 / 10;
+final gate passed 34 / 34, gaps only 0 / 0, missing 0 / 0.
 
 ## Isolation and cost
 

@@ -66,6 +66,16 @@ pub struct Anchors {
     pub writers: Vec<Site>,
     /// Writers, removers, the site and the owner declaration: `--patch` hunks lie near these.
     pub near: Vec<Site>,
+    /// The finding's owner (`shop.Cache.items`): a patch must not rename it on a writer line.
+    pub owner: Option<String>,
+}
+
+/// The identifier a probe column is named after: the last segment of the owner.
+fn owner_ident(owner: &str) -> Option<&str> {
+    owner
+        .rsplit(['.', ':', '/', '#', '$'])
+        .find(|s| !s.is_empty())
+        .filter(|s| s.len() >= 2)
 }
 
 /// File names the harness owns (`driver/`, `agent/`): never edited, even when generation
@@ -327,6 +337,50 @@ fn keeps_identity(rel: &str, h: &diff::HunkSite, anchors: &Anchors) -> Res<()> {
     Ok(())
 }
 
+/// Refuses a hunk that rewrites a recorded writer line (removes it and adds other lines)
+/// without keeping the owner identifier: the probe column is named after the owner, so the
+/// treated series would lose the measured column. Text based and cheap; a rename done in
+/// another way is caught after the run, where the missing column makes the result invalid.
+fn keeps_owner(rel: &str, old: &str, p: &diff::FilePatch, anchors: &Anchors) -> Res<()> {
+    let Some(ident) = anchors.owner.as_deref().and_then(owner_ident) else {
+        return Ok(());
+    };
+    let lines: Vec<&str> = old.lines().collect();
+    for w in anchors.writers.iter().filter(|w| w.file == rel) {
+        let Some(text) = lines.get((w.line as usize).wrapping_sub(1)) else {
+            continue;
+        };
+        if !text.contains(ident) {
+            continue;
+        }
+        for h in &p.hunks {
+            let removes = h
+                .lines
+                .iter()
+                .any(|l| matches!(l, diff::Line::Remove(t) if t == text));
+            let adds: Vec<&String> = h
+                .lines
+                .iter()
+                .filter_map(|l| match l {
+                    diff::Line::Add(t, _) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            if removes && !adds.is_empty() && !adds.iter().any(|t| t.contains(ident)) {
+                return Err(refuse(
+                    codes::SCOPE,
+                    format!(
+                        "the diff rewrites the recorded writer {w} without the owner name {ident}; the measured column is named after the owner"
+                    ),
+                    "an edit that keeps the owner identifier on the writer line",
+                    "keep the owner name (for example wrap the statement in a condition) or use --stub-writer".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Plans `--patch`: files under `work/` only, hunks near a recorded site, at most
 /// [`MAX_CHANGED_LINES`] changed lines, clean apply.
 pub fn patch_plan(
@@ -358,6 +412,7 @@ pub fn patch_plan(
         }
         editable(&rel, owned)?;
         let old = read_work(work, &rel)?;
+        keeps_owner(&rel, &old, p, anchors)?;
         let applied = diff::apply(&old, p).map_err(|why| {
             refuse(
                 codes::PATCH,
@@ -470,6 +525,7 @@ mod tests {
             finding: "F1".into(),
             writers: w,
             near,
+            owner: Some("shop.Cache.items".into()),
         }
     }
 
@@ -612,6 +668,26 @@ mod tests {
         // The same insertion below the last writer (line 20) keeps every writer line.
         let below = "--- a/a.py\n+++ b/a.py\n@@ -21,1 +21,2 @@\n line 21\n+# note\n";
         assert!(patch_plan(d.path(), &none, &anchors(), below).is_ok());
+    }
+
+    #[test]
+    fn a_patch_that_renames_the_owner_on_a_writer_line_is_refused() {
+        let src = "class A {\n  void f(int v) {\n    items.add(v);\n    n = 1;\n  }\n}\n";
+        let d = work(&[("a.py", src)]);
+        let none = BTreeSet::new();
+        let a = Anchors {
+            writers: vec![Site::parse("a.py:3").unwrap()],
+            near: vec![Site::parse("a.py:3").unwrap()],
+            ..anchors()
+        };
+        let rename =
+            "--- a/a.py\n+++ b/a.py\n@@ -3,1 +3,1 @@\n-    items.add(v);\n+    store.add(v);\n";
+        assert_eq!(
+            code_of(patch_plan(d.path(), &none, &a, rename)),
+            codes::SCOPE
+        );
+        let keep = "--- a/a.py\n+++ b/a.py\n@@ -3,1 +3,1 @@\n-    items.add(v);\n+    if (items.size() < 9) items.add(v);\n";
+        assert!(patch_plan(d.path(), &none, &a, keep).is_ok());
     }
 
     #[test]

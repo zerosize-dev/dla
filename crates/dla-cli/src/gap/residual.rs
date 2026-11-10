@@ -480,6 +480,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
         .iter()
         .zip(&actions)
         .map(|(c, a)| ResidualRow {
+            series: Some(src.id.clone()),
             region: c.region,
             total_slope: c.total,
             attributed_slope: c.attributed,

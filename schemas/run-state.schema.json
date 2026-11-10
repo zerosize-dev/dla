@@ -115,14 +115,14 @@
       "$ref": "#/$defs/RunStatus"
     },
     "stop_block_digest": {
-      "description": "Digest (ledger length plus hash of the missing-item ids) of the last stop-hook block.",
+      "description": "Digest (ledger length plus hash of the missing-item ids) of the last failing stop attempt.",
       "type": [
         "string",
         "null"
       ]
     },
     "stop_blocks": {
-      "description": "Consecutive stop-hook blocks with an unchanged ledger digest.",
+      "description": "Consecutive failing stop attempts with an unchanged ledger digest.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0
@@ -518,17 +518,17 @@
       ]
     },
     "StopCounter": {
-      "description": "Consecutive stop-hook blocks with an unchanged digest.",
+      "description": "Consecutive failing stop attempts with an unchanged digest.",
       "type": "object",
       "properties": {
         "blocks": {
-          "description": "Blocks in a row with this digest.",
+          "description": "Failing stop attempts in a row with this digest.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "digest": {
-          "description": "Digest of the last block.",
+          "description": "Digest of the last failing stop attempt.",
           "type": [
             "string",
             "null"
@@ -567,7 +567,7 @@
           "type": "string"
         },
         "stalled": {
-          "description": "The SubagentStop gate blocked the worker three times with no ledger change and let\nit stop; merge turns its unfinished work into an open item.",
+          "description": "The worker made three failing stop attempts in a row with no ledger change and the\nSubagentStop gate let it stop; merge turns its unfinished work into an open item.",
           "type": "boolean"
         },
         "started_at": {
