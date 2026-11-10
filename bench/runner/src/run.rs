@@ -895,6 +895,32 @@ fn link_toolchain(dir: &Path, cache: &Path) {
             }
         }
     }
+    // Before it switches, Go verifies the toolchain module against the checksum database,
+    // and a child's sandbox has no network for sum.golang.org. The host verified it when
+    // it fetched the toolchain, so the checksum database cache (lookups and tiles, a few
+    // MB) is copied: verification stays on and works offline. A copy, not a link: Go
+    // writes to this cache.
+    let sumdb = host.join("cache/download/sumdb");
+    let to = modcache.join("cache/download/sumdb");
+    if sumdb.is_dir() && to.symlink_metadata().is_err() {
+        let _ = copy_dir(&sumdb, &to);
+    }
+}
+
+/// Copies a directory tree (regular files and directories; links are skipped).
+#[cfg(unix)]
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for e in fs::read_dir(from)?.flatten() {
+        let ty = e.file_type()?;
+        let dst = to.join(e.file_name());
+        if ty.is_dir() {
+            copy_dir(&e.path(), &dst)?;
+        } else if ty.is_file() {
+            fs::copy(e.path(), &dst)?;
+        }
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------- tasks
@@ -2491,9 +2517,22 @@ mod tests {
             fs::write(dl.join(format!("v0.0.1-go1.27.0.linux-amd64.{f}")), f).unwrap();
         }
         fs::write(dl.join("v0.0.1-go1.26.0.linux-amd64.zip"), "other").unwrap();
+        let lookup = host.join("cache/download/sumdb/sum.golang.org/lookup/golang.org");
+        fs::create_dir_all(&lookup).unwrap();
+        fs::write(lookup.join(name), "sum").unwrap();
+        fs::write(
+            host.join("cache/download/sumdb/sum.golang.org/latest"),
+            "tree",
+        )
+        .unwrap();
         let cache = t.join("child");
         link_toolchain(&dir, &cache);
         let m = cache.join("gopath/pkg/mod");
+        // The checksum database cache is copied, so the switch verifies offline.
+        let sum = m.join("cache/download/sumdb/sum.golang.org");
+        assert_eq!(fs::read_to_string(sum.join("latest")).unwrap(), "tree");
+        let looked = sum.join("lookup/golang.org").join(name);
+        assert!(!looked.symlink_metadata().unwrap().file_type().is_symlink());
         assert!(m.join("golang.org").join(name).join("bin").is_dir());
         let c = m.join("cache/download/golang.org/toolchain/@v");
         let zip = c.join("v0.0.1-go1.27.0.linux-amd64.zip");

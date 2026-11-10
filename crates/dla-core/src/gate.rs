@@ -732,7 +732,9 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     // Every series was analysed.
     let analysed: BTreeSet<&str> = view.trends.iter().map(|t| t.series.as_str()).collect();
     for s in &view.series_ids {
-        if !analysed.contains(s.as_str()) {
+        // A series `dla gap` derived is the residual accounting of another series; the
+        // residual rows of that series (and their open items) govern it.
+        if !analysed.contains(s.as_str()) && !view.gap_series.contains(s) {
             out.add(
                 "series",
                 s.clone(),
@@ -744,6 +746,11 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     // (c) every non-flat column is tied to a finding (dispositioned for the final gate) or
     // covered by a resolved open item.
     for t in &view.trends {
+        // The trend of a series `dla gap` derived measures the accounting, not the target:
+        // its gap.unexplained growth is governed by the residual rows of the source series.
+        if view.gap_series.contains(&t.series) {
+            continue;
+        }
         for c in t.columns.iter().filter(|c| non_flat(c)) {
             if is_whole_process(&c.name) {
                 // Never tied to a finding. The classify stage leaves it to the final gate,

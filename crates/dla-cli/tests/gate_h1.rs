@@ -742,3 +742,56 @@ fn a_capture_tool_does_not_make_its_runtime_need_a_census_and_a_sweep() {
     let m = r.missing(&["--stage", "sweep"]);
     assert!(ids(&m).contains(&"native/census".to_owned()), "{m:?}");
 }
+
+/// A gap-derived series (`dla gap` writes `gap.accounted` and `gap.unexplained` for
+/// another series): the gates ask neither for its trend nor for a disposition of its
+/// columns, since the residual rows of the source series govern it.
+fn write_gap_series(r: &Run, id: &str, from: &str) {
+    let dir = r.run_dir().join("series");
+    fs::create_dir_all(&dir).unwrap();
+    let doc = json!({
+        "schema_version": 1, "id": id,
+        "source": {"kind": "gap", "harness": "H1", "mode": "fresh", "runtime": "go",
+                   "derived_from": from},
+        "axis": "iteration", "warmup": 1,
+        "columns": [
+            {"name": "gap.accounted", "unit": "bytes", "kind": "gauge", "region": "process",
+             "baseline": false, "after_gc": false, "scope": "process", "source": "gap"},
+            {"name": "gap.unexplained", "unit": "bytes", "kind": "gauge", "region": "off-heap",
+             "baseline": false, "after_gc": false, "scope": "process", "source": "gap"}
+        ],
+        "points": [{"x": 440.0, "t_ms": 13, "values": [9991432.0, -1139976.0]},
+                   {"x": 880.0, "t_ms": 40, "values": [14013704.0, -914696.0]},
+                   {"x": 1320.0, "t_ms": 70, "values": [18013704.0, -814696.0]}],
+        "events": [], "limitations": []
+    });
+    fs::write(dir.join(format!("{id}.json")), doc.to_string()).unwrap();
+}
+
+#[test]
+fn a_gap_derived_series_needs_no_trend_and_its_trend_columns_no_disposition() {
+    let r = init("repository");
+    write_gap_series(&r, "S6", "S1");
+    // Untrended: no "series has no trend analysis" item for the gap series.
+    let items = r.items(&["--final"]);
+    assert!(
+        !items
+            .iter()
+            .any(|m| m["kind"] == "series" && m["id"] == "S6"),
+        "{items:?}"
+    );
+    // Trended (a model may still run dla trend on it): its growing gap.accounted column
+    // asks for nothing, so the stop hook cannot loop on the residual accounting itself.
+    write_trend(&r, "T6", "S6", &["gap.accounted", "gap.unexplained"]);
+    let items = r.items(&["--final"]);
+    assert!(
+        !items
+            .iter()
+            .any(|m| m["id"].as_str().is_some_and(|id| id.starts_with("T6:"))),
+        "{items:?}"
+    );
+    // A growing whole-process column of a measured series is still asked for.
+    write_trend(&r, "T1", "S1", &["os.rss"]);
+    let items = r.items(&["--final"]);
+    assert!(items.iter().any(|m| m["id"] == "T1:os.rss"), "{items:?}");
+}

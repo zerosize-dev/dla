@@ -36,6 +36,10 @@ pub struct RunView {
     pub trends: Vec<TrendReport>,
     /// The series files present (`S1`, `S2`, ...), for a view loaded from disk.
     pub series_ids: Vec<String>,
+    /// The series `dla gap` derived (source kind `gap`: the accounted and unexplained
+    /// split of another series). They are the residual accounting itself, so the gates do
+    /// not ask for their trend or for a disposition of their columns.
+    pub gap_series: std::collections::BTreeSet<String>,
     /// Protected files other than `report.md` that no longer match their seal.
     pub tamper: Vec<Tamper>,
     /// True when `report.md` differs from the seal `dla` wrote at render time.
@@ -58,6 +62,7 @@ impl RunView {
             run_dir: None,
             trends: Vec::new(),
             series_ids: Vec::new(),
+            gap_series: std::collections::BTreeSet::new(),
             tamper: Vec::new(),
             report_modified: false,
             unsealed_run: false,
@@ -103,6 +108,15 @@ impl RunView {
         self.run_dir = Some(run_dir.to_path_buf());
         self.trends = TrendReport::load_all(run_dir);
         self.series_ids = crate::series::list_ids(run_dir);
+        self.gap_series = self
+            .series_ids
+            .iter()
+            .filter(|id| {
+                crate::series::SeriesFile::load(run_dir, id)
+                    .is_ok_and(|f| f.source.kind == crate::series::SeriesSourceKind::Gap)
+            })
+            .cloned()
+            .collect();
         self.unsealed_run = !integrity::is_sealed_run(run_dir);
         for t in integrity::verify(run_dir) {
             if t.file == REPORT_FILE {
