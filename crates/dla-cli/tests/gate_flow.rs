@@ -624,6 +624,10 @@ fn editing_report_md_by_hand_is_noted_in_the_next_report() {
     assert!(r.ok(&["run", "status"]).get("report_modified").is_none());
 }
 
+// bin/dla is a bash script. On the Windows runner `bash` on PATH is the WSL launcher,
+// which has no distribution; Claude Code runs hooks through Git Bash there, and the
+// shim's Windows behaviour is covered by the "shim and downloader" job (tests/shim).
+#[cfg(unix)]
 #[test]
 fn the_shim_runs_a_gate_hook_with_only_the_plugin_root_set() {
     // A hook gets CLAUDE_PLUGIN_ROOT and nothing on PATH: bin/dla must find the binary.
