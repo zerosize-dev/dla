@@ -1,0 +1,3 @@
+{"type": "finding_added", "finding": {"id": "F1", "state": "candidate", "site": "src/c.py:3", "holder": "container-field", "supports": ["E1"]}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "confirmed"}
+{"type": "open_item", "id": "O2", "text": "unexplained growth: 90 bytes/n in heap (S1); add a hypothesis"}

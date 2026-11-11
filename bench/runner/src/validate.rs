@@ -439,6 +439,10 @@ fn check_semantics(
     if exp.id != name {
         out.push(format!("id {:?} must equal the directory name", exp.id));
     }
+    let go_mod = project
+        .and_then(|p| p.files.get("go.mod"))
+        .and_then(|b| std::str::from_utf8(b).ok());
+    crate::fixture_toolchain::check(exp, go_mod, out);
     let mut seen = std::collections::BTreeSet::new();
     for l in &exp.leak {
         if !seen.insert(l.id.clone()) {

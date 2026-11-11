@@ -23,14 +23,20 @@ fn both_graders_write_identical_metrics_for_every_sample() {
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let out = tempfile::tempdir().unwrap();
-    let mut samples = 0;
+    let mut graded: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     for e in fs::read_dir(root.join("testdata")).unwrap().flatten() {
         let s = e.path();
-        if !s.join("results").is_dir() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !s.is_dir() {
             continue;
         }
-        samples += 1;
-        let name = e.file_name().to_string_lossy().into_owned();
+        // Every sample directory is graded: one without results/ is a mistake, not a skip.
+        if !s.join("results").is_dir() {
+            skipped.push(name);
+            continue;
+        }
+        graded.push(name.clone());
         let m = grade::grade_dir(&s.join("results"), &s.join("fixtures")).unwrap();
         let rust: serde_json::Value = serde_json::from_str(&grade::render(&m)).unwrap();
         let py_out = out.path().join(format!("{name}.json"));
@@ -57,5 +63,22 @@ fn both_graders_write_identical_metrics_for_every_sample() {
             }
         }
     }
-    assert!(samples >= 3, "expected the three samples, saw {samples}");
+    assert!(
+        skipped.is_empty(),
+        "testdata directories without results/ are not graded: {skipped:?}"
+    );
+    graded.sort();
+    assert_eq!(
+        graded,
+        [
+            "label-sample",
+            "m4-sample",
+            "m7-sample",
+            "py-sample",
+            "rust-sample",
+            "site-parse-sample",
+            "verify-sample"
+        ],
+        "a sample was added or lost: update this list"
+    );
 }

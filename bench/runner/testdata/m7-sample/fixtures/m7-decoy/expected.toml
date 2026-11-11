@@ -1,0 +1,15 @@
+schema_version = 1
+id = "m7-decoy"
+runtime = "python"
+category = "decoy-control"
+pair = "m7-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = "The process grows."
+
+[[non_leak]]
+id = "N1"
+cause = "N-HWM"
+discriminator = "plateaus"
+

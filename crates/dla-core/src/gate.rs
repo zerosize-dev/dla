@@ -575,6 +575,15 @@ pub fn is_whole_process(name: &str) -> bool {
     .any(|p| base.starts_with(p))
 }
 
+/// True for a per-type instance count of a JVM heap (`jvm.class:<name>.count`). It belongs to
+/// the heap, but the tie rule ties a type to a finding only through its accumulation class or its field's element type, and never for the
+/// generic types (`byte[]`, `String`, collection nodes), so most of these columns have no
+/// finding to tie to. The heap residual rows account for them, as they do for a total.
+pub fn is_type_count(name: &str) -> bool {
+    let base = name.strip_suffix(".pre_gc").unwrap_or(name);
+    !base.contains('@') && base.starts_with("jvm.class:")
+}
+
 /// The findings tied to a trend column: the one it was probed for, its candidates, and
 /// the findings that cite the growth evidence `dla trend` wrote for it. A whole-process
 /// column has none.
@@ -821,6 +830,30 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 !tied.is_empty()
             };
             if ok || superseded(view, t, c) || covered_by_open_item(view, t, c) {
+                continue;
+            }
+            // A per-type count that ties to no finding is accounted for by the residual rows
+            // of its series (the classify stage leaves that to the final gate, as it does for
+            // a whole-process column). A count tied only to undispositioned findings needs
+            // their disposition, below.
+            if is_type_count(&c.name) && tied.is_empty() {
+                if !is_final || residual_covers(view, &t.series, c) {
+                    continue;
+                }
+                out.add(
+                    "trend_column",
+                    format!("{}:{}", t.id, c.name),
+                    format!(
+                        "column {} of {} ({}) counts the instances of one type and is tied to no finding (a generic type never ties); it is accounted for by the residual rows, which are missing or over their threshold without a resolved open item",
+                        c.name,
+                        t.id,
+                        c.shape_name()
+                    ),
+                    format!(
+                        "dla gap {} --residual   (rows under the threshold, or over it with a resolved open item, account for the column)",
+                        t.series
+                    ),
+                );
                 continue;
             }
             let fix = match evidence_for_column(view, t, c) {

@@ -3,7 +3,10 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
-use dla_bench::{compare, dynamic_cmd, grade, run, schema_cmd, static_cmd, table, validate};
+use dla_bench::{
+    calib, closecalls, compare, dynamic_cmd, gates, grade, run, schema_cmd, static_cmd, table,
+    validate,
+};
 
 #[derive(Parser)]
 #[command(name = "dla-bench", version, about = "DLA benchmark runner and grader")]
@@ -65,6 +68,12 @@ enum Cmd {
     Static(static_cmd::StaticArgs),
     /// Dynamic acceptance: harness loops, trend, alloc-test and the M3 ledger rules on every fixture.
     Dynamic(dynamic_cmd::DynamicArgs),
+    /// List the fixtures whose runs disagree, and the command that adds runs 4 and 5.
+    CloseCalls(closecalls::CloseCallArgs),
+    /// Evaluate the ten release gates on a graded metrics.json (exit 1 when one fails).
+    Gates(gates::GatesArgs),
+    /// Extract calibration statistics from the log directory of `dla-bench dynamic`.
+    CalibExtract(calib::CalibArgs),
     /// Exit 0 when two JSON files are equal as parsed JSON.
     Compare {
         /// First file.
@@ -76,6 +85,23 @@ enum Cmd {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Cmd::Gates(a) = &cli.cmd {
+        // The table goes to stdout whether or not every gate passes.
+        return match gates::run(a) {
+            Ok((text, ok)) => {
+                println!("{}", text.trim_end());
+                if ok {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(1)
+                }
+            }
+            Err(msg) => {
+                eprintln!("{msg}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let result = match cli.cmd {
         Cmd::Schema(a) => schema_cmd::run(&a),
         Cmd::Validate { fixtures, schemas } => validate::validate_dir(&fixtures, &schemas)
@@ -121,6 +147,9 @@ fn main() -> ExitCode {
         .map(|()| format!("wrote {}", out.display())),
         Cmd::Static(a) => static_cmd::run(&a),
         Cmd::Dynamic(a) => dynamic_cmd::run(&a),
+        Cmd::CloseCalls(a) => closecalls::run(&a),
+        Cmd::CalibExtract(a) => calib::run(&a),
+        Cmd::Gates(_) => unreachable!("handled above"),
         Cmd::Compare { a, b } => compare::compare_files(&a, &b).and_then(|d| {
             if d.is_empty() {
                 Ok("equal".to_owned())

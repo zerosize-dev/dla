@@ -548,6 +548,20 @@ fn suggestions(
                     next.push(hint);
                 }
             }
+            None if dla_core::gate::is_type_count(&c.name) => {
+                // The gate accounts for a type count that ties to no finding through the
+                // residual rows of its series; a `ledger add` would open a finding that
+                // can never be tied (generic types never tie).
+                let hint = format!(
+                    "dla gap {} --residual   # column {} counts the instances of one type and ties to no finding: account for it with the residual rows",
+                    series.id, c.name
+                );
+                if !next.contains(&hint)
+                    && next.iter().filter(|n| n.starts_with("dla gap ")).count() < 1
+                {
+                    next.push(hint);
+                }
+            }
             None if unbound < 3 => {
                 unbound += 1;
                 let mut cmd = format!("dla ledger add --origin growth-series --evidence {e}");

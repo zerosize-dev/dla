@@ -44,8 +44,19 @@ pub fn render_group(g: &Group) -> String {
         ("trap_miss_rate", &m.trap_miss_rate),
         ("trap_false_alarm_rate", &m.trap_false_alarm_rate),
     ];
-    if let Some(r) = &m.source_overclaim_rate {
-        rows.push(("source_overclaim_rate", r));
+    for (name, r) in [
+        ("source_overclaim_rate", &m.source_overclaim_rate),
+        (
+            "undiscriminated_refutations",
+            &m.undiscriminated_refutations,
+        ),
+        ("uncited_findings", &m.uncited_findings),
+        ("uncited_checklist_answers", &m.uncited_checklist_answers),
+        ("dropped_rate", &m.dropped_rate),
+    ] {
+        if let Some(r) = r {
+            rows.push((name, r));
+        }
     }
     for (n, r) in rows {
         s.push_str(&ratio_row(n, r));
@@ -108,6 +119,22 @@ pub fn render_group(g: &Group) -> String {
             ),
         ] {
             let _ = writeln!(s, "| {n} | {} | {}/{} |", num(r.value), r.num, r.den);
+        }
+    }
+    if !g.decoys.is_empty() {
+        let _ = writeln!(s, "\n### Decoys\n");
+        s.push_str("| Row | Pairs | Leak found (runs) | Decoy claimed (runs) | Pass |\n|---|---|---|---|---|\n");
+        for (row, d) in &g.decoys {
+            let _ = writeln!(
+                s,
+                "| {row} | {} | {}/{} | {}/{} | {} |",
+                d.pairs.join(", "),
+                d.leak.found_runs,
+                d.leak.runs,
+                d.decoy.claim_runs,
+                d.decoy.runs,
+                if d.pass { "yes" } else { "no" }
+            );
         }
     }
     let _ = writeln!(s, "\n### Per fixture\n");

@@ -394,6 +394,82 @@ fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
 }
 
 #[test]
+fn a_type_count_column_with_no_tie_is_accounted_for_by_the_residual() {
+    // The jni-order-codec shape: the probe column is tied to the finding, the instance
+    // counts of the entry type and of `byte[]` grow with it and tie to no finding (a
+    // generic type never ties; the entry type has no type tie in a live series).
+    let r = init("repository");
+    write_trend(
+        &r,
+        "T1",
+        "S1",
+        &[
+            "probe:CACHE",
+            "jvm.class:shop.codec.Entry.count",
+            "jvm.class:byte[].count",
+        ],
+    );
+    let disc = alloc_discriminator(&r, "T1", &["probe:CACHE"]);
+    let f = finding_citing(&r, &disc);
+    // Classify asks nothing of the counts.
+    assert!(trend_columns(&r.missing(&["--stage", "classify"])).is_empty());
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    // Final: the counts need the residual rows, and the printed fix says so.
+    let items = r.items(&["--final"]);
+    let mut ids: Vec<&str> = items
+        .iter()
+        .filter(|m| m["kind"] == "trend_column")
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        [
+            "T1:jvm.class:byte[].count",
+            "T1:jvm.class:shop.codec.Entry.count"
+        ]
+    );
+    let item = items
+        .iter()
+        .find(|m| m["id"] == "T1:jvm.class:shop.codec.Entry.count")
+        .unwrap();
+    let fix = item["fix"].as_str().unwrap();
+    assert!(fix.contains("dla gap S1 --residual"), "{item}");
+    assert!(!fix.contains("dla trend"), "{item}");
+    // Residual rows under their threshold lead to a passing state.
+    let row = |residual: f64| dla_core::coverage::ResidualRow {
+        series: Some("S1".into()),
+        region: dla_core::finding::Region::Heap,
+        total_slope: 10.0,
+        attributed_slope: 10.0 - residual,
+        residual,
+        unit: "bytes/iteration".into(),
+        threshold: 1.0,
+        open_item: None,
+    };
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row(0.5)])).unwrap();
+    let m = r.missing(&["--final"]);
+    assert!(trend_columns(&m).is_empty(), "{m:?}");
+    // Rows over their threshold with no resolved open item do not account for them.
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row(8.0)])).unwrap();
+    let m = r.missing(&["--final"]);
+    assert!(
+        trend_columns(&m).contains(&"T1:jvm.class:shop.codec.Entry.count".to_owned()),
+        "{m:?}"
+    );
+}
+
+#[test]
 fn the_total_of_a_summarize_series_is_accounted_for_by_its_tied_groups() {
     // A summarize-made series has no byte column, so the residual cannot account for its
     // total (`dla gap S6 --residual` is refused); the total is the sum of its groups.

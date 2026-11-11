@@ -37,7 +37,14 @@ METRIC_NAMES = (
     "trap_miss_rate",
     "trap_false_alarm_rate",
     "source_overclaim_rate",
+    "undiscriminated_refutations",
+    "uncited_findings",
+    "uncited_checklist_answers",
+    "dropped_rate",
 )
+# Metrics whose counts come from the ledger text, report.md and coverage.json (not from
+# the normalised findings).
+LEDGER_METRICS = ("uncited_findings", "uncited_checklist_answers", "dropped_rate")
 TRANSITION_STATES = {
     "confirmed": "confirmed",
     "strong": "strong",
@@ -247,6 +254,185 @@ def parse_ledger_full(path):
     return saw_added, findings, verifications, order
 
 
+ITEM_RE = re.compile(r"^O([0-9]+)\Z")
+
+
+def item_number(item_id):
+    """The trailing number of an open item id ("jvm/O12" is 12), or None."""
+    m = ITEM_RE.match(item_id.rsplit("/", 1)[-1])
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if n <= U64_MAX else None
+
+
+def ids_in(value, into):
+    if isinstance(value, list):
+        for e in value:
+            if isinstance(e, str) and e != "":
+                into.add(e)
+
+
+def scan_ledger(path):
+    """What the ledger text says that the finding replay does not keep (M7 metrics):
+    the evidence ids each finding cites (by key), the latest checklist answer of each item
+    as (unresolved, cited), the open items (key -> text) and the resolved open item keys."""
+    out = {"cited": {}, "answers": {}, "open_items": {}, "resolved": set()}
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return out
+    cited = out["cited"]
+    for raw in data.split(b"\n"):
+        try:
+            line = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        line = line.strip(ASCII_WS)
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        rtype = rec.get("type")
+        if not isinstance(rtype, str):
+            continue
+
+        def key_of(name):
+            v = rec.get(name)
+            return ledger_key(v, rec) if isinstance(v, str) else None
+
+        if rtype == "finding_added":
+            fin = rec.get("finding")
+            if not isinstance(fin, dict) or not isinstance(fin.get("id"), str):
+                continue
+            ids = set()
+            ids_in(fin.get("supports"), ids)
+            ids_in(fin.get("contradicts"), ids)
+            cited[ledger_key(fin["id"], rec)] = ids
+        elif rtype == "transition":
+            key = key_of("finding")
+            if key is not None and key in cited:
+                ids_in(rec.get("evidence"), cited[key])
+        elif rtype == "finding_merged":
+            canonical = key_of("canonical")
+            duplicate = key_of("duplicate")
+            if (
+                canonical is not None
+                and duplicate is not None
+                and canonical != duplicate
+                and canonical in cited
+                and duplicate in cited
+            ):
+                cited[canonical] |= cited.pop(duplicate)
+        elif rtype == "checklist_answer":
+            item = rec.get("item")
+            if not isinstance(item, str):
+                continue
+            ids = set()
+            ids_in(rec.get("evidence"), ids)
+            out["answers"][item] = (rec.get("status") == "unresolved", bool(ids))
+        elif rtype == "open_item":
+            key = key_of("id")
+            if key is not None:
+                text = rec.get("text")
+                out["open_items"][key] = text if isinstance(text, str) else ""
+        elif rtype == "open_item_resolved":
+            key = key_of("id")
+            if key is not None:
+                out["resolved"].add(key)
+    return out
+
+
+def report_is_complete(text):
+    """True when the first line of the report that starts with "Status:" is exactly
+    "Status: COMPLETE" (after trimming space, tab and carriage return)."""
+    for line in text.split("\n"):
+        line = line.strip(" \t\r")
+        if line.startswith("Status:"):
+            return line == "Status: COMPLETE"
+    return False
+
+
+def row_item_resolved(scan, item_id, region):
+    """The open item a coverage row names is resolved: it exists with a resolution, or (an id
+    without a worker prefix) a prefixed item of the same number about the same region is."""
+    if item_id in scan["open_items"] and item_id in scan["resolved"]:
+        return True
+    if "/" in item_id:
+        return False
+    n = item_number(item_id)
+    if n is None:
+        return False
+    tag = f" in {region} ("
+    return any(
+        "/" in k and item_number(k) == n and k in scan["resolved"] and tag in text
+        for k, text in scan["open_items"].items()
+    )
+
+
+def coverage_has_unresolved_residual(text, scan):
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return False
+    rows = doc.get("residual") if isinstance(doc, dict) else None
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        residual = row.get("residual")
+        threshold = row.get("threshold")
+        if not is_number(residual) or not is_number(threshold):
+            continue
+        if residual <= threshold:
+            continue
+        region = row.get("region")
+        region = region if isinstance(region, str) else ""
+        item = row.get("open_item")
+        if isinstance(item, str) and row_item_resolved(scan, item, region):
+            continue
+        return True
+    return False
+
+
+def read_text_opt(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def ledger_extra(run_dir, findings, keys):
+    """The M7 counts of a run whose findings come from the ledger: {metric: [num, den]}."""
+    scan = scan_ledger(run_dir / "ledger.jsonl")
+    out = {m: [0, 0] for m in LEDGER_METRICS}
+    for key, f in zip(keys, findings):
+        if f["hypothesis"]:
+            continue
+        out["uncited_findings"][1] += 1
+        if not scan["cited"].get(key):
+            out["uncited_findings"][0] += 1
+    for unresolved, cited in scan["answers"].values():
+        if unresolved:
+            continue
+        out["uncited_checklist_answers"][1] += 1
+        if not cited:
+            out["uncited_checklist_answers"][0] += 1
+    report = read_text_opt(run_dir / "report.md")
+    if report is not None and report_is_complete(report):
+        coverage = read_text_opt(run_dir / "coverage.json")
+        dropped = any(f["state"] == "open" for f in findings) or (
+            coverage is not None and coverage_has_unresolved_residual(coverage, scan)
+        )
+        out["dropped_rate"] = [1 if dropped else 0, 1]
+    return out
+
+
 def parse_findings_json(path):
     """Return the findings list, or None when the file is unusable."""
     try:
@@ -314,17 +500,29 @@ def load_findings(run_dir):
 
 def load_run(run_dir):
     """Apply source selection; return (source, findings, verification counts)."""
+    source, findings, verif, _ = load_run_extra(run_dir)
+    return source, findings, verif
+
+
+def load_run_extra(run_dir):
+    """Apply source selection; return (source, findings, verification counts, M7 counts)."""
+    zero = {m: [0, 0] for m in LEDGER_METRICS}
     ledger = run_dir / "ledger.jsonl"
     if ledger.is_file():
         saw_added, findings, verifications, keys = parse_ledger_full(ledger)
         if saw_added:
-            return "ledger", findings, verif_counts(findings, keys, verifications)
+            return (
+                "ledger",
+                findings,
+                verif_counts(findings, keys, verifications),
+                ledger_extra(run_dir, findings, keys),
+            )
     fj = run_dir / "findings.json"
     if fj.is_file():
         findings = parse_findings_json(fj)
         if findings is not None:
-            return "findings", findings, dict.fromkeys(VERIF_KEYS, 0)
-    return "none", [], dict.fromkeys(VERIF_KEYS, 0)
+            return "findings", findings, dict.fromkeys(VERIF_KEYS, 0), zero
+    return "none", [], dict.fromkeys(VERIF_KEYS, 0), zero
 
 
 def is_claim(f):
@@ -517,10 +715,28 @@ def evaluate_run(fixture, findings):
         )
         contrib["source_overclaim_rate"][0] += 1 if with_site else 0
 
+    refuted = [f for f in findings if f["state"] == "refuted"]
+    contrib["undiscriminated_refutations"][1] += len(refuted)
+    contrib["undiscriminated_refutations"][0] += sum(1 for f in refuted if not f["discriminator"])
+
+    if cat in LEAK_SET_CATEGORIES:
+        ids = [
+            str(leak.get("id"))
+            for leak, found, _, _ in statuses
+            if leak.get("confirmable", True) is not False and found
+        ]
+        outcome = "found:" + (",".join(ids) if ids else "none")
+    else:
+        outcome = "claim" if claims else "no-claim"
+
     stats = {
         "claim": claims,
         "rule_out": rule_outs,
         "leaks": leak_stats,
+        "outcome": outcome,
+        "all_found": all(
+            found for leak, found, _, _ in statuses if leak.get("confirmable", True) is not False
+        ),
     }
     return contrib, stats
 
@@ -587,7 +803,8 @@ def coverage_residuals(run_dir):
         if is_number(rv):
             r += rv
         if is_number(tv):
-            t += tv
+            # A shrinking region has no growth to explain: it must not lower the total.
+            t += max(tv, 0)
     return r, t
 
 
@@ -663,6 +880,10 @@ def grade_group(ablation, archetypes, runs, fixtures, incomplete=0):
     for r in runs:
         fx = fixtures[r["fixture"]]
         contrib, stats = evaluate_run(fx, r["findings"])
+        r["claim"] = stats["claim"]
+        r["all_found"] = stats["all_found"]
+        for m in LEDGER_METRICS:
+            contrib[m] = list(r["extra"][m])
         for m in METRIC_NAMES:
             per_idx[r["index"]][m][0] += contrib[m][0]
             per_idx[r["index"]][m][1] += contrib[m][1]
@@ -677,9 +898,15 @@ def grade_group(ablation, archetypes, runs, fixtures, incomplete=0):
                     str(lk.get("id")): {"found": 0, "flagged": 0, "grounded": 0}
                     for lk in (fx.get("leak") or [])
                 },
+                "tokens_total": 0,
+                "agreement": {"runs": 0, "outcomes": [], "unanimous": True},
             }
             fixture_blocks[r["fixture"]] = blk
         blk["runs"] += 1
+        blk["tokens_total"] += sum(
+            token_value(r["run_json"].get("usage"), key) for key in TOKEN_FIELDS
+        )
+        blk["agreement"]["outcomes"].append({"run": r["index"], "outcome": stats["outcome"]})
         blk["claim_runs"] += 1 if stats["claim"] else 0
         blk["rule_out_runs"] += 1 if stats["rule_out"] else 0
         for lid, st in stats["leaks"].items():
@@ -714,8 +941,66 @@ def grade_group(ablation, archetypes, runs, fixtures, incomplete=0):
     verification = verification_block(runs)
     if verification is not None:
         group["verification"] = verification
+    for blk in fixture_blocks.values():
+        outcomes = blk["agreement"]["outcomes"]
+        blk["agreement"]["runs"] = len(outcomes)
+        blk["agreement"]["unanimous"] = all(
+            a["outcome"] == b["outcome"] for a, b in zip(outcomes, outcomes[1:])
+        )
+    decoys = decoy_rows(runs, fixtures)
+    if decoys:
+        group["decoys"] = decoys
     group["fixtures"] = fixture_blocks
     return group
+
+
+def decoy_rows(runs, fixtures):
+    """The decoy and control result of every archetype row that has a pair among the graded
+    fixtures: the row is the cause of the confirmable leaks of an archetype-leak fixture with
+    a pair, and the pair is that fixture and the decoy it names."""
+    by_fixture = {}
+    for r in runs:
+        by_fixture.setdefault(r["fixture"], []).append(r)
+    rows = {}
+    for fx_id in sorted(by_fixture):
+        fx = fixtures[fx_id]
+        decoy = fx.get("pair")
+        if fx.get("category") != "archetype-leak" or not isinstance(decoy, str):
+            continue
+        leak_runs = by_fixture[fx_id]
+        found = sum(1 for r in leak_runs if r["all_found"])
+        decoy_runs = by_fixture.get(decoy, [])
+        claims = sum(1 for r in decoy_runs if r["claim"])
+        causes = sorted(
+            {
+                lk.get("cause")
+                for lk in (fx.get("leak") or [])
+                if lk.get("confirmable", True) is not False
+                and lk.get("cause") != "UNCLASSIFIED"
+            }
+        )
+        for cause in causes:
+            row = rows.setdefault(
+                cause,
+                {
+                    "pairs": [],
+                    "leak": {"found_runs": 0, "runs": 0},
+                    "decoy": {"claim_runs": 0, "runs": 0},
+                },
+            )
+            row["pairs"].append(f"{fx_id}/{decoy}")
+            row["leak"]["found_runs"] += found
+            row["leak"]["runs"] += len(leak_runs)
+            row["decoy"]["claim_runs"] += claims
+            row["decoy"]["runs"] += len(decoy_runs)
+    for row in rows.values():
+        row["pass"] = (
+            row["leak"]["runs"] > 0
+            and row["decoy"]["runs"] > 0
+            and row["leak"]["found_runs"] == row["leak"]["runs"]
+            and row["decoy"]["claim_runs"] == 0
+        )
+    return rows
 
 
 def share_entry(num, den):
@@ -802,7 +1087,7 @@ def grade(results, fixtures_dir):
                         continue  # not a finished run
                     load_fixture(fixtures_dir, fx_dir.name, cache)
                     run_json = load_run_json(rj)
-                    source, findings, verif = load_run(run_dir)
+                    source, findings, verif, extra = load_run_extra(run_dir)
                     groups.setdefault((abl.name, arch_name), []).append(
                         {
                             "fixture": fx_dir.name,
@@ -812,6 +1097,7 @@ def grade(results, fixtures_dir):
                             "source": source,
                             "findings": findings,
                             "verif": verif,
+                            "extra": extra,
                         }
                     )
     out_groups = []

@@ -1,7 +1,7 @@
 //! `dla-bench run`: headless Claude Code runs of the fixtures.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
@@ -21,6 +21,7 @@ use serde_json::Value;
 use crate::{
     Res,
     fixture::{FINDINGS_INSTRUCTIONS, UNATTENDED_NOTE, fixture_dirs, load_expected},
+    fixture_toolchain::{Host, Provided, Toolchain, observe, provide_all},
     guard,
     model::{Expected, RunJson, Usage},
 };
@@ -795,7 +796,7 @@ pub fn go_toolchain_dir_name(version: &str, os: &str, arch: &str) -> String {
 }
 
 /// The host module cache: `go env GOMODCACHE`, else `$HOME/go/pkg/mod`.
-fn host_go_modcache() -> Option<PathBuf> {
+pub fn host_go_modcache() -> Option<PathBuf> {
     let out = Command::new("go")
         .args(["env", "GOMODCACHE"])
         .output()
@@ -815,27 +816,35 @@ fn host_go_modcache() -> Option<PathBuf> {
 pub fn prefetch_go_toolchain() -> Option<PathBuf> {
     static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let name = go_toolchain_dir_name(GO_LEAK_TOOLCHAIN, std::env::consts::OS, std::env::consts::ARCH);
         let cache = host_go_modcache()?;
-        let dir = cache.join("golang.org").join(&name);
-        if dir.join("bin").is_dir() {
-            return Some(dir);
-        }
-        let fetched = Command::new("go")
-            .arg("version")
-            .env("GOTOOLCHAIN", GO_LEAK_TOOLCHAIN)
-            .env_remove("GOFLAGS")
-            .stdin(Stdio::null())
-            .output()
-            .is_ok_and(|o| o.status.success());
-        if fetched && dir.join("bin").is_dir() {
-            Some(dir)
-        } else {
+        let dir = prefetch_go_toolchain_with(Path::new("go"), &cache, GO_LEAK_TOOLCHAIN);
+        if dir.is_none() {
             eprintln!("warning: {GO_LEAK_TOOLCHAIN} could not be fetched; go/goroutineleak stays missing in the children");
-            None
         }
+        dir
     })
     .clone()
+}
+
+/// [`prefetch_go_toolchain`] for any release (`go1.22.12`) and any module cache: runs
+/// `GOTOOLCHAIN=<version> <go> version` in a directory without a `go.mod`, which downloads
+/// and unpacks the toolchain into `cache` when it is missing. Returns the unpacked directory.
+pub fn prefetch_go_toolchain_with(go: &Path, cache: &Path, version: &str) -> Option<PathBuf> {
+    let name = go_toolchain_dir_name(version, std::env::consts::OS, std::env::consts::ARCH);
+    let dir = cache.join("golang.org").join(&name);
+    if dir.join("bin").is_dir() {
+        return Some(dir);
+    }
+    let fetched = Command::new(go)
+        .arg("version")
+        .current_dir(std::env::temp_dir())
+        .env("GOTOOLCHAIN", version)
+        .env("GOMODCACHE", cache)
+        .env_remove("GOFLAGS")
+        .stdin(Stdio::null())
+        .output()
+        .is_ok_and(|o| o.status.success());
+    (fetched && dir.join("bin").is_dir()).then_some(dir)
 }
 
 /// Links the prefetched toolchain into a child's module cache, so `GOTOOLCHAIN=go1.27.0`
@@ -849,11 +858,11 @@ fn link_go_toolchain(cache: &Path) {
 }
 
 #[cfg(not(unix))]
-fn link_toolchain(_dir: &Path, _cache: &Path) {}
+pub fn link_toolchain(_dir: &Path, _cache: &Path) {}
 
 /// [`link_go_toolchain`] for a known unpacked toolchain directory.
 #[cfg(unix)]
-fn link_toolchain(dir: &Path, cache: &Path) {
+pub fn link_toolchain(dir: &Path, cache: &Path) {
     let (Some(name), Some(host)) = (
         dir.file_name().and_then(|n| n.to_str()),
         dir.parent().and_then(Path::parent),
@@ -1344,6 +1353,8 @@ struct Ctx<'a> {
     deny_read: Vec<PathBuf>,
     deny_write: Vec<PathBuf>,
     probe_prompt: Option<String>,
+    /// What the fixtures' `[toolchain]` tables need, by fixture.
+    toolchains: BTreeMap<String, Provided>,
 }
 
 fn run_dir_of(ctx: &Ctx, t: &Task) -> PathBuf {
@@ -1570,6 +1581,10 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
         fs::create_dir_all(cache.join(sub)).map_err(|e| format!("{}: {e}", cache.display()))?;
     }
     link_go_toolchain(&cache);
+    let provided = ctx.toolchains.get(&t.fixture);
+    if let Some(p) = provided {
+        p.link_go(&cache);
+    }
     let tmp = work.join("tmp");
     fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     let settings_path = work.join("settings.json");
@@ -1608,18 +1623,23 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     if let Some(p) = &plugin_dir {
         cmd.arg("--plugin-dir").arg(p);
     }
+    let mut env = child_env(
+        std::env::vars(),
+        &config,
+        &cache,
+        &tmp,
+        ctx.dla_bin
+            .as_deref()
+            .filter(|_| args.ablation.uses_binary()),
+        args,
+    );
+    if let Some(p) = provided {
+        p.apply(&mut env);
+    }
+    let toolchain = Some(observe(&env, &project, &t.expected)).filter(|v| !v.is_empty());
     cmd.current_dir(&project)
         .env_clear()
-        .envs(child_env(
-            std::env::vars(),
-            &config,
-            &cache,
-            &tmp,
-            ctx.dla_bin
-                .as_deref()
-                .filter(|_| args.ablation.uses_binary()),
-            args,
-        ))
+        .envs(env)
         .stdin(Stdio::null());
     let transcript_path = out_dir.join("transcript.jsonl");
     let stdout = fs::File::create(&transcript_path).map_err(|e| e.to_string())?;
@@ -1680,6 +1700,7 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
         error: error.clone(),
         incomplete_reason,
         stop_blocks,
+        toolchain,
     };
     let mut body = serde_json::to_string_pretty(&rj).map_err(|e| e.to_string())?;
     body.push('\n');
@@ -1922,6 +1943,15 @@ pub fn run(args: &RunArgs) -> Res<String> {
         Some(p) => Some(fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?),
         None => None,
     };
+    let toolchain_requests: Vec<(String, Toolchain)> = expected
+        .iter()
+        .filter_map(|(id, e)| e.toolchain.clone().map(|t| (id.clone(), t)))
+        .collect();
+    let toolchains = provide_all(
+        &Host::system(),
+        &work_root.join("toolchains"),
+        &toolchain_requests,
+    )?;
     let ctx = Ctx {
         args: &args,
         out_root: out_root.clone(),
@@ -1931,6 +1961,7 @@ pub fn run(args: &RunArgs) -> Res<String> {
         deny_read,
         deny_write,
         probe_prompt,
+        toolchains,
     };
     let earlier = finished_cost(&out_root, args.retry_errored);
     let shared = Shared {

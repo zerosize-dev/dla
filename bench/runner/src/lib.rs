@@ -3,12 +3,17 @@
 //! The grading rules are specified in `bench/GRADING.md` and the fixture
 //! contract in `bench/FIXTURES.md`; this crate implements both.
 
+pub mod calib;
+pub mod closecalls;
 pub mod compare;
 pub mod dynamic_cmd;
 pub mod fixture;
+pub mod fixture_toolchain;
+pub mod gates;
 pub mod grade;
 pub mod guard;
 pub mod gzip;
+pub mod metrics_ext;
 pub mod model;
 pub mod run;
 pub mod schema_cmd;

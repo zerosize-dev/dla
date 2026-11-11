@@ -1,0 +1,22 @@
+{
+ "findings": [
+  {
+   "site": "src/n.py:4",
+   "holder": "container-field",
+   "region": "heap",
+   "verdict": "not-a-leak",
+   "mechanism": "m",
+   "evidence": "e",
+   "discriminator": "plateaus after warm-up"
+  },
+  {
+   "site": "src/n.py:9",
+   "holder": "container-field",
+   "region": "heap",
+   "verdict": "not-a-leak",
+   "mechanism": "m",
+   "evidence": "e",
+   "discriminator": "  "
+  }
+ ]
+}

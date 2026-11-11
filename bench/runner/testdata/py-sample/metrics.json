@@ -3,8 +3,34 @@
     {
       "ablation": "full",
       "archetypes": "off",
+      "decoys": {
+        "L-COLLECT": {
+          "decoy": {
+            "claim_runs": 0,
+            "runs": 0
+          },
+          "leak": {
+            "found_runs": 2,
+            "runs": 2
+          },
+          "pairs": [
+            "jvm-order-cache/jvm-order-cache-bounded"
+          ],
+          "pass": false
+        }
+      },
       "fixtures": {
         "jvm-audit-chain": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              }
+            ],
+            "runs": 1,
+            "unanimous": true
+          },
           "category": "archetype-free",
           "claim_runs": 1,
           "leaks": {
@@ -15,9 +41,24 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 1
+          "runs": 1,
+          "tokens_total": 6612
         },
         "jvm-order-cache": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 3
+              }
+            ],
+            "runs": 2,
+            "unanimous": true
+          },
           "category": "archetype-leak",
           "claim_runs": 2,
           "leaks": {
@@ -28,9 +69,20 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 2
+          "runs": 2,
+          "tokens_total": 25652
         },
         "python-ingest-two-leaks": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L2",
+                "run": 2
+              }
+            ],
+            "runs": 1,
+            "unanimous": true
+          },
           "category": "multi-leak",
           "claim_runs": 1,
           "leaks": {
@@ -46,7 +98,8 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 1
+          "runs": 1,
+          "tokens_total": 13132
         }
       },
       "metrics": {
@@ -76,6 +129,33 @@
           ],
           "stdev": 0.0,
           "value": 1.0
+        },
+        "dropped_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         },
         "false_confirmation_rate": {
           "den": 0,
@@ -400,6 +480,87 @@
           ],
           "stdev": 0.0,
           "value": 0.0
+        },
+        "uncited_checklist_answers": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "uncited_findings": {
+          "den": 4,
+          "mean": 1.0,
+          "num": 4,
+          "per_run": [
+            {
+              "den": 2,
+              "num": 2,
+              "run": 1,
+              "value": 1.0
+            },
+            {
+              "den": 1,
+              "num": 1,
+              "run": 2,
+              "value": 1.0
+            },
+            {
+              "den": 1,
+              "num": 1,
+              "run": 3,
+              "value": 1.0
+            }
+          ],
+          "stdev": 0.0,
+          "value": 1.0
+        },
+        "undiscriminated_refutations": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         }
       },
       "unexplained_growth_share": {
@@ -445,15 +606,68 @@
     {
       "ablation": "full",
       "archetypes": "on",
+      "decoys": {
+        "L-COLLECT": {
+          "decoy": {
+            "claim_runs": 1,
+            "runs": 3
+          },
+          "leak": {
+            "found_runs": 2,
+            "runs": 3
+          },
+          "pairs": [
+            "jvm-order-cache/jvm-order-cache-bounded"
+          ],
+          "pass": false
+        }
+      },
       "fixtures": {
         "go-buffer-pool": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "no-claim",
+                "run": 1
+              },
+              {
+                "outcome": "claim",
+                "run": 2
+              },
+              {
+                "outcome": "no-claim",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "non-leak",
           "claim_runs": 1,
           "leaks": {},
           "rule_out_runs": 2,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 37560
         },
         "jvm-audit-chain": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              },
+              {
+                "outcome": "found:none",
+                "run": 2
+              },
+              {
+                "outcome": "found:L1",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "archetype-free",
           "claim_runs": 2,
           "leaks": {
@@ -464,9 +678,28 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 37866
         },
         "jvm-billing-private-repo": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "no-claim",
+                "run": 1
+              },
+              {
+                "outcome": "no-claim",
+                "run": 2
+              },
+              {
+                "outcome": "no-claim",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": true
+          },
           "category": "impossible",
           "claim_runs": 0,
           "leaks": {
@@ -477,9 +710,28 @@
             }
           },
           "rule_out_runs": 1,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 37870
         },
         "jvm-order-cache": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 2
+              },
+              {
+                "outcome": "found:none",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "archetype-leak",
           "claim_runs": 2,
           "leaks": {
@@ -490,16 +742,54 @@
             }
           },
           "rule_out_runs": 1,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 38175
         },
         "jvm-order-cache-bounded": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "no-claim",
+                "run": 1
+              },
+              {
+                "outcome": "no-claim",
+                "run": 2
+              },
+              {
+                "outcome": "claim",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "decoy-control",
           "claim_runs": 1,
           "leaks": {},
           "rule_out_runs": 1,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 38480
         },
         "native-frame-decoder": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 2
+              },
+              {
+                "outcome": "found:none",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "archetype-leak",
           "claim_runs": 2,
           "leaks": {
@@ -510,9 +800,28 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 39090
         },
         "python-ingest-two-leaks": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1,L2",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 2
+              },
+              {
+                "outcome": "found:L1",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "multi-leak",
           "claim_runs": 3,
           "leaks": {
@@ -528,7 +837,8 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 39396
         }
       },
       "metrics": {
@@ -558,6 +868,33 @@
           ],
           "stdev": 0.408248,
           "value": 0.5
+        },
+        "dropped_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         },
         "false_confirmation_rate": {
           "den": 6,
@@ -882,6 +1219,87 @@
           ],
           "stdev": 0.471405,
           "value": 0.333333
+        },
+        "uncited_checklist_answers": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "uncited_findings": {
+          "den": 22,
+          "mean": 1.0,
+          "num": 22,
+          "per_run": [
+            {
+              "den": 8,
+              "num": 8,
+              "run": 1,
+              "value": 1.0
+            },
+            {
+              "den": 9,
+              "num": 9,
+              "run": 2,
+              "value": 1.0
+            },
+            {
+              "den": 5,
+              "num": 5,
+              "run": 3,
+              "value": 1.0
+            }
+          ],
+          "stdev": 0.0,
+          "value": 1.0
+        },
+        "undiscriminated_refutations": {
+          "den": 5,
+          "mean": 0.0,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 3,
+              "num": 0,
+              "run": 1,
+              "value": 0.0
+            },
+            {
+              "den": 1,
+              "num": 0,
+              "run": 2,
+              "value": 0.0
+            },
+            {
+              "den": 1,
+              "num": 0,
+              "run": 3,
+              "value": 0.0
+            }
+          ],
+          "stdev": 0.0,
+          "value": 0.0
         }
       },
       "unexplained_growth_share": {
@@ -927,15 +1345,68 @@
     {
       "ablation": "no-skill",
       "archetypes": "on",
+      "decoys": {
+        "L-COLLECT": {
+          "decoy": {
+            "claim_runs": 1,
+            "runs": 3
+          },
+          "leak": {
+            "found_runs": 2,
+            "runs": 3
+          },
+          "pairs": [
+            "jvm-order-cache/jvm-order-cache-bounded"
+          ],
+          "pass": false
+        }
+      },
       "fixtures": {
         "go-buffer-pool": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "no-claim",
+                "run": 1
+              },
+              {
+                "outcome": "claim",
+                "run": 2
+              },
+              {
+                "outcome": "no-claim",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "non-leak",
           "claim_runs": 1,
           "leaks": {},
           "rule_out_runs": 2,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 37560
         },
         "jvm-audit-chain": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 2
+              },
+              {
+                "outcome": "found:none",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "archetype-free",
           "claim_runs": 2,
           "leaks": {
@@ -946,9 +1417,28 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 37866
         },
         "jvm-billing-private-repo": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "claim",
+                "run": 1
+              },
+              {
+                "outcome": "no-claim",
+                "run": 2
+              },
+              {
+                "outcome": "no-claim",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "impossible",
           "claim_runs": 1,
           "leaks": {
@@ -959,9 +1449,28 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 37870
         },
         "jvm-order-cache": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 2
+              },
+              {
+                "outcome": "found:none",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "archetype-leak",
           "claim_runs": 2,
           "leaks": {
@@ -972,16 +1481,54 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 38175
         },
         "jvm-order-cache-bounded": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "no-claim",
+                "run": 1
+              },
+              {
+                "outcome": "claim",
+                "run": 2
+              },
+              {
+                "outcome": "no-claim",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "decoy-control",
           "claim_runs": 1,
           "leaks": {},
           "rule_out_runs": 1,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 38480
         },
         "native-frame-decoder": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 2
+              },
+              {
+                "outcome": "found:none",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "archetype-leak",
           "claim_runs": 2,
           "leaks": {
@@ -992,9 +1539,28 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 39090
         },
         "python-ingest-two-leaks": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "found:L1,L2",
+                "run": 1
+              },
+              {
+                "outcome": "found:L1",
+                "run": 2
+              },
+              {
+                "outcome": "found:none",
+                "run": 3
+              }
+            ],
+            "runs": 3,
+            "unanimous": false
+          },
           "category": "multi-leak",
           "claim_runs": 2,
           "leaks": {
@@ -1010,7 +1576,8 @@
             }
           },
           "rule_out_runs": 0,
-          "runs": 3
+          "runs": 3,
+          "tokens_total": 39396
         }
       },
       "metrics": {
@@ -1040,6 +1607,33 @@
           ],
           "stdev": 0.408248,
           "value": 0.5
+        },
+        "dropped_rate": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
         },
         "false_confirmation_rate": {
           "den": 6,
@@ -1364,6 +1958,87 @@
           ],
           "stdev": 0.471405,
           "value": 0.333333
+        },
+        "uncited_checklist_answers": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "uncited_findings": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 2,
+              "value": null
+            },
+            {
+              "den": 0,
+              "num": 0,
+              "run": 3,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "undiscriminated_refutations": {
+          "den": 4,
+          "mean": 0.333333,
+          "num": 1,
+          "per_run": [
+            {
+              "den": 2,
+              "num": 0,
+              "run": 1,
+              "value": 0.0
+            },
+            {
+              "den": 1,
+              "num": 0,
+              "run": 2,
+              "value": 0.0
+            },
+            {
+              "den": 1,
+              "num": 1,
+              "run": 3,
+              "value": 1.0
+            }
+          ],
+          "stdev": 0.471405,
+          "value": 0.25
         }
       },
       "unexplained_growth_share": {
@@ -1411,15 +2086,41 @@
       "archetypes": "on",
       "fixtures": {
         "go-buffer-pool": {
+          "agreement": {
+            "outcomes": [
+              {
+                "outcome": "no-claim",
+                "run": 1
+              }
+            ],
+            "runs": 1,
+            "unanimous": true
+          },
           "category": "non-leak",
           "claim_runs": 0,
           "leaks": {},
           "rule_out_runs": 1,
-          "runs": 1
+          "runs": 1,
+          "tokens_total": 6510
         }
       },
       "metrics": {
         "archetype_free_recall": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "dropped_rate": {
           "den": 0,
           "mean": null,
           "num": 0,
@@ -1613,6 +2314,51 @@
           ],
           "stdev": null,
           "value": null
+        },
+        "uncited_checklist_answers": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "uncited_findings": {
+          "den": 0,
+          "mean": null,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 0,
+              "num": 0,
+              "run": 1,
+              "value": null
+            }
+          ],
+          "stdev": null,
+          "value": null
+        },
+        "undiscriminated_refutations": {
+          "den": 1,
+          "mean": 0.0,
+          "num": 0,
+          "per_run": [
+            {
+              "den": 1,
+              "num": 0,
+              "run": 1,
+              "value": 0.0
+            }
+          ],
+          "stdev": 0.0,
+          "value": 0.0
         }
       },
       "unexplained_growth_share": {

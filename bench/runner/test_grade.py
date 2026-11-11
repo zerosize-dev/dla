@@ -704,11 +704,11 @@ class StatisticsTest(EnvCase):
         self.assertEqual((m["num"], m["den"], m["value"], m["mean"], m["stdev"]), (0, 0, None, None, None))
         self.assertEqual(m["per_run"], [{"run": 1, "num": 0, "den": 0, "value": None}])
 
-    def test_all_thirteen_metrics_present(self):
+    def test_all_seventeen_metrics_present(self):
         self.env.run("t", findings=[])
         m = self.env.group()["metrics"]
         self.assertEqual(sorted(m), sorted(grade.METRIC_NAMES))
-        self.assertEqual(len(m), 13)
+        self.assertEqual(len(m), 17)
         for v in m.values():
             self.assertEqual(sorted(v), ["den", "mean", "num", "per_run", "stdev", "value"])
 
@@ -812,6 +812,12 @@ class UnexplainedGrowthTest(EnvCase):
         self.env.run("t", n=5, coverage="{broken")
         self.assertEqual(self.share(), {"value": 0.065, "runs": 2})   # 6.5 / 100
 
+    def test_a_shrinking_region_does_not_lower_the_total(self):
+        # The jni-order-codec shape: a growing heap row and a shrinking non-heap row.
+        self.env.run("t", coverage={"residual": [{"residual": 1448.0, "total_slope": 1448.0},
+                                                 {"residual": 0.0, "total_slope": -5.873}]})
+        self.assertEqual(self.share(), {"value": 1.0, "runs": 1})
+
     def test_zero_total_is_null_but_counts_runs(self):
         self.env.run("t", coverage={"residual": [{"residual": 0, "total_slope": 0}]})
         self.assertEqual(self.share(), {"value": None, "runs": 1})
@@ -828,12 +834,19 @@ class FixtureBlockTest(EnvCase):
         self.env.run("m", n=3, findings=[jf("a.py:1", "static/global", "not-a-leak", disc="d")])
         self.env.run("n", n=1, findings=[jf("q:1", None, "not-a-leak", disc="d")])
         fx = self.env.group()["fixtures"]
+        tokens = 10 + 5 + 100 + 7
         self.assertEqual(fx["m"], {
             "category": "multi-leak", "runs": 3, "claim_runs": 2, "rule_out_runs": 1,
             "leaks": {"L1": {"found": 2, "flagged": 2, "grounded": 1},
-                      "L2": {"found": 1, "flagged": 2, "grounded": 1}}})
+                      "L2": {"found": 1, "flagged": 2, "grounded": 1}},
+            "tokens_total": 3 * tokens,
+            "agreement": {"runs": 3, "unanimous": False, "outcomes": [
+                {"run": 1, "outcome": "found:L1"}, {"run": 2, "outcome": "found:L1"},
+                {"run": 3, "outcome": "found:none"}]}})
         self.assertEqual(fx["n"], {"category": "non-leak", "runs": 1, "claim_runs": 0,
-                                   "rule_out_runs": 1, "leaks": {}})
+                                   "rule_out_runs": 1, "leaks": {}, "tokens_total": tokens,
+                                   "agreement": {"runs": 1, "unanimous": True,
+                                                 "outcomes": [{"run": 1, "outcome": "no-claim"}]}})
 
 
 class GroupingAndErrorsTest(EnvCase):
@@ -1501,7 +1514,7 @@ class SourceOverclaimTest(EnvCase):
         fx = {"category": "archetype-leak", "leak": [owner_leak()]}
         self.assertEqual(grade.evaluate_run(fx, [])[0]["source_overclaim_rate"], [0, 0])
 
-    def test_thirteen_metrics_and_end_to_end_provenance(self):
+    def test_seventeen_metrics_and_end_to_end_provenance(self):
         e = self.env
         (e.fixtures / "art").mkdir()
         (e.fixtures / "art" / "expected.toml").write_text(
@@ -1515,7 +1528,7 @@ class SourceOverclaimTest(EnvCase):
             {"type": "finding_added", "finding": {"id": "F1", "owner": "quotes.RfqDesk.OPEN", "site": "q/R.java:1"}},
             {"type": "transition", "finding": "F1", "to": "strong"}))
         g = e.group()
-        self.assertEqual(len(g["metrics"]), 13)
+        self.assertEqual(len(g["metrics"]), 17)
         so = g["metrics"]["source_overclaim_rate"]
         self.assertEqual((so["num"], so["den"]), (1, 2))
         self.assertEqual(g["fixtures"]["art"]["worker_provenance"], {"L1": {"jvm": 1}})
@@ -1692,6 +1705,178 @@ class VerificationMetrics(unittest.TestCase):
             groups = {g["ablation"]: g for g in json.loads(out.read_text())["groups"]}
             self.assertIn("verification", groups["full"])
             self.assertNotIn("verification", groups["gates"])
+
+
+class M7MetricsTest(EnvCase):
+    """The metrics added in M7: citations, dropped work, refutations, decoys, agreement."""
+
+    COMPLETE = "# DLA report\n\nStatus: COMPLETE\n"
+
+    def setUp(self):
+        super().setUp()
+        self.env.fixture("lk", "archetype-leak", leak_toml("L1", "a.py:10", cause="L-COLLECT"), pair="dc")
+        self.env.fixture("dc", "decoy-control", '\n[[non_leak]]\nid = "N1"\ncause = "N-WARM"\ndiscriminator = "x"\n', pair="lk")
+
+    @staticmethod
+    def add(fid, site, supports=None, parent=None, worker=None):
+        f = {"id": fid, "site": site}
+        if supports is not None:
+            f["supports"] = supports
+        if parent:
+            f["parent"] = parent
+        rec = {"type": "finding_added", "finding": f}
+        if worker:
+            rec["worker"] = worker
+        return json.dumps(rec)
+
+    def metric(self, name, abl="gates"):
+        m = self.env.group(abl)["metrics"][name]
+        return m["num"], m["den"]
+
+    def test_uncited_findings(self):
+        self.env.run("lk", abl="gates", ledger_text=ledger(
+            self.add("F1", "a.py:10", ["E1"]), self.add("F2", "b.py:1", []),
+            json.dumps({"type": "finding_added", "finding": {"id": "F3", "contradicts": ["E2"]}}),
+            self.add("F1.n1", None, [], parent="F1")))
+        self.assertEqual(self.metric("uncited_findings"), (1, 3))
+
+    def test_a_transition_cites_evidence(self):
+        self.env.run("lk", abl="gates", ledger_text=ledger(
+            self.add("F1", "a.py:10", []),
+            json.dumps({"type": "transition", "finding": "F1", "to": "confirmed", "evidence": ["E4"]})))
+        self.assertEqual(self.metric("uncited_findings"), (0, 1))
+
+    def test_empty_and_non_string_ids_do_not_cite(self):
+        self.env.run("lk", abl="gates", ledger_text=ledger(json.dumps(
+            {"type": "finding_added", "finding": {"id": "F1", "supports": ["", 7, None]}})))
+        self.assertEqual(self.metric("uncited_findings"), (1, 1))
+
+    def test_a_merge_hands_the_evidence_to_the_canonical_finding(self):
+        a = self.add("F1", "x:1", [], worker="a")
+        b = self.add("F1", "x:1", ["E7"], worker="b")
+        merged = json.dumps({"type": "finding_merged", "canonical": "a/F1", "duplicate": "b/F1"})
+        self.env.run("lk", abl="gates", ledger_text=ledger(a, b, merged))
+        self.assertEqual(self.metric("uncited_findings"), (0, 1))
+
+    def test_checklist_answers(self):
+        def ans(item, status, ev):
+            return json.dumps({"type": "checklist_answer", "item": item, "status": status, "evidence": ev})
+        self.env.run("lk", abl="gates", ledger_text=ledger(
+            self.add("F1", "a.py:10", ["E1"]),
+            ans("intake.build", "answered", []), ans("intake.build", "answered", ["E4"]),
+            ans("intake.scope", "partial", []), ans("intake.target", "unresolved", [])))
+        self.assertEqual(self.metric("uncited_checklist_answers"), (1, 2))
+
+    def test_findings_json_runs_have_no_ledger_counts(self):
+        self.env.run("lk", abl="no-skill", findings=[jf("a.py:10", "static/global")])
+        self.assertEqual(self.metric("uncited_findings", "no-skill"), (0, 0))
+        self.assertEqual(self.metric("dropped_rate", "no-skill"), (0, 0))
+
+    def test_undiscriminated_refutations(self):
+        self.env.run("lk", abl="no-skill", findings=[
+            jf("a.py:10", None, "not-a-leak", disc="flat"), jf("b.py:1", None, "not-a-leak", disc=" "),
+            jf("c.py:1", None, "leak-confirmed")])
+        self.assertEqual(self.metric("undiscriminated_refutations", "no-skill"), (1, 2))
+        self.env.run("lk", abl="gates", ledger_text=ledger(
+            self.add("F1", "a.py:10", ["E1"]), trans("F1", "refuted")))
+        self.assertEqual(self.metric("undiscriminated_refutations"), (0, 1))
+
+    def test_dropped_rate(self):
+        good = ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed"))
+        cand = ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed"),
+                      self.add("F2", "b.py:1", ["E1"]))
+        incomplete = "# DLA report\n\nStatus: INCOMPLETE (1 open)\n"
+        d = self.env.run("lk", 1, abl="gates", ledger_text=good)
+        (d / "report.md").write_text(self.COMPLETE)
+        d = self.env.run("lk", 2, abl="gates", ledger_text=cand)
+        (d / "report.md").write_text(self.COMPLETE)
+        d = self.env.run("lk", 3, abl="gates", ledger_text=cand)
+        (d / "report.md").write_text(incomplete)
+        self.env.run("lk", 4, abl="gates", ledger_text=cand)  # no report at all
+        m = self.env.group("gates")["metrics"]["dropped_rate"]
+        self.assertEqual((m["num"], m["den"]), (1, 2))
+        self.assertEqual([(p["num"], p["den"]) for p in m["per_run"]], [(0, 1), (1, 1), (0, 0), (0, 0)])
+
+    def test_residual_rows_over_threshold_need_a_resolved_open_item(self):
+        base = [self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed")]
+        item = json.dumps({"type": "open_item", "id": "jvm/O1", "worker": "jvm",
+                           "text": "unexplained growth: 9 bytes/n in heap (S1); x"})
+        resolved = json.dumps({"type": "open_item_resolved", "id": "jvm/O1", "worker": "jvm"})
+
+        def cov(item_id, region="heap", residual=9.0):
+            return {"residual": [{"region": region, "residual": residual, "threshold": 5.0,
+                                  "open_item": item_id}]}
+
+        cases = [
+            (1, [], cov(None), 1),                       # over, no open item
+            (2, [item], cov("O1"), 1),                   # over, item not resolved
+            (3, [item, resolved], cov("O1"), 0),         # resolved under a worker prefix
+            (4, [item, resolved], cov("O1", "non-heap"), 1),  # item about another region
+            (5, [item, resolved], cov("O1", residual=5.0), 0),  # at the threshold
+            (6, [item, resolved], cov("O9"), 1),         # names an item that does not exist
+        ]
+        for n, extra, c, _ in cases:
+            d = self.env.run("lk", n, abl="gates", ledger_text=ledger(*base, *extra), coverage=c)
+            (d / "report.md").write_text(self.COMPLETE)
+        m = self.env.group("gates")["metrics"]["dropped_rate"]
+        self.assertEqual([p["num"] for p in m["per_run"]], [c[3] for c in cases])
+
+    def test_report_status(self):
+        self.assertTrue(grade.report_is_complete("# r\n\nStatus: COMPLETE\r\n"))
+        self.assertFalse(grade.report_is_complete("Status: INCOMPLETE (1 open)\nStatus: COMPLETE\n"))
+        self.assertFalse(grade.report_is_complete("Status: COMPLETE.\n"))
+        self.assertFalse(grade.report_is_complete("nothing\n"))
+
+    def test_decoy_rows(self):
+        hit = ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed"))
+        miss = ledger(self.add("F1", "z.py:1", ["E1"]), trans("F1", "confirmed"))
+        for n in (1, 2, 3):
+            self.env.run("lk", n, abl="gates", ledger_text=hit)
+            self.env.run("dc", n, abl="gates", ledger_text=ledger(self.add("F1", "q.py:1", ["E1"]), trans("F1", "refuted")))
+        row = self.env.group("gates")["decoys"]["L-COLLECT"]
+        self.assertEqual(row, {"pairs": ["lk/dc"], "leak": {"found_runs": 3, "runs": 3},
+                               "decoy": {"claim_runs": 0, "runs": 3}, "pass": True})
+        self.env.run("lk", 2, abl="gates", ledger_text=miss)
+        self.assertFalse(self.env.group("gates")["decoys"]["L-COLLECT"]["pass"])
+        self.env.run("lk", 2, abl="gates", ledger_text=hit)
+        self.env.run("dc", 3, abl="gates", ledger_text=ledger(self.add("F1", "q.py:1", ["E1"]), trans("F1", "confirmed")))
+        row = self.env.group("gates")["decoys"]["L-COLLECT"]
+        self.assertEqual(row["decoy"], {"claim_runs": 1, "runs": 3})
+        self.assertFalse(row["pass"])
+
+    def test_a_decoy_without_runs_does_not_pass_and_no_pair_means_no_block(self):
+        self.env.run("lk", abl="gates", ledger_text=ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed")))
+        row = self.env.group("gates")["decoys"]["L-COLLECT"]
+        self.assertEqual(row["decoy"], {"claim_runs": 0, "runs": 0})
+        self.assertFalse(row["pass"])
+        env2 = Env()
+        self.addCleanup(env2.close)
+        env2.fixture("solo", "archetype-leak", leak_toml("L1", "a.py:1"))
+        env2.run("solo", abl="gates", ledger_text=ledger(self.add("F1", "a.py:1", ["E1"]), trans("F1", "confirmed")))
+        self.assertNotIn("decoys", env2.group("gates"))
+
+    def test_agreement_and_tokens(self):
+        e = self.env
+        e.run("lk", 1, abl="gates", ledger_text=ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed")))
+        e.run("lk", 2, abl="gates", ledger_text=ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed")))
+        blk = e.group("gates")["fixtures"]["lk"]
+        self.assertEqual(blk["agreement"]["unanimous"], True)
+        self.assertEqual(blk["tokens_total"], 2 * (10 + 5 + 100 + 7))
+        e.run("lk", 3, abl="gates", ledger_text=ledger(self.add("F1", "q.py:1", ["E1"])))
+        blk = e.group("gates")["fixtures"]["lk"]
+        self.assertFalse(blk["agreement"]["unanimous"])
+        self.assertEqual([o["outcome"] for o in blk["agreement"]["outcomes"]],
+                         ["found:L1", "found:L1", "found:none"])
+
+    def test_the_m7_sample_matches_its_golden(self):
+        sample = Path(__file__).parent / "testdata" / "m7-sample"
+        with tempfile.TemporaryDirectory() as t:
+            out = Path(t) / "m.json"
+            rc = grade.main([str(sample / "results"), "--fixtures", str(sample / "fixtures"),
+                             "--out", str(out)])
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(out.read_text()),
+                             json.loads((sample / "expected-metrics.json").read_text()))
 
 
 if __name__ == "__main__":

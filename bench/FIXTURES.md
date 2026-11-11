@@ -157,6 +157,49 @@ Field rules:
   least one `[[non_leak]]`; `impossible` has `dynamic_confirmation = false`
   and every leak `confirmable = false`.
 
+## Toolchains
+
+A fixture whose outcome depends on a tool version names it in an optional
+`[toolchain]` table. Such a file has `schema_version = 2`; every other file
+keeps `schema_version = 1`, and the validator refuses either mismatch.
+
+```toml
+schema_version = 2
+# ...
+[toolchain]
+go = "1.22.12"      # exact versions: major.minor.patch
+# node = "22.12.0"
+# python = "3.14.4"
+# java = "21"       # or "21.0.4"; a JDK of that release must be installed
+```
+
+- Each tool needs a matching runtime in the fixture (`go` for `go`, `node` for
+  `node`, `python` for `python`, `java` for `jvm`). The table names at least one tool.
+  `project/go.mod` may not ask for a newer Go than `go`; an older `go` line on a
+  newer toolchain is how a Go pair separates "before" and "after" (the timer
+  behaviour of Go 1.23 follows the `go` line of `go.mod`).
+- `dla-bench run` fetches the tools once on the host, because the children have no
+  network, and puts them in `<work root>/toolchains/`:
+  - Go: `GOTOOLCHAIN=go<version> go version` unpacks the release into the host module
+    cache, the runner links it into each child's module cache, and the child gets
+    `GOTOOLCHAIN=go<version>` instead of `auto`.
+  - Node: the tarball and `SHASUMS256.txt` of `nodejs.org/dist` (or the URL in
+    `DLA_BENCH_NODE_DIST`), checked with SHA-256, unpacked, `bin/` first on `PATH`.
+  - Python: `uv python install --no-bin <version>` into the toolchain directory,
+    its `bin/` first on `PATH`.
+  - Java: a JDK of that release under `/usr/lib/jvm`, `/opt/java` or `/opt/jdk`
+    (matched through its `release` file); `JAVA_HOME` and `PATH` point to it. The
+    runner does not download JDKs.
+- A release that cannot be provided stops the run before any child starts, with the
+  fixture's name in the message; a version pair never runs on the wrong tool.
+- A `run.json` has a `toolchain` block with the versions the child saw (`go`,
+  `node`, `python`, `java`, `rust`; only the tools of the fixture's runtimes), read
+  with the child's own `PATH` and environment, for fixtures with and without a table.
+  The block is absent when no tool answers (a native fixture, or a tool that is not
+  installed).
+- `dla-bench dynamic` does not read the table: it runs the harness with the host's
+  tools.
+
 ## Categories
 
 | Category | What it is | A correct run ends with |

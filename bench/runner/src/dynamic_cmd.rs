@@ -158,6 +158,38 @@ pub struct DynamicArgs {
     /// produce it). On by default; `--check-dump-backed=false` turns it off.
     #[arg(long, default_value_t = CHECK_DUMP_BACKED)]
     pub check_dump_backed: bool,
+    /// Measured points after the warm-up, passed to `dla harness gen --iterations` (the
+    /// calibration grid; default: the harness default).
+    #[arg(long)]
+    pub iterations: Option<u32>,
+    /// Units of work added per point, passed to `dla harness gen --step` (default: the
+    /// harness default).
+    #[arg(long)]
+    pub step: Option<u64>,
+    /// Warm-up points, passed to `dla harness gen --warmup` (default: the harness default).
+    #[arg(long)]
+    pub warmup: Option<u32>,
+}
+
+/// The `harness gen` flags of this process's run, set once by [`run`]. A process runs one
+/// `dla-bench dynamic`, so the policy code reads them here instead of through every call.
+static GEN_FLAGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+impl DynamicArgs {
+    /// The `harness gen` flags these options give, in order.
+    pub fn gen_flags(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if let Some(n) = self.iterations {
+            v.extend(["--iterations".to_owned(), n.to_string()]);
+        }
+        if let Some(n) = self.step {
+            v.extend(["--step".to_owned(), n.to_string()]);
+        }
+        if let Some(n) = self.warmup {
+            v.extend(["--warmup".to_owned(), n.to_string()]);
+        }
+        v
+    }
 }
 
 /// Default of `--check-dump-backed`: on, because the policy runs the summarize steps
@@ -200,20 +232,12 @@ pub fn expected_failures(archetypes_off: bool) -> Vec<ExpectedFailure> {
 }
 
 /// Fixtures expected to fail; see [`ExpectedFailure`] and bench/README.md.
-pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[
-    ExpectedFailure {
-        fixture: "rust-tree-parent-links",
-        failure: "leak L1 (src/section.rs:27) is not confirmed",
-        reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
-        needs_archetypes: false,
-    },
-    ExpectedFailure {
-        fixture: "node-socket-heartbeat",
-        failure: "leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table",
-        reason: "the census classifies the `setInterval` timer at heartbeat.js:15 as `blocked-stack` (non-heap) and the policy takes that holder from the census entry at the site; the fixture expects the table the sessions register in (`registration-table`, heap). The per-point heap-graph run now observes `registration-table` for the column of `Session.recent` and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding itself (the sessions it keeps alive are held through the loopback socket events, not through a timer entry in the snapshots), and node-resources ties the timer group to the finding by site only, so no observed holder is available to correct the timer finding",
-        needs_archetypes: false,
-    },
-];
+pub const EXPECTED_FAILURES: &[ExpectedFailure] = &[ExpectedFailure {
+    fixture: "rust-tree-parent-links",
+    failure: "leak L1 (src/section.rs:27) is not confirmed",
+    reason: "the fixed policy confirms the `children` edge of the Rc cycle (section.rs:11) while the fixture expects the `parent` back-link (section.rs:27); choosing the edge to weaken needs reading the code, which the mechanical policy cannot do",
+    needs_archetypes: false,
+}];
 
 fn is_zero(n: &usize) -> bool {
     *n == 0
@@ -992,6 +1016,7 @@ fn make_harnesses(
     let mut ran = Vec::new();
     let mut missing = None;
     let run_dir = fx.run_dir().unwrap_or_default();
+    let gen_flags = GEN_FLAGS.get().cloned().unwrap_or_default();
     for lang in runtimes {
         let others: Vec<String> = read_workloads(&run_dir, fx.worker.as_deref())
             .into_iter()
@@ -1022,6 +1047,7 @@ fn make_harnesses(
             if let Some(w) = &workload {
                 args.extend(["--workload", w.as_str()]);
             }
+            args.extend(gen_flags.iter().map(String::as_str));
             let gen_out = fx.call_quiet(&args);
             if let Some(w) = gen_out.json["summary"]["workload"].as_str() {
                 tried.push(w.to_owned());
@@ -1858,6 +1884,10 @@ fn missing_dump_backends(run_dir: &Path) -> Vec<String> {
 }
 
 /// Residual over total of the residual evidence; `Err` when a row cannot be computed.
+///
+/// A region whose total slope is negative (the series shrinks there) has no residual to
+/// explain, and its negative total must not shrink the denominator: the share would pass 1.
+/// Each row therefore counts `max(total, 0)`.
 fn residual_share(view: &View) -> Result<Option<f64>, String> {
     let mut residual = 0.0;
     let mut total = 0.0;
@@ -1869,7 +1899,7 @@ fn residual_share(view: &View) -> Result<Option<f64>, String> {
                 return Err("a residual row has no numeric residual and total".to_owned());
             };
             residual += a;
-            total += b;
+            total += b.max(0.0);
         }
     }
     if rows == 0 {
@@ -2425,6 +2455,7 @@ pub fn run(args: &DynamicArgs) -> Res<String> {
     if !data_src.is_dir() {
         return Err(format!("{}: no data directory", data_src.display()));
     }
+    let _ = GEN_FLAGS.set(args.gen_flags());
     let work = env::temp_dir().join(format!("dla-bench-dynamic-{}", std::process::id()));
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).map_err(|e| format!("{}: {e}", work.display()))?;
@@ -2893,6 +2924,68 @@ mod tests {
         );
         assert_eq!(residual_share(&v), Ok(Some(0.125)));
         assert_eq!(residual_share(&View::default()), Ok(None));
+    }
+
+    #[derive(clap::Parser)]
+    struct Wrapper {
+        #[command(flatten)]
+        args: DynamicArgs,
+    }
+
+    #[test]
+    fn iterations_step_and_warmup_become_harness_gen_flags() {
+        use clap::Parser;
+        let none = Wrapper::parse_from(["x"]).args;
+        assert!(none.gen_flags().is_empty());
+        let all =
+            Wrapper::parse_from(["x", "--iterations", "12", "--step", "50", "--warmup", "2"]).args;
+        assert_eq!(
+            all.gen_flags(),
+            ["--iterations", "12", "--step", "50", "--warmup", "2"]
+        );
+        let one = Wrapper::parse_from(["x", "--warmup", "4"]).args;
+        assert_eq!(one.gen_flags(), ["--warmup", "4"]);
+    }
+
+    /// The jni-order-codec shape: a growing heap row and a shrinking non-heap row. The
+    /// negative total used to lower the denominator and push the share past 1.
+    #[test]
+    fn residual_share_ignores_a_negative_total() {
+        let v = view(
+            "resid-neg",
+            &[
+                r#"{"type":"evidence","evidence_id":"E1","authority":"test","kind":"residual","result":{"rows":[{"residual":1448.0,"total":1448.0},{"residual":0.0,"total":-5.873}]}}"#,
+            ],
+        );
+        assert_eq!(residual_share(&v), Ok(Some(1.0)));
+    }
+
+    /// Property: whatever the rows, residual <= total per row keeps the share in [0, 1].
+    #[test]
+    fn residual_share_stays_within_zero_and_one() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for case in 0..200 {
+            let mut lines = Vec::new();
+            for _ in 0..(1 + case % 5) {
+                let total = (next() - 0.4) * 1000.0;
+                let residual = if total > 0.0 { next() * total } else { 0.0 };
+                lines.push(format!(
+                    r#"{{"type":"evidence","evidence_id":"E{}","authority":"test","kind":"residual","result":{{"rows":[{{"residual":{residual},"total":{total}}}]}}}}"#,
+                    lines.len() + 1
+                ));
+            }
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let v = view("resid-prop", &refs);
+            if let Ok(Some(share)) = residual_share(&v) {
+                assert!((0.0..=1.0 + 1e-12).contains(&share), "case {case}: {share}");
+            }
+        }
     }
 
     fn col(name: &str, kind: &str) -> Col {

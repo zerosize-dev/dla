@@ -56,15 +56,26 @@
       }
     },
     "schema_version": {
-      "description": "Schema version; 1.",
+      "description": "Schema version; 1, or 2 for a fixture with a `[toolchain]` table.",
       "type": "integer",
       "format": "uint32",
-      "maximum": 1,
+      "maximum": 2,
       "minimum": 1
     },
     "task": {
       "description": "The task.",
       "$ref": "#/$defs/Task"
+    },
+    "toolchain": {
+      "description": "Exact tool versions the children run on; absent for the host's tools.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Toolchain"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -407,6 +418,41 @@
       "required": [
         "prompt"
       ]
+    },
+    "Toolchain": {
+      "description": "`[toolchain]`: exact versions, such as `go = \"1.22.12\"` or `python = \"3.14.4\"`.",
+      "type": "object",
+      "properties": {
+        "go": {
+          "description": "Go release, `major.minor.patch` (`1.22.12`). The child runs `GOTOOLCHAIN=go<version>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "java": {
+          "description": "JDK release, `17` or `21.0.4`; a JDK of that version must be installed on the host.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node": {
+          "description": "Node release, `major.minor.patch` (`22.12.0`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "python": {
+          "description": "CPython release, `major.minor.patch` (`3.14.4`), installed with `uv python install`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

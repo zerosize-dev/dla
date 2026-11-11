@@ -161,21 +161,25 @@ pub fn label(ctx: &Ctx, data: Option<&PathBuf>, a: LabelArgs) -> Res<Value> {
     Ok(out)
 }
 
-/// The runtime a finding belongs to: the language of its site first (a C finding of the jvm
-/// worker is native), then its worker prefix, the worker the command runs as, or the only
-/// runtime in the coverage manifest.
-fn finding_runtime(ctx: &Ctx, ledger: &Ledger, id: &FindingId) -> Option<String> {
-    // A worker names its own findings bare (F1 is jvm/F1).
-    let id = &ledger.own_finding_id(id);
+/// The runtime of the language a finding's site is written in (`native/src/lib.rs` is rust,
+/// a C file of the jvm worker is native), when the reference has rows for it.
+fn site_runtime(ledger: &Ledger, id: &FindingId) -> Option<(String, String)> {
     let known = |r: &str| archetypes::runtime_rows(r).is_some();
-    let from_site = ledger
-        .finding(id)
-        .and_then(|f| f.site.as_deref())
-        .and_then(|s| s.rsplit_once(':').map(|(file, _)| file))
-        .and_then(archetypes::runtime_of_file);
-    if let Some(r) = from_site.filter(|r| known(r)) {
-        return Some(r.to_owned());
-    }
+    let file = ledger
+        .finding(&ledger.own_finding_id(id))?
+        .site
+        .as_deref()?
+        .rsplit_once(':')?
+        .0
+        .to_owned();
+    let r = archetypes::runtime_of_file(&file).filter(|r| known(r))?;
+    Some((r.to_owned(), file))
+}
+
+/// The runtime of the worker a finding belongs to: its worker prefix, the worker the command
+/// runs as, or the only runtime in the coverage manifest.
+fn worker_runtime(ctx: &Ctx, id: &FindingId) -> Option<String> {
+    let known = |r: &str| archetypes::runtime_rows(r).is_some();
     if let Some(p) = id.prefix().filter(|p| known(p)) {
         return Some(p.to_owned());
     }
@@ -194,7 +198,8 @@ fn finding_runtime(ctx: &Ctx, ledger: &Ledger, id: &FindingId) -> Option<String>
 
 /// The refusal for an `L-*` label that has no row in the finding's runtime reference, unless
 /// a note says why none of the runtime's rows fits. Nothing is written. No check when the
-/// runtime cannot be determined.
+/// runtime cannot be determined. The runtime is the language of the finding's site first (a
+/// C finding of the jvm worker is native), then the worker's.
 fn runtime_refusal(
     ctx: &Ctx,
     ledger: &Ledger,
@@ -203,17 +208,54 @@ fn runtime_refusal(
     note: Option<&str>,
 ) -> Option<Failure> {
     let note = note.map(str::trim).is_some_and(|n| !n.is_empty());
-    let runtime = finding_runtime(ctx, ledger, id)?;
-    rows_refusal(&runtime, id, label, note)
+    // A worker names its own findings bare (F1 is jvm/F1).
+    let id = &ledger.own_finding_id(id);
+    let worker = worker_runtime(ctx, id);
+    match site_runtime(ledger, id) {
+        Some((runtime, file)) => {
+            let boundary = worker
+                .as_deref()
+                .filter(|w| *w != runtime)
+                .map(|w| (w, file.as_str()));
+            rows_refusal(&runtime, id, label, note, boundary)
+        }
+        None => rows_refusal(&worker?, id, label, note, None),
+    }
 }
 
-fn rows_refusal(runtime: &str, id: &FindingId, label: &str, note: bool) -> Option<Failure> {
+/// `boundary` is `(worker runtime, site file)` when the finding's site is in another
+/// runtime's code than the worker's: a library the program calls (JNI, FFI).
+fn rows_refusal(
+    runtime: &str,
+    id: &FindingId,
+    label: &str,
+    note: bool,
+    boundary: Option<(&str, &str)>,
+) -> Option<Failure> {
     if note || !label.starts_with("L-") || !dla_core::detectors::ARCHETYPE_IDS.contains(&label) {
         return None;
     }
     let rows = archetypes::runtime_rows(runtime)?;
     if rows.contains(&label) {
         return None;
+    }
+    if let Some((worker, file)) = boundary {
+        // The label may be right: the leak is in code of another language that the worker's
+        // program calls, and that language's reference lists other rows.
+        return Some(Failure::refuse(
+            dla_core::m6::codes::LABEL_RUNTIME_ROW,
+            format!(
+                "{id} is a {worker} worker finding whose site {file} is {runtime} code (a library the {worker} program calls through JNI or FFI), and {label} has no row in the {runtime} archetype reference (its rows: {}); {id} is not labelled",
+                rows.join(", ")
+            ),
+            format!(
+                "one of {} or UNCLASSIFIED, or --note naming the library boundary that keeps {label}",
+                rows.join(", ")
+            ),
+            format!(
+                "to keep {label} for code across the library boundary: dla ledger label {id} --as {label} --note \"library boundary: the {worker} program calls {runtime} code at {file}; <how the {runtime} code holds the resource and why none of the {runtime} rows fits>\"   or choose one of those rows or UNCLASSIFIED: dla ledger label {id} --suggest"
+            ),
+        ));
     }
     Some(Failure::refuse(
         dla_core::m6::codes::LABEL_RUNTIME_ROW,
@@ -480,7 +522,7 @@ mod tests {
 
     #[test]
     fn a_label_without_a_row_in_the_runtime_reference_is_refused_and_names_the_rows() {
-        let f = rows_refusal("native", &id(), "L-OWNERSHIP", false).unwrap();
+        let f = rows_refusal("native", &id(), "L-OWNERSHIP", false, None).unwrap();
         let r = &f.refusal;
         assert_eq!(r.code, "label-runtime-row");
         assert!(
@@ -493,7 +535,7 @@ mod tests {
             "{}",
             r.fix
         );
-        let f = rows_refusal("jvm", &id(), "L-WORKER", false).unwrap();
+        let f = rows_refusal("jvm", &id(), "L-WORKER", false, None).unwrap();
         assert!(
             f.refusal.message.contains("L-COLLECT, L-TLS, L-UNLOAD"),
             "{:?}",
@@ -502,13 +544,64 @@ mod tests {
     }
 
     #[test]
+    fn code_in_another_runtimes_library_is_refused_with_the_library_boundary_note() {
+        // jni-order-codec: a jvm worker finding at native/src/lib.rs:43 (rust code).
+        let f = rows_refusal(
+            "rust",
+            &"jvm/F19".parse().unwrap(),
+            "L-HANDLE",
+            false,
+            Some(("jvm", "native/src/lib.rs")),
+        )
+        .unwrap();
+        let r = &f.refusal;
+        assert_eq!(r.code, "label-runtime-row");
+        assert!(
+            r.message
+                .contains("library the jvm program calls through JNI or FFI")
+                && r.message.contains("native/src/lib.rs")
+                && r.message.contains("L-CYCLE, L-OWNERSHIP"),
+            "{}",
+            r.message
+        );
+        assert!(
+            r.missing.contains("--note naming the library boundary"),
+            "{}",
+            r.missing
+        );
+        assert!(
+            r.fix.contains("--as L-HANDLE --note \"library boundary:") && r.fix.contains("jvm/F19"),
+            "{}",
+            r.fix
+        );
+        // The note keeps the label.
+        assert!(
+            rows_refusal(
+                "rust",
+                &id(),
+                "L-HANDLE",
+                true,
+                Some(("jvm", "native/src/lib.rs"))
+            )
+            .is_none()
+        );
+        // The same runtime, or no worker, is not a boundary: the plain text.
+        let plain = rows_refusal("rust", &id(), "L-HANDLE", false, None).unwrap();
+        assert!(
+            !plain.refusal.message.contains("JNI"),
+            "{}",
+            plain.refusal.message
+        );
+    }
+
+    #[test]
     fn a_note_a_row_or_a_non_leak_label_is_not_refused() {
-        assert!(rows_refusal("native", &id(), "L-OWNERSHIP", true).is_none());
-        assert!(rows_refusal("jvm", &id(), "L-UNLOAD", false).is_none());
-        assert!(rows_refusal("native", &id(), "L-HANDLE", false).is_none());
-        assert!(rows_refusal("jvm", &id(), "N-WARM", false).is_none());
-        assert!(rows_refusal("jvm", &id(), "UNCLASSIFIED", false).is_none());
-        assert!(rows_refusal("cobol", &id(), "L-COLLECT", false).is_none());
+        assert!(rows_refusal("native", &id(), "L-OWNERSHIP", true, None).is_none());
+        assert!(rows_refusal("jvm", &id(), "L-UNLOAD", false, None).is_none());
+        assert!(rows_refusal("native", &id(), "L-HANDLE", false, None).is_none());
+        assert!(rows_refusal("jvm", &id(), "N-WARM", false, None).is_none());
+        assert!(rows_refusal("jvm", &id(), "UNCLASSIFIED", false, None).is_none());
+        assert!(rows_refusal("cobol", &id(), "L-COLLECT", false, None).is_none());
     }
 
     #[test]

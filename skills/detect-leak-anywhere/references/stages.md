@@ -112,6 +112,9 @@ column the discriminator did not test is not covered by it.
 
 A whole-process column (`os.*`, `cgroup.*`, `fd.*`, `jvm.*`, `go.*`, `node.*`, `py.*` and `native.*` totals,
 `metric:*/total`) is never tied to a finding, whatever evidence a finding cites: no one holder explains it.
+A JVM type-count column (`jvm.class:<type>.count`) that ties to no finding (a generic type such as `byte[]`
+never ties) is accounted for the same way. `dla trend` and the gate both print `dla gap S<n> --residual` for
+it. A type count tied only to undispositioned findings still needs their disposition.
 The classify gate does not ask for it. The final gate accounts for it through the residual rows: run `dla gap
 S<n> --residual`; the column is covered when the rows of its region are under their threshold, or over it with
 a resolved open item. A resolved open item that names the column and its trend also covers it.
@@ -374,7 +377,7 @@ confirms nothing.
 
 `dla gate check --final` is the gate before the report. It needs everything the stage gates need, plus:
 every confirmed or strong leak-side finding has an explanation; every enumerated candidate of every
-backend is dispositioned; every non-flat trend column is tied to a dispositioned finding (a whole-process column is accounted for by the residual rows instead); checklist
+backend is dispositioned; every non-flat trend column is tied to a dispositioned finding (a whole-process column and a JVM type-count column that ties to no finding are accounted for by the residual rows instead); checklist
 answers cite evidence that exists; no worker slice is unmerged; the integrity seals match (see
 `references/safety-and-effects.md`); the run is not aborted. Work through the `missing` list. What cannot be
 done is recorded: `dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do

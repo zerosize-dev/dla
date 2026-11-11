@@ -125,6 +125,21 @@ fn go_timers_follow_the_go_line_and_the_code() {
     let v = verdicts(&ctx);
     assert_eq!(get(&v, "go-timer-asynctimerchan-revert").1, Verdict::True);
 
+    // Go 1.27 removed the setting (go.dev/doc/godebug, Go 1.27 section): the revert row
+    // ends before 1.27, so a go line of 1.27 with the godebug line is no longer a match.
+    let (_d, ctx) = project(
+        &[
+            (
+                "go.mod",
+                "module m\n\ngo 1.27.0\n\ngodebug asynctimerchan=1\n",
+            ),
+            ("m.go", code),
+        ],
+        Some(&shipped()),
+    );
+    let v = verdicts(&ctx);
+    assert_eq!(get(&v, "go-timer-asynctimerchan-revert").1, Verdict::False);
+
     // Old go line but no timers in the code: not applicable.
     let (_d, ctx) = project(
         &[("go.mod", "module m\n\ngo 1.21\n"), ("m.go", "package m\n")],

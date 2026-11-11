@@ -23,6 +23,34 @@
     "groups"
   ],
   "$defs": {
+    "Agreement": {
+      "description": "Whether the runs of one fixture agree on its graded outcome.",
+      "type": "object",
+      "properties": {
+        "outcomes": {
+          "description": "The outcome of each run, in run order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RunOutcome"
+          }
+        },
+        "runs": {
+          "description": "Graded runs of the fixture.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "unanimous": {
+          "description": "All runs have the same outcome. A fixture with one run is unanimous.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "runs",
+        "outcomes",
+        "unanimous"
+      ]
+    },
     "Cost": {
       "description": "Cost.",
       "type": "object",
@@ -45,10 +73,94 @@
         "sum"
       ]
     },
+    "DecoyClaimRuns": {
+      "description": "Runs of the decoy fixtures of a row that claimed a leak.",
+      "type": "object",
+      "properties": {
+        "claim_runs": {
+          "description": "Runs with at least one claim.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runs": {
+          "description": "Graded runs of the decoy fixtures.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "claim_runs",
+        "runs"
+      ]
+    },
+    "DecoyLeakRuns": {
+      "description": "Runs of the leak fixtures of a row that found every confirmable leak.",
+      "type": "object",
+      "properties": {
+        "found_runs": {
+          "description": "Runs in which every confirmable leak was found.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runs": {
+          "description": "Graded runs of the leak fixtures.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "found_runs",
+        "runs"
+      ]
+    },
+    "DecoyRow": {
+      "description": "The decoy and control pair result of one archetype row.",
+      "type": "object",
+      "properties": {
+        "decoy": {
+          "description": "The decoy fixtures.",
+          "$ref": "#/$defs/DecoyClaimRuns"
+        },
+        "leak": {
+          "description": "The leak fixtures.",
+          "$ref": "#/$defs/DecoyLeakRuns"
+        },
+        "pairs": {
+          "description": "`<leak fixture>/<decoy fixture>` of every pair of the row.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pass": {
+          "description": "The leak was found in every run of the leak fixtures, no run of the decoys claimed a\nleak, and both sides have runs.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pairs",
+        "leak",
+        "decoy",
+        "pass"
+      ]
+    },
     "FixtureStats": {
       "description": "Per fixture statistics of a group.",
       "type": "object",
       "properties": {
+        "agreement": {
+          "description": "Whether the runs agree on the graded outcome of the fixture.",
+          "$ref": "#/$defs/Agreement",
+          "default": {
+            "outcomes": [],
+            "runs": 0,
+            "unanimous": false
+          }
+        },
         "category": {
           "description": "Fixture category.",
           "type": "string"
@@ -76,6 +188,13 @@
           "description": "Runs.",
           "type": "integer",
           "format": "uint64",
+          "minimum": 0
+        },
+        "tokens_total": {
+          "description": "Sum over the runs of `input + cache_creation + cache_read + output` tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
           "minimum": 0
         },
         "worker_provenance": {
@@ -110,6 +229,13 @@
         "archetypes": {
           "description": "`on` or `off`.",
           "type": "string"
+        },
+        "decoys": {
+          "description": "Decoy and control result of every archetype row that has a pair; absent when none.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DecoyRow"
+          }
         },
         "fixtures": {
           "description": "Per fixture statistics.",
@@ -188,6 +314,18 @@
           "description": "Found leaks over leaks with cause UNCLASSIFIED.",
           "$ref": "#/$defs/Ratio"
         },
+        "dropped_rate": {
+          "description": "Runs with a COMPLETE report that still hold an undispositioned candidate or a\nresidual over its threshold without a resolved open item, over runs with a COMPLETE\nreport. Absent in results graded before M7.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ratio"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "false_confirmation_rate": {
           "description": "Decoy and non-leak runs that claim.",
           "$ref": "#/$defs/Ratio"
@@ -243,6 +381,42 @@
         "trap_miss_rate": {
           "description": "Trap runs that miss a leak.",
           "$ref": "#/$defs/Ratio"
+        },
+        "uncited_checklist_answers": {
+          "description": "Checklist answers (other than `unresolved`) that cite no evidence id, over those\nanswers. Absent in results graded before M7.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ratio"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uncited_findings": {
+          "description": "Findings (not hypotheses) that cite no evidence id, over all such findings. Absent\nin results graded before M7.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ratio"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "undiscriminated_refutations": {
+          "description": "Refuted findings without a discriminator, over refuted findings. Absent in results\ngraded before M7.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ratio"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -349,6 +523,26 @@
         "num",
         "den",
         "per_run"
+      ]
+    },
+    "RunOutcome": {
+      "description": "The outcome of one run of a fixture, for the agreement check.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "description": "`found:<ids>` (the confirmable leaks found, comma separated, `none` when no leak was\nfound) for fixtures with a leak set, else `claim` or `no-claim`.",
+          "type": "string"
+        },
+        "run": {
+          "description": "Run index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "run",
+        "outcome"
       ]
     },
     "Share": {

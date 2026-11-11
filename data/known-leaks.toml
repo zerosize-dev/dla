@@ -21,15 +21,15 @@ remedy = "Call Stop on every Timer and Ticker (defer t.Stop()), or raise the go 
 id = "go-timer-asynctimerchan-revert"
 runtime = "go"
 library = "go"
-versions = ">=1.23"
+versions = ">=1.23, <1.27"
 when = { all = [
   { config = { key = "asynctimerchan", value = "1" } },
   { source_regex = 'time\.(?:NewTimer|NewTicker|Tick|After|AfterFunc)\(' },
 ] }
-effect = "GODEBUG asynctimerchan=1 restores the old timer behavior even when go.mod names Go 1.23.0 or later, so unstopped Timers and Tickers are not collected again."
+effect = "GODEBUG asynctimerchan=1 restores the old timer behavior even when go.mod names Go 1.23.0 or later, so unstopped Timers and Tickers are not collected again. Go 1.27 removed the setting, so the row ends before 1.27."
 holder = "registration-table"
 archetype = "L-REGISTER"
-evidence = "https://go.dev/doc/go1.23"
+evidence = "https://go.dev/doc/godebug"
 remedy = "Remove asynctimerchan=1 from the godebug lines and the GODEBUG environment, or stop every Timer and Ticker."
 
 [[leak]]

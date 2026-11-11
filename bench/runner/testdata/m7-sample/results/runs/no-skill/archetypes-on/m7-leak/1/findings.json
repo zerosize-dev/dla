@@ -1,0 +1,12 @@
+{
+ "findings": [
+  {
+   "site": "src/a.py:10",
+   "holder": "container-field",
+   "region": "heap",
+   "verdict": "leak-confirmed",
+   "mechanism": "m",
+   "evidence": "e"
+  }
+ ]
+}

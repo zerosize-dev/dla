@@ -339,6 +339,17 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    // The stop handler sweeps the live list under this lock: a process is spawned and
+    // registered while the handler cannot sweep, so the sweep sees it with its record, or the
+    // handler has already run and no process is started.
+    let live = live_handle();
+    let mut live_held = live.as_ref().and_then(|l| l.lock().ok());
+    if live_held.as_ref().is_some_and(|l| l.stopping) {
+        res.spawn_error = Some(format!(
+            "cannot start {program}: the run is being stopped by a signal"
+        ));
+        return Ok(res);
+    }
     let started = Instant::now();
     let child = match cmd.spawn() {
         Ok(c) => c,
@@ -358,8 +369,7 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         registered: false,
         done: false,
     };
-    live_add(pid, start_time.clone());
-    ctx.register_process(ProcessRecord {
+    let registered = ctx.register_process(ProcessRecord {
         pid,
         start_time: start_time.clone(),
         kind: ProcessKind::Harness,
@@ -369,8 +379,17 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         role: dla_core::state::ProcessRole::Started,
         worker: ctx.worker.clone(),
         cleanup: Vec::new(),
-    })?;
+    });
+    if let Err(e) = registered {
+        // The guard's drop takes the live lock: release it first.
+        drop(live_held);
+        return Err(e);
+    }
     guard.registered = true;
+    if let Some(l) = live_held.as_mut() {
+        l.procs.push((pid, start_time.clone()));
+    }
+    drop(live_held);
     let sampler = spec
         .sample
         .then(|| {
@@ -473,22 +492,25 @@ impl Drop for ChildGuard<'_> {
 // ---------------------------------------------------------------------------------------
 // Signals
 
-/// Processes of this run that are alive: `(pid, start_time)`.
-type Live = Arc<Mutex<Vec<(u32, Option<String>)>>>;
+/// The processes of this run that are alive, and whether a signal is stopping the run.
+#[derive(Default)]
+struct LiveState {
+    /// `(pid, start_time)` of each live process.
+    procs: Vec<(u32, Option<String>)>,
+    /// Set by the stop handler, under the lock, before it sweeps: nothing starts after it.
+    stopping: bool,
+}
+
+type Live = Arc<Mutex<LiveState>>;
 
 thread_local! {
     /// The live list of the run executing on this thread.
     static LIVE: RefCell<Option<Live>> = const { RefCell::new(None) };
 }
 
-fn live_add(pid: u32, start_time: Option<String>) {
-    LIVE.with(|l| {
-        if let Some(live) = l.borrow().as_ref()
-            && let Ok(mut v) = live.lock()
-        {
-            v.push((pid, start_time));
-        }
-    });
+/// The live list of the run executing on this thread.
+fn live_handle() -> Option<Live> {
+    LIVE.with(|l| l.borrow().clone())
 }
 
 fn live_remove(pid: u32) {
@@ -496,7 +518,7 @@ fn live_remove(pid: u32) {
         if let Some(live) = l.borrow().as_ref()
             && let Ok(mut v) = live.lock()
         {
-            v.retain(|(p, _)| *p != pid);
+            v.procs.retain(|(p, _)| *p != pid);
         }
     });
 }
@@ -513,7 +535,7 @@ struct SignalGuard {
 
 impl SignalGuard {
     fn install(ctx: &ToolCtx) -> Self {
-        let live: Live = Arc::new(Mutex::new(Vec::new()));
+        let live: Live = Arc::new(Mutex::new(LiveState::default()));
         LIVE.with(|l| *l.borrow_mut() = Some(Arc::clone(&live)));
         #[cfg(unix)]
         {
@@ -531,8 +553,11 @@ impl SignalGuard {
             let ctx = ctx.clone();
             let thread = thread::spawn(move || {
                 if let Some(sig) = signals.forever().next() {
-                    let procs = live.lock().map(|v| v.clone()).unwrap_or_default();
-                    for (pid, start) in &procs {
+                    // The lock stays held to the exit: a process being started waits for it,
+                    // then finds `stopping` set and does not start.
+                    let mut state = live.lock().unwrap_or_else(|e| e.into_inner());
+                    state.stopping = true;
+                    for (pid, start) in &state.procs {
                         kill_group(*pid);
                         let _ = ctx.mark_process_stopped(*pid, start.as_deref());
                     }
@@ -2359,6 +2384,57 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A signal that is stopping the run sets `stopping` under the live lock before it sweeps:
+    /// a process that is started afterwards would be missed by the sweep, so none starts.
+    #[cfg(unix)]
+    #[test]
+    fn no_process_starts_once_the_stop_handler_has_swept() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolCtx {
+            project: dir.path().to_path_buf(),
+            run_dir: dir.path().join(".dla/r1"),
+            run_id: "r1".into(),
+            source_commit: "abc".into(),
+            data_flag: None,
+            worker: None,
+        };
+        let live: Live = Arc::new(Mutex::new(LiveState {
+            procs: Vec::new(),
+            stopping: true,
+        }));
+        LIVE.with(|l| *l.borrow_mut() = Some(live));
+        let marker = dir.path().join("started");
+        let res = exec(
+            &ctx,
+            &ExecSpec {
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    format!("touch {}", marker.display()),
+                ],
+                cwd: dir.path().to_path_buf(),
+                env: Vec::new(),
+                log: dir.path().join("out.log"),
+                stderr_log: None,
+                timeout: Duration::from_secs(5),
+                sample: false,
+                command: "touch",
+                vgdb: None,
+            },
+        )
+        .unwrap();
+        LIVE.with(|l| *l.borrow_mut() = None);
+        assert!(res.pid.is_none());
+        assert!(
+            res.spawn_error
+                .as_deref()
+                .is_some_and(|e| e.contains("being stopped by a signal")),
+            "{:?}",
+            res.spawn_error
+        );
+        assert!(!marker.exists(), "the process ran");
+    }
 
     #[test]
     fn tokens_are_replaced_everywhere_they_appear() {

@@ -1,0 +1,17 @@
+schema_version = 1
+id = "m7-leak"
+runtime = "python"
+category = "archetype-leak"
+pair = "m7-decoy"
+dynamic_confirmation = true
+
+[task]
+prompt = "The process grows."
+
+[[leak]]
+id = "L1"
+site = "src/a.py:10"
+holder = "container-field"
+region = "heap"
+cause = "L-COLLECT"
+

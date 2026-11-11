@@ -355,6 +355,114 @@
           ],
           "mean": 0.222222,
           "stdev": 0.31427
+        },
+        "undiscriminated_refutations": {
+          "num": 0,
+          "den": 1,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "uncited_findings": {
+          "num": 9,
+          "den": 9,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 3,
+              "den": 3,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 2,
+              "den": 2,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "uncited_checklist_answers": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "dropped_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
         }
       },
       "unexplained_growth_share": {
@@ -402,7 +510,26 @@
           "runs": 3,
           "claim_runs": 1,
           "rule_out_runs": 1,
-          "leaks": {}
+          "leaks": {},
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "claim"
+              },
+              {
+                "run": 3,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": false
+          }
         },
         "art-series": {
           "category": "archetype-leak",
@@ -420,6 +547,25 @@
             "L1": {
               "jvm": 1
             }
+          },
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:none"
+              },
+              {
+                "run": 3,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": false
           }
         },
         "art-single": {
@@ -433,6 +579,21 @@
               "flagged": 1,
               "grounded": 0
             }
+          },
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 2,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "claim"
+              },
+              {
+                "run": 2,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": false
           }
         },
         "multi": {
@@ -459,6 +620,21 @@
             "L2": {
               "rust": 1
             }
+          },
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 2,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1,L2"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": false
           }
         },
         "sym": {
@@ -466,7 +642,18 @@
           "runs": 1,
           "claim_runs": 0,
           "rule_out_runs": 0,
-          "leaks": {}
+          "leaks": {},
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
+          }
         }
       }
     }

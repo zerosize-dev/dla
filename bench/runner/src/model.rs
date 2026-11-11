@@ -5,6 +5,11 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::{
+    fixture_toolchain::{RunToolchain, Toolchain},
+    metrics_ext::{Agreement, DecoyRow},
+};
+
 /// Runtime of a fixture.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -292,8 +297,8 @@ pub struct NonLeak {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Expected {
-    /// Schema version; 1.
-    #[schemars(range(min = 1, max = 1))]
+    /// Schema version; 1, or 2 for a fixture with a `[toolchain]` table.
+    #[schemars(range(min = 1, max = 2))]
     pub schema_version: u32,
     /// Same as the directory name.
     pub id: String,
@@ -312,6 +317,9 @@ pub struct Expected {
     pub pair: Option<String>,
     /// False when no harness can run here.
     pub dynamic_confirmation: bool,
+    /// Exact tool versions the children run on; absent for the host's tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<Toolchain>,
     /// The task.
     pub task: Task,
     /// Expected leaks.
@@ -413,6 +421,10 @@ pub struct RunJson {
     /// `state.json` was collected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_blocks: Option<u32>,
+    /// The tool versions the child saw (the tools of the fixture's runtimes); absent when none
+    /// could be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolchain: Option<RunToolchain>,
 }
 
 /// A ratio metric.
@@ -476,6 +488,23 @@ pub struct Metrics {
     /// results graded before the metric existed.
     #[serde(default)]
     pub source_overclaim_rate: Option<Ratio>,
+    /// Refuted findings without a discriminator, over refuted findings. Absent in results
+    /// graded before M7.
+    #[serde(default)]
+    pub undiscriminated_refutations: Option<Ratio>,
+    /// Findings (not hypotheses) that cite no evidence id, over all such findings. Absent
+    /// in results graded before M7.
+    #[serde(default)]
+    pub uncited_findings: Option<Ratio>,
+    /// Checklist answers (other than `unresolved`) that cite no evidence id, over those
+    /// answers. Absent in results graded before M7.
+    #[serde(default)]
+    pub uncited_checklist_answers: Option<Ratio>,
+    /// Runs with a COMPLETE report that still hold an undispositioned candidate or a
+    /// residual over its threshold without a resolved open item, over runs with a COMPLETE
+    /// report. Absent in results graded before M7.
+    #[serde(default)]
+    pub dropped_rate: Option<Ratio>,
 }
 
 /// Unexplained growth share.
@@ -580,6 +609,12 @@ pub struct FixtureStats {
     /// finding of each worker. Absent when no chosen finding has a worker.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub worker_provenance: BTreeMap<String, BTreeMap<String, u64>>,
+    /// Sum over the runs of `input + cache_creation + cache_read + output` tokens.
+    #[serde(default)]
+    pub tokens_total: u64,
+    /// Whether the runs agree on the graded outcome of the fixture.
+    #[serde(default)]
+    pub agreement: Agreement,
 }
 
 /// A count over a count.
@@ -628,6 +663,9 @@ pub struct Group {
     /// Verification metrics; absent when no run has a verification record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<VerificationStats>,
+    /// Decoy and control result of every archetype row that has a pair; absent when none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub decoys: BTreeMap<String, DecoyRow>,
     /// Per fixture statistics.
     pub fixtures: BTreeMap<String, FixtureStats>,
 }

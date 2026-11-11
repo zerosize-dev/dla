@@ -277,6 +277,90 @@
           ],
           "mean": null,
           "stdev": null
+        },
+        "undiscriminated_refutations": {
+          "num": 0,
+          "den": 1,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "uncited_findings": {
+          "num": 5,
+          "den": 5,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "uncited_checklist_answers": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "dropped_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
         }
       },
       "unexplained_growth_share": {
@@ -354,6 +438,21 @@
               "flagged": 2,
               "grounded": 2
             }
+          },
+          "tokens_total": 42,
+          "agreement": {
+            "runs": 2,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": true
           }
         },
         "ver-two": {
@@ -380,6 +479,17 @@
             "L2": {
               "jvm": 1
             }
+          },
+          "tokens_total": 21,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1,L2"
+              }
+            ],
+            "unanimous": true
           }
         }
       }
@@ -582,6 +692,66 @@
           ],
           "mean": null,
           "stdev": null
+        },
+        "undiscriminated_refutations": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "uncited_findings": {
+          "num": 1,
+          "den": 1,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "uncited_checklist_answers": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "dropped_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
         }
       },
       "unexplained_growth_share": {
@@ -635,6 +805,17 @@
               "flagged": 1,
               "grounded": 1
             }
+          },
+          "tokens_total": 21,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": true
           }
         }
       }

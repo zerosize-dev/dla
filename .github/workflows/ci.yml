@@ -220,79 +220,201 @@ jobs:
         shell: bash
         run: tests/shim/run.sh
 
-  plugin-eval:
-    name: plugin eval smoke subset
+  # Integration suite: dla runs inside microVMs through rightsize (microsandbox
+  # backend). No model call and no credential is involved. The VM jobs need
+  # hardware virtualization: ubuntu-latest exposes /dev/kvm, windows-2025 has the
+  # Windows Hypervisor Platform. macOS runners cannot nest VMs, so macOS has no
+  # job here. The guests are Linux, so every job uses the same static musl dla.
+  it-build:
+    name: integration suite, build the static dla
     runs-on: ubuntu-latest
-    # Model calls cost money, so this job runs only on pushes and on pull
-    # requests from this repository, and only when the secret is available.
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    env:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - name: Check for the API key
-        id: key
-        run: |
-          if [ -n "$ANTHROPIC_API_KEY" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::ANTHROPIC_API_KEY is not set; skipping the plugin eval smoke subset"
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/checkout@v5
-        if: steps.key.outputs.available == 'true'
-      - uses: actions/setup-node@v5
-        if: steps.key.outputs.available == 'true'
-        with:
-          node-version: "22"
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.key.outputs.available == 'true'
+        with:
+          targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
-        if: steps.key.outputs.available == 'true'
-      - name: Install Claude Code CLI
-        if: steps.key.outputs.available == 'true'
-        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
-      - name: Install the sandbox prerequisites
-        if: steps.key.outputs.available == 'true'
+        with:
+          key: it-musl
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build dla for the guests
+        run: cargo build --release --locked -p dla-cli --target x86_64-unknown-linux-musl
+      - name: Lint the integration tests with the VM feature
+        run: cargo clippy --locked -p dla-it --features sandbox-it --all-targets -- -D warnings
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dla-it-bin
+          path: target/x86_64-unknown-linux-musl/release/dla
+          if-no-files-found: error
+
+  it-linux:
+    name: integration suite (ubuntu, microVM)
+    needs: it-build
+    runs-on: ubuntu-latest # GitHub-hosted runners expose /dev/kvm
+    timeout-minutes: 60
+    env:
+      RIGHTSIZE_BACKEND: microsandbox
+      DLA_IT_REQUIRE_VM: "1"
+      DLA_IT_BIN_DIR: ${{ github.workspace }}/dla-it-bin
+      DLA_IT_OUT: ${{ github.workspace }}/dla-it-out
+    steps:
+      - uses: actions/checkout@v5
+      - name: Enable KVM access
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat
-          # Ubuntu 24.04 restricts unprivileged user namespaces, which bubblewrap needs.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Build dla
-        if: steps.key.outputs.available == 'true'
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: it-linux
+      - uses: actions/download-artifact@v5
+        with:
+          name: dla-it-bin
+          path: dla-it-bin
+      # Image pulls are rate limited on shared runner addresses, so the image
+      # cache grows from run to run. The msb install is cached too, keyed on a
+      # hash of crates/dla-it/Cargo.toml, where the rightsize-msb version is pinned.
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.microsandbox/cache
+          key: dla-it-msb-images-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: dla-it-msb-images-${{ runner.os }}-
+      - id: msb-install
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/rightsize/msb
+          key: dla-it-msb-install-${{ runner.os }}-${{ hashFiles('crates/dla-it/Cargo.toml') }}
+      - name: Run the suite
+        shell: bash
         run: |
-          # Build outside the checkout and place only the binary where the shim looks
-          # for a development build: the eval refuses a plugin directory that holds
-          # hard-linked files, and cargo's target directory is full of them.
-          CARGO_TARGET_DIR="$RUNNER_TEMP/dla-target" cargo build -p dla-cli
-          mkdir -p target/debug
-          cp "$RUNNER_TEMP/dla-target/debug/dla" target/debug/dla
-      - name: Run the smoke subset
-        if: steps.key.outputs.available == 'true'
-        # Informational until dla ledger confirm exists (M3): before then the
-        # leak case cannot reach a confirmed finding, so no score threshold.
-        env:
-          DLA_BENCH_MODEL: ${{ vars.DLA_BENCH_MODEL }}
+          set -o pipefail
+          mkdir -p "$DLA_IT_OUT"
+          cargo test -p dla-it --features sandbox-it -- --nocapture 2>&1 | tee "$DLA_IT_OUT/it-output.log"
+      # Counts the agent-relay retry notes the backend writes to stderr, so a run
+      # shows how often the retry fires even when every test passed. The step never
+      # fails the job (a grep that finds nothing exits 1, hence the `|| true`).
+      - name: Count agent-relay retries
+        if: always()
+        shell: bash
         run: |
-          model_args=()
-          if [ -n "${DLA_BENCH_MODEL:-}" ]; then model_args=(--model "$DLA_BENCH_MODEL"); fi
-          claude plugin eval . \
-            --eval-dir bench/evals \
-            --tag smoke \
-            --scaffold \
-            --allow-tools Bash \
-            --ablation none \
-            --trust-plugin \
-            --no-publish \
-            --max-cost-usd 15 \
-            "${model_args[@]}" \
-            --json "$RUNNER_TEMP/plugin-eval.json"
-      - name: Upload the eval result
-        if: always() && steps.key.outputs.available == 'true'
+          count() { grep 'agent-relay retry:' "$DLA_IT_OUT/it-output.log" 2>/dev/null | grep -c -F -- "$1" || true; }
+          echo "::notice title=agent-relay retry::fired $(count '(attempt 1 of 2)'), booted on attempt 2 $(count 'booted on attempt 2'), gave up $(count '(attempt 2 of 2); giving up')"
+      - name: Purge the image cache if it was corrupted
+        if: always()
+        shell: bash
+        run: |
+          if grep -q "cache error at .*No such file" "$DLA_IT_OUT/it-output.log" 2>/dev/null; then
+            echo "image cache corruption detected, purging before save"
+            rm -rf ~/.microsandbox/cache
+          fi
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ~/.microsandbox/cache
+          key: dla-it-msb-images-${{ runner.os }}-${{ github.run_id }}
+      - name: Check that the msb install is complete
+        id: msb-install-complete
+        if: always() && steps.msb-install.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          if ls ~/.cache/rightsize/msb/*/bin/msb* >/dev/null 2>&1; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/cache/save@v4
+        if: always() && steps.msb-install-complete.outputs.complete == 'true'
+        with:
+          path: ~/.cache/rightsize/msb
+          key: dla-it-msb-install-${{ runner.os }}-${{ hashFiles('crates/dla-it/Cargo.toml') }}
+      - name: Upload the recorded facts and logs
+        if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: plugin-eval-smoke
-          path: |
-            ${{ runner.temp }}/plugin-eval.json
-            bench/evals/results/
+          name: dla-it-linux
+          path: dla-it-out
+          if-no-files-found: ignore
+
+  # WHP on windows-2025 is already enabled on the hosted image. The job is not
+  # required: microsandbox on Windows is newer, and concurrent msb runs hit an
+  # SQLite race there, so the tests run one at a time.
+  it-windows:
+    name: integration suite (windows-2025, WHP)
+    needs: it-build
+    runs-on: windows-2025
+    continue-on-error: true
+    timeout-minutes: 60
+    env:
+      RIGHTSIZE_BACKEND: microsandbox
+      DLA_IT_REQUIRE_VM: "1"
+      DLA_IT_BIN_DIR: ${{ github.workspace }}/dla-it-bin
+      DLA_IT_OUT: ${{ github.workspace }}/dla-it-out
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: it-windows
+      - uses: actions/download-artifact@v5
+        with:
+          name: dla-it-bin
+          path: dla-it-bin
+      # Same caches as the Linux job, at the Windows paths of msb.
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.microsandbox/cache
+          key: dla-it-msb-images-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: dla-it-msb-images-${{ runner.os }}-
+      - id: msb-install
+        uses: actions/cache/restore@v4
+        with:
+          path: ~\AppData\Local\rightsize\msb
+          key: dla-it-msb-install-${{ runner.os }}-${{ hashFiles('crates/dla-it/Cargo.toml') }}
+      - name: Run the suite
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$DLA_IT_OUT"
+          cargo test -p dla-it --features sandbox-it -- --nocapture --test-threads=1 2>&1 | tee "$DLA_IT_OUT/it-output.log"
+      # Counts the agent-relay retry notes the backend writes to stderr, so a run
+      # shows how often the retry fires even when every test passed. The step never
+      # fails the job (a grep that finds nothing exits 1, hence the `|| true`).
+      - name: Count agent-relay retries
+        if: always()
+        shell: bash
+        run: |
+          count() { grep 'agent-relay retry:' "$DLA_IT_OUT/it-output.log" 2>/dev/null | grep -c -F -- "$1" || true; }
+          echo "::notice title=agent-relay retry::fired $(count '(attempt 1 of 2)'), booted on attempt 2 $(count 'booted on attempt 2'), gave up $(count '(attempt 2 of 2); giving up')"
+      - name: Purge the image cache if it was corrupted
+        if: always()
+        shell: bash
+        run: |
+          if grep -q "cache error at .*No such file" "$DLA_IT_OUT/it-output.log" 2>/dev/null; then
+            echo "image cache corruption detected, purging before save"
+            rm -rf ~/.microsandbox/cache
+          fi
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ~/.microsandbox/cache
+          key: dla-it-msb-images-${{ runner.os }}-${{ github.run_id }}
+      - name: Check that the msb install is complete
+        id: msb-install-complete
+        if: always() && steps.msb-install.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          if ls ~/AppData/Local/rightsize/msb/*/bin/msb* >/dev/null 2>&1; then
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/cache/save@v4
+        if: always() && steps.msb-install-complete.outputs.complete == 'true'
+        with:
+          path: ~\AppData\Local\rightsize\msb
+          key: dla-it-msb-install-${{ runner.os }}-${{ hashFiles('crates/dla-it/Cargo.toml') }}
+      - name: Upload the recorded facts and logs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: dla-it-windows
+          path: dla-it-out
           if-no-files-found: ignore

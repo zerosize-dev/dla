@@ -52,6 +52,50 @@ use crate::{
 /// heap snapshot reader.
 const HOLDER_EVIDENCE_TOOLS: [&str; 2] = ["dla-hprof", "dla-v8-snapshot"];
 
+/// The Node resources reader. Its growth evidence observes the timer table, so it may back a
+/// change to `registration-table` (and to no other holder).
+const TIMER_EVIDENCE_TOOL: &str = "node-resources";
+
+/// True for the name of a live timer or listener group of the Node resources reader
+/// (`group:handle/<type>@<site>`): the groups of a registration table.
+pub fn is_timer_table_group(column: &str) -> bool {
+    let Some(kind) = column
+        .strip_prefix("group:handle/")
+        .and_then(|r| r.split('@').next())
+    else {
+        return false;
+    };
+    let lower = kind.to_ascii_lowercase();
+    lower == "timeout" || lower == "timerwrap" || lower.contains("listener")
+}
+
+/// True for a `file:line` site in a JavaScript or TypeScript file: the only findings the Node
+/// resources reader can observe.
+fn is_node_site(site: &str) -> bool {
+    let file = site.rsplit_once(':').map_or(site, |(f, _)| f);
+    ["js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx"]
+        .iter()
+        .any(|e| file.rsplit_once('.').is_some_and(|(_, x)| x == *e))
+}
+
+/// The holder a passing column of the Node resources evidence observes: a live timer or
+/// listener group tied to the finding by the finding's own site (the tie key is that site,
+/// not a writer's) is a registration table. A column tied any other way, or of another
+/// type, observes none.
+fn resources_holder_kind(
+    column: &serde_json::Value,
+    own_site: Option<&str>,
+) -> Option<&'static str> {
+    if column.pointer("/tie/rule").and_then(|v| v.as_str()) != Some("site") {
+        return None;
+    }
+    let key = column.pointer("/tie/key").and_then(|v| v.as_str())?;
+    if own_site != Some(key) {
+        return None;
+    }
+    is_timer_table_group(column.get("column")?.as_str()?).then_some("registration-table")
+}
+
 /// An open item with its resolution, if any.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenItemState {
@@ -917,10 +961,30 @@ impl Index {
                 ),
             ));
         }
-        let fix = format!(
-            "dla summarize heap-graph <dump...> --finding {} (then) dla ledger annotate {} --holder {want} --evidence <growth evidence id>",
-            a.finding, a.finding
-        );
+        let fix = if want == Holder::RegistrationTable {
+            let heap = format!(
+                "dla summarize heap-graph <dump...> --finding {} (then) dla ledger annotate {} --holder {want} --evidence <growth evidence id>",
+                a.finding, a.finding
+            );
+            if self
+                .findings
+                .get(&a.finding)
+                .and_then(|f| f.site.as_deref())
+                .is_some_and(is_node_site)
+            {
+                format!(
+                    "{heap}; for a timer or listener: dla summarize non-heap --backend node-resources <resources.json x3 or more> --finding {} (then) the same annotate with its growth evidence",
+                    a.finding
+                )
+            } else {
+                heap
+            }
+        } else {
+            format!(
+                "dla summarize heap-graph <dump...> --finding {} (then) dla ledger annotate {} --holder {want} --evidence <growth evidence id>",
+                a.finding, a.finding
+            )
+        };
         let refuse = |why: String, expected: String| {
             Refusal::new(
                 codes::ANNOTATION_CONFLICT,
@@ -933,6 +997,10 @@ impl Index {
             )
         };
         let id = a.finding.to_string();
+        let own_site = self
+            .findings
+            .get(&a.finding)
+            .and_then(|f| f.site.as_deref());
         let mut reasons = Vec::new();
         for eid in &a.evidence {
             let Some(e) = self.evidence.get(eid) else {
@@ -949,9 +1017,17 @@ impl Index {
                 ));
                 continue;
             }
-            if !HOLDER_EVIDENCE_TOOLS.contains(&e.tool.name.as_str()) {
+            let timer_table = e.tool.name == TIMER_EVIDENCE_TOOL;
+            if timer_table && want != Holder::RegistrationTable {
                 reasons.push(format!(
-                    "{eid} was written by {}, not a heap-graph reader ({})",
+                    "{eid} was written by {TIMER_EVIDENCE_TOOL}, which observes timer and listener tables only: it backs {}, not {want}",
+                    Holder::RegistrationTable
+                ));
+                continue;
+            }
+            if !timer_table && !HOLDER_EVIDENCE_TOOLS.contains(&e.tool.name.as_str()) {
+                reasons.push(format!(
+                    "{eid} was written by {}, not a heap-graph reader ({}) or the timer table reader ({TIMER_EVIDENCE_TOOL})",
                     e.tool.name,
                     HOLDER_EVIDENCE_TOOLS.join(" or ")
                 ));
@@ -974,7 +1050,12 @@ impl Index {
                     continue;
                 }
                 tied = true;
-                match c.get("holder_kind").and_then(|v| v.as_str()) {
+                let kind = if timer_table {
+                    resources_holder_kind(c, own_site)
+                } else {
+                    c.get("holder_kind").and_then(|v| v.as_str())
+                };
+                match kind {
                     Some(k) if k == want.as_str() => return Ok(()),
                     Some(k) => kinds.push(k.to_owned()),
                     None => {}
@@ -983,6 +1064,10 @@ impl Index {
             if !tied {
                 reasons.push(format!(
                     "{eid} has no passing column tied to {id} (by finding or candidates)"
+                ));
+            } else if kinds.is_empty() && timer_table {
+                reasons.push(format!(
+                    "the passing columns of {eid} tied to {id} are not timer or listener groups tied by the finding's own creation site (a writer's site does not count)"
                 ));
             } else if kinds.is_empty() {
                 reasons.push(format!(

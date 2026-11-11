@@ -1,0 +1,26 @@
+[package]
+name = "dla-it"
+description = "Integration tests that run dla inside microVMs (rightsize, microsandbox backend)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+# The crate stays in the workspace, so it shares the lockfile, the version and
+# the lints. The VM stack is optional: without the feature nothing of it is
+# compiled, and `cargo test --workspace` stays free of VMs on every OS.
+[features]
+sandbox-it = ["dep:rightsize", "dep:rightsize-msb", "dep:tokio"]
+
+[dependencies]
+serde_json.workspace = true
+# Only `rightsize` and the msb backend. No Docker provider is registered, so a
+# host without hardware virtualization cannot fall back to a container.
+rightsize = { version = "=0.7.18", optional = true }
+rightsize-msb = { version = "=0.7.18", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"], optional = true }
+
+[lints]
+workspace = true

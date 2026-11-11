@@ -1,7 +1,7 @@
 //! The grader: `bench/GRADING.md` implemented literally.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::{
     Res,
     fixture::load_expected,
+    metrics_ext::{Agreement, DecoyRow, LedgerExtra, RunOutcome, ledger_extra},
     model::{
         Category, Cost, Entry, Expected, FixtureStats, Group, Leak, LeakCounts, Metrics,
         MetricsFile, PerRun, Ratio, Share, Sources, SumMean, Unexplained, UsageStats,
@@ -103,7 +104,7 @@ fn state_of_to(to: Option<&str>) -> State {
 
 /// The key of a ledger finding id on a line: the id when it already carries a
 /// worker prefix or the line has no worker, else `<worker>/<id>`.
-fn ledger_key(id: &str, rec: &Value) -> String {
+pub(crate) fn ledger_key(id: &str, rec: &Value) -> String {
     let worker = rec
         .get("worker")
         .and_then(Value::as_str)
@@ -527,7 +528,7 @@ pub fn leak_outcomes(exp: &Expected, findings: &[Finding]) -> Vec<LeakOutcome> {
 }
 
 /// Metric names in output order.
-pub const METRIC_NAMES: [&str; 13] = [
+pub const METRIC_NAMES: [&str; 17] = [
     "leak_recall",
     "archetype_free_recall",
     "flagged_recall",
@@ -541,6 +542,10 @@ pub const METRIC_NAMES: [&str; 13] = [
     "trap_miss_rate",
     "trap_false_alarm_rate",
     "source_overclaim_rate",
+    "undiscriminated_refutations",
+    "uncited_findings",
+    "uncited_checklist_answers",
+    "dropped_rate",
 ];
 
 /// One run, graded.
@@ -556,8 +561,12 @@ pub struct RunGrade {
     pub rule_out: bool,
     /// Per expected leak.
     pub leaks: Vec<LeakOutcome>,
-    /// `(num, den)` of the thirteen metrics, in [`METRIC_NAMES`] order.
-    pub parts: [(u64, u64); 13],
+    /// `(num, den)` of the metrics, in [`METRIC_NAMES`] order. The last three (citations
+    /// and dropped work) need the ledger text and are filled by [`grade_dir`].
+    pub parts: [(u64, u64); 17],
+    /// The graded outcome of the run, for the agreement check: `found:<ids>` for a fixture
+    /// with a leak set, else `claim` or `no-claim`.
+    pub outcome: String,
 }
 
 /// Grades one run's normalised findings against its fixture.
@@ -566,7 +575,7 @@ pub fn grade_findings(exp: &Expected, source: Source, findings: &[Finding]) -> R
     let outcomes = leak_outcomes(exp, findings);
     let claim = findings.iter().any(Finding::is_claim);
     let rule_out = findings.iter().any(Finding::is_rule_out);
-    let mut p = [(0u64, 0u64); 13];
+    let mut p = [(0u64, 0u64); 17];
     let in_set = matches!(
         cat,
         Category::ArchetypeLeak | Category::ArchetypeFree | Category::MultiLeak
@@ -646,6 +655,30 @@ pub fn grade_findings(exp: &Expected, source: Source, findings: &[Finding]) -> R
         });
         p[12] = (u64::from(with_site), 1);
     }
+    // Refutations (hypotheses included) that carry no discriminator.
+    let refuted = findings.iter().filter(|f| f.state == State::Refuted);
+    p[13] = (
+        refuted.clone().filter(|f| !f.discriminator).count() as u64,
+        refuted.count() as u64,
+    );
+    let outcome = if in_set {
+        let found: Vec<&str> = exp
+            .leak
+            .iter()
+            .zip(&outcomes)
+            .filter(|(l, o)| l.confirmable && o.found)
+            .map(|(l, _)| l.id.as_str())
+            .collect();
+        if found.is_empty() {
+            "found:none".to_owned()
+        } else {
+            format!("found:{}", found.join(","))
+        }
+    } else if claim {
+        "claim".to_owned()
+    } else {
+        "no-claim".to_owned()
+    };
     RunGrade {
         category: cat,
         source,
@@ -653,6 +686,7 @@ pub fn grade_findings(exp: &Expected, source: Source, findings: &[Finding]) -> R
         rule_out,
         leaks: outcomes,
         parts: p,
+        outcome,
     }
 }
 
@@ -751,10 +785,13 @@ fn residual_of(text: &str) -> Option<(f64, f64)> {
     let (mut r, mut t) = (0.0, 0.0);
     for row in rows {
         r += row.get("residual").and_then(Value::as_f64).unwrap_or(0.0);
+        // A region that shrinks has no growth to explain: its negative total must not
+        // lower the denominator (the share would pass 1).
         t += row
             .get("total_slope")
             .and_then(Value::as_f64)
-            .unwrap_or(0.0);
+            .unwrap_or(0.0)
+            .max(0.0);
     }
     Some((r, t))
 }
@@ -824,16 +861,25 @@ pub fn grade_dir(results: &Path, fixtures: &Path) -> Res<MetricsFile> {
                     let ledger = fs::read(run_dir.join("ledger.jsonl")).ok();
                     let fj = fs::read(run_dir.join("findings.json")).ok();
                     let (source, findings) = select_source_bytes(ledger.as_deref(), fj.as_deref());
-                    let grade = grade_findings(exp, source, &findings);
-                    let verif = if source == Source::Ledger {
-                        ledger
-                            .as_deref()
-                            .and_then(read_ledger_bytes)
-                            .map(|r| VerifCounts::of(&r))
-                            .unwrap_or_default()
+                    let mut grade = grade_findings(exp, source, &findings);
+                    let read = if source == Source::Ledger {
+                        ledger.as_deref().and_then(read_ledger_bytes)
                     } else {
-                        VerifCounts::default()
+                        None
                     };
+                    let verif = read.as_ref().map(VerifCounts::of).unwrap_or_default();
+                    if let (Some(read), Some(bytes)) = (&read, ledger.as_deref()) {
+                        let report = read_utf8_opt(&run_dir.join("report.md"));
+                        let coverage = read_utf8_opt(&run_dir.join("coverage.json"));
+                        let LedgerExtra {
+                            uncited_findings,
+                            uncited_checklist,
+                            dropped,
+                        } = ledger_extra(read, bytes, report.as_deref(), coverage.as_deref());
+                        grade.parts[14] = uncited_findings;
+                        grade.parts[15] = uncited_checklist;
+                        grade.parts[16] = dropped;
+                    }
                     let residual = read_utf8_opt(&run_dir.join("coverage.json"))
                         .as_deref()
                         .and_then(residual_of);
@@ -910,6 +956,68 @@ fn build_ratio(idx: usize, runs: &[RunData], max_run: u32) -> Ratio {
     }
 }
 
+/// The four usage fields whose sum is a run's tokens (`input + cache_creation + cache_read +
+/// output`).
+const TOKEN_KEYS: [&str; 4] = [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+];
+
+/// The decoy and control result of every archetype row that has a pair among the graded
+/// fixtures: the row is the `cause` of the confirmable leaks of an `archetype-leak` fixture
+/// with a `pair`, and the pair is that fixture and the decoy it names.
+fn decoy_rows(
+    runs: &[RunData],
+    expected: &HashMap<String, Expected>,
+) -> BTreeMap<String, DecoyRow> {
+    let mut rows: BTreeMap<String, DecoyRow> = BTreeMap::new();
+    let mut fixtures: Vec<&String> = runs.iter().map(|r| &r.fixture).collect();
+    fixtures.sort();
+    fixtures.dedup();
+    for fx in fixtures {
+        let exp = &expected[fx];
+        let Some(decoy) = exp
+            .pair
+            .as_deref()
+            .filter(|_| exp.category == Category::ArchetypeLeak)
+        else {
+            continue;
+        };
+        let leak_runs: Vec<&RunData> = runs.iter().filter(|r| r.fixture == *fx).collect();
+        let found = leak_runs
+            .iter()
+            .filter(|r| {
+                exp.leak
+                    .iter()
+                    .zip(&r.grade.leaks)
+                    .all(|(l, o)| !l.confirmable || o.found)
+            })
+            .count() as u64;
+        let decoy_runs: Vec<&RunData> = runs.iter().filter(|r| r.fixture == decoy).collect();
+        let claims = decoy_runs.iter().filter(|r| r.grade.claim).count() as u64;
+        let causes: BTreeSet<&str> = exp
+            .leak
+            .iter()
+            .filter(|l| l.confirmable && l.cause != "UNCLASSIFIED")
+            .map(|l| l.cause.as_str())
+            .collect();
+        for cause in causes {
+            let row = rows.entry(cause.to_owned()).or_default();
+            row.pairs.push(format!("{fx}/{decoy}"));
+            row.leak.found_runs += found;
+            row.leak.runs += leak_runs.len() as u64;
+            row.decoy.claim_runs += claims;
+            row.decoy.runs += decoy_runs.len() as u64;
+        }
+    }
+    for row in rows.values_mut() {
+        row.settle();
+    }
+    rows
+}
+
 fn token(rj: &Value, key: &str) -> u64 {
     rj.get("usage")
         .and_then(|u| u.get(key))
@@ -940,6 +1048,10 @@ fn aggregate(
         trap_miss_rate: m(10),
         trap_false_alarm_rate: m(11),
         source_overclaim_rate: Some(m(12)),
+        undiscriminated_refutations: Some(m(13)),
+        uncited_findings: Some(m(14)),
+        uncited_checklist_answers: Some(m(15)),
+        dropped_rate: Some(m(16)),
     };
     // Unexplained growth.
     let (mut r_sum, mut t_sum, mut k) = (0.0, 0.0, 0u64);
@@ -1056,8 +1168,18 @@ fn aggregate(
                     .map(|l| (l.id.clone(), LeakCounts::default()))
                     .collect(),
                 worker_provenance: BTreeMap::new(),
+                tokens_total: 0,
+                agreement: Agreement::default(),
             });
         st.runs += 1;
+        st.tokens_total += TOKEN_KEYS
+            .iter()
+            .map(|k| token(&r.run_json, k))
+            .sum::<u64>();
+        st.agreement.outcomes.push(RunOutcome {
+            run: r.n,
+            outcome: r.grade.outcome.clone(),
+        });
         st.claim_runs += u64::from(r.grade.claim);
         st.rule_out_runs += u64::from(r.grade.rule_out);
         for (leak, o) in exp.leak.iter().zip(&r.grade.leaks) {
@@ -1077,6 +1199,10 @@ fn aggregate(
             }
         }
     }
+    for st in fixtures.values_mut() {
+        st.agreement = Agreement::of(std::mem::take(&mut st.agreement.outcomes));
+    }
+    let decoys = decoy_rows(runs, expected);
     Group {
         ablation: abl.to_owned(),
         archetypes: arch.to_owned(),
@@ -1084,6 +1210,7 @@ fn aggregate(
         unexplained_growth_share: unexplained,
         usage,
         verification,
+        decoys,
         fixtures,
     }
 }

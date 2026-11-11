@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use dla_core::{
     FindingId,
     evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal},
+    finding::Holder,
+    ledger::is_timer_table_group,
     runtime::Runtime,
     series::{SeriesRegion, SeriesSourceKind, Unit},
     toolctx::EvidenceSpec,
@@ -338,6 +340,18 @@ pub fn run_diff(
         .filter(|(t, i)| !t.ambiguous.is_empty() && monotone(i))
         .map(|(t, _)| (t.name.clone(), t.ambiguous.clone()))
         .collect();
+    // Timer and listener groups tied to a finding by the finding's OWN site (the tie key is
+    // that site, not a writer's): they observe a registration table.
+    let own_tables: Vec<(String, FindingId)> = tracks
+        .iter()
+        .filter(|t| is_timer_table_group(&t.name))
+        .filter_map(|t| {
+            let key = &t.tie.as_ref().filter(|w| w.rule == "site")?.key;
+            let f = t.finding.as_ref()?;
+            let own = ledger.finding(f)?.site.as_deref() == Some(key.as_str());
+            own.then(|| (t.name.clone(), f.clone()))
+        })
+        .collect();
     let t0 = captures[0].snap.timestamp_ms.unwrap_or(0);
     let t_ms: Vec<u64> = captures
         .iter()
@@ -378,16 +392,47 @@ pub fn run_diff(
         body.extend(m);
     }
     body.insert("tied".into(), json!(tied_ids));
+    // What the groups show about a tied finding's holder: a live timer or listener group
+    // made at the finding's own site is a registration table.
+    let observed: Map<String, Value> = g
+        .tied
+        .iter()
+        .filter(|(col, id)| own_tables.contains(&(col.clone(), id.clone())))
+        .map(|(_, id)| (id.to_string(), json!(Holder::RegistrationTable)))
+        .collect();
+    body.insert("observed_holder".into(), Value::Object(observed));
     if let Some(a) = growth::ambiguous_json(&ambiguous) {
         body.insert("ambiguous".into(), a);
     }
     let needed = if !g.pass {
         "nothing grows at every step: take another snapshot after more traffic and rerun with all snapshots".to_owned()
     } else if let Some(f) = tied_ids.first() {
-        format!(
+        let mut text = format!(
             "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {}",
             g.evidence.id
-        )
+        );
+        // A live timer or listener group tied by its creation site observes a registration
+        // table: it corrects a holder the census set otherwise (a `setInterval` is a
+        // blocked stack there).
+        let table: Vec<&FindingId> = tied_ids
+            .iter()
+            .filter(|t| {
+                ledger
+                    .finding(t)
+                    .and_then(|x| x.holder)
+                    .is_some_and(|h| h != Holder::RegistrationTable)
+                    && g.tied.iter().any(|(col, id)| {
+                        id == *t && own_tables.contains(&(col.clone(), id.clone()))
+                    })
+            })
+            .collect();
+        for t in table {
+            text.push_str(&format!(
+                "; {t} is held by a timer or listener table: dla ledger annotate {t} --holder registration-table --evidence {}",
+                g.evidence.id
+            ));
+        }
+        text
     } else if let Some(f) = &opts.finding {
         format!(
             "no passing column ties to {f} by holder, site or type: a group ties only by its creation site (a goroutine's created-by frame, a thread's spawn frame) equal to the finding's site or one of its writers"

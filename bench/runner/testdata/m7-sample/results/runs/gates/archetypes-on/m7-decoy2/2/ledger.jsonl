@@ -1,0 +1,2 @@
+{"type": "finding_added", "finding": {"id": "F1", "state": "candidate", "site": "src/r.py:1", "holder": "container-field", "supports": ["E1"]}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "refuted", "evidence": ["E2"]}

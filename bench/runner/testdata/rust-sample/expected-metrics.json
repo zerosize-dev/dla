@@ -258,25 +258,109 @@
           "stdev": 0.5
         },
         "source_overclaim_rate": {
-          "den": 0,
-          "mean": null,
           "num": 0,
+          "den": 0,
+          "value": null,
           "per_run": [
             {
-              "den": 0,
-              "num": 0,
               "run": 1,
+              "num": 0,
+              "den": 0,
               "value": null
             },
             {
-              "den": 0,
-              "num": 0,
               "run": 2,
+              "num": 0,
+              "den": 0,
               "value": null
             }
           ],
-          "stdev": null,
-          "value": null
+          "mean": null,
+          "stdev": null
+        },
+        "undiscriminated_refutations": {
+          "num": 0,
+          "den": 4,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "uncited_findings": {
+          "num": 13,
+          "den": 13,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 8,
+              "den": 8,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 5,
+              "den": 5,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "uncited_checklist_answers": {
+          "num": 1,
+          "den": 1,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "dropped_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
         }
       },
       "unexplained_growth_share": {
@@ -318,13 +402,44 @@
           "mean": 0.125
         }
       },
+      "decoys": {
+        "L-COLLECT": {
+          "pairs": [
+            "fx-trap/fx-decoy"
+          ],
+          "leak": {
+            "found_runs": 1,
+            "runs": 2
+          },
+          "decoy": {
+            "claim_runs": 1,
+            "runs": 2
+          },
+          "pass": false
+        }
+      },
       "fixtures": {
         "fx-decoy": {
           "category": "decoy-control",
           "runs": 2,
           "claim_runs": 1,
           "rule_out_runs": 1,
-          "leaks": {}
+          "leaks": {},
+          "tokens_total": 42,
+          "agreement": {
+            "runs": 2,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "claim"
+              }
+            ],
+            "unanimous": false
+          }
         },
         "fx-free": {
           "category": "archetype-free",
@@ -337,6 +452,21 @@
               "flagged": 2,
               "grounded": 1
             }
+          },
+          "tokens_total": 42,
+          "agreement": {
+            "runs": 2,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": true
           }
         },
         "fx-impossible": {
@@ -350,6 +480,17 @@
               "flagged": 1,
               "grounded": 0
             }
+          },
+          "tokens_total": 21,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
           }
         },
         "fx-multi": {
@@ -368,6 +509,21 @@
               "flagged": 1,
               "grounded": 1
             }
+          },
+          "tokens_total": 42,
+          "agreement": {
+            "runs": 2,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1,L2"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": false
           }
         },
         "fx-nonleak": {
@@ -375,7 +531,18 @@
           "runs": 1,
           "claim_runs": 0,
           "rule_out_runs": 1,
-          "leaks": {}
+          "leaks": {},
+          "tokens_total": 21,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
+          }
         },
         "fx-trap": {
           "category": "archetype-leak",
@@ -388,6 +555,21 @@
               "flagged": 2,
               "grounded": 1
             }
+          },
+          "tokens_total": 42,
+          "agreement": {
+            "runs": 2,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:none"
+              }
+            ],
+            "unanimous": false
           }
         }
       }
@@ -721,31 +903,139 @@
           "stdev": 0.0
         },
         "source_overclaim_rate": {
-          "den": 0,
-          "mean": null,
           "num": 0,
+          "den": 0,
+          "value": null,
           "per_run": [
             {
-              "den": 0,
-              "num": 0,
               "run": 1,
+              "num": 0,
+              "den": 0,
               "value": null
             },
             {
-              "den": 0,
-              "num": 0,
               "run": 2,
+              "num": 0,
+              "den": 0,
               "value": null
             },
             {
-              "den": 0,
-              "num": 0,
               "run": 3,
+              "num": 0,
+              "den": 0,
               "value": null
             }
           ],
-          "stdev": null,
-          "value": null
+          "mean": null,
+          "stdev": null
+        },
+        "undiscriminated_refutations": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "uncited_findings": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "uncited_checklist_answers": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "dropped_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
         }
       },
       "unexplained_growth_share": {
@@ -787,13 +1077,40 @@
           "mean": null
         }
       },
+      "decoys": {
+        "L-COLLECT": {
+          "pairs": [
+            "fx-trap/fx-decoy"
+          ],
+          "leak": {
+            "found_runs": 1,
+            "runs": 1
+          },
+          "decoy": {
+            "claim_runs": 0,
+            "runs": 1
+          },
+          "pass": true
+        }
+      },
       "fixtures": {
         "fx-decoy": {
           "category": "decoy-control",
           "runs": 1,
           "claim_runs": 0,
           "rule_out_runs": 0,
-          "leaks": {}
+          "leaks": {},
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
+          }
         },
         "fx-multi": {
           "category": "multi-leak",
@@ -811,6 +1128,17 @@
               "flagged": 0,
               "grounded": 0
             }
+          },
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 3,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": true
           }
         },
         "fx-trap": {
@@ -824,6 +1152,17 @@
               "flagged": 1,
               "grounded": 1
             }
+          },
+          "tokens_total": 0,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": true
           }
         }
       }
@@ -1157,31 +1496,139 @@
           "stdev": 0.471405
         },
         "source_overclaim_rate": {
-          "den": 0,
-          "mean": null,
           "num": 0,
+          "den": 0,
+          "value": null,
           "per_run": [
             {
-              "den": 0,
-              "num": 0,
               "run": 1,
+              "num": 0,
+              "den": 0,
               "value": null
             },
             {
-              "den": 0,
-              "num": 0,
               "run": 2,
+              "num": 0,
+              "den": 0,
               "value": null
             },
             {
-              "den": 0,
-              "num": 0,
               "run": 3,
+              "num": 0,
+              "den": 0,
               "value": null
             }
           ],
-          "stdev": null,
-          "value": null
+          "mean": null,
+          "stdev": null
+        },
+        "undiscriminated_refutations": {
+          "num": 1,
+          "den": 5,
+          "value": 0.2,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 3,
+              "value": 0.333333
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.111111,
+          "stdev": 0.157135
+        },
+        "uncited_findings": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "uncited_checklist_answers": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "dropped_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
         }
       },
       "unexplained_growth_share": {
@@ -1223,13 +1670,48 @@
           "mean": 0.303571
         }
       },
+      "decoys": {
+        "L-COLLECT": {
+          "pairs": [
+            "fx-trap/fx-decoy"
+          ],
+          "leak": {
+            "found_runs": 2,
+            "runs": 3
+          },
+          "decoy": {
+            "claim_runs": 1,
+            "runs": 3
+          },
+          "pass": false
+        }
+      },
       "fixtures": {
         "fx-decoy": {
           "category": "decoy-control",
           "runs": 3,
           "claim_runs": 1,
           "rule_out_runs": 2,
-          "leaks": {}
+          "leaks": {},
+          "tokens_total": 3064,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "claim"
+              },
+              {
+                "run": 3,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": false
+          }
         },
         "fx-free": {
           "category": "archetype-free",
@@ -1242,6 +1724,25 @@
               "flagged": 2,
               "grounded": 1
             }
+          },
+          "tokens_total": 4590,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:none"
+              },
+              {
+                "run": 3,
+                "outcome": "found:none"
+              }
+            ],
+            "unanimous": false
           }
         },
         "fx-impossible": {
@@ -1255,6 +1756,25 @@
               "flagged": 2,
               "grounded": 1
             }
+          },
+          "tokens_total": 4590,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "claim"
+              },
+              {
+                "run": 3,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": false
           }
         },
         "fx-multi": {
@@ -1273,6 +1793,25 @@
               "flagged": 2,
               "grounded": 2
             }
+          },
+          "tokens_total": 4590,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L2"
+              },
+              {
+                "run": 3,
+                "outcome": "found:L1,L2"
+              }
+            ],
+            "unanimous": false
           }
         },
         "fx-nonleak": {
@@ -1280,7 +1819,26 @@
           "runs": 3,
           "claim_runs": 1,
           "rule_out_runs": 1,
-          "leaks": {}
+          "leaks": {},
+          "tokens_total": 4590,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 3,
+                "outcome": "claim"
+              }
+            ],
+            "unanimous": false
+          }
         },
         "fx-trap": {
           "category": "archetype-leak",
@@ -1293,6 +1851,25 @@
               "flagged": 2,
               "grounded": 1
             }
+          },
+          "tokens_total": 4590,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 3,
+                "outcome": "found:none"
+              }
+            ],
+            "unanimous": false
           }
         }
       }

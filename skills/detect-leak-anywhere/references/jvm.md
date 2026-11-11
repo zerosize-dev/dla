@@ -17,6 +17,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `jvm.nmt_committed`, `jvm.threads`, `jvm.classes_loaded`, the `os.*` set, top-20 class counts,
   and one probe record per static reference field (`JvmClass`, `JvmStatic`): size, reachable
   objects (bounded walk, 2,000,000) and a shallow byte estimate assuming compressed oops.
+- A `jvm.class:<name>.count` column that ties to no finding (a generic type never ties) is accounted
+  for by `dla gap <S> --residual`: rows under their threshold, or over it with a resolved open item.
 - Purges: `trim-native-heap` (DiagnosticCommand) and `gc`.
 - The harness never attaches: it reads NMT and the histogram in-process.
 

@@ -1,0 +1,1120 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "ablation": "gates",
+      "archetypes": "on",
+      "metrics": {
+        "leak_recall": {
+          "num": 10,
+          "den": 12,
+          "value": 0.833333,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 2,
+              "den": 4,
+              "value": 0.5
+            },
+            {
+              "run": 3,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            }
+          ],
+          "mean": 0.833333,
+          "stdev": 0.235702
+        },
+        "archetype_free_recall": {
+          "num": 2,
+          "den": 3,
+          "value": 0.666667,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 0.666667,
+          "stdev": 0.471405
+        },
+        "flagged_recall": {
+          "num": 10,
+          "den": 12,
+          "value": 0.833333,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 2,
+              "den": 4,
+              "value": 0.5
+            },
+            {
+              "run": 3,
+              "num": 4,
+              "den": 4,
+              "value": 1.0
+            }
+          ],
+          "mean": 0.833333,
+          "stdev": 0.235702
+        },
+        "second_leak_recall": {
+          "num": 2,
+          "den": 3,
+          "value": 0.666667,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 0.666667,
+          "stdev": 0.471405
+        },
+        "grounded_attribution": {
+          "num": 6,
+          "den": 10,
+          "value": 0.6,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 2,
+              "den": 4,
+              "value": 0.5
+            },
+            {
+              "run": 2,
+              "num": 2,
+              "den": 2,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 2,
+              "den": 4,
+              "value": 0.5
+            }
+          ],
+          "mean": 0.666667,
+          "stdev": 0.235702
+        },
+        "label_accuracy": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "forced_fit_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "overclaim_rate": {
+          "num": 0,
+          "den": 3,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "false_confirmation_rate": {
+          "num": 1,
+          "den": 9,
+          "value": 0.111111,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 1,
+              "den": 3,
+              "value": 0.333333
+            }
+          ],
+          "mean": 0.111111,
+          "stdev": 0.157135
+        },
+        "non_leak_precision": {
+          "num": 3,
+          "den": 3,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            },
+            {
+              "run": 2,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            },
+            {
+              "run": 3,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "trap_miss_rate": {
+          "num": 1,
+          "den": 6,
+          "value": 0.166667,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 2,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 1,
+              "den": 2,
+              "value": 0.5
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 2,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.166667,
+          "stdev": 0.235702
+        },
+        "trap_false_alarm_rate": {
+          "num": 1,
+          "den": 6,
+          "value": 0.166667,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 2,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 2,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 1,
+              "den": 2,
+              "value": 0.5
+            }
+          ],
+          "mean": 0.166667,
+          "stdev": 0.235702
+        },
+        "source_overclaim_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 0,
+              "value": null
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "undiscriminated_refutations": {
+          "num": 0,
+          "den": 9,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 4,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 0,
+              "den": 3,
+              "value": 0.0
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 2,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "uncited_findings": {
+          "num": 1,
+          "den": 25,
+          "value": 0.04,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 8,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 1,
+              "den": 8,
+              "value": 0.125
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 9,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.041667,
+          "stdev": 0.058926
+        },
+        "uncited_checklist_answers": {
+          "num": 1,
+          "den": 3,
+          "value": 0.333333,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 1,
+              "den": 2,
+              "value": 0.5
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": 0.25,
+          "stdev": 0.25
+        },
+        "dropped_rate": {
+          "num": 2,
+          "den": 20,
+          "value": 0.1,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 7,
+              "value": 0.0
+            },
+            {
+              "run": 2,
+              "num": 2,
+              "den": 7,
+              "value": 0.285714
+            },
+            {
+              "run": 3,
+              "num": 0,
+              "den": 6,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.095238,
+          "stdev": 0.134687
+        }
+      },
+      "unexplained_growth_share": {
+        "value": 0.178607,
+        "runs": 21
+      },
+      "usage": {
+        "runs": 21,
+        "incomplete": 0,
+        "errored": 0,
+        "sources": {
+          "ledger": 21,
+          "findings": 0,
+          "none": 0
+        },
+        "input_tokens": {
+          "sum": 48,
+          "mean": 2.285714
+        },
+        "output_tokens": {
+          "sum": 96,
+          "mean": 4.571429
+        },
+        "cache_read_input_tokens": {
+          "sum": 954,
+          "mean": 45.428571
+        },
+        "cache_creation_input_tokens": {
+          "sum": 192,
+          "mean": 9.142857
+        },
+        "wall_seconds": {
+          "sum": 21.0,
+          "mean": 1.0,
+          "max": 1.0
+        },
+        "cost_usd": {
+          "sum": 10.5,
+          "mean": 0.5
+        }
+      },
+      "decoys": {
+        "L-COLLECT": {
+          "pairs": [
+            "m7-leak/m7-decoy"
+          ],
+          "leak": {
+            "found_runs": 3,
+            "runs": 3
+          },
+          "decoy": {
+            "claim_runs": 0,
+            "runs": 3
+          },
+          "pass": true
+        },
+        "L-REGISTER": {
+          "pairs": [
+            "m7-pair2/m7-decoy2"
+          ],
+          "leak": {
+            "found_runs": 2,
+            "runs": 3
+          },
+          "decoy": {
+            "claim_runs": 1,
+            "runs": 3
+          },
+          "pass": false
+        }
+      },
+      "fixtures": {
+        "m7-decoy": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {},
+          "tokens_total": 30,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 3,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
+          }
+        },
+        "m7-decoy2": {
+          "category": "decoy-control",
+          "runs": 3,
+          "claim_runs": 1,
+          "rule_out_runs": 2,
+          "leaks": {},
+          "tokens_total": 30,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 3,
+                "outcome": "claim"
+              }
+            ],
+            "unanimous": false
+          }
+        },
+        "m7-imp": {
+          "category": "impossible",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 0,
+              "flagged": 3,
+              "grounded": 0
+            }
+          },
+          "tokens_total": 30,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 3,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
+          }
+        },
+        "m7-leak": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 1,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            }
+          },
+          "tokens_total": 1110,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 3,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": true
+          }
+        },
+        "m7-multi": {
+          "category": "multi-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 3,
+              "flagged": 3,
+              "grounded": 3
+            },
+            "L2": {
+              "found": 2,
+              "flagged": 2,
+              "grounded": 0
+            }
+          },
+          "worker_provenance": {
+            "L1": {
+              "jvm": 2
+            },
+            "L2": {
+              "jvm": 2
+            }
+          },
+          "tokens_total": 30,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1,L2"
+              },
+              {
+                "run": 2,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 3,
+                "outcome": "found:L1,L2"
+              }
+            ],
+            "unanimous": false
+          }
+        },
+        "m7-nl": {
+          "category": "non-leak",
+          "runs": 3,
+          "claim_runs": 0,
+          "rule_out_runs": 3,
+          "leaks": {},
+          "tokens_total": 30,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 2,
+                "outcome": "no-claim"
+              },
+              {
+                "run": 3,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
+          }
+        },
+        "m7-pair2": {
+          "category": "archetype-leak",
+          "runs": 3,
+          "claim_runs": 3,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 2,
+              "flagged": 2,
+              "grounded": 0
+            }
+          },
+          "tokens_total": 30,
+          "agreement": {
+            "runs": 3,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              },
+              {
+                "run": 2,
+                "outcome": "found:none"
+              },
+              {
+                "run": 3,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": false
+          }
+        }
+      }
+    },
+    {
+      "ablation": "no-skill",
+      "archetypes": "on",
+      "metrics": {
+        "leak_recall": {
+          "num": 1,
+          "den": 1,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "archetype_free_recall": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "flagged_recall": {
+          "num": 1,
+          "den": 1,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "second_leak_recall": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "grounded_attribution": {
+          "num": 1,
+          "den": 1,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "label_accuracy": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "forced_fit_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "overclaim_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "false_confirmation_rate": {
+          "num": 0,
+          "den": 1,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "non_leak_precision": {
+          "num": 1,
+          "den": 1,
+          "value": 1.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 1,
+              "value": 1.0
+            }
+          ],
+          "mean": 1.0,
+          "stdev": 0.0
+        },
+        "trap_miss_rate": {
+          "num": 0,
+          "den": 1,
+          "value": 0.0,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 1,
+              "value": 0.0
+            }
+          ],
+          "mean": 0.0,
+          "stdev": 0.0
+        },
+        "trap_false_alarm_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "source_overclaim_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "undiscriminated_refutations": {
+          "num": 1,
+          "den": 2,
+          "value": 0.5,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 1,
+              "den": 2,
+              "value": 0.5
+            }
+          ],
+          "mean": 0.5,
+          "stdev": 0.0
+        },
+        "uncited_findings": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "uncited_checklist_answers": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        },
+        "dropped_rate": {
+          "num": 0,
+          "den": 0,
+          "value": null,
+          "per_run": [
+            {
+              "run": 1,
+              "num": 0,
+              "den": 0,
+              "value": null
+            }
+          ],
+          "mean": null,
+          "stdev": null
+        }
+      },
+      "unexplained_growth_share": {
+        "value": null,
+        "runs": 0
+      },
+      "usage": {
+        "runs": 2,
+        "incomplete": 0,
+        "errored": 0,
+        "sources": {
+          "ledger": 0,
+          "findings": 2,
+          "none": 0
+        },
+        "input_tokens": {
+          "sum": 10,
+          "mean": 5.0
+        },
+        "output_tokens": {
+          "sum": 12,
+          "mean": 6.0
+        },
+        "cache_read_input_tokens": {
+          "sum": 14,
+          "mean": 7.0
+        },
+        "cache_creation_input_tokens": {
+          "sum": 16,
+          "mean": 8.0
+        },
+        "wall_seconds": {
+          "sum": 2.0,
+          "mean": 1.0,
+          "max": 1.0
+        },
+        "cost_usd": {
+          "sum": 1.0,
+          "mean": 0.5
+        }
+      },
+      "decoys": {
+        "L-COLLECT": {
+          "pairs": [
+            "m7-leak/m7-decoy"
+          ],
+          "leak": {
+            "found_runs": 1,
+            "runs": 1
+          },
+          "decoy": {
+            "claim_runs": 0,
+            "runs": 0
+          },
+          "pass": false
+        }
+      },
+      "fixtures": {
+        "m7-leak": {
+          "category": "archetype-leak",
+          "runs": 1,
+          "claim_runs": 1,
+          "rule_out_runs": 0,
+          "leaks": {
+            "L1": {
+              "found": 1,
+              "flagged": 1,
+              "grounded": 1
+            }
+          },
+          "tokens_total": 26,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "found:L1"
+              }
+            ],
+            "unanimous": true
+          }
+        },
+        "m7-nl": {
+          "category": "non-leak",
+          "runs": 1,
+          "claim_runs": 0,
+          "rule_out_runs": 1,
+          "leaks": {},
+          "tokens_total": 26,
+          "agreement": {
+            "runs": 1,
+            "outcomes": [
+              {
+                "run": 1,
+                "outcome": "no-claim"
+              }
+            ],
+            "unanimous": true
+          }
+        }
+      }
+    }
+  ]
+}

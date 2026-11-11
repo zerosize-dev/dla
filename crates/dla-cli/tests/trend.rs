@@ -118,6 +118,36 @@ fn flat(v: f64) -> Vec<f64> {
 }
 
 #[test]
+fn an_untied_type_count_column_is_hinted_to_the_residual_accounting_as_the_gate_prints() {
+    let pr = project();
+    let p = pr.dir.path();
+    write_series(
+        &pr,
+        "S1",
+        "fresh",
+        &[(
+            "jvm.class:shop.codec.Entry.count",
+            "counter",
+            "process",
+            None,
+            rising(10.0, 25.0),
+        )],
+    );
+    let t = ok(p, &["trend", "S1"]);
+    let next: Vec<&str> = t["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    assert!(
+        next.iter().any(|n| n.starts_with("dla gap S1 --residual")),
+        "{t}"
+    );
+    assert!(next.iter().all(|n| !n.contains("growth-series")), "{t}");
+}
+
+#[test]
 fn a_whole_process_column_is_hinted_to_the_residual_accounting_not_ledger_add() {
     let pr = project();
     let p = pr.dir.path();

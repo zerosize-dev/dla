@@ -833,6 +833,166 @@ fn a_timer_group_ties_to_the_finding_at_its_creation_site() {
     );
 }
 
+/// Three resources files of a timer made at `site`, `n` timers in the i-th.
+fn timer_files(p: &Project, site: &str, counts: [u32; 3]) -> Vec<String> {
+    counts
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let text = json!({
+                "dla_resources": 1, "pid": 100, "runtime": "node", "x": null, "t_ms": 10 * i,
+                "active": {},
+                "types": {"Timeout": {"active": 0, "tracked": n, "created": null, "source": "timers",
+                                      "sites": {site: n}, "unattributed": 0}},
+                "limitations": []
+            });
+            p.put(&format!("in/res/resources-{i}.json"), text.to_string().as_bytes())
+        })
+        .collect()
+}
+
+#[test]
+fn the_timer_group_corrects_the_holder_of_the_node_socket_heartbeat_finding() {
+    // The follow-up run 2 shape: the census holds the `setInterval` finding as a blocked
+    // stack; the resources capture observes the live timers made at its line.
+    let p = Project::with_sources();
+    let timer = p.finding_with_owner("src.heartbeat.startHeartbeat");
+    assert_eq!(timer["holder"], "blocked-stack");
+    let f = timer["id"].as_str().unwrap().to_owned();
+    let files = timer_files(&p, "src/heartbeat.js:15", [40, 80, 120]);
+    let mut args = vec!["summarize", "non-heap", "--backend", "node-resources"];
+    args.extend(files.iter().map(String::as_str));
+    let v = ok(p.path(), &args);
+    assert_eq!(v["tied"], json!([f]), "{v}");
+    assert_eq!(v["observed_holder"][&f], "registration-table", "{v}");
+    let gid = v["growth_evidence"].as_str().unwrap().to_owned();
+    // The output names the correction.
+    assert!(
+        v["needed"].as_str().unwrap().contains(&format!(
+            "dla ledger annotate {f} --holder registration-table --evidence {gid}"
+        )),
+        "{v}"
+    );
+    // Without the evidence, the holder stays.
+    let e = refused(
+        p.path(),
+        &["ledger", "annotate", &f, "--holder", "registration-table"],
+    );
+    assert_eq!(e["code"], "annotation-conflict", "{e}");
+    // With it, the growth record is accepted for a registration table.
+    let a = ok(
+        p.path(),
+        &[
+            "ledger",
+            "annotate",
+            &f,
+            "--holder",
+            "registration-table",
+            "--evidence",
+            &gid,
+        ],
+    );
+    assert!(a.to_string().contains("registration-table"), "{a}");
+    let changed = p
+        .lines()
+        .into_iter()
+        .rfind(|e| e["type"] == "finding_annotated" && e["finding"] == f.as_str())
+        .unwrap_or_else(|| panic!("no annotation of {f}: {:?}", p.lines()));
+    assert_eq!(changed["holder"], "registration-table", "{changed}");
+    assert_eq!(changed["replaced_holder"], "blocked-stack", "{changed}");
+    // It backs no other holder.
+    let e = refused(
+        p.path(),
+        &[
+            "ledger",
+            "annotate",
+            &f,
+            "--holder",
+            "closure/continuation",
+            "--evidence",
+            &gid,
+        ],
+    );
+    assert_eq!(e["code"], "annotation-conflict", "{e}");
+}
+
+#[test]
+fn a_timer_group_made_at_another_line_corrects_no_holder() {
+    let p = Project::with_sources();
+    let timer = p.finding_with_owner("src.heartbeat.startHeartbeat");
+    let f = timer["id"].as_str().unwrap().to_owned();
+    let files = timer_files(&p, "src/heartbeat.js:99", [40, 80, 120]);
+    let mut args = vec!["summarize", "non-heap", "--backend", "node-resources"];
+    args.extend(files.iter().map(String::as_str));
+    let v = ok(p.path(), &args);
+    assert_eq!(v["tied"], json!([]), "{v}");
+    let gid = v["growth_evidence"].as_str().unwrap().to_owned();
+    assert!(
+        !v["needed"]
+            .as_str()
+            .unwrap()
+            .contains("--holder registration-table"),
+        "{v}"
+    );
+    let e = refused(
+        p.path(),
+        &[
+            "ledger",
+            "annotate",
+            &f,
+            "--holder",
+            "registration-table",
+            "--evidence",
+            &gid,
+        ],
+    );
+    assert_eq!(e["code"], "annotation-conflict", "{e}");
+    assert_eq!(
+        p.finding_with_owner("src.heartbeat.startHeartbeat")["holder"],
+        "blocked-stack"
+    );
+}
+
+#[test]
+fn a_timer_group_tied_through_a_writers_site_corrects_no_holder() {
+    // The tie rule lets a writer's site tie a column to the finding; a registration table is
+    // observed only at the finding's own site, so neither the summary nor the ledger takes it.
+    let p = Project::with_sources();
+    let timer = p.finding_with_owner("src.heartbeat.startHeartbeat");
+    let f = timer["id"].as_str().unwrap().to_owned();
+    ok(
+        p.path(),
+        &["ledger", "annotate", &f, "--writer", "src/heartbeat.js:16"],
+    );
+    let files = timer_files(&p, "src/heartbeat.js:16", [40, 80, 120]);
+    let mut args = vec!["summarize", "non-heap", "--backend", "node-resources"];
+    args.extend(files.iter().map(String::as_str));
+    let v = ok(p.path(), &args);
+    assert_eq!(v["tied"], json!([f]), "{v}");
+    assert_eq!(v["observed_holder"], json!({}), "{v}");
+    assert!(
+        !v["needed"]
+            .as_str()
+            .unwrap()
+            .contains("--holder registration-table"),
+        "{v}"
+    );
+    let gid = v["growth_evidence"].as_str().unwrap().to_owned();
+    let e = refused(
+        p.path(),
+        &[
+            "ledger",
+            "annotate",
+            &f,
+            "--holder",
+            "registration-table",
+            "--evidence",
+            &gid,
+        ],
+    );
+    assert_eq!(e["code"], "annotation-conflict", "{e}");
+}
+
 #[test]
 fn a_resources_file_without_its_version_is_refused() {
     let p = Project::new();

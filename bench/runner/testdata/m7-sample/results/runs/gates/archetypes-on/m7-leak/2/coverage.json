@@ -1,0 +1,22 @@
+{
+ "residual": [
+  {
+   "region": "heap",
+   "total_slope": 10.0,
+   "attributed_slope": 6.0,
+   "residual": 4.0,
+   "threshold": 5.0,
+   "unit": "bytes/n",
+   "open_item": null
+  },
+  {
+   "region": "non-heap",
+   "total_slope": -5.0,
+   "attributed_slope": 0.0,
+   "residual": 0.0,
+   "threshold": 1.0,
+   "unit": "bytes/n",
+   "open_item": null
+  }
+ ]
+}

@@ -1,0 +1,21 @@
+{
+ "schema_version": 1,
+ "fixture": "m7-decoy",
+ "ablation": "gates",
+ "archetypes": "on",
+ "run": 1,
+ "exit_code": 0,
+ "timed_out": false,
+ "wall_seconds": 1.0,
+ "usage": {
+  "input_tokens": 1,
+  "output_tokens": 2,
+  "cache_read_input_tokens": 3,
+  "cache_creation_input_tokens": 4
+ },
+ "cost_usd": 0.5,
+ "num_turns": 5,
+ "model": "sample-model",
+ "started_at": "2000-01-01T00:00:00Z",
+ "error": null
+}

@@ -1517,6 +1517,27 @@ fn a_jvm_finding_at_a_rust_site_needs_a_note_for_l_handle() {
         v["error"]["message"].as_str().unwrap().contains("rust"),
         "{v}"
     );
+    // The refusal names the library boundary and keeps the label with a note.
+    let m = v["error"]["message"].as_str().unwrap();
+    assert!(
+        m.contains("jvm worker finding")
+            && m.contains("native/src/lib.rs")
+            && m.contains("JNI or FFI"),
+        "{v}"
+    );
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("--as L-HANDLE --note \"library boundary:"),
+        "{v}"
+    );
+    // A finding of the same language as its worker gets the plain text.
+    let (e2, bare2, ev2) = jvm_worker_handle_case("kotlin/shop/Audit.kt:7");
+    let (code2, v2) = label_handle(&e2, &bare2, &ev2, &[]);
+    assert_eq!(code2, 2, "{v2}");
+    assert!(
+        !v2["error"]["message"].as_str().unwrap().contains("JNI"),
+        "{v2}"
+    );
     let (code, v) = label_handle(
         &e,
         &bare,

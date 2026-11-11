@@ -1,0 +1,4 @@
+{"type": "finding_added", "finding": {"id": "jvm/F1", "state": "candidate", "site": "src/c.py:3", "holder": "container-field", "supports": ["jvm/E1"]}, "worker": "jvm"}
+{"type": "transition", "finding": "jvm/F1", "from": "under_test", "to": "confirmed", "worker": "jvm"}
+{"type": "finding_added", "finding": {"id": "jvm/F2", "state": "candidate", "site": "src/d.py:8", "holder": "container-field", "supports": ["jvm/E2"]}, "worker": "jvm"}
+{"type": "transition", "finding": "jvm/F2", "from": "under_test", "to": "confirmed", "worker": "jvm"}

@@ -249,6 +249,179 @@ fn the_annotation_is_refused_when_the_evidence_does_not_back_it() {
     change(&mut l, &f, Holder::RegistrationTable, &[eid(4), ok]).unwrap();
 }
 
+/// A ledger with F1, a `setInterval` finding at `src/heartbeat.js:15` (holder static/global
+/// stands in for the census's blocked stack).
+fn node_setup() -> (Ledger, FindingId) {
+    let mut l = m3_ledger();
+    let mut nf = dla_core::NewFinding::new(origin("census"), vec![eid(E_STATIC)]);
+    nf.site = Some("src/heartbeat.js:15".into());
+    nf.holder = Some(Holder::StaticGlobal);
+    let f = match l.add_finding(nf).unwrap().record {
+        dla_core::Record::FindingAdded { finding } => finding.id,
+        _ => unreachable!(),
+    };
+    (l, f)
+}
+
+/// A passing column of the Node resources reader: a handle group tied by `rule`.
+fn group(name: &str, finding: &str, rule: &str) -> Value {
+    json!({"column": name, "region": "non-heap", "unit": "count", "slope": 40, "shape": "linear",
+        "site": "src/heartbeat.js:15", "finding": finding, "candidates": [finding],
+        "tie": {"rule": rule, "key": "src/heartbeat.js:15"}})
+}
+
+fn resources(passed: Value) -> NewEvidence {
+    graph("node-resources", K::GrowthSeries, A::Live, passed)
+}
+
+#[test]
+fn a_timer_or_listener_group_tied_by_its_site_backs_a_registration_table() {
+    // The node-socket-heartbeat shape: the census gave the `setInterval` finding the holder
+    // blocked-stack; the resources capture observes the live timers made at its line.
+    let (mut l, f) = node_setup();
+    for name in [
+        "group:handle/Timeout@src/heartbeat.js:15",
+        "group:handle/Timeout@src/heartbeat.js:15#2",
+        "group:handle/EventListener@src/bus.js:4",
+    ] {
+        let mut l2 = l.clone();
+        let e = add(&mut l2, resources(json!([group(name, "F1", "site")])));
+        change(
+            &mut l2,
+            &f,
+            Holder::RegistrationTable,
+            std::slice::from_ref(&e),
+        )
+        .unwrap();
+        let fin = l2.finding(&f).unwrap();
+        assert_eq!(fin.holder, Some(Holder::RegistrationTable), "{name}");
+        let ch = &l2.annotation(&f).unwrap().holder_changes;
+        assert_eq!(ch[0].from, Holder::StaticGlobal);
+        assert_eq!(ch[0].evidence, vec![e]);
+    }
+    // A column that lists the finding among its candidates is tied to it.
+    let mut c = group("group:handle/Timeout@src/heartbeat.js:15", "F9", "site");
+    c["candidates"] = json!(["F9", "F1"]);
+    let e = add(&mut l, resources(json!([c])));
+    change(&mut l, &f, Holder::RegistrationTable, &[e]).unwrap();
+}
+
+#[test]
+fn the_timer_table_reader_backs_nothing_but_a_registration_table_tied_by_site() {
+    let (mut l, f) = node_setup();
+    let timer = "group:handle/Timeout@src/heartbeat.js:15";
+    let cases: Vec<(&str, NewEvidence, Holder, &str)> = vec![
+        (
+            "tied by a holder, not a site",
+            resources(json!([group(timer, "F1", "holder")])),
+            Holder::RegistrationTable,
+            "not timer or listener groups tied by the finding's own creation site",
+        ),
+        (
+            "no tie object",
+            resources(json!([{"column": timer, "finding": "F1", "candidates": ["F1"]}])),
+            Holder::RegistrationTable,
+            "not timer or listener groups tied by the finding's own creation site",
+        ),
+        (
+            "a socket group is not a registration table",
+            resources(json!([group(
+                "group:handle/TCPSocketWrap@src/conn.js:3",
+                "F1",
+                "site"
+            )])),
+            Holder::RegistrationTable,
+            "not timer or listener groups tied by the finding's own creation site",
+        ),
+        (
+            "a whole-process metric",
+            resources(json!([group("metric:node.active/Timeout", "F1", "site")])),
+            Holder::RegistrationTable,
+            "not timer or listener groups tied by the finding's own creation site",
+        ),
+        (
+            "tied to another finding",
+            resources(json!([group(timer, "F9", "site")])),
+            Holder::RegistrationTable,
+            "no passing column tied to F1",
+        ),
+        (
+            "only the registration table",
+            resources(json!([group(timer, "F1", "site")])),
+            Holder::ClosureContinuation,
+            "observes timer and listener tables only",
+        ),
+        (
+            "a test run is not live or dump",
+            graph(
+                "node-resources",
+                K::GrowthSeries,
+                A::Test,
+                json!([group(timer, "F1", "site")]),
+            ),
+            Holder::RegistrationTable,
+            "not dump or live",
+        ),
+        (
+            "another kind",
+            graph(
+                "node-resources",
+                K::UnitCountSeries,
+                A::Live,
+                json!([group(timer, "F1", "site")]),
+            ),
+            Holder::RegistrationTable,
+            "not growth-series",
+        ),
+    ];
+    for (name, ev, to, want) in cases {
+        let e = add(&mut l, ev);
+        let r = refusal(change(&mut l, &f, to, &[e]));
+        assert_eq!(r.code, codes::ANNOTATION_CONFLICT, "{name}");
+        assert!(r.message.contains(want), "{name}: {}", r.message);
+        assert_eq!(
+            l.finding(&f).unwrap().holder,
+            Some(Holder::StaticGlobal),
+            "{name}"
+        );
+    }
+    // The refusal for a registration table names the timer route.
+    let e = add(&mut l, resources(json!([group(timer, "F9", "site")])));
+    let r = refusal(change(&mut l, &f, Holder::RegistrationTable, &[e]));
+    assert!(r.fix.contains("--backend node-resources"), "{}", r.fix);
+    // A tie through a writer's site is refused: the key is not the finding's own site.
+    let mut w = group(timer, "F1", "site");
+    w["tie"]["key"] = json!("src/other.js:7");
+    let e = add(&mut l, resources(json!([w])));
+    let r = refusal(change(&mut l, &f, Holder::RegistrationTable, &[e]));
+    assert!(
+        r.message.contains("a writer's site does not count"),
+        "{}",
+        r.message
+    );
+    // The timer route is named for a finding in a JavaScript file only.
+    let (mut other, g) = setup();
+    let e = add(&mut other, resources(json!([group(timer, "F9", "site")])));
+    let r = refusal(change(&mut other, &g, Holder::RegistrationTable, &[e]));
+    assert!(!r.fix.contains("node-resources"), "{}", r.fix);
+    // Another tool that names no heap graph stays refused for a timer group.
+    let e = add(
+        &mut l,
+        graph(
+            "dla-sample",
+            K::GrowthSeries,
+            A::Live,
+            json!([group(timer, "F1", "site")]),
+        ),
+    );
+    let r = refusal(change(&mut l, &f, Holder::RegistrationTable, &[e]));
+    assert!(
+        r.message.contains("not a heap-graph reader"),
+        "{}",
+        r.message
+    );
+}
+
 #[test]
 fn a_finding_without_a_holder_annotates_without_evidence() {
     let mut l = m3_ledger();

@@ -88,6 +88,17 @@
       "description": "True when the timeout fired.",
       "type": "boolean"
     },
+    "toolchain": {
+      "description": "The tool versions the child saw (the tools of the fixture's runtimes); absent when none\ncould be read.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunToolchain"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "usage": {
       "description": "Token usage from the final result event.",
       "$ref": "#/$defs/Usage"
@@ -111,6 +122,47 @@
     "started_at"
   ],
   "$defs": {
+    "RunToolchain": {
+      "description": "The `toolchain` block of `run.json`: the exact versions the child saw.",
+      "type": "object",
+      "properties": {
+        "go": {
+          "description": "Go, from `go env GOVERSION` without the `go` prefix (`1.22.12`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "java": {
+          "description": "Java, from `java -version` (`21.0.12`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node": {
+          "description": "Node, from `node --version` without the `v` (`22.12.0`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "python": {
+          "description": "Python, from `python3 --version` (`3.14.4`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rust": {
+          "description": "Rust, from `rustc --version` (`1.99.1`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "Usage": {
       "description": "Token usage of one run.",
       "type": "object",

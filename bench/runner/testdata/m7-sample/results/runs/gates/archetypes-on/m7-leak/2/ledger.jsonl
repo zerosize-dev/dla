@@ -1,0 +1,6 @@
+{"type": "finding_added", "finding": {"id": "F1", "state": "candidate", "site": "src/a.py:10", "holder": "container-field", "supports": []}}
+{"type": "transition", "finding": "F1", "from": "under_test", "to": "confirmed", "evidence": ["E3"]}
+{"type": "finding_added", "finding": {"id": "F2", "state": "candidate", "site": "src/z.py:1", "holder": "container-field", "supports": []}}
+{"type": "checklist_answer", "item": "intake.build", "status": "answered", "evidence": []}
+{"type": "checklist_answer", "item": "intake.build", "status": "answered", "evidence": ["E4"]}
+{"type": "checklist_answer", "item": "intake.scope", "status": "partial", "evidence": []}

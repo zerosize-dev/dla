@@ -252,7 +252,10 @@ differing paths. `table` renders `metrics.json` into `table.md`: one metric
 table per group (value, numerator/denominator, mean and standard deviation
 over run indexes), a usage table and a per-fixture table.
 
-`metrics.json` has thirteen ratio metrics. `source_overclaim_rate` is the share
+`metrics.json` has seventeen ratio metrics (four of them added in M7:
+`undiscriminated_refutations`, `uncited_findings`, `uncited_checklist_answers`
+and `dropped_rate`, plus the `decoys` and `agreement` blocks; see `GRADING.md`).
+`dla-bench gates`, `close-calls` and `calib-extract` read them. `source_overclaim_rate` is the share
 of `artifact`-entry runs that claim a leak at a source site although no source
 was given; it is null when a results directory holds no such run, which is the
 case for every result before M4. A finding may carry an `owner`, a leak without a
@@ -605,7 +608,7 @@ additional failure (a regression must not hide behind the entry).
 
 The last full run (`dla-bench dynamic --parallel 2`, release binaries, M6 after the fix rounds): 32 of 34
 fixtures pass and 2 are expected failures: `node-socket-heartbeat` and `rust-tree-parent-links`
-(the policy cannot read the code). After the benchmark follow-up (loopback `close` in the two node-socket-heartbeat fixtures, the label decision in the policy) the run was repeated with release binaries, archetypes on and off: 32 pass and the same 2 expected failures each time; `node-socket-heartbeat` still fails with the same holder text, so its entry stays. The four fixtures whose label could not be reached before the fix rounds
+(the policy cannot read the code). Since M7 the `node-resources` summary names the observed holder of a timer group tied by the finding's own site, so `node-socket-heartbeat` passes and its entry is removed; `rust-tree-parent-links` is the only expected failure. After the benchmark follow-up (loopback `close` in the two node-socket-heartbeat fixtures, the label decision in the policy) the run was repeated with release binaries, archetypes on and off: 32 pass and the same 2 expected failures each time; `node-socket-heartbeat` still failed with the same holder text then. The four fixtures whose label could not be reached before the fix rounds
 (`jvm-extension-reload`, `jvm-invoice-render`, `rust-meter-callbacks`, `jni-order-codec`) pass and their entries are removed. The
 `needs_archetypes` flag of an entry stays for a future label entry. `node-retry-scheduler` passes: the policy runs the
 `dla ledger annotate F --holder H --evidence E` command that `needed` prints for the finding of
@@ -617,7 +620,6 @@ column observed `static/global`.
 | fixture | failure | reason |
 | --- | --- | --- |
 | `rust-tree-parent-links` | `leak L1 (src/section.rs:27) is not confirmed` | The policy confirms the `children` edge of the `Rc` cycle (`section.rs:11`); the fixture expects the `parent` back-link (`section.rs:27`, alternatively `:10`, `:16-22`). Picking the edge to weaken needs reading the code. |
-| `node-socket-heartbeat` | `leak L1 (src/heartbeat.js:15) is confirmed with holder blocked-stack, expected registration-table` | The census gives the `setInterval` timer finding the holder `blocked-stack` and the policy keeps it. The per-point heap-graph run observes `registration-table` for the column of `Session.recent` (the sessions are held through the loopback socket events) and the policy annotates that finding with the growth evidence, but no heap column ties to the timer finding, so there is no observed holder to correct it with. `node-resources` ties the timer group to the finding by site only. |
 
 `jni-order-codec` meets the milestone's acceptance for multi-runtime runs (two
 workers, one merged ledger with both slices, merged coverage): the driver fails

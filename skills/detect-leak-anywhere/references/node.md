@@ -73,6 +73,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   it closes over. They are not `closure/continuation`. That holder is for a function-context variable
   that holds a chain of values, not for the callback a registration keeps. If a finding for a timer or a
   listener has another holder, correct it: `dla ledger annotate F --holder registration-table --evidence <growth evidence id>`.
+  Growth evidence from `dla summarize non-heap --backend node-resources` on 3 or more `resources.json`
+  files also backs this correction when its passing `Timeout` or listener group is tied to F by the
+  creation site, and only the finding's own site: a group tied through a writer's site is refused
+  (the output prints the command, and `observed_holder` names the finding).
 - ES module probes are not supported (CommonJS only); closure variables cannot be inspected.
 - Heap analysis tools lag new Node releases.
 - `--capture nonheap` uses `async_hooks`; promise-heavy targets can run up to about 10x slower.

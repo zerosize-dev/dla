@@ -34,7 +34,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - memray capture files and stats land under `attach/P<n>/`; the raw `.bin` is not read by any adapter.
   Harness captures are read by `dla summarize`: `py-tracemalloc` and `py-memray` (`alloc-stack-diff`) tie
   by the stack's first project frame; `py-types` (`type-histogram-diff`) ties only when a growing type is
-  the finding's accumulation class and never for built-in containers; `py-resources` (`non-heap`) ties a
+  the finding's accumulation class and never for built-in containers (a `py.type:*` count that ties to no finding has no residual route: it needs its own disposition); `py-resources` (`non-heap`) ties a
   thread or task group to the finding at the line that created it.
 - memray missing in the target's interpreter is a coverage gap (`pip install memray` there); the
   tracemalloc capture still runs.
