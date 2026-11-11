@@ -137,6 +137,26 @@ pub fn producer_hint(kind: EvidenceKind, finding: &FindingId) -> String {
     }
 }
 
+/// A short form of [`producer_hint`]: the command alone, for `--suggest` rows.
+pub fn producer_command(kind: EvidenceKind, finding: &FindingId) -> String {
+    match kind {
+        EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => {
+            format!("dla trend <S> --finding {finding}")
+        }
+        EvidenceKind::RetentionPath => {
+            format!("dla summarize heap-graph <dumps> --finding {finding}")
+        }
+        EvidenceKind::AllocStack => {
+            format!("dla summarize alloc-stack-diff <profiles> --finding {finding}")
+        }
+        EvidenceKind::Discriminator => format!("dla alloc-test <H> --finding {finding}"),
+        other => {
+            let hint = producer_hint(other, finding);
+            hint.split("   ").next().unwrap_or(&hint).to_owned()
+        }
+    }
+}
+
 fn refuse(code: &str, message: String, missing: impl Into<String>, fix: String) -> Refusal {
     Refusal::new(code, message, missing, fix)
 }
@@ -831,7 +851,8 @@ pub struct SuggestRow {
 }
 
 /// Read-only: per archetype that fits the finding's polarity, whether it can be labelled
-/// now and what is missing otherwise. Met rows first, then the closest misses.
+/// now and what is missing otherwise. Met rows first, then the rows missing evidence (the
+/// closest first), then the rows a wrong holder or an open sibling blocks.
 pub fn suggest(
     evidence: &dyn EvidenceLookup,
     findings: &dyn FindingLookup,
@@ -955,8 +976,8 @@ pub fn suggest(
     }
     let rank = |r: &SuggestRow| match r.status {
         "met" => (0, 0),
-        "blocked" => (1, 0),
-        _ => (2, r.missing.len()),
+        "blocked" => (2, 0),
+        _ => (1, r.missing.len()),
     };
     rows.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.id.cmp(&b.id)));
     Ok(rows)

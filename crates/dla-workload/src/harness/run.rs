@@ -62,7 +62,9 @@ use super::{
     capture::{self, AgentNotes, CaptureSet, NativeTool},
     cover::{self, CoverageOutcome},
     dumps::{self, DumpFile, Rec},
-    harness_dir, pymemray,
+    harness_dir,
+    pace::{self, Pace},
+    pymemray,
     symbolize::{Sites, symbolize},
 };
 
@@ -105,6 +107,9 @@ pub struct RunOptions {
     /// Run the points under this tool instead of measuring them (`--tool`): no series is
     /// written, the tool's output is.
     pub tool: Option<NativeTool>,
+    /// `(x, seconds)` pairs to estimate the run's duration from when the harness has no
+    /// series of its own (a clone made by `dla intervene` borrows its control's).
+    pub pace_seed: Vec<(f64, f64)>,
 }
 
 impl Default for RunOptions {
@@ -120,6 +125,7 @@ impl Default for RunOptions {
             capture: CaptureSet::default(),
             capture_dumps: None,
             tool: None,
+            pace_seed: Vec::new(),
         }
     }
 }
@@ -198,6 +204,10 @@ pub struct RunOutput {
     /// Native allocation sites in the JNI exports of the project (JVM harness with a
     /// native library).
     pub ffi_sites: Vec<FfiSite>,
+    /// Why the run stopped before its plan, when it did: the run deadline cut a point
+    /// or kept later points from starting. The series it wrote is partial and never
+    /// refutes anything.
+    pub partial: Vec<String>,
 }
 
 fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<String>) -> Refusal {
@@ -894,6 +904,225 @@ struct ModeRun {
     scan_logs: Vec<(String, PathBuf)>,
     /// Capture files of the points.
     captures: Vec<CaptureFile>,
+    /// Why this mode stopped before its plan (the run deadline).
+    partial: Vec<String>,
+}
+
+/// The time the run may still use: the nearest deadline less a reserve for the work that
+/// follows the points. Read once when the command starts; the clock runs from then.
+struct Allowance {
+    left: f64,
+    started: Instant,
+    reserve: f64,
+    deadline: String,
+}
+
+impl Allowance {
+    fn of(ctx: &ToolCtx) -> Option<Self> {
+        let (left, deadline) = ctx.time_left()?;
+        let left = left.as_secs_f64();
+        Some(Self {
+            left,
+            started: Instant::now(),
+            reserve: pace::reserve_secs(left),
+            deadline,
+        })
+    }
+
+    /// Seconds still usable for points.
+    fn usable(&self) -> f64 {
+        (self.left - self.started.elapsed().as_secs_f64() - self.reserve).max(0.0)
+    }
+
+    /// `timeout` cut to the usable time (at least one second); the flag says it was cut.
+    fn cap(&self, timeout: Duration) -> (Duration, bool) {
+        let u = self.usable();
+        if u < timeout.as_secs_f64() {
+            (Duration::from_secs_f64(u.max(1.0)), true)
+        } else {
+            (timeout, false)
+        }
+    }
+}
+
+/// The `(x, seconds)` pairs a series gives: one per point of a command-mode series
+/// (each point is a process), one `(last x, total seconds)` for a driver-mode series.
+pub fn pace_samples(series: &dla_core::series::SeriesFile, mode: HarnessMode) -> Vec<(f64, f64)> {
+    if mode == HarnessMode::Command {
+        series
+            .points
+            .iter()
+            .map(|p| (p.x, p.t_ms as f64 / 1000.0))
+            .collect()
+    } else {
+        series
+            .points
+            .last()
+            .map(|p| (p.x, p.t_ms as f64 / 1000.0))
+            .into_iter()
+            .collect()
+    }
+}
+
+/// The pace of the earlier series of `manifest` in `mode`, else `opts.pace_seed`.
+fn seed_pace(ctx: &ToolCtx, manifest: &HarnessManifest, opts: &RunOptions, mode: KeyMode) -> Pace {
+    use dla_core::series::{SERIES_DIR, SeriesFile};
+    let mut pace = Pace::new();
+    let mut samples = opts.pace_seed.clone();
+    if let Ok(rd) = fs::read_dir(ctx.run_dir.join(SERIES_DIR)) {
+        let mut ids: Vec<(u32, String)> = rd
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let id = name.strip_suffix(".json")?.to_owned();
+                Some((dla_core::series::numbered('S', &id)?, id))
+            })
+            .collect();
+        ids.sort();
+        let found = ids.into_iter().rev().find_map(|(_, id)| {
+            let s = SeriesFile::load(&ctx.run_dir, &id).ok()?;
+            (s.source.harness.as_deref() == Some(manifest.id.as_str())
+                && s.source.mode == Some(mode)
+                && !s.points.is_empty())
+            .then_some(s)
+        });
+        if let Some(s) = found {
+            samples = pace_samples(&s, manifest.mode);
+        }
+    }
+    for (x, secs) in samples {
+        pace.push(x, secs);
+    }
+    pace
+}
+
+/// The refusal for a driver whose single process is estimated to outlast the run.
+fn too_long_driver(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    opts: &RunOptions,
+    a: &Allowance,
+    pace: &Pace,
+    estimate: f64,
+) -> Refusal {
+    let usable = a.usable();
+    let iterations = opts.iterations.unwrap_or(manifest.iterations);
+    let step = manifest.step;
+    let alloc = opts.source_kind == SeriesSourceKind::AllocTest;
+    let at = |rounds: u32, st: u64| st.saturating_mul(u64::from(manifest.warmup + rounds)) as f64;
+    let suggestion = if alloc {
+        pace::largest_count(pace, usable, opts.extra, |c| vec![at(iterations + c, step)])
+            .filter(|c| *c >= pace::MIN_EXTRA)
+            .map(|c| format!("dla alloc-test {} --extra {c}", manifest.id))
+            .unwrap_or_default()
+    } else {
+        let count = pace::largest_count(pace, usable, iterations, |c| vec![at(c, step)]);
+        let by_step = pace::largest_step(pace, usable, step, |s| vec![at(iterations, s)]);
+        let mut parts = Vec::new();
+        if let Some(c) = count {
+            parts.push(format!("dla harness run {} --iterations {c}", manifest.id));
+        }
+        if let Some(s) = by_step {
+            parts.push(format!(
+                "dla harness gen --lang {} --driver --step {s} --iterations {iterations}   (a smaller step, same number of rounds)",
+                manifest.runtime.as_str()
+            ));
+        }
+        parts.join("   or   ")
+    };
+    let what = if alloc {
+        format!("dla alloc-test {}", manifest.id)
+    } else {
+        format!("dla harness run {}", manifest.id)
+    };
+    ctx.time_budget_refusal(
+        &what,
+        estimate.ceil().max(1.0) as u64,
+        usable.floor() as u64,
+        &a.deadline,
+        &suggestion,
+    )
+}
+
+/// The refusal for a run that has no time left for its next point.
+fn a_nothing_left(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    a: &Allowance,
+    predicted: f64,
+) -> Refusal {
+    ctx.time_budget_refusal(
+        &format!("dla harness run {}", manifest.id),
+        predicted.ceil().max(1.0) as u64,
+        a.usable().floor() as u64,
+        &a.deadline,
+        "",
+    )
+}
+
+/// The refusal for a run whose estimate does not fit: names the estimate, what is left
+/// and a smaller command. `spent` is what the points already run in this command took.
+#[allow(clippy::too_many_arguments)]
+fn too_long(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    opts: &RunOptions,
+    allow: &Allowance,
+    pace: &Pace,
+    spent: f64,
+    estimate: f64,
+    first_k: u32,
+) -> Refusal {
+    let usable = allow.usable() + spent;
+    let step = manifest.step;
+    let alloc = opts.source_kind == SeriesSourceKind::AllocTest;
+    let (what, suggestion) = if alloc {
+        let base = manifest.warmup + opts.iterations.unwrap_or(manifest.iterations);
+        let fit = pace::largest_count(pace, usable, opts.extra, |c| {
+            (first_k..=base + c)
+                .map(|k| (step * u64::from(k)) as f64)
+                .collect()
+        })
+        .filter(|c| *c >= pace::MIN_EXTRA);
+        (
+            format!("dla alloc-test {}", manifest.id),
+            fit.map(|c| format!("dla alloc-test {} --extra {c}", manifest.id))
+                .unwrap_or_default(),
+        )
+    } else {
+        let iterations = opts.iterations.unwrap_or(manifest.iterations);
+        let count = pace::largest_count(pace, usable, iterations, |c| {
+            (1..=manifest.warmup + c)
+                .map(|k| (step * u64::from(k)) as f64)
+                .collect()
+        });
+        let by_step = pace::largest_step(pace, usable, step, |s| {
+            (1..=manifest.warmup + iterations)
+                .map(|k| (s * u64::from(k)) as f64)
+                .collect()
+        });
+        let mut parts = Vec::new();
+        if let Some(c) = count {
+            parts.push(format!("dla harness run {} --iterations {c}", manifest.id));
+        }
+        if let Some(s) = by_step {
+            parts.push(format!(
+                "dla harness gen --lang {} --step {s} --iterations {iterations}   (a smaller step, same number of points)",
+                manifest.runtime.as_str()
+            ));
+        }
+        (
+            format!("dla harness run {}", manifest.id),
+            parts.join("   or   "),
+        )
+    };
+    ctx.time_budget_refusal(
+        &what,
+        estimate.ceil() as u64,
+        usable.floor() as u64,
+        &allow.deadline,
+        &suggestion,
+    )
 }
 
 /// Whether this run asks the agent of the harness's runtime for raw captures.
@@ -954,6 +1183,7 @@ fn exit_note(label: &str, res: &ExecResult) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_command_mode(
     ctx: &ToolCtx,
     manifest: &HarnessManifest,
@@ -961,18 +1191,53 @@ fn run_command_mode(
     paths: &Paths,
     mode: KeyMode,
     timeout: Duration,
+    allow: Option<&Allowance>,
+    pace: &mut Pace,
 ) -> Result<ModeRun, Refusal> {
     let iterations = opts.iterations.unwrap_or(manifest.iterations);
     let total = manifest.warmup + iterations + opts.extra;
+    let first = opts.first_point.max(1);
     let mut run = ModeRun::default();
+    let mut spent = 0.0_f64;
+    let size = |k: u32| manifest.step.saturating_mul(u64::from(k)) as f64;
+    // Known pace (an earlier series of this harness): refuse before the first point.
+    let mut decided = !pace.is_empty();
+    if let Some(a) = allow
+        && !pace.is_empty()
+    {
+        let estimate = pace.total((first..=total).map(size));
+        if estimate > a.usable() {
+            return Err(too_long(ctx, manifest, opts, a, pace, 0.0, estimate, first));
+        }
+    }
     let mut kept_warm = 0;
     let capturing = capture_active(manifest, opts);
     let dumps = opts.capture_dumps.unwrap_or(capture::DEFAULT_DUMPS);
     let heavy = capture::select_points(total, manifest.warmup, dumps);
-    for k in opts.first_point.max(1)..=total {
+    for k in first..=total {
         let n = manifest.step.saturating_mul(u64::from(k));
         let label = format!("p{k}-{}", mode.as_str());
         let last = k == total;
+        let (timeout, capped) = match allow {
+            Some(a) => {
+                let usable = a.usable();
+                let predicted = pace.predict(n as f64);
+                if usable < 1.0 || (!pace.is_empty() && predicted > usable) {
+                    if run.processes == 0 {
+                        return Err(a_nothing_left(ctx, manifest, a, predicted));
+                    }
+                    run.partial.push(format!(
+                        "stopped before point {label} (n={n}): it needs about {} s and {} s remain before the {}; the series ends at the previous point",
+                        predicted.ceil() as u64,
+                        usable.floor() as u64,
+                        a.deadline
+                    ));
+                    break;
+                }
+                a.cap(timeout)
+            }
+            None => (timeout, false),
+        };
         let pe = PointEnv {
             manifest,
             paths,
@@ -1025,11 +1290,42 @@ fn run_command_mode(
             break;
         }
         if res.timed_out {
-            run.limitations.push(format!(
+            let note = format!(
                 "point {label} (n={n}) did not finish in {} s and was killed (log {log_rel}); it is missing and larger points were not run",
                 timeout.as_secs()
-            ));
+            );
+            if capped {
+                run.partial.push(format!(
+                    "{note}: the limit was the time left before the {}",
+                    allow.map_or("run deadline", |a| a.deadline.as_str())
+                ));
+            }
+            run.limitations.push(note);
             break;
+        }
+        if res.code == Some(0)
+            && let Some(a) = allow
+        {
+            let secs = res.wall_ms as f64 / 1000.0;
+            spent += secs;
+            pace.push(n as f64, secs);
+            // No earlier series: decide once two points (or the last) are measured.
+            if !decided && (pace.has_slope() || k == total) {
+                decided = true;
+                let estimate = pace.total(((k + 1)..=total).map(size));
+                if estimate > a.usable() {
+                    return Err(too_long(
+                        ctx,
+                        manifest,
+                        opts,
+                        a,
+                        pace,
+                        spent,
+                        spent + estimate,
+                        first,
+                    ));
+                }
+            }
         }
         if let Some(c) = res.code.filter(|c| *c != 0) {
             // A crashed point (the agent's exit hook still writes a record) is not a
@@ -1108,6 +1404,7 @@ fn run_command_mode(
     Ok(run)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_driver_mode(
     ctx: &ToolCtx,
     manifest: &HarnessManifest,
@@ -1115,9 +1412,36 @@ fn run_driver_mode(
     paths: &Paths,
     mode: KeyMode,
     timeout: Duration,
+    allow: Option<&Allowance>,
+    pace: &mut Pace,
+    first_process: bool,
 ) -> Result<ModeRun, Refusal> {
     let rounds = opts.iterations.unwrap_or(manifest.iterations) + opts.extra;
     let total_rounds = manifest.warmup + rounds;
+    // One process runs all rounds, so the pace is the whole run's: an earlier series of
+    // this harness, or the mode that just ran.
+    let planned = manifest.step.saturating_mul(u64::from(total_rounds)) as f64;
+    let (timeout, capped) = match allow {
+        Some(a) => {
+            let estimate = pace.predict(planned);
+            if a.usable() < 1.0 || (!pace.is_empty() && estimate > a.usable()) {
+                if first_process {
+                    return Err(too_long_driver(ctx, manifest, opts, a, pace, estimate));
+                }
+                let mut skipped = ModeRun::default();
+                skipped.partial.push(format!(
+                    "mode {} was not run: it needs about {} s and {} s remain before the {}",
+                    mode.as_str(),
+                    estimate.ceil() as u64,
+                    a.usable().floor() as u64,
+                    a.deadline
+                ));
+                return Ok(skipped);
+            }
+            a.cap(timeout)
+        }
+        None => (timeout, false),
+    };
     let label = format!("p1-{}", mode.as_str());
     let capturing = capture_active(manifest, opts);
     let dumps_wanted = opts.capture_dumps.unwrap_or(capture::DEFAULT_DUMPS);
@@ -1157,10 +1481,19 @@ fn run_driver_mode(
         return Ok(run);
     }
     if res.timed_out {
-        run.limitations.push(format!(
+        let note = format!(
             "driver {label} did not finish in {} s and was killed (log {log_rel}); the rounds written so far are kept",
             timeout.as_secs()
-        ));
+        );
+        if capped {
+            run.partial.push(format!(
+                "{note}: the limit was the time left before the {}",
+                allow.map_or("run deadline", |a| a.deadline.as_str())
+            ));
+        }
+        run.limitations.push(note);
+    } else if res.code == Some(0) {
+        pace.push(planned, res.wall_ms as f64 / 1000.0);
     } else if let Some(note) = exit_note(&label, &res) {
         run.limitations.push(format!("{note} (log {log_rel})"));
     }
@@ -1404,19 +1737,48 @@ pub fn run_points(
     let mut max_post_units = 0u64;
     let mut first_log = None;
     let mut harness_failed: Option<Refusal> = None;
+    let allow = Allowance::of(ctx);
+    let mut carried = Pace::new();
     for mode in modes {
+        let mut pace = seed_pace(ctx, manifest, opts, mode);
+        if pace.is_empty() {
+            pace = carried.clone();
+        }
         let mut run = if command_mode {
-            run_command_mode(ctx, manifest, opts, &paths, mode, timeout)?
+            run_command_mode(
+                ctx,
+                manifest,
+                opts,
+                &paths,
+                mode,
+                timeout,
+                allow.as_ref(),
+                &mut pace,
+            )?
         } else {
-            run_driver_mode(ctx, manifest, opts, &paths, mode, timeout)?
+            run_driver_mode(
+                ctx,
+                manifest,
+                opts,
+                &paths,
+                mode,
+                timeout,
+                allow.as_ref(),
+                &mut pace,
+                out.processes == 0,
+            )?
         };
+        out.partial.extend(run.partial.iter().cloned());
+        if !command_mode {
+            carried = pace;
+        }
         goleak::leak_pass(
             ctx,
             manifest,
             opts,
             &paths,
             mode,
-            timeout,
+            allow.as_ref().map_or(timeout, |a| a.cap(timeout).0),
             leak_plan.as_ref(),
             &mut run,
         )?;
@@ -1463,6 +1825,7 @@ pub fn run_points(
             continue;
         }
         let mut limitations = run.limitations.clone();
+        limitations.extend(run.partial.iter().map(|p| format!("partial run: {p}")));
         if run.points.is_empty() {
             out.limitations.extend(limitations);
             out.limitations
@@ -1532,7 +1895,13 @@ pub fn run_points(
 
     // Detector pass at the warm-up n: abort-type detectors would end a measured run.
     let det_env = abort_detector_env(manifest);
-    if command_mode && !det_env.is_empty() && usable_modes > 0 {
+    let detect_time = allow.as_ref().map_or(timeout, |a| a.cap(timeout).0);
+    let detect_late = allow.as_ref().is_some_and(|a| a.usable() < 1.0);
+    if detect_late && command_mode && !det_env.is_empty() && usable_modes > 0 {
+        out.partial
+            .push("the detector pass was not run: no time remained before the deadline".to_owned());
+    }
+    if command_mode && !det_env.is_empty() && usable_modes > 0 && !detect_late {
         let n = manifest
             .step
             .saturating_mul(u64::from(manifest.warmup.max(1)));
@@ -1554,7 +1923,7 @@ pub fn run_points(
         let _ = fs::remove_file(&dump);
         let extra: Vec<(&str, String)> = Vec::new();
         let command = format!("{} (detector pass)", manifest.run.argv.join(" "));
-        let mut spec = pe.exec_spec(timeout, &command, &extra);
+        let mut spec = pe.exec_spec(detect_time, &command, &extra);
         // Abort-type detector settings merge like the manifest's own env.
         let tokens: [(&str, String); 0] = [];
         for (k, v) in merged_env(&det_env, &tokens) {
@@ -1647,6 +2016,12 @@ pub fn run_points(
         },
     )?;
     out.limitations.extend(cov_limits);
+    for p in out.partial.clone() {
+        let l = format!("partial run: {p}");
+        if !out.limitations.contains(&l) {
+            out.limitations.push(l);
+        }
+    }
     out.units = max_post_units;
     Ok(out)
 }
@@ -1802,6 +2177,7 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
         "detectors": out.detectors,
         "gaps": out.gaps,
         "limitations": out.limitations,
+        "partial": out.partial,
         "logs": out.logs,
         "tool": out.tool.map(NativeTool::as_str),
         "captures": out.captures,
@@ -1842,6 +2218,12 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
             "first": out.limitations.iter().take(3).map(|l| clip(l, 140)).collect::<Vec<_>>(),
         },
     });
+    if !out.partial.is_empty() {
+        result["partial"] = json!({
+            "reason": "the run deadline stopped it before its plan",
+            "first": out.partial.iter().take(2).map(|p| clip(p, 160)).collect::<Vec<_>>(),
+        });
+    }
     if manifest.mode == HarnessMode::Command {
         result["n_range"] = json!(out.x_range);
         result["step"] = json!(manifest.step);

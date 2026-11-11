@@ -230,7 +230,7 @@ fn recording(n: usize, other: usize) -> String {
     t
 }
 
-const CACHE_JAVA: &str = "package shop;\n\nimport java.util.ArrayList;\nimport java.util.List;\n\npublic final class Cache {\n    // the leak\n    static final List<byte[]> ENTRIES = new ArrayList<>();\n\n    static void x() {}\n\n    static void put(int n) {\n        ENTRIES.add(new byte[n]);\n    }\n}\n";
+const CACHE_JAVA: &str = "package shop;\n\nimport java.util.ArrayList;\nimport java.util.List;\n\npublic final class Cache {\n    // the leak\n    static final List<byte[]> ENTRIES = new ArrayList<>();\n    static int pad;\n    static void x() {}\n\n    static void put(int n) {\n        ENTRIES.add(new byte[n]);\n    }\n}\n";
 
 fn jfr_project(counts: &[(usize, usize)]) -> (Project, Vec<String>, String) {
     let p = Project::new();
@@ -716,7 +716,7 @@ fn thread_names_show_as_plain_patterns_or_shapes_and_never_tie() {
     let p = Project::new();
     p.put(
         "src/shop/Worker.java",
-        b"package shop;\n\npublic final class Worker {\n    static void spawn() {\n        new Thread(Worker::run).start();\n    }\n    static void run() {}\n}\n",
+        format!("package shop;\n\npublic final class Worker {{\n    static void spawn() {{\n        new Thread(Worker::run).start();\n    }}\n{}    static void run() {{}}\n}}\n", "    static int pad;\n".repeat(14)).as_bytes(),
     );
     // A finding whose site and writer are the frame the threads run in now.
     census_finding(

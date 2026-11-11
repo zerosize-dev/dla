@@ -13,7 +13,7 @@ use dla_core::{
     attribution,
     error::codes as core_codes,
     finding::ExplanationTag,
-    labels::Archetypes,
+    labels::{self, Archetypes, SuggestRow},
     paths,
 };
 use serde_json::{Value, json};
@@ -24,9 +24,6 @@ use crate::{
     ledger_cmd::{open, pointer},
     parse::parse_enum,
 };
-
-/// Most archetypes `--suggest` lists.
-const SUGGEST_ROWS: usize = 6;
 
 /// Loads the archetype table: `None` (archetypes off) when `DLA_ARCHETYPES=off`, when no
 /// plugin data directory can be found or when `data/archetypes.toml` is absent. A table
@@ -106,15 +103,6 @@ pub struct ExplainArgs {
     pub text: String,
 }
 
-fn clip(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_owned()
-    } else {
-        let cut: String = s.chars().take(n.saturating_sub(1)).collect();
-        format!("{cut}…")
-    }
-}
-
 /// `dla ledger label`.
 pub fn label(ctx: &Ctx, data: Option<&PathBuf>, a: LabelArgs) -> Res<Value> {
     let mut ledger = open(ctx)?;
@@ -164,7 +152,103 @@ pub fn label(ctx: &Ctx, data: Option<&PathBuf>, a: LabelArgs) -> Res<Value> {
             fits.join(", ")
         ));
     }
+    if let Some(w) = runtime_warning(ctx, &ledger, &rec.finding, &rec.label) {
+        out["runtime_warning"] = json!(w);
+    }
     Ok(out)
+}
+
+/// The runtime a finding belongs to: its worker prefix, the worker the command runs as, the
+/// language of its site, or the only runtime in the coverage manifest.
+fn finding_runtime(ctx: &Ctx, ledger: &Ledger, id: &FindingId) -> Option<String> {
+    let known = |r: &str| archetypes::runtime_rows(r).is_some();
+    if let Some(p) = id.prefix().filter(|p| known(p)) {
+        return Some(p.to_owned());
+    }
+    if let Some(w) = ctx.worker.as_deref().filter(|w| known(w)) {
+        return Some(w.to_owned());
+    }
+    let from_site = ledger
+        .finding(id)
+        .and_then(|f| f.site.as_deref())
+        .and_then(|s| s.rsplit_once(':').map(|(file, _)| file))
+        .and_then(runtime_of_file);
+    if let Some(r) = from_site {
+        return Some(r.to_owned());
+    }
+    let cov = dla_core::coverage::CoverageManifest::load(&ctx.run_dir)
+        .ok()
+        .flatten()?;
+    let mut it = cov.workers.keys().filter(|k| known(k));
+    match (it.next(), it.next()) {
+        (Some(only), None) => Some(only.clone()),
+        _ => None,
+    }
+}
+
+/// The runtime a source file belongs to, by extension.
+fn runtime_of_file(file: &str) -> Option<&'static str> {
+    let ext = file.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "java" | "kt" | "kts" | "scala" | "groovy" => "jvm",
+        "go" => "go",
+        "rs" => "rust",
+        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => "node",
+        "py" => "python",
+        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" => "native",
+        _ => return None,
+    })
+}
+
+/// A warning when an `L-*` label has no row in the finding's runtime reference. The label
+/// stays accepted: the table is shared and a row can fit a runtime the reference does not
+/// cover (L-OWNERSHIP on native C).
+fn runtime_warning(ctx: &Ctx, ledger: &Ledger, id: &FindingId, label: &str) -> Option<String> {
+    rows_warning(&finding_runtime(ctx, ledger, id)?, label)
+}
+
+fn rows_warning(runtime: &str, label: &str) -> Option<String> {
+    if !label.starts_with("L-") {
+        return None;
+    }
+    let rows = archetypes::runtime_rows(runtime)?;
+    if rows.contains(&label) {
+        return None;
+    }
+    Some(format!(
+        "{label} has no row in the {runtime} archetype reference (its rows: {}); the label is accepted. Check that the mechanism you found is {label}'s and not one of those rows or UNCLASSIFIED",
+        rows.join(", ")
+    ))
+}
+
+/// The row that closes every `--suggest` answer.
+fn unclassified_row(finding: &FindingId) -> String {
+    format!(
+        "{} none-fits: compare each summary above with the mechanism you stated; if none matches, choose UNCLASSIFIED: dla ledger label {finding} --as UNCLASSIFIED --note \"<holder and mechanism in words>\"",
+        archetypes::UNCLASSIFIED_ROW
+    )
+}
+
+fn row_line(r: &SuggestRow) -> String {
+    let state = match r.status {
+        "met" => format!("met [{}]", r.evidence.join(",")),
+        "missing" => format!("missing {}", r.missing.join(",")),
+        _ => format!("blocked, {}", r.blocked_by.join("; ")),
+    };
+    format!("{} {state}: {}", r.id, r.summary)
+}
+
+/// Adds `key` to the object when the answer stays within the output bound.
+fn add_if_fits(out: &mut Value, key: &str, alternatives: Vec<Value>) {
+    for v in alternatives {
+        out[key] = v;
+        if serde_json::to_string(out).is_ok_and(|s| s.len() < dla_core::MAX_OUTPUT_BYTES) {
+            return;
+        }
+    }
+    if let Some(o) = out.as_object_mut() {
+        o.remove(key);
+    }
 }
 
 fn suggest(ledger: &Ledger, a: &LabelArgs, table: Option<&Table>) -> Res<Value> {
@@ -174,32 +258,72 @@ fn suggest(ledger: &Ledger, a: &LabelArgs, table: Option<&Table>) -> Res<Value> 
             "finding": a.finding.to_string(),
             "archetypes": "off",
             "note": "archetypes are off (DLA_ARCHETYPES=off or no data/archetypes.toml): only `dla ledger label --as UNCLASSIFIED --note` applies",
-            "rows": [],
+            "rows": [unclassified_row(&a.finding)],
         }));
     };
-    let rows = ledger.suggest_labels(&a.finding, table)?;
-    let total = rows.len();
-    let shown: Vec<Value> = rows
-        .into_iter()
-        .take(SUGGEST_ROWS)
-        .map(|mut r| {
-            r.summary = clip(&r.summary, 70);
-            serde_json::to_value(r).unwrap_or(Value::Null)
-        })
-        .collect();
+    let found = ledger.suggest_labels(&a.finding, table)?;
+    let mut rows: Vec<String> = found.iter().map(row_line).collect();
+    rows.push(unclassified_row(&a.finding));
     let mut out = json!({
         "ok": true,
         "finding": a.finding.to_string(),
         "archetypes": "on",
-        "rows": shown,
+        "rows": rows,
     });
-    if total > SUGGEST_ROWS {
-        out["more"] = json!(total - SUGGEST_ROWS);
+    // The rows and their summaries stay whole; the commands around them shrink to fit.
+    let mut full = serde_json::Map::new();
+    let mut short = serde_json::Map::new();
+    for k in found
+        .iter()
+        .filter(|r| r.status == "missing")
+        .flat_map(|r| &r.missing)
+    {
+        if let Ok(kind) = k.parse::<dla_core::EvidenceKind>() {
+            let cmd = labels::producer_command(kind, &a.finding);
+            let bare = cmd.replace(&format!(" --finding {}", a.finding), "");
+            full.insert(k.clone(), json!(cmd));
+            short.insert(k.clone(), json!(bare));
+        }
     }
-    out["next"] = json!(format!(
-        "dla ledger label {} --as <ID> [--evidence E1,E2]   (a met row is ready; DLA never picks)",
-        a.finding
-    ));
+    if !full.is_empty() {
+        add_if_fits(
+            &mut out,
+            "produce",
+            vec![Value::Object(full), Value::Object(short)],
+        );
+    }
+    if found
+        .iter()
+        .any(|r| r.blocked_by.iter().any(|b| b.starts_with("holder ")))
+    {
+        let f = &a.finding;
+        add_if_fits(
+            &mut out,
+            "holder_fix",
+            vec![
+                json!(format!(
+                    "if the holder is wrong: dla ledger annotate {f} --holder <one the row lists> --evidence <E>"
+                )),
+                json!(format!(
+                    "wrong holder: dla ledger annotate {f} --holder <H> --evidence <E>"
+                )),
+            ],
+        );
+    }
+    add_if_fits(
+        &mut out,
+        "next",
+        vec![
+            json!(format!(
+                "dla ledger label {} --as <ID> [--evidence E1,E2]   (met is a candidate, not an answer: DLA never picks)",
+                a.finding
+            )),
+            json!(format!(
+                "dla ledger label {} --as <ID> --evidence E..",
+                a.finding
+            )),
+        ],
+    );
     Ok(out)
 }
 
@@ -274,4 +398,38 @@ pub fn explain(ctx: &Ctx, a: ExplainArgs) -> Res<Value> {
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_label_without_a_row_in_the_runtime_reference_warns_and_names_the_rows() {
+        let w = rows_warning("native", "L-OWNERSHIP").unwrap();
+        assert!(
+            w.contains("native archetype reference") && w.contains("L-HANDLE"),
+            "{w}"
+        );
+        assert!(w.contains("the label is accepted"), "{w}");
+        let w = rows_warning("jvm", "L-WORKER").unwrap();
+        assert!(w.contains("L-COLLECT, L-TLS, L-UNLOAD"), "{w}");
+    }
+
+    #[test]
+    fn a_label_with_a_row_or_a_non_leak_label_does_not_warn() {
+        assert_eq!(rows_warning("jvm", "L-UNLOAD"), None);
+        assert_eq!(rows_warning("native", "L-HANDLE"), None);
+        assert_eq!(rows_warning("jvm", "N-WARM"), None);
+        assert_eq!(rows_warning("jvm", "UNCLASSIFIED"), None);
+        assert_eq!(rows_warning("cobol", "L-COLLECT"), None);
+    }
+
+    #[test]
+    fn a_source_file_names_its_runtime() {
+        assert_eq!(runtime_of_file("src/Main.java"), Some("jvm"));
+        assert_eq!(runtime_of_file("src/ring.c"), Some("native"));
+        assert_eq!(runtime_of_file("a.go"), Some("go"));
+        assert_eq!(runtime_of_file("README"), None);
+    }
 }

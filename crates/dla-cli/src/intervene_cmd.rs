@@ -287,6 +287,7 @@ fn run_clone(
         modes: vec![mode],
         iterations: Some(u32::try_from(post).unwrap_or(u32::MAX)),
         source_kind: SeriesSourceKind::Intervention,
+        pace_seed: control_pace(ctl, manifest.mode),
         ..RunOptions::default()
     };
     let out = match run_points(tc, manifest, &opts) {
@@ -308,7 +309,10 @@ fn run_clone(
     let series = SeriesFile::load(&tc.run_dir, id)?;
     let idx: Vec<usize> = (0..series.columns.len()).collect();
     let trend = analysis::analyze_series(&series, &idx, th);
-    let run_ok = !out.exits.is_empty() && out.exits.iter().all(|(_, c)| *c == Some(0));
+    // A run the deadline cut short is not a run of the plan: no verdict from it.
+    let run_ok = !out.exits.is_empty()
+        && out.exits.iter().all(|(_, c)| *c == Some(0))
+        && out.partial.is_empty();
     let mut limitations = out.limitations;
     limitations.extend(out.gaps);
     Ok(Ran::Ok(Box::new(Measured {
@@ -317,6 +321,56 @@ fn run_clone(
         run_ok,
         limitations,
     })))
+}
+
+/// The control's `(x, seconds)` pairs: what a run of the clone is expected to cost.
+fn control_pace(ctl: &Control, mode: dla_core::harness::HarnessMode) -> Vec<(f64, f64)> {
+    dla_workload::harness::run::pace_samples(&ctl.series, mode)
+}
+
+/// Refuses before anything is cloned when the unedited rerun and the edited run are
+/// expected to take longer than the run has left.
+fn require_time_for_runs(
+    tc: &ToolCtx,
+    ctl: &Control,
+    src: &dla_core::harness::HarnessManifest,
+    runs: u32,
+) -> Res<()> {
+    let Some((left, deadline)) = tc.time_left() else {
+        return Ok(());
+    };
+    let mut pace = dla_workload::harness::pace::Pace::new();
+    for (x, secs) in control_pace(ctl, src.mode) {
+        pace.push(x, secs);
+    }
+    let one: f64 = if src.mode == dla_core::harness::HarnessMode::Command {
+        ctl.series.points.iter().map(|p| pace.predict(p.x)).sum()
+    } else {
+        pace.predict(ctl.series.points.last().map_or(0.0, |p| p.x))
+    };
+    let left = left.as_secs_f64();
+    let usable = (left - dla_workload::harness::pace::reserve_secs(left)).max(0.0);
+    if one * f64::from(runs) <= usable {
+        return Ok(());
+    }
+    let suggestion = if runs > 1 && one <= usable {
+        format!(
+            "dla intervene {} --finding <F> ...   (without --rerun-control: one run of about {} s)",
+            src.id,
+            one.ceil() as u64
+        )
+    } else {
+        String::new()
+    };
+    Err(tc
+        .time_budget_refusal(
+            &format!("dla intervene {}", src.id),
+            (one * f64::from(runs)).ceil() as u64,
+            usable.floor() as u64,
+            &deadline,
+            &suggestion,
+        )
+        .into())
 }
 
 fn column_json(series: &str, trend: &str, name: &str, c: Option<&ColumnTrend>) -> Value {
@@ -479,6 +533,10 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
     let src_dir = dla_workload::harness::harness_dir(&tc.run_dir, &src.id);
     let owned = plan::harness_owned_names(&src_dir);
     let work = src_dir.join(dla_workload::harness::WORK);
+
+    // The control series says how long a run of the clone takes: refuse up front when
+    // the run (twice with --rerun-control) does not fit in the time left.
+    require_time_for_runs(&tc, &ctl, &src, if a.rerun_control { 2 } else { 1 })?;
 
     // Plan against the harness's own copy; nothing is cloned if this refuses.
     let edit = match &a.patch {

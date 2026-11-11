@@ -650,3 +650,30 @@ fn go_a_stub_that_stops_the_build_is_invalid_and_never_evidence() {
     assert!(code.contains("strong"), "{code}");
     assert_eq!(state_of(&c.run_dir, f), "confirmed");
 }
+
+#[test]
+fn python_an_intervention_that_cannot_fit_the_run_budget_is_refused_before_cloning() {
+    let Some(c) = python() else { return };
+    // The control series says each point took ten minutes: nine of them do not fit the
+    // run's hour, so nothing is cloned or run.
+    let path = c.run_dir.join("series/S1.json");
+    let mut series: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for p in series["points"].as_array_mut().unwrap() {
+        p["t_ms"] = Value::from(600_000);
+    }
+    fs::write(&path, serde_json::to_string(&series).unwrap()).unwrap();
+    let (code, e) = refused(
+        &c.project,
+        &[
+            "intervene",
+            "H1",
+            "--finding",
+            &c.finding,
+            "--stub-writer",
+            "app/audit.py:8",
+        ],
+    );
+    assert_eq!(code, "time-budget", "{e}");
+    assert!(!c.run_dir.join("harness/H2").exists(), "nothing was cloned");
+    assert!(!c.run_dir.join("intervene/I1").exists());
+}

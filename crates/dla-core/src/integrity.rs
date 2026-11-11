@@ -340,12 +340,10 @@ pub fn seal_all(run_dir: &Path) -> Result<Vec<String>, Error> {
 }
 
 /// Takes the exclusive lock that serialises writes of the main `ledger.jsonl` and its
-/// seal; released when the returned handle is dropped (or the process dies). `None` for
-/// an unsealed run, which has nothing to keep in step.
-pub fn lock_ledger(run_dir: &Path) -> Result<Option<fs::File>, Error> {
-    if !is_sealed_run(run_dir) {
-        return Ok(None);
-    }
+/// seal; released when the returned handle is dropped (or the process dies). Sealed or
+/// not, a writer holds it from reading the ledger's tail to the end of its write, so two
+/// processes never assign the same `seq`.
+pub fn lock_ledger(run_dir: &Path) -> Result<fs::File, Error> {
     let path = run_dir.join("ledger.lock");
     let file = fs::OpenOptions::new()
         .create(true)
@@ -354,7 +352,7 @@ pub fn lock_ledger(run_dir: &Path) -> Result<Option<fs::File>, Error> {
         .open(&path)
         .map_err(|e| Error::io(&path, e))?;
     file.lock().map_err(|e| Error::io(&path, e))?;
-    Ok(Some(file))
+    Ok(file)
 }
 
 fn read_seal(path: &Path) -> Option<Seal> {

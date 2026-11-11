@@ -1071,7 +1071,7 @@ fn an_alloc_stack_ties_by_the_findings_writers_or_its_root_owner() {
     // A stack with no root path ties by its first project frame to the finding whose
     // site or census/user writers include it.
     let p = Project::new();
-    p.put("src/trail.rs", &[b'\n'; 60]);
+    p.put("src/trail.rs", "x;\n".repeat(60).as_bytes());
     let files = alloc_profiles(&p, |i| {
         vec![grp(
             &[("shop::trail::record", "src/trail.rs", 40)],
@@ -1100,8 +1100,8 @@ fn an_alloc_stack_ties_by_the_findings_writers_or_its_root_owner() {
     // By the root path's owner: a finding of that owner, no writers needed. A fixture
     // stack names its holder, and with an owner that is the finding's.
     let q = Project::new();
-    q.put("src/trail.rs", &[b'\n'; 60]);
-    q.put("src/cache.rs", &[b'\n'; 20]);
+    q.put("src/trail.rs", "x;\n".repeat(60).as_bytes());
+    q.put("src/cache.rs", "x;\n".repeat(20).as_bytes());
     let files = fx.materialize(&q);
     ok(
         q.path(),
@@ -1132,14 +1132,14 @@ fn an_alloc_stack_ties_by_the_findings_writers_or_its_root_owner() {
     assert_eq!(ann[0]["writers"][0], "src/trail.rs:40", "{ann:?}");
     // The stack named a holder: a finding that only has the stack's site is not tied.
     let r = Project::new();
-    r.put("src/trail.rs", &[b'\n'; 60]);
+    r.put("src/trail.rs", "x;\n".repeat(60).as_bytes());
     let files = fx.materialize(&r);
     add_hypothesis(&r, &["--site", "src/trail.rs:40"]);
     let v = alloc_diff(&r, &files, &[]);
     assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
     // No finding: the stack names an owner the resolver cannot find, so nothing is made up.
     let t = Project::new();
-    t.put("src/trail.rs", &[b'\n'; 60]);
+    t.put("src/trail.rs", "x;\n".repeat(60).as_bytes());
     let files = fx.materialize(&t);
     let v = alloc_diff(&t, &files, &[]);
     assert_eq!(v["tied"].as_array().unwrap().len(), 0);

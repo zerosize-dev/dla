@@ -2,7 +2,7 @@
 
 Run: `20260101-000000-abcd`
 
-Status: INCOMPLETE (7 open)
+Status: INCOMPLETE (8 open)
 
 Entry: repository
 
@@ -23,6 +23,7 @@ Coverage: go 8000 iterations, 2 of 3 entry points exercised
 - **python/census**: no census has run for runtime python. Fix: `dla census --lang python`
 - **python/sweep**: no sweep has run for runtime python. Fix: `dla sweep --lang python`
 - **F1**: finding F1 is confirmed and has no stored explanation. Fix: `dla ledger explain F1 --tag inferred --adds FILE:LINE --removal never --text "<site, holder, who adds, why nothing removes>"`
+- **F1**: finding F1 is confirmed and has no label decision (an archetype ID, or UNCLASSIFIED with a note). Fix: `dla ledger label F1 --suggest, then dla ledger label F1 --as <ID>, or dla ledger label F1 --as UNCLASSIFIED --note "<holder and mechanism in words>"`
 
 ## Findings
 

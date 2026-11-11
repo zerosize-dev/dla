@@ -271,10 +271,9 @@ fn label_suggest_then_label_then_relabel() {
     let s = ok(&e, &["ledger", "label", "F1", "--suggest"]);
     assert_eq!(s["archetypes"], "on");
     let rows = s["rows"].as_array().unwrap();
-    assert_eq!(rows[0]["id"], "L-COLLECT");
     // E5 ties by its allocation site, but F1 does not cite it, so it is a record to name.
-    assert_eq!(rows[0]["status"], "met");
-    assert_eq!(rows[0]["evidence"], json!(["E4", "E5"]));
+    let first = rows[0].as_str().unwrap();
+    assert!(first.starts_with("L-COLLECT met [E4,E5]: "), "{first}");
     let err = refused(&e, &[], &["ledger", "label", "F1", "--as", "L-COLLECT"]);
     assert_eq!(err["code"], "label-evidence-missing");
     assert_eq!(
@@ -365,6 +364,15 @@ fn archetypes_off_leaves_findings_unclassified() {
         let (code, s) = run_with(&e, &env, &["ledger", "label", "F1", "--suggest"]);
         assert_eq!(code, 0);
         assert_eq!(s["archetypes"], "off");
+        // Even then the answer ends on the UNCLASSIFIED choice.
+        let rows = s["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{s}");
+        assert!(
+            rows[0]
+                .as_str()
+                .unwrap()
+                .contains("--as UNCLASSIFIED --note")
+        );
         assert_eq!(
             reload(&e)
                 .finding(&"F1".parse().unwrap())
@@ -1029,5 +1037,432 @@ fn confirm_is_silent_when_the_observed_holder_matches_or_is_not_stated() {
     assert!(v.get("warning").is_none(), "{v}");
 }
 
-#[allow(dead_code)]
-fn unused(_: &Path) {}
+// ------------------------------------------------------------------- suggest, every row
+
+const EXTRA_ROWS: &str = r#"
+[L-WORKER]
+holders = ["blocked-stack"]
+regions = ["heap"]
+requires = [["intervention"]]
+disconfirm = []
+repair = ["stop/cancel"]
+summary = "A worker is started for each unit of work and never stopped, so its stack stays."
+"#;
+
+fn add_alloc_stack(e: &Env) {
+    let mut l = reload(e);
+    l.add_evidence(evidence(
+        EvidenceKind::AllocStack,
+        Authority::Live,
+        "jfr",
+        "alloc-profiler",
+        "cc",
+        json!({"mode": "diff", "finding": "F1", "top": []}),
+    ))
+    .unwrap();
+    write_ledger(e, &l);
+}
+
+#[test]
+fn suggest_lists_met_then_missing_then_blocked_and_ends_with_unclassified() {
+    let e = env();
+    fs::write(
+        e.data.path().join("archetypes.toml"),
+        format!("{TABLE}{EXTRA_ROWS}"),
+    )
+    .unwrap();
+    add_alloc_stack(&e);
+    let s = ok(&e, &["ledger", "label", "F1", "--suggest"]);
+    let rows: Vec<&str> = s["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert_eq!(rows.len(), 4, "{s}");
+    assert!(rows[0].starts_with("L-COLLECT met [E4,E5]: "), "{rows:?}");
+    assert!(
+        rows[1].starts_with("L-WORKER missing intervention: "),
+        "{rows:?}"
+    );
+    // Blocked by the holder: the row names it.
+    assert!(
+        rows[2].starts_with(
+            "L-HANDLE blocked, holder static/global is not among native-handle/global-ref: "
+        ),
+        "{rows:?}"
+    );
+    // Each row prints its full summary.
+    assert!(rows[0].ends_with("A collection gains entries and nothing removes them."));
+    assert!(rows[1].ends_with("never stopped, so its stack stays."));
+    assert!(rows[2].ends_with("A native handle is acquired and never released."));
+    // The command that produces the missing kind, and the fix for a wrong holder.
+    assert!(
+        s["produce"]["intervention"]
+            .as_str()
+            .unwrap()
+            .starts_with("dla intervene <H> --finding F1"),
+        "{s}"
+    );
+    assert!(
+        s["holder_fix"]
+            .as_str()
+            .unwrap()
+            .contains("dla ledger annotate F1 --holder"),
+        "{s}"
+    );
+    // The last row is always UNCLASSIFIED and says how to choose it.
+    assert!(rows[3].starts_with("UNCLASSIFIED "), "{rows:?}");
+    assert!(rows[3].contains("compare each summary above with the mechanism you stated"));
+    assert!(rows[3].contains("dla ledger label F1 --as UNCLASSIFIED --note"));
+}
+
+#[test]
+fn suggest_with_the_shipped_table_lists_every_leak_archetype_within_the_bound() {
+    let e = env();
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    fs::copy(
+        shipped.join("archetypes.toml"),
+        e.data.path().join("archetypes.toml"),
+    )
+    .unwrap();
+    let table = dla_core::archetypes::load(&shipped).unwrap().unwrap();
+    let leak: Vec<_> = table.entries().filter(|x| x.id.starts_with("L-")).collect();
+    assert!(leak.len() > 6, "the old cap would hide rows");
+    // The bound (2048 bytes, no `truncated`) is asserted by `ok`.
+    let s = ok(&e, &["ledger", "label", "F1", "--suggest"]);
+    assert!(s.get("truncated").is_none(), "{s}");
+    let rows: Vec<&str> = s["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert_eq!(rows.len(), leak.len() + 1, "{s}");
+    for x in &leak {
+        let row = rows
+            .iter()
+            .find(|r| r.starts_with(&format!("{} ", x.id)))
+            .unwrap_or_else(|| panic!("{} is not listed: {rows:?}", x.id));
+        assert!(row.ends_with(&x.summary), "{row} lacks the full summary");
+    }
+    assert!(rows.last().unwrap().starts_with("UNCLASSIFIED "));
+}
+
+// ------------------------------------------------------------- label and the runtime
+
+#[test]
+fn a_label_with_no_row_in_the_runtime_reference_is_accepted_with_a_warning() {
+    let e = env();
+    // F1's site is a Go file; the go reference has the L-WORKER row only.
+    let l = ok(
+        &e,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+        ],
+    );
+    assert_eq!(l["label"], "L-COLLECT");
+    let w = l["runtime_warning"].as_str().unwrap();
+    assert!(
+        w.contains("go archetype reference") && w.contains("L-WORKER"),
+        "{w}"
+    );
+    assert!(w.contains("accepted"), "{w}");
+    assert_eq!(
+        reload(&e)
+            .finding(&"F1".parse().unwrap())
+            .unwrap()
+            .archetype,
+        "L-COLLECT"
+    );
+}
+
+// --------------------------------------------------------------------- site lines
+
+fn write_src(e: &Env, rel: &str, text: &str) {
+    let p = e.project.path().join(rel);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(p, text).unwrap();
+}
+
+/// 1 line comment, 2 class, 3-4 block comment, 5 blank, 6 signature, 7 holder, 8-9 braces.
+const BOARD: &str = "// board\nclass Board {\n  /* header\n  still comment */\n\n  add(item) {\n    this.previous = item;\n  }\n}\n";
+
+fn lines_in_ledger(e: &Env) -> usize {
+    reload(e).lines().len()
+}
+
+#[test]
+fn annotate_writer_refuses_a_comment_blank_or_past_the_end_and_points_to_grep() {
+    let e = env();
+    write_src(&e, "src/board.js", BOARD);
+    let before = lines_in_ledger(&e);
+    for (site, what) in [
+        ("src/board.js:1", "a comment"),
+        ("src/board.js:3", "a comment"),
+        ("src/board.js:4", "a comment"),
+        ("src/board.js:5", "blank"),
+        ("src/board.js:10", "outside src/board.js"),
+        ("src/board.js:99", "outside src/board.js"),
+    ] {
+        let err = refused(
+            &e,
+            &[],
+            &[
+                "ledger",
+                "annotate",
+                "F1",
+                "--writer",
+                site,
+                "--owner",
+                "Board.previous",
+            ],
+        );
+        assert_eq!(err["code"], "invalid-site", "{site}");
+        assert!(
+            err["message"].as_str().unwrap().contains(what),
+            "{site}: {err}"
+        );
+        let fix = err["fix"].as_str().unwrap();
+        assert!(fix.contains("grep -n 'previous' src/board.js"), "{fix}");
+    }
+    assert_eq!(lines_in_ledger(&e), before, "a refusal writes nothing");
+}
+
+#[test]
+fn annotate_writer_accepts_a_code_line_that_holds_the_identifier() {
+    let e = env();
+    write_src(&e, "src/board.js", BOARD);
+    let v = ok(
+        &e,
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "src/board.js:7",
+            "--owner",
+            "Board.previous",
+        ],
+    );
+    assert_eq!(v["writers"], 1);
+    assert!(v.get("warnings").is_none(), "{v}");
+}
+
+#[test]
+fn annotate_writer_warns_when_the_line_lacks_the_identifier_and_names_the_nearest_lines() {
+    let e = env();
+    write_src(&e, "src/board.js", BOARD);
+    // Line 6 is the signature, line 7 holds the field.
+    let v = ok(
+        &e,
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "src/board.js:6",
+            "--owner",
+            "Board.previous",
+        ],
+    );
+    assert_eq!(v["writers"], 1, "a warning does not refuse");
+    let w = v["warnings"][0].as_str().unwrap();
+    assert!(w.contains("does not contain `previous`"), "{w}");
+    assert!(
+        w.contains("7:") && w.contains("this.previous = item;"),
+        "{w}"
+    );
+}
+
+#[test]
+fn annotate_checks_the_identifier_of_the_owner_the_finding_already_has() {
+    let e = env();
+    write_src(&e, "src/board.js", BOARD);
+    ok(
+        &e,
+        &["ledger", "annotate", "F1", "--owner", "Board.previous"],
+    );
+    let v = ok(
+        &e,
+        &["ledger", "annotate", "F1", "--writer", "src/board.js:6"],
+    );
+    assert!(
+        v["warnings"][0].as_str().unwrap().contains("`previous`"),
+        "{v}"
+    );
+}
+
+#[test]
+fn site_lines_use_the_comment_syntax_of_the_language() {
+    let e = env();
+    write_src(
+        &e,
+        "src/a.py",
+        "# helper\nitems = []\n\ndef put(x):\n    items.append(x)\n",
+    );
+    let err = refused(
+        &e,
+        &[],
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "src/a.py:1",
+            "--owner",
+            "items",
+        ],
+    );
+    assert!(
+        err["message"].as_str().unwrap().contains("a comment"),
+        "{err}"
+    );
+    // `//` is not a comment in Python, and a `#` inside a string is code.
+    write_src(
+        &e,
+        "src/b.py",
+        "// not a comment in python\nurl = \"http://x\"  # tail\n",
+    );
+    ok(
+        &e,
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "src/b.py:1",
+            "--owner",
+            "items",
+        ],
+    );
+    ok(
+        &e,
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "src/b.py:2",
+            "--owner",
+            "items",
+        ],
+    );
+    let v = ok(
+        &e,
+        &[
+            "ledger",
+            "annotate",
+            "F1",
+            "--writer",
+            "src/a.py:5",
+            "--owner",
+            "items",
+        ],
+    );
+    assert!(v.get("warnings").is_none(), "{v}");
+}
+
+#[test]
+fn a_site_in_a_file_the_project_lacks_is_noted_not_refused() {
+    let e = env();
+    let v = ok(
+        &e,
+        &["ledger", "annotate", "F1", "--writer", "src/nowhere.js:3"],
+    );
+    assert!(
+        v["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("not found under the project"),
+        "{v}"
+    );
+}
+
+#[test]
+fn a_site_outside_the_project_is_never_read() {
+    let e = env();
+    // A file one level above the project that holds the owner's identifier: were it read,
+    // its line would be quoted back in the warning.
+    let name = format!(
+        "{}-outside.js",
+        e.project.path().file_name().unwrap().to_str().unwrap()
+    );
+    let outside = e.project.path().parent().unwrap().join(name);
+    fs::write(&outside, "const previous = 1;\n").unwrap();
+    let up = format!("../{}:1", outside.file_name().unwrap().to_str().unwrap());
+    let abs = format!("{}:1", outside.display());
+    for site in [up.as_str(), abs.as_str()] {
+        let v = ok(&e, &["ledger", "annotate", "F1", "--writer", site]);
+        let w = v["warnings"][0].as_str().unwrap();
+        assert!(w.contains("not found under the project"), "{site}: {v}");
+        assert!(!w.contains("const previous"), "{site}: {v}");
+    }
+    fs::remove_file(&outside).unwrap();
+}
+
+#[test]
+fn ledger_add_checks_the_site_line_too() {
+    let e = env();
+    write_src(&e, "src/board.js", BOARD);
+    let before = lines_in_ledger(&e);
+    for site in ["src/board.js:1", "src/board.js:5", "src/board.js:12"] {
+        let err = refused(
+            &e,
+            &[],
+            &[
+                "ledger",
+                "add",
+                "--origin",
+                "census",
+                "--evidence",
+                "E1",
+                "--site",
+                site,
+                "--owner",
+                "Board.previous",
+            ],
+        );
+        assert_eq!(err["code"], "invalid-site", "{site}");
+        assert!(err["fix"].as_str().unwrap().contains("grep -n 'previous'"));
+    }
+    assert_eq!(lines_in_ledger(&e), before);
+    let v = ok(
+        &e,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "census",
+            "--evidence",
+            "E1",
+            "--site",
+            "src/board.js:6",
+            "--owner",
+            "Board.previous",
+        ],
+    );
+    assert!(v["warnings"][0].as_str().unwrap().contains("7:"), "{v}");
+    let v = ok(
+        &e,
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "census",
+            "--evidence",
+            "E1",
+            "--site",
+            "src/board.js:7",
+            "--owner",
+            "Board.previous",
+        ],
+    );
+    assert!(v.get("warnings").is_none(), "{v}");
+}

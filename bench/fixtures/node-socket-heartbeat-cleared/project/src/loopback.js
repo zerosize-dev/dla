@@ -10,6 +10,7 @@ class LoopbackSocket extends EventEmitter {
     super();
     this.written = [];
     this.destroyed = false;
+    this.closeEmitted = false;
   }
 
   write(chunk) {
@@ -18,8 +19,16 @@ class LoopbackSocket extends EventEmitter {
     return true;
   }
 
+  // Like net.Socket.destroy(): the 'close' event follows asynchronously, once.
   destroy() {
     this.destroyed = true;
+    process.nextTick(() => this.emitClose());
+  }
+
+  emitClose() {
+    if (this.closeEmitted) return;
+    this.closeEmitted = true;
+    this.emit('close');
   }
 
   clientSend(message) {
@@ -27,7 +36,8 @@ class LoopbackSocket extends EventEmitter {
   }
 
   clientHangUp() {
-    this.emit('close');
+    this.destroyed = true;
+    this.emitClose();
   }
 }
 

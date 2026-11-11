@@ -1077,6 +1077,24 @@ fn final_items(view: &RunView, out: &mut Out) {
             );
         }
     }
+    // Every confirmed or strong leak-side finding has a label decision: an archetype ID, or
+    // UNCLASSIFIED with a note (the only label with archetypes off).
+    for f in confirmed_leaks(view) {
+        if view.ledger.label_record(&f.id).is_none() {
+            out.add(
+                "label",
+                f.id.to_string(),
+                format!(
+                    "finding {} is {} and has no label decision (an archetype ID, or UNCLASSIFIED with a note)",
+                    f.id, f.state
+                ),
+                format!(
+                    "dla ledger label {} --suggest, then dla ledger label {} --as <ID>, or dla ledger label {} --as UNCLASSIFIED --note \"<holder and mechanism in words>\"",
+                    f.id, f.id, f.id
+                ),
+            );
+        }
+    }
     // No slice left unmerged, no torn tail.
     for s in view.unmerged_slices() {
         out.add(

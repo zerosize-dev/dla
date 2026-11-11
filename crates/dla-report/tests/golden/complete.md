@@ -2,7 +2,7 @@
 
 Run: `20260101-000000-abcd`
 
-Status: INCOMPLETE (5 open)
+Status: INCOMPLETE (6 open)
 
 Entry: repository
 
@@ -21,6 +21,7 @@ Coverage: not measured
 - **20260101-000000-abcd**: coverage.json has no runtime row: no runtime was detected or probed. Fix: `dla probe`
 - **F1**: finding F1 has no non-leak sibling hypothesis. Fix: `dla ledger add --sibling-of F1 --origin hypothesis --hypothesis N-WARM --refute-if "<result>" --evidence E..`
 - **F1**: finding F1 is confirmed and has no stored explanation. Fix: `dla ledger explain F1 --tag inferred --adds FILE:LINE --removal never --text "<site, holder, who adds, why nothing removes>"`
+- **F1**: finding F1 is confirmed and has no label decision (an archetype ID, or UNCLASSIFIED with a note). Fix: `dla ledger label F1 --suggest, then dla ledger label F1 --as <ID>, or dla ledger label F1 --as UNCLASSIFIED --note "<holder and mechanism in words>"`
 
 ## Findings
 

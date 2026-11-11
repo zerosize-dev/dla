@@ -68,6 +68,11 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - Native memory (Buffers, array buffers, addons) grows outside the JS heap; DLA does not see
   inside an addon.
 - An async-local store can hide the real holder: the cause is the registration.
+- Timers (`setInterval`, `setTimeout`), event listeners and subscriptions are `registration-table`
+  holders: the timer table or the emitter's listener list keeps the callback, and the callback keeps what
+  it closes over. They are not `closure/continuation`. That holder is for a function-context variable
+  that holds a chain of values, not for the callback a registration keeps. If a finding for a timer or a
+  listener has another holder, correct it: `dla ledger annotate F --holder registration-table --evidence <growth evidence id>`.
 - ES module probes are not supported (CommonJS only); closure variables cannot be inspected.
 - Heap analysis tools lag new Node releases.
 - `--capture nonheap` uses `async_hooks`; promise-heavy targets can run up to about 10x slower.

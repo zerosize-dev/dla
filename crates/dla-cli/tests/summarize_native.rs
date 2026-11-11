@@ -103,7 +103,7 @@ impl Project {
     /// The sources a real project has: the frames of a tool run are looked up in them.
     fn sources(&self) {
         for f in ["src/decoder.c", "src/main.c"] {
-            self.put(f, &"/* line */\n".repeat(60));
+            self.put(f, &"int x;\n".repeat(60));
         }
     }
 
@@ -431,7 +431,7 @@ const VGDB: [&str; 9] = [
 ];
 
 /// A C source that defines the static `registry` at file scope.
-const C_HOLD: &str = "#include <stdlib.h>\nstruct node { struct node *next; };\nstatic struct node *registry = NULL;\nstatic int cache;\n";
+const C_HOLD: &str = "#include <stdlib.h>\nstruct node { struct node *next; };\nstatic struct node *registry = NULL;\nstatic int cache;\n/* pad */\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n";
 
 fn heap_graph(p: &Project, files: &[String]) -> Value {
     summarize(p, "heap-graph", files)

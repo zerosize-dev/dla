@@ -334,6 +334,56 @@ impl ToolCtx {
         Ok(())
     }
 
+    /// Time left before the nearest deadline (the worker's, in worker mode, and the
+    /// run's): zero when one has passed, `None` when `state.json` cannot be read (a
+    /// caller then does not limit itself). `what` of the deadline is returned with it.
+    pub fn time_left(&self) -> Option<(std::time::Duration, String)> {
+        let state = RunState::load(&self.run_dir).ok()?;
+        let now = now_utc();
+        let mut limits = Vec::new();
+        if let Some(w) = self.worker.as_deref().and_then(|w| state.worker(w)) {
+            limits.push((format!("worker {}", w.name), w.deadline));
+        }
+        limits.push(("run".to_owned(), state.budget.deadline));
+        limits
+            .into_iter()
+            .map(|(who, d)| {
+                let when = d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                (
+                    (d - now).to_std().unwrap_or(std::time::Duration::ZERO),
+                    format!("{who} deadline {when}"),
+                )
+            })
+            .min_by_key(|(left, _)| *left)
+    }
+
+    /// The `time-budget` refusal of a command whose estimated duration does not fit what
+    /// is left. `what` names the command, `estimate_secs` and `usable_secs` are the
+    /// estimate and the time the command may use, `suggestion` is the smaller command to
+    /// run instead (empty: none fits).
+    pub fn time_budget_refusal(
+        &self,
+        what: &str,
+        estimate_secs: u64,
+        usable_secs: u64,
+        deadline: &str,
+        suggestion: &str,
+    ) -> Refusal {
+        let fix = if suggestion.is_empty() {
+            "even the smallest run does not fit: dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"".to_owned()
+        } else {
+            suggestion.to_owned()
+        };
+        Refusal::new(
+            codes::TIME_BUDGET,
+            format!(
+                "{what} is estimated at {estimate_secs} s but only {usable_secs} s remain before the {deadline}, so it was not run"
+            ),
+            format!("a run of at most {usable_secs} s"),
+            fix,
+        )
+    }
+
     /// Appends one evidence record and returns its ID. `raw` is relative to the run
     /// directory (for example `sweep/staticcheck.json`).
     pub fn add_evidence(

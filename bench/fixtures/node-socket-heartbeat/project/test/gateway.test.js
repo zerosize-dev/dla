@@ -71,3 +71,15 @@ test('silent peers are dropped after three periods', (t) => {
   assert.strictEqual(session.closed, true);
   assert.strictEqual(gateway.metrics.get('closed_idle'), 1);
 });
+
+test('a session the server ends is released once the socket has closed', async () => {
+  const gateway = new Gateway();
+  const socket = new LoopbackSocket();
+  const session = gateway.accept(socket);
+  socket.clientSend({ type: 'hello', user: 'unit-9' });
+  session.close('idle');
+  assert.strictEqual(gateway.size, 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(gateway.size, 0);
+  assert.strictEqual(socket.destroyed, true);
+});

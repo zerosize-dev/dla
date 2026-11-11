@@ -1449,6 +1449,11 @@ pub struct Ledger {
     ends_with_newline: bool,
     slice: Option<SliceMode>,
     torn_tail: Option<TornTail>,
+    /// Bytes of the main ledger file this replay covers; a write finding a different
+    /// size under the lock replays the file again first (another process appended).
+    disk_len: Option<u64>,
+    /// The main ledger's write lock, held for the length of one write operation.
+    main_lock: Option<std::sync::Arc<fs::File>>,
 }
 
 /// What a ledger opened for a worker adds to a plain one.
@@ -1508,6 +1513,8 @@ impl Ledger {
             ends_with_newline: true,
             slice: None,
             torn_tail: None,
+            disk_len: None,
+            main_lock: None,
         }
     }
 
@@ -1526,7 +1533,9 @@ impl Ledger {
             .open(&path)
             .map_err(|e| Error::io(&path, e))?;
         crate::integrity::seal_file(run_dir, LEDGER_FILE)?;
-        Ok(Self::empty(Some(path), entry_of(run_dir)))
+        let mut ledger = Self::empty(Some(path), entry_of(run_dir));
+        ledger.disk_len = Some(0);
+        Ok(ledger)
     }
 
     /// Replays `<run_dir>/ledger.jsonl`, validating every line. The entry path comes
@@ -1624,6 +1633,8 @@ impl Ledger {
                 lock: None,
             }),
             torn_tail: cut.torn.clone(),
+            disk_len: None,
+            main_lock: None,
         };
         ledger.index.slice_worker = Some(worker.to_owned());
         ledger.replay_lines(&cut.lines, Some(&sp), None)?;
@@ -1649,6 +1660,7 @@ impl Ledger {
 
     fn replay(text: &str, path: Option<PathBuf>, entry: EntryPath) -> Result<Self, Error> {
         let mut ledger = Self::empty(path.clone(), entry);
+        ledger.disk_len = path.as_ref().map(|_| text.len() as u64);
         ledger.ends_with_newline = text.is_empty() || text.ends_with('\n');
         let lines: Vec<&str> = text.lines().collect();
         ledger.replay_lines(&lines, path.as_deref(), None)?;
@@ -1718,19 +1730,34 @@ impl Ledger {
             }
             let expected = self.next_seq();
             if line.seq != expected {
-                return Err(replay_err(
-                    p,
-                    n,
-                    false,
-                    Refusal::new(
-                        codes::BAD_SEQ,
+                let repair = "dla has no command that rewrites ledger history. Keep a copy of ledger.jsonl, edit it by hand so seq values run 1, 2, 3 without gaps and no record repeats, then run `dla run reseal --reason <what you changed>` (the audit line records it); or start a new run with `dla run init`".to_owned();
+                let (message, fix) = if line.seq < expected && line.seq >= 1 {
+                    (
+                        format!(
+                            "seq {} appears on line {n} and on line {} (two writers appended at the same time, which a dla without the ledger lock could do)",
+                            line.seq, line.seq
+                        ),
+                        format!(
+                            "lines 1 to {} are intact; line {n} and the lines after it repeat or follow a duplicate. {repair}",
+                            n - 1
+                        ),
+                    )
+                } else {
+                    (
                         format!(
                             "seq is {} but {expected} was expected (gap or reordering)",
                             line.seq
                         ),
-                        format!("seq {expected}"),
-                        format!("renumber line {n} so seq values run 1, 2, 3 without gaps"),
-                    ),
+                        format!(
+                            "renumber line {n} so seq values run 1, 2, 3 without gaps. {repair}"
+                        ),
+                    )
+                };
+                return Err(replay_err(
+                    p,
+                    n,
+                    false,
+                    Refusal::new(codes::BAD_SEQ, message, format!("seq {expected}"), fix),
                 ));
             }
             self.index
@@ -2042,6 +2069,42 @@ impl Ledger {
     /// Validates `pending` against the replayed state, appends it to the file in one
     /// write and applies it. Nothing is written or applied when any record is refused.
     fn append_all(&mut self, pending: Vec<Pending>) -> Result<Vec<LedgerLine>, Error> {
+        // Only reached outside `locked` by a caller that already built its records from
+        // a view it did not refresh; every public writer goes through `locked`.
+        self.locked(|l| l.append_all_held(pending))
+    }
+
+    /// Runs one write operation on the main ledger under its exclusive lock. The file
+    /// is replayed again when another process appended since this handle was loaded,
+    /// so the `seq`, the IDs and the checks `f` makes all come from the file's current
+    /// tail, and the line and its seal are written before the lock is released. A
+    /// worker slice holds its own lock for the life of the handle; an unbound ledger
+    /// has no file.
+    fn locked<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, Error>) -> Result<T, Error> {
+        if self.slice.is_some() || self.main_lock.is_some() {
+            return f(self);
+        }
+        let Some(path) = self.path.clone() else {
+            return f(self);
+        };
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let lock = crate::integrity::lock_ledger(&dir)?;
+        let size = fs::metadata(&path).map_err(|e| Error::io(&path, e))?.len();
+        if self.disk_len != Some(size) {
+            let text = fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+            let fresh = Self::replay(&text, Some(path.clone()), self.index.entry)?;
+            self.lines = fresh.lines;
+            self.index = fresh.index;
+            self.ends_with_newline = fresh.ends_with_newline;
+            self.disk_len = fresh.disk_len;
+        }
+        self.main_lock = Some(std::sync::Arc::new(lock));
+        let out = f(self);
+        self.main_lock = None;
+        out
+    }
+
+    fn append_all_held(&mut self, pending: Vec<Pending>) -> Result<Vec<LedgerLine>, Error> {
         let mut trial = (pending.len() > 1).then(|| self.index.clone());
         let first_seq = self.next_seq();
         let mut new_lines = Vec::with_capacity(pending.len());
@@ -2064,10 +2127,10 @@ impl Ledger {
             // The write and its seal go together under one lock: the main ledger's own
             // lock, or the slice lock the handle already holds.
             let run_dir = path.parent().map(Path::to_path_buf);
-            let _seal_lock = match (&run_dir, self.slice.is_some()) {
-                (Some(d), false) => crate::integrity::lock_ledger(d)?,
-                _ => None,
-            };
+            debug_assert!(
+                self.slice.is_some() || self.main_lock.is_some(),
+                "a main-ledger write runs inside `locked`"
+            );
             let guard = match (&run_dir, path.file_name().and_then(|n| n.to_str())) {
                 (Some(d), Some(name)) => Some(crate::integrity::Guard::new(d, name)),
                 _ => None,
@@ -2110,6 +2173,9 @@ impl Ledger {
             if let Some(g) = guard {
                 g.seal()?;
             }
+            if self.slice.is_none() {
+                self.disk_len = fs::metadata(path).ok().map(|m| m.len());
+            }
             self.ends_with_newline = true;
             if let Some(sm) = &mut self.slice {
                 sm.torn_pending = false;
@@ -2150,12 +2216,20 @@ impl Ledger {
 
     /// Appends an evidence record with a freshly allocated ID.
     pub fn add_evidence(&mut self, new: NewEvidence) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.add_evidence_held(new))
+    }
+
+    fn add_evidence_held(&mut self, new: NewEvidence) -> Result<LedgerLine, Error> {
         let rec = new.into_record(self.next_evidence_id());
         self.append(Record::Evidence(rec))
     }
 
     /// Appends a finding in state `candidate`, allocating `F<n>` or `F<n>.n<k>`.
-    pub fn add_finding(&mut self, mut new: NewFinding) -> Result<LedgerLine, Error> {
+    pub fn add_finding(&mut self, new: NewFinding) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.add_finding_held(new))
+    }
+
+    fn add_finding_held(&mut self, mut new: NewFinding) -> Result<LedgerLine, Error> {
         new.supports = new
             .supports
             .iter()
@@ -2240,6 +2314,18 @@ impl Ledger {
         evidence: Vec<EvidenceId>,
         by: &str,
     ) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.transition_held(finding, to, reason, remedy, evidence, by))
+    }
+
+    fn transition_held(
+        &mut self,
+        finding: &FindingId,
+        to: FindingState,
+        reason: Option<crate::finding::UnresolvedReason>,
+        remedy: Option<String>,
+        evidence: Vec<EvidenceId>,
+        by: &str,
+    ) -> Result<LedgerLine, Error> {
         let finding = &self.own_finding_id(finding);
         let evidence: Vec<EvidenceId> = evidence.iter().map(|e| self.own_evidence_id(e)).collect();
         let from = self
@@ -2265,6 +2351,15 @@ impl Ledger {
         finding: Option<FindingId>,
         opened_by: &str,
     ) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.open_item_add_held(text, finding, opened_by))
+    }
+
+    fn open_item_add_held(
+        &mut self,
+        text: &str,
+        finding: Option<FindingId>,
+        opened_by: &str,
+    ) -> Result<LedgerLine, Error> {
         let finding = finding.map(|f| self.own_finding_id(&f));
         self.append(Record::OpenItem(OpenItem {
             id: self.next_open_item_id(),
@@ -2280,6 +2375,14 @@ impl Ledger {
         id: &OpenItemId,
         resolution: Resolution,
     ) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.resolve_open_item_held(id, resolution))
+    }
+
+    fn resolve_open_item_held(
+        &mut self,
+        id: &OpenItemId,
+        resolution: Resolution,
+    ) -> Result<LedgerLine, Error> {
         let resolution = match resolution {
             Resolution::Hypothesis(f) => Resolution::Hypothesis(self.own_finding_id(&f)),
             other => other,
@@ -2291,7 +2394,11 @@ impl Ledger {
     }
 
     /// Records the answer to a checklist item (the latest answer wins).
-    pub fn answer_checklist(&mut self, mut answer: ChecklistAnswer) -> Result<LedgerLine, Error> {
+    pub fn answer_checklist(&mut self, answer: ChecklistAnswer) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.answer_checklist_held(answer))
+    }
+
+    fn answer_checklist_held(&mut self, mut answer: ChecklistAnswer) -> Result<LedgerLine, Error> {
         answer.evidence = answer
             .evidence
             .iter()
@@ -2321,7 +2428,11 @@ impl Ledger {
     /// Appends a full annotation: writers, removers, a note, and the holder, owner,
     /// region and site of a finding that has none yet. A value that differs from one the finding
     /// already has is refused with `annotation-conflict`; the same value is accepted.
-    pub fn annotate_record(
+    pub fn annotate_record(&mut self, annotation: FindingAnnotation) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.annotate_record_held(annotation))
+    }
+
+    fn annotate_record_held(
         &mut self,
         mut annotation: FindingAnnotation,
     ) -> Result<LedgerLine, Error> {
@@ -2347,6 +2458,17 @@ impl Ledger {
     /// table the label is checked against, or off. Builds the proof, appends one
     /// `finding_labeled` line and returns it.
     pub fn label(
+        &mut self,
+        finding: &FindingId,
+        label: &str,
+        evidence: &[EvidenceId],
+        note: Option<&str>,
+        archetypes: Archetypes<'_>,
+    ) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.label_held(finding, label, evidence, note, archetypes))
+    }
+
+    fn label_held(
         &mut self,
         finding: &FindingId,
         label: &str,
@@ -2408,6 +2530,34 @@ impl Ledger {
         census_writers: &[String],
         census_removers: &[String],
     ) -> Result<LedgerLine, Error> {
+        self.locked(|this| {
+            this.explain_held(
+                finding,
+                tag,
+                adds,
+                removal,
+                remover,
+                evidence,
+                text,
+                census_writers,
+                census_removers,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn explain_held(
+        &mut self,
+        finding: &FindingId,
+        tag: crate::finding::ExplanationTag,
+        adds: &[String],
+        removal: RemovalClaim,
+        remover: Option<&str>,
+        evidence: Option<&EvidenceId>,
+        text: &str,
+        census_writers: &[String],
+        census_removers: &[String],
+    ) -> Result<LedgerLine, Error> {
         let finding = self.own_finding_id(finding);
         let evidence = evidence.map(|e| self.own_evidence_id(e));
         let (mut writers, mut removers) = self.recorded_sites(&finding);
@@ -2442,6 +2592,14 @@ impl Ledger {
 
     /// Core mode: records that protected files were sealed again by `dla run reseal`.
     pub fn integrity_resealed(
+        &mut self,
+        files: Vec<String>,
+        reason: &str,
+    ) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.integrity_resealed_held(files, reason))
+    }
+
+    fn integrity_resealed_held(
         &mut self,
         files: Vec<String>,
         reason: &str,
@@ -2511,6 +2669,15 @@ impl Ledger {
         lines: &[LedgerLine],
         merged: SliceMerged,
     ) -> Result<Vec<LedgerLine>, Error> {
+        self.locked(|this| this.append_merged_held(worker, lines, merged))
+    }
+
+    fn append_merged_held(
+        &mut self,
+        worker: &str,
+        lines: &[LedgerLine],
+        merged: SliceMerged,
+    ) -> Result<Vec<LedgerLine>, Error> {
         if self.slice.is_some() {
             return Err(core_only("merge").into());
         }
@@ -2533,6 +2700,14 @@ impl Ledger {
         canonical: &FindingId,
         duplicate: &FindingId,
     ) -> Result<LedgerLine, Error> {
+        self.locked(|this| this.merge_findings_held(canonical, duplicate))
+    }
+
+    fn merge_findings_held(
+        &mut self,
+        canonical: &FindingId,
+        duplicate: &FindingId,
+    ) -> Result<LedgerLine, Error> {
         if self.slice.is_some() {
             return Err(core_only("finding_merged").into());
         }
@@ -2548,6 +2723,22 @@ impl Ledger {
     /// values. Returns the verification line and the open item line, if any.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
+        &mut self,
+        finding: &FindingId,
+        site: Option<String>,
+        holder: crate::finding::Holder,
+        mechanism: &str,
+        label: &str,
+        bundle: &str,
+        archetypes: Archetypes<'_>,
+    ) -> Result<(LedgerLine, Option<LedgerLine>), Error> {
+        self.locked(|this| {
+            this.verify_held(finding, site, holder, mechanism, label, bundle, archetypes)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_held(
         &mut self,
         finding: &FindingId,
         site: Option<String>,

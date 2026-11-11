@@ -1825,3 +1825,148 @@ fn heaptrack_refuses_a_wrapper_run_command() {
         assert!(err.message.contains("wrapper"), "{argv:?}: {}", err.message);
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// The run's time budget
+
+/// Sets the run deadline `secs` seconds from now.
+fn deadline_in(fx: &Fx, secs: i64) {
+    RunState::update(&fx.ctx.run_dir, |s| {
+        s.budget.deadline = now_utc() + std::time::Duration::from_secs(secs as u64);
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn series_written(fx: &Fx) -> usize {
+    fs::read_dir(fx.ctx.run_dir.join("series"))
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_run_that_cannot_fit_the_deadline_is_refused_before_its_last_points() {
+    if !have(&["sh", "awk"]) {
+        return;
+    }
+    let fx = fixture("", &[], &[1]);
+    // The point of size n sleeps n/1000 s: 0.1 s, 0.2 s, ... 0.9 s, 4.5 s in all.
+    let mut m = manifest(
+        Runtime::Native,
+        &["sh", "-c", "sleep $(awk 'BEGIN{print {n}/1000}')"],
+        vec![],
+        100,
+    );
+    m.iterations = 8;
+    write_manifest(&fx, &m);
+    deadline_in(&fx, 4);
+    let started = std::time::Instant::now();
+    let err = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap_err();
+    assert_eq!(err.code, "time-budget", "{err:?}");
+    assert!(
+        err.message.contains("estimated at")
+            && err.message.contains("remain before the run deadline"),
+        "{err:?}"
+    );
+    // The fix names a smaller plan that fits.
+    assert!(err.fix.contains("--iterations"), "{err:?}");
+    let fewer: u32 = err
+        .fix
+        .split("--iterations ")
+        .nth(1)
+        .and_then(|t| t.split_whitespace().next())
+        .and_then(|t| t.parse().ok())
+        .expect("a number after --iterations");
+    assert!((1..8).contains(&fewer), "{err:?}");
+    assert!(err.fix.contains("--step"), "{err:?}");
+    // Only the first points ran, and no series was written.
+    assert!(
+        started.elapsed().as_secs_f64() < 3.0,
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(RunState::load(&fx.ctx.run_dir).unwrap().processes.len(), 2);
+    assert_eq!(series_written(&fx), 0);
+}
+
+#[test]
+fn a_point_that_outlasts_the_deadline_is_cut_and_the_partial_series_says_so() {
+    if !have(&["sh"]) {
+        return;
+    }
+    let fx = fixture("", &[], &[1]);
+    // Fast points until n = 500, then a point that would take 30 s.
+    let mut m = manifest(
+        Runtime::Native,
+        &[
+            "sh",
+            "-c",
+            "if [ {n} -ge 500 ]; then sleep 30; else sleep 0.05; fi",
+        ],
+        vec![],
+        100,
+    );
+    m.iterations = 8;
+    m.timeout_secs = 120;
+    write_manifest(&fx, &m);
+    deadline_in(&fx, 4);
+    let started = std::time::Instant::now();
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    assert!(
+        started.elapsed().as_secs_f64() < 12.0,
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!out.partial.is_empty(), "{:?}", out.limitations);
+    assert!(out.partial[0].contains("run deadline"), "{:?}", out.partial);
+    let series = load(&fx, &out, 0);
+    let xs: Vec<f64> = series.points.iter().map(|p| p.x).collect();
+    assert_eq!(xs, [100.0, 200.0, 300.0, 400.0]);
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.starts_with("partial run:")),
+        "{:?}",
+        series.limitations
+    );
+    let state = RunState::load(&fx.ctx.run_dir).unwrap();
+    assert!(
+        state
+            .processes
+            .iter()
+            .all(|p| !dla_sample::os::is_alive(p.pid))
+    );
+}
+
+#[test]
+fn a_known_pace_refuses_before_the_first_point() {
+    if !have(&["sh", "awk"]) {
+        return;
+    }
+    let fx = fixture("", &[], &[1]);
+    let mut m = manifest(
+        Runtime::Native,
+        &["sh", "-c", "sleep $(awk 'BEGIN{print {n}/1000}')"],
+        vec![],
+        100,
+    );
+    m.iterations = 3;
+    write_manifest(&fx, &m);
+    // A first run with time to spare gives the pace (0.1 s per 100 units).
+    run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let before = RunState::load(&fx.ctx.run_dir).unwrap().processes.len();
+    // The same plan with 40 more points and 3 s left: refused without starting one.
+    deadline_in(&fx, 3);
+    let opts = RunOptions {
+        iterations: Some(40),
+        ..RunOptions::default()
+    };
+    let err = run_points(&fx.ctx, &m, &opts).unwrap_err();
+    assert_eq!(err.code, "time-budget", "{err:?}");
+    assert_eq!(
+        RunState::load(&fx.ctx.run_dir).unwrap().processes.len(),
+        before,
+        "no point was started"
+    );
+}

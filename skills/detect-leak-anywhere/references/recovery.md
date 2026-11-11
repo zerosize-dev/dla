@@ -109,8 +109,14 @@ other workers do not count as a change).
 
 ## Budget exhausted
 
-A command refuses with `time-budget` (the worker's deadline or the run deadline passed).
-- Remedy: stop starting long commands. Disposition everything still open.
+A command refuses with `time-budget`. `dla harness run`, `dla alloc-test` and `dla intervene`
+estimate their duration from the points already measured and refuse a plan that would end after
+the worker's or the run's deadline; the refusal's fix names a smaller plan (`--iterations`,
+`--step` or `--extra`). A point that outlasts the deadline is stopped there, and the result says
+`partial run`: it is inconclusive and never refutes.
+- Remedy: when the fix names a smaller command, run it. When the deadline has passed or the fix
+  says even the smallest run does not fit, stop starting long commands and disposition everything
+  still open.
 - Record: `dla ledger resolve <F> --as unresolved --reason time_budget --remedy "<what to run next
   and how long it needs>"` for each unresolved item (a candidate with only static evidence may be
   `suspected_static_only` with the same reason), then `dla ledger done` in a worker, or

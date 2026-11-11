@@ -4,7 +4,7 @@
 //! With `--worker <name>` every write goes to the worker's slice `ledger.<name>.jsonl`
 //! and a bare `F3` means the worker's own `<name>/F3`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
 use dla_core::{
@@ -356,6 +356,10 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
         (Some(text), Some(tag)) => Some(Explanation { text, tag }),
         _ => None,
     };
+    let warnings = match &nf.site {
+        Some(site) => check_site_line(ctx, "--site", site, nf.owner.as_deref())?,
+        None => Vec::new(),
+    };
     let line = ledger.add_finding(nf)?;
     // Read the new finding from the line just appended, never from the ledger's
     // ID-ordered map: a sibling or any non-maximal ID is not the last entry there.
@@ -377,6 +381,9 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
     if let Some(p) = parent {
         out["parent"] = Value::String(p.to_string());
     }
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
     Ok(out)
 }
 
@@ -384,6 +391,17 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
 pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     let mut ledger = open(ctx)?;
     let a_finding = ledger.own_finding_id(&a.finding);
+    let owner = a
+        .owner
+        .clone()
+        .or_else(|| ledger.finding(&a_finding).and_then(|f| f.owner.clone()));
+    let mut warnings: Vec<String> = Vec::new();
+    for w in &a.writers {
+        warnings.extend(check_site_line(ctx, "--writer", w, owner.as_deref())?);
+    }
+    if let Some(site) = &a.site {
+        warnings.extend(check_site_line(ctx, "--site", site, owner.as_deref())?);
+    }
     let line = ledger.annotate_record(FindingAnnotation {
         writers: a.writers,
         removers: a.removers,
@@ -417,6 +435,9 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     }
     if let Some(s) = &rec.site {
         out["site"] = json!(s);
+    }
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
     }
     if let Some(old) = rec.replaced_holder {
         out["replaced_holder"] = json!(old.as_str());
@@ -763,4 +784,208 @@ fn verify(ctx: &Ctx, data: Option<&PathBuf>, a: VerifyArgs) -> Res<Value> {
         out["disagreement"] = json!(o.text);
     }
     Ok(out)
+}
+
+// ------------------------------------------------------------------ site lines
+
+/// Comment syntax of a source file, by extension.
+struct Comments {
+    line: &'static [&'static str],
+    block: Option<(&'static str, &'static str)>,
+}
+
+fn comments_for(file: &str) -> Comments {
+    let ext = file
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "java" | "kt" | "kts" | "scala" | "groovy" | "js" | "mjs" | "cjs" | "jsx" | "ts"
+        | "tsx" | "go" | "rs" | "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "cs" | "swift" => {
+            Comments {
+                line: &["//"],
+                block: Some(("/*", "*/")),
+            }
+        }
+        "py" | "rb" | "sh" => Comments {
+            line: &["#"],
+            block: None,
+        },
+        _ => Comments {
+            line: &[],
+            block: None,
+        },
+    }
+}
+
+/// Per line of `text`: whether it holds anything but blanks and comments.
+fn code_lines(text: &str, syntax: &Comments) -> Vec<bool> {
+    let mut in_block = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let b = line.as_bytes();
+        let (mut i, mut code, mut quote) = (0, false, None::<u8>);
+        while i < b.len() {
+            if in_block {
+                match syntax.block {
+                    Some((_, end)) if b[i..].starts_with(end.as_bytes()) => {
+                        in_block = false;
+                        i += end.len();
+                    }
+                    _ => i += 1,
+                }
+                continue;
+            }
+            let c = b[i];
+            if let Some(q) = quote {
+                if c == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if c == q {
+                    quote = None;
+                }
+                i += 1;
+                continue;
+            }
+            if c.is_ascii_whitespace() {
+                i += 1;
+                continue;
+            }
+            if syntax.line.iter().any(|m| b[i..].starts_with(m.as_bytes())) {
+                break;
+            }
+            if let Some((start, _)) = syntax.block
+                && b[i..].starts_with(start.as_bytes())
+            {
+                in_block = true;
+                i += start.len();
+                continue;
+            }
+            code = true;
+            if matches!(c, b'"' | b'\'' | b'`') {
+                quote = Some(c);
+            }
+            i += 1;
+        }
+        out.push(code);
+    }
+    out
+}
+
+/// The last component of an owner such as `com.acme.Cache.entries` or `Cache::items`.
+fn identifier(owner: &str) -> Option<&str> {
+    owner
+        .trim()
+        .trim_end_matches("()")
+        .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .find(|p| !p.is_empty())
+        .filter(|p| p.chars().count() >= 2)
+}
+
+fn site_refusal(site: &str, what: String, file: &str, ident: Option<&str>) -> Failure {
+    let grep = match ident {
+        Some(i) => format!("grep -n '{i}' {file}"),
+        None => format!("grep -n '<the holder or field name>' {file}"),
+    };
+    Failure::refuse(
+        core_codes::INVALID_SITE,
+        format!("{site}: {what}"),
+        format!("a line of {file} that holds code"),
+        format!(
+            "take the line number from `{grep}` (or `cat -n {file}`), not from counting an unnumbered listing"
+        ),
+    )
+}
+
+/// Checks that `site` (`file:line`) names a line of code that exists in the project file:
+/// refuses a line outside the file, past its end, or blank or comment-only; returns a
+/// warning when the line does not contain the owner's identifier, naming the nearest
+/// lines that do. A site that does not parse, or a file that is not under the project, is
+/// left to the ledger's own check (the file case is a warning: the line was not verified).
+fn check_site_line(ctx: &Ctx, flag: &str, site: &str, owner: Option<&str>) -> Res<Vec<String>> {
+    let Some((file, line)) = site
+        .trim()
+        .rsplit_once(':')
+        .and_then(|(f, l)| Some((f, l.parse::<usize>().ok()?)))
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(project) = ctx.run_dir.parent().and_then(Path::parent) else {
+        return Ok(Vec::new());
+    };
+    let ident = owner.and_then(identifier);
+    // A site names a file of the project: an absolute path or one that climbs out of the
+    // project is never read, so no line of a file outside it is quoted back.
+    let inside = Path::new(file).components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    });
+    let read = if inside {
+        std::fs::read(project.join(file)).ok()
+    } else {
+        None
+    };
+    let Some(bytes) = read else {
+        return Ok(vec![format!(
+            "{flag} {site}: {file} was not found under the project, so the line was not checked"
+        )]);
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = text.lines().collect();
+    if line == 0 || line > lines.len() {
+        return Err(site_refusal(
+            site,
+            format!(
+                "{flag} line {line} is outside {file}, which has {} line(s)",
+                lines.len()
+            ),
+            file,
+            ident,
+        ));
+    }
+    let has_code = code_lines(&text, &comments_for(file));
+    if !has_code.get(line - 1).copied().unwrap_or(true) {
+        let kind = if lines[line - 1].trim().is_empty() {
+            "blank"
+        } else {
+            "a comment"
+        };
+        return Err(site_refusal(
+            site,
+            format!("{flag} line {line} of {file} is {kind}, not code"),
+            file,
+            ident,
+        ));
+    }
+    let Some(ident) = ident else {
+        return Ok(Vec::new());
+    };
+    if lines[line - 1].contains(ident) {
+        return Ok(Vec::new());
+    }
+    let mut near: Vec<usize> = (1..=lines.len())
+        .filter(|n| *n != line && lines[n - 1].contains(ident))
+        .collect();
+    near.sort_by_key(|n| (n.abs_diff(line), *n));
+    near.truncate(3);
+    let shown: Vec<String> = near
+        .iter()
+        .map(|n| {
+            let t: String = lines[n - 1].trim().chars().take(60).collect();
+            format!("{n}: {t}")
+        })
+        .collect();
+    Ok(vec![if shown.is_empty() {
+        format!(
+            "{flag} {site}: line {line} does not contain `{ident}`, and no other line of {file} does"
+        )
+    } else {
+        format!(
+            "{flag} {site}: line {line} does not contain `{ident}`; nearest lines that do: {}",
+            shown.join(" | ")
+        )
+    }])
 }

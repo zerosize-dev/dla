@@ -463,9 +463,160 @@ fn the_final_gate_needs_an_explanation_for_a_confirmed_finding() {
         "--text",
         "Requests add entries to the static/global table at a.go:1 through put at a.go:9, and a.go:40 removes them only when the flag is set.",
     ]);
+    // Explained, but not yet labelled: the label decision is the one thing left.
+    let o = r.gate("final");
+    assert_eq!(o.code, 2, "{} {}", o.stdout, o.stderr);
+    assert_eq!(missing_ids(&o), ["F1"], "{o:?}");
+    assert_eq!(o.json["missing"][0]["kind"], "label");
+    r.ok(&[
+        "ledger",
+        "label",
+        "F1",
+        "--as",
+        "UNCLASSIFIED",
+        "--note",
+        "static table filled by requests; nothing in the archetypes fits",
+    ]);
     let o = r.gate("final");
     assert_eq!(o.code, 0, "{} {}", o.stdout, o.stderr);
     assert_eq!(r.ok(&["run", "status"])["complete"], true);
+}
+
+fn explain_f1(r: &Run) {
+    r.ok(&["ledger", "annotate", "F1", "--writer", "a.go:9"]);
+    r.ok(&[
+        "ledger",
+        "explain",
+        "F1",
+        "--tag",
+        "inferred",
+        "--removal",
+        "never",
+        "--text",
+        "Requests add entries to the static/global table at a.go:1 through put at a.go:9 and nothing removes them, so it only grows.",
+    ]);
+}
+
+const LABEL_TABLE: &str = r#"
+[L-COLLECT]
+holders = ["static/global", "container-field"]
+regions = ["heap"]
+requires = [["growth-series"]]
+disconfirm = ["N-WARM"]
+repair = ["bound/evict"]
+summary = "A collection gains entries and nothing removes them."
+"#;
+
+fn with_data(r: &Run, data: &Path, off: bool, args: &[&str]) -> Out {
+    let mut c = base(r.path());
+    c.arg("--data").arg(data).args(args);
+    if off {
+        c.env("DLA_ARCHETYPES", "off");
+    }
+    let o = c.output().unwrap();
+    let stdout = String::from_utf8(o.stdout).unwrap();
+    Out {
+        code: o.status.code().unwrap(),
+        json: serde_json::from_str(&stdout).unwrap_or(Value::Null),
+        stdout,
+        stderr: String::from_utf8(o.stderr).unwrap(),
+    }
+}
+
+#[test]
+fn the_final_gate_needs_a_label_decision_with_archetypes_on() {
+    let r = init("symptom");
+    r.answer_intake();
+    confirmed_finding(&r);
+    explain_f1(&r);
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("archetypes.toml"), LABEL_TABLE).unwrap();
+    let o = with_data(&r, data.path(), false, &["gate", "check", "--final"]);
+    assert_eq!(o.code, 2, "{o:?}");
+    let m = &o.json["missing"][0];
+    assert_eq!(
+        (m["kind"].as_str(), m["id"].as_str()),
+        (Some("label"), Some("F1"))
+    );
+    let fix = m["fix"].as_str().unwrap();
+    assert!(fix.contains("dla ledger label F1 --suggest"), "{fix}");
+    assert!(fix.contains("--as UNCLASSIFIED --note"), "{fix}");
+    // An archetype ID is a decision.
+    let l = with_data(
+        &r,
+        data.path(),
+        false,
+        &["ledger", "label", "F1", "--as", "L-COLLECT"],
+    );
+    assert_eq!(l.code, 0, "{l:?}");
+    let o = with_data(&r, data.path(), false, &["gate", "check", "--final"]);
+    assert_eq!(o.code, 0, "{o:?}");
+}
+
+#[test]
+fn unclassified_with_a_note_satisfies_the_final_gate_with_archetypes_on() {
+    let r = init("symptom");
+    r.answer_intake();
+    confirmed_finding(&r);
+    explain_f1(&r);
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("archetypes.toml"), LABEL_TABLE).unwrap();
+    let l = with_data(
+        &r,
+        data.path(),
+        false,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "UNCLASSIFIED",
+            "--note",
+            "no row fits",
+        ],
+    );
+    assert_eq!(l.code, 0, "{l:?}");
+    let o = with_data(&r, data.path(), false, &["gate", "check", "--final"]);
+    assert_eq!(o.code, 0, "{o:?}");
+}
+
+#[test]
+fn unclassified_with_a_note_satisfies_the_final_gate_with_archetypes_off() {
+    let r = init("symptom");
+    r.answer_intake();
+    confirmed_finding(&r);
+    explain_f1(&r);
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("archetypes.toml"), LABEL_TABLE).unwrap();
+    let o = with_data(&r, data.path(), true, &["gate", "check", "--final"]);
+    assert_eq!(o.code, 2, "{o:?}");
+    assert_eq!(o.json["missing"][0]["kind"], "label");
+    // An archetype ID is refused while they are off; UNCLASSIFIED with a note is not.
+    let l = with_data(
+        &r,
+        data.path(),
+        true,
+        &["ledger", "label", "F1", "--as", "L-COLLECT"],
+    );
+    assert_eq!(l.code, 2, "{l:?}");
+    assert_eq!(l.json["error"]["code"], "archetypes-off");
+    let l = with_data(
+        &r,
+        data.path(),
+        true,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "UNCLASSIFIED",
+            "--note",
+            "archetypes are off",
+        ],
+    );
+    assert_eq!(l.code, 0, "{l:?}");
+    let o = with_data(&r, data.path(), true, &["gate", "check", "--final"]);
+    assert_eq!(o.code, 0, "{o:?}");
 }
 
 // ----------------------------------------------------------------- integrity

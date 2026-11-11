@@ -131,10 +131,25 @@ fn nothing_fits_and_before_you_stop_say_what_they_must() {
         "success",
         "Never force a label",
         "refuses",
-        "stays UNCLASSIFIED",
+        "only when no archetype fits the mechanism",
+        "run the command the refusal names once, then label again",
+        "label decision for each confirmed finding",
+        "from `grep -n` or `cat -n` output, never from counting an unnumbered listing",
     ] {
         assert!(nothing.contains(want), "When nothing fits lacks {want:?}");
     }
+    let worker = fs::read_to_string(root().join("agents/worker.md")).unwrap();
+    for want in [
+        "UNCLASSIFIED only when no archetype fits the mechanism",
+        "run the command the refusal names once, then label again",
+        "label decision",
+        "`grep -n` or `cat -n` output",
+    ] {
+        assert!(worker.contains(want), "worker.md lacks {want:?}");
+    }
+    let node =
+        fs::read_to_string(root().join("skills/detect-leak-anywhere/references/node.md")).unwrap();
+    assert!(node.contains("Timers (`setInterval`, `setTimeout`), event listeners and subscriptions are `registration-table`"));
     let stop = section(body, "Before you stop");
     for want in [
         "dla gate check --final",
@@ -144,6 +159,33 @@ fn nothing_fits_and_before_you_stop_say_what_they_must() {
         "integrity seals",
     ] {
         assert!(stop.contains(want), "Before you stop lacks {want:?}");
+    }
+}
+
+#[test]
+fn a_time_budget_refusal_that_names_a_smaller_plan_is_followed_not_ended() {
+    // `harness run`, `alloc-test` and `intervene` refuse a plan the deadline cannot hold and
+    // name a smaller one; the texts must not send the model straight to `time_budget`.
+    let recovery =
+        fs::read_to_string(root().join("skills/detect-leak-anywhere/references/recovery.md"))
+            .unwrap();
+    let texts = [
+        ("SKILL.md", skill()),
+        (
+            "agents/worker.md",
+            fs::read_to_string(root().join("agents/worker.md")).unwrap(),
+        ),
+        ("references/recovery.md", recovery),
+    ];
+    for (name, text) in &texts {
+        assert!(
+            text.contains("names a smaller"),
+            "{name} lacks the smaller-plan rule"
+        );
+        assert!(
+            text.contains("partial run"),
+            "{name} lacks the partial-run rule"
+        );
     }
 }
 

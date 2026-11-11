@@ -605,7 +605,7 @@ additional failure (a regression must not hide behind the entry).
 
 The last full run (`dla-bench dynamic --parallel 2`, release binaries, M6 after the fix rounds): 32 of 34
 fixtures pass and 2 are expected failures: `node-socket-heartbeat` and `rust-tree-parent-links`
-(the policy cannot read the code). The four fixtures whose label could not be reached before the fix rounds
+(the policy cannot read the code). After the benchmark follow-up (loopback `close` in the two node-socket-heartbeat fixtures, the label decision in the policy) the run was repeated with release binaries, archetypes on and off: 32 pass and the same 2 expected failures each time; `node-socket-heartbeat` still fails with the same holder text, so its entry stays. The four fixtures whose label could not be reached before the fix rounds
 (`jvm-extension-reload`, `jvm-invoice-render`, `rust-meter-callbacks`, `jni-order-codec`) pass and their entries are removed. The
 `needs_archetypes` flag of an entry stays for a future label entry. `node-retry-scheduler` passes: the policy runs the
 `dla ledger annotate F --holder H --evidence E` command that `needed` prints for the finding of

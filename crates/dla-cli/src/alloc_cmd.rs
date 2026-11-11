@@ -58,7 +58,7 @@ const PURGES: &[&str] = &[
     "empty-cache",
 ];
 /// Fewest extra points the plateau test can use.
-const MIN_EXTRA: u32 = 3;
+const MIN_EXTRA: u32 = dla_workload::harness::pace::MIN_EXTRA;
 /// Most `next` commands printed.
 const MAX_NEXT: usize = 8;
 
@@ -466,6 +466,19 @@ fn join_series(prev: &SeriesFile, extra: &SeriesFile) -> SeriesFile {
     }
 }
 
+/// A run the deadline stopped short is inconclusive: its verdict and supports are dropped.
+fn cap_for_partial(
+    partial: &[String],
+    favors: Favors,
+    supports: Vec<String>,
+) -> (Favors, Vec<String>) {
+    if partial.is_empty() {
+        (favors, supports)
+    } else {
+        (Favors::Inconclusive, Vec::new())
+    }
+}
+
 fn key_mode(m: &HarnessManifest) -> KeyMode {
     match m.mode {
         HarnessMode::Driver => KeyMode::Fresh,
@@ -542,6 +555,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         ..RunOptions::default()
     };
     let out = run_points(&tc, &manifest, &opts)?;
+    let partial: Vec<String> = out.partial.clone();
     let series_id = out.series.first().cloned().ok_or_else(|| {
         Failure::refuse(
             "harness-failed",
@@ -618,6 +632,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         .map(|r| (r.favors, r.supports.clone()))
         .collect();
     let (favors, supports) = judge::overall(&deciding);
+    // A run the deadline cut short measured less than it planned: whatever its columns
+    // say, it never favours non-leak (and never confirms) on its own.
+    let (favors, supports) = cap_for_partial(&partial, favors, supports);
+    if !partial.is_empty() {
+        limitations.push(
+            "partial run: the run deadline stopped the points before the plan, so this result is inconclusive whatever the columns show"
+                .to_owned(),
+        );
+    }
 
     // Files: the new trend and the full result.
     let trend = trend_of(&tc, &ledger, &series, previous.as_ref())?;
@@ -669,6 +692,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         .extra
         .insert("iterations".into(), json!(manifest.iterations));
     result.extra.insert("extra".into(), json!(extra));
+    if !partial.is_empty() {
+        result.extra.insert(
+            "partial".into(),
+            json!({"reason": "the run deadline stopped the points before the plan", "first": partial.iter().take(2).collect::<Vec<_>>()}),
+        );
+    }
     let mut keep = results.len();
     let value = loop {
         let cols: Vec<Value> = results
@@ -733,6 +762,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     out.insert("finding".into(), json!(a.finding));
     out.insert("basis".into(), json!(picked.basis));
     out.insert("purge".into(), json!(purge_kind));
+    if !partial.is_empty() {
+        out.insert(
+            "partial".into(),
+            json!(format!(
+                "stopped at the run deadline before the plan ({}); inconclusive, never a refutation",
+                partial.first().map_or("", String::as_str)
+            )),
+        );
+    }
     let briefs: Vec<Value> = results.iter().map(ColumnResult::brief).collect();
     let mut shown = briefs.len().min(8);
     loop {
@@ -881,6 +919,19 @@ mod tests {
     use dla_core::series::{
         Axis, Column, ColumnScope, Point, SeriesRegion, SeriesSource, SeriesSourceKind,
     };
+
+    #[test]
+    fn a_partial_run_never_favours_either_side() {
+        let said = vec!["x".to_owned()];
+        for f in [Favors::Leak, Favors::NonLeak] {
+            let (got, supports) = cap_for_partial(&said, f, vec!["plateau".to_owned()]);
+            assert_eq!(got, Favors::Inconclusive);
+            assert!(supports.is_empty());
+        }
+        let (got, supports) = cap_for_partial(&[], Favors::NonLeak, vec!["plateau".to_owned()]);
+        assert_eq!(got, Favors::NonLeak);
+        assert_eq!(supports, ["plateau"]);
+    }
 
     fn col(name: &str) -> Column {
         Column {

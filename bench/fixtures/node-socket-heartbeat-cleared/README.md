@@ -31,20 +31,24 @@ diff -ru node-socket-heartbeat/project/src/session.js node-socket-heartbeat-clea
      this.metrics.inc(`closed_${reason}`);
 ```
 
+The loopback socket's `destroy()` emits `close` once, asynchronously, like
+`net.Socket`; the partner's README says why. The measurements were retaken after
+that change.
+
 ## Measurements
 
 Same harness and workload as the partner (`node --expose-gc measure-sock.js project N`).
 
 | connections | open sessions | live intervals | heap after GC (KB) |
 |---|---|---|---|
-| 2000  | 0 | 0 | 244 |
-| 8000  | 0 | 0 | 324 |
-| 16000 | 0 | 0 | 309 |
+| 2000  | 0 | 0 | 284 |
+| 8000  | 0 | 0 | 373 |
+| 16000 | 0 | 0 | 407 |
 
-Live intervals are 0 and heap after GC stays near 0.3 MB at every count; the second
-half of the run has zero slope. During the run at most 33 sessions (the replay
+Live intervals are 0 and heap after GC stays under 0.5 MB at every count and does not
+scale with the count (0.15 KB per connection at 2000, 0.03 KB at 16000). During the run at most 33 sessions (the replay
 window of 32 plus the one being opened) exist at once. Contrast with the trap: 16000
 live intervals and 67 MB at 16000 connections.
 
 Workload: `node load.js --iterations 8000` about 0.5 s. Unit tests: `node --test`
-(8 pass).
+(9 pass).

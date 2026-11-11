@@ -21,7 +21,13 @@
 //!    commands that already ran, again with `--finding F`). A refused label of a shipped row
 //!    is a failure (the report says whether the label is reachable). With archetypes off the
 //!    labels of shipped rows must be refused with `archetypes-off`; `UNCLASSIFIED` stays
-//!    allowed; `--suggest` must say that archetypes are off.
+//!    allowed; `--suggest` must say that archetypes are off. The final gate wants a label
+//!    decision for every confirmed leak-side finding, so a finding the policy did not label
+//!    with an archetype (no expected leak, a holder that differs, a cause without a shipped
+//!    row, a refused label) is read from `--suggest` (its rows are recorded in the note) and
+//!    gets `--as UNCLASSIFIED --note`: the policy cannot read the code, so it never picks an
+//!    archetype it was not given. A `label` item that still names a finding at the final
+//!    gate is answered the same way.
 //! 4. Strong. `ledger strong` with each eligible record (an intervention that removed the
 //!    growth, or a retention record) when one exists. Reported, never gating.
 //! 5. Close-out. `dla gate check --final` must pass. What it names is done with the command
@@ -252,11 +258,13 @@ fn label_all(fx: &mut Fx, ts: &[Target], off: bool, row: &mut PolicyRow) {
                 "label {id} --suggest does not say archetypes are on"
             ));
         }
+        let met = suggest_rows(&s);
         let Some(leak) = &t.leak else {
+            let o = label_unclassified(fx, &id, "no expected leak matches this finding", &met);
             row.labels.push(Note {
                 finding: id,
                 detail: "no expected leak".to_owned(),
-                result: "not labelled".to_owned(),
+                result: format!("not labelled; {}", unclassified_result(&o, &met)),
             });
             continue;
         };
@@ -264,13 +272,15 @@ fn label_all(fx: &mut Fx, ts: &[Target], off: bool, row: &mut PolicyRow) {
         if t.f.holder.as_deref() != Some(leak.holder.as_str()) {
             // A wrong holder is a failure of the fixture already; the label rule on the
             // holder would only repeat it.
+            let o = label_unclassified(fx, &id, "the holder differs from the expected one", &met);
             row.labels.push(Note {
                 finding: id,
                 detail,
                 result: format!(
-                    "not tried: holder {} differs from the expected {}",
+                    "not tried: holder {} differs from the expected {}; {}",
                     t.f.holder.as_deref().unwrap_or("none"),
-                    leak.holder.as_str()
+                    leak.holder.as_str(),
+                    unclassified_result(&o, &met)
                 ),
             });
             continue;
@@ -337,18 +347,81 @@ fn label_all(fx: &mut Fx, ts: &[Target], off: bool, row: &mut PolicyRow) {
                     refusal(&o)
                 )),
             }
+            // A refused label (expected with archetypes off, a failure otherwise) leaves the
+            // finding without a decision; UNCLASSIFIED with a note stands in.
+            let result = if o.ok {
+                result
+            } else {
+                let u = label_unclassified(fx, &id, &format!("{cause} was refused"), &met);
+                format!("{result}; {}", unclassified_result(&u, &met))
+            };
             row.labels.push(Note {
                 finding: id,
                 detail,
                 result,
             });
         } else {
+            let u = label_unclassified(fx, &id, &format!("{cause} has no shipped row"), &met);
             row.labels.push(Note {
                 finding: id,
                 detail,
-                result: format!("not tried: {cause} has no shipped row"),
+                result: format!(
+                    "not tried: {cause} has no shipped row; {}",
+                    unclassified_result(&u, &met)
+                ),
             });
         }
+    }
+}
+
+/// The archetype rows `--suggest` lists as met: `L-COLLECT` for the row
+/// `L-COLLECT met [E1,E2]: <summary>`. The closing UNCLASSIFIED row and the rows missing
+/// evidence or blocked are not listed.
+fn suggest_rows(s: &Out) -> Vec<String> {
+    s.json["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|r| {
+            let mut w = r.split_whitespace();
+            let (id, state) = (w.next()?, w.next()?);
+            (state == "met").then(|| id.to_owned())
+        })
+        .collect()
+}
+
+/// `ledger label F --as UNCLASSIFIED --note`, with the reason and the rows `--suggest` met.
+fn label_unclassified(fx: &mut Fx, id: &str, why: &str, met: &[String]) -> Out {
+    let rows = if met.is_empty() {
+        "no row is met".to_owned()
+    } else {
+        format!("rows met: {}", met.join(", "))
+    };
+    let note = format!(
+        "the policy cannot read the code and picks no archetype it was not given: {why} ({rows})"
+    );
+    fx.call_quiet(&[
+        "ledger",
+        "label",
+        id,
+        "--as",
+        "UNCLASSIFIED",
+        "--note",
+        &note,
+    ])
+}
+
+fn unclassified_result(o: &Out, met: &[String]) -> String {
+    let met = if met.is_empty() {
+        String::new()
+    } else {
+        format!(" (suggest met {})", met.join(", "))
+    };
+    if o.ok {
+        format!("UNCLASSIFIED{met}")
+    } else {
+        format!("UNCLASSIFIED {}{met}", refusal(o))
     }
 }
 
@@ -905,6 +978,20 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                 if o.ok { "ok".to_owned() } else { refusal(&o) }
             ))
         }
+        "label" => {
+            // A finding that came after the label step: no archetype is picked for it.
+            if !tried.insert(format!("label {}", item.id)) {
+                return None;
+            }
+            let s = fx.call_quiet(&["ledger", "label", &item.id, "--suggest"]);
+            let met = suggest_rows(&s);
+            let o = label_unclassified(fx, &item.id, "found after the label step", &met);
+            Some(format!(
+                "label {} UNCLASSIFIED: {}",
+                item.id,
+                if o.ok { "ok".to_owned() } else { refusal(&o) }
+            ))
+        }
         "explanation" => {
             let f = fx.view().finding(&item.id).cloned()?;
             let (None, Some(owner), Some(holder)) = (f.site, f.owner, f.holder) else {
@@ -1098,7 +1185,8 @@ echo "$*" >> "$FAKE_LOG"
 case "$1 $2" in
 "ledger label")
   case "$*" in
-  *--suggest*) echo "{\"ok\":true,\"archetypes\":\"$FAKE_ARCH\"}";;
+  *--suggest*) echo "{\"ok\":true,\"archetypes\":\"$FAKE_ARCH\",\"rows\":[\"L-COLLECT met [E6]: s\",\"L-TLS missing growth-series: s\",\"UNCLASSIFIED none-fits: c\"]}";;
+  *"--as UNCLASSIFIED"*) echo '{"ok":true}';;
   *) if [ -n "$FAKE_LABEL_CODE" ]; then
        echo "{\"ok\":false,\"error\":{\"code\":\"$FAKE_LABEL_CODE\",\"message\":\"m\"}}"; exit 2
      fi
@@ -1279,13 +1367,56 @@ cause = "{cause}"
         let l = &row.policy.labels[0];
         assert_eq!((l.finding.as_str(), l.result.as_str()), ("F1", "ok"));
         assert_eq!(l.detail, "L1 L-COLLECT");
-        // F9 matches no expected leak: it is not labelled.
-        assert_eq!(row.policy.labels[1].result, "not labelled");
-        assert!(!calls.contains("label F9 --as"), "{calls}");
+        // F9 matches no expected leak: the final gate needs a decision, and the policy
+        // picks no archetype it was not given. It reads --suggest and records the rows met.
+        assert!(
+            row.policy.labels[1]
+                .result
+                .starts_with("not labelled; UNCLASSIFIED (suggest met L-COLLECT)"),
+            "{:?}",
+            row.policy.labels[1]
+        );
+        assert!(
+            calls.contains("ledger label F9 --as UNCLASSIFIED --note"),
+            "{calls}"
+        );
+        assert!(calls.contains("rows met: L-COLLECT"), "{calls}");
+        assert!(!calls.contains("label F9 --as L-"), "{calls}");
         assert!(
             row.failures.iter().all(|f| !f.starts_with("label ")),
             "{:?}",
             row.failures
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_label_still_gets_a_label_decision_for_the_final_gate() {
+        let (_, calls) = drive_fake(
+            &expected("L-COLLECT", "container-field"),
+            true,
+            &[("FAKE_LABEL_CODE", "archetypes-off")],
+        );
+        assert!(
+            calls.contains("ledger label F1 --as UNCLASSIFIED --note"),
+            "{calls}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_label_item_at_the_final_gate_is_answered_with_unclassified() {
+        let gate2 = r#"{"ok":false,"missing_total":1,"missing":[
+          {"kind":"label","id":"F7","description":"d","fix":"dla ledger label F7 --suggest"}]}"#;
+        let (_, calls) = drive_fake_with(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1")],
+            gate2,
+        );
+        assert!(
+            calls.contains("ledger label F7 --as UNCLASSIFIED --note"),
+            "{calls}"
         );
     }
 
@@ -1304,9 +1435,12 @@ cause = "{cause}"
             "{:?}",
             row.failures
         );
-        assert_eq!(
-            row.policy.labels[0].result,
-            "refused label-evidence-missing"
+        assert!(
+            row.policy.labels[0]
+                .result
+                .starts_with("refused label-evidence-missing; UNCLASSIFIED"),
+            "{:?}",
+            row.policy.labels[0]
         );
     }
 
@@ -1320,9 +1454,12 @@ cause = "{cause}"
             "{:?}",
             row.failures
         );
-        assert_eq!(
-            row.policy.labels[0].result,
-            "refused archetypes-off (expected)"
+        assert!(
+            row.policy.labels[0]
+                .result
+                .starts_with("refused archetypes-off (expected); UNCLASSIFIED"),
+            "{:?}",
+            row.policy.labels[0]
         );
         // Accepted with archetypes off: a failure.
         let (row, _) = drive_fake(&e, true, &[]);

@@ -64,6 +64,25 @@ pub const PRODUCED_KINDS: [EvidenceKind; 16] = [
     EvidenceKind::Artifact,
 ];
 
+/// ID of the closing `--suggest` row that stands for "no archetype fits".
+pub const UNCLASSIFIED_ROW: &str = "UNCLASSIFIED";
+
+/// The leak archetypes that have a row in a runtime's shipped
+/// `skills/detect-leak-anywhere/references/<runtime>-archetypes.md` (the rows with a
+/// decoy/control pair). `None` for a name that is not a runtime. A test keeps this list
+/// equal to the files.
+pub fn runtime_rows(runtime: &str) -> Option<&'static [&'static str]> {
+    Some(match runtime {
+        "jvm" => &["L-COLLECT", "L-TLS", "L-UNLOAD"],
+        "go" => &["L-WORKER"],
+        "node" => &["L-REGISTER", "L-CAPTURE"],
+        "python" => &["L-COLLECT"],
+        "rust" => &["L-CYCLE", "L-OWNERSHIP"],
+        "native" => &["L-HANDLE"],
+        _ => return None,
+    })
+}
+
 /// One archetype.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
@@ -246,6 +265,27 @@ summary = "A collection gains entries and nothing removes them."
         assert_eq!(r.code, codes::INVALID_DATA_FILE);
         let r = Table::parse(&SAMPLE.replace("L-COLLECT", "L-NOPE"), "data/a.toml").unwrap_err();
         assert!(r.message.contains("L-NOPE"));
+    }
+
+    #[test]
+    fn runtime_rows_match_the_shipped_reference_files() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skills/detect-leak-anywhere/references");
+        for rt in ["jvm", "go", "node", "python", "rust", "native"] {
+            let text = std::fs::read_to_string(dir.join(format!("{rt}-archetypes.md"))).unwrap();
+            let in_file: Vec<&str> = text
+                .lines()
+                .filter_map(|l| l.strip_prefix("| L-"))
+                .filter_map(|l| l.split_once(' ').map(|(id, _)| id))
+                .collect();
+            let want: Vec<String> = runtime_rows(rt)
+                .unwrap()
+                .iter()
+                .map(|r| r.trim_start_matches("L-").to_owned())
+                .collect();
+            assert_eq!(in_file, want, "{rt}-archetypes.md rows");
+        }
+        assert_eq!(runtime_rows("cobol"), None);
     }
 
     #[test]
