@@ -134,6 +134,9 @@ fn nothing_fits_and_before_you_stop_say_what_they_must() {
         "only when no archetype fits the mechanism",
         "run the command the refusal names once, then label again",
         "label decision for each confirmed finding",
+        "`--note` only to keep the ID, and it must say why none of the runtime's rows fits",
+        "what is met and what is missing",
+        "`dla ledger duplicate F --of G`",
         "from `grep -n` or `cat -n` output, never from counting an unnumbered listing",
     ] {
         assert!(nothing.contains(want), "When nothing fits lacks {want:?}");
@@ -143,6 +146,8 @@ fn nothing_fits_and_before_you_stop_say_what_they_must() {
         "UNCLASSIFIED only when no archetype fits the mechanism",
         "run the command the refusal names once, then label again",
         "label decision",
+        "label-runtime-row",
+        "`dla --run <id> --worker <name> ledger duplicate F --of G`",
         "`grep -n` or `cat -n` output",
     ] {
         assert!(worker.contains(want), "worker.md lacks {want:?}");

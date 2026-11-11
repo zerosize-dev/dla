@@ -48,7 +48,9 @@ fn digest(l: &Ledger) -> String {
         if let Some(c) = l.merged_into(&f.id) {
             h.update(format!("{} -> {c}\n", f.id));
         }
-        h.update(format!("{:?}\n", l.annotation(&f.id)));
+        // Fields added after schema 5 (`owner_changes`) are left out while empty, so the
+        // digest is of the replayed state and not of the Debug text of newer fields.
+        h.update(format!("{:?}\n", l.annotation(&f.id)).replace(", owner_changes: []", ""));
     }
     hex::encode(h.finalize())[..16].to_owned()
 }

@@ -190,6 +190,19 @@ pub struct Annotation {
     pub notes: Vec<String>,
     /// Holder corrections backed by evidence, oldest first.
     pub holder_changes: Vec<HolderChange>,
+    /// Owner corrections backed by evidence, oldest first.
+    pub owner_changes: Vec<OwnerChange>,
+}
+
+/// An owner replaced by an evidence-backed annotation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerChange {
+    /// The owner before.
+    pub from: String,
+    /// The owner after.
+    pub to: String,
+    /// The evidence that names a holder with the new owner.
+    pub evidence: Vec<EvidenceId>,
 }
 
 /// A holder replaced by an evidence-backed annotation (schema 5).
@@ -502,6 +515,10 @@ impl Index {
             Record::FindingExplained(x) if !own(x.finding.prefix()) => {
                 Err(foreign("finding", &x.finding))
             }
+            // A worker records duplicates among its own findings (`dla ledger duplicate`).
+            Record::FindingMerged(m) if own(m.canonical.prefix()) && own(m.duplicate.prefix()) => {
+                Ok(())
+            }
             Record::SliceMerged(_)
             | Record::FindingMerged(_)
             | Record::Verification(_)
@@ -604,7 +621,7 @@ impl Index {
             Refusal::new(
                 m4::MERGE_STATE,
                 why,
-                "two distinct top-level findings of different workers",
+                "two distinct top-level findings of different workers, or duplicates of one scope",
                 fix,
             )
         };
@@ -619,11 +636,20 @@ impl Index {
                 m.canonical, m.duplicate
             )));
         }
-        match (m.canonical.prefix(), m.duplicate.prefix()) {
-            (Some(a), Some(b)) if a != b => {}
-            _ => {
+        // Two cases write this record: the merge of findings of different workers, and
+        // `dla ledger duplicate` (one scope, exact identity). Anything else is refused.
+        let cross_worker = matches!(
+            (m.canonical.prefix(), m.duplicate.prefix()),
+            (Some(a), Some(b)) if a != b
+        );
+        if !cross_worker {
+            let identical = match (self.finding(&m.canonical), self.finding(&m.duplicate)) {
+                (Some(c), Some(d)) => crate::duplicate::duplicate_by(c, d).is_some(),
+                _ => false,
+            };
+            if !identical {
                 return Err(bad(format!(
-                    "{} and {} must belong to different workers",
+                    "{} and {} are neither findings of different workers nor duplicates in one worker and runtime with the same owner or site",
                     m.canonical, m.duplicate
                 )));
             }
@@ -793,6 +819,22 @@ impl Index {
         if version >= 5 && !a.evidence.is_empty() {
             self.check_annotation_evidence(a)?;
         }
+        if let Some(old) = a.replaced_owner.as_deref()
+            && (f.owner.as_deref() != Some(old) || a.owner.as_deref().is_none_or(|n| n == old))
+        {
+            return Err(Refusal::new(
+                codes::ANNOTATION_CONFLICT,
+                format!(
+                    "annotation of {} says it replaces owner {old:?}, but the finding has {:?} and the annotation sets {:?}",
+                    a.finding, f.owner, a.owner
+                ),
+                "replaced_owner equal to the owner being replaced, and a different new owner",
+                format!(
+                    "dla ledger annotate {} --owner <new owner> --evidence <evidence id> (the ledger writes replaced_owner)",
+                    a.finding
+                ),
+            ));
+        }
         let conflicts = [
             (
                 "holder",
@@ -815,6 +857,10 @@ impl Index {
                     self.check_holder_change(a, f)?;
                     continue;
                 }
+                if field == "owner" && version >= 6 && !a.evidence.is_empty() {
+                    self.check_owner_change(a, f)?;
+                    continue;
+                }
                 return Err(Refusal::new(
                     codes::ANNOTATION_CONFLICT,
                     format!(
@@ -828,6 +874,13 @@ impl Index {
                         if field == "holder" {
                             format!(
                                 "; or, when heap-graph growth evidence observed the holder: dla ledger annotate {} --holder {want} --evidence <growth evidence id>",
+                                a.finding
+                            )
+                        } else if field == "owner"
+                            && matches!(f.state, FindingState::Candidate | FindingState::UnderTest)
+                        {
+                            format!(
+                                "; or, before confirmation and when growth or retention evidence names a holder owned by {want}: dla ledger annotate {} --owner {want} --evidence <evidence id>",
                                 a.finding
                             )
                         } else {
@@ -971,6 +1024,201 @@ impl Index {
             reasons.join("; "),
             format!(
                 "growth-series evidence (dump or live) with a passing column tied to {id} and holder_kind {want}"
+            ),
+        ))
+    }
+
+    /// The rule for replacing an owner already set: a cited growth-series or retention-path
+    /// evidence of authority dump or live, written by the HPROF or V8 snapshot reader,
+    /// names a holder whose owner is the new owner.
+    fn check_owner_change(&self, a: &FindingAnnotation, f: &Finding) -> Result<(), Refusal> {
+        let (Some(want), Some(have)) = (a.owner.as_deref(), f.owner.as_deref()) else {
+            return Ok(());
+        };
+        if let Some(old) = a.replaced_owner.as_deref()
+            && old != have
+        {
+            return Err(Refusal::new(
+                codes::ANNOTATION_CONFLICT,
+                format!(
+                    "annotation of {} says it replaces owner {old:?}, but the finding has {have:?}",
+                    a.finding
+                ),
+                format!("replaced_owner {have:?}"),
+                format!(
+                    "dla ledger annotate {} --owner {want} --evidence <evidence id>",
+                    a.finding
+                ),
+            ));
+        }
+        if !matches!(f.state, FindingState::Candidate | FindingState::UnderTest) {
+            return Err(Refusal::new(
+                codes::ANNOTATION_CONFLICT,
+                format!(
+                    "{} is {} and has owner {have:?}; an owner is replaced only before confirmation (candidate or under_test), because the finding's growth ties were made for {have:?}",
+                    a.finding, f.state
+                ),
+                format!("owner {have:?}, or a new finding with the right owner"),
+                format!(
+                    "the owner must be corrected before confirmation; after it, record a new finding with the right owner: dla ledger add --origin hypothesis --sibling-of {} --hypothesis \"<cause>\" --refute-if \"<result>\" --evidence <id> --owner {want}",
+                    f.root_id()
+                ),
+            ));
+        }
+        // The growth already tied to the finding stays tied: a new owner must agree with
+        // every passing `holder:`/`probe:` column tied to it (by finding or candidates), or
+        // the confirmation would rest on the growth of another variable.
+        if let Some(want_c) = crate::attribution::canonical(want) {
+            let mut clash: Vec<String> = Vec::new();
+            // Tied owners the new owner is a strictly shorter form of: more than one
+            // distinct such owner makes the short form ambiguous.
+            let mut longer: Vec<String> = Vec::new();
+            let id = a.finding.to_string();
+            for e in self.evidence.values() {
+                if !crate::machine::is_passing_growth(e) {
+                    continue;
+                }
+                let Some(s) = crate::trend::GrowthSummary::from_result(&e.result) else {
+                    continue;
+                };
+                for c in &s.passed {
+                    if c.finding.as_deref() != Some(id.as_str()) && !c.candidates.contains(&id) {
+                        continue;
+                    }
+                    if !(c.column.starts_with("holder:") || c.column.starts_with("probe:")) {
+                        continue;
+                    }
+                    let Some(o) = crate::holders::column_owner(&c.column) else {
+                        // A tied column whose holder has no owner form (a registration,
+                        // a thread, a JNI global): nothing shows the new owner agrees.
+                        let what = format!("{} (a holder with no owner form)", c.column);
+                        if !clash.contains(&what) {
+                            clash.push(what);
+                        }
+                        continue;
+                    };
+                    let probe = c.column.starts_with("probe:");
+                    let agrees = o == want_c
+                        || crate::attribution::is_shorter_form(&o, &want_c)
+                        // A probe may be named without its package (as the trend ties it).
+                        || (probe && crate::attribution::is_shorter_form(&want_c, &o));
+                    if !agrees {
+                        if !clash.contains(&o) {
+                            clash.push(o);
+                        }
+                    } else if crate::attribution::is_shorter_form(&o, &want_c)
+                        && !longer.contains(&o)
+                    {
+                        longer.push(o);
+                    }
+                }
+            }
+            // Two longer owners that are not forms of one another: the short form names
+            // two variables.
+            let distinct: Vec<&String> = longer
+                .iter()
+                .filter(|o| {
+                    !longer
+                        .iter()
+                        .any(|p| p != *o && crate::attribution::is_shorter_form(p, o))
+                })
+                .collect();
+            if distinct.len() > 1 {
+                let mut names: Vec<String> = distinct.iter().map(|s| (*s).clone()).collect();
+                names.sort();
+                clash.push(format!(
+                    "{} (the short form {want} names each of them)",
+                    names.join(" and ")
+                ));
+            }
+            if !clash.is_empty() {
+                clash.sort();
+                return Err(Refusal::new(
+                    codes::ANNOTATION_CONFLICT,
+                    format!(
+                        "{} is tied to growth of {}; replacing its owner {have:?} with {want:?} would keep that tie for a different variable",
+                        a.finding,
+                        clash.join(", ")
+                    ),
+                    format!(
+                        "an owner every growth column tied to {} agrees with",
+                        a.finding
+                    ),
+                    format!(
+                        "keep {have:?}, or record the corrected owner on a new hypothesis: dla ledger add --origin hypothesis --sibling-of {} --hypothesis \"<cause>\" --refute-if \"<result>\" --evidence <id> --owner {want}",
+                        f.root_id()
+                    ),
+                ));
+            }
+        }
+        let mut reasons = Vec::new();
+        let want_c = crate::attribution::canonical(want);
+        let mut owners: Vec<String> = Vec::new();
+        for eid in &a.evidence {
+            let Some(e) = self.evidence.get(eid) else {
+                continue;
+            };
+            if !matches!(
+                e.kind,
+                EvidenceKind::GrowthSeries | EvidenceKind::RetentionPath
+            ) {
+                reasons.push(format!(
+                    "{eid} is {}, not growth-series or retention-path",
+                    e.kind
+                ));
+                continue;
+            }
+            if !matches!(e.authority, Authority::Dump | Authority::Live)
+                || !HOLDER_EVIDENCE_TOOLS.contains(&e.tool.name.as_str())
+            {
+                reasons.push(format!(
+                    "{eid} is not a heap-graph reading ({}, authority dump or live)",
+                    HOLDER_EVIDENCE_TOOLS.join(" or ")
+                ));
+                continue;
+            }
+            owners.extend(crate::holders::record_holder_owners(e));
+        }
+        // Exact, or a shorter form of exactly one distinct owner among all cited records.
+        if let Some(w) = &want_c {
+            owners.sort();
+            owners.dedup();
+            if owners.contains(w) {
+                return Ok(());
+            }
+            let longer: Vec<&String> = owners
+                .iter()
+                .filter(|o| crate::attribution::is_shorter_form(o, w))
+                .collect();
+            match longer.len() {
+                0 => {}
+                1 => return Ok(()),
+                _ => reasons.push(format!(
+                    "{want} is a short form of several holders ({}) in the cited evidence and ties none; give the full owner",
+                    longer.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                )),
+            }
+        }
+        let named = owners;
+        if !named.is_empty() {
+            reasons.push(format!(
+                "the cited evidence names holders {}",
+                named.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+            ));
+        }
+        Err(Refusal::new(
+            codes::ANNOTATION_CONFLICT,
+            format!(
+                "{} already has owner {have:?}; replacing it with {want:?} needs evidence that names a holder owned by {want}: {}",
+                a.finding,
+                reasons.join("; ")
+            ),
+            format!(
+                "growth-series or retention-path evidence (dump or live) naming a holder owned by {want}"
+            ),
+            format!(
+                "dla summarize heap-graph <dump...> (then) dla ledger annotate {} --owner <an owner the evidence names> --evidence <evidence id>",
+                a.finding
             ),
         ))
     }
@@ -1352,8 +1600,23 @@ impl Index {
                     if f.site.is_none() {
                         f.site.clone_from(&a.site);
                     }
-                    if f.owner.is_none() {
-                        f.owner.clone_from(&a.owner);
+                    match (&f.owner, &a.owner) {
+                        (None, _) => f.owner.clone_from(&a.owner),
+                        // The check let this pass: the change is backed by evidence.
+                        (Some(old), Some(new)) if version >= 6 && old != new => {
+                            let from = old.clone();
+                            f.owner = Some(new.clone());
+                            self.annotations
+                                .entry(a.finding.clone())
+                                .or_default()
+                                .owner_changes
+                                .push(OwnerChange {
+                                    from,
+                                    to: new.clone(),
+                                    evidence: a.evidence.clone(),
+                                });
+                        }
+                        _ => {}
                     }
                 }
                 let slot = self.annotations.entry(a.finding.clone()).or_default();
@@ -1919,7 +2182,7 @@ impl Ledger {
     // ----- IDs -----
 
     /// The prefix new IDs carry: the worker's name in worker mode.
-    fn prefix(&self) -> Option<&str> {
+    pub(crate) fn prefix(&self) -> Option<&str> {
         self.slice.as_ref().map(|s| s.worker.as_str())
     }
 
@@ -2451,6 +2714,15 @@ impl Ledger {
         {
             annotation.replaced_holder = f.holder;
         }
+        annotation.replaced_owner = None;
+        if let (Some(new), Some(f)) = (
+            annotation.owner.as_deref(),
+            self.index.findings.get(&annotation.finding),
+        ) && f.owner.as_deref().is_some_and(|old| old != new)
+            && !annotation.evidence.is_empty()
+        {
+            annotation.replaced_owner.clone_from(&f.owner);
+        }
         self.append(Record::FindingAnnotated(annotation))
     }
 
@@ -2490,6 +2762,17 @@ impl Ledger {
             },
         )?;
         self.append(Record::FindingLabeled(rec))
+    }
+
+    /// Read only: the refusal `label` would give before it looks at any evidence.
+    pub fn label_precheck(
+        &self,
+        finding: &FindingId,
+        label: &str,
+        archetypes: Archetypes<'_>,
+    ) -> Result<(), Error> {
+        let finding = self.own_finding_id(finding);
+        Ok(labels::precheck(&self.index, &finding, label, archetypes)?)
     }
 
     /// Read only: per archetype that fits `finding`, whether it can be labelled now.
@@ -2715,6 +2998,25 @@ impl Ledger {
             canonical: canonical.clone(),
             duplicate: duplicate.clone(),
         }))
+    }
+
+    /// Records that `duplicate` is the same leak as `canonical` (`dla ledger duplicate`),
+    /// when [`crate::duplicate::check`] accepts the pair. Works in core mode and in a
+    /// worker's slice (both findings must be the worker's own there). The duplicate's
+    /// supports join the canonical finding at replay, as in a cross-worker merge.
+    pub fn duplicate_finding(
+        &mut self,
+        duplicate: &FindingId,
+        canonical: &FindingId,
+    ) -> Result<(LedgerLine, crate::duplicate::DuplicateBy), Error> {
+        self.locked(|this| {
+            let by = crate::duplicate::check(this, duplicate, canonical)?;
+            let line = this.append(Record::FindingMerged(FindingMerged {
+                canonical: canonical.clone(),
+                duplicate: duplicate.clone(),
+            }))?;
+            Ok((line, by))
+        })
     }
 
     /// Core mode: records what a verifier concluded about `finding` from its bundle.

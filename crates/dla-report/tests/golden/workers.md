@@ -82,7 +82,7 @@ Coverage: not measured
 
 ## Merged duplicates
 
-- **rust/F1** merged into **jvm/F1** (same site and holder; its evidence E1 is kept on jvm/F1)
+- **rust/F1** merged into **jvm/F1** (a duplicate of the same leak; its evidence E1 is kept on jvm/F1)
 
 ## Ruled out
 

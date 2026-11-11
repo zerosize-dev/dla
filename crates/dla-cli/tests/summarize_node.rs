@@ -1023,3 +1023,232 @@ fn snapshots_not_listed_as_harness_captures_keep_the_pid_directory_rule() {
         "{e}"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// a closure variable dominated by larger holders, in the scratch copy of a harness
+
+const BOARD_JS: &str = r#"'use strict';
+class Board {
+  constructor() { this.latest = null; this.sequence = 0; }
+  publish(symbol, ticks) {
+    const previous = this.latest;
+    const changeNote = () => (previous ? `${symbol}: ${previous.count}` : `${symbol}: first`);
+    const snapshot = {
+      id: ++this.sequence, symbol, count: ticks.length, ticks,
+      describe() { return `${symbol}#${snapshot.id} ${changeNote.name}`; },
+    };
+    this.latest = snapshot;
+    return snapshot;
+  }
+}
+module.exports = (() => {
+  const board = new Board();
+  return { publish: (...args) => board.publish(...args) };
+})();
+"#;
+
+const LOAD_JS: &str = r#"'use strict';
+const board = require('./src/board');
+const i = process.argv.indexOf('--iterations');
+const n = i > 0 ? Number(process.argv[i + 1]) : 10;
+for (let k = 0; k < n; k += 1) board.publish(`S${k % 8}`, Array.from({ length: 40 }, (_, j) => j + 0.5));
+"#;
+
+const GEN_JS: &str = r#"'use strict';
+const v8 = require('node:v8');
+const board = require('./src/board');
+const n = Number(process.argv[2]);
+for (let i = 0; i < n; i += 1) {
+  board.publish(`S${i % 8}`, Array.from({ length: 40 }, (_, k) => k + i + 0.5));
+}
+v8.writeHeapSnapshot(process.argv[3]);
+"#;
+
+/// Four per-point snapshots (real V8 output) of a program whose newest snapshot object is
+/// held by `Board.latest`, and whose chain of older ones hangs from the context variable
+/// `previous`. They are taken from the scratch copy of a harness, as `dla harness run
+/// --capture heap` takes them. `None` when node is not installed.
+fn board_snapshots(p: &Project) -> Option<Vec<String>> {
+    std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .ok()?;
+    // The project, and the harness `dla harness gen` writes for it (id H1).
+    p.put(
+        "package.json",
+        br#"{"name":"board","scripts":{"load":"node load.js"}}"#,
+    );
+    p.put("src/board.js", BOARD_JS.as_bytes());
+    p.put("load.js", LOAD_JS.as_bytes());
+    ok(p.path(), &["workload", "discover", "--lang", "node"]);
+    ok(p.path(), &["harness", "gen", "--lang", "node"]);
+    let work = p.run_dir.join("harness/H1/work");
+    fs::create_dir_all(work.join("src")).unwrap();
+    fs::write(work.join("src/board.js"), BOARD_JS).unwrap();
+    fs::write(work.join("gen.js"), GEN_JS).unwrap();
+    let mut files = Vec::new();
+    for (k, n) in [200u32, 400, 600, 800].into_iter().enumerate() {
+        let out = p.path().join(format!("in/gen/heap-{n}.heapsnapshot"));
+        fs::create_dir_all(out.parent().unwrap()).unwrap();
+        let st = std::process::Command::new("node")
+            .arg("gen.js")
+            .arg(n.to_string())
+            .arg(&out)
+            .current_dir(&work)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let rel = format!("in/gen/heap-{n}.heapsnapshot");
+        files.push(p.capture(
+            &format!("p{n}-native"),
+            100 + k as u32,
+            Some(f64::from(n)),
+            &rel,
+        ));
+    }
+    Some(files)
+}
+
+fn retention_holders(p: &Project, v: &Value) -> Vec<Vec<Value>> {
+    v["dumps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            let id = d["evidence"].as_str().unwrap();
+            p.lines()
+                .into_iter()
+                .find(|e| e["type"] == "evidence" && e["evidence_id"] == id)
+                .unwrap()["result"]["holders"]
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn the_holder_of_the_finding_is_in_every_retention_record_and_the_label_is_accepted() {
+    let p = Project::new();
+    let Some(files) = board_snapshots(&p) else {
+        eprintln!("node is not installed: skipped");
+        return;
+    };
+    // The owners are named relative to the harness work copy, as the census names them.
+    let first = heap_graph(&p, &files, &[]);
+    assert_eq!(first["gate"], "pass", "{first}");
+    let f = p.finding_with_owner("src.board.publish.previous");
+    let f = f["id"].as_str().unwrap().to_owned();
+    assert!(
+        first["passed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k == "closure:src.board.publish.previous"),
+        "{first}"
+    );
+    // Without --finding the record lists the three largest holders: `previous` is
+    // dominated by larger ones and is not among them.
+    for holders in retention_holders(&p, &first) {
+        assert_eq!(holders.len(), 3, "{holders:?}");
+        assert!(
+            holders
+                .iter()
+                .all(|h| h["key"] != "closure:src.board.publish.previous"),
+            "{holders:?}"
+        );
+    }
+    // With --finding the record also lists the finding's holder, with its holder_kind.
+    let v = heap_graph(&p, &files, &["--finding", &f]);
+    let records = retention_holders(&p, &v);
+    assert_eq!(records.len(), 4);
+    let mut cited = Vec::new();
+    for (holders, d) in records.iter().zip(v["dumps"].as_array().unwrap()) {
+        assert_eq!(holders.len(), 4, "{holders:?}");
+        let h = holders
+            .iter()
+            .find(|h| h["key"] == "closure:src.board.publish.previous")
+            .unwrap_or_else(|| panic!("the bound holder is missing: {holders:?}"));
+        assert_eq!(h["holder_kind"], "closure/continuation");
+        cited.push(d["evidence"].as_str().unwrap().to_owned());
+    }
+    assert!(
+        v["tied"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| *t == f.as_str())
+    );
+    let growth = v["growth_evidence"].as_str().unwrap().to_owned();
+    // The model's route to a label: a refuted warm-up sibling, the holder and the site,
+    // the confirmation, then the label citing the retention record.
+    let disc = p
+        .evidence("discriminator")
+        .into_iter()
+        .rev()
+        .find(|e| e["result"]["finding"] == f.as_str())
+        .unwrap()["evidence_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let support = format!("{growth},{disc}");
+    ok(
+        p.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "hypothesis",
+            "--sibling-of",
+            &f,
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "retained bytes plateau",
+            "--evidence",
+            &disc,
+        ],
+    );
+    ok(
+        p.path(),
+        &["ledger", "refute", &format!("{f}.n1"), "--evidence", &disc],
+    );
+    ok(
+        p.path(),
+        &["ledger", "annotate", &f, "--site", "src/board.js:15"],
+    );
+    let harness = p.evidence("workload").pop().unwrap()["evidence_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        p.path(),
+        &[
+            "ledger",
+            "test",
+            &f,
+            "--evidence",
+            &format!("{support},{harness}"),
+        ],
+    );
+    ok(p.path(), &["ledger", "confirm", &f, "--evidence", &support]);
+    let retention = &cited[0];
+    let labelled = ok(
+        p.path(),
+        &[
+            "ledger",
+            "label",
+            &f,
+            "--as",
+            "L-CAPTURE",
+            "--evidence",
+            &format!("{growth},{retention}"),
+        ],
+    );
+    assert_eq!(labelled["label"], "L-CAPTURE");
+    // `strong` is not refused for the holder: the record names it, with the kind the
+    // finding has. It is refused for independence (one tool, one tool class).
+    let (code, _, s) = run(p.path(), &["ledger", "strong", &f, "--evidence", retention]);
+    assert_eq!(code, 2);
+    assert_eq!(s["error"]["code"], "strong-not-independent", "{s}");
+}

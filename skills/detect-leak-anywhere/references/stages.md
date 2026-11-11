@@ -98,6 +98,8 @@ uses it to open the archetype tables to that worker's subagent after `--stage cl
 | attribute | every confirmed or strong finding has a holder and a site (an owner on an artifact run) |
 | rule_out | every leak-side finding has a non-leak sibling, and no sibling is left without a disposition |
 
+Several findings of one leak (a detector hit, the census finding, growth-series findings of one harness) are merged with `dla ledger duplicate F --of G`: the same worker and runtime, and the same canonical owner or the same `file:line` site. The merged finding is no longer counted by the gates or the report.
+
 Which trend columns the classify gate holds: the newest trend of each series. A non-flat column of an older
 trend of the same series is replaced when a later trend of that series analysed a column of the same name
 and that column is itself non-flat, so `dla trend S3` after `dla alloc-test` moves the gate to the new
@@ -213,6 +215,9 @@ For each passed column tied to a candidate `F3`:
   `--site` fill other gaps; a holder already set changes only with `--evidence`, see the heap-graph
   note below), then `dla ledger confirm F3 --evidence E11`, citing the passing
   `dla trend` evidence. A refusal names what is missing.
+- A wrong owner is corrected before confirmation only: `dla ledger annotate F3 --owner X --evidence E`, where `E` is
+  heap-graph growth or retention evidence naming a holder owned by `X` (the full owner, or a short form of one holder);
+  after confirmation record a new finding with the right owner.
 - The passing column must be tied to `F3`: its probe (`probe:<owner>`), a group column at its site,
   or a column that lists it under `candidates`. A refusal `growth-not-tied` means the growth you cite
   belongs to another holder or to the whole process (`os.rss`, heap totals). Then add a probe for

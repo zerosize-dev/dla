@@ -437,7 +437,15 @@ fn label_with_the_printed_fixes(
     off: bool,
 ) -> (Out, Vec<String>) {
     let mut followed: Vec<String> = Vec::new();
-    let mut o = fx.call_quiet(&["ledger", "label", id, "--as", cause]);
+    // The note that keeps a cause whose row is in another runtime's reference
+    // (`label-runtime-row`); empty until the refusal asks for it.
+    let mut note: Vec<&str> = Vec::new();
+    let mut o = label_call(fx, id, cause, None, &note);
+    if o.code() == "label-runtime-row" {
+        followed.push("--note".to_owned());
+        note = vec!["--note", RUNTIME_NOTE];
+        o = label_call(fx, id, cause, None, &note);
+    }
     let mut narrowed: BTreeSet<String> = BTreeSet::new();
     for _ in 0..4 {
         if off || o.ok || o.code() != "label-evidence-missing" {
@@ -446,7 +454,7 @@ fn label_with_the_printed_fixes(
         let fix = o.json["error"]["fix"].as_str().unwrap_or("").to_owned();
         if let Some(ev) = evidence_in_label_fix(&fix) {
             followed.push(format!("--evidence {ev}"));
-            o = fx.call_quiet(&["ledger", "label", id, "--as", cause, "--evidence", &ev]);
+            o = label_call(fx, id, cause, Some(&ev), &note);
             continue;
         }
         let mut ran = 0;
@@ -475,9 +483,22 @@ fn label_with_the_printed_fixes(
         if ran == 0 {
             break;
         }
-        o = fx.call_quiet(&["ledger", "label", id, "--as", cause]);
+        o = label_call(fx, id, cause, None, &note);
     }
     (o, followed)
+}
+
+/// The note the policy gives when the expected cause has no row in the finding's runtime
+/// reference (a row of another runtime, such as L-OWNERSHIP on native code).
+const RUNTIME_NOTE: &str = "the fixture's expected cause is this row; the runtime reference has no row for it, none of the runtime's rows fits this mechanism";
+
+fn label_call(fx: &mut Fx, id: &str, cause: &str, evidence: Option<&str>, note: &[&str]) -> Out {
+    let mut args: Vec<&str> = vec!["ledger", "label", id, "--as", cause];
+    if let Some(ev) = evidence {
+        args.extend(["--evidence", ev]);
+    }
+    args.extend(note);
+    fx.call_quiet(&args)
 }
 
 /// Summarize commands run again per operation at most.
@@ -1187,7 +1208,12 @@ case "$1 $2" in
   case "$*" in
   *--suggest*) echo "{\"ok\":true,\"archetypes\":\"$FAKE_ARCH\",\"rows\":[\"L-COLLECT met [E6]: s\",\"L-TLS missing growth-series: s\",\"UNCLASSIFIED none-fits: c\"]}";;
   *"--as UNCLASSIFIED"*) echo '{"ok":true}';;
-  *) if [ -n "$FAKE_LABEL_CODE" ]; then
+  *) if [ -n "$FAKE_NEEDS_NOTE" ]; then
+       case "$*" in *--note*) ;; *)
+         echo '{"ok":false,"error":{"code":"label-runtime-row","message":"m","fix":"f"}}'; exit 2;;
+       esac
+     fi
+     if [ -n "$FAKE_LABEL_CODE" ]; then
        echo "{\"ok\":false,\"error\":{\"code\":\"$FAKE_LABEL_CODE\",\"message\":\"m\"}}"; exit 2
      fi
      case "$*" in *--evidence*) echo '{"ok":true}'; exit 0;; esac
@@ -1482,6 +1508,23 @@ cause = "{cause}"
         // `--suggest` has to say that archetypes are off.
         let (row, _) = drive_fake(&e, false, &[]);
         assert!(row.failures.is_empty() || row.failures.iter().all(|f| !f.contains("suggest")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cause_with_no_row_in_the_runtime_reference_is_labelled_with_a_note() {
+        let e = expected("L-OWNERSHIP", "container-field");
+        let (row, calls) = drive_fake(&e, false, &[("FAKE_NEEDS_NOTE", "1")]);
+        assert!(
+            calls.contains("ledger label F1 --as L-OWNERSHIP --note "),
+            "{calls}"
+        );
+        assert_eq!(row.policy.labels[0].result, "ok (after --note)");
+        assert!(
+            row.failures.iter().all(|f| !f.starts_with("leak L1")),
+            "{:?}",
+            row.failures
+        );
     }
 
     #[cfg(unix)]

@@ -66,6 +66,7 @@ Commands:
 | `dla ledger test\|confirm\|refute` | Moves a finding under test, confirms it, or refutes it, each citing evidence (`--evidence E1,E2`); the ledger refuses the move unless its rules are met |
 | `dla ledger resolve` | Dispositions a finding or open item, or answers a checklist item |
 | `dla ledger label <F> --as <ID>` | Labels a confirmed or strong finding with an archetype when the evidence, the holder kind and the refuted look-alikes that archetype requires are recorded; `--suggest` lists what each archetype has and lacks; `--as UNCLASSIFIED --note` is always allowed |
+| `dla ledger duplicate <F> --of <G>` | Merges a finding into another finding of the same leak (same worker and runtime, same canonical owner or the same `file:line` site); the duplicate's evidence then counts for the labelled one and the report counts the leak once |
 | `dla ledger strong <F> --evidence E..` | Marks a confirmed leak-side finding strong on a second independent class of evidence: a retention record or an intervention that removed the growth |
 | `dla ledger explain <F>` | Records a checked explanation (site, holder, who adds, why nothing removes) of a confirmed or strong leak-side finding; the final gate requires one |
 | `dla gate check --stage <s>\|--final` | Lists what a stage or the whole run still needs and how to clear each item; a passing stage is recorded. The same list feeds `dla run status`, the report's status line and the stop hooks |

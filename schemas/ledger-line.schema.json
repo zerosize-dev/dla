@@ -816,7 +816,7 @@
           ]
         },
         "owner": {
-          "description": "Owning field or container; applied only when the finding has no owner yet.",
+          "description": "Owning field or container; applied when the finding has no owner yet, or replaces it\nwhen `evidence` names a holder with this owner (ledger schema 6).",
           "type": [
             "string",
             "null"
@@ -850,6 +850,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "replaced_owner": {
+          "description": "The owner this annotation replaced; written by the ledger, an audit trail. An owner\nalready set is replaced only when `evidence` names a holder with the new owner.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "site": {

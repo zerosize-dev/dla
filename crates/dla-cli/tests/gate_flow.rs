@@ -546,11 +546,125 @@ fn the_final_gate_needs_a_label_decision_with_archetypes_on() {
         &r,
         data.path(),
         false,
-        &["ledger", "label", "F1", "--as", "L-COLLECT"],
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--note",
+            "fits none of the go rows",
+        ],
     );
     assert_eq!(l.code, 0, "{l:?}");
     let o = with_data(&r, data.path(), false, &["gate", "check", "--final"]);
     assert_eq!(o.code, 0, "{o:?}");
+}
+
+/// Adds a second confirmed leak-side finding F2 at `site`, on the evidence F1 used.
+fn second_confirmed_finding(r: &Run, site: &str) {
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    let by = |k: EvidenceKind| {
+        l.evidence()
+            .find(|x| x.kind == k)
+            .unwrap()
+            .evidence_id
+            .clone()
+    };
+    let (first, harness, disc, growth) = (
+        by(EvidenceKind::StaticHit),
+        by(EvidenceKind::Workload),
+        by(EvidenceKind::Discriminator),
+        by(EvidenceKind::GrowthSeries),
+    );
+    let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![first.clone()]);
+    nf.site = Some(site.into());
+    nf.holder = Some(Holder::StaticGlobal);
+    l.add_finding(nf).unwrap();
+    let mut nf = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![first]);
+    nf.sibling_of = Some("F2".parse().unwrap());
+    nf.hypothesis = Some("N-WARM".into());
+    nf.refute_if = Some("growth continues".into());
+    l.add_finding(nf).unwrap();
+    let id = |s: &str| s.parse().unwrap();
+    for (f, to, ev) in [
+        ("F2.n1", FindingState::Refuted, disc),
+        ("F2", FindingState::UnderTest, harness),
+    ] {
+        l.transition(&id(f), to, None, None, vec![ev], "t").unwrap();
+    }
+    // The growth column of F1 is at a.go:1; F2 is confirmed on the same record by its site.
+    l.transition(
+        &id("F2"),
+        FindingState::Confirmed,
+        None,
+        None,
+        vec![growth],
+        "t",
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_label_item_of_a_duplicate_names_the_duplicate_command_first() {
+    let r = init("symptom");
+    r.answer_intake();
+    confirmed_finding(&r);
+    second_confirmed_finding(&r, "a.go:1");
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("archetypes.toml"), LABEL_TABLE).unwrap();
+    let find = |o: &Out, id: &str| {
+        o.json["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["kind"] == "label" && m["id"] == id)
+            .cloned()
+    };
+    // Nothing is labelled: no twin to merge into.
+    let o = with_data(&r, data.path(), false, &["gate", "check", "--final"]);
+    let fix = find(&o, "F2").expect("F2 needs a label")["fix"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(fix.starts_with("dla ledger label F2 --suggest"), "{fix}");
+    // F1 is labelled: F2 (the same site) is its duplicate.
+    let l = with_data(
+        &r,
+        data.path(),
+        false,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "UNCLASSIFIED",
+            "--note",
+            "no row fits",
+        ],
+    );
+    assert_eq!(l.code, 0, "{l:?}");
+    let o = with_data(&r, data.path(), false, &["gate", "check", "--final"]);
+    let fix = find(&o, "F2").expect("F2 still needs a label")["fix"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(fix.starts_with("dla ledger duplicate F2 --of F1"), "{fix}");
+    assert!(
+        fix.contains("dla ledger label F2 --as UNCLASSIFIED --note"),
+        "{fix}"
+    );
+    // After the merge the item is gone: a merged duplicate needs no label.
+    let d = with_data(
+        &r,
+        data.path(),
+        false,
+        &["ledger", "duplicate", "F2", "--of", "F1"],
+    );
+    assert_eq!(d.code, 0, "{d:?}");
+    assert_eq!(d.json["canonical"], "F1");
+    let o = with_data(&r, data.path(), false, &["gate", "check", "--final"]);
+    assert!(find(&o, "F2").is_none(), "{o:?}");
 }
 
 #[test]

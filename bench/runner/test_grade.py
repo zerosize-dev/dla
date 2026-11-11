@@ -310,6 +310,19 @@ class LedgerParseTest(EnvCase):
         _, fs = self.parse(ledger(*lines))
         self.assertEqual(fs[0]["holder"], "static/global")
 
+    def test_an_owner_replacement_changes_the_owner_and_a_plain_annotation_only_fills(self):
+        # Ledger schema 6: the record names the `replaced_owner`.
+        lines = [
+            json.dumps({"type": "finding_added", "finding": {"id": "F5", "owner": "src.board.Board.publish.previous"}}),
+            json.dumps({"type": "finding_annotated", "finding": "F5", "owner": "other.x"}),
+            json.dumps({"type": "finding_annotated", "finding": "F5", "owner": "src.board.previous",
+                        "replaced_owner": "src.board.Board.publish.previous", "evidence": ["E22"]}),
+            json.dumps({"type": "finding_added", "finding": {"id": "F6"}}),
+            json.dumps({"type": "finding_annotated", "finding": "F6", "owner": "a.B.c"}),
+        ]
+        _, fs = self.parse(ledger(*lines))
+        self.assertEqual([f["owner"] for f in fs], ["src.board.previous", "a.B.c"])
+
     def test_missing_or_nonstring_members_are_null(self):
         line = json.dumps({"type": "finding_added",
                            "finding": {"id": "f", "site": 5, "holder": None, "archetype": 3}})
@@ -1440,6 +1453,23 @@ class WorkerLedgerTest(EnvCase):
             {"type": "slice_merged", "worker": "jvm", "lines": 4},
         ))
         self.assertEqual([(x["state"]) for x in f], ["open"])
+
+    def test_core_duplicate_collapses_into_the_labelled_finding(self):
+        # `dla ledger duplicate F4 --of F1`: no worker prefix on either id.
+        merged = self.parse(raw(
+            {"type": "finding_added", "finding": {"id": "F1", "site": "r/b.py:14", "owner": "r.b.Registry.items"}},
+            {"type": "finding_added", "finding": {"id": "F4", "site": "r/b.py:15", "owner": "r.b.Registry.items"}},
+            {"type": "transition", "finding": "F1", "to": "confirmed"},
+            {"type": "transition", "finding": "F4", "to": "confirmed"},
+            {"type": "finding_labeled", "finding": "F1", "label": "L-COLLECT"},
+            {"type": "finding_merged", "canonical": "F1", "duplicate": "F4"}))
+        self.assertEqual([(x["site"], x["label"], x["state"]) for x in merged],
+                         [("r/b.py:14", "L-COLLECT", "confirmed")])
+        in_slice = self.parse(raw(
+            {"type": "finding_added", "finding": {"id": "py/F1", "site": "r/b.py:14", "owner": "r.b.Registry.items"}},
+            {"type": "finding_added", "finding": {"id": "py/F2", "site": "r/b.py:15", "owner": "r.b.Registry.items"}},
+            {"type": "finding_merged", "canonical": "py/F1", "duplicate": "py/F2"}))
+        self.assertEqual(len(in_slice), 1)
 
     def test_merge_removes_a_claim_only_the_duplicate_made(self):
         leak = {"id": "L1", "site": "src/cache.py:10"}

@@ -118,6 +118,12 @@ pub fn label(ctx: &Ctx, data: Option<&PathBuf>, a: LabelArgs) -> Res<Value> {
             format!("dla ledger label {} --suggest", a.finding),
         ));
     };
+    // The cheap checks first: archetypes off, the label's own state and polarity. Only then
+    // the runtime's rows, so the refusal that comes first is the one that can be acted on.
+    ledger.label_precheck(&a.finding, as_, Archetypes::from_table(table.as_ref()))?;
+    if let Some(r) = runtime_refusal(ctx, &ledger, &a.finding, as_, a.note.as_deref()) {
+        return Err(r);
+    }
     let line = ledger.label(
         &a.finding,
         as_,
@@ -152,29 +158,29 @@ pub fn label(ctx: &Ctx, data: Option<&PathBuf>, a: LabelArgs) -> Res<Value> {
             fits.join(", ")
         ));
     }
-    if let Some(w) = runtime_warning(ctx, &ledger, &rec.finding, &rec.label) {
-        out["runtime_warning"] = json!(w);
-    }
     Ok(out)
 }
 
-/// The runtime a finding belongs to: its worker prefix, the worker the command runs as, the
-/// language of its site, or the only runtime in the coverage manifest.
+/// The runtime a finding belongs to: the language of its site first (a C finding of the jvm
+/// worker is native), then its worker prefix, the worker the command runs as, or the only
+/// runtime in the coverage manifest.
 fn finding_runtime(ctx: &Ctx, ledger: &Ledger, id: &FindingId) -> Option<String> {
+    // A worker names its own findings bare (F1 is jvm/F1).
+    let id = &ledger.own_finding_id(id);
     let known = |r: &str| archetypes::runtime_rows(r).is_some();
+    let from_site = ledger
+        .finding(id)
+        .and_then(|f| f.site.as_deref())
+        .and_then(|s| s.rsplit_once(':').map(|(file, _)| file))
+        .and_then(archetypes::runtime_of_file);
+    if let Some(r) = from_site.filter(|r| known(r)) {
+        return Some(r.to_owned());
+    }
     if let Some(p) = id.prefix().filter(|p| known(p)) {
         return Some(p.to_owned());
     }
     if let Some(w) = ctx.worker.as_deref().filter(|w| known(w)) {
         return Some(w.to_owned());
-    }
-    let from_site = ledger
-        .finding(id)
-        .and_then(|f| f.site.as_deref())
-        .and_then(|s| s.rsplit_once(':').map(|(file, _)| file))
-        .and_then(runtime_of_file);
-    if let Some(r) = from_site {
-        return Some(r.to_owned());
     }
     let cov = dla_core::coverage::CoverageManifest::load(&ctx.run_dir)
         .ok()
@@ -186,38 +192,42 @@ fn finding_runtime(ctx: &Ctx, ledger: &Ledger, id: &FindingId) -> Option<String>
     }
 }
 
-/// The runtime a source file belongs to, by extension.
-fn runtime_of_file(file: &str) -> Option<&'static str> {
-    let ext = file.rsplit_once('.')?.1.to_ascii_lowercase();
-    Some(match ext.as_str() {
-        "java" | "kt" | "kts" | "scala" | "groovy" => "jvm",
-        "go" => "go",
-        "rs" => "rust",
-        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => "node",
-        "py" => "python",
-        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" => "native",
-        _ => return None,
-    })
+/// The refusal for an `L-*` label that has no row in the finding's runtime reference, unless
+/// a note says why none of the runtime's rows fits. Nothing is written. No check when the
+/// runtime cannot be determined.
+fn runtime_refusal(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    id: &FindingId,
+    label: &str,
+    note: Option<&str>,
+) -> Option<Failure> {
+    let note = note.map(str::trim).is_some_and(|n| !n.is_empty());
+    let runtime = finding_runtime(ctx, ledger, id)?;
+    rows_refusal(&runtime, id, label, note)
 }
 
-/// A warning when an `L-*` label has no row in the finding's runtime reference. The label
-/// stays accepted: the table is shared and a row can fit a runtime the reference does not
-/// cover (L-OWNERSHIP on native C).
-fn runtime_warning(ctx: &Ctx, ledger: &Ledger, id: &FindingId, label: &str) -> Option<String> {
-    rows_warning(&finding_runtime(ctx, ledger, id)?, label)
-}
-
-fn rows_warning(runtime: &str, label: &str) -> Option<String> {
-    if !label.starts_with("L-") {
+fn rows_refusal(runtime: &str, id: &FindingId, label: &str, note: bool) -> Option<Failure> {
+    if note || !label.starts_with("L-") || !dla_core::detectors::ARCHETYPE_IDS.contains(&label) {
         return None;
     }
     let rows = archetypes::runtime_rows(runtime)?;
     if rows.contains(&label) {
         return None;
     }
-    Some(format!(
-        "{label} has no row in the {runtime} archetype reference (its rows: {}); the label is accepted. Check that the mechanism you found is {label}'s and not one of those rows or UNCLASSIFIED",
-        rows.join(", ")
+    Some(Failure::refuse(
+        dla_core::m6::codes::LABEL_RUNTIME_ROW,
+        format!(
+            "{label} has no row in the {runtime} archetype reference (its rows: {}); {id} is not labelled",
+            rows.join(", ")
+        ),
+        format!(
+            "one of {} or UNCLASSIFIED, or --note saying why none of the {runtime} rows fits",
+            rows.join(", ")
+        ),
+        format!(
+            "choose one of those rows or UNCLASSIFIED: dla ledger label {id} --suggest   or, to keep {label}: dla ledger label {id} --as {label} --note \"<why none of the {runtime} rows fits>\""
+        ),
     ))
 }
 
@@ -232,7 +242,10 @@ fn unclassified_row(finding: &FindingId) -> String {
 fn row_line(r: &SuggestRow) -> String {
     let state = match r.status {
         "met" => format!("met [{}]", r.evidence.join(",")),
-        "missing" => format!("missing {}", r.missing.join(",")),
+        "missing" => {
+            // Only the closest alternative; the producers of the others are in `produce`.
+            format!("missing {}", r.missing.join(","))
+        }
         _ => format!("blocked, {}", r.blocked_by.join("; ")),
     };
     format!("{} {state}: {}", r.id, r.summary)
@@ -276,7 +289,7 @@ fn suggest(ledger: &Ledger, a: &LabelArgs, table: Option<&Table>) -> Res<Value> 
     for k in found
         .iter()
         .filter(|r| r.status == "missing")
-        .flat_map(|r| &r.missing)
+        .flat_map(|r| r.missing.iter().chain(r.or_missing.iter().flatten()))
     {
         if let Ok(kind) = k.parse::<dla_core::EvidenceKind>() {
             let cmd = labels::producer_command(kind, &a.finding);
@@ -285,13 +298,26 @@ fn suggest(ledger: &Ledger, a: &LabelArgs, table: Option<&Table>) -> Res<Value> 
             short.insert(k.clone(), json!(bare));
         }
     }
-    if !full.is_empty() {
-        add_if_fits(
-            &mut out,
-            "produce",
-            vec![Value::Object(full), Value::Object(short)],
-        );
+    // The short form first, so `next` and the notes fit; the full form replaces it at the
+    // end when everything still fits.
+    let produce_full = (!full.is_empty()).then_some(Value::Object(full));
+    if !short.is_empty() {
+        add_if_fits(&mut out, "produce", vec![Value::Object(short)]);
     }
+    add_if_fits(
+        &mut out,
+        "next",
+        vec![
+            json!(format!(
+                "dla ledger label {} --as <ID> [--evidence E1,E2]   (met is a candidate, not an answer: DLA never picks)",
+                a.finding
+            )),
+            json!(format!(
+                "dla ledger label {} --as <ID> --evidence E..",
+                a.finding
+            )),
+        ],
+    );
     if found
         .iter()
         .any(|r| r.blocked_by.iter().any(|b| b.starts_with("holder ")))
@@ -310,21 +336,65 @@ fn suggest(ledger: &Ledger, a: &LabelArgs, table: Option<&Table>) -> Res<Value> 
             ],
         );
     }
-    add_if_fits(
-        &mut out,
-        "next",
-        vec![
-            json!(format!(
-                "dla ledger label {} --as <ID> [--evidence E1,E2]   (met is a candidate, not an answer: DLA never picks)",
-                a.finding
-            )),
-            json!(format!(
-                "dla ledger label {} --as <ID> --evidence E..",
-                a.finding
-            )),
-        ],
-    );
+    let cited_only = found
+        .iter()
+        .filter(|r| r.status == "missing")
+        .flat_map(|r| r.missing.iter().chain(r.or_missing.iter().flatten()))
+        .filter_map(|k| k.parse::<dla_core::EvidenceKind>().ok())
+        .any(labels::cited_only);
+    if cited_only {
+        let f = &a.finding;
+        add_if_fits(
+            &mut out,
+            "cited_only",
+            vec![
+                json!(format!(
+                    "a record of a kind that names no finding (non-heap, census-holder, static-hit, histogram-diff, should-be-dead, residual) counts only when {f} cites it: cite it when {f} moves (dla ledger test|confirm {f} --evidence E), so before confirmation; a confirmed finding uses the other alternatives"
+                )),
+                json!(format!(
+                    "kinds that name no finding count only when {f} cites them (dla ledger test|confirm {f} --evidence E, before confirmation)"
+                )),
+            ],
+        );
+    }
+    if let Some(full) = produce_full
+        && out.get("produce").is_some()
+    {
+        let short = out["produce"].take();
+        out["produce"] = full;
+        if serde_json::to_string(&out).map_or(true, |s| s.len() >= dla_core::MAX_OUTPUT_BYTES) {
+            out["produce"] = short;
+        }
+    }
     Ok(out)
+}
+
+/// Flags of `dla ledger duplicate`.
+#[derive(Args, Debug)]
+pub struct DuplicateArgs {
+    /// The finding that repeats another one (F4).
+    #[arg(value_parser = parse_enum::<FindingId>)]
+    pub finding: FindingId,
+    /// The finding of the same leak that stays (F1): the labelled one.
+    #[arg(long = "of", value_name = "FINDING", value_parser = parse_enum::<FindingId>)]
+    pub of: FindingId,
+}
+
+/// `dla ledger duplicate F --of G`.
+pub fn duplicate(ctx: &Ctx, a: DuplicateArgs) -> Res<Value> {
+    let mut ledger = open(ctx)?;
+    let dup = ledger.own_finding_id(&a.finding);
+    let canonical = ledger.own_finding_id(&a.of);
+    let (line, by) = ledger.duplicate_finding(&dup, &canonical)?;
+    Ok(json!({
+        "ok": true,
+        "duplicate": dup.to_string(),
+        "canonical": canonical.to_string(),
+        "by": by.describe(),
+        "note": format!("{dup} is merged into {canonical}: its supporting evidence now counts for {canonical}, and the gates and the report count the leak once"),
+        "seq": line.seq,
+        "record": pointer(ctx, line.seq),
+    }))
 }
 
 /// `dla ledger strong`.
@@ -404,32 +474,48 @@ pub fn explain(ctx: &Ctx, a: ExplainArgs) -> Res<Value> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_label_without_a_row_in_the_runtime_reference_warns_and_names_the_rows() {
-        let w = rows_warning("native", "L-OWNERSHIP").unwrap();
-        assert!(
-            w.contains("native archetype reference") && w.contains("L-HANDLE"),
-            "{w}"
-        );
-        assert!(w.contains("the label is accepted"), "{w}");
-        let w = rows_warning("jvm", "L-WORKER").unwrap();
-        assert!(w.contains("L-COLLECT, L-TLS, L-UNLOAD"), "{w}");
+    fn id() -> FindingId {
+        "F1".parse().unwrap()
     }
 
     #[test]
-    fn a_label_with_a_row_or_a_non_leak_label_does_not_warn() {
-        assert_eq!(rows_warning("jvm", "L-UNLOAD"), None);
-        assert_eq!(rows_warning("native", "L-HANDLE"), None);
-        assert_eq!(rows_warning("jvm", "N-WARM"), None);
-        assert_eq!(rows_warning("jvm", "UNCLASSIFIED"), None);
-        assert_eq!(rows_warning("cobol", "L-COLLECT"), None);
+    fn a_label_without_a_row_in_the_runtime_reference_is_refused_and_names_the_rows() {
+        let f = rows_refusal("native", &id(), "L-OWNERSHIP", false).unwrap();
+        let r = &f.refusal;
+        assert_eq!(r.code, "label-runtime-row");
+        assert!(
+            r.message.contains("native archetype reference") && r.message.contains("L-HANDLE"),
+            "{}",
+            r.message
+        );
+        assert!(
+            r.fix.contains("--note") && r.fix.contains("UNCLASSIFIED"),
+            "{}",
+            r.fix
+        );
+        let f = rows_refusal("jvm", &id(), "L-WORKER", false).unwrap();
+        assert!(
+            f.refusal.message.contains("L-COLLECT, L-TLS, L-UNLOAD"),
+            "{:?}",
+            f.refusal
+        );
+    }
+
+    #[test]
+    fn a_note_a_row_or_a_non_leak_label_is_not_refused() {
+        assert!(rows_refusal("native", &id(), "L-OWNERSHIP", true).is_none());
+        assert!(rows_refusal("jvm", &id(), "L-UNLOAD", false).is_none());
+        assert!(rows_refusal("native", &id(), "L-HANDLE", false).is_none());
+        assert!(rows_refusal("jvm", &id(), "N-WARM", false).is_none());
+        assert!(rows_refusal("jvm", &id(), "UNCLASSIFIED", false).is_none());
+        assert!(rows_refusal("cobol", &id(), "L-COLLECT", false).is_none());
     }
 
     #[test]
     fn a_source_file_names_its_runtime() {
-        assert_eq!(runtime_of_file("src/Main.java"), Some("jvm"));
-        assert_eq!(runtime_of_file("src/ring.c"), Some("native"));
-        assert_eq!(runtime_of_file("a.go"), Some("go"));
-        assert_eq!(runtime_of_file("README"), None);
+        assert_eq!(archetypes::runtime_of_file("src/Main.java"), Some("jvm"));
+        assert_eq!(archetypes::runtime_of_file("src/ring.c"), Some("native"));
+        assert_eq!(archetypes::runtime_of_file("a.go"), Some("go"));
+        assert_eq!(archetypes::runtime_of_file("README"), None);
     }
 }

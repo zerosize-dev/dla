@@ -311,6 +311,41 @@ fn own_cited(f: &Finding) -> Vec<EvidenceId> {
     f.supports.clone()
 }
 
+/// True for a kind whose result names no finding: such a record counts for a finding only
+/// when the finding itself cites it (or the result names it).
+pub fn cited_only(kind: EvidenceKind) -> bool {
+    !matches!(
+        kind,
+        EvidenceKind::GrowthSeries
+            | EvidenceKind::UnitCountSeries
+            | EvidenceKind::Discriminator
+            | EvidenceKind::RetentionPath
+            | EvidenceKind::AllocStack
+            | EvidenceKind::Intervention
+    )
+}
+
+/// The alternatives of `requires` with the fewest kinds still missing from `have`, in the
+/// order of the list: `(index, missing kinds)`. Empty alternatives are skipped.
+fn closest_alternatives(
+    requires: &[Vec<EvidenceKind>],
+    have: &dyn Fn(EvidenceKind) -> bool,
+) -> Vec<(usize, Vec<EvidenceKind>)> {
+    let missing: Vec<(usize, Vec<EvidenceKind>)> = requires
+        .iter()
+        .enumerate()
+        .filter(|(_, alt)| !alt.is_empty())
+        .map(|(i, alt)| (i, alt.iter().copied().filter(|k| !have(*k)).collect()))
+        .collect();
+    let Some(best) = missing.iter().map(|(_, m)| m.len()).min() else {
+        return Vec::new();
+    };
+    missing
+        .into_iter()
+        .filter(|(_, m)| m.len() == best)
+        .collect()
+}
+
 /// The evidence the finding and its family cite, in order, without repeats.
 fn default_pool(findings: &dyn FindingLookup, f: &Finding) -> Vec<EvidenceId> {
     let mut out: Vec<EvidenceId> = Vec::new();
@@ -399,6 +434,54 @@ fn unknown_archetype(label: &str, table: &Table) -> Refusal {
     )
 }
 
+/// Read only: the refusal `plan` gives for the checks that need no evidence (archetypes
+/// off, an unknown archetype, the finding's state, the label's polarity), in the order
+/// `plan` makes them. `Ok` for UNCLASSIFIED, which has its own rules.
+pub fn precheck(
+    findings: &dyn FindingLookup,
+    id: &FindingId,
+    label: &str,
+    archetypes: Archetypes<'_>,
+) -> Result<(), Refusal> {
+    let label = label.trim();
+    if label == UNCLASSIFIED {
+        return Ok(());
+    }
+    let Some(f) = findings.finding(id) else {
+        return Err(refuse(
+            crate::error::codes::UNKNOWN_FINDING,
+            format!("label refers to {id}, which does not exist in the ledger"),
+            format!("finding {id}"),
+            "dla run status".to_owned(),
+        ));
+    };
+    let table = match archetypes {
+        Archetypes::Off => {
+            return Err(refuse(
+                codes::ARCHETYPES_OFF,
+                format!(
+                    "archetypes are off (DLA_ARCHETYPES=off or no data/archetypes.toml): {id} stays UNCLASSIFIED"
+                ),
+                "archetypes on, or --as UNCLASSIFIED --note",
+                format!(
+                    "dla ledger label {id} --as UNCLASSIFIED --note \"<holder and mechanism in words>\""
+                ),
+            ));
+        }
+        Archetypes::On(t) => t,
+    };
+    if table.get(label).is_none() {
+        return Err(unknown_archetype(label, table));
+    }
+    if let Some(r) = state_gap(f) {
+        return Err(r);
+    }
+    match polarity_gap(f, label) {
+        Some(r) => Err(r),
+        None => Ok(()),
+    }
+}
+
 /// Builds the `finding_labeled` record for `input`, or the refusal that names what is
 /// missing. Reads only the ledger and the archetype table.
 pub fn plan(
@@ -477,6 +560,7 @@ pub fn plan(
     // Which pool records count, by kind; why the others do not.
     let mut tied: BTreeMap<EvidenceKind, Vec<EvidenceId>> = BTreeMap::new();
     let mut why_not: Vec<String> = Vec::new();
+    let mut uncited: Vec<(EvidenceKind, EvidenceId)> = Vec::new();
     for e in &pool {
         let Some(rec) = evidence.evidence(e) else {
             return Err(refuse(
@@ -490,7 +574,22 @@ pub fn plan(
         };
         match tie(&subs, &cited, rec, nonleak) {
             Ok(()) => tied.entry(rec.kind).or_default().push(e.clone()),
-            Err(why) => why_not.push(why),
+            Err(why) => {
+                // Only a record excluded for lack of citation (not for authority) whose
+                // kind one alternative of this archetype needs.
+                let static_only = rec.authority == Authority::Static
+                    && !matches!(
+                        rec.kind,
+                        EvidenceKind::StaticHit | EvidenceKind::CensusHolder
+                    );
+                if cited_only(rec.kind)
+                    && !static_only
+                    && entry.requires.iter().any(|alt| alt.contains(&rec.kind))
+                {
+                    uncited.push((rec.kind, e.clone()));
+                }
+                why_not.push(why);
+            }
         }
     }
     let met = entry
@@ -537,7 +636,7 @@ pub fn plan(
             }
         }
         return Err(evidence_missing(
-            id, label, entry, &tied, &why_not, explicit,
+            id, label, entry, &tied, &why_not, &uncited, explicit,
         ));
     };
     if explicit && !why_not.is_empty() {
@@ -650,10 +749,10 @@ fn evidence_missing(
     entry: &Entry,
     tied: &BTreeMap<EvidenceKind, Vec<EvidenceId>>,
     why_not: &[String],
+    uncited: &[(EvidenceKind, EvidenceId)],
     explicit: bool,
 ) -> Refusal {
     let mut alts: Vec<String> = Vec::new();
-    let mut hints: Vec<String> = Vec::new();
     for alt in entry.requires.iter().take(4) {
         let missing: Vec<EvidenceKind> = alt
             .iter()
@@ -672,13 +771,23 @@ fn evidence_missing(
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
-        if hints.len() < 2
-            && let Some(k) = missing.first()
-        {
+    }
+    // The command for every closest alternative (fewest kinds missing, ties included), in
+    // the order of the list, each command once.
+    let closest = closest_alternatives(&entry.requires, &|k| tied.contains_key(&k));
+    let mut seen: Vec<String> = Vec::new();
+    let mut routes: Vec<String> = Vec::new();
+    for (_, missing) in &closest {
+        let mut route: Vec<String> = Vec::new();
+        for k in missing {
             let h = producer_hint(*k, id);
-            if !hints.contains(&h) {
-                hints.push(h);
+            if !seen.contains(&h) {
+                seen.push(h.clone());
+                route.push(h);
             }
+        }
+        if !route.is_empty() {
+            routes.push(route.join("   and   "));
         }
     }
     let mut message = format!(
@@ -688,6 +797,51 @@ fn evidence_missing(
     if !why_not.is_empty() {
         let shown: Vec<&str> = why_not.iter().take(3).map(String::as_str).collect();
         message.push_str(&format!(" (not counted: {})", shown.join("; ")));
+    }
+    let mut fix = if routes.is_empty() {
+        format!("dla ledger label {id} --suggest")
+    } else {
+        routes.join("   or   ")
+    };
+    // A record that names no finding counts only when the finding cites it.
+    let mut blocked: Vec<String> = Vec::new();
+    for (k, e) in uncited {
+        let s = format!("{e} ({k})");
+        if !blocked.contains(&s) {
+            blocked.push(s);
+        }
+    }
+    if !blocked.is_empty() {
+        let others: Vec<String> = entry
+            .requires
+            .iter()
+            .filter(|alt| {
+                !alt.is_empty() && !alt.iter().any(|k| cited_only(*k) && !tied.contains_key(k))
+            })
+            .map(|alt| {
+                format!(
+                    "[{}]",
+                    alt.iter()
+                        .map(|k| k.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" + ")
+                )
+            })
+            .collect();
+        let tail = if others.is_empty() {
+            format!(
+                "no other alternative of {label} exists for a confirmed finding, so choose another row or UNCLASSIFIED"
+            )
+        } else {
+            format!(
+                "a confirmed finding uses the alternatives {}",
+                others.join(" or ")
+            )
+        };
+        fix.push_str(&format!(
+            "   (note: {} names no finding, so it counts only when {id} cites it; a finding cites a record when it moves, dla ledger test|confirm {id} --evidence <E>, so produce it before confirmation; {tail})",
+            blocked.join(", "),
+        ));
     }
     refuse(
         codes::LABEL_EVIDENCE_MISSING,
@@ -700,11 +854,7 @@ fn evidence_missing(
                 ""
             }
         ),
-        if hints.is_empty() {
-            format!("dla ledger label {id} --suggest")
-        } else {
-            hints.join("   or   ")
-        },
+        fix,
     )
 }
 
@@ -843,6 +993,10 @@ pub struct SuggestRow {
     /// For `missing`: the fewest kinds still needed (the closest alternative).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
+    /// For `missing`: the kinds the other equally close alternatives still need, one list
+    /// per alternative, in the order of the `requires` list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub or_missing: Vec<Vec<String>>,
     /// What stops a met alternative from becoming the label.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub blocked_by: Vec<String>,
@@ -954,21 +1108,48 @@ pub fn suggest(
                     .collect(),
                 evidence: chosen,
                 missing: Vec::new(),
+                or_missing: Vec::new(),
                 blocked_by,
                 summary,
             });
         } else {
-            let best = alts
-                .iter()
-                .min_by_key(|m| m.len())
-                .cloned()
-                .unwrap_or_default();
+            let mut closest = closest_alternatives(&entry.requires, &|k| tied.contains_key(&k));
+            // A confirmed finding can no longer cite a record of a kind that names no
+            // finding: when the closest alternative needs one, show the closest one it can
+            // still meet (every row stays; with none to meet, the closest stays).
+            if matches!(f.state, FindingState::Confirmed | FindingState::Strong) {
+                let meetable = |alt: &[EvidenceKind]| {
+                    alt.iter().all(|k| tied.contains_key(k) || !cited_only(*k))
+                };
+                let reachable: Vec<Vec<EvidenceKind>> = entry
+                    .requires
+                    .iter()
+                    .filter(|a| !a.is_empty() && meetable(a))
+                    .cloned()
+                    .collect();
+                if !reachable.is_empty() {
+                    closest = closest_alternatives(&reachable, &|k| tied.contains_key(&k));
+                }
+            }
+            let names = |m: &[EvidenceKind]| -> Vec<String> {
+                m.iter().map(|k| k.as_str().to_owned()).collect()
+            };
+            let mut sets: Vec<Vec<String>> = Vec::new();
+            for (_, m) in &closest {
+                let n = names(m);
+                if !sets.contains(&n) {
+                    sets.push(n);
+                }
+            }
+            let mut it = sets.into_iter();
+            let first = it.next().unwrap_or_default();
             rows.push(SuggestRow {
                 id: entry.id.clone(),
                 status: "missing",
                 met: Vec::new(),
                 evidence: Vec::new(),
-                missing: best.iter().map(|k| k.as_str().to_owned()).collect(),
+                missing: first,
+                or_missing: it.collect(),
                 blocked_by: Vec::new(),
                 summary,
             });

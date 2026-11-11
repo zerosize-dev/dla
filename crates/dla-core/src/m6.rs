@@ -12,6 +12,9 @@ pub mod codes {
     pub const LABEL_STATE: &str = "label-state";
     /// `label`: the finding's holder is not among the archetype's holders.
     pub const LABEL_HOLDER: &str = "label-holder";
+    /// `label`: the archetype has no row in the finding's runtime reference and no `--note`
+    /// says why none of the runtime's rows fits.
+    pub const LABEL_RUNTIME_ROW: &str = "label-runtime-row";
     /// `label`: a sibling the archetype must see refuted is still open.
     pub const LABEL_DISCONFIRM_OPEN: &str = "label-disconfirm-open";
     /// `label`: the label is neither `UNCLASSIFIED` nor an archetype ID.
@@ -30,6 +33,11 @@ pub mod codes {
     pub const STRONG_NOT_INDEPENDENT: &str = "strong-not-independent";
     /// `strong`: the second record observed another holder kind than the finding's.
     pub const STRONG_HOLDER_MISMATCH: &str = "strong-holder-mismatch";
+    /// `duplicate`: a finding the command cannot merge (hypothesis, non-leak, sibling, itself,
+    /// or one already merged).
+    pub const DUPLICATE_STATE: &str = "duplicate-state";
+    /// `duplicate`: the two findings share neither an owner nor a site.
+    pub const DUPLICATE_NOT_SAME: &str = "duplicate-not-same";
     /// `explain`: the finding is not a confirmed or strong leak-side finding.
     pub const EXPLAIN_STATE: &str = "explain-state";
     /// `explain`: the text does not name the site (or owner).

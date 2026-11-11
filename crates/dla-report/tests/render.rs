@@ -565,9 +565,12 @@ fn a_merged_duplicate_is_shown_under_its_canonical_finding_only() {
     assert!(md.contains("- Merged duplicates: rust/F1\n"), "{md}");
     assert!(!md.contains("### rust/F1"), "{md}");
     assert!(
-        md.contains("- **rust/F1** merged into **jvm/F1** (same site and holder; its evidence E1 is kept on jvm/F1)"),
+        md.contains("- **rust/F1** merged into **jvm/F1** (a duplicate of the same leak; its evidence E1 is kept on jvm/F1)"),
         "{md}"
     );
+    // A `dla ledger duplicate` merge is reported the same way, so the reason is not
+    // claimed to be a shared site and holder.
+    assert!(!md.contains("same site and holder"), "{md}");
     // 3 findings are enumerated, not 4.
     assert!(
         md.contains("Findings: 3 enumerated, 0 dispositioned"),

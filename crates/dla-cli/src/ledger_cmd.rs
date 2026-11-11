@@ -61,6 +61,9 @@ pub enum LedgerCmd {
     Strong(ledger_m6::StrongArgs),
     /// Record a checked explanation of a confirmed or strong leak-side finding.
     Explain(ledger_m6::ExplainArgs),
+    /// Merge a finding into another finding of the same leak (the same qualified owner, or
+    /// the same `file:line` site) in the same worker and runtime; core and worker slices.
+    Duplicate(ledger_m6::DuplicateArgs),
 }
 
 /// Flags of `dla ledger verify`.
@@ -120,7 +123,9 @@ pub struct AnnotateArgs {
     /// closure/continuation | native-handle/global-ref | cycle-only
     #[arg(long, value_parser = parse_enum::<Holder>)]
     holder: Option<Holder>,
-    /// Owning field or container on the retention path; only set when none is recorded.
+    /// Owning field or container on the retention path; only set when none is recorded, or
+    /// replaced before confirmation (candidate or under_test) with --evidence that names a holder
+    /// owned by the new owner and agrees with the growth already tied to the finding.
     #[arg(long)]
     owner: Option<String>,
     /// heap | off-heap | non-heap; only set when none is recorded.
@@ -129,8 +134,9 @@ pub struct AnnotateArgs {
     /// `file:line` of the finding; only set when the finding has no site yet.
     #[arg(long, value_name = "FILE:LINE")]
     site: Option<String>,
-    /// Growth evidence (heap-graph, dump or live) that observed the holder; lets --holder
-    /// change a holder already set. Comma separated.
+    /// Evidence that observed the holder: growth-series evidence lets --holder change a holder
+    /// already set; growth or retention evidence of a heap graph (dump or live) lets --owner
+    /// replace an owner before confirmation. Comma separated.
     #[arg(long, value_delimiter = ',', value_parser = parse_enum::<EvidenceId>)]
     evidence: Vec<EvidenceId>,
 }
@@ -302,6 +308,7 @@ pub fn dispatch(ctx: &Ctx, data: Option<&PathBuf>, cmd: LedgerCmd) -> Res<Value>
         LedgerCmd::Label(a) => ledger_m6::label(ctx, data, a),
         LedgerCmd::Strong(a) => ledger_m6::strong(ctx, a),
         LedgerCmd::Explain(a) => ledger_m6::explain(ctx, a),
+        LedgerCmd::Duplicate(a) => ledger_m6::duplicate(ctx, a),
     }
 }
 
@@ -356,10 +363,16 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
         (Some(text), Some(tag)) => Some(Explanation { text, tag }),
         _ => None,
     };
-    let warnings = match &nf.site {
+    let mut warnings = match &nf.site {
         Some(site) => check_site_line(ctx, "--site", site, nf.owner.as_deref())?,
         None => Vec::new(),
     };
+    warnings.extend(owner_warning(
+        &ledger,
+        nf.owner.as_deref(),
+        &nf.supports,
+        None,
+    ));
     let line = ledger.add_finding(nf)?;
     // Read the new finding from the line just appended, never from the ledger's
     // ID-ordered map: a sibling or any non-maximal ID is not the last entry there.
@@ -387,6 +400,77 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
     Ok(out)
 }
 
+/// A warning when `owner` names no holder in the growth-series or retention-path evidence
+/// the command cites (for an annotation without `--evidence`, the evidence the finding
+/// cites). Such an owner ties no heap-graph column or retention record to the finding.
+/// The warning lists up to three holder owners those records name, in the form that ties.
+/// Nothing is said when the cited records name no holder at all (nothing to compare).
+fn owner_warning(
+    ledger: &Ledger,
+    owner: Option<&str>,
+    cited: &[EvidenceId],
+    finding: Option<&FindingId>,
+) -> Option<String> {
+    let owner = owner?;
+    let mut ids: Vec<EvidenceId> = cited.to_vec();
+    if ids.is_empty()
+        && let Some(f) = finding.and_then(|f| ledger.finding(f))
+    {
+        ids = f.supports.clone();
+    }
+    let mut named: Vec<String> = Vec::new();
+    let mut seen: Vec<&EvidenceId> = Vec::new();
+    for id in &ids {
+        let Some(rec) = ledger.evidence_by_id(&ledger.own_evidence_id(id)) else {
+            continue;
+        };
+        let owners = dla_core::holders::record_holder_owners(rec);
+        if owners.is_empty() {
+            continue;
+        }
+        if dla_core::holders::record_names_owner(rec, owner) {
+            return None;
+        }
+        seen.push(id);
+        for o in owners {
+            if !named.contains(&o) {
+                named.push(o);
+            }
+        }
+    }
+    if named.is_empty() {
+        return None;
+    }
+    let ambiguous = ids.iter().any(|id| {
+        ledger
+            .evidence_by_id(&ledger.own_evidence_id(id))
+            .is_some_and(|r| {
+                matches!(
+                    dla_core::holders::owner_naming(r, owner),
+                    dla_core::holders::OwnerNaming::Ambiguous(_)
+                )
+            })
+    });
+    Some(format!(
+        "--owner {owner} {} {}; a heap-graph column or retention record ties to a finding only by the owner of its holder, which these records name as {}{}: dla ledger annotate <finding> --owner <one of them> --evidence <one of {}>",
+        if ambiguous {
+            "is a short form of several holders in"
+        } else {
+            "names no holder in"
+        },
+        seen.iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+        named.iter().take(3).cloned().collect::<Vec<_>>().join(", "),
+        if named.len() > 3 { ", ..." } else { "" },
+        seen.iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    ))
+}
+
 /// Runs `dla ledger annotate`.
 pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     let mut ledger = open(ctx)?;
@@ -402,6 +486,12 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     if let Some(site) = &a.site {
         warnings.extend(check_site_line(ctx, "--site", site, owner.as_deref())?);
     }
+    warnings.extend(owner_warning(
+        &ledger,
+        a.owner.as_deref(),
+        &a.evidence,
+        Some(&a_finding),
+    ));
     let line = ledger.annotate_record(FindingAnnotation {
         writers: a.writers,
         removers: a.removers,
@@ -429,6 +519,9 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     }
     if let Some(o) = &rec.owner {
         out["owner"] = json!(o);
+    }
+    if let Some(o) = &rec.replaced_owner {
+        out["replaced_owner"] = json!(o);
     }
     if let Some(r) = rec.region {
         out["region"] = json!(r.as_str());

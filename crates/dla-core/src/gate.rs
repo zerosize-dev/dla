@@ -1081,6 +1081,19 @@ fn final_items(view: &RunView, out: &mut Out) {
     // UNCLASSIFIED with a note (the only label with archetypes off).
     for f in confirmed_leaks(view) {
         if view.ledger.label_record(&f.id).is_none() {
+            // Another finding of the same leak (same owner or site) already carries a
+            // label: one leak is one finding, so the duplicate is merged into it.
+            let twins = crate::duplicate::labelled_twins(&view.ledger, f);
+            let fix = match twins.first() {
+                Some(g) => format!(
+                    "dla ledger duplicate {} --of {}   ({} is the same leak as {}, which is labelled: merge it); if it is another leak: dla ledger label {} --suggest, then dla ledger label {} --as <ID>, or dla ledger label {} --as UNCLASSIFIED --note \"<holder and mechanism in words>\"",
+                    f.id, g.id, f.id, g.id, f.id, f.id, f.id
+                ),
+                None => format!(
+                    "dla ledger label {} --suggest, then dla ledger label {} --as <ID>, or dla ledger label {} --as UNCLASSIFIED --note \"<holder and mechanism in words>\"",
+                    f.id, f.id, f.id
+                ),
+            };
             out.add(
                 "label",
                 f.id.to_string(),
@@ -1088,10 +1101,7 @@ fn final_items(view: &RunView, out: &mut Out) {
                     "finding {} is {} and has no label decision (an archetype ID, or UNCLASSIFIED with a note)",
                     f.id, f.state
                 ),
-                format!(
-                    "dla ledger label {} --suggest, then dla ledger label {} --as <ID>, or dla ledger label {} --as UNCLASSIFIED --note \"<holder and mechanism in words>\"",
-                    f.id, f.id, f.id
-                ),
+                fix,
             );
         }
     }

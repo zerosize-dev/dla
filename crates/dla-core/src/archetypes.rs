@@ -83,6 +83,21 @@ pub fn runtime_rows(runtime: &str) -> Option<&'static [&'static str]> {
     })
 }
 
+/// The runtime a source file belongs to, by extension (`.c`, `.cc`, `.cpp`, `.h` native;
+/// `.java`, `.kt` jvm; `.go`; `.js`, `.mjs`, `.cjs`, `.ts` node; `.py`; `.rs`).
+pub fn runtime_of_file(file: &str) -> Option<&'static str> {
+    let ext = file.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "java" | "kt" | "kts" | "scala" | "groovy" => "jvm",
+        "go" => "go",
+        "rs" => "rust",
+        "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => "node",
+        "py" => "python",
+        "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" => "native",
+        _ => return None,
+    })
+}
+
 /// One archetype.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {

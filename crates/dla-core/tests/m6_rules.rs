@@ -1225,3 +1225,248 @@ fn a_label_on_a_duplicate_is_not_copied_and_the_merge_says_so() {
         1
     );
 }
+
+// ------------------------------------------------- the refusal names every closest route
+
+const UNLOAD_TABLE: &str = r#"
+[L-UNLOAD]
+holders = ["static/global", "registration-table"]
+regions = ["non-heap", "heap"]
+requires = [["growth-series", "non-heap"], ["unit-count-series", "retention-path"], ["growth-series", "retention-path"]]
+disconfirm = ["N-WARM"]
+repair = ["deregister"]
+summary = "A reload leaves the old module reachable from a long-lived holder."
+
+[N-WARM]
+requires = [["growth-series", "discriminator"]]
+disconfirm = []
+summary = "Growth that levels off after warm-up."
+"#;
+
+fn unload_label(l: &mut Ledger, f: &FindingId, ev: &[u32]) -> Result<dla_core::LedgerLine, Error> {
+    let t = Table::parse(UNLOAD_TABLE, "unload table").unwrap();
+    let ev: Vec<_> = ev.iter().map(|n| eid(*n)).collect();
+    l.label(f, "L-UNLOAD", &ev, None, Archetypes::On(&t))
+}
+
+#[test]
+fn a_refused_label_names_the_command_of_every_closest_alternative() {
+    // The run of jvm-extension-reload/2: growth is tied, the class-loader counts were
+    // summarized as non-heap (they name no finding) and no retention record exists.
+    let (mut l, f, _) = leak();
+    let nh = push(
+        &mut l,
+        evidence_with(
+            EvidenceKind::NonHeap,
+            Authority::Live,
+            json!({"summary": "class loaders"}),
+        ),
+    );
+    let r = refusal(unload_label(&mut l, &f, &[E_GROWTH_PASS, nh]));
+    assert_eq!(r.code, m6::LABEL_EVIDENCE_MISSING);
+    assert!(
+        r.message
+            .contains("[growth-series + non-heap] lacks non-heap")
+            && r.message
+                .contains("[growth-series + retention-path] lacks retention-path"),
+        "{}",
+        r.message
+    );
+    // Both closest alternatives (one kind missing each) are named, once, in list order.
+    let non_heap = r.fix.find("dla summarize non-heap").expect(&r.fix);
+    let retention = r.fix.find("dla summarize heap-graph").expect(&r.fix);
+    assert!(non_heap < retention, "{}", r.fix);
+    assert_eq!(r.fix.matches("dla summarize heap-graph").count(), 1);
+    // The non-heap record names no finding: how it would count, and what a confirmed
+    // finding does instead.
+    assert!(
+        r.fix
+            .contains(&format!("E{nh} (non-heap) names no finding")),
+        "{}",
+        r.fix
+    );
+    assert!(
+        r.fix.contains("dla ledger test|confirm F1 --evidence <E>")
+            && r.fix.contains("before confirmation")
+            && r.fix.contains("[unit-count-series + retention-path]")
+            && r.fix.contains("[growth-series + retention-path]"),
+        "{}",
+        r.fix
+    );
+    assert!(!r.fix.contains("[growth-series + non-heap]"), "{}", r.fix);
+    assert_eq!(l.finding(&f).unwrap().archetype, "UNCLASSIFIED");
+}
+
+#[test]
+fn a_refusal_without_a_non_heap_record_names_both_routes_and_no_note() {
+    let (mut l, f, _) = leak();
+    let r = refusal(unload_label(&mut l, &f, &[E_GROWTH_PASS]));
+    assert!(r.fix.contains("dla summarize non-heap"), "{}", r.fix);
+    assert!(r.fix.contains("dla summarize heap-graph"), "{}", r.fix);
+    assert!(!r.fix.contains("names no finding"), "{}", r.fix);
+}
+
+#[test]
+fn suggest_rows_list_every_closest_alternative() {
+    let (l, f, _) = leak();
+    let t = Table::parse(UNLOAD_TABLE, "unload table").unwrap();
+    let rows = l.suggest_labels(&f, &t).unwrap();
+    let r = rows.iter().find(|r| r.id == "L-UNLOAD").unwrap();
+    assert_eq!(r.status, "missing");
+    // The finding is confirmed: the non-heap alternative names no finding and can no longer
+    // be cited, so the row shows the one it can still meet.
+    assert_eq!(r.missing, ["retention-path"]);
+    assert!(r.or_missing.is_empty(), "{r:?}");
+}
+
+// ------------------------------------------------------- the note fires only when it applies
+
+const NEEDS_CITED_TABLE: &str = r#"
+[L-UNLOAD]
+holders = ["static/global", "registration-table"]
+regions = ["non-heap", "heap"]
+requires = [["growth-series", "non-heap"], ["unit-count-series", "retention-path"], ["growth-series", "retention-path"]]
+disconfirm = []
+repair = ["deregister"]
+summary = "A reload leaves the old module reachable from a long-lived holder."
+
+[L-STALE]
+holders = ["static/global"]
+regions = ["heap"]
+requires = [["growth-series", "should-be-dead"], ["unit-count-series", "should-be-dead"]]
+disconfirm = []
+repair = ["deregister"]
+summary = "Both ways need a record that names no finding."
+"#;
+
+fn label_with(
+    l: &mut Ledger,
+    f: &FindingId,
+    id: &str,
+    ev: &[u32],
+) -> Result<dla_core::LedgerLine, Error> {
+    let t = Table::parse(NEEDS_CITED_TABLE, "cited table").unwrap();
+    let ev: Vec<_> = ev.iter().map(|n| eid(*n)).collect();
+    l.label(f, id, &ev, None, Archetypes::On(&t))
+}
+
+#[test]
+fn the_note_says_no_other_alternative_exists_when_every_alternative_needs_such_a_kind() {
+    let (mut l, f, _) = leak();
+    let sd = push(
+        &mut l,
+        evidence_with(
+            EvidenceKind::ShouldBeDead,
+            Authority::Live,
+            json!({"summary": "old loaders"}),
+        ),
+    );
+    let r = refusal(label_with(&mut l, &f, "L-STALE", &[E_GROWTH_PASS, sd]));
+    assert!(
+        r.fix.contains("names no finding")
+            && r.fix
+                .contains("no other alternative of L-STALE exists for a confirmed finding"),
+        "{}",
+        r.fix
+    );
+    assert!(!r.fix.contains("uses the alternatives"), "{}", r.fix);
+}
+
+#[test]
+fn the_note_stays_silent_for_a_kind_no_alternative_needs() {
+    let (mut l, f, _) = leak();
+    let sd = push(
+        &mut l,
+        evidence_with(
+            EvidenceKind::ShouldBeDead,
+            Authority::Live,
+            json!({"summary": "old loaders"}),
+        ),
+    );
+    // L-UNLOAD's alternatives need no should-be-dead record.
+    let r = refusal(label_with(&mut l, &f, "L-UNLOAD", &[E_GROWTH_PASS, sd]));
+    assert!(!r.fix.contains("names no finding"), "{}", r.fix);
+}
+
+#[test]
+fn the_note_stays_silent_for_a_record_excluded_for_its_authority() {
+    let (mut l, f, _) = leak();
+    let nh = push(
+        &mut l,
+        evidence_with(
+            EvidenceKind::NonHeap,
+            Authority::Static,
+            json!({"summary": "class loaders"}),
+        ),
+    );
+    let r = refusal(label_with(&mut l, &f, "L-UNLOAD", &[E_GROWTH_PASS, nh]));
+    assert!(!r.fix.contains("names no finding"), "{}", r.fix);
+    assert!(r.message.contains("authority static"), "{}", r.message);
+}
+
+#[test]
+fn the_note_offers_no_alternative_that_needs_any_kind_the_finding_does_not_cite() {
+    // L-MIX has three ways: one needs the non-heap record that was found but not cited, one
+    // needs a histogram-diff record nobody cited (a kind that names no finding as well), and
+    // one needs a retention path. Only the last is open to a confirmed finding.
+    const MIX: &str = r#"
+[L-UNLOAD]
+holders = ["static/global"]
+regions = ["heap"]
+requires = [["growth-series", "non-heap"], ["growth-series", "histogram-diff"], ["growth-series", "retention-path"]]
+disconfirm = []
+repair = ["deregister"]
+summary = "Three ways."
+"#;
+    let (mut l, f, _) = leak();
+    let nh = push(
+        &mut l,
+        evidence_with(
+            EvidenceKind::NonHeap,
+            Authority::Live,
+            json!({"summary": "class loaders"}),
+        ),
+    );
+    let t = Table::parse(MIX, "mix table").unwrap();
+    let ev = [eid(E_GROWTH_PASS), eid(nh)];
+    let r = refusal(l.label(&f, "L-UNLOAD", &ev, None, Archetypes::On(&t)));
+    assert_eq!(r.code, m6::LABEL_EVIDENCE_MISSING);
+    assert!(
+        r.fix
+            .contains("uses the alternatives [growth-series + retention-path]"),
+        "{}",
+        r.fix
+    );
+    assert!(!r.fix.contains("histogram-diff]"), "{}", r.fix);
+    assert!(
+        !r.fix.contains("[growth-series + non-heap] or"),
+        "{}",
+        r.fix
+    );
+}
+
+#[test]
+fn suggest_shows_a_confirmed_finding_the_closest_alternative_it_can_still_meet() {
+    // jvm-extension-reload: the closest alternative of L-UNLOAD needs a non-heap record, which
+    // names no finding and which a confirmed finding can no longer cite; the row shows the
+    // retention path instead. A row with no such alternative keeps its closest one.
+    let (l, f, _) = leak();
+    let t = Table::parse(UNLOAD_TABLE, "unload table").unwrap();
+    let rows = l.suggest_labels(&f, &t).unwrap();
+    let r = rows.iter().find(|r| r.id == "L-UNLOAD").unwrap();
+    assert_eq!(r.status, "missing");
+    assert_eq!(r.missing, ["retention-path"], "{r:?}");
+    assert!(r.or_missing.is_empty(), "{r:?}");
+    const ONLY: &str = r#"
+[L-STALE]
+holders = ["static/global"]
+regions = ["heap"]
+requires = [["growth-series", "should-be-dead"]]
+disconfirm = []
+repair = ["deregister"]
+summary = "Needs a record no confirmed finding can cite."
+"#;
+    let t = Table::parse(ONLY, "only table").unwrap();
+    let rows = l.suggest_labels(&f, &t).unwrap();
+    assert_eq!(rows[0].missing, ["should-be-dead"], "{:?}", rows[0]);
+}

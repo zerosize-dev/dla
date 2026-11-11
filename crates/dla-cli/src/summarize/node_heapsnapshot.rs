@@ -135,6 +135,23 @@ fn module_path(rel: &str) -> String {
     stem.trim_start_matches("./").replace('/', ".")
 }
 
+/// The part of a script path below the harness work copy, `src/board.js` of
+/// `/p/.dla/r1/harness/H1/work/src/board.js`, or `None` for any other path.
+fn harness_work_relative(path: &str) -> Option<&str> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let at = parts.windows(5).position(|w| {
+        w[0] == ".dla"
+            && !w[1].is_empty()
+            && w[2] == "harness"
+            && !w[3].is_empty()
+            && w[4] == "work"
+    })?;
+    // Skip the five components, find the byte offset of the rest.
+    let consumed: usize = parts[..at + 5].iter().map(|p| p.len() + 1).sum();
+    let rest = path.get(consumed..)?;
+    (!rest.is_empty()).then_some(rest)
+}
+
 /// The module name of a script path from a snapshot, and whether it is a project file.
 /// A project file is named relative to the project; a path of another machine is matched
 /// by its longest tail that exists in the project; Node internals and packages keep a
@@ -143,6 +160,12 @@ pub fn module_of(script: &str, project: &Path) -> (String, bool) {
     let s = script.replace('\\', "/");
     if s.starts_with("node:") {
         return (s, false);
+    }
+    // A harness runs a scratch copy of the project (`.dla/<run>/harness/<id>/work/`): its
+    // modules are named relative to that copy, the project root of the process.
+    if let Some(rel) = harness_work_relative(&s) {
+        let in_modules = rel.starts_with("node_modules/") || rel.contains("/node_modules/");
+        return (module_path(rel), !in_modules);
     }
     if let Ok(rel) = Path::new(&s).strip_prefix(project) {
         let rel = rel.to_string_lossy().replace('\\', "/");
@@ -499,6 +522,51 @@ fn top_json(v: &View) -> Value {
     })
 }
 
+/// The key of the holder in `views` that the owner of the finding named with `--finding`
+/// names: the holder whose owner equals it after normalization, else the only holder it is
+/// a shorter form of. Several holders at one tier give none (a tie is never forced).
+fn bound_holder<'a>(views: &'a [View], owner: &str) -> Option<&'a str> {
+    let want = dla_core::attribution::canonical(owner)?;
+    let canon = |v: &View| dla_core::attribution::canonical(&v.owner);
+    let one = |tier: Vec<&'a View>| {
+        let mut keys: Vec<&str> = tier.iter().map(|v| v.key.as_str()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        match keys.as_slice() {
+            [k] => Some(Some(*k)),
+            [] => None,
+            _ => Some(None),
+        }
+    };
+    let exact: Vec<&View> = views
+        .iter()
+        .filter(|v| canon(v).as_deref() == Some(want.as_str()))
+        .collect();
+    if let Some(r) = one(exact) {
+        return r;
+    }
+    let shorter: Vec<&View> = views
+        .iter()
+        .filter(|v| canon(v).is_some_and(|c| dla_core::attribution::is_shorter_form(&c, &want)))
+        .collect();
+    one(shorter).flatten()
+}
+
+/// The `holders` of a snapshot's retention-path evidence: the largest `n`, and the holder
+/// the finding named with `--finding` (`bound`) when it is not among them. A finding's
+/// holder is rarely among the largest of a process; without its entry no retention record
+/// of the run would name it.
+fn evidence_holders(views: &[View], n: usize, bound: Option<&str>) -> Vec<Value> {
+    let mut top: Vec<&View> = views.iter().take(n).collect();
+    if let Some(key) = bound
+        && !top.iter().any(|v| v.key == key)
+        && let Some(v) = views.iter().find(|v| v.key == key)
+    {
+        top.push(v);
+    }
+    top.into_iter().map(top_json).collect()
+}
+
 fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
     let tc = ctx.tc;
     // ---- read (no writes yet)
@@ -593,18 +661,35 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             rel: d.summary_file.clone(),
             sha256: emit::sha_hex(body.as_bytes()),
         };
-        let top: Vec<Value> = d
-            .views
-            .iter()
-            .take(EVIDENCE_HOLDERS)
-            .map(top_json)
-            .collect();
-        let result = json!({
+        let bound = a
+            .finding
+            .as_ref()
+            .and_then(|f| ledger.finding(f))
+            .and_then(|f| f.owner.as_deref())
+            .and_then(|owner| bound_holder(&d.views, owner));
+        let mut result = json!({
             "file": d.rel,
             "objects": d.summary.reachable,
             "bytes": d.summary.total_bytes,
-            "holders": top,
+            "holders": evidence_holders(&d.views, EVIDENCE_HOLDERS, bound),
         });
+        // Bounded: the smallest of the largest holders go first; the bound one stays.
+        while dla_core::evidence::result_size(&result) > emit::RESULT_BUDGET {
+            let keep = bound.unwrap_or("");
+            let Some(list) = result["holders"].as_array_mut() else {
+                break;
+            };
+            match list
+                .iter()
+                .rposition(|h| h["key"].as_str() != Some(&clip(keep, CLIP)))
+                .filter(|_| list.len() > 1)
+            {
+                Some(at) => {
+                    list.remove(at);
+                }
+                None => break,
+            }
+        }
         let mut spec = EvidenceSpec::new(
             EvidenceKind::RetentionPath,
             TOOL,
@@ -1123,7 +1208,7 @@ fn series_part(
         holder_needed(f, seen, named, &growth_id)
     } else if let Some(f) = &a.finding {
         format!(
-            "no passing column ties to {f} by holder, site or type: a holder ties to the finding whose owner is its module path plus name (for example src.scheduler.shared); annotate {f}'s owner in that form"
+            "no passing column ties to {f} by holder, site or type: a holder ties to the finding whose owner is its module path plus name (for example src.scheduler.shared); dla ledger annotate {f} --owner <that form> --evidence <a growth or retention evidence of this run that names the holder> sets it (an owner already set is replaced before confirmation, while the finding is a candidate or under_test, when that evidence names the holder)"
         )
     } else {
         "no passing holder is tied in the evidence: dla census --lang node gives each module variable and field an owner, which a holder then ties to".to_owned()
@@ -1376,6 +1461,93 @@ mod tests {
         assert!(other.contains("has holder blocked-stack"), "{other}");
         let same = holder_needed(&"F6", seen, seen, &"E9");
         assert!(!same.contains("annotate"), "{same}");
+    }
+
+    fn view(key: &str, owner: &str, retained: u64) -> View {
+        View {
+            key: key.to_owned(),
+            owner: owner.to_owned(),
+            holder: FindingHolder::ClosureContinuation,
+            retained,
+            count: 1,
+            project: true,
+            internal: false,
+            generic: false,
+        }
+    }
+
+    #[test]
+    fn a_harness_work_copy_is_the_project_root_of_its_modules() {
+        let project = Path::new("/p");
+        for s in [
+            "/p/.dla/20261111-010154-d55a/harness/H1/work/src/board.js",
+            "/elsewhere/.dla/r2/harness/H3/work/src/board.js",
+        ] {
+            assert_eq!(module_of(s, project), ("src.board".to_owned(), true), "{s}");
+        }
+        // A package of the work copy is still a dependency; `harness/work` without the
+        // run directory is an ordinary path.
+        let (m, p) = module_of("/p/.dla/r/harness/H1/work/node_modules/x/index.js", project);
+        assert_eq!((m.as_str(), p), ("node_modules.x.index", false));
+        let (m, _) = module_of("/p/harness/H1/work/src/a.js", project);
+        assert_eq!(m, "harness.H1.work.src.a");
+    }
+
+    #[test]
+    fn the_bound_holder_is_the_one_the_owner_names_and_ambiguity_binds_none() {
+        let views = vec![
+            view("closure:src.board.board", "src.board.board", 900),
+            view(
+                "field:src.board.Board.latest",
+                "src.board.Board.latest",
+                800,
+            ),
+            view("closure:src.board.previous", "src.board.previous", 10),
+        ];
+        assert_eq!(
+            bound_holder(&views, "src.board.previous"),
+            Some("closure:src.board.previous")
+        );
+        // A shorter form of the one holder binds it; another variable binds nothing.
+        assert_eq!(
+            bound_holder(&views, "board.previous"),
+            Some("closure:src.board.previous")
+        );
+        assert_eq!(bound_holder(&views, "src.board.other"), None);
+        // Two holder keys with one owner: none is bound.
+        let mut two = views.clone();
+        two.push(view("field:src.board.previous", "src.board.previous", 5));
+        assert_eq!(bound_holder(&two, "src.board.previous"), None);
+        // Exact identity wins over a shorter form.
+        let mut both = views;
+        both.push(view(
+            "closure:lib.src.board.previous",
+            "lib.src.board.previous",
+            5,
+        ));
+        assert_eq!(
+            bound_holder(&both, "src.board.previous"),
+            Some("closure:src.board.previous")
+        );
+    }
+
+    #[test]
+    fn the_evidence_holders_add_the_bound_one_after_the_largest() {
+        let views: Vec<View> = (0..6)
+            .map(|i| view(&format!("field:a.B.f{i}"), &format!("a.B.f{i}"), 100 - i))
+            .collect();
+        let keys = |h: Vec<Value>| -> Vec<String> {
+            h.iter()
+                .map(|x| x["key"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(keys(evidence_holders(&views, 3, None)).len(), 3);
+        let with = keys(evidence_holders(&views, 3, Some("field:a.B.f5")));
+        assert_eq!(with.len(), 4);
+        assert_eq!(with[3], "field:a.B.f5");
+        assert!(evidence_holders(&views, 3, Some("field:a.B.f5"))[3]["holder_kind"].is_string());
+        // Already among the largest: not listed twice.
+        assert_eq!(evidence_holders(&views, 3, Some("field:a.B.f1")).len(), 3);
     }
 
     #[test]

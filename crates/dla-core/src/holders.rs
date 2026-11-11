@@ -9,7 +9,8 @@
 //!
 //! * `dla-hprof` `retention-path`: `holders[].key` and `via[].key`
 //!   (`static:<Class>.<field>`, `field:<Decl>.<field>`, `thread-local:<Class>.<field>`).
-//! * `dla-v8-snapshot` `retention-path`: `holders[].key` (`static:<module>.<name>`).
+//! * `dla-v8-snapshot` `retention-path`: `holders[].key` (`static:<module>.<name>`,
+//!   `closure:<module>.<var>`, `field:<module>.<Class>.<field>`).
 //! * `valgrind-vgdb` `retention-path`: `alloc` (`function (file:line)`), `root` and `path[]`.
 //! * `alloc-stack`: `top[].root` (the root holder of a sampled path, JFR OldObjectSample).
 //!
@@ -19,7 +20,7 @@
 use serde_json::Value;
 
 use crate::{
-    attribution::{canonical, owners_match},
+    attribution::{canonical, is_shorter_form, owners_match},
     evidence::{Authority, EvidenceKind, EvidenceRecord},
     finding::{Finding, Holder},
     ids::FindingId,
@@ -33,12 +34,108 @@ fn key_owner(key: &str) -> Option<String> {
     let k = key.trim();
     // `field:<Decl>.<f>` is an instance field; `thread-local:<Class>.<f>` is the static
     // field whose `ThreadLocal` the values hang from (dla-hprof writes it for the values
-    // held by live threads). Both name the field, as `static:` does.
+    // held by live threads). Both name the field, as `static:` does. `closure:<module>.<var>`
+    // (dla-v8-snapshot) names the context variable a closure captured, written with the
+    // owner the backend gives that variable. `registry:`, `instance:` and `thread:` keys
+    // name no variable or field.
     let k = k
         .strip_prefix("field:")
         .or_else(|| k.strip_prefix("thread-local:"))
+        .or_else(|| k.strip_prefix("closure:"))
         .unwrap_or(k);
     canonical(k)
+}
+
+/// The canonical owner a passing `holder:<key>` or `probe:<owner>` growth column measures;
+/// `None` for another column and for a key that names no variable or field.
+pub fn column_owner(column: &str) -> Option<String> {
+    // The column suffixes of `dla trend` (`crate::trend::probe_column_matches_owner`): a
+    // heap-dump column may end in `.count`, a probe column in `.size` or `.bytes`.
+    if let Some(n) = column.strip_prefix("holder:") {
+        return key_owner(n.strip_suffix(".count").unwrap_or(n));
+    }
+    let n = column.strip_prefix("probe:")?;
+    let n = n
+        .strip_suffix(".size")
+        .or_else(|| n.strip_suffix(".bytes"))
+        .unwrap_or(n);
+    key_owner(n)
+}
+
+/// The canonical owners of the holders a growth-series or retention-path record names:
+/// the keys of `holders` and `via` entries and the `holder:`/`probe:` columns of `passed`.
+/// Empty for every other kind and for a record read from source text. `dla ledger add` and
+/// `dla ledger annotate` use it to say which owner form ties.
+pub fn record_holder_owners(record: &EvidenceRecord) -> Vec<String> {
+    if record.authority == Authority::Static
+        || !matches!(
+            record.kind,
+            EvidenceKind::RetentionPath | EvidenceKind::GrowthSeries
+        )
+    {
+        return Vec::new();
+    }
+    let r = &record.result;
+    let from_keys = ["holders", "via"]
+        .iter()
+        .flat_map(|l| list_keys(r, l))
+        .filter_map(|e| e.get("key").and_then(Value::as_str))
+        .filter_map(key_owner);
+    let from_columns = list_keys(r, "passed")
+        .filter_map(|c| c.get("column").and_then(Value::as_str))
+        .filter_map(column_owner);
+    let mut out: Vec<String> = Vec::new();
+    for o in from_keys.chain(from_columns) {
+        if !out.contains(&o) {
+            out.push(o);
+        }
+    }
+    out
+}
+
+/// How an owner relates to the holders a record names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnerNaming {
+    /// A holder's owner equals the owner (after canonical form).
+    Exact,
+    /// The owner is a shorter form of exactly one named holder's owner.
+    Short,
+    /// The owner is a shorter form of several named holders' owners; it ties none.
+    Ambiguous(Vec<String>),
+    /// No named holder has this owner or a longer form of it (an invented longer form
+    /// included).
+    None,
+}
+
+/// Compares `owner` with [`record_holder_owners`] of `record`: exact canonical equality, or a
+/// shorter form of exactly one holder's owner. A longer owner than any holder's, and a short
+/// form of several holders, name none.
+pub fn owner_naming(record: &EvidenceRecord, owner: &str) -> OwnerNaming {
+    let Some(want) = canonical(owner) else {
+        return OwnerNaming::None;
+    };
+    let owners = record_holder_owners(record);
+    if owners.contains(&want) {
+        return OwnerNaming::Exact;
+    }
+    let longer: Vec<String> = owners
+        .into_iter()
+        .filter(|o| is_shorter_form(o, &want))
+        .collect();
+    match longer.len() {
+        0 => OwnerNaming::None,
+        1 => OwnerNaming::Short,
+        _ => OwnerNaming::Ambiguous(longer),
+    }
+}
+
+/// True when [`owner_naming`] ties `owner` to a holder of `record`: exact, or a shorter form
+/// of exactly one holder.
+pub fn record_names_owner(record: &EvidenceRecord, owner: &str) -> bool {
+    matches!(
+        owner_naming(record, owner),
+        OwnerNaming::Exact | OwnerNaming::Short
+    )
 }
 
 fn strings<'a>(v: &'a Value, key: &str) -> impl Iterator<Item = &'a str> {
@@ -407,6 +504,32 @@ mod tests {
         );
         assert!(names_holder(&r, &finding(Some("scheduler.shared"), None)));
         assert!(!names_holder(&r, &finding(Some("scheduler.other"), None)));
+    }
+
+    #[test]
+    fn a_closure_key_names_the_captured_variable() {
+        let r = rec(
+            EvidenceKind::RetentionPath,
+            Authority::Dump,
+            "dla-v8-snapshot",
+            json!({"file": "a.heapsnapshot", "holders": [
+                {"key": "closure:src.board.previous", "holder_kind": "closure/continuation"},
+                {"key": "registry:events:src.board.Board.listeners"},
+                {"key": "instance:root>src.board.Board"}]}),
+        );
+        assert!(names_holder(&r, &finding(Some("src.board.previous"), None)));
+        assert!(names_holder(&r, &finding(Some("board.previous"), None)));
+        assert_eq!(
+            named_holder_kind(&r, &finding(Some("src.board.previous"), None)),
+            Some(Holder::ClosureContinuation)
+        );
+        // Another variable of the same module, and keys that name no variable, tie nothing.
+        assert!(!names_holder(&r, &finding(Some("src.board.other"), None)));
+        assert!(!names_holder(
+            &r,
+            &finding(Some("src.board.Board.listeners"), None)
+        ));
+        assert!(!names_holder(&r, &finding(Some("src.board.Board"), None)));
     }
 
     #[test]

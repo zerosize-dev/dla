@@ -824,8 +824,9 @@ impl View {
                         if f.site.is_none() {
                             f.site = s(&rec, "site");
                         }
-                        if f.owner.is_none() {
-                            f.owner = s(&rec, "owner");
+                        // An owner replaced with evidence (schema 6) names `replaced_owner`.
+                        if f.owner.is_none() || rec.get("replaced_owner").is_some() {
+                            f.owner = s(&rec, "owner").or(f.owner.take());
                         }
                     }
                 }
@@ -2788,6 +2789,30 @@ mod tests {
             ],
         );
         assert_eq!(v.findings[0].holder.as_deref(), Some("registration-table"));
+    }
+
+    #[test]
+    fn a_replaced_owner_is_read_and_a_plain_annotation_only_fills() {
+        let add = r#"{"type":"finding_added","finding":{"id":"F1","origin":"growth-series","owner":"src.board.Board.publish.previous"}}"#;
+        let v = view(
+            "owner-plain",
+            &[
+                add,
+                r#"{"type":"finding_annotated","finding":"F1","writers":[],"removers":[],"owner":"other.x"}"#,
+            ],
+        );
+        assert_eq!(
+            v.findings[0].owner.as_deref(),
+            Some("src.board.Board.publish.previous")
+        );
+        let v = view(
+            "owner-replaced",
+            &[
+                add,
+                r#"{"type":"finding_annotated","finding":"F1","writers":[],"removers":[],"owner":"src.board.previous","evidence":["E1"],"replaced_owner":"src.board.Board.publish.previous"}"#,
+            ],
+        );
+        assert_eq!(v.findings[0].owner.as_deref(), Some("src.board.previous"));
     }
 
     #[test]

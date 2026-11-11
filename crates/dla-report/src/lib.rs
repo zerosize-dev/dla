@@ -796,13 +796,13 @@ fn workers(out: &mut String, view: &RunView) {
     }
 }
 
-/// Findings folded into another worker's finding with the same site and holder.
+/// Findings folded into another finding of the same leak (a cross-worker merge or `dla ledger duplicate`).
 fn merged_duplicates(out: &mut String, view: &RunView) {
     let mut rows: Vec<String> = Vec::new();
     for f in view.ledger.findings() {
         if let Some(c) = view.ledger.merged_into(&f.id) {
             rows.push(format!(
-                "- **{}** merged into **{c}** (same site and holder; its evidence {} is kept on {c})",
+                "- **{}** merged into **{c}** (a duplicate of the same leak; its evidence {} is kept on {c})",
                 f.id,
                 if f.supports.is_empty() {
                     DASH.to_owned()

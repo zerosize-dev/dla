@@ -130,6 +130,11 @@ fn write_ledger(e: &Env, l: &Ledger) {
 /// A run whose ledger holds: E1 static hit, E2 harness, E3 leak discriminator, E4 trend growth
 /// (signed), E5 vgdb retention (signed); F1 confirmed with F1.n1 (N-WARM) refuted.
 fn env() -> Env {
+    env_at("a.go:1")
+}
+
+/// The same run with the finding's site at `site` (its language names the runtime).
+fn env_at(site: &str) -> Env {
     let project = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
     fs::write(data.path().join("archetypes.toml"), TABLE).unwrap();
@@ -196,7 +201,7 @@ fn env() -> Env {
             "harness-series",
             "aa",
             json!({"trend": "T1", "series": "S1", "n": 8, "gate": "pass", "failed": 0,
-            "passed": [{"column": "probe:CACHE", "region": "heap", "site": "a.go:1", "finding": "F1", "shape": "steady"}]}),
+            "passed": [{"column": "probe:CACHE", "region": "heap", "site": site, "finding": "F1", "shape": "steady"}]}),
         ),
     );
     ev(
@@ -214,7 +219,7 @@ fn env() -> Env {
         Origin::parse("census").unwrap(),
         vec!["E1".parse().unwrap()],
     );
-    nf.site = Some("a.go:1".into());
+    nf.site = Some(site.into());
     nf.holder = Some(Holder::StaticGlobal);
     l.add_finding(nf).unwrap();
     let mut nf = NewFinding::new(
@@ -274,7 +279,19 @@ fn label_suggest_then_label_then_relabel() {
     // E5 ties by its allocation site, but F1 does not cite it, so it is a record to name.
     let first = rows[0].as_str().unwrap();
     assert!(first.starts_with("L-COLLECT met [E4,E5]: "), "{first}");
-    let err = refused(&e, &[], &["ledger", "label", "F1", "--as", "L-COLLECT"]);
+    let err = refused(
+        &e,
+        &[],
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--note",
+            "fits none of the go rows",
+        ],
+    );
     assert_eq!(err["code"], "label-evidence-missing");
     assert_eq!(
         err["fix"],
@@ -298,6 +315,8 @@ fn label_suggest_then_label_then_relabel() {
             "L-COLLECT",
             "--evidence",
             "E4,E5",
+            "--note",
+            "fits none of the go rows",
         ],
     );
     assert_eq!(l["label"], "L-COLLECT");
@@ -356,6 +375,8 @@ fn archetypes_off_leaves_findings_unclassified() {
                 "L-COLLECT",
                 "--evidence",
                 "E4,E5",
+                "--note",
+                "fits none of the go rows",
             ],
         );
         assert_eq!(err["code"], "archetypes-off");
@@ -422,6 +443,8 @@ fn a_holder_the_archetype_does_not_fit_is_refused_with_the_annotate_fix() {
             "L-HANDLE",
             "--evidence",
             "E4,E6",
+            "--note",
+            "fits none of the go rows",
         ],
     );
     assert_eq!(err["code"], "label-holder");
@@ -567,6 +590,8 @@ fn the_verifier_label_is_compared_with_the_findings() {
             "L-COLLECT",
             "--evidence",
             "E4,E5",
+            "--note",
+            "fits none of the go rows",
         ],
     );
     let bundle = bundle_for(&e, "F1");
@@ -705,6 +730,8 @@ fn a_labelled_explained_verified_findings_bundle_shows_none_of_that() {
             "L-COLLECT",
             "--evidence",
             "E4,E5",
+            "--note",
+            "fits none of the go rows",
         ],
     );
     ok(
@@ -1149,14 +1176,107 @@ fn suggest_with_the_shipped_table_lists_every_leak_archetype_within_the_bound() 
     assert!(rows.last().unwrap().starts_with("UNCLASSIFIED "));
 }
 
+#[test]
+fn suggest_for_a_jvm_finding_with_only_growth_tied_keeps_the_rows_and_the_heap_graph_command() {
+    // The shape of jvm-extension-reload: a confirmed jvm finding, only growth tied.
+    let e = env_at("A.java:1");
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    fs::copy(
+        shipped.join("archetypes.toml"),
+        e.data.path().join("archetypes.toml"),
+    )
+    .unwrap();
+    let s = ok(&e, &["ledger", "label", "F1", "--suggest"]);
+    assert!(s.get("truncated").is_none(), "{s}");
+    let table = dla_core::archetypes::load(&shipped).unwrap().unwrap();
+    let rows: Vec<&str> = s["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    for x in table.entries().filter(|x| x.id.starts_with("L-")) {
+        let row = rows
+            .iter()
+            .find(|r| r.starts_with(&format!("{} ", x.id)))
+            .unwrap_or_else(|| panic!("{} is not listed: {rows:?}", x.id));
+        assert!(row.ends_with(&x.summary), "{row} lacks the full summary");
+    }
+    let produce = s["produce"].to_string();
+    assert!(
+        produce.contains("dla summarize heap-graph"),
+        "the retention-path producer is kept: {s}"
+    );
+    assert!(s["next"].as_str().is_some(), "the next step fits: {s}");
+    // F1 is confirmed and cannot cite a non-heap record any more: the L-UNLOAD row names the
+    // alternative it can still meet.
+    let unload = rows
+        .iter()
+        .find(|r| r.starts_with("L-UNLOAD "))
+        .unwrap_or_else(|| panic!("L-UNLOAD is not listed: {rows:?}"));
+    assert!(
+        unload.starts_with("L-UNLOAD missing retention-path"),
+        "{unload}"
+    );
+}
+
+#[test]
+fn suggest_never_drops_next_for_the_sake_of_the_long_form_of_produce() {
+    // The commands in `produce` shrink first: `next` is dropped only when it does not fit
+    // even beside the short form of `produce`. The rows grow with a padded summary until
+    // the answer is full; around that point no answer may lack `next` while the short
+    // `produce` and `next` would have fitted.
+    let e = env();
+    let answer = |pad: usize| {
+        let table = format!(
+            "{TABLE}\n[L-STALE]\nholders = [\"static/global\"]\nregions = [\"heap\"]\nrequires = [[\"growth-series\", \"should-be-dead\"]]\ndisconfirm = []\nrepair = [\"deregister\"]\nsummary = \"{}\"\n",
+            "x".repeat(pad)
+        );
+        fs::write(e.data.path().join("archetypes.toml"), table).unwrap();
+        let (code, s) = run_with(&e, &[], &["ledger", "label", "F1", "--suggest"]);
+        assert_eq!(code, 0, "pad {pad}: {s}");
+        s
+    };
+    let first_without_next = (0..1900)
+        .step_by(20)
+        .find(|&p| answer(p).get("next").is_none())
+        .expect("the answer never filled up");
+    let mut long_forms = 0;
+    for pad in first_without_next.saturating_sub(60)..first_without_next + 20 {
+        let mut s = answer(pad);
+        if s.get("next").is_some() {
+            continue;
+        }
+        let long = s["produce"].to_string().contains("--finding F1");
+        long_forms += usize::from(long);
+        // The same answer with the short produce and the short next.
+        if let Some(p) = s.get_mut("produce").and_then(Value::as_object_mut) {
+            for v in p.values_mut() {
+                *v = json!(v.as_str().unwrap().replace(" --finding F1", ""));
+            }
+        }
+        s["next"] = json!("dla ledger label F1 --as <ID> --evidence E..");
+        assert!(
+            s.to_string().len() >= dla_core::MAX_OUTPUT_BYTES,
+            "pad {pad}: next was dropped although it fits beside the short produce"
+        );
+    }
+    assert!(
+        long_forms > 0,
+        "the scan never met the long form without next"
+    );
+}
+
 // ------------------------------------------------------------- label and the runtime
 
 #[test]
-fn a_label_with_no_row_in_the_runtime_reference_is_accepted_with_a_warning() {
+fn a_label_with_no_row_in_the_runtime_reference_is_refused_without_a_note() {
     let e = env();
     // F1's site is a Go file; the go reference has the L-WORKER row only.
-    let l = ok(
+    let before = reload(&e).lines().len();
+    let r = refused(
         &e,
+        &[],
         &[
             "ledger",
             "label",
@@ -1167,20 +1287,350 @@ fn a_label_with_no_row_in_the_runtime_reference_is_accepted_with_a_warning() {
             "E4,E5",
         ],
     );
-    assert_eq!(l["label"], "L-COLLECT");
-    let w = l["runtime_warning"].as_str().unwrap();
+    assert_eq!(r["code"], "label-runtime-row", "{r}");
+    let m = r["message"].as_str().unwrap();
     assert!(
-        w.contains("go archetype reference") && w.contains("L-WORKER"),
-        "{w}"
+        m.contains("go archetype reference") && m.contains("L-WORKER"),
+        "{m}"
     );
-    assert!(w.contains("accepted"), "{w}");
+    let fix = r["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("UNCLASSIFIED") && fix.contains("--note"),
+        "{fix}"
+    );
+    assert_eq!(reload(&e).lines().len(), before, "nothing is written");
     assert_eq!(
         reload(&e)
             .finding(&"F1".parse().unwrap())
             .unwrap()
             .archetype,
+        "UNCLASSIFIED"
+    );
+}
+
+#[test]
+fn a_note_keeps_a_label_with_no_row_in_the_runtime_reference() {
+    let e = env();
+    let l = ok(
+        &e,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+            "--note",
+            "a map keyed by request id; the go worker row is a goroutine pool, not this",
+        ],
+    );
+    assert_eq!(l["label"], "L-COLLECT");
+    let led = reload(&e);
+    assert_eq!(
+        led.finding(&"F1".parse().unwrap()).unwrap().archetype,
         "L-COLLECT"
     );
+    let rec = led.labels(&"F1".parse().unwrap());
+    assert!(
+        rec.last()
+            .unwrap()
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("goroutine pool")),
+        "the note is stored with the label"
+    );
+}
+
+#[test]
+fn archetypes_off_is_refused_before_the_runtime_row_check() {
+    // F1 is a go finding and L-COLLECT is no go row: with archetypes off the refusal is
+    // archetypes-off, which no --note can get past, not label-runtime-row.
+    let e = env();
+    let r = refused(
+        &e,
+        &[("DLA_ARCHETYPES", "off")],
+        &["ledger", "label", "F1", "--as", "L-COLLECT"],
+    );
+    assert_eq!(r["code"], "archetypes-off", "{r}");
+}
+
+#[test]
+fn the_labels_own_state_and_polarity_come_before_the_runtime_row_check() {
+    let e = env();
+    // F1.n1 is a refuted non-leak sibling: its state is the first thing wrong.
+    let r = refused(&e, &[], &["ledger", "label", "F1.n1", "--as", "L-COLLECT"]);
+    assert_eq!(r["code"], "label-state", "{r}");
+    // An N-* label on the leak-side finding: polarity, not the runtime row.
+    let r = refused(&e, &[], &["ledger", "label", "F1", "--as", "N-WARM"]);
+    assert_ne!(r["code"], "label-runtime-row", "{r}");
+    // A finding that is not confirmed yet.
+    let mut l = reload(&e);
+    let mut nf = NewFinding::new(
+        Origin::parse("census").unwrap(),
+        vec!["E1".parse().unwrap()],
+    );
+    nf.site = Some("b.go:5".into());
+    l.add_finding(nf).unwrap();
+    write_ledger(&e, &l);
+    let r = refused(&e, &[], &["ledger", "label", "F2", "--as", "L-COLLECT"]);
+    assert_eq!(r["code"], "label-state", "{r}");
+}
+
+/// A confirmed finding of the jvm worker at `site` with the growth and the allocation
+/// profile L-HANDLE needs. Returns the environment, the finding's bare ID and the evidence
+/// list to cite.
+fn jvm_worker_handle_case(site: &str) -> (Env, String, String) {
+    let e = env();
+    let out = dla(&e)
+        .args(["run", "dispatch", "--workers", "jvm"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let mut l = Ledger::load_for(&e.run_dir, Some("jvm")).unwrap();
+    let mut add = |k, a, tool: &str, class: &str, src: &str, r: Value| {
+        let line = l.add_evidence(evidence(k, a, tool, class, src, r)).unwrap();
+        let dla_core::Record::Evidence(rec) = line.record else {
+            unreachable!()
+        };
+        rec.evidence_id
+    };
+    let hit = add(
+        EvidenceKind::StaticHit,
+        Authority::Static,
+        "t",
+        "x",
+        "s1",
+        json!({}),
+    );
+    let work = add(
+        EvidenceKind::Workload,
+        Authority::Test,
+        "t",
+        "x",
+        "s2",
+        json!({"harness": "H1", "mode": "command", "runtime": "jvm"}),
+    );
+    let disc = add(
+        EvidenceKind::Discriminator,
+        Authority::Test,
+        "dla",
+        "x",
+        "s3",
+        json!({"test": "plateau", "favors": "leak", "supports": ["leak"], "finding": null}),
+    );
+    let growth = add(
+        EvidenceKind::GrowthSeries,
+        Authority::Test,
+        "dla-trend",
+        "harness-series",
+        "aa",
+        json!({"trend": "T1", "series": "S1", "n": 8, "gate": "pass", "failed": 0,
+        "passed": [{"column": "probe:BUF", "region": "off-heap", "site": site, "finding": "F1", "shape": "steady"}]}),
+    );
+    let alloc = add(
+        EvidenceKind::AllocStack,
+        Authority::Live,
+        "jfr",
+        "alloc-profiler",
+        "cc",
+        json!({"mode": "diff", "finding": "jvm/F1", "top": []}),
+    );
+    let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![hit]);
+    nf.site = Some(site.into());
+    nf.holder = Some(Holder::NativeHandleGlobalRef);
+    let line = l.add_finding(nf).unwrap();
+    let dla_core::Record::FindingAdded { finding } = line.record else {
+        unreachable!()
+    };
+    let f = finding.id;
+    let mut sib = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![disc.clone()]);
+    sib.sibling_of = Some(f.clone());
+    sib.hypothesis = Some("N-WARM".into());
+    sib.refute_if = Some("growth continues".into());
+    let line = l.add_finding(sib).unwrap();
+    let dla_core::Record::FindingAdded { finding: n } = line.record else {
+        unreachable!()
+    };
+    l.transition(&n.id, FindingState::Refuted, None, None, vec![disc], "t")
+        .unwrap();
+    l.transition(&f, FindingState::UnderTest, None, None, vec![work], "t")
+        .unwrap();
+    l.transition(
+        &f,
+        FindingState::Confirmed,
+        None,
+        None,
+        vec![growth.clone()],
+        "t",
+    )
+    .unwrap();
+    drop(l);
+    let fid = f.to_string();
+    let bare = fid.split('/').next_back().unwrap();
+    let ev = format!("{growth},{alloc}");
+    (e, bare.to_owned(), ev)
+}
+
+fn label_handle(e: &Env, bare: &str, ev: &str, extra: &[&str]) -> (i32, Value) {
+    let mut args = vec![
+        "--worker",
+        "jvm",
+        "ledger",
+        "label",
+        bare,
+        "--as",
+        "L-HANDLE",
+        "--evidence",
+        ev,
+    ];
+    args.extend(extra);
+    run_with(e, &[], &args)
+}
+
+#[test]
+fn a_worker_finding_with_a_c_site_is_labelled_by_the_language_of_its_site() {
+    // A C finding of the jvm worker takes the native rows (L-HANDLE), without a note,
+    // although its worker is jvm.
+    let (e, bare, ev) = jvm_worker_handle_case("codec.c:7");
+    let (code, v) = label_handle(&e, &bare, &ev, &[]);
+    assert_eq!(
+        code, 0,
+        "no note needed for a C finding of the jvm worker: {v}"
+    );
+    assert_eq!(v["label"], "L-HANDLE");
+}
+
+#[test]
+fn a_jvm_finding_at_a_rust_site_needs_a_note_for_l_handle() {
+    // jni-order-codec: the JNI code is Rust (native/src/lib.rs), so the runtime is rust,
+    // whose reference has no L-HANDLE row. The designed escape is --note.
+    let (e, bare, ev) = jvm_worker_handle_case("native/src/lib.rs:7");
+    let (code, v) = label_handle(&e, &bare, &ev, &[]);
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(v["error"]["code"], "label-runtime-row", "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("rust"),
+        "{v}"
+    );
+    let (code, v) = label_handle(
+        &e,
+        &bare,
+        &ev,
+        &["--note", "JNI handle table in Rust code; no rust row fits"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["label"], "L-HANDLE");
+}
+
+/// A jvm worker ledger whose leak-side finding is refuted and whose N-WARM sibling is
+/// confirmed; returns the environment and the sibling's bare ID (`F1.n1`).
+fn jvm_worker_confirmed_nonleak_case() -> (Env, String) {
+    let e = env();
+    let out = dla(&e)
+        .args(["run", "dispatch", "--workers", "jvm"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let mut l = Ledger::load_for(&e.run_dir, Some("jvm")).unwrap();
+    let mut add = |k, a, tool: &str, class: &str, src: &str, r: Value| {
+        let line = l.add_evidence(evidence(k, a, tool, class, src, r)).unwrap();
+        let dla_core::Record::Evidence(rec) = line.record else {
+            unreachable!()
+        };
+        rec.evidence_id
+    };
+    let hit = add(
+        EvidenceKind::StaticHit,
+        Authority::Static,
+        "t",
+        "x",
+        "s1",
+        json!({}),
+    );
+    let work = add(
+        EvidenceKind::Workload,
+        Authority::Test,
+        "t",
+        "x",
+        "s2",
+        json!({"harness": "H1", "mode": "command", "runtime": "jvm"}),
+    );
+    let disc = add(
+        EvidenceKind::Discriminator,
+        Authority::Test,
+        "dla",
+        "x",
+        "s3",
+        json!({"test": "plateau", "favors": "non-leak", "supports": ["non-leak"], "finding": null}),
+    );
+    let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![hit]);
+    nf.site = Some("A.java:3".into());
+    nf.holder = Some(Holder::StaticGlobal);
+    let line = l.add_finding(nf).unwrap();
+    let dla_core::Record::FindingAdded { finding } = line.record else {
+        unreachable!()
+    };
+    let f = finding.id;
+    let mut sib = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![disc.clone()]);
+    sib.sibling_of = Some(f.clone());
+    sib.hypothesis = Some("N-WARM".into());
+    sib.refute_if = Some("growth continues".into());
+    let line = l.add_finding(sib).unwrap();
+    let dla_core::Record::FindingAdded { finding: n } = line.record else {
+        unreachable!()
+    };
+    l.transition(
+        &f,
+        FindingState::UnderTest,
+        None,
+        None,
+        vec![work.clone()],
+        "t",
+    )
+    .unwrap();
+    l.transition(
+        &f,
+        FindingState::Refuted,
+        None,
+        None,
+        vec![disc.clone()],
+        "t",
+    )
+    .unwrap();
+    l.transition(&n.id, FindingState::UnderTest, None, None, vec![work], "t")
+        .unwrap();
+    l.transition(&n.id, FindingState::Confirmed, None, None, vec![disc], "t")
+        .unwrap();
+    drop(l);
+    let nid = n.id.to_string();
+    (e, nid.split('/').next_back().unwrap().to_owned())
+}
+
+#[test]
+fn the_labels_polarity_comes_before_the_runtime_row_check() {
+    // A confirmed non-leak sibling of the jvm worker: L-HANDLE has no jvm row, but the
+    // first thing wrong is that an L-* label does not fit a non-leak finding.
+    let (e, n) = jvm_worker_confirmed_nonleak_case();
+    let (code, v) = run_with(
+        &e,
+        &[],
+        &["--worker", "jvm", "ledger", "label", &n, "--as", "L-HANDLE"],
+    );
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(v["error"]["code"], "label-polarity", "{v}");
+}
+
+#[test]
+fn an_unknown_finding_is_reported_before_the_runtime_row_check() {
+    let (e, _, ev) = jvm_worker_handle_case("A.java:3");
+    let (code, v) = label_handle(&e, "F99", &ev, &[]);
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(v["error"]["code"], "unknown-finding", "{v}");
 }
 
 // --------------------------------------------------------------------- site lines
@@ -1465,4 +1915,13 @@ fn ledger_add_checks_the_site_line_too() {
         ],
     );
     assert!(v.get("warnings").is_none(), "{v}");
+}
+
+#[test]
+fn duplicate_refuses_a_finding_against_itself_and_an_unknown_one() {
+    let e = env();
+    let r = refused(&e, &[], &["ledger", "duplicate", "F1", "--of", "F1"]);
+    assert_eq!(r["code"], "duplicate-state", "{r}");
+    let r = refused(&e, &[], &["ledger", "duplicate", "F1", "--of", "F77"]);
+    assert_eq!(r["code"], "unknown-finding", "{r}");
 }

@@ -138,6 +138,21 @@ fn an_annotation_that_replaced_a_holder_changes_it() {
 }
 
 #[test]
+fn an_annotation_that_replaced_an_owner_changes_it_and_a_plain_one_only_fills() {
+    let text = [
+        r#"{"type":"finding_added","finding":{"id":"F5","owner":"src.board.Board.publish.previous"}}"#,
+        r#"{"type":"finding_annotated","finding":"F5","owner":"other.x"}"#,
+        r#"{"type":"finding_annotated","finding":"F5","owner":"src.board.previous","evidence":["E22"],"replaced_owner":"src.board.Board.publish.previous"}"#,
+        r#"{"type":"finding_added","finding":{"id":"F6"}}"#,
+        r#"{"type":"finding_annotated","finding":"F6","owner":"a.B.c"}"#,
+    ]
+    .join("\n");
+    let f = findings_from_ledger(&text).expect("has finding_added");
+    assert_eq!(f[0].owner.as_deref(), Some("src.board.previous"));
+    assert_eq!(f[1].owner.as_deref(), Some("a.B.c"));
+}
+
+#[test]
 fn a_label_record_sets_the_label_and_the_last_one_wins() {
     let text = [
         "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"archetype\":\"UNCLASSIFIED\"}}",
@@ -999,6 +1014,32 @@ fn a_merged_duplicate_is_removed_and_the_canonical_keeps_its_state() {
     v.push(r#"{"type":"finding_merged","canonical":"jvm/F1","duplicate":"rust/F1"}"#);
     v.push(r#"{"type":"finding_added","finding":{"id":"rust/F1","site":"b.kt:2"}}"#);
     assert_eq!(findings_from_ledger(&v.join("\n")).unwrap().len(), 2);
+}
+
+#[test]
+fn a_core_duplicate_collapses_into_the_labelled_finding() {
+    // `dla ledger duplicate F4 --of F1`: no worker prefix on either id. The findings share
+    // a qualified owner (the rule accepts exact identity only), not a site.
+    let lines = [
+        r#"{"type":"finding_added","finding":{"id":"F1","site":"r/b.py:14","owner":"r.b.Registry.items"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"F4","site":"r/b.py:15","owner":"r.b.Registry.items"}}"#,
+        r#"{"type":"transition","finding":"F1","to":"confirmed"}"#,
+        r#"{"type":"transition","finding":"F4","to":"confirmed"}"#,
+        r#"{"type":"finding_labeled","finding":"F1","label":"L-COLLECT"}"#,
+        r#"{"type":"finding_merged","canonical":"F1","duplicate":"F4"}"#,
+    ];
+    let f = findings_from_ledger(&lines.join("\n")).unwrap();
+    assert_eq!(f.len(), 1);
+    assert_eq!(f[0].site.as_deref(), Some("r/b.py:14"));
+    assert_eq!(f[0].label.as_deref(), Some("L-COLLECT"));
+    assert_eq!(f[0].state, State::Confirmed);
+    // Inside a worker slice both ids carry the worker prefix.
+    let slice = [
+        r#"{"type":"finding_added","finding":{"id":"py/F1","site":"r/b.py:14","owner":"r.b.Registry.items"}}"#,
+        r#"{"type":"finding_added","finding":{"id":"py/F2","site":"r/b.py:15","owner":"r.b.Registry.items"}}"#,
+        r#"{"type":"finding_merged","canonical":"py/F1","duplicate":"py/F2"}"#,
+    ];
+    assert_eq!(findings_from_ledger(&slice.join("\n")).unwrap().len(), 1);
 }
 
 #[test]

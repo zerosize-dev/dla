@@ -26,6 +26,7 @@ pub mod consent;
 pub mod coverage;
 pub mod detectors;
 pub mod discriminator;
+pub mod duplicate;
 pub mod error;
 pub mod evidence;
 pub mod explain;
