@@ -1308,15 +1308,23 @@ fn a_label_with_no_row_in_the_runtime_reference_is_refused_without_a_note() {
     );
 }
 
-/// A `known-leaks.toml` with one Go row that names `archetype`, and one jvm row that names
-/// `L-HANDLE`.
-fn known_leaks_text(go_archetype: &str) -> String {
+/// A `known-leaks.toml` with one row per `(runtime, archetype)` pair.
+fn known_leaks_rows(rows: &[(&str, &str)]) -> String {
     let row = |id: &str, rt: &str, arch: &str| {
         format!(
             "[[leak]]\nid = \"{id}\"\nruntime = \"{rt}\"\nlibrary = \"{rt}\"\nversions = \"*\"\neffect = \"An unstopped timer is kept.\"\nholder = \"registration-table\"\narchetype = \"{arch}\"\nevidence = \"https://go.dev/doc/go1.23\"\nremedy = \"Stop it.\"\n\n"
         )
     };
-    row("go-test-ticker", "go", go_archetype) + &row("jvm-test-handle", "jvm", "L-HANDLE")
+    rows.iter()
+        .enumerate()
+        .map(|(i, (rt, arch))| row(&format!("{rt}-test-row-{i}"), rt, arch))
+        .collect()
+}
+
+/// A `known-leaks.toml` with one Go row that names `archetype`, and one jvm row that names
+/// `L-HANDLE`.
+fn known_leaks_text(go_archetype: &str) -> String {
+    known_leaks_rows(&[("go", go_archetype), ("jvm", "L-HANDLE")])
 }
 
 #[test]
@@ -1347,8 +1355,8 @@ fn an_archetype_a_shipped_known_leaks_row_names_for_the_runtime_is_accepted_with
 #[test]
 fn an_archetype_no_row_or_known_leak_names_for_the_runtime_is_still_refused() {
     let e = env();
-    // The go known-leaks row names L-HANDLE; L-COLLECT is named for jvm only (a row of another
-    // runtime does not count).
+    // The go known-leaks row names L-HANDLE, so L-COLLECT is named by no go row and no go
+    // known-leaks row.
     fs::write(
         e.data.path().join("known-leaks.toml"),
         known_leaks_text("L-HANDLE"),
@@ -1395,6 +1403,67 @@ fn an_archetype_no_row_or_known_leak_names_for_the_runtime_is_still_refused() {
             .contains("no shipped known-leaks row names an archetype for go"),
         "{r}"
     );
+}
+
+#[test]
+fn an_archetype_only_another_runtimes_known_leaks_row_names_is_refused() {
+    // Only a jvm known-leaks row names L-COLLECT. The go finding labelled L-COLLECT is still
+    // refused: the runtime filter keeps a row of another runtime from counting.
+    let e = env();
+    fs::write(
+        e.data.path().join("known-leaks.toml"),
+        known_leaks_rows(&[("jvm", "L-COLLECT")]),
+    )
+    .unwrap();
+    let r = refused(
+        &e,
+        &[],
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+        ],
+    );
+    assert_eq!(r["code"], "label-runtime-row", "{r}");
+    let m = r["message"].as_str().unwrap();
+    assert!(
+        m.contains("no shipped known-leaks row names an archetype for go"),
+        "{m}"
+    );
+}
+
+#[test]
+fn the_shipped_go_ticker_row_makes_l_register_acceptable_on_a_go_finding_without_a_note() {
+    let e = env();
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/known-leaks.toml");
+    fs::copy(&shipped, e.data.path().join("known-leaks.toml")).unwrap();
+    // The test table lacks L-REGISTER; the go reference has no such row either.
+    let table = e.data.path().join("archetypes.toml");
+    let mut text = fs::read_to_string(&table).unwrap();
+    text.push_str("\n[L-REGISTER]\nholders = [\"registration-table\", \"static/global\"]\nregions = [\"heap\"]\nrequires = [[\"growth-series\", \"retention-path\"]]\ndisconfirm = []\nrepair = [\"deregister\"]\nsummary = \"A timer is added to a table and never removed.\"\n");
+    fs::write(&table, text).unwrap();
+    assert!(
+        !dla_core::archetypes::runtime_rows("go")
+            .unwrap()
+            .contains(&"L-REGISTER")
+    );
+    let l = ok(
+        &e,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-REGISTER",
+            "--evidence",
+            "E4,E5",
+        ],
+    );
+    assert_eq!(l["label"], "L-REGISTER");
 }
 
 #[test]

@@ -994,6 +994,41 @@ fn a_timer_group_tied_through_a_writers_site_corrects_no_holder() {
 }
 
 #[test]
+fn a_timer_group_from_another_backend_gives_no_observed_holder() {
+    // Only the Node resources reader observes a registration table. The same group name
+    // (`group:handle/Timeout@...`) tied to the finding's own site through the generic
+    // non-heap JSON reader is growth evidence, not a holder observation.
+    let p = Project::with_sources();
+    let timer = p.finding_with_owner("src.heartbeat.startHeartbeat");
+    let f = timer["id"].as_str().unwrap().to_owned();
+    let files: Vec<String> = [40u64, 80, 120]
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let snap = json!({
+                "source": "other-timer-reader", "timestamp_ms": 10 * i, "metrics": [],
+                "groups": [{"kind": "handle", "key": "Timeout@src/heartbeat.js:15", "count": n,
+                            "site": {"function": "startHeartbeat", "file": "src/heartbeat.js",
+                                     "line": 15, "module": null}}]
+            });
+            p.put(&format!("in/nh/t{i}.json"), snap.to_string().as_bytes())
+        })
+        .collect();
+    let mut args = vec!["summarize", "non-heap", "--backend", "dla-nonheap-json"];
+    args.extend(files.iter().map(String::as_str));
+    let v = ok(p.path(), &args);
+    assert_eq!(v["tied"], json!([f]), "the group still ties by site: {v}");
+    assert_eq!(v["observed_holder"], json!({}), "{v}");
+    assert!(
+        !v["needed"]
+            .as_str()
+            .unwrap()
+            .contains("--holder registration-table"),
+        "{v}"
+    );
+}
+
+#[test]
 fn a_resources_file_without_its_version_is_refused() {
     let p = Project::new();
     let bad = p.put(

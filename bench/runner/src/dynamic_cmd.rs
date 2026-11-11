@@ -250,7 +250,7 @@ pub struct SummarizeStep {
     pub op: String,
     /// The backend that read the inputs.
     pub backend: String,
-    /// `pass`, `fail` or `-`.
+    /// `pass`, `fail`, `-`, or `gap` or `error` for a call that gave no evidence.
     pub gate: String,
     /// The findings the call tied, comma separated; `none` when it tied nothing.
     pub tied: String,
@@ -319,8 +319,8 @@ pub struct FixtureRow {
     /// again narrowed to a finding.
     #[serde(skip)]
     pub summarize_cmds: Vec<Vec<String>>,
-    /// What each successful summarize call said (gate, tie, reasons), for the failure line of
-    /// a label refused for missing evidence.
+    /// What each summarize call that ran said (gate, tie, reasons; gate `gap` or `error` for a
+    /// call with no evidence), for the failure line of a label refused for missing evidence.
     #[serde(skip)]
     pub summarize_log: Vec<SummarizeStep>,
     /// The M6 steps (labels, explanations, interventions, strong, final gate).

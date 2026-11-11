@@ -539,10 +539,9 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
             .flatten()
             .filter_map(|g| g["backend"].as_str())
             .collect();
-        fx.step(format!(
-            "{op}: coverage gap, backend {} missing",
-            missing.join(",")
-        ));
+        let gap = format!("coverage gap, backend {} missing", missing.join(","));
+        fx.step(format!("{op}: {gap}"));
+        log_failed_summarize(fx, &op, &backend, "gap", gap);
         None
     } else if out.ok {
         fx.row.ops.push(format!("{op}:{backend}"));
@@ -603,11 +602,27 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
             });
         t
     } else {
+        log_failed_summarize(fx, &op, &backend, "error", out.message());
         let msg = format!("{op}: {}", out.message());
         fx.step(format!("summarize {msg}"));
         fx.row.errors.push(format!("dla summarize {msg}"));
         None
     }
+}
+
+/// Records a summarize call that ran but gave no evidence (a coverage gap or an error), so a
+/// refused label's failure line does not say the step "did not run". `gate` is `gap` or
+/// `error`; `why` carries the code and message.
+fn log_failed_summarize(fx: &mut Fx, op: &str, backend: &str, gate: &str, why: String) {
+    fx.row
+        .summarize_log
+        .push(crate::dynamic_cmd::SummarizeStep {
+            op: op.to_owned(),
+            backend: backend.to_owned(),
+            gate: gate.to_owned(),
+            tied: "none".to_owned(),
+            reasons: vec![why],
+        });
 }
 
 /// A holder annotation a summarize call asks for: finding, holder, and the growth evidence
@@ -965,6 +980,8 @@ case "$1 $2" in
   if [ -n "$FAKE_CRASH_HARNESS" ]; then echo "thread main panicked" >&2; exit 101; fi
   echo '{"ok":true,"summary":{"summarize":["dla summarize type-histogram-diff a.txt \"b c.txt\" d.txt"]}}';;
 "summarize type-histogram-diff")
+  if [ -n "$FAKE_SUMMARIZE_ERR" ]; then echo '{"ok":false,"error":{"code":"malformed-artifact","message":"not a histogram"}}'; exit 2; fi
+  if [ -n "$FAKE_SUMMARIZE_GAP" ]; then echo '{"ok":true,"evidence":[],"coverage_gap":[{"backend":"b"}]}'; exit 0; fi
   mkdir -p $R/histograms
   printf raw > $R/histograms/H1.json
   tie='"tie":{"rule":"type","key":"X"},'
@@ -1065,6 +1082,28 @@ esac
         // The held-back confirmation cites the trend evidence and the tied call's evidence.
         assert_eq!(lines[3], "ledger confirm F1 --evidence E0,E1,E2");
         assert_eq!(lines.len(), 4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_summarize_call_with_an_error_or_a_gap_is_logged_for_the_failure_line() {
+        let (row, _) = drive_fake(&[("FAKE_SUMMARIZE_ERR", "1")]);
+        assert_eq!(row.summarize_log.len(), 1, "{:?}", row.summarize_log);
+        let s = &row.summarize_log[0];
+        assert_eq!(
+            (s.op.as_str(), s.gate.as_str()),
+            ("type-histogram-diff", "error")
+        );
+        assert_eq!(s.tied, "none");
+        assert_eq!(s.reasons, ["malformed-artifact: not a histogram"]);
+        let (row, _) = drive_fake(&[("FAKE_SUMMARIZE_GAP", "1")]);
+        assert_eq!(row.summarize_log.len(), 1, "{:?}", row.summarize_log);
+        let s = &row.summarize_log[0];
+        assert_eq!(
+            (s.op.as_str(), s.gate.as_str()),
+            ("type-histogram-diff", "gap")
+        );
+        assert_eq!(s.reasons, ["coverage gap, backend b missing"]);
     }
 
     /// `drive_tied` against the stand-in: the ledger holds the given finding records.

@@ -293,7 +293,8 @@ fn rows_refusal(
 }
 
 /// The archetypes the shipped `known-leaks.toml` names for `runtime` (sorted, without
-/// repeats). Empty when the file is absent or invalid, or archetypes are off.
+/// repeats). Empty when no data directory is found or the file is absent or invalid. It does
+/// not look at `DLA_ARCHETYPES`: `label` refuses with archetypes off before it gets here.
 fn known_leak_archetypes(data: Option<&PathBuf>, runtime: &str) -> Vec<String> {
     let Ok(dir) = paths::data_files_dir(data.map(PathBuf::as_path)) else {
         return Vec::new();

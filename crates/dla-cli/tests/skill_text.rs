@@ -212,3 +212,19 @@ fn the_prose_arm_has_the_unclassified_wording_and_no_binary_commands() {
         assert!(!text.contains(banned), "the prose arm mentions {banned:?}");
     }
 }
+
+#[test]
+fn the_runtime_row_rule_names_the_known_leaks_route() {
+    let text = std::fs::read_to_string(
+        root().join("skills/detect-leak-anywhere/references/evidence-and-report.md"),
+    )
+    .unwrap();
+    let rule = text
+        .lines()
+        .find(|l| l.contains("`ledger label F3 --as L-X`"))
+        .expect("the label row of the move table");
+    assert!(
+        rule.contains("a shipped `known-leaks.toml` row names that archetype for the runtime"),
+        "{rule}"
+    );
+}

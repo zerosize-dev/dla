@@ -219,8 +219,16 @@ fn gates_3_4_and_6_compare_with_the_baseline() {
         false,
     );
     assert_eq!(failed(&run(&m, Some(&baseline()), Some(10))), vec![6]);
-    // Without a baseline file the three gates cannot pass.
-    assert_eq!(failed(&run(&good(), None, Some(10))), vec![3, 4, 6]);
+    // Without a baseline file the three gates cannot pass, and say how to make the file.
+    let r = run(&good(), None, Some(10));
+    assert_eq!(failed(&r), vec![3, 4, 6]);
+    for n in [3, 4, 6] {
+        let detail = r[n - 1].detail.join(" ");
+        assert!(
+            detail.contains("--write-baseline <file> --baselines-only"),
+            "gate {n}: {detail}"
+        );
+    }
 }
 
 #[test]
@@ -881,16 +889,69 @@ fn gate_args(t: &Path, metrics: &Value, extra: &[&str]) -> Command {
 fn write_baseline_judges_against_the_stored_file_before_writing() {
     let t = tempfile::tempdir().unwrap();
     let bf = t.path().join("b.json");
-    // The stored file: strict baselines and a previous release with 1 token per run.
+    // The stored file: baselines stricter than these metrics, by less than the gates'
+    // tolerance (1e-9), so every gate still passes; and a previous release with the same
+    // 1000 tokens per run.
     let mut stored = baseline();
+    stored.baselines = Baselines {
+        second_leak_recall: Some(1.0 + 5e-10),
+        forced_fit_rate: Some(-5e-10),
+        non_leak_precision: Some(1.0 + 5e-10),
+    };
     stored.release = Some(ReleaseBlock {
         label: Some("prev".into()),
         ablation: "full".into(),
         arms: BTreeMap::from([("full/on".to_owned(), BTreeMap::new())]),
-        tokens_per_run: [("full/on".to_owned(), 1.0)].into(),
+        tokens_per_run: [("full/on".to_owned(), 1000.0)].into(),
     });
     write_json(&bf, &serde_json::to_value(&stored).unwrap());
-    // Weaker metrics: second-leak recall 0.5 against the stored 1.0.
+    // Every gate passes against the stored file, so the write path runs.
+    let m = good();
+    gate_args(
+        t.path(),
+        &serde_json::to_value(&m).unwrap(),
+        &["--write-baseline", bf.to_str().unwrap(), "--label", "next"],
+    )
+    .assert()
+    .success()
+    .stdout(
+        predicate::str::contains("10 of 10 gates pass")
+            .and(predicate::str::contains("baseline written")),
+    );
+    let after: BaselineFile = serde_json::from_str(&fs::read_to_string(&bf).unwrap()).unwrap();
+    // The write happened: the previous-release block is the new one.
+    let release = after.release.clone().unwrap();
+    assert_eq!(release.label.as_deref(), Some("next"));
+    assert_eq!(release.tokens_per_run["full/on"], 1000.0);
+    // The stricter stored baselines survive it.
+    assert_eq!(after.baselines, stored.baselines);
+    // A looser stored baseline is tightened to this run's value.
+    let mut loose = stored.clone();
+    loose.baselines.non_leak_precision = Some(0.5);
+    write_json(&bf, &serde_json::to_value(&loose).unwrap());
+    gate_args(
+        t.path(),
+        &serde_json::to_value(&m).unwrap(),
+        &["--write-baseline", bf.to_str().unwrap()],
+    )
+    .assert()
+    .success();
+    let again: BaselineFile = serde_json::from_str(&fs::read_to_string(&bf).unwrap()).unwrap();
+    assert_eq!(again.baselines.non_leak_precision, Some(1.0));
+    assert_eq!(
+        again.baselines.second_leak_recall,
+        stored.baselines.second_leak_recall
+    );
+}
+
+#[test]
+fn a_failing_gate_leaves_the_stored_baseline_file_as_it_was() {
+    let t = tempfile::tempdir().unwrap();
+    let bf = t.path().join("b.json");
+    let stored = baseline();
+    write_json(&bf, &serde_json::to_value(&stored).unwrap());
+    let before = fs::read_to_string(&bf).unwrap();
+    // Weaker second-leak recall: 0.5 against the stored 1.0.
     let mut weak = good_metrics();
     weak["second_leak_recall"] = flat(1, 2);
     let m = file(vec![
@@ -907,11 +968,9 @@ fn write_baseline_judges_against_the_stored_file_before_writing() {
     .code(1)
     .stdout(
         predicate::str::contains("second_leak_recall 0.5000 < baseline 1.0000")
-            .and(predicate::str::contains("tokens per run >")),
+            .and(predicate::str::contains("baseline not written")),
     );
-    // The stricter stored baselines survive the write.
-    let after: BaselineFile = serde_json::from_str(&fs::read_to_string(&bf).unwrap()).unwrap();
-    assert_eq!(after.baselines, stored.baselines);
+    assert_eq!(fs::read_to_string(&bf).unwrap(), before);
 }
 
 #[test]

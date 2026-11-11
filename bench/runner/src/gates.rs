@@ -493,7 +493,7 @@ pub fn evaluate(i: &Inputs) -> Vec<GateResult> {
                 fmt(s.mean)
             )),
             (_, None) => {
-                g4.fail("no forced_fit_rate baseline: run the baseline run with --write-baseline")
+                g4.fail("no forced_fit_rate baseline: run the baseline run with --write-baseline <file> --baselines-only")
             }
             (Some(s), Some(b)) if s.mean > b + EPS => {
                 g4.fail(format!(
@@ -764,7 +764,7 @@ fn floor_gate(
                 fmt(s.mean)
             )),
             (_, None) => res.fail(format!(
-                "no {name} baseline: run the baseline run with --write-baseline"
+                "no {name} baseline: run the baseline run with --write-baseline <file> --baselines-only"
             )),
             (Some(s), Some(b)) if s.mean + EPS < b => {
                 res.fail(format!("{name} {} < baseline {}", fmt(s.mean), fmt(b)));
