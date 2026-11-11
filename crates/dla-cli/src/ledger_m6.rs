@@ -121,7 +121,7 @@ pub fn label(ctx: &Ctx, data: Option<&PathBuf>, a: LabelArgs) -> Res<Value> {
     // The cheap checks first: archetypes off, the label's own state and polarity. Only then
     // the runtime's rows, so the refusal that comes first is the one that can be acted on.
     ledger.label_precheck(&a.finding, as_, Archetypes::from_table(table.as_ref()))?;
-    if let Some(r) = runtime_refusal(ctx, &ledger, &a.finding, as_, a.note.as_deref()) {
+    if let Some(r) = runtime_refusal(ctx, data, &ledger, &a.finding, as_, a.note.as_deref()) {
         return Err(r);
     }
     let line = ledger.label(
@@ -202,12 +202,14 @@ fn worker_runtime(ctx: &Ctx, id: &FindingId) -> Option<String> {
 /// C finding of the jvm worker is native), then the worker's.
 fn runtime_refusal(
     ctx: &Ctx,
+    data: Option<&PathBuf>,
     ledger: &Ledger,
     id: &FindingId,
     label: &str,
     note: Option<&str>,
 ) -> Option<Failure> {
     let note = note.map(str::trim).is_some_and(|n| !n.is_empty());
+    let known_for = |rt: &str| known_leak_archetypes(data, rt);
     // A worker names its own findings bare (F1 is jvm/F1).
     let id = &ledger.own_finding_id(id);
     let worker = worker_runtime(ctx, id);
@@ -217,9 +219,12 @@ fn runtime_refusal(
                 .as_deref()
                 .filter(|w| *w != runtime)
                 .map(|w| (w, file.as_str()));
-            rows_refusal(&runtime, id, label, note, boundary)
+            rows_refusal(&runtime, id, label, note, boundary, &known_for(&runtime))
         }
-        None => rows_refusal(&worker?, id, label, note, None),
+        None => {
+            let w = worker?;
+            rows_refusal(&w, id, label, note, None, &known_for(&w))
+        }
     }
 }
 
@@ -231,6 +236,7 @@ fn rows_refusal(
     label: &str,
     note: bool,
     boundary: Option<(&str, &str)>,
+    known: &[String],
 ) -> Option<Failure> {
     if note || !label.starts_with("L-") || !dla_core::detectors::ARCHETYPE_IDS.contains(&label) {
         return None;
@@ -239,13 +245,26 @@ fn rows_refusal(
     if rows.contains(&label) {
         return None;
     }
+    // A shipped known-leaks row that names the archetype for this runtime is a row of the
+    // runtime too (the Go ticker is L-REGISTER; Go has no L-REGISTER decoy row).
+    if known.iter().any(|k| k == label) {
+        return None;
+    }
+    let route = if known.is_empty() {
+        format!("no shipped known-leaks row names an archetype for {runtime}")
+    } else {
+        format!(
+            "archetypes a shipped known-leaks row names for {runtime}: {}",
+            known.join(", ")
+        )
+    };
     if let Some((worker, file)) = boundary {
         // The label may be right: the leak is in code of another language that the worker's
         // program calls, and that language's reference lists other rows.
         return Some(Failure::refuse(
             dla_core::m6::codes::LABEL_RUNTIME_ROW,
             format!(
-                "{id} is a {worker} worker finding whose site {file} is {runtime} code (a library the {worker} program calls through JNI or FFI), and {label} has no row in the {runtime} archetype reference (its rows: {}); {id} is not labelled",
+                "{id} is a {worker} worker finding whose site {file} is {runtime} code (a library the {worker} program calls through JNI or FFI), and {label} has no row in the {runtime} archetype reference (its rows: {}; {route}); {id} is not labelled",
                 rows.join(", ")
             ),
             format!(
@@ -260,7 +279,7 @@ fn rows_refusal(
     Some(Failure::refuse(
         dla_core::m6::codes::LABEL_RUNTIME_ROW,
         format!(
-            "{label} has no row in the {runtime} archetype reference (its rows: {}); {id} is not labelled",
+            "{label} has no row in the {runtime} archetype reference (its rows: {}; {route}); {id} is not labelled",
             rows.join(", ")
         ),
         format!(
@@ -271,6 +290,26 @@ fn rows_refusal(
             "choose one of those rows or UNCLASSIFIED: dla ledger label {id} --suggest   or, to keep {label}: dla ledger label {id} --as {label} --note \"<why none of the {runtime} rows fits>\""
         ),
     ))
+}
+
+/// The archetypes the shipped `known-leaks.toml` names for `runtime` (sorted, without
+/// repeats). Empty when the file is absent or invalid, or archetypes are off.
+fn known_leak_archetypes(data: Option<&PathBuf>, runtime: &str) -> Vec<String> {
+    let Ok(dir) = paths::data_files_dir(data.map(PathBuf::as_path)) else {
+        return Vec::new();
+    };
+    let Ok(Some(file)) = dla_probe::known_leaks::load(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = file
+        .leak
+        .iter()
+        .filter(|k| k.runtime.as_str() == runtime)
+        .map(|k| k.archetype.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The row that closes every `--suggest` answer.
@@ -522,7 +561,7 @@ mod tests {
 
     #[test]
     fn a_label_without_a_row_in_the_runtime_reference_is_refused_and_names_the_rows() {
-        let f = rows_refusal("native", &id(), "L-OWNERSHIP", false, None).unwrap();
+        let f = rows_refusal("native", &id(), "L-OWNERSHIP", false, None, &[]).unwrap();
         let r = &f.refusal;
         assert_eq!(r.code, "label-runtime-row");
         assert!(
@@ -535,7 +574,7 @@ mod tests {
             "{}",
             r.fix
         );
-        let f = rows_refusal("jvm", &id(), "L-WORKER", false, None).unwrap();
+        let f = rows_refusal("jvm", &id(), "L-WORKER", false, None, &[]).unwrap();
         assert!(
             f.refusal.message.contains("L-COLLECT, L-TLS, L-UNLOAD"),
             "{:?}",
@@ -552,6 +591,7 @@ mod tests {
             "L-HANDLE",
             false,
             Some(("jvm", "native/src/lib.rs")),
+            &[],
         )
         .unwrap();
         let r = &f.refusal;
@@ -581,12 +621,13 @@ mod tests {
                 &id(),
                 "L-HANDLE",
                 true,
-                Some(("jvm", "native/src/lib.rs"))
+                Some(("jvm", "native/src/lib.rs")),
+                &[]
             )
             .is_none()
         );
         // The same runtime, or no worker, is not a boundary: the plain text.
-        let plain = rows_refusal("rust", &id(), "L-HANDLE", false, None).unwrap();
+        let plain = rows_refusal("rust", &id(), "L-HANDLE", false, None, &[]).unwrap();
         assert!(
             !plain.refusal.message.contains("JNI"),
             "{}",
@@ -596,12 +637,12 @@ mod tests {
 
     #[test]
     fn a_note_a_row_or_a_non_leak_label_is_not_refused() {
-        assert!(rows_refusal("native", &id(), "L-OWNERSHIP", true, None).is_none());
-        assert!(rows_refusal("jvm", &id(), "L-UNLOAD", false, None).is_none());
-        assert!(rows_refusal("native", &id(), "L-HANDLE", false, None).is_none());
-        assert!(rows_refusal("jvm", &id(), "N-WARM", false, None).is_none());
-        assert!(rows_refusal("jvm", &id(), "UNCLASSIFIED", false, None).is_none());
-        assert!(rows_refusal("cobol", &id(), "L-COLLECT", false, None).is_none());
+        assert!(rows_refusal("native", &id(), "L-OWNERSHIP", true, None, &[]).is_none());
+        assert!(rows_refusal("jvm", &id(), "L-UNLOAD", false, None, &[]).is_none());
+        assert!(rows_refusal("native", &id(), "L-HANDLE", false, None, &[]).is_none());
+        assert!(rows_refusal("jvm", &id(), "N-WARM", false, None, &[]).is_none());
+        assert!(rows_refusal("jvm", &id(), "UNCLASSIFIED", false, None, &[]).is_none());
+        assert!(rows_refusal("cobol", &id(), "L-COLLECT", false, None, &[]).is_none());
     }
 
     #[test]

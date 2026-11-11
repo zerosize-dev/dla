@@ -243,6 +243,21 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+/// The answer of one summarize call that ran.
+#[derive(Debug, Clone, Default)]
+pub struct SummarizeStep {
+    /// The operation (`alloc-stack-diff`).
+    pub op: String,
+    /// The backend that read the inputs.
+    pub backend: String,
+    /// `pass`, `fail` or `-`.
+    pub gate: String,
+    /// The findings the call tied, comma separated; `none` when it tied nothing.
+    pub tied: String,
+    /// Why the gate failed (`reasons`), else the `needed` text.
+    pub reasons: Vec<String>,
+}
+
 /// The result for one fixture.
 #[derive(Serialize, Debug, Clone, Default)]
 pub struct FixtureRow {
@@ -304,6 +319,10 @@ pub struct FixtureRow {
     /// again narrowed to a finding.
     #[serde(skip)]
     pub summarize_cmds: Vec<Vec<String>>,
+    /// What each successful summarize call said (gate, tie, reasons), for the failure line of
+    /// a label refused for missing evidence.
+    #[serde(skip)]
+    pub summarize_log: Vec<SummarizeStep>,
     /// The M6 steps (labels, explanations, interventions, strong, final gate).
     #[serde(skip_serializing_if = "policy::PolicyRow::is_empty")]
     pub policy: policy::PolicyRow,

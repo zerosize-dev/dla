@@ -485,3 +485,54 @@ fn an_off_heap_row_takes_its_noise_and_span_from_the_gap_series_it_was_fitted_on
     assert_eq!(row["column"], "node.external");
     assert_eq!(row["span"], 400.0);
 }
+
+#[test]
+fn an_off_heap_row_uses_the_gap_series_its_raw_file_names_when_the_evidence_names_none() {
+    let t = tempfile::tempdir().unwrap();
+    let (logs, fixtures) = (t.path().join("logs"), t.path().join("fixtures"));
+    expected(&fixtures, "fx-raw", "archetype-leak", Some("src/a.py:10"));
+    let d = logs.join("fx-raw");
+    put(
+        &d.join("series/S1.json"),
+        &json!({"schema_version": 1, "id": "S1", "axis": "n", "warmup": 0,
+            "source": {"kind": "harness"},
+            "columns": [{"name": "node.external"}],
+            "points": [{"x": 100.0, "values": [0.0]}, {"x": 200.0, "values": [50.0]},
+                       {"x": 300.0, "values": [10.0]}]}),
+    );
+    let gap = |id: &str, scale: f64| {
+        let points: Vec<Value> = [0.0, 2.0, 1.0, 3.0, 6.0]
+            .iter()
+            .enumerate()
+            .map(|(i, y)| json!({"x": scale * (i as f64 + 1.0), "values": [y]}))
+            .collect();
+        json!({"schema_version": 1, "id": id, "axis": "n", "warmup": 0,
+            "source": {"kind": "gap", "derived_from": "S1"},
+            "columns": [{"name": "gap.unexplained"}], "points": points})
+    };
+    // S2 (span 4000) is the one fitted; S3 is a newer gap series of the same source (span 40).
+    put(&d.join("series/S2.json"), &gap("S2", 1000.0));
+    put(&d.join("series/S3.json"), &gap("S3", 10.0));
+    put(
+        &d.join("gap/residual-S1-E1.json"),
+        &json!({"series": "S1", "derived": "S2", "rows": []}),
+    );
+    let ledger = json!({"type": "evidence", "evidence_id": "E1", "kind": "residual",
+        "raw": "gap/residual-S1-E1.json",
+        "result": {"series": "S1", "rows": [
+            {"region": "off-heap", "total": 3.0, "attributed": 0.0, "residual": 3.0,
+             "threshold": 0.5, "unit": "bytes/n", "open_item": null}]}});
+    fs::write(d.join("ledger.jsonl"), ledger.to_string() + "\n").unwrap();
+    let doc = extract(&logs, &fixtures, &[]).unwrap();
+    let row = &doc["fixtures"]["fx-raw"]["residual"][0];
+    assert_eq!(row["column"], "gap.unexplained");
+    assert_eq!(row["span"], 4000.0, "the newest gap series was used: {row}");
+    // A raw file that names no derived series means none was used: the source series is.
+    put(
+        &d.join("gap/residual-S1-E1.json"),
+        &json!({"series": "S1", "derived": null, "rows": []}),
+    );
+    let doc = extract(&logs, &fixtures, &[]).unwrap();
+    let row = &doc["fixtures"]["fx-raw"]["residual"][0];
+    assert_eq!(row["column"], "node.external");
+}

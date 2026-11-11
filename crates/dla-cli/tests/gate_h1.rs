@@ -470,6 +470,53 @@ fn a_type_count_column_with_no_tie_is_accounted_for_by_the_residual() {
 }
 
 #[test]
+fn an_untied_py_type_column_is_not_left_to_the_residual_rows() {
+    // The M7 decision: only `jvm.class:*` counts have the residual route (a Python heap
+    // residual does not account for per-type counts; references/python.md). An untied
+    // `py.type:*` column keeps the ordinary path: it needs a finding tied to it.
+    let r = init("repository");
+    write_trend(&r, "T1", "S1", &["probe:CACHE", "py.type:shop.Entry.count"]);
+    let disc = alloc_discriminator(&r, "T1", &["probe:CACHE"]);
+    let f = finding_citing(&r, &disc);
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    let row = dla_core::coverage::ResidualRow {
+        series: Some("S1".into()),
+        region: dla_core::finding::Region::Heap,
+        total_slope: 10.0,
+        attributed_slope: 9.5,
+        residual: 0.5,
+        unit: "bytes/iteration".into(),
+        threshold: 1.0,
+        open_item: None,
+    };
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row])).unwrap();
+    let items = r.items(&["--final"]);
+    let item = items
+        .iter()
+        .find(|m| m["id"] == "T1:py.type:shop.Entry.count")
+        .unwrap_or_else(|| panic!("the residual rows covered a py.type column: {items:?}"));
+    let fix = item["fix"].as_str().unwrap();
+    assert!(!fix.contains("dla gap"), "{item}");
+    assert!(
+        !item["description"]
+            .as_str()
+            .unwrap()
+            .contains("residual rows"),
+        "{item}"
+    );
+}
+
+#[test]
 fn the_total_of_a_summarize_series_is_accounted_for_by_its_tied_groups() {
     // A summarize-made series has no byte column, so the residual cannot account for its
     // total (`dla gap S6 --residual` is refused); the total is the sum of its groups.

@@ -14,7 +14,7 @@ use dla_core::{
     FindingId,
     evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind, Signal},
     finding::Holder,
-    ledger::is_timer_table_group,
+    ledger::{TIMER_EVIDENCE_TOOL, is_timer_table_group},
     runtime::Runtime,
     series::{SeriesRegion, SeriesSourceKind, Unit},
     toolctx::EvidenceSpec,
@@ -342,16 +342,22 @@ pub fn run_diff(
         .collect();
     // Timer and listener groups tied to a finding by the finding's OWN site (the tie key is
     // that site, not a writer's): they observe a registration table.
-    let own_tables: Vec<(String, FindingId)> = tracks
-        .iter()
-        .filter(|t| is_timer_table_group(&t.name))
-        .filter_map(|t| {
-            let key = &t.tie.as_ref().filter(|w| w.rule == "site")?.key;
-            let f = t.finding.as_ref()?;
-            let own = ledger.finding(f)?.site.as_deref() == Some(key.as_str());
-            own.then(|| (t.name.clone(), f.clone()))
-        })
-        .collect();
+    // Only the Node resources reader observes a registration table (the ledger checks the
+    // tool too). A group lists the findings at its tie key as `finding` and `candidates`; each
+    // one whose own site is that key qualifies.
+    let mut own_tables: Vec<(String, FindingId)> = Vec::new();
+    if origin.tool == TIMER_EVIDENCE_TOOL {
+        for t in tracks.iter().filter(|t| is_timer_table_group(&t.name)) {
+            let Some(key) = t.tie.as_ref().filter(|w| w.rule == "site").map(|w| &w.key) else {
+                continue;
+            };
+            for f in &t.candidates {
+                if ledger.finding(f).and_then(|x| x.site.as_deref()) == Some(key.as_str()) {
+                    own_tables.push((t.name.clone(), f.clone()));
+                }
+            }
+        }
+    }
     let t0 = captures[0].snap.timestamp_ms.unwrap_or(0);
     let t_ms: Vec<u64> = captures
         .iter()

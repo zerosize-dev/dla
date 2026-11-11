@@ -328,9 +328,10 @@ fn label_all(fx: &mut Fx, ts: &[Target], off: bool, row: &mut PolicyRow) {
                 (false, true, _) | (true, false, "archetypes-off") => {}
                 (false, false, _) => {
                     fx.row.failures.push(format!(
-                        "leak {} ({cause}) label {}",
+                        "leak {} ({cause}) label {}{}",
                         leak.id,
-                        refusal(&o)
+                        refusal(&o),
+                        missing_evidence_steps(fx, &o)
                     ));
                     fx.row.errors.push(format!(
                         "dla ledger label {id} --as {cause}: {}",
@@ -486,6 +487,40 @@ fn label_with_the_printed_fixes(
         o = label_call(fx, id, cause, None, &note);
     }
     (o, followed)
+}
+
+/// For a label refused for missing evidence: the gate result and reasons of each summarize
+/// step that could have produced the missing kind (the operations the refusal's fix names), so
+/// a failure in CI explains itself. Empty for any other refusal.
+fn missing_evidence_steps(fx: &Fx, o: &Out) -> String {
+    if o.code() != "label-evidence-missing" {
+        return String::new();
+    }
+    let fix = o.json["error"]["fix"].as_str().unwrap_or("");
+    let mut parts: Vec<String> = Vec::new();
+    for op in summarize_ops_in(fix) {
+        let steps: Vec<&crate::dynamic_cmd::SummarizeStep> =
+            fx.row.summarize_log.iter().filter(|s| s.op == op).collect();
+        if steps.is_empty() {
+            parts.push(format!("summarize {op}: did not run"));
+        }
+        for s in steps {
+            let why = if s.reasons.is_empty() {
+                String::new()
+            } else {
+                format!(", reasons: {}", s.reasons.join("; "))
+            };
+            parts.push(format!(
+                "summarize {} via {}: gate {}, tied {}{why}",
+                s.op, s.backend, s.gate, s.tied
+            ));
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", parts.join(" | "))
+    }
 }
 
 /// The note the policy gives when the expected cause has no row in the finding's runtime
@@ -1326,6 +1361,18 @@ cause = "{cause}"
         env: &[(&str, &str)],
         gate2: &str,
     ) -> (super::super::FixtureRow, String) {
+        drive_fake_full(expected, off, env, gate2, Vec::new())
+    }
+
+    /// Like [`drive_fake_with`], with the summarize steps that already ran.
+    #[cfg(unix)]
+    fn drive_fake_full(
+        expected: &Expected,
+        off: bool,
+        env: &[(&str, &str)],
+        gate2: &str,
+        summarize_log: Vec<crate::dynamic_cmd::SummarizeStep>,
+    ) -> (super::super::FixtureRow, String) {
         use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
         let bin = t.path().join("dla");
@@ -1376,6 +1423,7 @@ cause = "{cause}"
                 "h.txt".into(),
             ],
         ];
+        fx.row.summarize_log = summarize_log;
         run(&mut fx, expected, off);
         let calls = fs::read_to_string(&log).unwrap_or_default();
         (std::mem::take(&mut fx.row), calls)
@@ -1576,7 +1624,8 @@ cause = "{cause}"
         assert!(
             row.failures
                 .iter()
-                .any(|f| f == "leak L1 (L-COLLECT) label refused label-evidence-missing")
+                .any(|f| f
+                    == "leak L1 (L-COLLECT) label refused label-evidence-missing [summarize non-heap: did not run]")
         );
         // With archetypes off nothing is followed.
         let (_, calls) = drive_fake(
@@ -1591,6 +1640,53 @@ cause = "{cause}"
             ],
         );
         assert!(!calls.contains("--as L-COLLECT --evidence"), "{calls}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_label_refused_for_missing_evidence_prints_the_steps_that_could_have_produced_it() {
+        let e = expected("L-COLLECT", "container-field");
+        let step = |op: &str, backend: &str, gate: &str, reasons: &[&str]| {
+            crate::dynamic_cmd::SummarizeStep {
+                op: op.to_owned(),
+                backend: backend.to_owned(),
+                gate: gate.to_owned(),
+                tied: "none".to_owned(),
+                reasons: reasons.iter().map(|r| (*r).to_owned()).collect(),
+            }
+        };
+        let (row, _) = drive_fake_full(
+            &e,
+            false,
+            &[(
+                "FAKE_LABEL_FIX",
+                "dla summarize alloc-stack-diff <captures> --finding F1   or   dla summarize non-heap <captures>",
+            )],
+            GATE2,
+            vec![
+                step(
+                    "alloc-stack-diff",
+                    "shim-alloc-stacks",
+                    "fail",
+                    &["no stack grows at every step"],
+                ),
+                step("heap-graph", "hprof", "pass", &[]),
+            ],
+        );
+        let f = row
+            .failures
+            .iter()
+            .find(|f| f.starts_with("leak L1 (L-COLLECT) label refused label-evidence-missing"))
+            .unwrap_or_else(|| panic!("{:?}", row.failures));
+        assert!(
+            f.contains(
+                "summarize alloc-stack-diff via shim-alloc-stacks: gate fail, tied none, reasons: no stack grows at every step"
+            ),
+            "{f}"
+        );
+        assert!(f.contains("summarize non-heap: did not run"), "{f}");
+        // A step of an operation the fix does not name is left out.
+        assert!(!f.contains("heap-graph"), "{f}");
     }
 
     #[test]

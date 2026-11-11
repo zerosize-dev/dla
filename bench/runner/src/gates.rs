@@ -43,11 +43,13 @@ pub struct GatesArgs {
     /// Write the baselines of these metrics to this file. The metrics are judged first,
     /// against the values the file already holds (and `--baseline`, when given: the
     /// stricter of the two per value); a baseline already stored is replaced only by a
-    /// stricter value. The previous-release block is replaced with these metrics unless
-    /// `--baselines-only` is given.
+    /// stricter value. Nothing is written when a gate fails, except with `--baselines-only`.
+    /// The previous-release block is replaced with these metrics unless `--baselines-only`
+    /// is given.
     #[arg(long)]
     pub write_baseline: Option<PathBuf>,
-    /// With `--write-baseline`: leave the previous-release block as it is.
+    /// With `--write-baseline`, the M7 baseline run: write only the three baselines, even when
+    /// a gate fails, and keep the file's own previous-release block as it is.
     #[arg(long)]
     pub baselines_only: bool,
     /// A name for the release block written by `--write-baseline`, such as `1.0.0-rc.1`.
@@ -942,7 +944,7 @@ pub fn run(a: &GatesArgs) -> Res<(String, bool)> {
     // The metrics are judged against what is stored (the file and `--baseline`, the stricter
     // value of each), never against the values they are about to write.
     let in_effect = merge_baselines(given.as_ref(), existing.as_ref());
-    let written = match &a.write_baseline {
+    let mut written = match &a.write_baseline {
         Some(_) => Some(make_baseline(
             &m,
             &a.ablation,
@@ -969,12 +971,27 @@ pub fn run(a: &GatesArgs) -> Res<(String, bool)> {
         skill_lines,
         shipped_rows: rows.as_deref(),
     });
-    if let (Some(p), Some(b)) = (&a.write_baseline, &written) {
+    let ok = results.iter().all(|r| r.status == Status::Pass);
+    // `--baselines-only` keeps the previous-release block of the file as it is, not the one
+    // of `--baseline`.
+    if let Some(b) = &mut written
+        && a.baselines_only
+    {
+        b.release = existing.as_ref().and_then(|e| e.release.clone());
+    }
+    // A failing gate refuses the write, except for the M7 baseline run (`--baselines-only`),
+    // which writes only the three baselines.
+    let refused: Vec<String> = results
+        .iter()
+        .filter(|r| r.status == Status::Fail)
+        .map(|r| format!("{} {}", r.n, r.name))
+        .collect();
+    let refuse = !ok && !a.baselines_only;
+    if let (Some(p), Some(b), false) = (&a.write_baseline, &written, refuse) {
         let mut body = serde_json::to_string_pretty(b).map_err(|e| e.to_string())?;
         body.push('\n');
         fs::write(p, body).map_err(|e| format!("{}: {e}", p.display()))?;
     }
-    let ok = results.iter().all(|r| r.status == Status::Pass);
     let mut out = if a.json {
         serde_json::to_string_pretty(&serde_json::json!({ "pass": ok, "gates": results }))
             .map_err(|e| e.to_string())?
@@ -982,7 +999,15 @@ pub fn run(a: &GatesArgs) -> Res<(String, bool)> {
         render(&results)
     };
     if let Some(p) = &a.write_baseline {
-        out.push_str(&format!("\nbaseline written to {}\n", p.display()));
+        if refuse {
+            out.push_str(&format!(
+                "\nbaseline not written to {}: gate(s) failed ({}); fix them, or use --baselines-only on the M7 baseline run to write only the three baselines\n",
+                p.display(),
+                refused.join(", ")
+            ));
+        } else {
+            out.push_str(&format!("\nbaseline written to {}\n", p.display()));
+        }
     }
     Ok((out, ok))
 }

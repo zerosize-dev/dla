@@ -369,6 +369,8 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
         registered: false,
         done: false,
     };
+    #[cfg(test)]
+    test_hooks::before_register();
     let registered = ctx.register_process(ProcessRecord {
         pid,
         start_time: start_time.clone(),
@@ -462,13 +464,24 @@ struct ChildGuard<'a> {
 impl ChildGuard<'_> {
     /// Marks the record stopped; the process has ended.
     fn finish(&mut self) -> Result<(), Refusal> {
+        self.finish_with(|| {})
+    }
+
+    /// [`ChildGuard::finish`] with a hook between its two steps (tests inject a stop signal
+    /// there). The record is marked stopped before the live entry goes, so at every point
+    /// either the stop handler's sweep still sees the process or its record is stopped.
+    fn finish_with(&mut self, between: impl FnOnce()) -> Result<(), Refusal> {
         self.done = true;
-        live_remove(self.pid);
-        if self.registered {
+        let marked = if self.registered {
             self.ctx
-                .mark_process_stopped(self.pid, self.start_time.as_deref())?;
-        }
-        Ok(())
+                .mark_process_stopped(self.pid, self.start_time.as_deref())
+                .map(|_| ())
+        } else {
+            Ok(())
+        };
+        between();
+        live_remove(self.pid);
+        marked
     }
 }
 
@@ -480,12 +493,14 @@ impl Drop for ChildGuard<'_> {
         kill_group(self.pid);
         let _ = self.child.kill();
         let _ = self.child.wait();
-        live_remove(self.pid);
         if self.registered {
             let _ = self
                 .ctx
                 .mark_process_stopped(self.pid, self.start_time.as_deref());
         }
+        // `try_lock`: a panic in `register_process` unwinds here while this thread still
+        // holds the live lock (nothing was pushed yet), and a plain `lock` would deadlock.
+        live_remove_nowait(self.pid);
     }
 }
 
@@ -517,6 +532,18 @@ fn live_remove(pid: u32) {
     LIVE.with(|l| {
         if let Some(live) = l.borrow().as_ref()
             && let Ok(mut v) = live.lock()
+        {
+            v.procs.retain(|(p, _)| *p != pid);
+        }
+    });
+}
+
+/// [`live_remove`] that never waits: the lock is held by this thread (a panic unwinding
+/// through the spawn section) or by the stop handler, which exits the process.
+fn live_remove_nowait(pid: u32) {
+    LIVE.with(|l| {
+        if let Some(live) = l.borrow().as_ref()
+            && let Ok(mut v) = live.try_lock()
         {
             v.procs.retain(|(p, _)| *p != pid);
         }
@@ -2382,8 +2409,163 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
 }
 
 #[cfg(test)]
+mod test_hooks {
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// Runs just before `register_process`, with the live lock held.
+        pub static BEFORE_REGISTER: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+    }
+
+    pub fn before_register() {
+        BEFORE_REGISTER.with(|h| {
+            if let Some(f) = h.borrow().as_ref() {
+                f();
+            }
+        });
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    use dla_core::state::RunState;
+
+    #[cfg(unix)]
+    fn test_ctx(dir: &Path) -> ToolCtx {
+        ToolCtx {
+            project: dir.to_path_buf(),
+            run_dir: dir.join(".dla/r1"),
+            run_id: "r1".into(),
+            source_commit: "abc".into(),
+            data_flag: None,
+            worker: None,
+        }
+    }
+
+    /// A ctx over a run directory that has a saved state.
+    #[cfg(unix)]
+    fn ctx_with_state(dir: &Path) -> ToolCtx {
+        let ctx = test_ctx(dir);
+        fs::create_dir_all(&ctx.run_dir).unwrap();
+        RunState::init(dir.to_str().unwrap(), Some("s"), 3600, None, now_utc())
+            .unwrap()
+            .save(&ctx.run_dir)
+            .unwrap();
+        ctx
+    }
+
+    #[cfg(unix)]
+    fn sleeper_guard(ctx: &ToolCtx, register: bool) -> ChildGuard<'_> {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        let start_time = os::process_start_time(pid);
+        if register {
+            ctx.register_process(ProcessRecord {
+                pid,
+                start_time: start_time.clone(),
+                kind: ProcessKind::Harness,
+                command: "sleep".into(),
+                started_at: now_utc(),
+                stopped_at: None,
+                role: dla_core::state::ProcessRole::Started,
+                worker: None,
+                cleanup: Vec::new(),
+            })
+            .unwrap();
+        }
+        ChildGuard {
+            ctx,
+            child,
+            pid,
+            start_time,
+            registered: register,
+            done: false,
+        }
+    }
+
+    #[cfg(unix)]
+    fn stopped(ctx: &ToolCtx, pid: u32) -> bool {
+        RunState::load(&ctx.run_dir)
+            .unwrap()
+            .processes
+            .iter()
+            .any(|p| p.pid == pid && p.stopped_at.is_some())
+    }
+
+    /// A stop signal that lands between the two steps of `finish` sweeps the live list: at that
+    /// point the process must still be listed or its record already stopped, or the sweep skips
+    /// it and `stopped_at` stays unset.
+    #[cfg(unix)]
+    #[test]
+    fn finish_never_leaves_a_process_neither_live_nor_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_with_state(dir.path());
+        let live: Live = Arc::new(Mutex::new(LiveState::default()));
+        LIVE.with(|l| *l.borrow_mut() = Some(Arc::clone(&live)));
+        let mut guard = sleeper_guard(&ctx, true);
+        let pid = guard.pid;
+        live.lock()
+            .unwrap()
+            .procs
+            .push((pid, guard.start_time.clone()));
+        let seen = std::cell::Cell::new(None);
+        guard
+            .finish_with(|| {
+                let listed = live.lock().unwrap().procs.iter().any(|(p, _)| *p == pid);
+                seen.set(Some((listed, stopped(&ctx, pid))));
+            })
+            .unwrap();
+        let (listed, marked) = seen.get().unwrap();
+        assert!(listed || marked, "a sweep here would miss the process");
+        assert!(stopped(&ctx, pid));
+        assert!(live.lock().unwrap().procs.is_empty());
+        LIVE.with(|l| *l.borrow_mut() = None);
+        let _ = guard.child.kill();
+        let _ = guard.child.wait();
+    }
+
+    /// A panic in `register_process` unwinds while the spawn section still holds the live lock;
+    /// the child guard's drop must not wait for that lock.
+    #[cfg(unix)]
+    #[test]
+    fn a_panic_while_registering_does_not_deadlock_the_guard_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(dir.path());
+        let live: Live = Arc::new(Mutex::new(LiveState::default()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx2 = ctx.clone();
+        let dir2 = dir.path().to_path_buf();
+        let t = thread::spawn(move || {
+            LIVE.with(|l| *l.borrow_mut() = Some(live));
+            test_hooks::BEFORE_REGISTER
+                .with(|h| *h.borrow_mut() = Some(Box::new(|| panic!("injected"))));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                exec(
+                    &ctx2,
+                    &ExecSpec {
+                        argv: vec!["sleep".into(), "30".into()],
+                        cwd: dir2.clone(),
+                        env: Vec::new(),
+                        log: dir2.join("out.log"),
+                        stderr_log: None,
+                        timeout: Duration::from_secs(60),
+                        sample: false,
+                        command: "sleep",
+                        vgdb: None,
+                    },
+                )
+            }));
+            let _ = tx.send(r.is_err());
+        });
+        let panicked = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the guard's drop deadlocked on the live lock");
+        assert!(panicked);
+        t.join().unwrap();
+    }
 
     /// A signal that is stopping the run sets `stopping` under the live lock before it sweeps:
     /// a process that is started afterwards would be missed by the sweep, so none starts.

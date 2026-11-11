@@ -1412,3 +1412,67 @@ fn the_holder_of_the_finding_is_in_every_retention_record_and_the_label_is_accep
     assert_eq!(code, 2);
     assert_eq!(s["error"]["code"], "strong-not-independent", "{s}");
 }
+
+#[test]
+fn a_timer_group_listing_the_finding_among_its_candidates_corrects_the_holder() {
+    // Two findings at one site: the group ties to both, the first by id as `finding` and the
+    // other as a candidate. Both are at the group's own creation site, and the ledger accepts
+    // the growth record for either, so the summary names the correction for both.
+    let p = Project::with_sources();
+    let first = p.finding_with_owner("src.heartbeat.startHeartbeat");
+    let a = first["id"].as_str().unwrap().to_owned();
+    let ev = first["supports"][0].as_str().unwrap().to_owned();
+    ok(
+        p.path(),
+        &[
+            "ledger",
+            "add",
+            "--origin",
+            "census",
+            "--evidence",
+            &ev,
+            "--site",
+            "src/heartbeat.js:15",
+            "--owner",
+            "src.heartbeat.startHeartbeat2",
+            "--holder",
+            "blocked-stack",
+            "--region",
+            "non-heap",
+        ],
+    );
+    let b = p
+        .findings()
+        .into_iter()
+        .find(|f| f["owner"] == "src.heartbeat.startHeartbeat2")
+        .and_then(|f| f["id"].as_str().map(str::to_owned))
+        .expect("the second finding");
+    let files = timer_files(&p, "src/heartbeat.js:15", [40, 80, 120]);
+    let mut args = vec!["summarize", "non-heap", "--backend", "node-resources"];
+    args.extend(files.iter().map(String::as_str));
+    let v = ok(p.path(), &args);
+    let gid = v["growth_evidence"].as_str().unwrap().to_owned();
+    let text = v["needed"].as_str().unwrap();
+    for id in [&a, &b] {
+        assert_eq!(v["observed_holder"][id], "registration-table", "{v}");
+        assert!(
+            text.contains(&format!(
+                "dla ledger annotate {id} --holder registration-table --evidence {gid}"
+            )),
+            "{v}"
+        );
+        // The ledger accepts it for the candidate too.
+        ok(
+            p.path(),
+            &[
+                "ledger",
+                "annotate",
+                id,
+                "--holder",
+                "registration-table",
+                "--evidence",
+                &gid,
+            ],
+        );
+    }
+}

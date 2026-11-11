@@ -333,14 +333,23 @@ pub fn fit_noise(pts: &[(f64, f64)]) -> Option<f64> {
     Some(1.4826 * median(&mut dev))
 }
 
-/// The newest gap series of the fixture derived from `series` (the one `dla gap --residual`
-/// fits for the off-heap row): the evidence's own `derived` id when it names one, else the
-/// highest-numbered series with `source.derived_from == series`.
+/// The gap series `dla gap --residual` fitted for the off-heap row: the evidence's own
+/// `derived` id when it names one, else the one its `raw` file (`gap/residual-S1-E3.json`)
+/// names (a raw file that names none means no gap series was used). Only when neither can be
+/// read: the highest-numbered series with `source.derived_from == series`.
 fn derived_gap_series(fx: &Path, series: &str, evidence: &Value) -> Option<Value> {
-    if let Some(d) = evidence["result"]["derived"].as_str()
+    let named = evidence["result"]["derived"].as_str().map(str::to_owned);
+    let raw = evidence["raw"]
+        .as_str()
+        .and_then(|r| read_json(&fx.join(r)));
+    let named = named.or_else(|| raw.as_ref()?["derived"].as_str().map(str::to_owned));
+    if let Some(d) = named
         && let Some(v) = read_json(&fx.join("series").join(format!("{d}.json")))
     {
         return Some(v);
+    }
+    if raw.is_some() {
+        return None;
     }
     numbered_files(&fx.join("series"), 'S')
         .iter()

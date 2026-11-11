@@ -1308,6 +1308,95 @@ fn a_label_with_no_row_in_the_runtime_reference_is_refused_without_a_note() {
     );
 }
 
+/// A `known-leaks.toml` with one Go row that names `archetype`, and one jvm row that names
+/// `L-HANDLE`.
+fn known_leaks_text(go_archetype: &str) -> String {
+    let row = |id: &str, rt: &str, arch: &str| {
+        format!(
+            "[[leak]]\nid = \"{id}\"\nruntime = \"{rt}\"\nlibrary = \"{rt}\"\nversions = \"*\"\neffect = \"An unstopped timer is kept.\"\nholder = \"registration-table\"\narchetype = \"{arch}\"\nevidence = \"https://go.dev/doc/go1.23\"\nremedy = \"Stop it.\"\n\n"
+        )
+    };
+    row("go-test-ticker", "go", go_archetype) + &row("jvm-test-handle", "jvm", "L-HANDLE")
+}
+
+#[test]
+fn an_archetype_a_shipped_known_leaks_row_names_for_the_runtime_is_accepted_without_a_note() {
+    // The Go ticker: the known-leaks row names L-COLLECT here (L-REGISTER in the shipped
+    // data), and the go reference has no such row. The runtime-row check accepts it.
+    let e = env();
+    fs::write(
+        e.data.path().join("known-leaks.toml"),
+        known_leaks_text("L-COLLECT"),
+    )
+    .unwrap();
+    let l = ok(
+        &e,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+        ],
+    );
+    assert_eq!(l["label"], "L-COLLECT");
+}
+
+#[test]
+fn an_archetype_no_row_or_known_leak_names_for_the_runtime_is_still_refused() {
+    let e = env();
+    // The go known-leaks row names L-HANDLE; L-COLLECT is named for jvm only (a row of another
+    // runtime does not count).
+    fs::write(
+        e.data.path().join("known-leaks.toml"),
+        known_leaks_text("L-HANDLE"),
+    )
+    .unwrap();
+    let r = refused(
+        &e,
+        &[],
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+        ],
+    );
+    assert_eq!(r["code"], "label-runtime-row", "{r}");
+    let m = r["message"].as_str().unwrap();
+    assert!(
+        m.contains("a shipped known-leaks row names for go: L-HANDLE"),
+        "the refusal names the known-leaks route: {m}"
+    );
+    // Without a known-leaks file the refusal says no row names one.
+    fs::remove_file(e.data.path().join("known-leaks.toml")).unwrap();
+    let r = refused(
+        &e,
+        &[],
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+        ],
+    );
+    assert!(
+        r["message"]
+            .as_str()
+            .unwrap()
+            .contains("no shipped known-leaks row names an archetype for go"),
+        "{r}"
+    );
+}
+
 #[test]
 fn a_note_keeps_a_label_with_no_row_in_the_runtime_reference() {
     let e = env();

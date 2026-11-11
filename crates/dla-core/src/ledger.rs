@@ -54,7 +54,7 @@ const HOLDER_EVIDENCE_TOOLS: [&str; 2] = ["dla-hprof", "dla-v8-snapshot"];
 
 /// The Node resources reader. Its growth evidence observes the timer table, so it may back a
 /// change to `registration-table` (and to no other holder).
-const TIMER_EVIDENCE_TOOL: &str = "node-resources";
+pub const TIMER_EVIDENCE_TOOL: &str = "node-resources";
 
 /// True for the name of a live timer or listener group of the Node resources reader
 /// (`group:handle/<type>@<site>`): the groups of a registration table.

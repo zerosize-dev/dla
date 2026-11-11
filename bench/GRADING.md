@@ -462,7 +462,12 @@ metrics against the values FILE already holds (and `--baseline G` when given:
 the stricter of the two per value, the previous release from `G`, else from
 FILE), then writes the baselines (tightened as above) and replaces the
 `release` block with these metrics, unless `--baselines-only` is given;
-`--label` names the block. The release block holds the statistics of every arm
+`--label` names the block. When any gate fails nothing is written: the command
+exits non-zero and says which gates failed, so a second identical run cannot
+pass against what a failing run wrote. The exception is `--baselines-only`, the
+M7 baseline run: it writes only the three baselines (tightened as above) even
+when a gate fails, and keeps the previous-release block of FILE itself, never
+the one of `--baseline`. The release block holds the statistics of every arm
 and the smoke tokens of every arm; it is not written from metrics without token
 counts. A baseline value FILE does not hold yet is set by this run: its gate
 passes with a note ("this run sets it"). The first baseline run therefore

@@ -575,14 +575,32 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
                 })
                 .collect(),
         });
-        fx.step(format!(
-            "{op} via {backend}: gate {}, tied {}",
-            out.json["gate"].as_str().unwrap_or("-"),
-            t.as_ref().map_or_else(
-                || "none".to_owned(),
-                |t| t.set.iter().cloned().collect::<Vec<_>>().join(",")
-            )
-        ));
+        let gate = out.json["gate"].as_str().unwrap_or("-").to_owned();
+        let tied_text = t.as_ref().map_or_else(
+            || "none".to_owned(),
+            |t| t.set.iter().cloned().collect::<Vec<_>>().join(","),
+        );
+        let mut reasons: Vec<String> = out.json["reasons"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r.as_str().map(str::to_owned))
+            .collect();
+        if reasons.is_empty()
+            && let Some(n) = out.json["needed"].as_str()
+        {
+            reasons.push(n.chars().take(200).collect());
+        }
+        fx.step(format!("{op} via {backend}: gate {gate}, tied {tied_text}"));
+        fx.row
+            .summarize_log
+            .push(crate::dynamic_cmd::SummarizeStep {
+                op: op.clone(),
+                backend: backend.clone(),
+                gate,
+                tied: tied_text,
+                reasons,
+            });
         t
     } else {
         let msg = format!("{op}: {}", out.message());
@@ -1027,6 +1045,14 @@ esac
         assert_eq!(row.captures, ["H1:capture-all"]);
         assert_eq!(row.ops, ["type-histogram-diff:b"]);
         assert_eq!(row.summarize_evidence, ["E1", "E2"]);
+        // Each successful call is logged with its gate and tie, for a refused label's failure line.
+        assert_eq!(row.summarize_log.len(), 1, "{:?}", row.summarize_log);
+        let step = &row.summarize_log[0];
+        assert_eq!(
+            (step.op.as_str(), step.backend.as_str(), step.gate.as_str()),
+            ("type-histogram-diff", "b", "pass")
+        );
+        assert_eq!(step.tied, "F1");
         assert!(row.max_stdout > 0 && row.max_stdout < LIMIT);
         let lines: Vec<&str> = calls.lines().collect();
         assert_eq!(lines[0], "summarize --list");

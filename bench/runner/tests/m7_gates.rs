@@ -1067,3 +1067,82 @@ fn copy_dir(from: &Path, to: &Path) {
         }
     }
 }
+
+#[test]
+fn write_baseline_refuses_when_a_gate_fails() {
+    let t = tempfile::tempdir().unwrap();
+    let (bf, gf) = (t.path().join("b.json"), t.path().join("g.json"));
+    write_json(&gf, &serde_json::to_value(baseline()).unwrap());
+    let mut weak = good_metrics();
+    weak["second_leak_recall"] = flat(1, 2);
+    let m = file(vec![
+        group("full", "on", &weak, 1000),
+        group("gates", "on", &good_metrics(), 1000),
+        group("gates", "off", &good_metrics(), 1000),
+    ]);
+    let args = [
+        "--write-baseline",
+        bf.to_str().unwrap(),
+        "--baseline",
+        gf.to_str().unwrap(),
+    ];
+    for _ in 0..2 {
+        gate_args(t.path(), &serde_json::to_value(&m).unwrap(), &args)
+            .assert()
+            .code(1)
+            .stdout(
+                predicate::str::contains("baseline not written")
+                    .and(predicate::str::contains("baseline written").not()),
+            );
+        assert!(
+            !bf.exists(),
+            "a failing run must not write the baseline file"
+        );
+    }
+}
+
+#[test]
+fn baselines_only_writes_the_baselines_when_a_gate_fails_and_keeps_the_files_release_block() {
+    let t = tempfile::tempdir().unwrap();
+    let (bf, gf) = (t.path().join("b.json"), t.path().join("g.json"));
+    let block = |label: &str, tokens: f64| ReleaseBlock {
+        label: Some(label.into()),
+        ablation: "full".into(),
+        arms: BTreeMap::new(),
+        tokens_per_run: [("full/on".to_owned(), tokens)].into(),
+    };
+    let mut f = baseline();
+    f.baselines.second_leak_recall = Some(0.1);
+    f.release = Some(block("file-release", 5000.0));
+    let mut g = baseline();
+    g.baselines.second_leak_recall = Some(0.1);
+    g.release = Some(block("g-release", 6000.0));
+    write_json(&bf, &serde_json::to_value(&f).unwrap());
+    write_json(&gf, &serde_json::to_value(&g).unwrap());
+    // Gate 9 fails on tokens (1000 per run against 5000 is fine; 9000 is not).
+    let m = file(vec![
+        group("full", "on", &good_metrics(), 9000),
+        group("gates", "on", &good_metrics(), 9000),
+        group("gates", "off", &good_metrics(), 9000),
+    ]);
+    gate_args(
+        t.path(),
+        &serde_json::to_value(&m).unwrap(),
+        &[
+            "--write-baseline",
+            bf.to_str().unwrap(),
+            "--baseline",
+            gf.to_str().unwrap(),
+            "--baselines-only",
+        ],
+    )
+    .assert()
+    .code(1)
+    .stdout(predicate::str::contains("baseline written"));
+    let after: BaselineFile = serde_json::from_str(&fs::read_to_string(&bf).unwrap()).unwrap();
+    assert_eq!(after.baselines.second_leak_recall, Some(1.0));
+    assert_eq!(
+        after.release.unwrap().label.as_deref(),
+        Some("file-release")
+    );
+}
