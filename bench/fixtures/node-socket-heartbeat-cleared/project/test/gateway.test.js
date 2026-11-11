@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { Gateway } = require('../src/gateway');
 const { LoopbackSocket } = require('../src/loopback');
-const { Decoder } = require('../src/frames');
+const { Decoder, encode } = require('../src/frames');
 
 function decodeAll(socket) {
   const decoder = new Decoder();
@@ -82,4 +82,14 @@ test('a session the server ends is released once the socket has closed', async (
   await new Promise((resolve) => setImmediate(resolve));
   assert.strictEqual(gateway.size, 0);
   assert.strictEqual(socket.destroyed, true);
+});
+
+test('frames that follow bye in the same chunk are not dispatched', async () => {
+  const gateway = new Gateway();
+  const socket = new LoopbackSocket();
+  gateway.accept(socket);
+  socket.emit('data', Buffer.concat([encode({ type: 'bye' }), encode({ type: 'subscribe', topic: 'ops' })]));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(gateway.size, 0);
+  assert.strictEqual(gateway.router.topics.size, 0);
 });

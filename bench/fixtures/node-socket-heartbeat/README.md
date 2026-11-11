@@ -23,7 +23,11 @@ asynchronously (next tick), as a real socket does, so a session the server ends
 (idle timeout, protocol error, `bye`) is released from the `sessions` map like one
 the client hangs up. Earlier revisions never emitted `close` on `destroy()`, which
 kept such sessions in the map and let a decoy be confirmed honestly as a session
-leak. The measurements below were retaken after the change.
+leak. A session also stops dispatching the frames of a chunk once one of them has
+closed it: earlier revisions went on, so a `subscribe` that followed `bye` in the
+same chunk put the closed session into `Router.topics` after its topics had been
+released, which a model found and confirmed in the decoy. The measurements below
+were retaken after both changes.
 
 Real code around the site: framing, topic fan-out, per-session `recent` window
 (capped at 64), a `sessions` map that is removed on close, metrics counters.
@@ -43,13 +47,13 @@ Command (from this directory): `node --expose-gc measure-sock.js project N`.
 
 | connections | open sessions | live intervals | heap after GC (KB) | bytes per connection |
 |---|---|---|---|---|
-| 2000  | 0 | 2000  | 8681  | 4445 |
-| 8000  | 0 | 8000  | 33900 | 4339 |
-| 16000 | 0 | 16000 | 67434 | 4316 |
+| 2000  | 0 | 2000  | 8672  | 4440 |
+| 8000  | 0 | 8000  | 33916 | 4341 |
+| 16000 | 0 | 16000 | 67429 | 4315 |
 
-Slope between 2000 and 16000 connections: (67434 - 8681) KB / 14000 = 4.10 KB per
+Slope between 2000 and 16000 connections: (67429 - 8672) KB / 14000 = 4.20 KB per
 connection, linear in the iteration count; live intervals equal connections served
 while open sessions are 0 at every point.
 
 Workload: `node load.js --iterations 8000` takes about 0.5 s (`--iterations 100000`
-about 5 s). Unit tests: `node --test` (9 pass).
+about 5 s). Unit tests: `node --test` (10 pass).

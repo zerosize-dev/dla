@@ -34,6 +34,7 @@ class Session {
       return;
     }
     for (const message of messages) {
+      if (this.closed) break;
       this.metrics.inc('frames_in');
       this.remember(message);
       this.router.dispatch(this, message);

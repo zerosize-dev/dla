@@ -14,14 +14,14 @@ the closure over the session look as suspicious as in the trap.
 
 ## Distinguishing edit (trap vs control)
 
-One added line; 564 lines of `diff -ru` output, run from `bench/fixtures`
+One added line; 11 lines of `diff -ru` output, run from `bench/fixtures`
 (`diff -ru node-socket-heartbeat/project node-socket-heartbeat-cleared/project`):
 
 ```
 diff -ru node-socket-heartbeat/project/src/session.js node-socket-heartbeat-cleared/project/src/session.js
 --- node-socket-heartbeat/project/src/session.js	2026-11-07 15:38:20.937276161 +0000
 +++ node-socket-heartbeat-cleared/project/src/session.js	2026-11-07 15:38:44.514210621 +0000
-@@ -62,6 +62,7 @@
+@@ -63,6 +63,7 @@
    close(reason) {
      if (this.closed) return;
      this.closed = true;
@@ -32,8 +32,9 @@ diff -ru node-socket-heartbeat/project/src/session.js node-socket-heartbeat-clea
 ```
 
 The loopback socket's `destroy()` emits `close` once, asynchronously, like
-`net.Socket`; the partner's README says why. The measurements were retaken after
-that change.
+`net.Socket`, and a session stops dispatching the frames of a chunk once one of them
+has closed it; the partner's README says why. The measurements were retaken after
+both changes.
 
 ## Measurements
 
@@ -41,9 +42,9 @@ Same harness and workload as the partner (`node --expose-gc measure-sock.js proj
 
 | connections | open sessions | live intervals | heap after GC (KB) |
 |---|---|---|---|
-| 2000  | 0 | 0 | 284 |
-| 8000  | 0 | 0 | 373 |
-| 16000 | 0 | 0 | 407 |
+| 2000  | 0 | 0 | 282 |
+| 8000  | 0 | 0 | 397 |
+| 16000 | 0 | 0 | 395 |
 
 Live intervals are 0 and heap after GC stays under 0.5 MB at every count and does not
 scale with the count (0.15 KB per connection at 2000, 0.03 KB at 16000). During the run at most 33 sessions (the replay
@@ -51,4 +52,4 @@ window of 32 plus the one being opened) exist at once. Contrast with the trap: 1
 live intervals and 67 MB at 16000 connections.
 
 Workload: `node load.js --iterations 8000` about 0.5 s. Unit tests: `node --test`
-(9 pass).
+(10 pass).
