@@ -797,7 +797,12 @@ mod tests {
                 .map(|(_, v)| v.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(get("PATH"), vec!["/tc/a:/tc/b:/usr/bin:/bin".to_owned()]);
+        // The separator is the platform's (`;` on Windows), and the old value is kept as it was.
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        assert_eq!(
+            get("PATH"),
+            vec![format!("/tc/a{sep}/tc/b{sep}/usr/bin:/bin")]
+        );
         assert_eq!(get("GOTOOLCHAIN"), vec!["go1.22.12".to_owned()]);
         assert_eq!(get("HOME"), vec!["/h".to_owned()]);
     }

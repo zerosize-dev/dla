@@ -1850,16 +1850,18 @@ fn a_run_that_cannot_fit_the_deadline_is_refused_before_its_last_points() {
         return;
     }
     let fx = fixture("", &[], &[1]);
-    // The point of size n sleeps n/1000 s: 0.1 s, 0.2 s, ... 0.9 s, 4.5 s in all.
+    // The point of size n sleeps n/250 s: 0.4 s, 0.8 s, ... 3.2 s, 14.4 s in all, against a
+    // 6 s budget. After the first two points (1.2 s) the rest needs about three times the
+    // time left, however small a machine's start-up cost is.
     let mut m = manifest(
         Runtime::Native,
-        &["sh", "-c", "sleep $(awk 'BEGIN{print {n}/1000}')"],
+        &["sh", "-c", "sleep $(awk 'BEGIN{print {n}/250}')"],
         vec![],
         100,
     );
     m.iterations = 8;
     write_manifest(&fx, &m);
-    deadline_in(&fx, 4);
+    deadline_in(&fx, 6);
     let started = std::time::Instant::now();
     let err = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap_err();
     assert_eq!(err.code, "time-budget", "{err:?}");

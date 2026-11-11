@@ -53,6 +53,22 @@ impl Sleeper {
                 Err(e) => panic!("spawn {}: {e}", exe.display()),
             }
         };
+        // The attach backends inspect the target's executable: wait until the child runs as
+        // `java`, not as the forked copy of this test binary it is for a moment after spawn.
+        #[cfg(target_os = "linux")]
+        {
+            let link = format!("/proc/{}/exe", child.id());
+            for _ in 0..250 {
+                let ok = fs::read_link(&link)
+                    .ok()
+                    .and_then(|p| p.file_name().map(|n| n == "java"))
+                    .unwrap_or(false);
+                if ok {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
         Self(child, dir)
     }
 }
