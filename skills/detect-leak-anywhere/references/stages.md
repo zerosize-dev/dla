@@ -215,9 +215,10 @@ For each passed column tied to a candidate `F3`:
   `--site` fill other gaps; a holder already set changes only with `--evidence`, see the heap-graph
   note below), then `dla ledger confirm F3 --evidence E11`, citing the passing
   `dla trend` evidence. A refusal names what is missing.
-- A wrong owner is corrected before confirmation only: `dla ledger annotate F3 --owner X --evidence E`, where `E` is
-  heap-graph growth or retention evidence naming a holder owned by `X` (the full owner, or a short form of one holder);
-  after confirmation record a new finding with the right owner.
+- An owner is set once. When it is wrong, add a finding with the owner in the form the evidence names,
+  at the old finding's site (`dla ledger add --origin growth-series --evidence E --site <F3's file:line>
+  --owner X`; the heap-graph output lists the owners), and merge the old one into it with
+  `dla ledger duplicate F3 --of F7` (a duplicate needs the same owner or the same site), or resolve the old one.
 - The passing column must be tied to `F3`: its probe (`probe:<owner>`), a group column at its site,
   or a column that lists it under `candidates`. A refusal `growth-not-tied` means the growth you cite
   belongs to another holder or to the whole process (`os.rss`, heap totals). Then add a probe for

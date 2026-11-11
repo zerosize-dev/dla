@@ -1208,7 +1208,7 @@ fn series_part(
         holder_needed(f, seen, named, &growth_id)
     } else if let Some(f) = &a.finding {
         format!(
-            "no passing column ties to {f} by holder, site or type: a holder ties to the finding whose owner is its module path plus name (for example src.scheduler.shared); dla ledger annotate {f} --owner <that form> --evidence <a growth or retention evidence of this run that names the holder> sets it (an owner already set is replaced before confirmation, while the finding is a candidate or under_test, when that evidence names the holder)"
+            "no passing column ties to {f} by holder, site or type: a holder ties to the finding whose owner is its module path plus name (for example src.scheduler.shared); dla ledger annotate {f} --owner <that form> sets it when none is set; an owner is set once, so when it is wrong add a finding with the owner in that form at the same site (dla ledger add --origin growth-series --evidence <E> --site <the same file:line> --owner <owner>) and merge the old one into it (dla ledger duplicate <old> --of <new>)"
         )
     } else {
         "no passing holder is tied in the evidence: dla census --lang node gives each module variable and field an owner, which a holder then ties to".to_owned()

@@ -1,4 +1,0 @@
-{"type": "finding_added", "finding": {"id": "F1", "owner": "quotes.Desk.Other.RECENT", "holder": "static/global", "archetype": "UNCLASSIFIED"}}
-{"type": "finding_annotated", "finding": "F1", "owner": "quotes.RfqDesk.RECENT", "evidence": ["E2"], "replaced_owner": "quotes.Desk.Other.RECENT"}
-{"type": "transition", "finding": "F1", "from": "under_test", "to": "confirmed"}
-{"type": "finding_labeled", "finding": "F1", "label": "L-COLLECT", "previous": "UNCLASSIFIED"}

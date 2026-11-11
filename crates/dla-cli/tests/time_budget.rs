@@ -86,7 +86,9 @@ fn slow_project(budget: &str, script: &str, iterations: u32) -> (tempfile::TempD
 #[cfg(unix)]
 #[test]
 fn harness_run_refuses_a_plan_the_budget_cannot_hold_and_names_a_smaller_one() {
-    let (dir, run_dir) = slow_project("4s", "sleep $(awk 'BEGIN{print {n}/1000}')", 8);
+    // Points of 0.4 to 3.2 s (14.4 s in all) against a 6 s budget: after the first two
+    // points the estimate for the rest is about three times the time left, on any machine.
+    let (dir, run_dir) = slow_project("6s", "sleep $(awk 'BEGIN{print {n}/250}')", 8);
     let out = dla(dir.path())
         .args(["harness", "run", "H1"])
         .output()

@@ -692,7 +692,9 @@ fn bound_holder(ledger: &Ledger, f: &FindingId, dumps: &[Dump]) -> Res<(FindingI
                     .join(", ")
             ),
             "a finding whose owner is a holder in these dumps",
-            &format!("dla ledger annotate {f} --owner <class.field of a holder>"),
+            &format!(
+                "an owner is set once: add a finding with the class.field of one of these holders at {f}'s site (dla ledger add --origin growth-series --evidence <E> --site <the same file:line> --owner <class.field>) and merge {f} into it (dla ledger duplicate {f} --of <new>)"
+            ),
         )),
         many => Err(fail(
             "ambiguous-holder",
@@ -706,7 +708,9 @@ fn bound_holder(ledger: &Ledger, f: &FindingId, dumps: &[Dump]) -> Res<(FindingI
                     .join(", ")
             ),
             "a finding whose owner names one holder",
-            &format!("dla ledger annotate {f} --owner <fully qualified class.field>"),
+            &format!(
+                "an owner is set once: add a finding with the fully qualified class.field at {f}'s site (dla ledger add --origin growth-series --evidence <E> --site <the same file:line> --owner <pkg.Class.field>) and merge {f} into it (dla ledger duplicate {f} --of <new>)"
+            ),
         )),
     }
 }

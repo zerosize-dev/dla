@@ -78,7 +78,9 @@ fn a_site_that_is_not_the_same_line_is_not_a_duplicate() {
     for dup in [&near, &far, &other] {
         let r = refusal(l.duplicate_finding(dup, &f1));
         assert_eq!(r.code, m6::DUPLICATE_NOT_SAME, "{}", r.message);
-        assert!(r.fix.contains("annotate"), "{}", r.fix);
+        // The fix never offers an owner change (an owner is set once).
+        assert!(!r.fix.contains("annotate"), "{}", r.fix);
+        assert!(r.fix.contains("label each"), "{}", r.fix);
     }
     assert_eq!(l.merged_into(&near), None);
 }

@@ -123,9 +123,9 @@ pub struct AnnotateArgs {
     /// closure/continuation | native-handle/global-ref | cycle-only
     #[arg(long, value_parser = parse_enum::<Holder>)]
     holder: Option<Holder>,
-    /// Owning field or container on the retention path; only set when none is recorded, or
-    /// replaced before confirmation (candidate or under_test) with --evidence that names a holder
-    /// owned by the new owner and agrees with the growth already tied to the finding.
+    /// Owning field or container on the retention path; only set when none is recorded (an
+    /// owner is set once; when it is wrong, add a finding with the right owner and merge the
+    /// old one into it with `dla ledger duplicate`).
     #[arg(long)]
     owner: Option<String>,
     /// heap | off-heap | non-heap; only set when none is recorded.
@@ -134,9 +134,9 @@ pub struct AnnotateArgs {
     /// `file:line` of the finding; only set when the finding has no site yet.
     #[arg(long, value_name = "FILE:LINE")]
     site: Option<String>,
-    /// Evidence that observed the holder: growth-series evidence lets --holder change a holder
-    /// already set; growth or retention evidence of a heap graph (dump or live) lets --owner
-    /// replace an owner before confirmation. Comma separated.
+    /// Growth evidence (heap-graph, dump or live) that observed the holder; lets --holder
+    /// change a holder already set. With --owner it is the evidence the owner warning
+    /// compares. Comma separated.
     #[arg(long, value_delimiter = ',', value_parser = parse_enum::<EvidenceId>)]
     evidence: Vec<EvidenceId>,
 }
@@ -452,7 +452,7 @@ fn owner_warning(
             })
     });
     Some(format!(
-        "--owner {owner} {} {}; a heap-graph column or retention record ties to a finding only by the owner of its holder, which these records name as {}{}: dla ledger annotate <finding> --owner <one of them> --evidence <one of {}>",
+        "--owner {owner} {} {}; a heap-graph column or retention record ties to a finding only by the owner of its holder, which these records name as {}{}. An owner is set once: if it is wrong, add a finding with one of them at the same site (dla ledger add --origin growth-series --evidence <one of {}> --site <the same file:line> --owner <one of them>) and merge this one into it (dla ledger duplicate <this finding> --of <new>)",
         if ambiguous {
             "is a short form of several holders in"
         } else {
@@ -519,9 +519,6 @@ pub fn annotate(ctx: &Ctx, a: AnnotateArgs) -> Res<Value> {
     }
     if let Some(o) = &rec.owner {
         out["owner"] = json!(o);
-    }
-    if let Some(o) = &rec.replaced_owner {
-        out["replaced_owner"] = json!(o);
     }
     if let Some(r) = rec.region {
         out["region"] = json!(r.as_str());

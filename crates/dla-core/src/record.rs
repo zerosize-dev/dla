@@ -91,8 +91,7 @@ pub struct FindingAnnotation {
     /// What holds the memory; applied only when the finding has no holder yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holder: Option<Holder>,
-    /// Owning field or container; applied when the finding has no owner yet, or replaces it
-    /// when `evidence` names a holder with this owner (ledger schema 6).
+    /// Owning field or container; applied only when the finding has no owner yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     /// Memory region; applied only when the finding has no region yet.
@@ -109,10 +108,6 @@ pub struct FindingAnnotation {
     /// The holder this annotation replaced; written by the ledger, an audit trail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_holder: Option<Holder>,
-    /// The owner this annotation replaced; written by the ledger, an audit trail. An owner
-    /// already set is replaced only when `evidence` names a holder with the new owner.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replaced_owner: Option<String>,
 }
 
 impl FindingAnnotation {
@@ -129,7 +124,6 @@ impl FindingAnnotation {
             site: None,
             evidence: Vec::new(),
             replaced_holder: None,
-            replaced_owner: None,
         }
     }
 }

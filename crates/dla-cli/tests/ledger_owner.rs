@@ -1,8 +1,7 @@
 //! `dla ledger add` and `annotate` warn when an owner names no holder in the growth or
-//! retention evidence they cite, and `annotate --owner X --evidence E` replaces an owner
-//! when E names a holder owned by X. The ledgers are written with the `dla-core` API.
+//! retention evidence they cite, and `annotate --owner` never replaces an owner. The ledgers are written with the `dla-core` API.
 
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use assert_cmd::Command;
 use dla_core::{
@@ -196,69 +195,25 @@ fn the_warning_lists_at_most_three_owners() {
 }
 
 #[test]
-fn annotate_warns_and_replaces_an_owner_with_evidence() {
+fn an_owner_already_set_is_refused_with_or_without_evidence_and_the_fix_names_the_way() {
     let e = env();
-    // The model's wrong owner is kept without evidence, with the refusal's fix naming the way.
-    let (code, v) = run(
-        &e,
-        &["ledger", "annotate", "F1", "--owner", "src.board.previous"],
-    );
-    assert_eq!(code, 2, "{v}");
-    assert_eq!(v["error"]["code"], "annotation-conflict");
-    assert!(
-        v["error"]["fix"]
-            .as_str()
-            .unwrap()
-            .contains("--owner src.board.previous --evidence"),
-        "{v}"
-    );
-    // An owner the evidence does not name is refused, listing what it names.
-    let (code, v) = run(
-        &e,
-        &[
-            "ledger",
-            "annotate",
-            "F1",
-            "--owner",
-            "src.board.nothing",
-            "--evidence",
-            "E2",
-        ],
-    );
-    assert_eq!(code, 2, "{v}");
-    assert!(
-        v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("src.board.previous"),
-        "{v}"
-    );
-    // The evidence names the holder: the owner is replaced and the old one recorded.
-    let v = ok(
-        &e,
-        &[
-            "ledger",
-            "annotate",
-            "F1",
-            "--owner",
-            "src.board.previous",
-            "--evidence",
-            "E2",
-        ],
-    );
-    assert_eq!(v["owner"], "src.board.previous");
-    assert_eq!(v["replaced_owner"], "src.board.Board.publish.previous");
+    for extra in [&[][..], &["--evidence", "E2"][..]] {
+        let mut args = vec!["ledger", "annotate", "F1", "--owner", "src.board.previous"];
+        args.extend_from_slice(extra);
+        let (code, v) = run(&e, &args);
+        assert_eq!(code, 2, "{v}");
+        assert_eq!(v["error"]["code"], "annotation-conflict");
+        let fix = v["error"]["fix"].as_str().unwrap();
+        assert!(
+            fix.contains("dla ledger add --origin growth-series --evidence <E> --site <the same file:line> --owner src.board.previous"),
+            "{v}"
+        );
+        assert!(fix.contains("dla ledger duplicate F1 --of <new>"), "{v}");
+    }
     let l = Ledger::load(&e.run_dir).unwrap();
     assert_eq!(
         l.finding(&"F1".parse().unwrap()).unwrap().owner.as_deref(),
-        Some("src.board.previous")
-    );
-    let text = fs::read_to_string(e.run_dir.join("ledger.jsonl")).unwrap();
-    assert!(
-        text.lines()
-            .last()
-            .unwrap()
-            .contains(r#""replaced_owner":"src.board.Board.publish.previous""#)
+        Some("src.board.Board.publish.previous")
     );
 }
 

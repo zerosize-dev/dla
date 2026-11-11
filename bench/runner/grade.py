@@ -212,9 +212,8 @@ def parse_ledger_full(path):
                     f["holder"] = str_or_none(rec.get("holder")) or f["holder"]
                 if f["site"] is None:
                     f["site"] = str_or_none(rec.get("site"))
-                # An owner replaced with evidence (ledger schema 6) names `replaced_owner`.
-                if f["owner"] is None or rec.get("replaced_owner") is not None:
-                    f["owner"] = str_or_none(rec.get("owner")) or f["owner"]
+                if f["owner"] is None:
+                    f["owner"] = str_or_none(rec.get("owner"))
         elif rtype == "finding_labeled":
             # `dla ledger label` (ledger schema 6) sets the archetype label; the last
             # record of a finding wins.

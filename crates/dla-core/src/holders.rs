@@ -47,18 +47,27 @@ fn key_owner(key: &str) -> Option<String> {
 }
 
 /// The canonical owner a passing `holder:<key>` or `probe:<owner>` growth column measures;
-/// `None` for another column and for a key that names no variable or field.
-pub fn column_owner(column: &str) -> Option<String> {
-    // The column suffixes of `dla trend` (`crate::trend::probe_column_matches_owner`): a
-    // heap-dump column may end in `.count`, a probe column in `.size` or `.bytes`.
-    if let Some(n) = column.strip_prefix("holder:") {
-        return key_owner(n.strip_suffix(".count").unwrap_or(n));
+/// `None` for another column and for a key that names no variable or field. `columns` are
+/// the columns of the same record: a `.count` (holder), `.size` or `.bytes` (probe) suffix
+/// is a measure suffix only when the record also has the column without it; otherwise the
+/// name is read as it is (a holder named `count` is the holder `count`).
+pub fn column_owner(column: &str, columns: &[&str]) -> Option<String> {
+    let (prefix, suffixes): (&str, &[&str]) = if column.starts_with("holder:") {
+        ("holder:", &[".count"])
+    } else if column.starts_with("probe:") {
+        ("probe:", &[".size", ".bytes"])
+    } else {
+        return None;
+    };
+    let n = &column[prefix.len()..];
+    for suf in suffixes {
+        if let Some(base) = n.strip_suffix(suf)
+            && !base.is_empty()
+            && columns.iter().any(|c| *c == format!("{prefix}{base}"))
+        {
+            return key_owner(base);
+        }
     }
-    let n = column.strip_prefix("probe:")?;
-    let n = n
-        .strip_suffix(".size")
-        .or_else(|| n.strip_suffix(".bytes"))
-        .unwrap_or(n);
     key_owner(n)
 }
 
@@ -81,9 +90,18 @@ pub fn record_holder_owners(record: &EvidenceRecord) -> Vec<String> {
         .flat_map(|l| list_keys(r, l))
         .filter_map(|e| e.get("key").and_then(Value::as_str))
         .filter_map(key_owner);
+    // Every column of the record, to tell a measure suffix from a name that ends like one.
+    let columns: Vec<&str> = r
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.values())
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter_map(|c| c.get("column").and_then(Value::as_str))
+        .collect();
     let from_columns = list_keys(r, "passed")
         .filter_map(|c| c.get("column").and_then(Value::as_str))
-        .filter_map(column_owner);
+        .filter_map(|c| column_owner(c, &columns));
     let mut out: Vec<String> = Vec::new();
     for o in from_keys.chain(from_columns) {
         if !out.contains(&o) {
@@ -530,6 +548,41 @@ mod tests {
             &finding(Some("src.board.Board.listeners"), None)
         ));
         assert!(!names_holder(&r, &finding(Some("src.board.Board"), None)));
+    }
+
+    #[test]
+    fn a_measure_suffix_is_stripped_only_when_the_record_has_the_bare_column() {
+        let owners = |cols: &[&str]| {
+            let passed: Vec<Value> = cols.iter().map(|c| json!({"column": c})).collect();
+            let r = rec(
+                EvidenceKind::GrowthSeries,
+                Authority::Dump,
+                "dla-hprof",
+                json!({"passed": passed}),
+            );
+            let mut o = record_holder_owners(&r);
+            o.sort();
+            o
+        };
+        // A holder named `count` of class `app.Cache`: no bare `holder:field:app.Cache` column.
+        assert_eq!(
+            owners(&["holder:field:app.Cache.count"]),
+            ["app.Cache.count"]
+        );
+        // The measure column of a holder that also has its own column.
+        assert_eq!(
+            owners(&[
+                "holder:field:app.Cache.map",
+                "holder:field:app.Cache.map.count"
+            ]),
+            ["app.Cache.map"]
+        );
+        // Probe suffixes follow the same rule.
+        assert_eq!(owners(&["probe:app.Cache.size"]), ["app.Cache.size"]);
+        assert_eq!(
+            owners(&["probe:app.Cache", "probe:app.Cache.size"]),
+            ["app.Cache"]
+        );
     }
 
     #[test]

@@ -138,21 +138,6 @@ fn an_annotation_that_replaced_a_holder_changes_it() {
 }
 
 #[test]
-fn an_annotation_that_replaced_an_owner_changes_it_and_a_plain_one_only_fills() {
-    let text = [
-        r#"{"type":"finding_added","finding":{"id":"F5","owner":"src.board.Board.publish.previous"}}"#,
-        r#"{"type":"finding_annotated","finding":"F5","owner":"other.x"}"#,
-        r#"{"type":"finding_annotated","finding":"F5","owner":"src.board.previous","evidence":["E22"],"replaced_owner":"src.board.Board.publish.previous"}"#,
-        r#"{"type":"finding_added","finding":{"id":"F6"}}"#,
-        r#"{"type":"finding_annotated","finding":"F6","owner":"a.B.c"}"#,
-    ]
-    .join("\n");
-    let f = findings_from_ledger(&text).expect("has finding_added");
-    assert_eq!(f[0].owner.as_deref(), Some("src.board.previous"));
-    assert_eq!(f[1].owner.as_deref(), Some("a.B.c"));
-}
-
-#[test]
 fn a_label_record_sets_the_label_and_the_last_one_wins() {
     let text = [
         "{\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"archetype\":\"UNCLASSIFIED\"}}",

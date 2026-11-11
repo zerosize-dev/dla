@@ -245,9 +245,8 @@ pub fn read_ledger_bytes(bytes: &[u8]) -> Option<LedgerRead> {
                     if f.site.is_none() {
                         f.site = str_of(&rec, "site");
                     }
-                    // An owner replaced with evidence (ledger schema 6) names `replaced_owner`.
-                    if f.owner.is_none() || rec.get("replaced_owner").is_some() {
-                        f.owner = str_of(&rec, "owner").or(f.owner.take());
+                    if f.owner.is_none() {
+                        f.owner = str_of(&rec, "owner");
                     }
                 }
             }

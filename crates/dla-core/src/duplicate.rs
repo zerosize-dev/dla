@@ -183,7 +183,7 @@ pub fn check(
             ),
             "the same owner or the same site file:line, both findings in one worker and runtime",
             format!(
-                "if they are one leak, record the owner or site they share (dla ledger annotate {dup} --owner <owner> --evidence <E>); if they are two leaks, label each: dla ledger label {dup} --suggest"
+                "only findings with the same qualified owner or the same site merge; otherwise label each: dla ledger label {dup} --suggest"
             ),
         )
     })
