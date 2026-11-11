@@ -111,6 +111,8 @@ fails without the line).
 jni-order-codec stays incomplete in every run on `jvm.class:*` columns, whose fix text
 (`dla trend S<n>`) repeats.
 
+The fixes for these misses are measured in `../m6-followup-2/README.md`.
+
 ## Reproduce the grading
 
 The raw runs were deleted after grading (see "Keeping results" in `bench/README.md`);

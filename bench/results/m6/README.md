@@ -177,6 +177,8 @@ go1.27.0. In M5 it was blocked in every run.
 
 ## Open items (fixes found by this run)
 
+The fixes are measured in `../m6-followup/README.md` and `../m6-followup-2/README.md`.
+
 1. **Ledger sequence race (correctness).** Concurrent `dla` writers must take the sequence number and
    append under one lock. This must be fixed in M6.
 2. **Long commands and the time budget.** `harness run` and `alloc-test` should refuse a plan that
