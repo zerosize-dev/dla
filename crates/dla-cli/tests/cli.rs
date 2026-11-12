@@ -122,7 +122,8 @@ fn version_flag_prints_version() {
         .output()
         .unwrap();
     assert!(out.status.success());
-    assert!(String::from_utf8_lossy(&out.stdout).starts_with("dla 0.1.0"));
+    let expected = format!("dla {}", env!("CARGO_PKG_VERSION"));
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with(&expected));
 }
 
 #[test]

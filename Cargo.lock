@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "dla-backends"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "chrono",
  "dla-census",
@@ -397,7 +397,7 @@ dependencies = [
 
 [[package]]
 name = "dla-bench"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "dla-census"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "dla-core",
  "regex",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "dla-cli"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "dla-core"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "chrono",
  "dla-stats",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "dla-it"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "rightsize",
  "rightsize-msb",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "dla-parsers"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "dla-probe"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "chrono",
  "dla-core",
@@ -514,7 +514,7 @@ dependencies = [
 
 [[package]]
 name = "dla-report"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "dla-core",
  "serde_json",
@@ -522,7 +522,7 @@ dependencies = [
 
 [[package]]
 name = "dla-sample"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "dla-parsers",
  "libc",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "dla-stats"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "proptest",
  "schemars",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "dla-workload"
-version = "0.1.0"
+version = "0.9.0-preview.1"
 dependencies = [
  "dla-census",
  "dla-core",
