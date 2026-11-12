@@ -383,7 +383,7 @@ mod tests {
         fs::create_dir_all(&bin).unwrap();
         fs::write(bin.join("jcmd.exe"), "").unwrap();
         fs::write(bin.join("README.txt"), "").unwrap();
-        let c = provided_conflict(&["jcmd".to_owned()], &[bin.clone()], &[]).unwrap();
+        let c = provided_conflict(&["jcmd".to_owned()], std::slice::from_ref(&bin), &[]).unwrap();
         assert_eq!(c.0, "jcmd");
         assert!(provided_conflict(&["README".to_owned()], &[bin], &[]).is_none());
     }

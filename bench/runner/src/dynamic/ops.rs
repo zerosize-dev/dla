@@ -1483,8 +1483,10 @@ esac
         assert_eq!(calls.matches("alloc-test H1").count(), 2, "{calls}");
     }
 
+    #[cfg(unix)]
     const TICKER_PROBE: &str = r#"{"type":"evidence","evidence_id":"E1","kind":"probe","authority":"static","result":{"known_leaks":{"maybe":[],"true":["go-timer-unstopped-before-1.23"]}}}"#;
 
+    #[cfg(unix)]
     const TICKER_ROWS: &str = r#"
 [[leak]]
 id = "go-timer-unstopped-before-1.23"
@@ -1501,6 +1503,7 @@ archetype = "L-REGISTER"
 when = { all = [ { config = { key = "asynctimerchan", value = "1" } }, { source_regex = 'time\.NewTicker\(' } ] }
 "#;
 
+    #[cfg(unix)]
     const WAIT_GO: &str = "package reserve\n\nfunc wait() {\n\t// a line\n\tt := time.NewTicker(time.Second)\n\t_ = t\n}\n";
 
     /// The ledger of go-ticker-legacy: F1 is the detector's finding at the ticker (no holder),
