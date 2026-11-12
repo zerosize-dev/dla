@@ -111,9 +111,11 @@ fn harness_run_refuses_a_plan_the_budget_cannot_hold_and_names_a_smaller_one() {
 #[cfg(unix)]
 #[test]
 fn alloc_test_stops_at_the_deadline_and_says_the_result_is_partial() {
-    // Fast until n = 1000 (point 10), then a point that would outlast the run.
+    // Fast until n = 1000 (point 10), then a point that would outlast the run. The budget
+    // leaves room for slow process starts (about 0.7 s per point on a macOS runner, where a
+    // 7 s budget made the up-front estimate refuse the run instead of cutting it).
     let (dir, _run) = slow_project(
-        "7s",
+        "20s",
         "if [ {n} -ge 1000 ]; then sleep 60; else sleep 0.05; fi",
         8,
     );
@@ -123,7 +125,7 @@ fn alloc_test_stops_at_the_deadline_and_says_the_result_is_partial() {
         .output()
         .unwrap();
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+    assert!(started.elapsed().as_secs() < 40, "{:?}", started.elapsed());
     assert_eq!(out.status.code(), Some(0), "{v}");
     assert_eq!(v["favors"], "inconclusive", "{v}");
     assert!(
