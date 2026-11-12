@@ -4,6 +4,8 @@ Run: `20260101-000000-abcd`
 
 Status: INCOMPLETE (8 open)
 
+Measured: 1 harness run, 1 series, 0 captures
+
 Entry: repository
 
 Scope: repository; excluded: none; out of scope: none
@@ -30,6 +32,7 @@ Coverage: go 8000 iterations, 2 of 3 entry points exercised
 ### F1: **UNCLASSIFIED**
 
 - State: confirmed
+- Origin: `census`
 - Growth: `probe:Registry.listeners` 412 bytes/n (steady, gate pass, E3)
 - Evidence classes: context, growth, static
 - Holder: registration-table

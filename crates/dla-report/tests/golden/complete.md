@@ -4,6 +4,8 @@ Run: `20260101-000000-abcd`
 
 Status: INCOMPLETE (6 open)
 
+Measured: 0 harness runs, 1 series, 0 captures
+
 Entry: repository
 
 Scope: repository; excluded: none; out of scope: none
@@ -28,6 +30,7 @@ Coverage: not measured
 ### F1: **UNCLASSIFIED**
 
 - State: confirmed
+- Origin: `growth-series`
 - Evidence classes: growth
 - Holder: container-field
 - Owner: `Cache.entries`
@@ -46,6 +49,7 @@ Coverage: not measured
 ### F3: **UNCLASSIFIED**
 
 - State: unresolved(no_harness)
+- Origin: `detector:py/unclosed`
 - Evidence classes: static
 - Site: `src/net.py:7`
 - Reason: no_harness

@@ -36,6 +36,14 @@ pub const HARNESS_SCHEMA_VERSION: u32 = 1;
 pub const HARNESS_DIR: &str = "harness";
 /// Manifest file name inside a harness directory.
 pub const MANIFEST_FILE: &str = "harness.json";
+/// The file `dla harness run` writes in a harness directory on every attempt.
+pub const ATTEMPT_FILE: &str = "attempt.json";
+/// The `reason` of an attempt that failed on a driver whose DLA-HOOK bodies were still the
+/// template's: it does not count as a run of the harness.
+pub const ATTEMPT_HOOKS_UNFILLED: &str = "hooks_unfilled";
+/// The `reason` of an attempt that SIGINT or SIGTERM ended. Like [`ATTEMPT_HOOKS_UNFILLED`]
+/// it does not count as a run of the harness: nothing was measured.
+pub const ATTEMPT_INTERRUPTED: &str = "interrupted";
 /// Version written in `dla_harness` by agents.
 pub const DUMP_VERSION: u32 = 1;
 
@@ -365,6 +373,91 @@ impl HarnessManifest {
         write_atomic(&path, to_pretty_json(self).as_bytes())?;
         Ok(path)
     }
+}
+
+/// How a `dla harness run` attempt ended.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AttemptOutcome {
+    /// Every planned point was measured.
+    Ran,
+    /// The run deadline cut it short; a partial series was written.
+    Partial,
+    /// Refused or failed; nothing usable was measured.
+    Failed,
+}
+
+/// `harness/H<n>/attempt.json`: the record that someone tried to run the harness, written
+/// by `dla harness run` on every path once the manifest has loaded (success, partial run,
+/// build failure, no usable point, time-budget refusal, timeout, SIGINT or SIGTERM; a panic
+/// writes nothing). It is not sealed and not in the ledger: the final gate reads its presence to tell a harness that was generated
+/// and tried from one that was generated and never run ([`crate::gate::harness_not_run`]).
+/// A later attempt replaces the file.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HarnessAttempt {
+    /// `H2`.
+    pub harness: String,
+    /// When the attempt began (UTC, RFC 3339).
+    pub started_at: String,
+    /// When it ended (UTC, RFC 3339).
+    pub finished_at: String,
+    /// How it ended.
+    pub outcome: AttemptOutcome,
+    /// Why it failed: `no_harness`, `build_fails`, `time_budget`, [`ATTEMPT_HOOKS_UNFILLED`],
+    /// `interrupted` (SIGINT or SIGTERM) or the refusal code. Absent when it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The refusal message, or a note on a partial run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl HarnessAttempt {
+    /// The current time as the timestamps of this record are written.
+    pub fn now() -> String {
+        crate::state::now_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    /// `<run_dir>/harness/<id>/attempt.json`.
+    pub fn path_in(run_dir: &Path, id: &str) -> PathBuf {
+        HarnessManifest::dir_in(run_dir, id).join(ATTEMPT_FILE)
+    }
+
+    /// Writes the record atomically.
+    pub fn save(&self, run_dir: &Path) -> Result<PathBuf, Error> {
+        let path = Self::path_in(run_dir, &self.harness);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        }
+        write_atomic(&path, to_pretty_json(self).as_bytes())?;
+        Ok(path)
+    }
+}
+
+/// True when a source file under `harness/<id>/driver/` still has a template hook body
+/// (`DLA-HOOK <name> has not been filled in`): the driver was generated and not filled.
+pub fn hooks_unfilled(run_dir: &Path, id: &str) -> bool {
+    fn scan(dir: &Path, depth: u32) -> bool {
+        let Ok(rd) = fs::read_dir(dir) else {
+            return false;
+        };
+        rd.flatten().any(|e| {
+            let p = e.path();
+            match e.file_type() {
+                Ok(t) if t.is_dir() => depth < 4 && scan(&p, depth + 1),
+                Ok(t) if t.is_file() => {
+                    e.metadata().is_ok_and(|m| m.len() <= 1 << 20)
+                        && fs::read_to_string(&p).is_ok_and(|s| {
+                            s.lines().any(|l| {
+                                l.contains("DLA-HOOK") && l.contains("has not been filled in")
+                            })
+                        })
+                }
+                _ => false,
+            }
+        })
+    }
+    scan(&HarnessManifest::dir_in(run_dir, id).join("driver"), 0)
 }
 
 /// The harness ID a `workload` evidence `result` names in `harness`, if any.

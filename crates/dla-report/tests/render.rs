@@ -765,7 +765,7 @@ summary = "A collection gains entries and nothing removes them."
     fn a_labelled_explained_strong_finding_shows_its_proof() {
         let md = md(ledger());
         assert!(
-            md.contains("### F1: **L-COLLECT**\n\n- State: strong\n- Label: L-COLLECT (evidence: E4 growth-series, E5 retention-path)\n"),
+            md.contains("### F1: **L-COLLECT**\n\n- State: strong\n- Origin: `census`\n- Label: L-COLLECT (evidence: E4 growth-series, E5 retention-path)\n"),
             "{md}"
         );
         assert!(
@@ -857,5 +857,452 @@ summary = "A collection gains entries and nothing removes them."
             md.contains("- Label: UNCLASSIFIED (a pool keyed by thread; no row fits)\n"),
             "{md}"
         );
+    }
+}
+
+// ------------------------------------------------------------------ Measured line, ranking
+
+mod ranking {
+    use super::*;
+
+    struct Spec {
+        origin: &'static str,
+        holder: Option<&'static str>,
+        writers: &'static [&'static str],
+        removers: &'static [&'static str],
+    }
+
+    const REMEDY: &str = "run a harness over it";
+
+    /// A ledger with one static-hit record and one `suspected_static_only(no_harness)`
+    /// finding per spec, in the given order (F1, F2, ...). `remedy` is `Some` for all rows.
+    fn static_only_text(specs: &[Spec], remedy: impl Fn(usize) -> String) -> String {
+        let mut lines = vec![json!({"type": "evidence", "evidence_id": "E1",
+            "source": {"repo": {"commit": "abc123"}}, "tool": {"name": "t", "version": "0"},
+            "authority": "static", "kind": "census-holder", "result": {}})];
+        for (i, s) in specs.iter().enumerate() {
+            let n = i + 1;
+            let mut f = json!({"id": format!("F{n}"), "state": "candidate", "origin": s.origin,
+                "supports": ["E1"], "owner": format!("pkg.Owner{n}.items"),
+                "site": format!("src/o{n}.kt:{n}")});
+            if let Some(h) = s.holder {
+                f["holder"] = json!(h);
+            }
+            lines.push(json!({"type": "finding_added", "finding": f}));
+            if !s.writers.is_empty() || !s.removers.is_empty() {
+                lines.push(
+                    json!({"type": "finding_annotated", "finding": format!("F{n}"),
+                    "writers": s.writers, "removers": s.removers}),
+                );
+            }
+            lines.push(json!({"type": "transition", "finding": format!("F{n}"),
+                "from": "candidate", "to": "suspected_static_only", "evidence": [],
+                "by": "dla ledger resolve", "reason": "no_harness", "remedy": remedy(n)}));
+        }
+        lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let mut l = l.clone();
+                l["schema_version"] = json!(1);
+                l["seq"] = json!(i + 1);
+                l["ts"] = json!("2026-01-01T00:00:00Z");
+                format!("{l}\n")
+            })
+            .collect()
+    }
+
+    fn render(text: &str) -> String {
+        render_markdown(&view_of_text(text))
+    }
+
+    /// The finding IDs of full sections, in order.
+    fn section_ids(md: &str) -> Vec<String> {
+        md.lines()
+            .filter_map(|l| l.strip_prefix("### F"))
+            .map(|l| format!("F{}", l.split(':').next().unwrap()))
+            .collect()
+    }
+
+    fn tiers() -> Vec<Spec> {
+        // Tier 5, 4, 3, 2, 1 in ledger order F1..F5.
+        vec![
+            Spec {
+                origin: "census",
+                holder: Some("container-field"),
+                writers: &[],
+                removers: &[],
+            },
+            Spec {
+                origin: "census",
+                holder: Some("static/global"),
+                writers: &["a.kt:1"],
+                removers: &["a.kt:9"],
+            },
+            Spec {
+                origin: "detector:semgrep/leaky",
+                holder: None,
+                writers: &[],
+                removers: &[],
+            },
+            Spec {
+                origin: "census",
+                holder: Some("registration-table"),
+                writers: &["a.kt:1"],
+                removers: &[],
+            },
+            Spec {
+                origin: "known-leak:okhttp-1",
+                holder: None,
+                writers: &[],
+                removers: &[],
+            },
+        ]
+    }
+
+    #[test]
+    fn static_only_findings_are_ordered_by_tier_then_ledger_order() {
+        let md = render(&static_only_text(&tiers(), |_| REMEDY.into()));
+        assert_eq!(section_ids(&md), ["F5", "F4", "F3", "F2", "F1"], "{md}");
+        assert!(
+            md.contains("Suspected, static-only findings are ordered"),
+            "{md}"
+        );
+        assert!(md.contains("such as a holder with no writers."), "{md}");
+        assert!(
+            !md.contains("none of them was exercised") && !md.contains("most were not measured"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn a_tier_keeps_ledger_order_and_the_other_census_shapes_land_in_the_right_tier() {
+        let mut specs = tiers();
+        // Another tier-4 (thread-local with writers, no removers) after F2, and a tier-2 before F4.
+        specs.push(Spec {
+            origin: "census",
+            holder: Some("thread-local"),
+            writers: &["b.kt:2"],
+            removers: &[],
+        });
+        specs.push(Spec {
+            origin: "census",
+            holder: Some("container-field"),
+            writers: &["b.kt:3"],
+            removers: &[],
+        });
+        let md = render(&static_only_text(&specs, |_| REMEDY.into()));
+        assert_eq!(
+            section_ids(&md),
+            ["F5", "F4", "F7", "F3", "F2", "F6", "F1"],
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn every_finding_section_prints_its_origin() {
+        let md = render(&static_only_text(&tiers(), |_| REMEDY.into()));
+        for o in [
+            "`known-leak:okhttp-1`",
+            "`census`",
+            "`detector:semgrep/leaky`",
+        ] {
+            assert!(md.contains(&format!("- Origin: {o}\n")), "{o}\n{md}");
+        }
+        let full = render_markdown(&view("complete", None));
+        assert_eq!(
+            full.matches("\n### F").count(),
+            full.matches("\n- Origin: ").count(),
+            "{full}"
+        );
+    }
+
+    fn leak(list: &[String]) -> &'static [&'static str] {
+        let v: Vec<&'static str> = list
+            .iter()
+            .map(|s| &*Box::leak(s.clone().into_boxed_str()))
+            .collect();
+        Box::leak(v.into_boxed_slice())
+    }
+
+    fn many(n: usize) -> Vec<Spec> {
+        (0..n)
+            .map(|_| Spec {
+                origin: "census",
+                holder: Some("container-field"),
+                writers: &["a.kt:1"],
+                removers: &[],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_first_fifteen_get_sections_and_the_rest_one_table() {
+        let md = render(&static_only_text(&many(17), |_| REMEDY.into()));
+        assert_eq!(section_ids(&md).len(), 15, "{md}");
+        assert!(md.contains("#### Other static-only findings (2)\n"), "{md}");
+        assert!(
+            md.contains(&format!("Remedy for all of them: {REMEDY}\n")),
+            "{md}"
+        );
+        let table = md
+            .split("#### Other static-only findings (2)")
+            .nth(1)
+            .unwrap();
+        let rows: Vec<&str> = table.lines().filter(|l| l.starts_with("| F")).collect();
+        assert_eq!(rows.len(), 2, "{table}");
+        assert!(
+            rows[0].starts_with(
+                "| F16 | `census` | container-field | `pkg.Owner16.items` | no_harness |"
+            ),
+            "{rows:?}"
+        );
+        assert!(table.contains("| ID | Origin | Holder | Owner or site | Reason |"));
+        // Exactly 15 is all sections, no table.
+        let md = render(&static_only_text(&many(15), |_| REMEDY.into()));
+        assert!(!md.contains("Other static-only findings"), "{md}");
+    }
+
+    #[test]
+    fn differing_remedies_are_not_printed_once_nor_per_row() {
+        let md = render(&static_only_text(&many(17), |n| format!("remedy {n}")));
+        let table = md
+            .split("#### Other static-only findings (2)")
+            .nth(1)
+            .unwrap();
+        assert!(!table.contains("Remedy for all of them"), "{table}");
+        assert!(!table.contains("remedy 16"), "{table}");
+    }
+
+    #[test]
+    fn other_states_keep_their_full_sections_after_the_table() {
+        let mut text = static_only_text(&many(17), |_| REMEDY.into());
+        // The golden-style fixture's unresolved F3 and confirmed F1 as extra findings.
+        let n = text.lines().count();
+        let extra = [
+            json!({"type": "finding_added", "finding": {"id": "F18", "state": "candidate",
+                "origin": "growth-series", "supports": ["E1"]}}),
+            json!({"type": "transition", "finding": "F18", "from": "candidate",
+                "to": "unresolved", "evidence": [], "by": "dla ledger resolve",
+                "reason": "no_harness", "remedy": "x"}),
+        ];
+        for (i, mut l) in extra.into_iter().enumerate() {
+            l["schema_version"] = json!(1);
+            l["seq"] = json!(n + i + 1);
+            l["ts"] = json!("2026-01-01T00:00:00Z");
+            text.push_str(&format!("{l}\n"));
+        }
+        let md = render(&text);
+        let table_at = md.find("#### Other static-only findings (2)").unwrap();
+        let f18 = md.find("### F18: **UNCLASSIFIED**").unwrap();
+        assert!(table_at < f18, "{md}");
+        assert!(
+            md[f18..].contains("- State: unresolved(no_harness)\n"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn a_candidate_and_its_hypothesis_keep_full_sections_beside_a_cut_table() {
+        let mut text = static_only_text(&many(17), |_| REMEDY.into());
+        let n = text.lines().count();
+        let extra = [
+            json!({"type": "finding_added", "finding": {"id": "F18", "state": "candidate",
+                "origin": "growth-series", "supports": ["E1"]}}),
+            json!({"type": "finding_added", "finding": {"id": "F18.n1", "state": "candidate",
+                "origin": "hypothesis", "supports": ["E1"], "parent": "F18",
+                "hypothesis": "N-WARM: warm-up growth", "refute_if": "flat after warm-up"}}),
+        ];
+        for (i, mut l) in extra.into_iter().enumerate() {
+            l["schema_version"] = json!(1);
+            l["seq"] = json!(n + i + 1);
+            l["ts"] = json!("2026-01-01T00:00:00Z");
+            text.push_str(&format!("{l}\n"));
+        }
+        let md = render(&text);
+        assert!(md.contains("#### Other static-only findings (2)\n"), "{md}");
+        for (id, origin) in [("F18", "growth-series"), ("F18.n1", "hypothesis")] {
+            let at = md
+                .find(&format!("### {id}: "))
+                .unwrap_or_else(|| panic!("{id}\n{md}"));
+            assert!(md[at..].contains("- State: candidate\n"), "{id}\n{md}");
+            assert!(
+                md[at..].contains(&format!("- Origin: `{origin}`\n")),
+                "{id}\n{md}"
+            );
+        }
+        assert_eq!(section_ids(&md).len(), 17, "15 static-only plus 2 others");
+    }
+
+    #[test]
+    fn a_big_blind_spots_list_is_counted_not_listed() {
+        let entries: Vec<_> = (0..608)
+            .map(|i| {
+                json!({"entry": format!("com.example.service.Handler{i}|handle"),
+                            "reason": "no_harness"})
+            })
+            .collect();
+        let cov: CoverageManifest = serde_json::from_value(json!({
+            "schema_version": 1,
+            "workers": {"jvm": {"runtime": "jvm", "entry_points": {
+                "discovered": [], "exercised": [], "not_exercisable": entries}}}
+        }))
+        .unwrap();
+        let mut v = view_of_text(&static_only_text(&many(362), |_| REMEDY.into()));
+        v.coverage = Some(cov);
+        let md = render_markdown(&v);
+        assert!(
+            md.contains("- jvm: and 593 more not listed (593 x no_harness)"),
+            "{md}"
+        );
+        assert_eq!(md.matches("Handler").count(), 15, "{md}");
+        assert!(md.len() < 80 * 1024, "{} bytes", md.len());
+    }
+
+    #[test]
+    fn a_static_only_section_lists_five_writers_and_counts_the_rest() {
+        let writers: Vec<String> = (0..24)
+            .map(|i| format!("src/main/kotlin/com/example/service/Writer{i}.kt:{}", i + 1))
+            .collect();
+        let w: &'static [&'static str] = leak(&writers);
+        let specs: Vec<Spec> = (0..3)
+            .map(|_| Spec {
+                origin: "census",
+                holder: Some("container-field"),
+                writers: w,
+                removers: &[],
+            })
+            .collect();
+        let md = render(&static_only_text(&specs, |_| REMEDY.into()));
+        assert_eq!(md.matches("Writer4.kt:5").count(), 3, "{md}");
+        assert!(!md.contains("Writer5.kt:6"), "{md}");
+        assert_eq!(
+            md.matches("and 19 more (in the ledger annotation)").count(),
+            3,
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn a_kotlin_shaped_run_with_many_writers_renders_under_64_kb() {
+        let writers: Vec<String> = (0..24)
+            .map(|i| {
+                format!(
+                    "src/main/kotlin/com/example/service/persistence/OrderRepository{i}.kt:{}",
+                    i + 1
+                )
+            })
+            .collect();
+        let w: &'static [&'static str] = leak(&writers);
+        let specs: Vec<Spec> = (0..362)
+            .map(|_| Spec {
+                origin: "census",
+                holder: Some("container-field"),
+                writers: w,
+                removers: &[],
+            })
+            .collect();
+        // Owners and sites the length a Kotlin service has.
+        let text = static_only_text(&specs, |_| REMEDY.into())
+            .replace(
+                "pkg.Owner",
+                "com.example.service.persistence.impl.OrderRepositoryOwner",
+            )
+            .replace(
+                "src/o",
+                "src/main/kotlin/com/example/service/persistence/impl/o",
+            );
+        let md = render(&text);
+        assert!(md.len() < 64 * 1024, "{} bytes", md.len());
+        assert!(md.contains("#### Other static-only findings (347)\n"));
+    }
+
+    #[test]
+    fn ranked_output_is_deterministic() {
+        let t = static_only_text(&many(20), |_| REMEDY.into());
+        assert_eq!(render(&t), render(&t));
+    }
+
+    #[test]
+    fn a_run_with_362_census_findings_renders_under_80_kb() {
+        let t = static_only_text(&many(362), |_| REMEDY.into());
+        let md = render(&t);
+        assert!(md.len() < 80 * 1024, "{} bytes", md.len());
+        assert!(md.contains("#### Other static-only findings (347)\n"));
+    }
+}
+
+mod measured_line {
+    use super::*;
+    use dla_core::{
+        Authority, EvidenceKind, NewEvidence, Source, Tool, evidence::EvidenceCoverage,
+    };
+
+    const NOTHING: &str = "Measured: nothing. No harness ran and nothing was sampled or captured, so every finding rests on reading the code: this report neither shows nor rules out a leak.\n";
+
+    fn ev(kind: EvidenceKind, authority: Authority) -> NewEvidence {
+        NewEvidence {
+            source: Source::Repo {
+                commit: "abc".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "0".into(),
+            },
+            authority,
+            kind,
+            result: json!({}),
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        }
+    }
+
+    #[test]
+    fn nothing_measured_follows_the_status_line_for_complete_and_incomplete() {
+        let md = render_markdown(&gate_complete_view());
+        assert!(
+            md.contains(&format!("Status: COMPLETE\n\n{NOTHING}\nEntry:")),
+            "{md}"
+        );
+        let md = render_markdown(&view("incomplete", None));
+        assert!(
+            md.contains(&format!(
+                "Status: INCOMPLETE ({} open)\n\n{NOTHING}",
+                open_count(&md)
+            )),
+            "{md}"
+        );
+    }
+
+    fn open_count(md: &str) -> usize {
+        md.lines()
+            .find_map(|l| l.strip_prefix("Status: INCOMPLETE ("))
+            .and_then(|r| r.split(' ').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_measured_run_counts_harness_runs_series_and_captures() {
+        let mut l = Ledger::from_text("").unwrap();
+        for (k, a) in [
+            (EvidenceKind::CensusHolder, Authority::Static),
+            (EvidenceKind::Workload, Authority::Static),
+            (EvidenceKind::Workload, Authority::Test),
+            (EvidenceKind::Workload, Authority::Test),
+            (EvidenceKind::GrowthSeries, Authority::Live),
+            (EvidenceKind::HistogramDiff, Authority::Dump),
+        ] {
+            l.add_evidence(ev(k, a)).unwrap();
+        }
+        let md = render_markdown(&RunView::new(state("20260101-000000-abcd"), l, None));
+        assert!(
+            md.contains("\n\nMeasured: 2 harness runs, 1 series, 1 capture\n\n"),
+            "{md}"
+        );
+        assert!(!md.contains("Measured: nothing"));
     }
 }

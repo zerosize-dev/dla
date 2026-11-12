@@ -12,6 +12,12 @@ pub const JVM_DUMP: &str = include_str!("../../../../harness/jvm/DlaDump.java");
 pub const JVM_CAPTURE: &str = include_str!("../../../../harness/jvm/DlaCapture.java");
 /// JVM driver template.
 pub const JVM_DRIVER: &str = include_str!("../../../../harness/jvm/DlaHarness.java");
+/// JVM JUnit repeat driver template: runs the project's own JUnit 5 tests in a loop, no hooks.
+pub const JVM_JUNIT_DRIVER: &str = include_str!("../../../../harness/jvm/DlaJUnitHarness.java");
+/// Gradle init script of the JUnit repeat build step: prints the test runtime class path.
+pub const JVM_JUNIT_INIT: &str = include_str!("../../../../harness/jvm/dla-junit.init.gradle");
+/// Build step script of the JUnit repeat harness (class path, driver compile, argument file).
+pub const JVM_JUNIT_BUILD: &str = include_str!("../../../../harness/jvm/dla-junit-build.sh");
 /// JVM agent jar manifest.
 pub const JVM_MANIFEST: &str = include_str!("../../../../harness/jvm/MANIFEST.MF");
 /// Python agent (`sitecustomize`).
@@ -127,9 +133,11 @@ mod tests {
             ("ROUNDS", "8"),
             ("REPEAT", "64"),
             ("CRATE", "demo"),
+            ("SELECT", "\"shop.CartTest\""),
         ];
         for t in [
             JVM_DRIVER,
+            JVM_JUNIT_DRIVER,
             PY_DRIVER,
             PY_PYTEST,
             NODE_DRIVER,
@@ -151,6 +159,7 @@ mod tests {
     #[test]
     fn drivers_carry_their_hooks() {
         assert_eq!(hooks(JVM_DRIVER), ["setup", "unit"]);
+        assert!(hooks(JVM_JUNIT_DRIVER).is_empty());
         assert!(hooks(NATIVE_DRIVER).contains(&"state".to_owned()));
     }
 }

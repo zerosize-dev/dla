@@ -5,7 +5,10 @@
 //! missing. Stages are cumulative: `--stage X` also requires everything the stages before
 //! it require. `--final` requires everything the report needs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use dla_stats::{GateVerdict, TrendShape};
 use schemars::JsonSchema;
@@ -15,8 +18,9 @@ use crate::{
     checklist::AnswerStatus,
     coverage::{BackendStatus, CoverageManifest},
     evidence::EvidenceKind,
-    finding::{Finding, FindingState, Polarity},
+    finding::{Finding, FindingState, Polarity, UnresolvedReason},
     ids::FindingId,
+    record::Record,
     series::ColumnKind,
     state::{EntryPath, Stage},
     trend::{ColumnTrend, TrendReport},
@@ -1095,6 +1099,7 @@ fn residual_item_resolved(view: &RunView, id: &crate::ids::OpenItemId, region: &
 }
 
 fn final_items(view: &RunView, out: &mut Out) {
+    unrun_harness_items(view, None, out);
     // (b) per backend: every hit has a candidate and every candidate a disposition. The
     // undispositioned findings themselves are listed by `status`.
     for a in accounting(view) {
@@ -1216,6 +1221,338 @@ fn final_items(view: &RunView, out: &mut Out) {
     }
 }
 
+// ------------------------------------------------------------ unrun harnesses
+
+/// The rule for a generated harness that was never run applies only while more than
+/// `max(HARNESS_MIN_LEFT_SECS, HARNESS_MIN_LEFT_PERCENT % of the budget)` is left: below
+/// that a finding closed with `time_budget` is honest.
+pub const HARNESS_MIN_LEFT_SECS: u64 = 600;
+/// See [`HARNESS_MIN_LEFT_SECS`].
+pub const HARNESS_MIN_LEFT_PERCENT: u64 = 20;
+
+/// A harness ID (`H1`).
+pub type HarnessId = String;
+
+/// A generated harness that was never run, with the budget left that makes that matter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnrunHarness {
+    /// `H1`.
+    pub id: HarnessId,
+    /// Its runtime (`jvm`).
+    pub runtime: String,
+    /// Whole minutes of budget left (the nearest of the run's and the worker's deadline).
+    pub minutes_left: u64,
+    /// Whole minutes of the run's budget.
+    pub minutes_total: u64,
+    /// The driver's DLA-HOOK bodies are still the template's.
+    pub hooks_unfilled: bool,
+    /// The reason of its last attempt when one exists but is not a try (`hooks_unfilled`,
+    /// `interrupted`), for the wording of a refusal.
+    pub last_attempt: Option<String>,
+}
+
+impl UnrunHarness {
+    /// What happened to the harness, for a refusal or a missing item: "was generated and
+    /// never run", or what the last attempt shows.
+    pub fn state(&self) -> &'static str {
+        match self.last_attempt.as_deref() {
+            Some(crate::harness::ATTEMPT_HOOKS_UNFILLED) => {
+                "was never run with its DLA-HOOK bodies filled in"
+            }
+            Some(crate::harness::ATTEMPT_INTERRUPTED) => {
+                "was interrupted before it measured anything"
+            }
+            _ => "was generated and never run",
+        }
+    }
+
+    /// The command that clears the rule, for a refusal or a missing item.
+    pub fn fix(&self, run_id: &str) -> String {
+        let h = &self.id;
+        let run = if self.hooks_unfilled {
+            let junit = if self.runtime == "jvm" {
+                "; for a JVM project with JUnit 5 tests, dla harness gen --lang jvm --junit runs an existing test in a loop instead"
+            } else {
+                ""
+            };
+            format!(
+                "dla harness run {h} (a driver harness: fill the DLA-HOOK bodies in .dla/{run_id}/harness/{h}/driver/ first{junit})"
+            )
+        } else {
+            format!("dla harness run {h}")
+        };
+        format!(
+            "{run}. If {h} cannot run, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<what blocks {h}>\". If only the user can unblock it (services, credentials, data), ask the user before closing the run."
+        )
+    }
+}
+
+/// True for the reasons that close a finding without exercising it: the ones the rule
+/// covers. `env_unavailable`, `build_fails`, `tool_missing` and `privilege_declined` name a
+/// blocker and are never refused.
+pub fn closes_without_exercise(reason: UnresolvedReason) -> bool {
+    matches!(
+        reason,
+        UnresolvedReason::NoHarness | UnresolvedReason::NotExercised | UnresolvedReason::TimeBudget
+    )
+}
+
+/// The reasons that record a blocker on `intake.workload`.
+fn is_blocker_reason(reason: UnresolvedReason) -> bool {
+    matches!(
+        reason,
+        UnresolvedReason::EnvUnavailable
+            | UnresolvedReason::ToolMissing
+            | UnresolvedReason::BuildFails
+            | UnresolvedReason::PrivilegeDeclined
+    )
+}
+
+/// The harness directories of the run, `H1`, `H2`, ... in numeric order.
+fn harness_ids(run_dir: &Path) -> Vec<(u32, HarnessId)> {
+    let Ok(rd) = std::fs::read_dir(run_dir.join(crate::harness::HARNESS_DIR)) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<(u32, HarnessId)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            Some((crate::series::numbered('H', &name)?, name))
+        })
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Where the ledger recorded that harness `h` was generated: the sequence number of its
+/// first `workload` evidence without a `series` key (a run's evidence has one).
+fn generated_at(view: &RunView, h: &str) -> Option<u64> {
+    view.ledger.lines().iter().find_map(|l| match &l.record {
+        Record::Evidence(e)
+            if e.kind == EvidenceKind::Workload
+                && crate::harness::harness_id_of(&e.result) == Some(h)
+                && e.result.get("series").is_none() =>
+        {
+            Some(l.seq)
+        }
+        _ => None,
+    })
+}
+
+/// True when `intake.workload` was answered `unresolved` with a blocker reason and a
+/// remedy after harness `h` was generated.
+fn blocker_recorded(view: &RunView, h: &str) -> bool {
+    let after = generated_at(view, h).unwrap_or(0);
+    view.ledger.lines().iter().any(|l| {
+        l.seq > after
+            && matches!(&l.record, Record::ChecklistAnswer(a)
+                if a.item == "intake.workload"
+                    && a.status == AnswerStatus::Unresolved
+                    && a.reason.is_some_and(is_blocker_reason)
+                    && a.remedy.as_deref().is_some_and(|r| !r.trim().is_empty()))
+    })
+}
+
+/// The attempt record of harness `h`, when one was written and parses.
+fn attempt_of(run_dir: &Path, h: &str) -> Option<crate::harness::HarnessAttempt> {
+    let text = std::fs::read_to_string(crate::harness::HarnessAttempt::path_in(run_dir, h)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// True when harness `h` measured something: an attempt that ran (or ran partly), a
+/// `run-*.json`, or a series whose source is the harness (`view.harness_series`, read
+/// once with the series files).
+fn harness_ran(view: &RunView, run_dir: &Path, h: &str) -> bool {
+    use crate::harness::AttemptOutcome;
+    if attempt_of(run_dir, h).is_some_and(|a| a.outcome != AttemptOutcome::Failed) {
+        return true;
+    }
+    let dir = crate::harness::HarnessManifest::dir_in(run_dir, h);
+    let has_run_file = std::fs::read_dir(&dir).is_ok_and(|rd| {
+        rd.flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("run-") && n.ends_with(".json")
+        })
+    });
+    has_run_file || view.harness_series.contains(h)
+}
+
+/// True when harness `h` was tried: it measured something, or `dla harness run` wrote a
+/// failed attempt for it. A failure on a driver whose hooks were never filled in is not a
+/// try (the template's own error says nothing about the workload), and neither is a run
+/// the caller stopped (`interrupted`).
+fn harness_tried(view: &RunView, run_dir: &Path, h: &str) -> bool {
+    harness_ran(view, run_dir, h)
+        || attempt_of(run_dir, h).is_some_and(|a| !attempt_is_no_try(a.reason.as_deref()))
+}
+
+/// An attempt reason that says nothing about the workload: the driver's template hooks
+/// failed, or the caller stopped the run before it measured.
+fn attempt_is_no_try(reason: Option<&str>) -> bool {
+    matches!(
+        reason,
+        Some(crate::harness::ATTEMPT_HOOKS_UNFILLED | crate::harness::ATTEMPT_INTERRUPTED)
+    )
+}
+
+/// The first harness of `runtime` that `dla harness gen` wrote and nothing tried: its
+/// `harness.json` loads, the ledger has its generation evidence (a clone made by
+/// `dla intervene` has none), it was not tried (see `harness_tried`), and the blocker is
+/// not recorded (`intake.workload` answered `unresolved` with a blocker reason and a remedy
+/// after the harness was generated). `None` when another harness of the runtime measured
+/// something (an abandoned driver does not hold the rule), and for a view without a run
+/// directory. Pure of the clock; see [`harness_not_run`] for the budget part.
+pub fn unrun_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    let generated: Vec<HarnessId> = harness_ids(run_dir)
+        .into_iter()
+        .filter_map(|(_, id)| {
+            let m = crate::harness::HarnessManifest::load(run_dir, &id).ok()?;
+            (m.runtime.as_str() == runtime && generated_at(view, &id).is_some()).then_some(id)
+        })
+        .collect();
+    if generated.iter().any(|id| harness_ran(view, run_dir, id)) {
+        return None;
+    }
+    generated
+        .into_iter()
+        .find(|id| !harness_tried(view, run_dir, id) && !blocker_recorded(view, id))
+}
+
+/// Minutes left to the nearest deadline (the worker's, in worker mode, and the run's) and
+/// the budget in minutes, when the rule applies: the run is still going and more than
+/// the floor is left.
+fn budget_for_rule(view: &RunView, worker: Option<&str>) -> Option<(u64, u64)> {
+    use crate::state::RunStatus;
+    if matches!(
+        view.state.status,
+        RunStatus::Aborted | RunStatus::Incomplete
+    ) {
+        return None;
+    }
+    let now = crate::state::now_utc();
+    let mut deadline = view.state.budget.deadline;
+    if let Some(w) = worker.and_then(|w| view.state.worker(w)) {
+        deadline = deadline.min(w.deadline);
+    }
+    let left = u64::try_from((deadline - now).num_seconds()).unwrap_or(0);
+    let total = view.state.budget.seconds;
+    let floor = HARNESS_MIN_LEFT_SECS.max(total * HARNESS_MIN_LEFT_PERCENT / 100);
+    (left > floor).then_some((left / 60, total / 60))
+}
+
+/// The unrun harness of `runtime` while the rule applies (the run is going and more than
+/// the floor of budget is left), else `None`. `worker` is the worker whose slice `view`
+/// is, in worker mode.
+pub fn harness_not_run(
+    view: &RunView,
+    runtime: &str,
+    worker: Option<&str>,
+) -> Option<UnrunHarness> {
+    let (minutes_left, minutes_total) = budget_for_rule(view, worker)?;
+    let id = unrun_harness(view, runtime)?;
+    let hooks_unfilled = view
+        .run_dir
+        .as_deref()
+        .is_some_and(|d| crate::harness::hooks_unfilled(d, &id));
+    let last_attempt = view
+        .run_dir
+        .as_deref()
+        .and_then(|d| attempt_of(d, &id))
+        .and_then(|a| a.reason)
+        .filter(|r| attempt_is_no_try(Some(r)));
+    Some(UnrunHarness {
+        id,
+        last_attempt,
+        hooks_unfilled,
+        runtime: runtime.to_owned(),
+        minutes_left,
+        minutes_total,
+    })
+}
+
+/// The runtime of a finding for the rule: [`worker_key`], else the only runtime that has a
+/// harness.
+pub fn finding_runtime(view: &RunView, f: &Finding) -> Option<String> {
+    finding_runtime_with(view, f, &mut None)
+}
+
+/// [`finding_runtime`] with the only-runtime-that-has-a-harness fallback computed once per
+/// caller: `only` holds it after the first use (`Some(None)`: there is no single runtime).
+fn finding_runtime_with(
+    view: &RunView,
+    f: &Finding,
+    only: &mut Option<Option<String>>,
+) -> Option<String> {
+    let empty;
+    let cov = match &view.coverage {
+        Some(c) => c,
+        None => {
+            empty = CoverageManifest::new(None);
+            &empty
+        }
+    };
+    worker_key(view, cov, f).or_else(|| {
+        only.get_or_insert_with(|| {
+            let run_dir = view.run_dir.as_deref()?;
+            let mut rts: BTreeSet<String> = BTreeSet::new();
+            for (_, id) in harness_ids(run_dir) {
+                if let Ok(m) = crate::harness::HarnessManifest::load(run_dir, &id) {
+                    rts.insert(m.runtime.as_str().to_owned());
+                }
+            }
+            (rts.len() == 1).then(|| rts.into_iter().next()).flatten()
+        })
+        .clone()
+    })
+}
+
+/// One missing item per unrun harness that has a finding closed without exercise while the
+/// rule applies. `worker` limits the findings to a worker's own. The answer for a runtime
+/// is computed once, not once per finding: the cost is one pass over the findings plus one
+/// evaluation per runtime.
+fn unrun_harness_items(view: &RunView, worker: Option<&str>, out: &mut Out) {
+    let mut only: Option<Option<String>> = None;
+    let mut by_runtime: BTreeMap<String, Option<UnrunHarness>> = BTreeMap::new();
+    let mut counts: BTreeMap<HarnessId, (UnrunHarness, usize)> = BTreeMap::new();
+    for f in view.ledger.findings() {
+        let closed = matches!(
+            f.state,
+            FindingState::Unresolved | FindingState::SuspectedStaticOnly
+        ) && f.reason.is_some_and(closes_without_exercise);
+        if !closed {
+            continue;
+        }
+        if let Some(w) = worker
+            && f.id.prefix() != Some(w)
+        {
+            continue;
+        }
+        let Some(rt) = finding_runtime_with(view, f, &mut only) else {
+            continue;
+        };
+        let unrun = by_runtime
+            .entry(rt.clone())
+            .or_insert_with(|| harness_not_run(view, &rt, worker));
+        if let Some(u) = unrun {
+            counts.entry(u.id.clone()).or_insert((u.clone(), 0)).1 += 1;
+        }
+    }
+    let mut items: Vec<_> = counts.into_values().collect();
+    items.sort_by_key(|(u, _)| crate::series::numbered('H', &u.id));
+    for (u, n) in items {
+        out.add(
+            "harness_not_run",
+            u.id.clone(),
+            format!(
+                "harness {} ({}) {}, {n} finding(s) are closed with no_harness, not_exercised or time_budget, and {} of {} budget minutes remain",
+                u.id, u.runtime, u.state(), u.minutes_left, u.minutes_total
+            ),
+            u.fix(&view.state.run_id),
+        );
+    }
+}
+
 // ------------------------------------------------------------------- worker
 
 /// The gate for one worker's slice: its own findings and open items are dispositioned,
@@ -1273,6 +1610,7 @@ fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
         }
     }
     if target == GateTarget::Final {
+        unrun_harness_items(view, Some(w), &mut out);
         let done = view.slices.iter().any(|s| s.worker == w && s.done)
             || view.ledger.slice_info(w).is_some_and(|s| s.done.is_some());
         if !done {

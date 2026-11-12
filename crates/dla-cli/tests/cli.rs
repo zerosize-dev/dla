@@ -258,6 +258,29 @@ fn handwritten_ledger_renders_a_complete_report_and_stores_its_hash() {
 }
 
 #[test]
+fn a_measured_record_flips_measured_in_status_and_report() {
+    let dir = fixture_project();
+    append_evidence(
+        dir.path(),
+        FIXTURE_RUN,
+        "workload",
+        "test",
+        r#"{"harness":"H1","mode":"command","runtime":"go"}"#,
+    );
+    let st = ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
+    assert_eq!(st["counts"]["measured"], true);
+    let out = dla(dir.path())
+        .args(["--run", FIXTURE_RUN, "report"])
+        .output()
+        .unwrap();
+    let md = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        md.contains("\nMeasured: 1 harness run, 0 series, 0 captures\n"),
+        "{md}"
+    );
+}
+
+#[test]
 fn open_item_makes_the_report_incomplete() {
     let dir = fixture_project();
     append_line(
@@ -275,6 +298,13 @@ fn open_item_makes_the_report_incomplete() {
     let st = ok(dir.path(), &["--run", FIXTURE_RUN, "run", "status"]);
     assert_eq!(st["complete"], false);
     assert_eq!(st["counts"]["open_items"], 1);
+    // The fixture ledger holds only static records: nothing was measured, and both the
+    // report and `run status` say so.
+    assert_eq!(st["counts"]["measured"], false);
+    assert!(
+        md.contains("Status: INCOMPLETE (1 open)\n\nMeasured: nothing. No harness ran"),
+        "{md}"
+    );
 
     // resolving it through the CLI clears the header
     ok(

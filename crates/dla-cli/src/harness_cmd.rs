@@ -57,7 +57,8 @@ pub struct GenArgs {
     /// workload of the runtime that takes an iteration count).
     #[arg(long, value_name = "ID")]
     workload: Option<String>,
-    /// Driver mode: write a loop test with hooks to fill in, run in one process.
+    /// Driver mode: run in one process. A loop test with hooks to fill in (always, also for a
+    /// JUnit 5 test workload; --junit asks for the hookless JUnit repeat instead).
     #[arg(long)]
     driver: bool,
     /// How the workload takes an iteration count, with `{n}`: "--iterations {n}", "-n {n}",
@@ -65,7 +66,7 @@ pub struct GenArgs {
     #[arg(long, value_name = "TEMPLATE", allow_hyphen_values = true)]
     iter_arg: Option<String>,
     /// Units of work added per point (default: the largest count is about four times the
-    /// workload's default).
+    /// workload's default; 2 for the JUnit repeat, where a unit is one run of the tests).
     #[arg(long, value_name = "UNITS")]
     step: Option<u64>,
     /// Measured points after the warm-up.
@@ -83,6 +84,38 @@ pub struct GenArgs {
     /// Driver mode: the Go package directory or the Java package to drive.
     #[arg(long, value_name = "DIR|NAME")]
     package: Option<String>,
+    /// JVM: run the project's own JUnit 5 tests in a loop in one JVM (a driver with no hooks to
+    /// fill). Uses the JUnit test workload of a Gradle or Maven project (`--workload
+    /// jvm:test:<file>` to choose). The tests must not need to be told an iteration count.
+    #[arg(long)]
+    junit: bool,
+    /// With --junit: the classes or methods to run, `pkg.Class` or `pkg.Class#method`,
+    /// comma-separated or repeated (default: the workload's test class). A parameterized test is
+    /// `pkg.Class#method(java.lang.String,int)`.
+    #[arg(long, value_name = "CLASS[#METHOD],..")]
+    tests: Vec<String>,
+}
+
+/// Splits `--tests` on commas that are not inside the parentheses of a parameter list.
+fn split_selectors(text: &str) -> Vec<String> {
+    let (mut out, mut depth, mut cur) = (Vec::new(), 0usize, String::new());
+    for c in text.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(std::mem::take(&mut cur));
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    out.push(cur);
+    out.into_iter()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Which key modes `dla harness run` measures.
@@ -161,6 +194,8 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 probe_findings: g.probe,
                 auto_probes: g.probes == ProbesChoice::Auto,
                 package: g.package,
+                junit: g.junit,
+                tests: g.tests.iter().flat_map(|t| split_selectors(t)).collect(),
             };
             stage::finish(
                 "harness gen",
@@ -206,5 +241,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 run_harness(&tc, &r.harness, &opts),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_selectors;
+
+    #[test]
+    fn tests_flag_splits_on_commas_outside_parameter_lists() {
+        assert_eq!(
+            split_selectors("a.B, a.C#p(java.lang.String,int),a.D#m"),
+            ["a.B", "a.C#p(java.lang.String,int)", "a.D#m"]
+        );
+        assert!(split_selectors(" , ").is_empty());
     }
 }

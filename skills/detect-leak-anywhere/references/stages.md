@@ -171,7 +171,10 @@ under the run directory and need tier 1.
   and derive ids from `key` so a repeated key reproduces an earlier request. Go probes of package
   variables work only in driver mode.
 - `dla harness run H1` builds once and measures every point (`--mode both` in driver mode). Give a
-  harness run or alloc-test Bash call a timeout of 600000 ms.
+  harness run or alloc-test Bash call a timeout of 600000 ms. A harness that `gen` wrote must be run, or the
+  blocker recorded on `intake.workload` (`--status unresolved --reason env_unavailable|tool_missing|build_fails|privilege_declined
+  --remedy "<what blocks it>"`), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with
+  `harness-not-run` while budget remains. Once its manifest loads, `harness run` leaves `harness/H<n>/attempt.json`.
 - Raw captures for stage 6 come from flags of the same command; each is a separate, costlier run, so
   add one only for a harness that grew (a passing column), not for every harness:
   - JVM: `--capture heap,histogram,jfr,nonheap` or `--capture all` (`--dumps <N>` heap dumps,
@@ -371,7 +374,7 @@ evidence. A candidate the harness could not exercise is neither confirmed nor re
 `dla ledger resolve F6 --as suspected_static_only --reason not_exercised --remedy "<text>"
 --evidence E4` (reasons `not_exercised`, `no_harness`, `build_fails`), or `--as unresolved` when
 no static evidence exists. A failed build or a run without usable points (`harness-failed`)
-confirms nothing.
+confirms nothing. Closing with `no_harness`, `not_exercised` or `time_budget` while a generated harness of the runtime was never run (and more than 10 minutes and more than 20% of the budget remains) is refused (`harness-not-run`); if only the user can unblock the harness (services, credentials, data), ask the user before closing.
 
 ## 8. Final gate
 
@@ -383,7 +386,7 @@ answers cite evidence that exists; no worker slice is unmerged; the integrity se
 done is recorded: `dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do
 next>"`. Reasons: `not_exercised`, `no_harness`, `env_unavailable`, `build_fails`,
 `privilege_declined`, `tool_missing`, `time_budget`. With workers: `dla ledger merge` first, then
-verification, then this stage. `dla run status` shows the same open items in short.
+verification, then this stage. A harness that was generated, never run (a run you stopped, or one that failed on unfilled DLA-HOOK bodies, does not count) and has findings closed without exercise is a missing item of kind `harness_not_run` while budget remains. After `dla ledger merge` the core judges every worker's harness against the run's deadline only, so a worker that stopped at its own, nearer deadline can leave its harness listed: run it from the core or record its blocker on `intake.workload`. `dla run status` shows the same open items in short.
 
 ## 9. Report and revisit
 

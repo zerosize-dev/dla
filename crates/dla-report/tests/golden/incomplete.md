@@ -4,6 +4,8 @@ Run: `20260101-000000-abcd`
 
 Status: INCOMPLETE (11 open)
 
+Measured: 1 harness run, 0 series, 0 captures
+
 Entry: repository
 
 Scope: repository; excluded: none; out of scope: none
@@ -33,6 +35,7 @@ Coverage: jvm no iterations, 1 of 2 entry points exercised
 ### F1: **UNCLASSIFIED**
 
 - State: candidate
+- Origin: `census`
 - Evidence classes: static
 - Site: `src/a.py:1`
 - Supporting evidence: E2
@@ -40,6 +43,7 @@ Coverage: jvm no iterations, 1 of 2 entry points exercised
 ### F2: **UNCLASSIFIED**
 
 - State: under_test
+- Origin: `census`
 - Evidence classes: static
 - Supporting evidence: E2
 

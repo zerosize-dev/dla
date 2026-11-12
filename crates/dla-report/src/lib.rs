@@ -5,18 +5,18 @@
 //! byte-identical output. The completeness gate itself lives in `dla-core`
 //! ([`dla_core::status`]); this crate only formats it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use dla_core::{
-    EvidenceId, EvidenceRecord, Finding, FindingState, RunView, UNCLASSIFIED,
+    EvidenceId, EvidenceRecord, Finding, FindingState, Measured, RunView, UNCLASSIFIED,
     coverage::{BackendStatus, CoverageManifest, ResidualRow},
     discriminator::favors_of,
     evidence::CoverageStatus,
     finding::Polarity,
     gate::{self, GateTarget, Missing},
     machine::is_passing_growth,
-    status,
+    measured, status,
     trend::{GrowthSummary, PassedColumn},
 };
 
@@ -115,6 +115,21 @@ fn sites(list: &[String]) -> String {
     list.iter().map(|s| code(s)).collect::<Vec<_>>().join(", ")
 }
 
+/// Writers or removers listed in a static-only finding's section; the rest are counted.
+const LISTED_SITES: usize = 5;
+
+/// `sites`, cut after `cap` entries with the number left out.
+fn capped_sites(list: &[String], cap: usize) -> String {
+    if list.len() <= cap {
+        return sites(list);
+    }
+    format!(
+        "{}, and {} more (in the ledger annotation)",
+        sites(&list[..cap]),
+        list.len() - cap
+    )
+}
+
 /// The archetype label: the archetype ID, or `UNCLASSIFIED` at the same weight as any
 /// other label (it is a result, not a claim of novelty).
 fn label(f: &Finding) -> String {
@@ -208,6 +223,7 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     } else {
         let _ = writeln!(out, "Status: INCOMPLETE ({} open)\n", st.blocking.len());
     }
+    let _ = writeln!(out, "{}\n", measured_line(&measured(view)));
     let _ = writeln!(out, "Entry: {}\n", entry_line(view));
     let _ = writeln!(out, "Scope: {}\n", scope_line(view));
     let s = &c.by_state;
@@ -224,6 +240,21 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     );
     let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
     let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
+}
+
+/// The `Measured:` line, right after `Status:` (which stays exactly as it was: graders
+/// match it). A run that measured nothing says so, in words that cannot be read as a
+/// clean result.
+fn measured_line(m: &Measured) -> String {
+    if !m.any() {
+        return "Measured: nothing. No harness ran and nothing was sampled or captured, so every finding rests on reading the code: this report neither shows nor rules out a leak.".to_owned();
+    }
+    format!(
+        "Measured: {}, {}, {}",
+        plural(m.harness_runs, "harness run", "harness runs"),
+        plural(m.series, "series", "series"),
+        plural(m.captures, "capture", "captures"),
+    )
 }
 
 /// The entry path, with the artifacts of an artifact run.
@@ -419,6 +450,56 @@ fn classes(view: &RunView, f: &Finding) -> String {
     set.into_iter().collect::<Vec<_>>().join(", ")
 }
 
+/// The first this many `suspected_static_only` findings, in rank order, get a full
+/// section; the rest are rows of one table.
+const FULL_STATIC_ONLY: usize = 15;
+
+/// The sentence above the `suspected_static_only` findings.
+const TIER_NOTE: &str = "Suspected, static-only findings are ordered by how likely a read-only signal makes a leak, strongest first, and keep the ledger's order within a tier: (1) a known leak pattern, (2) a census holder with writers and no removers in a registration table, container field or static/global, (3) a detector hit, (4) a census holder with writers that also has removers or sits in a thread-local, closure, native handle or blocked stack, (5) everything else, such as a holder with no writers.";
+
+/// The rank of a `suspected_static_only` finding, 1 (strongest) to 5. Pure function of
+/// the finding and its census annotation, so the order is the same on every run.
+fn static_tier(view: &RunView, f: &Finding) -> u8 {
+    use dla_core::finding::Holder as H;
+    let origin = f.origin.as_str();
+    if origin.starts_with("known-leak:") {
+        return 1;
+    }
+    if origin.starts_with("detector:") {
+        return 3;
+    }
+    if origin == "census" {
+        let (writers, removers) = view
+            .ledger
+            .annotation(&f.id)
+            .map_or((0, 0), |a| (a.writers.len(), a.removers.len()));
+        if writers > 0
+            && removers == 0
+            && matches!(
+                f.holder,
+                Some(H::RegistrationTable | H::ContainerField | H::StaticGlobal)
+            )
+        {
+            return 2;
+        }
+        if writers > 0
+            && (removers > 0
+                || matches!(
+                    f.holder,
+                    Some(
+                        H::ThreadLocal
+                            | H::ClosureContinuation
+                            | H::NativeHandleGlobalRef
+                            | H::BlockedStack
+                    )
+                ))
+        {
+            return 4;
+        }
+    }
+    5
+}
+
 fn findings(out: &mut String, view: &RunView) {
     out.push_str("## Findings\n\n");
     let mut list: Vec<&Finding> = view
@@ -426,14 +507,70 @@ fn findings(out: &mut String, view: &RunView) {
         .findings()
         .filter(|f| f.state != FindingState::Refuted && view.ledger.merged_into(&f.id).is_none())
         .collect();
-    list.sort_by_key(|f| rank(f.state));
+    // Stable: inside a state the ledger order stays; inside suspected_static_only the
+    // tier decides first.
+    list.sort_by_key(|f| {
+        let tier = if f.state == FindingState::SuspectedStaticOnly {
+            static_tier(view, f)
+        } else {
+            0
+        };
+        (rank(f.state), tier)
+    });
     if list.is_empty() {
         out.push_str("No findings to report.\n\n");
         return;
     }
+    let mut static_seen = 0;
+    let mut table: Vec<&Finding> = Vec::new();
+    let flush = |out: &mut String, table: &mut Vec<&Finding>| {
+        if !table.is_empty() {
+            static_table(out, table);
+            table.clear();
+        }
+    };
     for f in list {
+        if f.state == FindingState::SuspectedStaticOnly {
+            if static_seen == 0 {
+                let _ = writeln!(out, "{TIER_NOTE}\n");
+            }
+            static_seen += 1;
+            if static_seen > FULL_STATIC_ONLY {
+                table.push(f);
+                continue;
+            }
+        } else {
+            flush(out, &mut table);
+        }
         finding_section(out, view, f);
     }
+    flush(out, &mut table);
+}
+
+/// `#### Other static-only findings (<n>)`: one row per finding, no remedy per row. A
+/// remedy shared by every row is printed once above the table.
+fn static_table(out: &mut String, rows: &[&Finding]) {
+    let _ = writeln!(out, "#### Other static-only findings ({})\n", rows.len());
+    let first = rows.first().and_then(|f| f.remedy.as_deref());
+    if let Some(r) = first
+        && rows.iter().all(|f| f.remedy.as_deref() == Some(r))
+    {
+        let _ = writeln!(out, "Remedy for all of them: {}\n", inline(r));
+    }
+    out.push_str("| ID | Origin | Holder | Owner or site | Reason |\n|---|---|---|---|---|\n");
+    for f in rows {
+        let place = f.owner.as_deref().or(f.site.as_deref());
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            f.id,
+            code_cell(f.origin.as_str()),
+            f.holder.map_or_else(|| DASH.to_owned(), |h| h.to_string()),
+            place.map_or_else(|| DASH.to_owned(), code_cell),
+            f.reason.map_or_else(|| DASH.to_owned(), |r| r.to_string()),
+        );
+    }
+    out.push('\n');
 }
 
 /// A number without trailing zeros: whole numbers print as integers, others with at
@@ -584,6 +721,7 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
         }
     }
     let _ = writeln!(out, "- State: {}", f.state_label());
+    let _ = writeln!(out, "- Origin: {}", code(f.origin.as_str()));
     if let Some(l) = label_line(view, f) {
         let _ = writeln!(out, "- {l}");
     }
@@ -619,11 +757,18 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
         let _ = writeln!(out, "- Site: {}", code(s));
     }
     if let Some(a) = view.ledger.annotation(&f.id) {
+        // A census finding can name dozens of writers; on a static-only finding (one of
+        // hundreds on a service) the first few identify it and the rest are in the ledger.
+        let cap = if f.state == FindingState::SuspectedStaticOnly {
+            LISTED_SITES
+        } else {
+            usize::MAX
+        };
         if !a.writers.is_empty() {
-            let _ = writeln!(out, "- Writers: {}", sites(&a.writers));
+            let _ = writeln!(out, "- Writers: {}", capped_sites(&a.writers, cap));
         }
         if !a.removers.is_empty() {
-            let _ = writeln!(out, "- Removers: {}", sites(&a.removers));
+            let _ = writeln!(out, "- Removers: {}", capped_sites(&a.removers, cap));
         }
         for n in &a.notes {
             let _ = writeln!(out, "- Annotation: {}", inline(n));
@@ -874,6 +1019,10 @@ fn ruled_out(out: &mut String, view: &RunView) {
     out.push('\n');
 }
 
+/// Entry points per worker listed one by one under "Entry points not exercisable"; the
+/// rest are counted by reason (a discovery over a large service marks hundreds).
+const LISTED_UNEXERCISABLE: usize = 15;
+
 fn blind_spots(out: &mut String, view: &RunView) {
     out.push_str("## Blind spots and unknowns\n\n");
 
@@ -913,9 +1062,35 @@ fn blind_spots(out: &mut String, view: &RunView) {
     let mut any = false;
     if let Some(cov) = &view.coverage {
         for (worker, w) in &cov.workers {
-            for n in &w.entry_points.not_exercisable {
+            for n in w
+                .entry_points
+                .not_exercisable
+                .iter()
+                .take(LISTED_UNEXERCISABLE)
+            {
                 any = true;
                 let _ = writeln!(out, "- {worker}: {}: {}", code(&n.entry), inline(&n.reason));
+            }
+            let rest = w
+                .entry_points
+                .not_exercisable
+                .iter()
+                .skip(LISTED_UNEXERCISABLE)
+                .fold(BTreeMap::<&str, usize>::new(), |mut m, n| {
+                    *m.entry(n.reason.as_str()).or_default() += 1;
+                    m
+                });
+            if !rest.is_empty() {
+                let total: usize = rest.values().sum();
+                let by: Vec<String> = rest
+                    .iter()
+                    .map(|(r, n)| format!("{n} x {}", inline(r)))
+                    .collect();
+                let _ = writeln!(
+                    out,
+                    "- {worker}: and {total} more not listed ({}); the full list is in `coverage.json`",
+                    by.join("; ")
+                );
             }
         }
     }

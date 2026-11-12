@@ -89,6 +89,8 @@ When you annotate a site or writer, take `file:line` from `grep -n` or `cat -n` 
 ## Before you stop
 
 - `dla gate check --final` passes, or every open item has a reason and a next step (`dla ledger resolve ... --as unresolved --reason <r> --remedy "<text>"`). Every confirmed leak has an explanation and a verification record.
+- Run a harness `dla harness gen` wrote (`dla harness run`) before closing any finding of its runtime as `no_harness`, `not_exercised` or `time_budget`. If it cannot run, record the blocker on `intake.workload`; if only the user can unblock it (services, credentials, data), ask the user before closing, not after the report.
+- If the report's `Measured:` line says nothing was measured, say first and plainly that the run measured nothing, so it neither shows nor rules out a leak, and name what would let it measure (the harness and what it needs).
 - If `dla report` shows INCOMPLETE, say so plainly and list what is still open. Never write "done" over it.
 - A Stop hook may block your stop while `gate check --final` fails. Do not rely on it: it blocks the first two stop attempts, lets the third go if nothing changed in the ledger, and stamps the run INCOMPLETE, and older Claude Code versions do not run it at all.
 - Never edit `.dla` files to make a check pass. The write hook refuses them (the harness driver excepted), the integrity seals on the protected files detect an edit that gets past it, the report names it, and `dla run reseal --reason` is for a change made outside `dla` that you disclose.

@@ -320,7 +320,7 @@ The policy, per fixture (repository entry, one runtime):
    `iteration-arg-unknown`, or when the harness does not run, the next main or
    script workload with an iteration argument, at most two) and
    `harness run H`. If no harness ran, every candidate becomes
-   `suspected_static_only` (`build_fails` or `no_harness`).
+   `suspected_static_only` (`build_fails` or `no_harness`). The policy runs every harness it generates with `dla harness run`, so each has an `attempt.json`; a harness that `dla intervene` clones is not a generated one, so the `harness-not-run` rule never holds the policy's closures back.
 3. `trend S`. For every passed column with candidates, the column's first
    candidate (once per run): add an N-WARM sibling, `ledger test`, `alloc-test
    H --finding F`. Favors leak: refute the sibling, annotate the holder if

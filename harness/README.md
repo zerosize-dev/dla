@@ -6,7 +6,7 @@ lists its placeholders and hooks:
 
 | Directory | Contents |
 |---|---|
-| `jvm/` | `DlaAgent.java` (premain agent), `DlaDump.java` (dump and probe code), `DlaHarness.java` (driver), `MANIFEST.MF` |
+| `jvm/` | `DlaAgent.java` (premain agent), `DlaDump.java` (dump and probe code), `DlaHarness.java` (driver), `DlaJUnitHarness.java` (JUnit repeat driver, no hooks), `dla-junit-build.sh` and `dla-junit.init.gradle` (its build step), `MANIFEST.MF` |
 | `python/` | `sitecustomize.py` (agent), `dla_harness.py` (driver), `test_dla_harness.py` (pytest-memray variant) |
 | `node/` | `dla-preload.js` (agent), `dla-harness.js` (driver) |
 | `go/` | `zz_dla_harness_test.go.tmpl` (command mode), `zz_dla_driver_test.go.tmpl` (driver), `zz_dla_goleak_test.go.tmpl` (optional goleak check) |
@@ -83,6 +83,8 @@ name that may be empty (`@@DLA_PACKAGE@@` for the default Java package), `dla` r
 `package ...;` line.
 
 ## Hook syntax
+
+The JUnit repeat driver (`jvm/DlaJUnitHarness.java`, `dla harness gen --lang jvm --junit`) has no hooks: it runs the project's own JUnit 5 tests in a loop, see `jvm/README.md`.
 
 Driver templates contain hooks the model fills in. A hook is a line comment
 

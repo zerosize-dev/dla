@@ -52,6 +52,11 @@ const TIMEOUT_SECS: u64 = 300;
 const DEFAULT_REPEAT: u64 = 64;
 /// Name of the JVM driver class.
 const JVM_DRIVER_CLASS: &str = "DlaLoop";
+/// Default units (runs of the selected tests) per round of a JUnit repeat harness.
+const JUNIT_STEP: u64 = 2;
+/// Default timeout of one measured JUnit repeat process: a Spring context start is paid once
+/// and every later unit is a repeat.
+const JUNIT_TIMEOUT_SECS: u64 = 1800;
 
 /// Options of `dla harness gen`.
 #[derive(Debug, Clone)]
@@ -77,6 +82,11 @@ pub struct GenOptions {
     pub auto_probes: bool,
     /// Go/JVM package (directory or name) for driver mode.
     pub package: Option<String>,
+    /// JVM: run the project's own JUnit 5 tests in a loop (implies driver mode; no hooks).
+    pub junit: bool,
+    /// JVM, JUnit repeat: classes (`pkg.Class`) or methods (`pkg.Class#method`) to run, instead
+    /// of the workload's test class.
+    pub tests: Vec<String>,
 }
 
 fn refuse(
@@ -191,8 +201,11 @@ fn choose_workload(
 ) -> Result<Option<Workload>, Refusal> {
     let rt = opts.lang;
     let lang = rt.as_str();
+    if opts.junit {
+        junit_lang_check(opts)?;
+    }
     let Some(report) = report else {
-        if opts.driver && opts.workload.is_none() {
+        if opts.driver && opts.workload.is_none() && !opts.junit {
             return Ok(None);
         }
         return Err(refuse(
@@ -234,6 +247,9 @@ fn choose_workload(
         }
         return Ok(Some(w.clone()));
     }
+    if opts.junit {
+        return pick_junit_workload(ctx, report, opts).map(Some);
+    }
     let pick = report.workloads.iter().find(|w| {
         w.runtime == rt
             && matches!(w.kind, WorkloadKind::Main | WorkloadKind::Script)
@@ -248,17 +264,327 @@ fn choose_workload(
                 w.runtime == rt && matches!(w.kind, WorkloadKind::Main | WorkloadKind::Script)
             })
             .cloned()),
+        None => {
+            // A project of JUnit 5 tests is the case --junit is for: name it first.
+            let junit = rt == Runtime::Jvm
+                && report
+                    .workloads
+                    .iter()
+                    .any(|w| w.runtime == rt && junit_problem(&ctx.project, w).is_none());
+            let junit_fix = if junit {
+                "dla harness gen --lang jvm --junit   (runs your JUnit 5 tests in a loop; nothing to fill)   or   "
+            } else {
+                ""
+            };
+            Err(refuse(
+                WORKLOAD_REQUIRED,
+                format!(
+                    "no {lang} main or script workload with an iteration argument; candidates: {}",
+                    candidates_text(report, rt)
+                ),
+                format!("a {lang} workload that takes an iteration count"),
+                format!(
+                    "{junit_fix}dla harness gen --lang {lang} --workload <id> --iter-arg \"--iterations {{n}}\"   or   dla harness gen --lang {lang} --driver"
+                ),
+            ))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// JUnit repeat
+// ---------------------------------------------------------------------------------------
+
+/// The build tool a discovered JVM test workload runs through (`mvn ...`, `./gradlew ...`).
+fn junit_tool(w: &Workload) -> Option<commands::JunitTool> {
+    let first = w.command.split_whitespace().next()?;
+    let name = first.rsplit('/').next().unwrap_or(first);
+    if name.starts_with("mvn") {
+        Some(commands::JunitTool::Maven)
+    } else if name.starts_with("gradle") {
+        Some(commands::JunitTool::Gradle)
+    } else {
+        None
+    }
+}
+
+/// Why workload `w` cannot be run by the JUnit repeat driver; `None` when it can: a JVM test
+/// of a Gradle or Maven project whose file uses the JUnit 5 (`org.junit.jupiter`) API.
+fn junit_problem(project: &Path, w: &Workload) -> Option<String> {
+    if w.runtime != Runtime::Jvm || w.kind != WorkloadKind::Test {
+        return Some(format!(
+            "workload {} is a {} {} workload, not a JVM test",
+            w.id,
+            w.runtime.as_str(),
+            w.kind.as_str()
+        ));
+    }
+    if junit_tool(w).is_none() {
+        return Some(format!(
+            "workload {} does not run through Maven or Gradle (command: {}), so there is no build tool to resolve the test class path",
+            w.id, w.command
+        ));
+    }
+    let Ok(text) = fs::read_to_string(project.join(&w.file)) else {
+        return Some(format!("{} cannot be read", w.file));
+    };
+    // `kotlin.test` runs on JUnit 5 when the project uses the kotlin-test-junit5 backend; the
+    // build step checks that a junit-platform-engine is on the class path.
+    if text.contains("org.junit.jupiter")
+        || (text.contains("kotlin.test") && !text.contains("org.junit.Test"))
+    {
+        return None;
+    }
+    if text.contains("org.junit.Test") || text.contains("org.testng") {
+        Some(format!(
+            "{} uses JUnit 4 or TestNG, which the Jupiter launcher runs only with the vintage engine (junit-vintage-engine) or not at all",
+            w.file
+        ))
+    } else {
+        Some(format!(
+            "{} imports neither org.junit.jupiter nor kotlin.test, so it is not a JUnit 5 test",
+            w.file
+        ))
+    }
+}
+
+/// `--junit` without `--workload`: the JUnit 5 test workload that holds the first `--tests`
+/// class, else the best-ranked one.
+fn pick_junit_workload(
+    ctx: &ToolCtx,
+    report: &WorkloadReport,
+    opts: &GenOptions,
+) -> Result<Workload, Refusal> {
+    let tests: Vec<&Workload> = report
+        .workloads
+        .iter()
+        .filter(|w| w.runtime == Runtime::Jvm && w.kind == WorkloadKind::Test)
+        .collect();
+    let ok: Vec<&Workload> = tests
+        .iter()
+        .copied()
+        .filter(|w| junit_problem(&ctx.project, w).is_none())
+        .collect();
+    let wanted = opts.tests.first().map(|t| t.split('#').next().unwrap_or(t));
+    let by_class = wanted.and_then(|class| {
+        ok.iter().copied().find(|w| {
+            fs::read_to_string(ctx.project.join(&w.file))
+                .is_ok_and(|text| crate::jvm::fqcn_of(&w.file, &text) == class)
+        })
+    });
+    if let Some(w) = by_class.or_else(|| ok.first().copied()) {
+        return Ok(w.clone());
+    }
+    match tests.first() {
+        Some(w) => Err(refuse(
+            DRIVER_UNAVAILABLE,
+            format!(
+                "no JVM test workload can run as a JUnit repeat: {}",
+                junit_problem(&ctx.project, w).unwrap_or_default()
+            ),
+            "a JUnit 5 test in a Gradle or Maven project",
+            "dla harness gen --lang jvm --driver   (hooks to fill; the driver runs your own code), or add a JUnit 5 test",
+        )),
         None => Err(refuse(
             WORKLOAD_REQUIRED,
             format!(
-                "no {lang} main or script workload with an iteration argument; candidates: {}",
-                candidates_text(report, rt)
+                "no JVM test workload in this project; candidates: {}",
+                candidates_text(report, Runtime::Jvm)
             ),
-            format!("a {lang} workload that takes an iteration count"),
-            format!(
-                "dla harness gen --lang {lang} --workload <id> --iter-arg \"--iterations {{n}}\"   or   dla harness gen --lang {lang} --driver"
-            ),
+            "a JUnit 5 test in a Gradle or Maven project",
+            "dla workload discover --lang jvm   or   dla harness gen --lang jvm --driver",
         )),
+    }
+}
+
+/// What the JUnit repeat build and driver are made from.
+struct JunitPick {
+    tool: commands::JunitTool,
+    /// Wrapper script (`gradlew`, `mvnw`) path relative to the project root, when the project
+    /// has one at or above the workload's directory.
+    wrapper: Option<String>,
+    /// Selectors: `pkg.Class` or `pkg.Class#method`.
+    select: Vec<String>,
+    /// Notes for the manifest.
+    gaps: Vec<String>,
+}
+
+/// True for a class (`pkg.Class`) or method (`pkg.Class#method`) selector the driver can embed.
+fn valid_selector(t: &str) -> bool {
+    let (class, method) = t.split_once('#').map_or((t, None), |(c, m)| (c, Some(m)));
+    let word = |s: &str, dots: bool| {
+        !s.is_empty()
+            && !s.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+            && !s.ends_with('.')
+            && s.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '$' || (dots && c == '.'))
+    };
+    // A method name may hold spaces and punctuation (a Kotlin backtick test,
+    // fun `publishes to the broker`()): the JVM accepts them, and they are safe inside the
+    // Java string literal the selector is embedded in. Quotes, backslashes and control
+    // characters are not.
+    let name_ok = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with(char::is_whitespace)
+            && !s.ends_with(char::is_whitespace)
+            && !s
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '"' | '\\' | '#' | '('))
+    };
+    // `method(java.lang.String, int)`: the parameter types of a parameterized test, which is
+    // selected by its full signature.
+    let method_ok = |m: &str| match m.split_once('(') {
+        None => name_ok(m),
+        Some((name, rest)) => {
+            name_ok(name)
+                && rest.strip_suffix(')').is_some_and(|params| {
+                    params.chars().all(|c| {
+                        c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | ',' | '[' | ']' | ' ')
+                    })
+                })
+        }
+    };
+    word(class, true) && method.is_none_or(method_ok)
+}
+
+/// `--junit` is for JVM projects.
+fn junit_lang_check(opts: &GenOptions) -> Result<(), Refusal> {
+    if opts.lang == Runtime::Jvm {
+        return Ok(());
+    }
+    Err(refuse(
+        codes::INVALID_VALUE,
+        format!("--junit is for JVM projects, not {}", opts.lang.as_str()),
+        "--lang jvm",
+        "dla harness gen --lang jvm --junit",
+    ))
+}
+
+/// Decides whether this harness is a JUnit repeat and, if so, what it runs. `Ok(None)` for
+/// every other harness.
+fn junit_pick(
+    ctx: &ToolCtx,
+    opts: &GenOptions,
+    w: Option<&Workload>,
+) -> Result<Option<JunitPick>, Refusal> {
+    // Only `--junit` makes a JUnit repeat: an explicit `--driver` is always the plain driver
+    // with hooks, also when its workload is a JUnit 5 test file.
+    if !opts.junit {
+        if let Some(t) = opts.tests.first() {
+            return Err(refuse(
+                codes::INVALID_VALUE,
+                format!("--tests {t} applies to the JUnit repeat driver only"),
+                "--junit",
+                format!("dla harness gen --lang jvm --junit --tests {t}"),
+            ));
+        }
+        return Ok(None);
+    }
+    junit_lang_check(opts)?;
+    let Some(w) = w else {
+        return Err(refuse(
+            WORKLOAD_REQUIRED,
+            "no JVM test workload to run as a JUnit repeat",
+            "a JUnit 5 test workload",
+            "dla workload discover --lang jvm",
+        ));
+    };
+    if let Some(why) = junit_problem(&ctx.project, w) {
+        return Err(refuse(
+            DRIVER_UNAVAILABLE,
+            format!("cannot run {} as a JUnit repeat: {why}", w.id),
+            "a JUnit 5 test in a Gradle or Maven project",
+            "dla harness gen --lang jvm --driver --workload <a Main or Script workload>   (hooks to fill)",
+        ));
+    }
+    let tool = junit_tool(w).ok_or_else(|| {
+        refuse(
+            DRIVER_UNAVAILABLE,
+            format!("{} has no Maven or Gradle build", w.id),
+            "pom.xml or build.gradle",
+            "dla harness gen --lang jvm --driver",
+        )
+    })?;
+    for t in &opts.tests {
+        if !valid_selector(t) {
+            return Err(refuse(
+                codes::INVALID_VALUE,
+                format!("--tests {t:?} is not a class name or Class#method"),
+                "fully qualified class names, optionally with #method or #method(parameter types)",
+                "dla harness gen --lang jvm --junit --tests pkg.FooTest,pkg.BarTest#touches",
+            ));
+        }
+    }
+    let text = fs::read_to_string(ctx.project.join(&w.file)).unwrap_or_default();
+    let select = if opts.tests.is_empty() {
+        vec![crate::jvm::fqcn_of(&w.file, &text)]
+    } else {
+        opts.tests.clone()
+    };
+    let wrapper_name = match tool {
+        commands::JunitTool::Gradle => "gradlew",
+        commands::JunitTool::Maven => "mvnw",
+    };
+    let wrapper = find_wrapper(&ctx.project, &w.cwd, wrapper_name);
+    let program = match tool {
+        commands::JunitTool::Gradle => "gradle",
+        commands::JunitTool::Maven => "mvn",
+    };
+    if wrapper.is_none() && !on_path(program) {
+        return Err(refuse(
+            TOOL_MISSING,
+            format!(
+                "{program} is not installed and the project has no {wrapper_name}, so the tests' class path cannot be resolved"
+            ),
+            program,
+            format!(
+                "install {program} (or add the project's {wrapper_name}), then rerun dla harness gen --lang jvm {}",
+                if opts.junit { "--junit" } else { "--driver" }
+            ),
+        ));
+    }
+    let mut gaps = vec![
+        format!(
+            "JUnit repeat: each unit runs {} through the JUnit Platform Launcher in one JVM; the build step resolves the test class path with {program} and adds junit-platform-launcher of the project's junit-platform-engine version when the project does not declare it",
+            select.join(", ")
+        ),
+        "the tests start whatever the project's tests start: a unit that needs a service that is not running (database, broker, cache) fails, and the driver's last stderr lines name the first failure".to_owned(),
+        "a framework that caches state between units (the Spring test context) keeps it across units, so growth comes from the code under test; a test that discards the cache (@DirtiesContext) rebuilds it every unit".to_owned(),
+    ];
+    if cfg!(windows) {
+        gaps.push("the build step is a sh script (Git Bash)".to_owned());
+    }
+    if text.contains("@DirtiesContext") {
+        gaps.push(format!(
+            "{} uses @DirtiesContext: its Spring context is rebuilt every unit, so the series includes that cost",
+            w.file
+        ));
+    }
+    Ok(Some(JunitPick {
+        tool,
+        wrapper,
+        select,
+        gaps,
+    }))
+}
+
+/// The wrapper script `name` in the workload's directory or the nearest parent, as a path
+/// relative to the project root.
+fn find_wrapper(project: &Path, cwd: &str, name: &str) -> Option<String> {
+    let mut dir: Vec<&str> = cwd
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    loop {
+        let rel = if dir.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{}/{name}", dir.join("/"))
+        };
+        if project.join(&rel).is_file() {
+            return Some(rel);
+        }
+        dir.pop()?;
     }
 }
 
@@ -690,6 +1016,7 @@ struct DriverCtx<'a> {
     workload: Option<&'a Workload>,
     cwd: &'a str,
     step: u64,
+    junit: Option<&'a JunitPick>,
 }
 
 fn driver_vars(d: &DriverCtx<'_>) -> [(String, String); 4] {
@@ -729,6 +1056,56 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
     };
     let driver_rel = |name: &str| format!("{DRIVER}/{name}");
     match rt {
+        Runtime::Jvm if d.junit.is_some() => {
+            let j = d.junit.ok_or_else(|| {
+                refuse(
+                    codes::TOOL_FAILED,
+                    "JUnit repeat without a selection",
+                    "a JUnit selection",
+                    "report this as a dla bug",
+                )
+            })?;
+            let select = j
+                .select
+                .iter()
+                .map(|t| format!("\"{t}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            vars.push(("SELECT".into(), select));
+            let text = fill_with(templates::JVM_JUNIT_DRIVER, &vars)?;
+            let file = format!("{}.java", commands::JUNIT_DRIVER_CLASS);
+            write(&d.driver.join(&file), &text)?;
+            write(
+                &d.driver.join(commands::JUNIT_INIT_SCRIPT),
+                templates::JVM_JUNIT_INIT,
+            )?;
+            write(
+                &d.driver.join(commands::JUNIT_BUILD_SCRIPT),
+                templates::JVM_JUNIT_BUILD,
+            )?;
+            out.hooks = templates::hooks(&text);
+            // Nothing to edit: the driver runs the project's own tests.
+            let launcher = j.wrapper.as_ref().map_or_else(
+                || match j.tool {
+                    commands::JunitTool::Gradle => "gradle".to_owned(),
+                    commands::JunitTool::Maven => "mvn".to_owned(),
+                },
+                |rel| dla_core::paths::to_slash(&d.work.join(rel)),
+            );
+            out.spec.junit = Some(commands::JunitSpec {
+                tool: j.tool,
+                launcher,
+            });
+            out.tools.push("junit-platform-launcher".to_owned());
+            out.tools.push(
+                match j.tool {
+                    commands::JunitTool::Gradle => "gradle",
+                    commands::JunitTool::Maven => "maven",
+                }
+                .to_owned(),
+            );
+            out.gaps.extend(j.gaps.iter().cloned());
+        }
         Runtime::Jvm => {
             let package = jvm_package_for(d.ctx, d.work, d.workload, d.opts.package.as_deref());
             vars.push(("PACKAGE".into(), package.clone()));
@@ -747,9 +1124,6 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
             } else {
                 format!("{package}.{JVM_DRIVER_CLASS}")
             };
-            out.gaps.push(
-                "junit-platform-console-standalone not used: the plain driver main runs the loop (JUnit variant is generated only when the jar is on the classpath)".to_owned(),
-            );
             let _ = d.agent;
         }
         Runtime::Python => {
@@ -957,8 +1331,29 @@ impl Drop for Cleanup {
 
 /// Writes a harness and its manifest; see the module docs.
 pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusal> {
+    let junit_opts;
+    let opts = if opts.junit && !opts.driver {
+        junit_opts = GenOptions {
+            driver: true,
+            ..opts.clone()
+        };
+        &junit_opts
+    } else {
+        opts
+    };
     let rt = opts.lang;
     let lang = rt.as_str();
+    if !opts.junit
+        && !opts.driver
+        && let Some(t) = opts.tests.first()
+    {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            format!("--tests {t} applies to the JUnit repeat driver only"),
+            "--junit",
+            format!("dla harness gen --lang jvm --junit --tests {t}"),
+        ));
+    }
     if opts.iterations == 0 {
         return Err(refuse(
             codes::INVALID_VALUE,
@@ -979,6 +1374,18 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     }
     let report = load_workloads(ctx)?;
     let workload = choose_workload(ctx, report.as_ref(), opts, !opts.driver)?;
+    let junit = junit_pick(ctx, opts, workload.as_ref())?;
+    // A hook driver on a project that has JUnit 5 tests: name the variant with nothing to fill.
+    let junit_hint = (junit.is_none()
+        && rt == Runtime::Jvm
+        && report.as_ref().is_some_and(|r| {
+            r.workloads
+                .iter()
+                .any(|w| w.runtime == rt && junit_problem(&ctx.project, w).is_none())
+        }))
+    .then_some(
+        "this project has JUnit 5 tests: dla harness gen --lang jvm --junit runs them in a loop with nothing to fill",
+    );
     let iter_arg = opts
         .iter_arg
         .clone()
@@ -1074,7 +1481,13 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     let default_count = workload.as_ref().and_then(|w| w.iteration_default);
     let step = opts
         .step
-        .unwrap_or_else(|| choose_step(default_count, opts.warmup, opts.iterations))
+        .unwrap_or_else(|| {
+            if junit.is_some() {
+                JUNIT_STEP
+            } else {
+                choose_step(default_count, opts.warmup, opts.iterations)
+            }
+        })
         .max(1);
     let layout = commands::Layout {
         work: work.clone(),
@@ -1099,7 +1512,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         }
     }
     let mut kotlin_stdlib: Option<String> = None;
-    if rt == Runtime::Jvm && opts.driver && super::kotlin::has_kotlin_sources(&work) {
+    if rt == Runtime::Jvm
+        && opts.driver
+        && junit.is_none()
+        && super::kotlin::has_kotlin_sources(&work)
+    {
         match super::kotlin::find_stdlib(&work, &super::kotlin::Lookup::current()) {
             Ok(jar) => {
                 gaps.push(format!(
@@ -1133,6 +1550,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             workload: workload.as_ref(),
             cwd,
             step,
+            junit: junit.as_ref(),
         };
         let info = build_driver(&dctx)?;
         let mut sw = switches.clone();
@@ -1237,7 +1655,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         warmup: opts.warmup,
         iterations: opts.iterations,
         step,
-        key_modes: if opts.driver {
+        key_modes: if junit.is_some() {
+            // A JUnit repeat has no keys: one series, labelled like the first key mode of a
+            // driver so `dla alloc-test` and `dla trend` read it the same way.
+            vec![KeyMode::Fresh]
+        } else if opts.driver {
             vec![KeyMode::Fresh, KeyMode::Repeated]
         } else {
             vec![KeyMode::Native]
@@ -1247,7 +1669,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         detectors: det.on.clone(),
         tools,
         gaps: gaps.clone(),
-        timeout_secs: TIMEOUT_SECS,
+        timeout_secs: if junit.is_some() {
+            JUNIT_TIMEOUT_SECS
+        } else {
+            TIMEOUT_SECS
+        },
         ffi: ffi_info.clone(),
         captures: vec![],
     };
@@ -1300,14 +1726,31 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     ];
     let mut summary = result;
     if let (Some(info), Value::Object(m)) = (&driver_info, &mut summary) {
-        let edit = ctx.pointer(&format!("harness/{id}/{}", info.edit));
-        artifacts.push(edit.clone());
-        m.insert("edit".into(), json!(edit));
-        m.insert("hooks".into(), json!(info.hooks));
-        m.insert(
-            "instructions".into(),
-            json!("replace the body of each DLA-HOOK (keep the comment), then run the harness"),
-        );
+        if info.spec.junit.is_some() {
+            let driver_file = ctx.pointer(&format!(
+                "harness/{id}/{DRIVER}/{}.java",
+                commands::JUNIT_DRIVER_CLASS
+            ));
+            artifacts.push(driver_file);
+            m.insert("hooks".into(), json!(info.hooks));
+            m.insert("junit".into(), json!(true));
+            m.insert(
+                "instructions".into(),
+                json!("nothing to fill: the driver runs the project's own JUnit 5 tests in a loop; run it"),
+            );
+        } else {
+            let edit = ctx.pointer(&format!("harness/{id}/{}", info.edit));
+            artifacts.push(edit.clone());
+            m.insert("edit".into(), json!(edit));
+            m.insert("hooks".into(), json!(info.hooks));
+            m.insert(
+                "instructions".into(),
+                json!("replace the body of each DLA-HOOK (keep the comment), then run the harness"),
+            );
+            if let Some(hint) = junit_hint {
+                m.insert("junit_hint".into(), json!(hint));
+            }
+        }
         if !info.extra_files.is_empty() {
             m.insert("also".into(), json!(info.extra_files));
         }
@@ -1315,7 +1758,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     if let Value::Object(m) = &mut summary {
         m.insert(
             "next".into(),
-            json!(if opts.driver {
+            json!(if junit.is_some() {
+                format!("dla harness run {id}")
+            } else if opts.driver {
                 format!("fill the hooks, then dla harness run {id} --mode both")
             } else {
                 format!("dla harness run {id}")

@@ -497,7 +497,10 @@ fn worker_status(ctx: &Ctx, w: &str) -> Res<(RunView, StatusParts)> {
     missing.retain(|m| m.kind != "slice");
     let mine = |id: &str| id.split_once('/').is_some_and(|(p, _)| p == w);
     // The counts describe this worker's slice, not the whole run.
-    let mut counts = dla_core::view::StatusCounts::default();
+    let mut counts = dla_core::view::StatusCounts {
+        measured: rs.counts.measured,
+        ..Default::default()
+    };
     for f in view.ledger.findings().filter(|f| mine(&f.id.to_string())) {
         counts.enumerated += 1;
         counts.dispositioned += usize::from(f.state.is_dispositioned());

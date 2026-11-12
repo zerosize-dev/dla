@@ -115,6 +115,9 @@ pub mod codes {
     pub const ANNOTATION_CONFLICT: &str = "annotation-conflict";
     /// A series file is invalid.
     pub const INVALID_SERIES: &str = "invalid-series";
+    /// A finding was closed without exercising it while a generated harness of its runtime
+    /// was never run and budget remains.
+    pub const HARNESS_NOT_RUN: &str = "harness-not-run";
     /// The run's or the worker's time budget has passed.
     pub const TIME_BUDGET: &str = "time-budget";
 }

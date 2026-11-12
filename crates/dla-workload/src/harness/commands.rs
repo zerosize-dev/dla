@@ -842,6 +842,92 @@ pub struct DriverSpec {
     pub goleak: bool,
     /// Rust: crate directory, relative to the scratch copy (the workload's cwd).
     pub crate_dir: String,
+    /// JVM: run the project's own JUnit 5 tests in a loop (no hooks, see [`JunitSpec`]).
+    pub junit: Option<JunitSpec>,
+}
+
+/// Build tool of a JUnit repeat harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JunitTool {
+    /// Gradle (or its wrapper).
+    Gradle,
+    /// Maven (or its wrapper).
+    Maven,
+}
+
+impl JunitTool {
+    /// The word `dla-junit-build.sh` takes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gradle => "gradle",
+            Self::Maven => "maven",
+        }
+    }
+}
+
+/// What a JUnit repeat harness is built from.
+#[derive(Debug, Clone)]
+pub struct JunitSpec {
+    /// Which build tool resolves the test class path.
+    pub tool: JunitTool,
+    /// The tool executable (`gradle`, `mvn`) or the project's wrapper script (absolute).
+    pub launcher: String,
+}
+
+/// File name of the JUnit repeat driver class (default package).
+pub const JUNIT_DRIVER_CLASS: &str = "DlaJUnitLoop";
+/// File names the JUnit repeat build step reads or writes in the driver directory.
+pub const JUNIT_BUILD_SCRIPT: &str = "dla-junit-build.sh";
+/// Gradle init script file name.
+pub const JUNIT_INIT_SCRIPT: &str = "dla-junit.init.gradle";
+/// The Java argument file the build step writes (`java @run.args`).
+pub const JUNIT_ARGS_FILE: &str = "run.args";
+
+/// Build and run of a JUnit repeat harness: the build step resolves the class path of the
+/// project's tests and compiles the driver against it, the run is `java @run.args DlaJUnitLoop`.
+fn plan_junit(cwd: &str, layout: &Layout, sw: &Switches, j: &JunitSpec) -> Plan {
+    let driver = |file: &str| abs(&layout.driver.join(file));
+    let jar = abs(&layout.agent.join("dla-agent.jar"));
+    let mut build = CommandSpec {
+        argv: vec![
+            "sh".into(),
+            driver(JUNIT_BUILD_SCRIPT),
+            j.tool.as_str().into(),
+            j.launcher.clone(),
+            abs(&layout.driver),
+            jar,
+            path_sep().into(),
+        ],
+        cwd: cwd.to_owned(),
+        env: Vec::new(),
+    };
+    let mut sw = sw.clone();
+    sw.jfr = true;
+    let mut run = CommandSpec {
+        argv: vec![
+            "java".into(),
+            format!("@{}", driver(JUNIT_ARGS_FILE)),
+            JUNIT_DRIVER_CLASS.into(),
+        ],
+        cwd: cwd.to_owned(),
+        env: Vec::new(),
+    };
+    set_env(
+        &mut run,
+        "JAVA_TOOL_OPTIONS",
+        jvm_options(&layout.agent, &sw),
+    );
+    let mut gaps = Vec::new();
+    if let Some(f) = &sw.ffi {
+        attach_ffi(&mut run, Some(&mut build), layout, &f.lib_dirs, &mut gaps);
+    }
+    Plan {
+        build: Some(build),
+        run,
+        agent: AgentKind::DriverJvm,
+        gaps,
+        files: Vec::new(),
+    }
 }
 
 /// Plans the build and run of a driver-mode harness for runtime `rt`.
@@ -855,6 +941,10 @@ pub fn plan_driver(
 ) -> Result<Plan, String> {
     let driver = |file: &str| abs(&layout.driver.join(file));
     let mut plan = match rt {
+        Runtime::Jvm if spec.junit.is_some() => {
+            let j = spec.junit.as_ref().ok_or("no JUnit spec")?;
+            plan_junit(cwd, layout, sw, j)
+        }
         Runtime::Jvm => {
             let (pre, run_piece): (Vec<String>, String) = match w {
                 Some(w) => {
@@ -1558,5 +1648,47 @@ mod tests {
         // A relative path below the copy is.
         let p = plan_of(Runtime::Native, "make && bin/leasebroker", &l);
         assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), Some("leasebroker"));
+    }
+
+    #[test]
+    fn junit_plan_builds_with_the_script_and_runs_java_with_an_argument_file() {
+        let l = layout();
+        let spec = DriverSpec {
+            junit: Some(JunitSpec {
+                tool: JunitTool::Gradle,
+                launcher: "/w/gradlew".into(),
+            }),
+            ..DriverSpec::default()
+        };
+        let p = plan_driver(Runtime::Jvm, None, "svc", &l, &Switches::default(), &spec).unwrap();
+        assert_eq!(p.agent, AgentKind::DriverJvm);
+        let build = p.build.unwrap();
+        assert_eq!(
+            &build.argv[..4],
+            [
+                "sh",
+                &format!("{}/dla-junit-build.sh", abs(&l.driver)),
+                "gradle",
+                "/w/gradlew"
+            ]
+        );
+        assert_eq!(build.argv[4], abs(&l.driver));
+        assert!(build.argv[5].ends_with("dla-agent.jar"));
+        assert_eq!(build.argv[6], path_sep());
+        assert_eq!(build.cwd, "svc");
+        assert_eq!(
+            p.run.argv,
+            [
+                "java".to_owned(),
+                format!("@{}/run.args", abs(&l.driver)),
+                "DlaJUnitLoop".to_owned()
+            ]
+        );
+        assert_eq!(p.run.cwd, "svc");
+        let jto = env(&p.run, "JAVA_TOOL_OPTIONS").unwrap();
+        assert!(
+            jto.contains("-javaagent:") && jto.contains("StartFlightRecording"),
+            "{jto}"
+        );
     }
 }

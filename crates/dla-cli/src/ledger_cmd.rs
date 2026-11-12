@@ -9,10 +9,11 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand, ValueEnum};
 use dla_core::{
     EvidenceId, FindingId, FindingState, Ledger, NewFinding, OpenItemId, Origin, Resolution,
-    RunState, UnresolvedReason,
+    RunState, RunView, UnresolvedReason,
     checklist::{AnswerStatus, Checklist, ChecklistAnswer},
     error::codes as core_codes,
     finding::{Explanation, ExplanationTag, Holder, Locus, Region, RepairClass, Shape},
+    gate,
     merge::MergeReport,
     record::FindingAnnotation,
     slice::slice_file_name,
@@ -608,6 +609,9 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
         }
     };
     let from = ledger.finding(&id).map(|f| f.state);
+    if let Some(reason) = a.reason {
+        refuse_unrun_harness(ctx, &id, reason)?;
+    }
     let line = ledger.transition(&id, to, a.reason, a.remedy, a.evidence, BY)?;
     let label = ledger
         .finding(&id)
@@ -621,6 +625,47 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+/// True when the run has a `harness/H<n>` directory. Without one the rule cannot hold, and
+/// the run view (every series file) is not loaded for each closure.
+fn has_harness_dir(run_dir: &Path) -> bool {
+    std::fs::read_dir(run_dir.join(dla_core::harness::HARNESS_DIR)).is_ok_and(|rd| {
+        rd.flatten()
+            .any(|e| dla_core::series::numbered('H', &e.file_name().to_string_lossy()).is_some())
+    })
+}
+
+/// Refuses to close `id` without exercising it (`no_harness`, `not_exercised`,
+/// `time_budget`) while a harness of its runtime was generated and never run and the
+/// budget has room to run it. The same rule feeds the final gate.
+fn refuse_unrun_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> Res<()> {
+    if !gate::closes_without_exercise(reason) || !has_harness_dir(&ctx.run_dir) {
+        return Ok(());
+    }
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let Some(finding) = view.ledger.finding(id) else {
+        return Ok(());
+    };
+    let Some(runtime) = gate::finding_runtime(&view, finding) else {
+        return Ok(());
+    };
+    let Some(u) = gate::harness_not_run(&view, &runtime, ctx.worker.as_deref()) else {
+        return Ok(());
+    };
+    Err(Failure::refuse(
+        core_codes::HARNESS_NOT_RUN,
+        format!(
+            "{id} cannot be closed with {reason}: harness {} ({}) {}, and {} of {} budget minutes remain.",
+            u.id,
+            u.runtime,
+            u.state(),
+            u.minutes_left,
+            u.minutes_total
+        ),
+        format!("{} run, or its blocker recorded on intake.workload", u.id),
+        u.fix(&view.state.run_id),
+    ))
 }
 
 fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveArgs) -> Res<Value> {

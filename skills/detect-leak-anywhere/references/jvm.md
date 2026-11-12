@@ -13,6 +13,34 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   record after two `System.gc()` calls. Driver mode (`dla harness gen --lang jvm --driver
   [--package <pkg>]`): one process, a `checkpoint` per round, JFR enabled; fill each `DLA-HOOK`
   and derive ids from `key`. `--mode both` gives a fresh and a repeated-keys series.
+- JUnit repeat (`dla harness gen --lang jvm --junit [--tests pkg.Class[#method],..]`): for a Gradle or
+  Maven project with JUnit 5 tests, a driver with no hooks runs the selected tests again and again in
+  one JVM (one unit = one run of the selection; defaults warm-up 1, rounds 8, step 2, timeout 1800 s),
+  so a service whose tests take no iteration count is still measured. Run it with `dla harness run H<n>`;
+  the first build resolves the test class path through Gradle or Maven (offline first, then online).
+  JUnit 4 and TestNG tests are refused. When the project's own tests start the application
+  (`@SpringBootTest`), use `--junit` with such an integration test: it is one JVM and the Spring test
+  context cache keeps the context across repetitions, so growth comes from the code under test;
+  `@DirtiesContext` rebuilds the context every repetition. If the services the test needs (database,
+  broker, cache) are not running, the first unit fails and the last stderr lines of the log
+  (`DLA-JUNIT every unit failed: ...`) name the first failure and its root cause (a refused
+  connection shows the exception, not always the host): look in the log for the address, then record
+  `env_unavailable` with it, not `no_harness`. A run where the first unit passes and later units fail
+  keeps its series (`failed_units=n` in the `DLA-JUNIT summary:` line): a test that asserts a fresh
+  state (a count of 1) fails once state has built up, and an assertion on accumulated state is the
+  leak, not a missing service; only a connection or startup error is `env_unavailable`. One test
+  method that always fails (it needs a broker) fails every unit and there is no exclude option:
+  list the passing methods with `--tests`. `--mode both` (or `repeated`) on a JUnit harness runs only
+  its one mode (`fresh`) and records a limitation in `run-S<n>.json`, so it does not run the loop
+  twice. If no test passed or failed, the run exits 3 and no series is written: read the last
+  `DLA-JUNIT` lines. Tests aborted by an assumption (`assumeTrue(env var set)` for a service that
+  is not running, also in `@BeforeAll`) show as `aborted=n`, `@Disabled` or conditionally disabled
+  ones as `skipped=n`, and a class that fails before its tests (`@BeforeAll` throwing
+  `ConnectException`, Testcontainers without Docker) is named by the cause line and `first_failure=`.
+  Record `env_unavailable` for the service cases: the code under test never ran. A Kotlin backtick test is selected with its spaces: `--tests 'pkg.GetTest#publishes to the broker'`.
+  The run measures `java` from `PATH`, not the Gradle `test` task's JVM: `jvmArgs`, `systemProperty`
+  and `environment` of the task are not applied (set the profile or property the test needs before
+  `dla harness run`). Select a `@ParameterizedTest` as `pkg.Class#method(java.lang.String,int)`.
 - What the dump measures (after GC): `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used`,
   `jvm.nmt_committed`, `jvm.threads`, `jvm.classes_loaded`, the `os.*` set, top-20 class counts,
   and one probe record per static reference field (`JvmClass`, `JvmStatic`): size, reachable

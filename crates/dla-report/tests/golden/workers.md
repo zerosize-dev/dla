@@ -4,6 +4,8 @@ Run: `20260101-000000-abcd`
 
 Status: INCOMPLETE (22 open)
 
+Measured: nothing. No harness ran and nothing was sampled or captured, so every finding rests on reading the code: this report neither shows nor rules out a leak.
+
 Entry: repository
 
 Scope: module `services/api`; excluded: `services/api/generated`, `vendor`; out of scope: jvm 12 files, rust 1 file
@@ -53,6 +55,7 @@ Coverage: not measured
 ### jvm/F1: **UNCLASSIFIED**
 
 - State: candidate
+- Origin: `census`
 - Evidence classes: context
 - Holder: static/global
 - Owner: `Registry.listeners`
@@ -65,6 +68,7 @@ Coverage: not measured
 ### jvm/F1.n1: Hypothesis N-WARM (UNCLASSIFIED)
 
 - State: candidate
+- Origin: `hypothesis`
 - Evidence classes: context
 - Sibling hypothesis of: jvm/F1
 - Hypothesis: N-WARM
@@ -74,6 +78,7 @@ Coverage: not measured
 ### rust/F2: **UNCLASSIFIED**
 
 - State: candidate
+- Origin: `census`
 - Evidence classes: context
 - Holder: native-handle/global-ref
 - Site: `native/pool.rs:7`

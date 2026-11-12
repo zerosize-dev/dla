@@ -1,0 +1,36 @@
+// DLA: prints the test runtime class path of the project in the current directory, with the
+// JUnit Platform launcher added when the project does not declare it. Used by the build step of a
+// JUnit repeat harness (-Pdla.cpfile=<file>); it changes nothing in the project.
+allprojects { p ->
+    p.afterEvaluate {
+        def sourceSets = p.extensions.findByName('sourceSets')
+        if (sourceSets == null || p.tasks.findByName('testClasses') == null) {
+            return
+        }
+        if (p.projectDir.canonicalFile != p.gradle.startParameter.currentDir.canonicalFile) {
+            return
+        }
+        p.tasks.register('dlaPrintTestClasspath') {
+            dependsOn 'testClasses'
+            doLast {
+                def target = p.findProperty('dla.cpfile')
+                if (target == null) {
+                    throw new GradleException('DLA: -Pdla.cpfile is not set')
+                }
+                def files = new ArrayList<File>(sourceSets.getByName('test').runtimeClasspath.files)
+                def has = { String prefix -> files.any { it.name.startsWith(prefix) } }
+                if (!has('junit-platform-launcher-')) {
+                    def engine = files.find { it.name ==~ /junit-platform-engine-\d.*\.jar/ }
+                    if (engine == null) {
+                        throw new GradleException('DLA: no junit-platform-engine on the test runtime class path: the tests are not JUnit 5')
+                    }
+                    def version = engine.name.substring('junit-platform-engine-'.length(), engine.name.length() - '.jar'.length())
+                    def dep = p.dependencies.create("org.junit.platform:junit-platform-launcher:${version}")
+                    def extra = p.configurations.detachedConfiguration(dep).resolve()
+                    extra.each { f -> if (!files.contains(f)) { files.add(f) } }
+                }
+                new File(target.toString()).text = files.collect { it.absolutePath }.join(File.pathSeparator)
+            }
+        }
+    }
+}

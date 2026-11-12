@@ -98,4 +98,4 @@ pub use record::{
 pub use series::SeriesFile;
 pub use state::{RunState, RunStatus, Stage};
 pub use trend::TrendReport;
-pub use view::{ReportStatus, RunView, status};
+pub use view::{Measured, ReportStatus, RunView, measured, status};

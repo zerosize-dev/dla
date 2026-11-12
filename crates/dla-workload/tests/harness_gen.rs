@@ -81,6 +81,8 @@ fn opts(rt: Runtime) -> GenOptions {
         probe_findings: Vec::new(),
         auto_probes: true,
         package: None,
+        junit: false,
+        tests: Vec::new(),
     }
 }
 

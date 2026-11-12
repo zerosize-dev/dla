@@ -9,6 +9,7 @@ use crate::{
     checklist::ChecklistEntry,
     coverage::CoverageManifest,
     error::Error,
+    evidence::{Authority, EvidenceKind},
     finding::FindingState,
     integrity::{self, Tamper},
     ledger::Ledger,
@@ -40,6 +41,9 @@ pub struct RunView {
     /// split of another series). They are the residual accounting itself, so the gates do
     /// not ask for their trend or for a disposition of their columns.
     pub gap_series: std::collections::BTreeSet<String>,
+    /// The harnesses (`H1`) that some series names as its source (`source.harness`),
+    /// built in the same pass over the series files as `gap_series`.
+    pub harness_series: std::collections::BTreeSet<String>,
     /// Protected files other than `report.md` that no longer match their seal.
     pub tamper: Vec<Tamper>,
     /// True when `report.md` differs from the seal `dla` wrote at render time.
@@ -63,6 +67,7 @@ impl RunView {
             trends: Vec::new(),
             series_ids: Vec::new(),
             gap_series: std::collections::BTreeSet::new(),
+            harness_series: std::collections::BTreeSet::new(),
             tamper: Vec::new(),
             report_modified: false,
             unsealed_run: false,
@@ -108,15 +113,19 @@ impl RunView {
         self.run_dir = Some(run_dir.to_path_buf());
         self.trends = TrendReport::load_all(run_dir);
         self.series_ids = crate::series::list_ids(run_dir);
-        self.gap_series = self
-            .series_ids
-            .iter()
-            .filter(|id| {
-                crate::series::SeriesFile::load(run_dir, id)
-                    .is_ok_and(|f| f.source.kind == crate::series::SeriesSourceKind::Gap)
-            })
-            .cloned()
-            .collect();
+        self.gap_series.clear();
+        self.harness_series.clear();
+        for id in &self.series_ids {
+            let Ok(f) = crate::series::SeriesFile::load(run_dir, id) else {
+                continue;
+            };
+            if f.source.kind == crate::series::SeriesSourceKind::Gap {
+                self.gap_series.insert(id.clone());
+            }
+            if let Some(h) = f.source.harness {
+                self.harness_series.insert(h);
+            }
+        }
         self.unsealed_run = !integrity::is_sealed_run(run_dir);
         for t in integrity::verify(run_dir) {
             if t.file == REPORT_FILE {
@@ -228,6 +237,8 @@ pub struct StatusCounts {
     pub checklist_missing: usize,
     /// Checklist items in total.
     pub checklist_total: usize,
+    /// True when something was measured: see [`measured`].
+    pub measured: bool,
 }
 
 /// The result of the completeness gate.
@@ -364,9 +375,94 @@ pub fn status(view: &RunView) -> ReportStatus {
             fix,
         });
     }
+    counts.measured = measured(view).any();
     ReportStatus {
         complete: blocking.is_empty(),
         blocking,
         counts,
     }
+}
+
+/// What the run measured, as opposed to read. Every count comes from ledger evidence
+/// whose authority is `test`, `live` or `dump` (run-config and probe records never
+/// count), plus the coverage manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Measured {
+    /// Harness runs: measured `workload` records (what `dla harness run` writes; workload
+    /// discovery and `dla harness gen` records are static and do not count), or the
+    /// coverage workers that record iterations or exercised entry points when there are
+    /// more.
+    pub harness_runs: usize,
+    /// Series: the run's non-gap series files (a derived `gap` series is not counted).
+    /// `dla trend` and the summarizers write several growth-series records per series, so
+    /// records are not counted; only a view with no series files at all (not loaded from
+    /// a run directory) falls back to its measured `growth-series` and `unit-count-series`
+    /// records.
+    pub series: usize,
+    /// Captures: measured records of a capture kind (retention paths, allocation stacks,
+    /// histogram diffs, blocked-stack profiles, unreachable-at-exit and should-be-dead
+    /// sets, non-heap readings, attached artifacts). Residual rows, discriminator results,
+    /// interventions and the split `dla gap` writes for a series are analysis, not captures, and are not counted.
+    pub captures: usize,
+    /// True when a coverage worker row records iterations or exercised entry points.
+    pub exercised: bool,
+    /// Measured ledger records of any kind (the counts above keep only some of them).
+    pub records: usize,
+}
+
+impl Measured {
+    /// True when anything was measured.
+    pub fn any(&self) -> bool {
+        self.records > 0 || self.exercised
+    }
+}
+
+/// What the run measured. A pure function of the view, so the report, `dla run status`
+/// and the stop hook agree. Static hits, census holders, the probe, workload discovery and
+/// a generated (never run) harness measure nothing.
+pub fn measured(view: &RunView) -> Measured {
+    let mut m = Measured::default();
+    let mut series_records = 0;
+    for e in view.ledger.evidence() {
+        let measuring = matches!(
+            e.authority,
+            Authority::Test | Authority::Live | Authority::Dump
+        ) && !matches!(e.kind, EvidenceKind::RunConfig | EvidenceKind::Probe);
+        if !measuring {
+            continue;
+        }
+        m.records += 1;
+        match e.kind {
+            EvidenceKind::Workload => m.harness_runs += 1,
+            EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => series_records += 1,
+            EvidenceKind::Residual | EvidenceKind::Discriminator | EvidenceKind::Intervention => {}
+            // `dla gap S` records the split of a series as a non-heap record naming the
+            // derived gap series: analysis of a series already counted, not a reading.
+            EvidenceKind::NonHeap
+                if e.result
+                    .get("derived")
+                    .and_then(|d| d.as_str())
+                    .is_some_and(|d| view.gap_series.contains(d)) => {}
+            _ => m.captures += 1,
+        }
+    }
+    let files = view
+        .series_ids
+        .iter()
+        .filter(|id| !view.gap_series.contains(*id))
+        .count();
+    m.series = if view.series_ids.is_empty() {
+        series_records
+    } else {
+        files
+    };
+    let workers = view.coverage.as_ref().map_or(0, |c| {
+        c.workers
+            .values()
+            .filter(|w| w.iterations.is_some_and(|n| n > 0) || !w.entry_points.exercised.is_empty())
+            .count()
+    });
+    m.exercised = workers > 0;
+    m.harness_runs = m.harness_runs.max(workers);
+    m
 }

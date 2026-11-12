@@ -14,6 +14,12 @@
 //!    allocator sites to source lines, [`super::build`] writes one series per key mode and
 //!    [`super::cover`] records iterations and exercised entry points.
 //! 4. [`run`] adds the `workload` evidence (authority test) naming the harness.
+//! 5. [`run`] writes `harness/H<n>/attempt.json` ([`dla_core::harness::HarnessAttempt`]) on every path
+//!    once the manifest has loaded, whether the run succeeded, was cut short or failed, and
+//!    also when SIGINT or SIGTERM stops it (reason `interrupted`). A panic or SIGKILL writes
+//!    nothing. It is not sealed and not in the ledger; the final gate reads it to tell a
+//!    harness that was tried from one never run (`hooks_unfilled` and `interrupted` are not
+//!    a try).
 //!
 //! # Environment of a measured process
 //!
@@ -43,7 +49,10 @@ use dla_core::{
     Refusal,
     error::Error,
     evidence::{Authority, CoverageStatus, EvidenceCoverage, EvidenceKind},
-    harness::{CaptureFile, CommandSpec, DumpCoverage, HarnessManifest, HarnessMode},
+    harness::{
+        AttemptOutcome, CaptureFile, CommandSpec, DumpCoverage, HarnessAttempt, HarnessManifest,
+        HarnessMode,
+    },
     series::{Axis, KeyMode, SeriesSourceKind},
     state::{ProcessKind, ProcessRecord, now_utc},
     toolctx::{EvidenceSpec, StageOutcome, ToolCtx},
@@ -212,6 +221,24 @@ pub struct RunOutput {
 
 fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<String>) -> Refusal {
     Refusal::new("harness-failed", why, missing, fix)
+}
+
+/// The fix text of a harness whose every measured process failed. A JUnit repeat harness
+/// (made by `--junit`) has no hooks: its failure is the project's tests failing in the
+/// loop, so the text names the log tail and the usual cause, a service the tests need.
+fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
+    let id = &manifest.id;
+    if manifest
+        .tools
+        .iter()
+        .any(|t| t == "junit-platform-launcher")
+    {
+        format!(
+            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\""
+        )
+    } else {
+        format!("read the logs, fix the harness or its hooks, then dla harness run {id}")
+    }
 }
 
 fn io_refusal(path: &Path, e: std::io::Error) -> Refusal {
@@ -550,6 +577,12 @@ fn live_remove_nowait(pid: u32) {
     });
 }
 
+thread_local! {
+    /// The harness id and start time of the `dla harness run` in progress on this thread:
+    /// the stop handler of [`SignalGuard`] writes its `attempt.json` before it exits.
+    static PENDING_ATTEMPT: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+}
+
 /// For the duration of a run: SIGINT and SIGTERM kill the process groups of the run's
 /// measured processes, mark them stopped in `state.json` and end `dla` with a non-zero
 /// status (128 + the signal number).
@@ -566,6 +599,7 @@ impl SignalGuard {
         LIVE.with(|l| *l.borrow_mut() = Some(Arc::clone(&live)));
         #[cfg(unix)]
         {
+            let pending = PENDING_ATTEMPT.with(|p| p.borrow().clone());
             use signal_hook::{
                 consts::{SIGINT, SIGTERM},
                 iterator::Signals,
@@ -587,6 +621,22 @@ impl SignalGuard {
                     for (pid, start) in &state.procs {
                         kill_group(*pid);
                         let _ = ctx.mark_process_stopped(*pid, start.as_deref());
+                    }
+                    if let Some((id, started)) = pending {
+                        let reason = if dla_core::harness::hooks_unfilled(&ctx.run_dir, &id) {
+                            dla_core::harness::ATTEMPT_HOOKS_UNFILLED
+                        } else {
+                            dla_core::harness::ATTEMPT_INTERRUPTED
+                        };
+                        let _ = HarnessAttempt {
+                            harness: id,
+                            started_at: started,
+                            finished_at: HarnessAttempt::now(),
+                            outcome: AttemptOutcome::Failed,
+                            reason: Some(reason.to_owned()),
+                            message: Some(format!("stopped by signal {sig}")),
+                        }
+                        .save(&ctx.run_dir);
                     }
                     std::process::exit(128 + sig);
                 }
@@ -860,7 +910,7 @@ fn build_once(
         )?;
         return Err(failed(
             format!("harness {} did not build: {why}", manifest.id),
-            format!("a successful build; see {}", ctx.pointer(&log_rel)),
+            format!("{BUILD_MISSING}; see {}", ctx.pointer(&log_rel)),
             format!(
                 "fix the build in {}, then dla harness run {}",
                 ctx.pointer(&manifest.scratch),
@@ -1842,7 +1892,30 @@ pub fn run_points(
         let m = if opts.modes.is_empty() {
             manifest.key_modes.clone()
         } else {
-            opts.modes.clone()
+            // A manifest declares the key modes it supports (a JUnit repeat has one): run only
+            // those, with a note, instead of running the same loop twice under two labels.
+            let supported: Vec<KeyMode> = opts
+                .modes
+                .iter()
+                .copied()
+                .filter(|m| manifest.key_modes.is_empty() || manifest.key_modes.contains(m))
+                .collect();
+            if supported.len() < opts.modes.len() {
+                out.limitations.push(format!(
+                    "this harness supports the key mode(s) {} only (it has no keys to vary): the requested mode(s) it does not support were not run",
+                    manifest
+                        .key_modes
+                        .iter()
+                        .map(|m| m.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if supported.is_empty() {
+                manifest.key_modes.clone()
+            } else {
+                supported
+            }
         };
         if m.is_empty() {
             vec![KeyMode::Fresh, KeyMode::Repeated]
@@ -1942,10 +2015,7 @@ pub fn run_points(
                         mode.as_str()
                     ),
                     format!("a harness that runs to completion; see the logs {logs}"),
-                    format!(
-                        "read the logs, fix the harness or its hooks, then dla harness run {}",
-                        manifest.id
-                    ),
+                    harness_failed_fix(manifest, &logs),
                 )
             });
             continue;
@@ -2253,9 +2323,75 @@ fn clip(s: &str, max: usize) -> String {
 /// `dla harness run <id>`: [`run_points`] plus one `workload` evidence (authority test)
 /// whose result names the harness.
 pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, Refusal> {
-    ctx.require_time("harness run")?;
-    let mut manifest = ctx.harness(id)?;
+    let manifest = ctx.harness(id)?;
+    let started = HarnessAttempt::now();
+    PENDING_ATTEMPT.with(|p| *p.borrow_mut() = Some((id.to_owned(), started.clone())));
+    let res = ctx
+        .require_time("harness run")
+        .and_then(|()| run_loaded(ctx, manifest, opts));
+    PENDING_ATTEMPT.with(|p| *p.borrow_mut() = None);
+    write_attempt(ctx, id, started, &res);
+    res.map(|(outcome, _)| outcome)
+}
+
+/// Marker text in the `missing` of the refusal for a failed build, so the attempt record
+/// can tell it from a run that failed.
+const BUILD_MISSING: &str = "a successful build";
+
+/// Writes `harness/<id>/attempt.json` for the attempt that ended in `res`: `ran`, `partial`
+/// (the second value of `Ok`), or `failed` with the reason `time_budget`, `build_fails`,
+/// `no_harness` (the harness itself failed or produced no usable point) or the refusal
+/// code. Best effort: a run that cannot write the marker still reports its own result.
+fn write_attempt(
+    ctx: &ToolCtx,
+    id: &str,
+    started: String,
+    res: &Result<(StageOutcome, bool), Refusal>,
+) {
+    let (outcome, reason, message) = match res {
+        Ok((_, false)) => (AttemptOutcome::Ran, None, None),
+        Ok((_, true)) => (
+            AttemptOutcome::Partial,
+            None,
+            Some("the run deadline stopped it before its plan".to_owned()),
+        ),
+        Err(r) => {
+            let reason = if dla_core::harness::hooks_unfilled(&ctx.run_dir, id) {
+                dla_core::harness::ATTEMPT_HOOKS_UNFILLED.to_owned()
+            } else if r.code == dla_core::error::codes::TIME_BUDGET {
+                "time_budget".to_owned()
+            } else if r.code == "harness-failed" && r.missing.starts_with(BUILD_MISSING) {
+                crate::BUILD_FAILS.to_owned()
+            } else if r.code == "harness-failed" {
+                crate::NO_HARNESS.to_owned()
+            } else {
+                r.code.clone()
+            };
+            (
+                AttemptOutcome::Failed,
+                Some(reason),
+                Some(clip(&r.message, 300)),
+            )
+        }
+    };
+    let rec = HarnessAttempt {
+        harness: id.to_owned(),
+        started_at: started,
+        finished_at: HarnessAttempt::now(),
+        outcome,
+        reason,
+        message,
+    };
+    let _ = rec.save(&ctx.run_dir);
+}
+
+fn run_loaded(
+    ctx: &ToolCtx,
+    mut manifest: HarnessManifest,
+    opts: &RunOptions,
+) -> Result<(StageOutcome, bool), Refusal> {
     let out = run_points(ctx, &manifest, opts)?;
+    let partial = !out.partial.is_empty();
     let captured = !opts.capture.is_empty() || opts.tool.is_some();
     let mut commands = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), false);
     let mut compact = capture::summarize_commands(&out.captures, &|p| ctx.pointer(p), true);
@@ -2474,12 +2610,15 @@ pub fn run(ctx: &ToolCtx, id: &str, opts: &RunOptions) -> Result<StageOutcome, R
         |s| format!("dla trend {s}"),
     );
     summary["next"] = json!(next);
-    Ok(StageOutcome {
-        evidence: vec![ev.to_string()],
-        artifacts,
-        summary,
-        ..StageOutcome::default()
-    })
+    Ok((
+        StageOutcome {
+            evidence: vec![ev.to_string()],
+            artifacts,
+            summary,
+            ..StageOutcome::default()
+        },
+        partial,
+    ))
 }
 
 #[cfg(test)]
