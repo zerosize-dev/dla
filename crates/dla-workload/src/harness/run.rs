@@ -688,7 +688,9 @@ impl Paths {
             let d = hdir.join(sub);
             fs::create_dir_all(&d).map_err(|e| io_refusal(&d, e))?;
         }
-        let hdir = hdir.canonicalize().map_err(|e| io_refusal(&hdir, e))?;
+        // Plain, not verbatim, on Windows: these paths reach the measured process
+        // (`{out}` in the JFR file name, DLA_PROJECT, DLA_HARNESS_OUT) and Java rejects `\\?\`.
+        let hdir = dla_core::paths::plain(hdir.canonicalize().map_err(|e| io_refusal(&hdir, e))?);
         let work = ctx.run_dir.join(&manifest.scratch);
         let work = work.canonicalize().map_err(|_| {
             failed(
@@ -701,6 +703,7 @@ impl Paths {
                 "dla harness gen to write the harness again",
             )
         })?;
+        let work = dla_core::paths::plain(work);
         let probes = hdir.join(PROBES);
         Ok(Self {
             out: hdir.join(OUT),
@@ -717,6 +720,7 @@ impl Paths {
             .run_dir
             .canonicalize()
             .unwrap_or_else(|_| ctx.run_dir.clone());
+        let run = dla_core::paths::plain(run);
         p.strip_prefix(&run)
             .unwrap_or(p)
             .to_string_lossy()

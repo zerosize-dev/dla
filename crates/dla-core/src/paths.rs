@@ -140,6 +140,22 @@ pub fn rel_slash(root: &Path, path: &Path) -> Option<String> {
     path.strip_prefix(root).ok().map(to_slash)
 }
 
+/// `path` without the verbatim prefix `canonicalize` adds on Windows (`\\?\C:\x` becomes
+/// `C:\x`, `\\?\UNC\host\share` becomes `\\host\share`); other paths are returned as they
+/// are. Use it on a canonical path passed to a child process: Java rejects the `?` in a
+/// verbatim path ("Illegal character [?] in path"), for example in
+/// `-XX:StartFlightRecording=filename=`.
+pub fn plain(path: PathBuf) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +236,26 @@ mod tests {
         assert_eq!(slash(r"src\main\A.java"), "src/main/A.java");
         assert_eq!(slash("already/fine"), "already/fine");
         assert_eq!(to_slash(Path::new(r"a\b/c")), "a/b/c");
+    }
+
+    #[test]
+    fn plain_drops_the_verbatim_prefix_and_keeps_other_paths() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\C:\Users\a\H1\out")),
+            PathBuf::from(r"C:\Users\a\H1\out")
+        );
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\UNC\host\share\x")),
+            PathBuf::from(r"\\host\share\x")
+        );
+        assert_eq!(
+            plain(PathBuf::from("/tmp/x/out")),
+            PathBuf::from("/tmp/x/out")
+        );
+        assert_eq!(
+            plain(PathBuf::from(r"C:\already\plain")),
+            PathBuf::from(r"C:\already\plain")
+        );
     }
 
     #[test]
