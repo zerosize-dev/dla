@@ -388,12 +388,27 @@ jobs:
         with:
           path: ~\AppData\Local\rightsize\msb
           key: dla-it-msb-install-${{ runner.os }}-${{ hashFiles('crates/dla-it/Cargo.toml') }}
+      # The output goes to a file, not through `tee`: on runs 106 and 108 every test
+      # passed in about 12 s and the step then sat idle until the job timeout, the
+      # sign of a process the tests leave behind holding the pipe open. The next step
+      # lists what is still running.
       - name: Run the suite
         shell: bash
+        timeout-minutes: 15
         run: |
-          set -o pipefail
           mkdir -p "$DLA_IT_OUT"
-          cargo test -p dla-it --features sandbox-it -- --nocapture --test-threads=1 2>&1 | tee "$DLA_IT_OUT/it-output.log"
+          rc=0
+          cargo test -p dla-it --features sandbox-it -- --nocapture --test-threads=1 > "$DLA_IT_OUT/it-output.log" 2>&1 || rc=$?
+          cat "$DLA_IT_OUT/it-output.log"
+          exit $rc
+      - name: List the processes left after the suite
+        if: always()
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Process |
+            Where-Object { $_.Name -notmatch '^(svchost|System|Idle|Registry|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|conhost|Runner\.(Listener|Worker))(\.exe)?$' } |
+            Select-Object Name, ProcessId, ParentProcessId, CommandLine |
+            Format-Table -AutoSize -Wrap | Out-String -Width 400
       # Counts the agent-relay retry notes the backend writes to stderr, so a run
       # shows how often the retry fires even when every test passed. The step never
       # fails the job (a grep that finds nothing exits 1, hence the `|| true`).
