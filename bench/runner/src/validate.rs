@@ -174,7 +174,7 @@ fn validate_fixture(
         .map(|e| e.entry)
         .unwrap_or_default();
     if let Some(p) = &project {
-        check_project(p, entry, &mut out);
+        check_project(p, entry, name, &mut out);
     }
     let Ok(text) = fs::read_to_string(&toml_path) else {
         out.push("expected.toml is missing or unreadable".to_owned());
@@ -271,7 +271,10 @@ fn check_dumps(p: &Project, out: &mut Vec<String>) {
     }
 }
 
-fn check_project(p: &Project, entry: Entry, out: &mut Vec<String>) {
+fn check_project(p: &Project, entry: Entry, id: &str, out: &mut Vec<String>) {
+    // Fixture ids are `<runtime>-<name>`: a file that carries one tells the model which
+    // fixture it is in. (A hyphen-less id is a synthetic one of the validator's tests.)
+    let id = if id.contains('-') { id } else { "\u{0}" };
     let mut source_files = 0;
     let mut source_lines = 0;
     for (path, data) in &p.files {
@@ -290,6 +293,11 @@ fn check_project(p: &Project, entry: Entry, out: &mut Vec<String>) {
             source_files += 1;
             source_lines += p.line_count(path).unwrap_or(0);
         }
+        if path.contains(id) {
+            out.push(format!(
+                "project/{path}: the path contains the fixture id {id:?}"
+            ));
+        }
         scan_hints(&path.replace('_', " "), |w| {
             out.push(format!(
                 "project/{path}: file name contains hint word {w:?}"
@@ -297,6 +305,12 @@ fn check_project(p: &Project, entry: Entry, out: &mut Vec<String>) {
         });
         if let Ok(text) = std::str::from_utf8(data) {
             for (i, line) in text.lines().enumerate() {
+                if line.contains(id) {
+                    out.push(format!(
+                        "project/{path}:{}: the line contains the fixture id {id:?}",
+                        i + 1
+                    ));
+                }
                 scan_hints(&line.replace('_', " "), |w| {
                     out.push(format!("project/{path}:{}: hint word {w:?}", i + 1));
                 });
@@ -562,6 +576,7 @@ fn check_semantics(
                 if other.task.prompt != exp.task.prompt {
                     out.push(format!("pair {partner} has a different task.prompt"));
                 }
+                check_pair_roles(exp, &other, partner, out);
             }
             Err(e) => out.push(format!("pair {partner}: {e}")),
         }
@@ -603,5 +618,37 @@ fn check_semantics(
                 ));
             }
         }
+    }
+}
+
+/// A pair is one trap (`archetype-leak`, or `archetype-free` when its cause is
+/// UNCLASSIFIED) and one `decoy-control`, in one runtime. A version pair differs in the
+/// version of a tool, never in which tools the `[toolchain]` names.
+fn check_pair_roles(exp: &Expected, other: &Expected, partner: &str, out: &mut Vec<String>) {
+    let is_trap = |c: Category| matches!(c, Category::ArchetypeLeak | Category::ArchetypeFree);
+    let ok = (is_trap(exp.category) && other.category == Category::DecoyControl)
+        || (exp.category == Category::DecoyControl && is_trap(other.category));
+    if !ok {
+        out.push(format!(
+            "pair {partner}: a pair is one trap (archetype-leak or archetype-free) and one decoy-control, not {} and {}",
+            exp.category.as_str(),
+            other.category.as_str()
+        ));
+    }
+    if exp.runtime != other.runtime {
+        out.push(format!("pair {partner} has a different runtime"));
+    }
+    let tools = |e: &Expected| {
+        e.toolchain
+            .as_ref()
+            .map(crate::fixture_toolchain::Toolchain::tool_names)
+            .unwrap_or_default()
+    };
+    if tools(exp) != tools(other) {
+        out.push(format!(
+            "pair {partner} names other tools in [toolchain] ({:?} against {:?}); a version pair differs only in versions",
+            tools(exp),
+            tools(other)
+        ));
     }
 }

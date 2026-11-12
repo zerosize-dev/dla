@@ -720,6 +720,77 @@ fn hash_dir(dir: &Path) -> u64 {
     h
 }
 
+/// The program path `gen` narrowed the shim to: the first word of the run piece. That is
+/// `argv[0]`, or, for the `sh -c "<piece>"` form a piece takes when it cannot be split into
+/// words, the first word of the body after any `NAME=value` words.
+fn narrowed_program(argv: &[String]) -> Option<String> {
+    let first = argv.first()?;
+    let body = match argv {
+        [sh, flag, body, ..] if matches!(sh.as_str(), "sh" | "bash") && flag == "-c" => body,
+        _ => return Some(first.clone()),
+    };
+    let words = body.split_whitespace().map(str::to_owned).collect();
+    let (_, rest) = super::commands::split_env(words);
+    rest.first()
+        .map(|w| w.trim_matches(|c| c == '"' || c == '\'').to_owned())
+}
+
+/// `gen` narrows the allocator shim to the run command's program (`DLA_SHIM_ONLY`), also for
+/// a program a build step in front of it has yet to produce. The shim compares the name of
+/// the running executable with its links resolved (`/proc/self/exe`; `realpath` of the
+/// executable path on macOS). After the build step the file exists, and two cases need
+/// another value for this run:
+/// - a wrapper script (a libtool `#!/bin/sh` stub that execs `.libs/prog`): no process carries
+///   its name, so `DLA_SHIM_ONLY` is removed and the shim is loaded in every process;
+/// - a symbolic link to a native executable of another name: the shim is narrowed to that
+///   name.
+///
+/// Returns the changed manifest and says why in `limitations`; `None` when nothing changes.
+fn settle_shim_only(
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    limitations: &mut Vec<String>,
+) -> Option<HarnessManifest> {
+    let narrowed = manifest
+        .run
+        .env
+        .iter()
+        .find(|(k, _)| k == "DLA_SHIM_ONLY")
+        .map(|(_, v)| v.as_str())?;
+    let program = narrowed_program(&manifest.run.argv)?;
+    // Only a narrowing `gen` took from the program's own name: another value (the JVM
+    // harnesses narrow to `java`) names a process the wrapper does not hide.
+    if program.rsplit('/').next() != Some(narrowed) {
+        return None;
+    }
+    let path = cwd_of(paths, &manifest.run).join(&program);
+    if !path.is_file() {
+        return None;
+    }
+    let mut m = manifest.clone();
+    if super::commands::is_native_binary(&path) {
+        let real = fs::canonicalize(&path).ok()?;
+        let real_name = real.file_name()?.to_str()?.to_owned();
+        if real_name == narrowed {
+            return None;
+        }
+        for (k, v) in &mut m.run.env {
+            if k == "DLA_SHIM_ONLY" {
+                v.clone_from(&real_name);
+            }
+        }
+        limitations.push(format!(
+            "the allocator shim is narrowed to {real_name}: {program} is a link to it, and the shim matches the executable's resolved name"
+        ));
+        return Some(m);
+    }
+    m.run.env.retain(|(k, _)| k != "DLA_SHIM_ONLY");
+    limitations.push(format!(
+        "the allocator shim is loaded in every process: {program} is not a native executable (a wrapper script such as a libtool stub), so it was not narrowed to that name"
+    ));
+    Some(m)
+}
+
 /// Runs the build step once. A failed build is the refusal `harness-failed`.
 fn build_once(
     ctx: &ToolCtx,
@@ -1748,6 +1819,9 @@ pub fn run_points(
             manifest.runtime.as_str()
         ));
     }
+
+    let settled = settle_shim_only(manifest, &paths, &mut out.limitations);
+    let manifest = settled.as_ref().unwrap_or(manifest);
 
     let secs = opts.timeout_secs.unwrap_or(manifest.timeout_secs);
     let timeout = Duration::from_secs(if secs == 0 {

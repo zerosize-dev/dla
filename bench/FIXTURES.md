@@ -151,7 +151,13 @@ Field rules:
 - `share` values of one fixture sum to 1.0 (within 0.01) when there is more
   than one leak.
 - `pair` is reciprocal: the partner names this fixture back, and both use the
-  identical `task.prompt`.
+  identical `task.prompt`. A pair is one trap and one `decoy-control` in the same
+  runtime. The trap is an `archetype-leak`, or an `archetype-free` one when its cause is
+  `UNCLASSIFIED` (a version pair whose trap is runtime bookkeeping); both count in
+  `trap_miss_rate`, and only an `archetype-leak` trap feeds the `decoys` block of a row
+  (an `UNCLASSIFIED` trap has no row). A version pair names the same tools in both
+  `[toolchain]` tables and differs in their versions; the validator refuses a pair that
+  does not.
 - A fixture of category `archetype-leak`, `archetype-free` or `multi-leak` has
   at least one `[[leak]]`; `decoy-control` and `non-leak` have none and at
   least one `[[non_leak]]`; `impossible` has `dynamic_confirmation = false`
@@ -197,15 +203,17 @@ go = "1.22.12"      # exact versions: major.minor.patch
   with the child's own `PATH` and environment, for fixtures with and without a table.
   The block is absent when no tool answers (a native fixture, or a tool that is not
   installed).
-- `dla-bench dynamic` does not read the table: it runs the harness with the host's
-  tools.
+- `dla-bench dynamic` reads the table too (same code): every `dla` command of the
+  fixture runs with the same `PATH`, `GOTOOLCHAIN` and `JAVA_HOME` as a child of
+  `dla-bench run`, and a release that cannot be provided stops the run with the
+  fixture's name.
 
 ## Categories
 
 | Category | What it is | A correct run ends with |
 |---|---|---|
 | `archetype-leak` | A leak that matches one taxonomy row; the trap half of a pair | The leak confirmed at the right site and holder |
-| `decoy-control` | One minimal edit away from its trap; memory is bounded | No confirmed leak; the growth ruled out with its discriminator |
+| `decoy-control` | One minimal edit away from its trap (a version pair: the same source on another release of one tool); memory is bounded | No confirmed leak; the growth ruled out with its discriminator |
 | `archetype-free` | A real leak whose mechanism fits no taxonomy row | The leak confirmed and labelled `UNCLASSIFIED` |
 | `non-leak` | Growth that is not a leak (`N-*`) | No confirmed leak; the growth ruled out with its discriminator |
 | `impossible` | The leak pattern is in the code, but nothing can run (no build, missing tool) | `suspected_static_only` or `unresolved` with a reason; never confirmed |
@@ -272,6 +280,37 @@ New pairs for the archetype rows that had none, plus the decoy for the native ro
 | `node-price-board-flat` | node | decoy-control | `node-price-board` | Same code where the closure captures a number, not the previous snapshot (`N-WARM`) |
 | `rust-meter-callbacks` | rust | archetype-leak | `rust-meter-callbacks-reclaimed` | `Box::into_raw` handed to a C-style callback table as the user pointer and never converted back with `Box::from_raw` (`L-OWNERSHIP`, holder `native-handle/global-ref`, region `off-heap`) |
 | `rust-meter-callbacks-reclaimed` | rust | decoy-control | `rust-meter-callbacks` | Same code that reclaims the pointer with `Box::from_raw` on close (`N-WARM`) |
+
+## Writing a fixture the checkers can measure
+
+Notes from the phase 2 builders. They are rules for the fixture author, not for `dla`.
+
+- **No fixture id in `project/`.** The validator refuses a file whose path or text contains
+  the fixture id (`runtime-name`). `dla-bench run` also gives the child an opaque working
+  directory (12 hex digits of a hash of the arm, the fixture and the run number; `run.json`
+  records it as `work_key`), so neither the fixture id nor the arm name reaches the model.
+- **Command mode reads the retained state at exit**, for every runtime: the harness reads
+  the live heap (Go: `go.heap_live` after two collections) once `main` has returned. A
+  holder must therefore be reachable when `main` returns: a static, a package-level or a
+  module-level root. A holder that is a local of `main` or `Run` is freed first and the leak
+  is invisible; change the fixture, not `dla`.
+- **Rust live bytes at exit.** The alloc shim reads its live bytes at process exit. End
+  `main` with `std::process::exit(status)` or keep the state in a static, or the leaked
+  memory is freed by `main`'s destructors before the reading.
+- **Rust container leaks need enough bytes per step.** A site column of the alloc shim
+  (`@file:line`) appears only when the growth per step is large enough; at about 50 B per
+  iteration there is none and the leak is refuted. Work in waves of 100 to 500 units per step.
+- **Capacity growth by doubling makes a staircase.** A `Vec` or table that doubles gives a
+  series whose columns all fail the trend gate. Grow by a fixed factor such as 1.25, or by
+  a fixed step.
+- **A flat decoy with no container needs a bounded look-alike.** The policy refutes
+  candidates; a decoy whose growth has no container in the census has none to refute, and
+  the acceptance is flaky (it can pass with archetypes on and fail with them off). Give
+  the decoy, and its trap, a small bounded container (one entry per tenant, for example).
+- **A version pair is a decoy control too.** Its two halves share one source; they differ
+  in the release of one tool in `[toolchain]` (the same tools, other versions: the validator
+  refuses a pair that swaps a tool for another). The decoy's README argues the release, not
+  an edit, as the difference.
 
 ## README.md for each fixture
 

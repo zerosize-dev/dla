@@ -49,13 +49,14 @@ use crate::{
 
 /// The archetype rows with a prose row in a shipped `references/<lang>-archetypes.md`
 /// (spec D1). `tests/archetype_lists.rs` keeps this equal to the rows of those files.
-pub const SHIPPED_ROWS: [&str; 9] = [
+pub const SHIPPED_ROWS: [&str; 10] = [
     "L-CAPTURE",
     "L-COLLECT",
     "L-CYCLE",
     "L-HANDLE",
     "L-OWNERSHIP",
     "L-REGISTER",
+    "L-STALE",
     "L-TLS",
     "L-UNLOAD",
     "L-WORKER",
@@ -1413,6 +1414,7 @@ cause = "{cause}"
             path_dir: None,
             unset_vars: Vec::new(),
             pending: Vec::new(),
+            provided: None,
         };
         fx.row.harnesses = vec!["H1".to_owned()];
         fx.row.summarize_cmds = vec![
@@ -1732,8 +1734,8 @@ cause = "{cause}"
     #[cfg(unix)]
     #[test]
     fn a_row_without_a_shipped_prose_row_and_a_wrong_holder_are_not_tried() {
-        let (row, calls) = drive_fake(&expected("L-STALE", "container-field"), false, &[]);
-        assert!(!calls.contains("--as L-STALE"), "{calls}");
+        let (row, calls) = drive_fake(&expected("L-NOROW", "container-field"), false, &[]);
+        assert!(!calls.contains("--as L-NOROW"), "{calls}");
         assert!(row.policy.labels[0].result.contains("no shipped row"));
         let (row, calls) = drive_fake(&expected("L-COLLECT", "static/global"), false, &[]);
         assert!(!calls.contains("--as L-COLLECT"), "{calls}");
@@ -1953,7 +1955,8 @@ cause = "{cause}"
     #[test]
     fn only_the_shipped_rows_are_labelled() {
         assert!(SHIPPED_ROWS.contains(&"L-COLLECT"));
-        assert!(!SHIPPED_ROWS.contains(&"L-STALE"));
+        assert!(SHIPPED_ROWS.contains(&"L-STALE"));
+        assert!(!SHIPPED_ROWS.contains(&"L-NOPE"));
         let mut sorted = SHIPPED_ROWS;
         sorted.sort_unstable();
         assert_eq!(sorted, SHIPPED_ROWS, "keep the list sorted");

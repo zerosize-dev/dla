@@ -140,6 +140,20 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      # The Python version pairs run on the exact CPython releases their [toolchain] names; the
+      # runner installs them with `uv python install`. The Node and Go releases are fetched by
+      # the runner itself.
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.5"
+          enable-cache: false
+      # The fetched releases are kept between CI runs. The job runs the archetypes-on arm only,
+      # so no second arm of the same run reuses them.
+      - uses: actions/cache@v4
+        with:
+          path: target/dla-bench-toolchains
+          key: dla-bench-toolchains-${{ hashFiles('bench/fixtures/*/expected.toml') }}
+          restore-keys: dla-bench-toolchains-
       # jni-order-codec compiles Kotlin. The runner has no ~/.m2 with the compiler jars,
       # so install the official compiler zip (pinned, with its checksum) and put the
       # stdlib where the fixture's build.sh looks for it when it runs the classes.
@@ -158,7 +172,7 @@ jobs:
           "$RUNNER_TEMP/kotlin/kotlinc/bin/kotlinc" -version
       # valgrind and heaptrack are the native backends the per-operation policy runs.
       - name: C toolchain, addr2line, valgrind and heaptrack
-        run: sudo apt-get update && sudo apt-get install -y build-essential binutils valgrind heaptrack
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y build-essential binutils valgrind heaptrack
       - name: Build dla and dla-bench
         run: cargo build -p dla-cli -p dla-bench
       # The harness runs of the fixtures take 10 to 90 s each. The archetypes-off
@@ -219,6 +233,10 @@ jobs:
       - name: Run the shim tests
         shell: bash
         run: tests/shim/run.sh
+      - name: Build and run the allocator shim
+        if: runner.os != 'Windows'
+        shell: bash
+        run: tests/shim/alloc-shim.sh
 
   # Integration suite: dla runs inside microVMs through rightsize (microsandbox
   # backend). No model call and no credential is involved. The VM jobs need
@@ -237,7 +255,7 @@ jobs:
         with:
           key: it-musl
       - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y musl-tools
       - name: Build dla for the guests
         run: cargo build --release --locked -p dla-cli --target x86_64-unknown-linux-musl
       - name: Lint the integration tests with the VM feature

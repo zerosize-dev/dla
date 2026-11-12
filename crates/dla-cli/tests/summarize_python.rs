@@ -499,7 +499,13 @@ fn growing_types_pass_and_tie_to_nothing_without_a_recorded_accumulation_class()
         "{v}"
     );
     assert_eq!(v["tied"], json!([]), "{v}");
-    assert!(v["needed"].as_str().unwrap().contains("heap-graph"), "{v}");
+    // A Python type never ties, and Python has no heap-graph backend: the text names a holder
+    // probe.
+    let needed = v["needed"].as_str().unwrap();
+    assert!(
+        needed.contains("holder probe") && !needed.contains("heap-graph"),
+        "{v}"
+    );
     assert_eq!(v["top"][0]["type"], "ingest.models.Record");
 }
 

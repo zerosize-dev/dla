@@ -398,6 +398,10 @@ pub(super) fn correlate(fx: &mut Fx, harness: &str) {
     }
 }
 
+/// Alloc-tests the late-tied findings of one fixture may run in all (on top of
+/// [`super::MAX_ALLOC_TESTS`] of the trend steps).
+const MAX_LATE_ALLOC_TESTS: usize = 2;
+
 /// Steps 1 to 5. `grew` holds the harnesses with a passing column (id, runtime).
 pub(super) fn run(fx: &mut Fx, grew: &[(String, String)]) {
     let pending = std::mem::take(&mut fx.pending);
@@ -427,7 +431,7 @@ pub(super) fn run(fx: &mut Fx, grew: &[(String, String)]) {
             }
         }
     }
-    drive_tied(fx, &late, &pending, &tied);
+    drive_tied(fx, &late, &pending, &tied, grew);
     for p in pending {
         confirm(fx, &p, &tied);
     }
@@ -438,14 +442,18 @@ pub(super) fn run(fx: &mut Fx, grew: &[(String, String)]) {
 /// or a finding the summarize step added): driven like a harness-tied finding. The N-WARM
 /// sibling is added, the finding tested with the workload of the harness, the sibling refuted
 /// with the call's `favors leak` discriminator, and the finding confirmed citing the call's
-/// growth evidence. A finding that is not a candidate (a refuted one stays refuted), has no
-/// discriminator that favors leak, or has no site on a repository run is left alone.
+/// growth evidence. A finding with no discriminator from the call gets its own alloc-test
+/// (a budget of [`MAX_LATE_ALLOC_TESTS`] per run), and is taken only when the test favors leak
+/// and a holder is known ([`alloc_route_holder`]). A finding that is not a candidate (a refuted
+/// one stays refuted), or has no site on a repository run, is left alone.
 fn drive_tied(
     fx: &mut Fx,
     late: &[(String, Tied)],
     pending: &[Pending],
     tied: &[(BTreeSet<String>, Vec<String>)],
+    grew: &[(String, String)],
 ) {
+    let late_tests = &mut 0usize;
     let artifact = fx.plan.entry == crate::model::Entry::Artifact;
     let mut taken: BTreeSet<String> = pending.iter().map(|p| p.finding.clone()).collect();
     for (harness, t) in late {
@@ -463,9 +471,7 @@ fn drive_tied(
             } else {
                 fnd.site.is_some()
             };
-            let Some((_, disc)) = t.discs.iter().find(|(x, _)| x == f) else {
-                continue;
-            };
+            let known = t.discs.iter().find(|(x, _)| x == f).map(|(_, d)| d.clone());
             let same_site = fnd.site.as_ref().is_some_and(|site| {
                 taken
                     .iter()
@@ -475,6 +481,48 @@ fn drive_tied(
             if !located || same_site {
                 continue;
             }
+            // A tied finding the summarize call wrote no discriminator for: the alloc-test of
+            // the finding is the discriminator, as for a column that carries candidates. A
+            // verdict that does not favor leak leaves the finding alone, and so does a finding
+            // whose holder the evidence does not give ([`alloc_route_holder`]).
+            let mut annotate: Option<(String, String)> = None;
+            let disc = match known {
+                Some(d) => d,
+                None => {
+                    if *late_tests >= MAX_LATE_ALLOC_TESTS {
+                        fx.step(format!(
+                            "{f} via summarize: no discriminator and the alloc-test budget is used up"
+                        ));
+                        continue;
+                    }
+                    *late_tests += 1;
+                    let a = super::alloc_test(fx, harness, Some(f));
+                    let e = match (a.verdict, a.evidence) {
+                        (super::Verdict::Leak, Some(e)) => e,
+                        (v, _) => {
+                            fx.step(format!(
+                                "{f} via summarize: no discriminator; alloc-test says {v:?}, left alone"
+                            ));
+                            continue;
+                        }
+                    };
+                    let runtime = grew
+                        .iter()
+                        .find(|(h, _)| h == harness)
+                        .map_or("", |(_, r)| r.as_str());
+                    match alloc_route_holder(fx, f, runtime, &e) {
+                        Ok(h) => annotate = h,
+                        Err(why) => {
+                            fx.step(format!(
+                                "{f} via summarize: alloc-test favors leak ({e}) but no holder: {why}; left alone"
+                            ));
+                            continue;
+                        }
+                    }
+                    e
+                }
+            };
+            let disc = &disc;
             taken.insert(f.clone());
             let Some(sib) = super::add_sibling(fx, f, "N-WARM", &t.growth) else {
                 fx.step(format!(
@@ -494,8 +542,22 @@ fn drive_tied(
                 ));
                 continue;
             }
+            let mut note = String::new();
+            if let Some((holder, source)) = annotate {
+                let r = fx.call(&["ledger", "annotate", f, "--holder", &holder]);
+                if r.ok {
+                    note = format!(", holder {holder} ({source})");
+                } else {
+                    let why = if r.code().is_empty() {
+                        format!("annotate gave no ledger answer: {}", r.message())
+                    } else {
+                        format!("refused by the ledger ({})", r.code())
+                    };
+                    note = format!(", holder {holder} ({source}) {why}, confirming without it");
+                }
+            }
             fx.step(format!(
-                "{f} via summarize: sibling {sib} refuted by {disc}, confirmation next"
+                "{f} via summarize: sibling {sib} refuted by {disc}{note}, confirmation next"
             ));
             let p = Pending {
                 finding: f.clone(),
@@ -503,6 +565,163 @@ fn drive_tied(
             };
             confirm(fx, &p, tied);
         }
+    }
+}
+
+/// The holder of a finding that the alloc-test route confirms, in this order: (1) the holder
+/// the finding has (`Ok(None)`: nothing to annotate); (2) the holder of a known-leaks row that
+/// the probe evidence of the run lists as `true` for the runtime and whose `when` source regex
+/// matches the finding's site line (rows that disagree give none); (3) a holder the
+/// alloc-test evidence itself names. The census entry of another finding at the same site is
+/// never a source. `Err` says why there is none.
+fn alloc_route_holder(
+    fx: &Fx,
+    id: &str,
+    runtime: &str,
+    alloc_evidence: &str,
+) -> Result<Option<(String, String)>, String> {
+    let view = fx.view();
+    let Some(f) = view.finding(id) else {
+        return Err("the finding is not in the ledger".to_owned());
+    };
+    if f.holder.is_some() {
+        return Ok(None);
+    }
+    let truths: BTreeSet<String> = view
+        .evidence
+        .values()
+        .filter(|e| e.kind == "probe")
+        .flat_map(|e| strings(&e.result["known_leaks"]["true"]))
+        .collect();
+    let line = f.site.as_deref().and_then(|s| site_line(&fx.project, s));
+    if let (Some(line), false) = (&line, truths.is_empty())
+        && let Ok(text) = fs::read_to_string(fx.plugin_root.join("data").join("known-leaks.toml"))
+    {
+        match known_leak_holder(&text, &truths, runtime, line) {
+            KnownHolder::One {
+                id,
+                holder,
+                archetype,
+            } => {
+                let row = archetype.map_or(id.clone(), |a| format!("{id}, {a}"));
+                return Ok(Some((holder, format!("known-leaks row {row}"))));
+            }
+            KnownHolder::Ambiguous => {
+                return Err(
+                    "known-leaks rows that match the site line name different holders".to_owned(),
+                );
+            }
+            KnownHolder::None => {}
+        }
+    }
+    if let Some(h) = view
+        .evidence
+        .get(alloc_evidence)
+        .and_then(|e| e.result["holder"].as_str())
+    {
+        return Ok(Some((h.to_owned(), format!("named by {alloc_evidence}"))));
+    }
+    Err(if truths.is_empty() {
+        "the finding has no holder, the probe lists no true known-leaks row and the alloc-test names none"
+    } else {
+        "the finding has no holder, no true known-leaks row matches its site line and the alloc-test names none"
+    }
+    .to_owned())
+}
+
+/// The source line `file:line` of a site in the project, trimmed.
+fn site_line(project: &std::path::Path, site: &str) -> Option<String> {
+    let (file, line) = site.rsplit_once(':')?;
+    let n: usize = line.parse().ok()?;
+    let text = fs::read_to_string(project.join(file)).ok()?;
+    text.lines()
+        .nth(n.checked_sub(1)?)
+        .map(|l| l.trim().to_owned())
+}
+
+/// What the known-leaks rows say about the holder at one source line.
+#[derive(Debug, PartialEq)]
+enum KnownHolder {
+    One {
+        id: String,
+        holder: String,
+        archetype: Option<String>,
+    },
+    Ambiguous,
+    None,
+}
+
+/// The rows of `data/known-leaks.toml` text that are `true` for the project, are for the
+/// runtime and have a `when` source regex (outside a `not`) that matches `line`.
+fn known_leak_holder(
+    text: &str,
+    truths: &BTreeSet<String>,
+    runtime: &str,
+    line: &str,
+) -> KnownHolder {
+    let Ok(file) = text.parse::<toml::Table>() else {
+        return KnownHolder::None;
+    };
+    let mut found: Vec<(String, String, Option<String>)> = Vec::new();
+    for row in file
+        .get("leak")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(id), Some(rt), Some(holder)) = (
+            row.get("id").and_then(toml::Value::as_str),
+            row.get("runtime").and_then(toml::Value::as_str),
+            row.get("holder").and_then(toml::Value::as_str),
+        ) else {
+            continue;
+        };
+        if rt != runtime || !truths.contains(id) {
+            continue;
+        }
+        let mut regexes = Vec::new();
+        if let Some(w) = row.get("when") {
+            source_regexes(w, &mut regexes);
+        }
+        let hit = regexes
+            .iter()
+            .any(|r| regex::Regex::new(r).is_ok_and(|re| re.is_match(line)));
+        if hit {
+            let archetype = row
+                .get("archetype")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned);
+            found.push((id.to_owned(), holder.to_owned(), archetype));
+        }
+    }
+    let mut holders: Vec<&str> = found.iter().map(|(_, h, _)| h.as_str()).collect();
+    holders.sort_unstable();
+    holders.dedup();
+    match (found.first(), holders.len()) {
+        (None, _) => KnownHolder::None,
+        (Some((id, holder, archetype)), 1) => KnownHolder::One {
+            id: id.clone(),
+            holder: holder.clone(),
+            archetype: archetype.clone(),
+        },
+        _ => KnownHolder::Ambiguous,
+    }
+}
+
+/// Every `source_regex` of a `when` condition, leaving out the ones under `not`.
+fn source_regexes(v: &toml::Value, out: &mut Vec<String>) {
+    match v {
+        toml::Value::Table(t) => {
+            for (k, x) in t {
+                match (k.as_str(), x) {
+                    ("not", _) => {}
+                    ("source_regex", toml::Value::String(r)) => out.push(r.clone()),
+                    _ => source_regexes(x, out),
+                }
+            }
+        }
+        toml::Value::Array(a) => a.iter().for_each(|x| source_regexes(x, out)),
+        _ => {}
     }
 }
 
@@ -994,6 +1213,13 @@ case "$1 $2" in
 "ledger refute")
   if [ -n "$FAKE_NO_REFUTE" ]; then echo '{"ok":false,"error":{"code":"not-refutable"}}'; exit 2; fi
   echo '{"ok":true}';;
+"alloc-test H1")
+  echo '{"type":"evidence","evidence_id":"E9","kind":"discriminator","authority":"live","result":{"favors":"'"${FAKE_ALLOC_FAVORS:-leak}"'"'"${FAKE_ALLOC_HOLDER:+,\"holder\":\"$FAKE_ALLOC_HOLDER\"}"'}}' >> $R/ledger.jsonl
+  echo '{"ok":true,"evidence":["E9"]}';;
+"ledger annotate")
+  if [ -n "$FAKE_ANNOTATE_CRASH" ]; then exit 3; fi
+  if [ -n "$FAKE_NO_ANNOTATE" ]; then echo '{"ok":false,"error":{"code":"holder-refused"}}'; exit 2; fi
+  echo '{"ok":true}';;
 "ledger confirm")
   if [ -n "$FAKE_CRASH_CONFIRM" ]; then echo "thread main panicked" >&2; exit 101; fi
   echo '{"ok":true}';;
@@ -1003,6 +1229,11 @@ esac
 
     #[cfg(unix)]
     fn drive_fake(env: &[(&str, &str)]) -> (FixtureRow, String) {
+        drive_fake_with(env, "")
+    }
+
+    #[cfg(unix)]
+    fn drive_fake_with(env: &[(&str, &str)], ledger: &str) -> (FixtureRow, String) {
         use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
         let bin = t.path().join("dla");
@@ -1011,7 +1242,7 @@ esac
         let project = t.path().join("project");
         fs::create_dir_all(project.join(".dla/R1")).unwrap();
         fs::write(project.join(".dla/current"), "R1\n").unwrap();
-        fs::write(project.join(".dla/R1/ledger.jsonl"), "").unwrap();
+        fs::write(project.join(".dla/R1/ledger.jsonl"), ledger).unwrap();
         let log = t.path().join("calls.log");
         // The stand-in reads its settings from a file in the project.
         let mut settings = format!(
@@ -1041,6 +1272,7 @@ esac
             worker: None,
             path_dir: None,
             unset_vars: Vec::new(),
+            provided: None,
             pending: vec![Pending {
                 finding: "F1".into(),
                 evidence: "E0".into(),
@@ -1113,6 +1345,18 @@ esac
         env: &[(&str, &str)],
         discs: &[(&str, &str)],
     ) -> (FixtureRow, String) {
+        drive_late_in(ledger, env, discs, &[], &[])
+    }
+
+    /// [`drive_late`] with files in the project and in the plugin's `data/` directory.
+    #[cfg(unix)]
+    fn drive_late_in(
+        ledger: &str,
+        env: &[(&str, &str)],
+        discs: &[(&str, &str)],
+        project_files: &[(&str, &str)],
+        data_files: &[(&str, &str)],
+    ) -> (FixtureRow, String) {
         use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir().unwrap();
         let bin = t.path().join("dla");
@@ -1128,6 +1372,15 @@ esac
             settings.push_str(&format!("{k}='{v}'\n"));
         }
         fs::write(project.join("fake.env"), settings).unwrap();
+        for (name, text) in project_files {
+            let path = project.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        fs::create_dir_all(t.path().join("data")).unwrap();
+        for (name, text) in data_files {
+            fs::write(t.path().join("data").join(name), text).unwrap();
+        }
         let mut fx = Fx {
             plan: super::super::Plan {
                 entry: crate::model::Entry::Repository,
@@ -1137,7 +1390,7 @@ esac
             bin: &bin,
             project,
             plugin_root: t.path(),
-            data_dir: t.path().join("data"),
+            data_dir: t.path().join("run-data"),
             log_dir: t.path().join("logs"),
             seq: 0,
             row: FixtureRow::default(),
@@ -1147,6 +1400,7 @@ esac
             path_dir: None,
             unset_vars: Vec::new(),
             pending: Vec::new(),
+            provided: None,
         };
         let tied = Tied {
             set: ["F1", "F2", "F3", "F4"]
@@ -1161,7 +1415,8 @@ esac
                 .collect(),
         };
         let sets = [(tied.set.clone(), tied.evidence.clone())];
-        drive_tied(&mut fx, &[("H1".to_owned(), tied)], &[], &sets);
+        let grew = [("H1".to_owned(), "go".to_owned())];
+        drive_tied(&mut fx, &[("H1".to_owned(), tied)], &[], &sets, &grew);
         let calls = fs::read_to_string(&log).unwrap_or_default();
         (std::mem::take(&mut fx.row), calls)
     }
@@ -1202,7 +1457,288 @@ esac
         assert_eq!(lines[1], "ledger test F1 --evidence E5");
         assert_eq!(lines[2], "ledger refute F2.n1 --evidence E8");
         assert_eq!(lines[3], "ledger confirm F1 --evidence E7,E8");
-        assert_eq!(lines.len(), 4, "{lines:?}");
+        // F4 has no discriminator from the summarize call: its alloc-test is the discriminator.
+        // It favors leak, but F4 has no holder and nothing names one: F4 is left alone.
+        assert_eq!(lines[4], "alloc-test H1 --finding F4");
+        assert_eq!(lines.len(), 5, "{lines:?}");
+        assert!(
+            row.steps
+                .iter()
+                .any(|s| s
+                    .starts_with("F4 via summarize: alloc-test favors leak (E9) but no holder")),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tied_finding_without_a_discriminator_stays_alone_when_the_alloc_test_does_not_favor_leak()
+    {
+        let (row, calls) = drive_late(LATE_LEDGER, &[("FAKE_ALLOC_FAVORS", "non-leak")], &[]);
+        assert!(row.failures.is_empty(), "{:?}", row.failures);
+        assert!(!calls.contains("ledger confirm"), "{calls}");
+        assert!(!calls.contains("--sibling-of"), "{calls}");
+        // F1 and F4 are located candidates: each got one alloc-test, then the budget of two ended.
+        assert_eq!(calls.matches("alloc-test H1").count(), 2, "{calls}");
+    }
+
+    const TICKER_PROBE: &str = r#"{"type":"evidence","evidence_id":"E1","kind":"probe","authority":"static","result":{"known_leaks":{"maybe":[],"true":["go-timer-unstopped-before-1.23"]}}}"#;
+
+    const TICKER_ROWS: &str = r#"
+[[leak]]
+id = "go-timer-unstopped-before-1.23"
+runtime = "go"
+holder = "registration-table"
+archetype = "L-REGISTER"
+when = { source_regex = 'time\.(?:NewTimer|NewTicker|Tick|After|AfterFunc)\(' }
+
+[[leak]]
+id = "go-timer-asynctimerchan-revert"
+runtime = "go"
+holder = "registration-table"
+archetype = "L-REGISTER"
+when = { all = [ { config = { key = "asynctimerchan", value = "1" } }, { source_regex = 'time\.NewTicker\(' } ] }
+"#;
+
+    const WAIT_GO: &str = "package reserve\n\nfunc wait() {\n\t// a line\n\tt := time.NewTicker(time.Second)\n\t_ = t\n}\n";
+
+    /// The ledger of go-ticker-legacy: F1 is the detector's finding at the ticker (no holder),
+    /// F3 the census blocked-stack entry at the same line.
+    #[cfg(unix)]
+    fn ticker_ledger() -> String {
+        [
+            r#"{"type":"evidence","evidence_id":"E5","kind":"workload","authority":"test","result":{"harness":"H1"}}"#,
+            TICKER_PROBE,
+            r#"{"type":"finding_added","finding":{"id":"F1","origin":"detector:dla/go-ticker-no-stop","site":"internal/wait.go:5"}}"#,
+            r#"{"type":"finding_added","finding":{"id":"F3","origin":"census","holder":"blocked-stack","site":"internal/wait.go:5"}}"#,
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_detector_finding_gets_the_holder_of_the_true_known_leaks_row_at_its_site_line() {
+        // F1 and F3 share the site; F3 (the census entry) is not taken from.
+        let (row, calls) = drive_late_in(
+            &ticker_ledger(),
+            &[],
+            &[],
+            &[("internal/wait.go", WAIT_GO)],
+            &[("known-leaks.toml", TICKER_ROWS)],
+        );
+        assert!(row.failures.is_empty(), "{:?}", row.failures);
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines[0], "alloc-test H1 --finding F1", "{lines:?}");
+        assert!(
+            lines[1].starts_with("ledger add --sibling-of F1 "),
+            "{lines:?}"
+        );
+        assert_eq!(lines[2], "ledger test F1 --evidence E5");
+        assert_eq!(lines[3], "ledger refute F2.n1 --evidence E9");
+        assert_eq!(lines[4], "ledger annotate F1 --holder registration-table");
+        assert_eq!(lines[5], "ledger confirm F1 --evidence E7,E8");
+        assert_eq!(lines.len(), 6, "{lines:?}");
+        assert!(!calls.contains("F3"), "{calls}");
+        assert!(
+            row.steps
+                .iter()
+                .any(|s| s.contains("known-leaks row go-timer-unstopped-before-1.23, L-REGISTER")),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_row_that_is_not_true_or_does_not_match_the_site_line_gives_no_holder() {
+        // The probe lists no true row: nothing names a holder.
+        let ledger = ticker_ledger().replace("go-timer-unstopped-before-1.23", "other-row");
+        let (_, calls) = drive_late_in(
+            &ledger,
+            &[],
+            &[],
+            &[("internal/wait.go", WAIT_GO)],
+            &[("known-leaks.toml", TICKER_ROWS)],
+        );
+        assert!(!calls.contains("ledger confirm F1"), "{calls}");
+        assert!(!calls.contains("annotate F1"), "{calls}");
+        // The site line is not a timer call.
+        let (row, calls) = drive_late_in(
+            &ticker_ledger().replace("wait.go:5", "wait.go:3"),
+            &[],
+            &[],
+            &[("internal/wait.go", WAIT_GO)],
+            &[("known-leaks.toml", TICKER_ROWS)],
+        );
+        assert!(!calls.contains("ledger confirm F1"), "{calls}");
+        assert!(!calls.contains("annotate F1"), "{calls}");
+        assert!(
+            row.steps
+                .iter()
+                .any(|s| s.contains("no true known-leaks row matches its site line")),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_finding_with_its_own_holder_keeps_it_on_the_alloc_test_route() {
+        // The census entry at the site: its own holder, no annotate.
+        let ledger = ticker_ledger().replace(
+            r#""origin":"detector:dla/go-ticker-no-stop""#,
+            r#""origin":"census","holder":"container-field""#,
+        );
+        let (_, calls) = drive_late_in(&ledger, &[], &[], &[], &[]);
+        assert!(!calls.contains("annotate"), "{calls}");
+        assert!(
+            calls.contains("ledger confirm F1 --evidence E7,E8"),
+            "{calls}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_holder_the_alloc_test_evidence_names_is_used_last() {
+        let ledger = ticker_ledger();
+        let (_, calls) = drive_late_in(
+            &ledger,
+            &[("FAKE_ALLOC_HOLDER", "thread-local")],
+            &[],
+            &[],
+            &[],
+        );
+        assert!(
+            calls.contains("ledger annotate F1 --holder thread-local"),
+            "{calls}"
+        );
+        assert!(calls.contains("ledger confirm F1 "), "{calls}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_holder_sources_apply_in_order_when_several_are_present() {
+        let files = [("internal/wait.go", WAIT_GO)];
+        let rows = [("known-leaks.toml", TICKER_ROWS)];
+        let env = [("FAKE_ALLOC_HOLDER", "thread-local")];
+        // Row and alloc-test holder both present: the row comes first.
+        let (_, calls) = drive_late_in(&ticker_ledger(), &env, &[], &files, &rows);
+        assert!(
+            calls.contains("ledger annotate F1 --holder registration-table"),
+            "{calls}"
+        );
+        assert!(!calls.contains("thread-local"), "{calls}");
+        // The finding's own holder, the row and the alloc-test holder: the own holder is kept.
+        let own = ticker_ledger().replace(
+            r#""origin":"detector:dla/go-ticker-no-stop""#,
+            r#""origin":"census","holder":"container-field""#,
+        );
+        let (_, calls) = drive_late_in(&own, &env, &[], &files, &rows);
+        assert!(!calls.contains("annotate"), "{calls}");
+        assert!(
+            calls.contains("ledger confirm F1 --evidence E7,E8"),
+            "{calls}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_annotate_that_prints_no_json_is_not_called_a_ledger_refusal() {
+        let (row, _) = drive_late_in(
+            &ticker_ledger(),
+            &[("FAKE_ANNOTATE_CRASH", "1")],
+            &[],
+            &[("internal/wait.go", WAIT_GO)],
+            &[("known-leaks.toml", TICKER_ROWS)],
+        );
+        assert!(
+            row.steps
+                .iter()
+                .any(|s| s.contains("annotate gave no ledger answer") && !s.contains("()")),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_holder_the_ledger_refuses_is_logged_not_reported_as_set() {
+        let (row, _) = drive_late_in(
+            &ticker_ledger(),
+            &[("FAKE_NO_ANNOTATE", "1")],
+            &[],
+            &[("internal/wait.go", WAIT_GO)],
+            &[("known-leaks.toml", TICKER_ROWS)],
+        );
+        assert!(
+            row.steps
+                .iter()
+                .any(|s| s.contains("refused by the ledger") && s.contains("registration-table")),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_alloc_test_budget_of_the_late_findings_ends_with_a_step_line() {
+        // Three located candidates on three sites: two alloc-tests, then the budget is used up.
+        let ledger = [
+            r#"{"type":"evidence","evidence_id":"E5","kind":"workload","authority":"test","result":{"harness":"H1"}}"#,
+            r#"{"type":"finding_added","finding":{"id":"F1","origin":"census","site":"src/a.js:1"}}"#,
+            r#"{"type":"finding_added","finding":{"id":"F2","origin":"census","site":"src/b.js:2"}}"#,
+            r#"{"type":"finding_added","finding":{"id":"F4","origin":"census","site":"src/c.js:3"}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        let (row, calls) = drive_late(&ledger, &[], &[]);
+        assert_eq!(calls.matches("alloc-test H1").count(), 2, "{calls}");
+        assert!(
+            row.steps
+                .iter()
+                .any(|s| s
+                    == "F4 via summarize: no discriminator and the alloc-test budget is used up"),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[test]
+    fn known_leak_rows_that_name_different_holders_at_a_line_give_none() {
+        let text = r#"
+[[leak]]
+id = "a"
+runtime = "go"
+holder = "registration-table"
+when = { source_regex = 'time\.NewTicker' }
+[[leak]]
+id = "b"
+runtime = "go"
+holder = "static/global"
+when = { all = [ { source_regex = 'NewTicker' } ] }
+[[leak]]
+id = "c"
+runtime = "go"
+holder = "thread-local"
+when = { not = { source_regex = 'NewTicker' } }
+"#;
+        let truths: BTreeSet<String> = ["a", "b", "c"].iter().map(|s| (*s).to_owned()).collect();
+        assert_eq!(
+            known_leak_holder(text, &truths, "go", "t := time.NewTicker(d)"),
+            KnownHolder::Ambiguous
+        );
+        let only_a: BTreeSet<String> = ["a", "c"].iter().map(|s| (*s).to_owned()).collect();
+        // `c` has its regex under `not`: it never matches.
+        assert!(matches!(
+            known_leak_holder(text, &only_a, "go", "t := time.NewTicker(d)"),
+            KnownHolder::One { ref holder, .. } if holder == "registration-table"
+        ));
+        assert_eq!(
+            known_leak_holder(text, &truths, "python", "time.NewTicker"),
+            KnownHolder::None
+        );
     }
 
     #[cfg(unix)]

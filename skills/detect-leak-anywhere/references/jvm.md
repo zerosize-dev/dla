@@ -16,7 +16,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - What the dump measures (after GC): `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used`,
   `jvm.nmt_committed`, `jvm.threads`, `jvm.classes_loaded`, the `os.*` set, top-20 class counts,
   and one probe record per static reference field (`JvmClass`, `JvmStatic`): size, reachable
-  objects (bounded walk, 2,000,000) and a shallow byte estimate assuming compressed oops.
+  objects (bounded walk, 2,000,000) and a shallow byte estimate assuming compressed oops. A
+  `ClassLoader`-valued static is probed differently: a `.classes` count (the loaded classes it
+  defined, through the agent's Instrumentation) plus the walk of its own fields (those of the
+  project's subclass; the JDK's loader internals are not walked) into the reachable and bytes figures.
 - A `jvm.class:<name>.count` column that ties to no finding (a generic type never ties) is accounted
   for by `dla gap <S> --residual`: rows under their threshold, or over it with a resolved open item.
 - Purges: `trim-native-heap` (DiagnosticCommand) and `gc`.
@@ -43,7 +46,7 @@ artifact run the files come from `dla attach jcmd` or the user.
 | HPROF or `GC.class_histogram` text | `type-histogram-diff` | growth by class. Ties by type only to the accumulation class recorded for a holder, the declared element type of a finding's field, or the field's own plain declared type when it is a project class (a type declared in the sources); an instance field whose type is its own class (a chain link such as `previous`) is not a holder of that type, the static root is; if several findings declare that type, it ties none. Generic types (`Object[]`, `String`, `java.util.*`, `kotlin.*` collections) never tie |
 | JFR `.jfr` (tool `jfr`) or `jfr print` text | `alloc-stack-diff` | a sample of old objects with the root path: a `holder:static:<Class>.<field>` total ties by holder |
 | `threads.json` | `non-heap` | thread count and groups; no creation site, so groups never tie |
-| `classloader-stats.txt`, `nmt-diff.txt` | `non-heap` | loader, class and native category growth; never tie. One command per file kind |
+| `classloader-stats.txt`, `nmt-diff.txt` | `non-heap` | loader, class and native category growth; only a loader's own group ties, by exact class to a finding whose holder is that loader class; the rest never tie. One command per file kind |
 
 - Retained sizes are approximate (instances sized as header plus fields, compressed references assumed).
 - JFR is a sample, not a census. At the default step the old-object counts are small (about 20 samples)

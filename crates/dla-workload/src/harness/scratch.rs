@@ -5,16 +5,20 @@
 //! [`crate::model::SKIP_DIRS`] and `.dla`), plus whatever generation drops in.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use dla_census::parse::Lang;
 use dla_core::{runtime::Runtime, state::Scope};
 
 use crate::model::SKIP_DIRS;
+#[cfg(unix)]
+use dla_probe::project_copy::repointed_link;
+use dla_probe::project_copy::{
+    git_files, git_tracked, is_dropped_build_output, link_for_copy, under_root_build_dir,
+};
 
 /// Most files copied into a scratch tree.
 const MAX_FILES: usize = 100_000;
@@ -36,47 +40,27 @@ pub struct CopyReport {
     pub out_of_scope_sources: BTreeMap<Runtime, u64>,
 }
 
-/// Project files per `git ls-files` (tracked, plus untracked files that are not ignored),
-/// or `None` when `project` is not a git work tree or git is missing.
-fn git_files(project: &Path) -> Option<Vec<PathBuf>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(project)
-        .args([
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let top = Command::new("git")
-        .arg("-C")
-        .arg(project)
-        .args(["rev-parse", "--show-prefix"])
-        .output()
-        .ok()?;
-    if !top.status.success() {
-        return None;
-    }
-    let mut files: Vec<PathBuf> = out
-        .stdout
-        .split(|b| *b == 0)
-        .filter(|s| !s.is_empty())
-        .filter_map(|s| std::str::from_utf8(s).ok())
-        .map(PathBuf::from)
-        .collect();
-    files.sort();
-    files.dedup();
-    Some(files)
-}
-
 /// Directories skipped wherever they are: they never hold project sources.
 const SKIP_ANYWHERE: [&str; 4] = ["node_modules", "__pycache__", ".git", ".dla"];
+
+/// Copies one file with its permissions and its modification time, so a copy builds the
+/// same as its source: `make` compares the times of sources, headers and outputs, and a
+/// copy that stamps every file with the time and order of the copy changes what is rebuilt.
+/// The content goes through a handle opened for writing and the time is set on that handle;
+/// the permissions are copied last, so a read-only source (mode 0444) keeps its time on
+/// every platform too.
+fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = fs::metadata(from)?;
+    let mut src = fs::File::open(from)?;
+    let mut dst = fs::File::create(to)?;
+    std::io::copy(&mut src, &mut dst)?;
+    if let Ok(t) = meta.modified() {
+        // Best effort: a copy with a fresh time is still a copy.
+        let _ = dst.set_modified(t);
+    }
+    drop(dst);
+    fs::set_permissions(to, meta.permissions())
+}
 
 /// Directories of [`SKIP_DIRS`] that are skipped only at the project root: a package named
 /// `build` or `out` deeper in the tree is source.
@@ -127,27 +111,7 @@ fn is_dla_path(rel: &Path) -> bool {
 /// Recreates the symlink `src` at `to` when it points inside `project`; the reason it was
 /// not copied otherwise.
 fn copy_symlink(project: &Path, dest: &Path, src: &Path, to: &Path) -> Result<(), String> {
-    let target = fs::read_link(src).map_err(|e| format!("unreadable symlink: {e}"))?;
-    let abs = if target.is_absolute() {
-        target.clone()
-    } else {
-        src.parent().unwrap_or(project).join(&target)
-    };
-    let root = project
-        .canonicalize()
-        .map_err(|e| format!("project not resolvable: {e}"))?;
-    let real = abs
-        .canonicalize()
-        .map_err(|_| "dangling symlink".to_owned())?;
-    let Ok(inside) = real.strip_prefix(&root) else {
-        return Err("symlink pointing outside the project".to_owned());
-    };
-    // Relative links keep their text; absolute ones are re-pointed into the copy.
-    let link = if target.is_absolute() {
-        dest.join(inside)
-    } else {
-        target
-    };
+    let link = link_for_copy(project, dest, src)?;
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&link, to).map_err(|e| format!("cannot create symlink: {e}"))
@@ -159,21 +123,12 @@ fn copy_symlink(project: &Path, dest: &Path, src: &Path, to: &Path) -> Result<()
     }
 }
 
-/// Root-level directories that hold build configuration or dependencies, copied whole
-/// under a scope.
-const ROOT_BUILD_DIRS: [&str; 4] = ["gradle", "buildSrc", ".mvn", "vendor"];
-
 /// Whether a file outside the scope is still needed to build what is inside it: any
 /// non-source file in a directory above the scope (`svc/go.mod` for the scope
 /// `svc/a`, a parent `pom.xml` or `Cargo.toml`) and everything under the root-level
 /// build directories.
 fn keeps_for_build(scope: &Scope, rel: &Path, slash: &str) -> bool {
-    if rel
-        .components()
-        .next()
-        .and_then(|c| c.as_os_str().to_str())
-        .is_some_and(|c| ROOT_BUILD_DIRS.contains(&c))
-    {
+    if under_root_build_dir(rel) {
         return true;
     }
     if Lang::from_path(rel).is_some() {
@@ -190,14 +145,26 @@ fn keeps_for_build(scope: &Scope, rel: &Path, slash: &str) -> bool {
 }
 
 /// Copies the scratch tree `src` into `dest` (created) without build outputs: the
-/// directories of [`SKIP_ANYWHERE`] wherever they are, and the root-level ones of
-/// [`SKIP_DIRS`]. Symlinks are recreated as they are on Unix and skipped elsewhere.
-/// `dla intervene` clones a harness's `work/` this way. Returns the files copied.
-pub fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<usize> {
+/// directories of [`SKIP_ANYWHERE`] wherever they are, the root-level ones of
+/// [`SKIP_DIRS`], and what [`is_dropped_build_output`] leaves out: object files git does
+/// not track in `project` (every object outside git) and untracked archives and shared
+/// libraries (the project copy's rule: a shipped input stays, a build output goes). Files
+/// keep their modification times. Symlinks are recreated as they are on Unix and skipped
+/// elsewhere. `dla intervene` clones a harness's `work/` this way. Returns the files copied.
+pub fn copy_tree(src: &Path, dest: &Path, project: &Path) -> std::io::Result<usize> {
     fs::create_dir_all(dest)?;
     let (files, _left_out) = walk_files(src);
+    let from_git = git_files(project).is_some();
+    let tracked = if from_git {
+        git_tracked(project)
+    } else {
+        HashSet::new()
+    };
     let mut copied = 0;
     for rel in files {
+        if is_dropped_build_output(&rel, from_git, &tracked) {
+            continue;
+        }
         let from = src.join(&rel);
         let to = dest.join(&rel);
         if let Some(parent) = to.parent() {
@@ -212,30 +179,10 @@ pub fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<usize> {
             }
             continue;
         }
-        fs::copy(&from, &to)?;
+        copy_file(&from, &to)?;
         copied += 1;
     }
     Ok(copied)
-}
-
-/// The text of the link `from` (inside `src`) for its copy in `dest`: an absolute target
-/// inside `src` is re-pointed into `dest`, so the copy never leads back to the original.
-#[cfg(unix)]
-fn repointed_link(src: &Path, dest: &Path, from: &Path) -> std::io::Result<PathBuf> {
-    let target = fs::read_link(from)?;
-    if !target.is_absolute() {
-        return Ok(target);
-    }
-    let mut roots = vec![src.to_path_buf()];
-    if let Ok(c) = src.canonicalize() {
-        roots.push(c);
-    }
-    for root in roots {
-        if let Ok(inside) = target.strip_prefix(&root) {
-            return Ok(dest.join(inside));
-        }
-    }
-    Ok(target)
 }
 
 /// Copies the project into `dest` (created). The `.dla` directory is never copied.
@@ -258,10 +205,16 @@ pub fn copy_project_scoped(
             (f, false, l)
         }
     };
+    let tracked = if from_git {
+        git_tracked(project)
+    } else {
+        HashSet::new()
+    };
     let mut report = CopyReport {
         from_git,
         ..CopyReport::default()
     };
+    let mut objects = 0usize;
     let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
     let mut skip = |report: &mut CopyReport, why: String| {
         report.skipped += 1;
@@ -286,6 +239,12 @@ pub fn copy_project_scoped(
                 }
                 continue;
             }
+        }
+        // Build outputs of another tree: rebuilt in the copy, never copied. Outside git
+        // every library counts as shipped; in git only the tracked ones do.
+        if is_dropped_build_output(&rel, from_git, &tracked) {
+            objects += 1;
+            continue;
         }
         if report.files >= MAX_FILES {
             skip(&mut report, format!("over the {MAX_FILES}-file cap"));
@@ -312,7 +271,7 @@ pub fn copy_project_scoped(
             skip(&mut report, "not a regular file".to_owned());
             continue;
         }
-        if fs::copy(&src, &to).is_err() {
+        if copy_file(&src, &to).is_err() {
             skip(&mut report, "unreadable file".to_owned());
             continue;
         }
@@ -322,6 +281,12 @@ pub fn copy_project_scoped(
         report
             .gaps
             .push(format!("scratch copy: {n} path(s) not copied ({why})"));
+    }
+    if objects > 0 {
+        report.gaps.push(format!(
+            "scratch copy: {objects} object file(s) and untracked librar{} not copied (they are rebuilt in the copy)",
+            if objects == 1 { "y" } else { "ies" }
+        ));
     }
     if report.out_of_scope > 0 {
         report.gaps.push(format!(
@@ -342,6 +307,8 @@ pub fn copy_project_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dla_probe::project_copy::is_library;
+    use std::process::Command;
 
     #[cfg(unix)]
     #[test]
@@ -352,12 +319,253 @@ mod tests {
         fs::write(src.join("real/F.java"), "x").unwrap();
         std::os::unix::fs::symlink(src.join("real"), src.join("linkdir")).unwrap();
         let dest = d.path().join("H2").join("work");
-        copy_tree(&src, &dest).unwrap();
+        copy_tree(&src, &dest, &src).unwrap();
         let to = fs::read_link(dest.join("linkdir")).unwrap();
         assert_eq!(
             to,
             dest.join("real"),
             "the copy must not lead back to the original"
+        );
+    }
+
+    #[test]
+    fn a_copy_keeps_modification_times() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        fs::create_dir_all(p.join("src")).unwrap();
+        let base = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        // A header that sorts before the sources, an old source and a newer one.
+        for (f, age) in [("src/a.h", 30), ("src/b.c", 20), ("src/z.c", 10)] {
+            fs::write(p.join(f), f).unwrap();
+            let t = base + std::time::Duration::from_secs(age);
+            fs::File::options()
+                .write(true)
+                .open(p.join(f))
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        }
+        let (via_project, via_tree) = (d.path().join("w"), d.path().join("t"));
+        copy_project(&p, &via_project).unwrap();
+        copy_tree(&p, &via_tree, &p).unwrap();
+        for dest in [&via_project, &via_tree] {
+            for f in ["src/a.h", "src/b.c", "src/z.c"] {
+                let want = fs::metadata(p.join(f)).unwrap().modified().unwrap();
+                let got = fs::metadata(dest.join(f)).unwrap().modified().unwrap();
+                assert_eq!(got, want, "{f} in {}", dest.display());
+            }
+        }
+    }
+
+    fn git(p: &Path, args: &[&str]) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(p)
+            .args(args)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    #[test]
+    fn a_copy_leaves_object_files_to_be_rebuilt() {
+        // A C project whose header sorts before its objects: the copy must hold no object
+        // that `make` would take as up to date and keep debug paths of another tree in.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        for f in [
+            "Makefile",
+            "src/a.h",
+            "src/main.c",
+            "src/main.o",
+            "src/util.obj",
+            "build_helper.lo",
+            "prebuilt/blob.o",
+            "libs/prebuilt.a",
+            "libs/built.a",
+            "libs/built.so",
+            "libs/built.so.1",
+            "libs/built.so.1.2.3",
+            "libs/built.1.dylib",
+            "libs/notes.so.txt",
+            "vendor/dep/dep.a",
+        ] {
+            let path = p.join(f);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, f).unwrap();
+        }
+        // Outside git every library counts as shipped, in the copy and in the clone.
+        let plain = d.path().join("plain");
+        copy_project(&p, &plain).unwrap();
+        let plain_clone = d.path().join("plain-clone");
+        copy_tree(&plain, &plain_clone, &p).unwrap();
+        for dest in [&plain, &plain_clone] {
+            for kept in ["libs/built.a", "libs/built.so.1", "libs/prebuilt.a"] {
+                assert!(dest.join(kept).is_file(), "{kept} in {}", dest.display());
+            }
+            assert!(!dest.join("src/main.o").exists());
+            // Outside git there is no telling a shipped object from a build output.
+            assert!(!dest.join("prebuilt/blob.o").exists());
+        }
+        // In a git work tree only the tracked libraries are shipped.
+        if !git(&p, &["init", "-q"]) {
+            return;
+        }
+        assert!(git(
+            &p,
+            &[
+                "add",
+                "Makefile",
+                "src/a.h",
+                "src/main.c",
+                "prebuilt/blob.o",
+                "libs/prebuilt.a"
+            ]
+        ));
+        let dest = d.path().join("w");
+        let r = copy_project(&p, &dest).unwrap();
+        for gone in ["src/main.o", "src/util.obj", "build_helper.lo"] {
+            assert!(!dest.join(gone).exists(), "{gone} copied");
+        }
+        for gone in [
+            "libs/built.a",
+            "libs/built.so",
+            "libs/built.so.1",
+            "libs/built.so.1.2.3",
+            "libs/built.1.dylib",
+        ] {
+            assert!(!dest.join(gone).exists(), "{gone} copied");
+        }
+        for kept in [
+            "Makefile",
+            "src/a.h",
+            "src/main.c",
+            "prebuilt/blob.o",
+            "libs/prebuilt.a",
+            "libs/notes.so.txt",
+            "vendor/dep/dep.a",
+        ] {
+            assert!(dest.join(kept).is_file(), "{kept} missing");
+        }
+        assert!(
+            r.gaps.iter().any(|g| g.contains("object file")),
+            "{:?}",
+            r.gaps
+        );
+        // The clone of a harness tree takes the same decision: an object or library git
+        // tracks in the project stays (a prebuilt one the build links), the others are rebuilt.
+        let clone = d.path().join("c");
+        copy_tree(&p, &clone, &p).unwrap();
+        for gone in [
+            "src/main.o",
+            "src/util.obj",
+            "build_helper.lo",
+            "libs/built.a",
+            "libs/built.so",
+            "libs/built.so.1",
+            "libs/built.so.1.2.3",
+            "libs/built.1.dylib",
+        ] {
+            assert!(!clone.join(gone).exists(), "{gone} cloned");
+        }
+        for kept in [
+            "prebuilt/blob.o",
+            "libs/prebuilt.a",
+            "libs/notes.so.txt",
+            "vendor/dep/dep.a",
+            "src/a.h",
+        ] {
+            assert!(clone.join(kept).is_file(), "{kept} not cloned");
+        }
+    }
+
+    #[test]
+    fn library_names_include_versioned_shared_objects() {
+        for lib in [
+            "libx.a",
+            "libx.so",
+            "libx.dylib",
+            "libx.so.1",
+            "libx.so.1.2.3",
+            "libx.1.dylib",
+        ] {
+            assert!(is_library(Path::new(lib)), "{lib}");
+        }
+        for not in [
+            "so",
+            "x.so.txt",
+            "a.1",
+            "libx.1",
+            "notes.txt",
+            "x.so.",
+            "1.2",
+        ] {
+            assert!(!is_library(Path::new(not)), "{not}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_keeps_the_time_of_a_read_only_source() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let from = d.path().join("lease.h");
+        fs::write(&from, "x").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&from)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        fs::set_permissions(&from, fs::Permissions::from_mode(0o444)).unwrap();
+        let to = d.path().join("copy.h");
+        copy_file(&from, &to).unwrap();
+        let meta = fs::metadata(&to).unwrap();
+        assert_eq!(meta.modified().unwrap(), old);
+        assert_eq!(meta.permissions().mode() & 0o777, 0o444);
+    }
+
+    #[test]
+    fn make_rebuilds_every_object_in_a_copy_of_a_built_project() {
+        // The native-tombstone-table shape: a header that sorts before the objects. A
+        // copy that stamped files in listing order left `main.o` newer than the header
+        // and `make` rebuilt only some objects. Needs `make`; skipped without it.
+        if Command::new("make").arg("--version").output().is_err() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        fs::create_dir_all(&p).unwrap();
+        fs::write(
+            p.join("Makefile"),
+            "OBJS = main.o util.o\nall: $(OBJS)\n\ttouch app\n%.o: %.c lease.h\n\ttouch $@\n",
+        )
+        .unwrap();
+        for f in ["lease.h", "main.c", "util.c"] {
+            fs::write(p.join(f), f).unwrap();
+        }
+        assert!(
+            Command::new("make")
+                .arg("-C")
+                .arg(&p)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert!(p.join("main.o").is_file());
+        let dest = d.path().join("w");
+        copy_project(&p, &dest).unwrap();
+        let plan = Command::new("make")
+            .arg("-n")
+            .arg("-C")
+            .arg(&dest)
+            .output()
+            .unwrap();
+        let plan = String::from_utf8_lossy(&plan.stdout).into_owned();
+        assert!(
+            plan.contains("touch main.o") && plan.contains("touch util.o"),
+            "{plan}"
         );
     }
 
@@ -402,7 +610,7 @@ mod tests {
             fs::write(path, f).unwrap();
         }
         let dest = d.path().join("clone");
-        assert_eq!(copy_tree(&w, &dest).unwrap(), 3);
+        assert_eq!(copy_tree(&w, &dest, &w).unwrap(), 3);
         assert_eq!(
             fs::read_to_string(dest.join("pkg/a/a.go")).unwrap(),
             "pkg/a/a.go"

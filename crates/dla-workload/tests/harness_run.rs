@@ -473,6 +473,79 @@ fn node_timers_are_counted_by_site_and_the_cleared_control_has_none() {
     assert!(ratio(ctl, "node.heap_used") < 1.3);
 }
 
+/// The purge record's `before` is the reading the column's series holds at the last point
+/// (after that point's forced collections), so per-step garbage collected by the purge is
+/// not counted as released memory: a small retained growth plus large per-step garbage is
+/// a `retained` purge.
+/// With the pre-collection `before` the garbage looked like most of the growth (ratio 0.6).
+#[test]
+fn node_gc_purge_of_retained_growth_with_garbage_is_retained() {
+    if !have(&["node"]) {
+        return;
+    }
+    let fx = fixture("", &["node"], &[1]);
+    fs::write(
+        fx.work.join("grow.js"),
+        "'use strict';\n\
+         const n = Number.parseInt(process.argv[2], 10);\n\
+         globalThis.KEEP = [];\n\
+         let garbage = null;\n\
+         for (let i = 0; i < n; i++) {\n\
+           if (i % 10 === 0) KEEP.push({ i, s: 'k' + i });\n\
+           garbage = new Array(2000).fill(i);\n\
+         }\n",
+    )
+    .unwrap();
+    let preload = fx.agent.join("dla-preload.js");
+    let mut m = manifest(
+        Runtime::Node,
+        &["node", "grow.js", "{n}"],
+        vec![(
+            s("NODE_OPTIONS"),
+            format!("--require {}", preload.display()),
+        )],
+        20000,
+    );
+    m.agent = AgentKind::NodePreload;
+    write_manifest(&fx, &m);
+    let opts = RunOptions {
+        purge: Some(s("gc")),
+        ..RunOptions::default()
+    };
+    let out = run_points(&fx.ctx, &m, &opts).unwrap();
+    let series = load(&fx, &out, 0);
+    let ev = series
+        .events
+        .iter()
+        .find(|e| e.kind == "purge:gc")
+        .unwrap_or_else(|| panic!("no purge event: {:?}", out.limitations));
+    let detail: serde_json::Value = serde_json::from_str(ev.detail.as_deref().unwrap()).unwrap();
+    let num = |side: &str, key: &str| detail[side][key].as_f64().unwrap();
+    let i = series.column_index("node.heap_used").unwrap();
+    let last = series.points.last().unwrap().values[i].unwrap();
+    // `before` is the series' own last reading, not a pre-collection one.
+    assert_eq!(num("before", "node.heap_used"), last, "{detail}");
+    let warm = series.points[series.warmup as usize - 1].values[i].unwrap();
+    let growth = num("before", "node.heap_used") - warm;
+    let drop = num("before", "node.heap_used") - num("after", "node.heap_used");
+    assert!(growth > 0.0, "{detail}");
+    assert!(
+        drop <= 0.2 * growth,
+        "retained growth looks released: {detail}"
+    );
+    for key in [
+        "node.heap_total",
+        "node.external",
+        "node.array_buffers",
+        "os.rss",
+    ] {
+        assert!(
+            detail["before"].get(key).is_some() && detail["after"].get(key).is_some(),
+            "{key}: {detail}"
+        );
+    }
+}
+
 #[test]
 fn go_goroutines_are_counted_by_creation_site() {
     if !have(&["go"]) {
@@ -637,6 +710,226 @@ fn native_shim_sites_are_symbolized_to_the_leaking_line() {
             .modified()
             .unwrap(),
         before
+    );
+}
+
+/// What the build step of [`run_wrapped`] leaves at `./framedec`.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum Built {
+    /// The binary itself.
+    Plain,
+    /// A libtool-style wrapper script that execs the real binary under another name.
+    Wrapper,
+    /// A symbolic link to the real binary under another name.
+    Link,
+}
+
+/// Builds the shim, makes a manifest for `argv` with `DLA_SHIM_ONLY=shim_only` whose build step
+/// leaves `built` at `./framedec`, and runs it. None when the host lacks a tool.
+#[cfg(target_os = "linux")]
+fn run_wrapped(argv: &[&str], shim_only: &str, built: Built) -> Option<(Fx, RunOutput)> {
+    if !have(&["cc", "make", "addr2line", "sh"]) {
+        return None;
+    }
+    let fx = fixture("native-frame-decoder", &["native"], &[1]);
+    let lib = fx.agent.join("libdlashim.so");
+    let st = Command::new("cc")
+        .args([
+            "-std=gnu11",
+            "-O2",
+            "-g",
+            "-fPIC",
+            "-shared",
+            "-fno-optimize-sibling-calls",
+            "-o",
+        ])
+        .arg(&lib)
+        .arg(fx.agent.join("dla_alloc_shim.c"))
+        .args(["-ldl", "-lpthread"])
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let env = vec![
+        (s("LD_PRELOAD"), lib.to_string_lossy().into_owned()),
+        (s("DLA_SHIM_ONLY"), s(shim_only)),
+    ];
+    let mut m = manifest(Runtime::Native, argv, env, 1000);
+    m.build = Some(spec(&match built {
+        Built::Wrapper => vec![
+            "sh",
+            "-c",
+            "make -s && mkdir -p .libs && mv framedec .libs/framedec-real && printf '#!/bin/sh\\nexec \"$(dirname \"$0\")/.libs/framedec-real\" \"$@\"\\n' > framedec && chmod +x framedec",
+        ],
+        Built::Link => vec![
+            "sh",
+            "-c",
+            "make -s && mkdir -p .libs && mv framedec .libs/framedec-real && ln -s .libs/framedec-real framedec",
+        ],
+        Built::Plain => vec!["make", "-s"],
+    }));
+    m.agent = AgentKind::AllocShim;
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    Some((fx, out))
+}
+
+// The build step turns `./framedec` into a libtool-style wrapper script that execs the real
+// binary under another name. `gen` narrowed the shim to `framedec`, a name no process
+// carries once the build has run, so the run must drop `DLA_SHIM_ONLY` and still measure
+// the site columns.
+// The shim is preloaded with `LD_PRELOAD` and symbolized with GNU `addr2line`: Linux only.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_build_that_makes_the_program_a_wrapper_script_is_measured_without_the_narrowing() {
+    let live = "native.live_bytes@src/decoder.c:29";
+    let Some((fx, out)) = run_wrapped(
+        &["./framedec", "--iterations", "{n}"],
+        "framedec",
+        Built::Wrapper,
+    ) else {
+        return;
+    };
+    let series = load(&fx, &out, 0);
+    assert!(
+        passes(&series, live),
+        "no site column: {:?} {:?}",
+        series.limitations,
+        series.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+    assert!(
+        out.limitations
+            .iter()
+            .any(|l| l.contains("not a native executable")),
+        "{:?}",
+        out.limitations
+    );
+    // A plain binary keeps the narrowing and says nothing about it.
+    let (fx2, out2) = run_wrapped(
+        &["./framedec", "--iterations", "{n}"],
+        "framedec",
+        Built::Plain,
+    )
+    .unwrap();
+    assert!(
+        !out2
+            .limitations
+            .iter()
+            .any(|l| l.contains("not a native executable")),
+        "{:?}",
+        out2.limitations
+    );
+    assert!(passes(&load(&fx2, &out2, 0), live));
+}
+
+// The build step makes `./framedec` a symbolic link to the real binary under another name.
+// The shim compares the executable's resolved name (`/proc/self/exe`), so the run narrows to
+// `framedec-real` instead of the link's name and the site columns are measured.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_build_that_makes_the_program_a_link_narrows_to_the_resolved_name() {
+    let Some((fx, out)) = run_wrapped(
+        &["./framedec", "--iterations", "{n}"],
+        "framedec",
+        Built::Link,
+    ) else {
+        return;
+    };
+    assert!(
+        passes(&load(&fx, &out, 0), "native.live_bytes@src/decoder.c:29"),
+        "{:?}",
+        out.limitations
+    );
+    assert!(
+        out.limitations
+            .iter()
+            .any(|l| l.contains("narrowed to framedec-real")),
+        "{:?}",
+        out.limitations
+    );
+}
+
+// A run piece `gen` could not split into words becomes `sh -c "<piece>"`; `gen` still
+// narrowed to the first word of the piece, so the check reads that word, not `sh`.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_wrapper_started_through_sh_c_is_measured_without_the_narrowing() {
+    let Some((fx, out)) = run_wrapped(
+        &["sh", "-c", "./framedec --iterations {n}"],
+        "framedec",
+        Built::Wrapper,
+    ) else {
+        return;
+    };
+    assert!(
+        passes(&load(&fx, &out, 0), "native.live_bytes@src/decoder.c:29"),
+        "{:?}",
+        out.limitations
+    );
+    assert!(
+        out.limitations
+            .iter()
+            .any(|l| l.contains("not a native executable")),
+        "{:?}",
+        out.limitations
+    );
+}
+
+// `DLA_SHIM_ONLY=java` (the JNI harnesses) is not a name taken from the program, so a
+// script as the program must not drop it, nor claim it was not narrowed to that name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_narrowing_to_another_name_is_kept_when_the_program_is_a_script() {
+    let Some((_fx, out)) = run_wrapped(
+        &["./framedec", "--iterations", "{n}"],
+        "java",
+        Built::Wrapper,
+    ) else {
+        return;
+    };
+    assert!(
+        !out.limitations
+            .iter()
+            .any(|l| l.contains("not a native executable")),
+        "{:?}",
+        out.limitations
+    );
+    // The narrowing stayed: `java` matches no process here, so nothing is measured.
+    assert!(
+        load(&_fx, &out, 0)
+            .column_index("native.live_bytes@src/decoder.c:29")
+            .is_none(),
+        "the narrowing to `java` was dropped"
+    );
+}
+
+// The shape `gen` writes for a piece with a redirect: an assignment whose value holds a
+// '/' comes before the program and is skipped, as `gen` skips it.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_env_word_with_a_slash_in_a_sh_c_body_does_not_hide_the_wrapper() {
+    let Some((fx, out)) = run_wrapped(
+        &[
+            "sh",
+            "-c",
+            "LD_LIBRARY_PATH=/usr/lib ./framedec --iterations {n} 2>/dev/null",
+        ],
+        "framedec",
+        Built::Wrapper,
+    ) else {
+        return;
+    };
+    assert!(
+        passes(&load(&fx, &out, 0), "native.live_bytes@src/decoder.c:29"),
+        "{:?}",
+        out.limitations
+    );
+    assert!(
+        out.limitations
+            .iter()
+            .any(|l| l.contains("not a native executable")),
+        "{:?}",
+        out.limitations
     );
 }
 
@@ -827,6 +1120,176 @@ fn jvm_agent_probe_measures_threadlocal_values_on_pooled_threads() {
     );
     let ctl = &results[1];
     assert!(!passes(ctl, probe), "the trimmed lists stay short");
+}
+
+/// A program whose static `ClassLoader` defines `n` classes (`flat`: always 3). Each class is
+/// a tiny class file written by hand, so the loader's own fields never change.
+const LOADER_PROGRAM: &str = r#"import java.io.*;
+public class Gen {
+    static final class Defs extends ClassLoader {
+        Defs() { super(Gen.class.getClassLoader()); }
+        Class<?> define(String name, byte[] b) { return defineClass(name, b, 0, b.length); }
+    }
+    static final Defs LOADER = new Defs();
+    static byte[] classFile(String name) throws IOException {
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bo);
+        o.writeInt(0xCAFEBABE); o.writeShort(0); o.writeShort(52);
+        o.writeShort(5);
+        o.writeByte(1); o.writeUTF(name);
+        o.writeByte(7); o.writeShort(1);
+        o.writeByte(1); o.writeUTF("java/lang/Object");
+        o.writeByte(7); o.writeShort(3);
+        o.writeShort(0x20); o.writeShort(2); o.writeShort(4);
+        o.writeShort(0); o.writeShort(0); o.writeShort(0); o.writeShort(0);
+        return bo.toByteArray();
+    }
+    public static void main(String[] a) throws Exception {
+        int n = Integer.parseInt(a[0]);
+        int defined = a[1].equals("flat") ? Math.min(n, 3) : n;
+        for (int i = 0; i < defined; i++) {
+            String name = "gen.G" + i;
+            LOADER.define(name, classFile(name.replace('.', '/')));
+        }
+    }
+}
+"#;
+
+/// The probe of a static `ClassLoader` counts the classes it defined: its own fields are
+/// flat however many classes it holds, so a shallow walk would read as a plateau and clear
+/// the loader. A loader that defines a fixed few classes stays flat.
+#[test]
+fn jvm_agent_probe_counts_the_classes_a_static_class_loader_defined() {
+    if !have(&["java", "javac", "jar"]) {
+        return;
+    }
+    let mut results = Vec::new();
+    for mode in ["grow", "flat"] {
+        let fx = fixture("", &["jvm"], &[1]);
+        fs::write(fx.work.join("Gen.java"), LOADER_PROGRAM).unwrap();
+        let jar = build_jvm_agent(&fx);
+        let mut m = manifest(
+            Runtime::Jvm,
+            &["java", "-cp", "out", "Gen", "{n}", mode],
+            vec![(
+                s("JAVA_TOOL_OPTIONS"),
+                format!("-javaagent:{}", jar.display()),
+            )],
+            200,
+        );
+        m.build = Some(spec(&[
+            "sh",
+            "-c",
+            "rm -rf out && mkdir out && javac -d out Gen.java",
+        ]));
+        m.agent = AgentKind::JvmAgent;
+        m.probes = vec![ProbeSpec {
+            id: s("P1"),
+            finding: None,
+            target: ProbeTarget::JvmStatic {
+                class: s("Gen"),
+                field: s("LOADER"),
+            },
+            site: Some(s("Gen.java:8")),
+        }];
+        write_manifest(&fx, &m);
+        let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+        results.push(load(&fx, &out, 0));
+    }
+    let probe = "probe:Gen.LOADER";
+    let grow = &results[0];
+    assert!(passes(grow, probe), "the classes the loader defined grow");
+    assert!(passes(grow, &format!("{probe}.classes")));
+    let counts = post(grow, &format!("{probe}.classes"));
+    let (first, last) = (counts.first().unwrap(), counts.last().unwrap());
+    assert!(
+        ((last.1 - first.1) / (last.0 - first.0) - 1.0).abs() < 0.05,
+        "one class per unit in {counts:?}"
+    );
+    assert!(
+        !passes(grow, &format!("{probe}.bytes")),
+        "a loader with no field of its own has a flat byte figure"
+    );
+    let flat = &results[1];
+    assert!(!passes(flat, &format!("{probe}.classes")));
+}
+
+/// A project subclass of `ClassLoader` that keeps a list of byte arrays (`cache`), defining
+/// no class (`flat`: the list stays at 3 entries).
+const CACHE_LOADER_PROGRAM: &str = r#"import java.util.*;
+public class Gen {
+    static final class Defs extends ClassLoader {
+        final List<byte[]> cache = new ArrayList<>();
+        Defs() { super(Gen.class.getClassLoader()); }
+    }
+    static final Defs LOADER = new Defs();
+    public static void main(String[] a) throws Exception {
+        int n = Integer.parseInt(a[0]);
+        int kept = a[1].equals("flat") ? Math.min(n, 3) : n;
+        for (int i = 0; i < kept; i++) {
+            LOADER.cache.add(new byte[2048]);
+        }
+    }
+}
+"#;
+
+/// The probe of a static `ClassLoader` also walks the loader's own fields (those below
+/// `java.lang.ClassLoader`): a cache that grows inside a project loader grows the byte
+/// column, while the classes it defined stay at zero.
+#[test]
+fn jvm_agent_probe_walks_the_own_fields_of_a_static_class_loader() {
+    if !have(&["java", "javac", "jar"]) {
+        return;
+    }
+    let mut results = Vec::new();
+    for mode in ["grow", "flat"] {
+        let fx = fixture("", &["jvm"], &[1]);
+        fs::write(fx.work.join("Gen.java"), CACHE_LOADER_PROGRAM).unwrap();
+        let jar = build_jvm_agent(&fx);
+        let mut m = manifest(
+            Runtime::Jvm,
+            &["java", "-cp", "out", "Gen", "{n}", mode],
+            vec![(
+                s("JAVA_TOOL_OPTIONS"),
+                format!("-javaagent:{}", jar.display()),
+            )],
+            200,
+        );
+        m.build = Some(spec(&[
+            "sh",
+            "-c",
+            "rm -rf out && mkdir out && javac -d out Gen.java",
+        ]));
+        m.agent = AgentKind::JvmAgent;
+        m.probes = vec![ProbeSpec {
+            id: s("P1"),
+            finding: None,
+            target: ProbeTarget::JvmStatic {
+                class: s("Gen"),
+                field: s("LOADER"),
+            },
+            site: Some(s("Gen.java:7")),
+        }];
+        write_manifest(&fx, &m);
+        let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+        results.push(load(&fx, &out, 0));
+    }
+    let probe = "probe:Gen.LOADER";
+    let grow = &results[0];
+    assert!(passes(grow, &format!("{probe}.bytes")), "the cache grows");
+    assert!(passes(grow, probe), "its objects grow");
+    assert!(
+        !passes(grow, &format!("{probe}.classes")),
+        "no class is defined"
+    );
+    let bytes = post(grow, &format!("{probe}.bytes"));
+    let (first, last) = (bytes.first().unwrap(), bytes.last().unwrap());
+    assert!(
+        (last.1 - first.1) / (last.0 - first.0) > 2000.0,
+        "a 2 KiB array per unit in {bytes:?}"
+    );
+    let flat = &results[1];
+    assert!(!passes(flat, &format!("{probe}.bytes")));
 }
 
 /// A `ThreadLocal` that no live thread holds a value of is not a measurement of zero: the

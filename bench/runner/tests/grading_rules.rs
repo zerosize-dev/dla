@@ -657,6 +657,28 @@ fn trap_miss_requires_a_pair_and_counts_missed_confirmable_leaks() {
 }
 
 #[test]
+fn an_unclassified_trap_with_a_pair_counts_in_the_trap_miss_rate() {
+    let free = exp(&TRAP
+        .replace("archetype-leak", "archetype-free")
+        .replace("L-COLLECT", "UNCLASSIFIED"));
+    assert_eq!(grade_findings(&free, Source::None, &[]).parts[10], (1, 1));
+    let hit = [at(
+        State::Confirmed,
+        "src/cache.py:10",
+        "static/global",
+        None,
+    )];
+    assert_eq!(
+        grade_findings(&free, Source::Findings, &hit).parts[10],
+        (0, 1)
+    );
+    let alone = exp(&TRAP
+        .replace("archetype-leak", "archetype-free")
+        .replace("pair = \"t-ctl\"\n", ""));
+    assert_eq!(grade_findings(&alone, Source::None, &[]).parts[10], (0, 0));
+}
+
+#[test]
 fn metrics_of_other_categories_stay_zero() {
     let nl = plain("non-leak", NONLEAK);
     let g = grade_findings(&nl, Source::None, &[]);

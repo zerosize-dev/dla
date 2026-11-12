@@ -34,8 +34,8 @@ def leak_toml(lid, site, holder="static/global", cause="L-COLLECT", confirmable=
     return s
 
 
-def fixture_toml(fid, category, body="", pair=None):
-    s = f'schema_version = 1\nid = "{fid}"\nruntime = "jvm"\ncategory = "{category}"\n'
+def fixture_toml(fid, category, body="", pair=None, runtime="jvm"):
+    s = f'schema_version = 1\nid = "{fid}"\nruntime = "{runtime}"\ncategory = "{category}"\n'
     if pair:
         s += f'pair = "{pair}"\n'
     s += 'dynamic_confirmation = true\n\n[task]\nprompt = "p"\n'
@@ -86,10 +86,10 @@ class Env:
     def close(self):
         self._tmp.cleanup()
 
-    def fixture(self, fid, category, body="", pair=None):
+    def fixture(self, fid, category, body="", pair=None, runtime="jvm"):
         d = self.fixtures / fid
         d.mkdir(exist_ok=True)
-        (d / "expected.toml").write_text(fixture_toml(fid, category, body, pair))
+        (d / "expected.toml").write_text(fixture_toml(fid, category, body, pair, runtime))
 
     def run(self, fid, n=1, abl="no-skill", arch="on", ledger_text=None, findings=None,
             raw_findings=None, coverage=None, run_json=None, write_run_json=True):
@@ -648,9 +648,11 @@ class ClaimMetricsTest(EnvCase):
         self.env.run("pa", n=1, findings=[jf("a.py:1", "h"), jf("a.py:2", "h")])
         self.env.run("pa", n=2, findings=[jf("a.py:1", "h")])
         self.env.run("nopair", n=1, findings=[])
-        self.env.run("free", n=1, findings=[])
+        self.env.fixture("freealone", "archetype-free", leak_toml("L1", "a.py:1", cause="UNCLASSIFIED"))
+        self.env.run("free", n=1, findings=[])           # an UNCLASSIFIED trap with a pair counts
+        self.env.run("freealone", n=1, findings=[])      # no pair: not counted
         m = self.env.group()["metrics"]["trap_miss_rate"]
-        self.assertEqual((m["num"], m["den"]), (1, 2))
+        self.assertEqual((m["num"], m["den"]), (2, 3))
 
     def test_fixtures_of_other_categories_do_not_feed_claim_metrics(self):
         self.env.fixture("t", "archetype-leak", leak_toml("L1", "a.py:1"))
@@ -1833,20 +1835,39 @@ class M7MetricsTest(EnvCase):
         for n in (1, 2, 3):
             self.env.run("lk", n, abl="gates", ledger_text=hit)
             self.env.run("dc", n, abl="gates", ledger_text=ledger(self.add("F1", "q.py:1", ["E1"]), trans("F1", "refuted")))
-        row = self.env.group("gates")["decoys"]["L-COLLECT"]
+        row = self.env.group("gates")["decoys"]["L-COLLECT (jvm)"]
         self.assertEqual(row, {"pairs": ["lk/dc"], "leak": {"found_runs": 3, "runs": 3},
                                "decoy": {"claim_runs": 0, "runs": 3}, "pass": True})
         self.env.run("lk", 2, abl="gates", ledger_text=miss)
-        self.assertFalse(self.env.group("gates")["decoys"]["L-COLLECT"]["pass"])
+        self.assertFalse(self.env.group("gates")["decoys"]["L-COLLECT (jvm)"]["pass"])
         self.env.run("lk", 2, abl="gates", ledger_text=hit)
         self.env.run("dc", 3, abl="gates", ledger_text=ledger(self.add("F1", "q.py:1", ["E1"]), trans("F1", "confirmed")))
-        row = self.env.group("gates")["decoys"]["L-COLLECT"]
+        row = self.env.group("gates")["decoys"]["L-COLLECT (jvm)"]
         self.assertEqual(row["decoy"], {"claim_runs": 1, "runs": 3})
         self.assertFalse(row["pass"])
 
+    def test_decoy_rows_are_keyed_by_row_and_runtime(self):
+        """The same cause in two runtimes is two rows: a go pair that holds does not cover a
+        node pair that fails."""
+        body = leak_toml("L1", "a.py:10", cause="L-REGISTER")
+        dc = '\n[[non_leak]]\nid = "N1"\ncause = "N-WARM"\ndiscriminator = "x"\n'
+        self.env.fixture("go-lk", "archetype-leak", body, pair="go-dc", runtime="go")
+        self.env.fixture("go-dc", "decoy-control", dc, pair="go-lk", runtime="go")
+        self.env.fixture("nd-lk", "archetype-leak", body, pair="nd-dc", runtime="node")
+        self.env.fixture("nd-dc", "decoy-control", dc, pair="nd-lk", runtime="node")
+        hit = ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed"))
+        no_claim = ledger(self.add("F1", "q.py:1", ["E1"]), trans("F1", "refuted"))
+        claim = ledger(self.add("F1", "q.py:1", ["E1"]), trans("F1", "confirmed"))
+        for fx, text in (("go-lk", hit), ("go-dc", no_claim), ("nd-lk", hit), ("nd-dc", claim)):
+            self.env.run(fx, abl="gates", ledger_text=text)
+        rows = self.env.group("gates")["decoys"]
+        self.assertTrue(rows["L-REGISTER (go)"]["pass"])
+        self.assertFalse(rows["L-REGISTER (node)"]["pass"])
+        self.assertEqual(rows["L-REGISTER (node)"]["pairs"], ["nd-lk/nd-dc"])
+
     def test_a_decoy_without_runs_does_not_pass_and_no_pair_means_no_block(self):
         self.env.run("lk", abl="gates", ledger_text=ledger(self.add("F1", "a.py:10", ["E1"]), trans("F1", "confirmed")))
-        row = self.env.group("gates")["decoys"]["L-COLLECT"]
+        row = self.env.group("gates")["decoys"]["L-COLLECT (jvm)"]
         self.assertEqual(row["decoy"], {"claim_runs": 0, "runs": 0})
         self.assertFalse(row["pass"])
         env2 = Env()

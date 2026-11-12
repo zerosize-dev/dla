@@ -6,7 +6,9 @@
 //! (threads created at one site, descriptors of one kind) is tied (see [`tie`]) to the
 //! finding whose site or writers are the group's creation site. Only a creation site
 //! ties: the frame a JVM thread is running in now is not one, so groups read from a JVM
-//! thread dump never tie by site. Whole-process metrics tie to nothing.
+//! thread dump never tie by site. A `classloader` group ties by type identity to the finding
+//! whose holder is declared with exactly that loader class (see [`super::loader_tie`]).
+//! Whole-process metrics tie to nothing.
 
 use std::collections::BTreeMap;
 
@@ -23,7 +25,7 @@ use dla_parsers::model::NonHeapSnapshot;
 use serde_json::{Map, Value, json};
 
 use super::{
-    AdapterOut, CandidateRow, Ctx, Opts, Recorded, emit, growth,
+    AdapterOut, CandidateRow, Ctx, Opts, Recorded, emit, growth, loader_tie,
     rule::{self, Observed},
     tie,
 };
@@ -67,6 +69,8 @@ struct Item {
     unit: Unit,
     values: Vec<Option<u64>>,
     site: Option<String>,
+    /// The loader class of a `classloader` group (dotted, qualified).
+    loader: Option<String>,
 }
 
 /// Sources whose group sites are the frame a thread runs in now, not where it was made.
@@ -127,6 +131,7 @@ pub fn run_diff(
                 unit,
                 values: vec![None; n],
                 site: None,
+                loader: None,
             });
             it.values[ci] = Some(u64::try_from(m.value.max(0)).unwrap_or(0) * mult);
         }
@@ -148,6 +153,7 @@ pub fn run_diff(
                     unit: Unit::Count,
                     values: vec![None; n],
                     site,
+                    loader: loader_tie::loader_class(&g.kind, &g.key),
                 });
             it.values[ci] = Some(it.values[ci].unwrap_or(0) + g.count);
         }
@@ -292,10 +298,12 @@ pub fn run_diff(
     }
     picked.truncate(TRACKED);
     let who = tie::Who::new(tc.worker.as_deref(), origin.runtime);
+    // The project's declared classes, scanned on the first loader group and then reused.
+    let project_classes = std::cell::OnceCell::new();
     let mut tracks: Vec<growth::Track> = picked
         .iter()
         .map(|i| {
-            let matches: Vec<(FindingId, tie::TieReason)> = i
+            let mut matches: Vec<(FindingId, tie::TieReason)> = i
                 .site
                 .as_deref()
                 .map(|s| {
@@ -305,6 +313,20 @@ pub fn run_diff(
                         .collect()
                 })
                 .unwrap_or_default();
+            // A class loader group ties to the finding whose holder is declared with
+            // exactly that loader class.
+            if let Some(loader) = &i.loader {
+                let classes =
+                    project_classes.get_or_init(|| tie::ProjectClasses::scan(&tc.project));
+                matches.extend(loader_tie::findings_for_loader(
+                    ledger,
+                    &who,
+                    &tc.project,
+                    classes,
+                    ctx.artifact_run,
+                    loader,
+                ));
+            }
             let r_tie = tie::resolve(matches, opts.finding.as_ref());
             let mut t = growth::Track {
                 name: clip(&i.name, 120),
@@ -441,12 +463,12 @@ pub fn run_diff(
         text
     } else if let Some(f) = &opts.finding {
         format!(
-            "no passing column ties to {f} by holder, site or type: a group ties only by its creation site (a goroutine's created-by frame, a thread's spawn frame) equal to the finding's site or one of its writers"
+            "no passing column ties to {f} by holder, site or type: a group ties by its creation site (a goroutine's created-by frame, a thread's spawn frame) equal to the finding's site or one of its writers, and a classloader group by the exact loader class of the holder's declared type"
         )
     } else if site_is_current_frame(&captures[0].snap.source) {
         "the growing items tie to no finding: a JVM thread dump has no creation site, so its groups never tie; a thread leak is tied by a probe column on the holder, or by a heap-dump holder. Whole-process totals never tie".to_owned()
     } else {
-        "the growing items tie to no finding: a group ties only by its creation site; run dla census so a spawn or handle holder exists there. Whole-process totals never tie".to_owned()
+        "the growing items tie to no finding: a group ties by its creation site (run dla census so a spawn or handle holder exists there), and a classloader group by the holder's declared loader type (exactly the loader class of the group). Whole-process totals never tie".to_owned()
     };
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);

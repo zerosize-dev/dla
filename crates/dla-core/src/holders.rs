@@ -48,14 +48,15 @@ fn key_owner(key: &str) -> Option<String> {
 
 /// The canonical owner a passing `holder:<key>` or `probe:<owner>` growth column measures;
 /// `None` for another column and for a key that names no variable or field. `columns` are
-/// the columns of the same record: a `.count` (holder), `.size` or `.bytes` (probe) suffix
+/// the columns of the same record: a `.count` (holder), `.size`, `.bytes` or `.classes` (probe;
+/// `.classes` is the classes a probed JVM class loader defined) suffix
 /// is a measure suffix only when the record also has the column without it; otherwise the
 /// name is read as it is (a holder named `count` is the holder `count`).
 pub fn column_owner(column: &str, columns: &[&str]) -> Option<String> {
     let (prefix, suffixes): (&str, &[&str]) = if column.starts_with("holder:") {
         ("holder:", &[".count"])
     } else if column.starts_with("probe:") {
-        ("probe:", &[".size", ".bytes"])
+        ("probe:", &[".size", ".bytes", ".classes"])
     } else {
         return None;
     };
@@ -582,6 +583,10 @@ mod tests {
         assert_eq!(
             owners(&["probe:app.Cache", "probe:app.Cache.size"]),
             ["app.Cache"]
+        );
+        assert_eq!(
+            owners(&["probe:app.Rules.LOADER", "probe:app.Rules.LOADER.classes"]),
+            ["app.Rules.LOADER"]
         );
     }
 

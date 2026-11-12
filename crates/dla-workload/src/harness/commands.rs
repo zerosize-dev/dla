@@ -209,7 +209,7 @@ pub fn shell_words(s: &str) -> Option<Vec<String>> {
 }
 
 /// Leading `NAME=value` words of a command line as environment pairs.
-fn split_env(words: Vec<String>) -> (Vec<(String, String)>, Vec<String>) {
+pub(crate) fn split_env(words: Vec<String>) -> (Vec<(String, String)>, Vec<String>) {
     let mut env = Vec::new();
     let mut rest = words.into_iter().peekable();
     while let Some(w) = rest.peek() {
@@ -762,6 +762,25 @@ fn native_executable(work: &Path, cwd: &str, piece: &str) -> Option<String> {
     is_native_binary(&path).then(|| base.to_owned())
 }
 
+/// Basename of the program `piece` starts when it is an explicit relative path (`./prog`,
+/// `bin/prog`) without an extension that does not exist in the scratch copy yet: the name a
+/// build step before it is expected to produce. `None` for anything that exists (that case
+/// is [`native_executable`]'s), for shells, interpreters and scripts, and for bare names.
+fn to_be_built_executable(work: &Path, cwd: &str, piece: &str) -> Option<String> {
+    let words: Vec<String> = piece.split_whitespace().map(str::to_owned).collect();
+    let (_, rest) = split_env(words);
+    let tok = rest.first()?;
+    let tok = tok.trim_matches(|c| c == '"' || c == '\'');
+    if !tok.contains('/') || tok.starts_with('/') || tok.contains("..") {
+        return None;
+    }
+    let base = tok.rsplit('/').next().unwrap_or(tok);
+    if base.is_empty() || base.contains('.') || work.join(cwd).join(tok).exists() {
+        return None;
+    }
+    Some(base.to_owned())
+}
+
 /// Whether `path` is an ELF or Mach-O executable (by its first four bytes), not a script.
 pub(crate) fn is_native_binary(path: &Path) -> bool {
     let mut head = [0u8; 4];
@@ -791,7 +810,15 @@ fn plan_native(w: &Workload, iter_arg: Option<&str>, layout: &Layout) -> Plan {
         // Narrow the shim to the program itself only when the command starts a real
         // executable of the scratch copy. A shell, a script or anything else leaves the
         // shim loaded in every process; `select_measured` drops the shell's record.
-        if let Some(base) = native_executable(&layout.work, &w.cwd, last) {
+        // A build step in front of the command (`make && ./prog`) produces the executable
+        // after this plan is made (the probe's build no longer leaves it in the project),
+        // so a path that does not exist yet is narrowed by its name too.
+        let found = native_executable(&layout.work, &w.cwd, last).or_else(|| {
+            (!before.is_empty())
+                .then(|| to_be_built_executable(&layout.work, &w.cwd, last))
+                .flatten()
+        });
+        if let Some(base) = found {
             set_env(&mut run, "DLA_SHIM_ONLY", base);
         }
     }
@@ -1497,5 +1524,39 @@ mod tests {
         }
         let p = plan_of(Runtime::Native, "make && ./prog", &l);
         assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), Some("prog"));
+    }
+
+    #[test]
+    fn shim_only_names_an_executable_the_build_step_has_yet_to_produce() {
+        if cfg!(windows) {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let l = Layout {
+            work: d.path().join("work"),
+            agent: d.path().join("agent"),
+            driver: d.path().join("driver"),
+        };
+        std::fs::create_dir_all(&l.work).unwrap();
+        // Not built yet: the build step in front of it names the program.
+        let p = plan_of(Runtime::Native, "make && ./leasebroker --iterations 5", &l);
+        assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), Some("leasebroker"));
+        // Nothing builds it, a script name, a bare name: no narrowing.
+        for cmd in ["./leasebroker", "make && ./run.sh", "make && prog"] {
+            let p = plan_of(Runtime::Native, cmd, &l);
+            assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), None, "{cmd}");
+        }
+        // An absolute path or one that leaves the scratch copy is not the build's output.
+        for cmd in [
+            "make && /usr/local/bin/leasebroker",
+            "make && ../leasebroker",
+            "make && ./bin/../../leasebroker",
+        ] {
+            let p = plan_of(Runtime::Native, cmd, &l);
+            assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), None, "{cmd}");
+        }
+        // A relative path below the copy is.
+        let p = plan_of(Runtime::Native, "make && bin/leasebroker", &l);
+        assert_eq!(env(&p.run, "DLA_SHIM_ONLY"), Some("leasebroker"));
     }
 }

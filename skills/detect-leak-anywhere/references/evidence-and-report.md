@@ -45,7 +45,7 @@ Every column has a unit (`bytes`, `count`, `ratio`, `seconds`), a kind, a region
 | Python | `py.traced`, `py.gc_objects` |
 | Rust, native | `native.live_bytes`, `native.live_blocks`, `native.peak_bytes` |
 | Grouped counters | `<base>@<file:line>`, for example `go.goroutines@internal/notify/subscription.go:33`, `node.timers@src/heartbeat.js:15`, `native.live_bytes@src/decoder.c:29` |
-| Holder probes | `probe:<target>` (entry or reachable-object count, a counter) and `probe:<target>.bytes` (a gauge, when the runtime can estimate bytes) |
+| Holder probes | `probe:<target>` (entry or reachable-object count, a counter), `probe:<target>.bytes` (a gauge, when the runtime can estimate bytes) and, for a JVM class loader, `probe:<target>.classes` (the classes it defined) |
 | Type counts | `jvm.class:<name>.count`, `py.type:<name>.count` (top types by growth) |
 | Gap | `gap.accounted`, `gap.unexplained` |
 

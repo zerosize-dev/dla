@@ -76,7 +76,7 @@ requires = [["growth-series", "retention-path"], ["growth-series", "should-be-de
 disconfirm = ["N-WARM", "N-INTENT", "N-HEADROOM"]
 signals = ["jvm.heap_used", "go.heap_live", "node.heap_used", "py.traced"]
 repair = ["clear-reference", "remove-entry"]
-summary = "A reference to logical state that is dead (removed, replaced or finished) is still held."
+summary = "An index, registry or cache entry still names state that was removed, replaced or finished elsewhere; the entry is reachable from a container the program owns, not through a chain of the objects' own fields."
 
 [L-CAPTURE]
 holders = ["closure/continuation"]

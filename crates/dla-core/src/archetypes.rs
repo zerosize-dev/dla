@@ -73,7 +73,7 @@ pub const UNCLASSIFIED_ROW: &str = "UNCLASSIFIED";
 /// equal to the files.
 pub fn runtime_rows(runtime: &str) -> Option<&'static [&'static str]> {
     Some(match runtime {
-        "jvm" => &["L-COLLECT", "L-TLS", "L-UNLOAD"],
+        "jvm" => &["L-COLLECT", "L-TLS", "L-UNLOAD", "L-STALE"],
         "go" => &["L-WORKER"],
         "node" => &["L-REGISTER", "L-CAPTURE"],
         "python" => &["L-COLLECT"],

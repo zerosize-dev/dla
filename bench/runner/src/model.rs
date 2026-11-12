@@ -425,6 +425,11 @@ pub struct RunJson {
     /// could be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolchain: Option<RunToolchain>,
+    /// The opaque name of the child's working directory (12 hex digits of a SHA-256 of the
+    /// results directory, ablation, archetypes setting, fixture and run number). The child
+    /// never reads `run.json`; the mapping from this name to the arm and the fixture is here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_key: Option<String>,
 }
 
 /// A ratio metric.
@@ -663,7 +668,8 @@ pub struct Group {
     /// Verification metrics; absent when no run has a verification record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<VerificationStats>,
-    /// Decoy and control result of every archetype row that has a pair; absent when none.
+    /// Decoy and control result of every archetype row and runtime that has a pair, keyed
+    /// `L-REGISTER (node)`; absent when none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub decoys: BTreeMap<String, DecoyRow>,
     /// Per fixture statistics.

@@ -1,5 +1,7 @@
 //! Candidate findings of a column: the findings whose site is the column's site, or
-//! lies in the same file inside the same enclosing function, method or class body.
+//! lies in the same file inside the same enclosing function, method or class body, or
+//! whose census writers include the column's exact site (file and line). A finding that
+//! only shares the file is never a candidate.
 
 use std::{collections::HashMap, fs, path::Path};
 
@@ -7,7 +9,7 @@ use dla_census::parse::{
     Lang, parse,
     tree_sitter::{Node, Point, Tree},
 };
-use dla_core::{FindingId, Ledger, finding::Polarity, trend::ColumnTrend};
+use dla_core::{FindingId, Ledger, attribution::Resolver, finding::Polarity, trend::ColumnTrend};
 
 /// Node kinds that are a function or method body in some supported grammar.
 const FUNCTIONS: &[&str] = &[
@@ -47,10 +49,19 @@ fn split(site: &str) -> Option<(String, u32)> {
 
 /// The 1-based line range of the innermost function around `line`, else of the
 /// innermost class.
-fn enclosing(tree: &Tree, line: u32) -> Option<(u32, u32)> {
+fn enclosing(tree: &Tree, src: &str, line: u32) -> Option<(u32, u32)> {
     let row = (line as usize).checked_sub(1)?;
     let root = tree.root_node();
-    let start = Point { row, column: 0 };
+    // Start at the first non-blank column: a `fn` line begins at its indentation, so a
+    // range from column 0 would not lie inside the function and would name its parent.
+    let indent = src
+        .lines()
+        .nth(row)
+        .map_or(0, |l| l.len() - l.trim_start().len());
+    let start = Point {
+        row,
+        column: indent,
+    };
     let end = Point {
         row,
         column: usize::MAX / 2,
@@ -80,7 +91,8 @@ fn range(n: Node<'_>) -> (u32, u32) {
 pub struct Matcher<'a> {
     project: &'a Path,
     ledger: &'a Ledger,
-    trees: HashMap<String, Option<Tree>>,
+    resolver: Option<Resolver>,
+    trees: HashMap<String, Option<(Tree, String)>>,
 }
 
 impl<'a> Matcher<'a> {
@@ -89,15 +101,36 @@ impl<'a> Matcher<'a> {
         Self {
             project,
             ledger,
+            resolver: None,
             trees: HashMap::new(),
         }
     }
 
-    fn tree(&mut self, file: &str) -> Option<&Tree> {
+    /// Reads the census writers of the run at `run_dir`, so a column at exactly a writer
+    /// line of a finding's holder is a candidate for that finding.
+    #[must_use]
+    pub fn with_census(mut self, run_dir: &Path) -> Self {
+        self.resolver = Some(Resolver::new(run_dir, self.project));
+        self
+    }
+
+    /// The census writers of a finding's owner as `(file, line)`, empty without a census.
+    fn writers_of(&self, owner: Option<&str>) -> Vec<(String, u32)> {
+        let (Some(resolver), Some(owner)) = (&self.resolver, owner) else {
+            return Vec::new();
+        };
+        resolver
+            .resolve(owner)
+            .map(|r| r.writers.iter().filter_map(|w| split(w)).collect())
+            .unwrap_or_default()
+    }
+
+    fn tree(&mut self, file: &str) -> Option<&(Tree, String)> {
         if !self.trees.contains_key(file) {
             let parsed = Lang::from_path(Path::new(file)).and_then(|lang| {
                 let src = fs::read_to_string(self.project.join(file)).ok()?;
-                parse(lang, &src).ok()
+                let tree = parse(lang, &src).ok()?;
+                Some((tree, src))
             });
             self.trees.insert(file.to_owned(), parsed);
         }
@@ -105,10 +138,11 @@ impl<'a> Matcher<'a> {
     }
 
     /// The candidates of `c`: the finding it names (when the ledger has it), then the
-    /// findings at exactly its site, then those in the same enclosing body, and when
-    /// none of these exists, the findings of the same file nearest first. Leak-side
-    /// findings only (an `N-*` hypothesis is not a candidate). Empty for a column with
-    /// neither a site nor a finding.
+    /// findings at exactly its site, then those in the same enclosing body, then those
+    /// with a census writer at exactly the site. A writer elsewhere in the site's body
+    /// ties nothing. Findings that only share the file are never candidates.
+    /// Leak-side findings only (an `N-*` hypothesis is not a candidate). Empty for a
+    /// column with neither a site nor a finding.
     pub fn candidates(&mut self, c: &ColumnTrend) -> Vec<FindingId> {
         let mut out: Vec<FindingId> = Vec::new();
         if let Some(f) = &c.finding
@@ -145,25 +179,37 @@ impl<'a> Matcher<'a> {
                 out.push(id.clone());
             }
         }
-        let same_file: Vec<&(FindingId, String, u32)> =
-            sited.iter().filter(|(_, ff, _)| *ff == file).collect();
-        if !same_file.is_empty()
-            && let Some((lo, hi)) = self.tree(&file).and_then(|t| enclosing(t, line))
-        {
-            for (id, _, fl) in &same_file {
-                if (lo..=hi).contains(fl) && !out.contains(id) {
-                    out.push(id.clone());
-                }
+        let body = self
+            .tree(&file)
+            .and_then(|(t, src)| enclosing(t, src, line));
+        for (id, ff, fl) in &sited {
+            if *ff == file
+                && body.is_some_and(|(lo, hi)| (lo..=hi).contains(fl))
+                && !out.contains(id)
+            {
+                out.push(id.clone());
             }
         }
-        if out.is_empty() {
-            // Nothing at the site or in its body: fall back to the findings of the same
-            // file, nearest line first. An allocation site (`native.live_bytes@f.rs:16`)
-            // often sits in a constructor while the holder candidate is the field it fills
-            // (`f.rs:10`), in a different body of the same file.
-            let mut near = same_file;
-            near.sort_by_key(|(id, _, fl)| (fl.abs_diff(line), id.to_string()));
-            out.extend(near.into_iter().map(|(id, _, _)| id.clone()));
+        // A census writer of the finding's holder AT the column's site (equal file and
+        // line). A writer somewhere in the site's body is not enough: it may belong to
+        // another holder that the body also touches.
+        let leaks: Vec<(FindingId, Option<String>)> = self
+            .ledger
+            .findings()
+            .filter(|f| f.polarity() == Polarity::Leak)
+            .map(|f| (f.id.clone(), f.owner.clone()))
+            .collect();
+        for (id, owner) in leaks {
+            if out.contains(&id) {
+                continue;
+            }
+            let hit = self
+                .writers_of(owner.as_deref())
+                .iter()
+                .any(|(wf, wl)| *wf == file && *wl == line);
+            if hit {
+                out.push(id);
+            }
         }
         out
     }
@@ -246,11 +292,8 @@ mod tests {
         let t = trend_of("cache.go:6", None);
         assert_eq!(m.candidates(&t), [FindingId::new(1), FindingId::new(3)]);
         // A column at the top-level var has no enclosing body and no exact match: the
-        // findings of the same file, nearest first (F3 at :5, F1 at :6, F2 at :10).
-        assert_eq!(
-            m.candidates(&trend_of("cache.go:3", None)),
-            [FindingId::new(3), FindingId::new(1), FindingId::new(2)]
-        );
+        // findings that only share the file are not candidates.
+        assert!(m.candidates(&trend_of("cache.go:3", None)).is_empty());
         // The named finding comes first, even without a site match.
         let t = trend_of("cache.go:10", Some(FindingId::new(4)));
         assert_eq!(m.candidates(&t), [FindingId::new(4), FindingId::new(2)]);
@@ -310,6 +353,216 @@ mod tests {
         // No source file on disk: only the exact site matches.
         assert_eq!(
             m.candidates(&trend_of("cache.go:6", None)),
+            [FindingId::new(1)]
+        );
+    }
+
+    const ARENA: &str = "use std::collections::HashMap;\n\npub struct Arena {\n    pub pages: Vec<Page>,\n    pub free: Vec<usize>,\n}\n\nimpl Arena {\n    pub fn new() -> Self {\n        Arena { pages: Vec::new(), free: Vec::new() }\n    }\n\n    pub fn hold(&mut self, p: Page) {\n        self.pages.push(p);\n    }\n\n    pub fn release(&mut self, i: usize) {\n        self.free.push(i);\n    }\n}\n";
+
+    fn write_census(run_dir: &Path, entries: &[(&str, &str, &[&str])]) {
+        let dir = run_dir.join("census");
+        fs::create_dir_all(&dir).unwrap();
+        let entries: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(owner, site, writers)| {
+                json!({"kind":"struct-field","holder":"container-field","region":"heap",
+                    "site":site,"owner":owner,"writers":writers,"removers":[]})
+            })
+            .collect();
+        fs::write(
+            dir.join("census.json"),
+            json!({"entries": entries}).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn finding_of(l: &mut Ledger, site: &str, owner: &str) {
+        let mut nf = NewFinding::new(
+            Origin::parse("census").unwrap(),
+            vec![dla_core::EvidenceId::new(1)],
+        );
+        nf.site = Some(site.into());
+        nf.owner = Some(owner.into());
+        l.add_finding(nf).unwrap();
+    }
+
+    #[test]
+    fn a_column_ties_to_the_census_writer_and_not_to_a_sibling_field_of_the_file() {
+        // The rust-slot-arena shape: the column sits at the writer of `Arena.pages`, and
+        // `Arena.free`, declared in the same file at another line, is not a candidate.
+        let project = tempfile::tempdir().unwrap();
+        let run = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("arena.rs"), ARENA).unwrap();
+        write_census(
+            run.path(),
+            &[
+                ("Arena.pages", "arena.rs:4", &["arena.rs:14"]),
+                ("Arena.free", "arena.rs:5", &["arena.rs:18"]),
+            ],
+        );
+        let mut ledger = ledger_with(&[]);
+        finding_of(&mut ledger, "arena.rs:5", "Arena.free");
+        finding_of(&mut ledger, "arena.rs:4", "Arena.pages");
+        let mut m = Matcher::new(project.path(), &ledger).with_census(run.path());
+        // F2 is `pages`: the column is at its writer line.
+        assert_eq!(
+            m.candidates(&trend_of("arena.rs:14", None)),
+            [FindingId::new(2)]
+        );
+        // A column on the `fn hold` line is not at the writer (:14): no tie.
+        assert!(m.candidates(&trend_of("arena.rs:13", None)).is_empty());
+        // Without the census, nothing but the file is shared: no candidate.
+        let mut bare = Matcher::new(project.path(), &ledger);
+        assert!(bare.candidates(&trend_of("arena.rs:14", None)).is_empty());
+    }
+
+    /// A source of `lines` where each `(line, text)` replaces its line (1-based).
+    fn source(lines: usize, put: &[(usize, &str)]) -> String {
+        let mut v: Vec<String> = vec![String::new(); lines];
+        for (n, t) in put {
+            v[n - 1] = (*t).to_owned();
+        }
+        v.join("\n") + "\n"
+    }
+
+    #[test]
+    fn a_writer_in_the_body_of_a_column_ties_nothing_but_a_writer_at_a_column_site_does() {
+        // The rust-delayed-queue shape. `place` (orders.rs:27-31) allocates at :28 and
+        // holds the writer (:30) of the wrong holder `Orders.open`, whose declaration is
+        // elsewhere. The right holder `Scheduler.queue` is written at scheduler.rs:53.
+        let project = tempfile::tempdir().unwrap();
+        let run = tempfile::tempdir().unwrap();
+        fs::write(
+            project.path().join("orders.rs"),
+            source(
+                40,
+                &[
+                    (10, "    open: Vec<Order>,"),
+                    (27, "    pub fn place(&mut self, o: Order) {"),
+                    (28, "        let boxed = Box::new(o);"),
+                    (30, "        self.open.push(*boxed);"),
+                    (31, "    }"),
+                ],
+            ),
+        )
+        .unwrap();
+        fs::write(
+            project.path().join("scheduler.rs"),
+            source(
+                60,
+                &[
+                    (20, "    queue: Vec<Slot>,"),
+                    (50, "    pub fn defer(&mut self, s: Slot) {"),
+                    (53, "        self.queue.push(s);"),
+                    (54, "    }"),
+                ],
+            ),
+        )
+        .unwrap();
+        write_census(
+            run.path(),
+            &[
+                ("Orders.open", "orders.rs:10", &["orders.rs:30"]),
+                ("Scheduler.queue", "scheduler.rs:20", &["scheduler.rs:53"]),
+            ],
+        );
+        let mut ledger = ledger_with(&[]);
+        finding_of(&mut ledger, "orders.rs:10", "Orders.open");
+        finding_of(&mut ledger, "scheduler.rs:20", "Scheduler.queue");
+        let mut m = Matcher::new(project.path(), &ledger).with_census(run.path());
+        // The column at the allocation line: the wrong holder's writer lies in its body
+        // (:30), which is not the column's site. It ties nothing.
+        assert!(m.candidates(&trend_of("orders.rs:28", None)).is_empty());
+        // The column at the writer of the right holder, in another file, ties it.
+        assert_eq!(
+            m.candidates(&trend_of("scheduler.rs:53", None)),
+            [FindingId::new(2)]
+        );
+        // The wrong holder's own writer line ties the wrong holder, as before.
+        assert_eq!(
+            m.candidates(&trend_of("orders.rs:30", None)),
+            [FindingId::new(1)]
+        );
+    }
+
+    #[test]
+    fn a_pool_column_ties_the_finding_at_its_site_and_no_field_written_in_the_same_body() {
+        // The native-split-freelist shape. `pool_grow` (pool.c:60-75) allocates at :67,
+        // where F1 has its site; `block.next` and `bump` are written
+        // in the same body (:70, :72) and are not candidates.
+        let project = tempfile::tempdir().unwrap();
+        let run = tempfile::tempdir().unwrap();
+        fs::write(
+            project.path().join("pool.c"),
+            source(
+                80,
+                &[
+                    (60, "static void pool_grow(struct pool *p) {"),
+                    (67, "    struct chunk *c = malloc(sizeof *c);"),
+                    (70, "    c->next = p->chunks;"),
+                    (72, "    p->bump = c->data;"),
+                    (75, "}"),
+                ],
+            ),
+        )
+        .unwrap();
+        write_census(
+            run.path(),
+            &[
+                ("Block.next", "types.h:11", &["pool.c:70"]),
+                ("Pool.bump", "types.h:20", &["pool.c:72"]),
+                ("Pool.chunks", "types.h:21", &["pool.c:69"]),
+            ],
+        );
+        let mut ledger = ledger_with(&[("census", Some("pool.c:67"))]);
+        finding_of(&mut ledger, "types.h:11", "Block.next");
+        finding_of(&mut ledger, "types.h:20", "Pool.bump");
+        finding_of(&mut ledger, "types.h:21", "Pool.chunks");
+        let mut m = Matcher::new(project.path(), &ledger).with_census(run.path());
+        // F1 is the finding at the column's exact site; the other three have writers
+        // in the body of `pool_grow` but none at :67.
+        assert_eq!(
+            m.candidates(&trend_of("pool.c:67", None)),
+            [FindingId::new(1)]
+        );
+    }
+
+    #[test]
+    fn an_interning_column_ties_the_finding_whose_writer_is_at_its_site_and_not_a_list_link_written_nearby()
+     {
+        // The native-parcel-router shape: the column at intern.c:52 ties F1 (here
+        // `Interner.table`, declared at :5, tied through its census writer at exactly :52;
+        // in the real fixture the finding at that site is F3, `label_intern`) and not
+        // `Label.next`, written at :41 and :55 in the same function.
+        let project = tempfile::tempdir().unwrap();
+        let run = tempfile::tempdir().unwrap();
+        fs::write(
+            project.path().join("intern.c"),
+            source(
+                70,
+                &[
+                    (38, "static const char *intern(const char *s) {"),
+                    (41, "    l->next = table;"),
+                    (52, "    table = l;"),
+                    (55, "    l->next = NULL;"),
+                    (58, "}"),
+                ],
+            ),
+        )
+        .unwrap();
+        write_census(
+            run.path(),
+            &[
+                ("Interner.table", "intern.c:5", &["intern.c:52"]),
+                ("Label.next", "types.h:9", &["intern.c:41", "intern.c:55"]),
+            ],
+        );
+        let mut ledger = ledger_with(&[]);
+        finding_of(&mut ledger, "intern.c:5", "Interner.table");
+        finding_of(&mut ledger, "types.h:9", "Label.next");
+        let mut m = Matcher::new(project.path(), &ledger).with_census(run.path());
+        assert_eq!(
+            m.candidates(&trend_of("intern.c:52", None)),
             [FindingId::new(1)]
         );
     }

@@ -222,7 +222,7 @@ impl Adapter for JvmClassloaderStats {
             self.name(),
             snaps,
             vec![
-                "loaders and classes are whole-runtime counts: they never tie to a finding".into(),
+                "loader totals are whole-runtime counts and never tie; a loader's own group ties only to the finding whose holder is declared with exactly that loader class (type identity)".into(),
             ],
         )
     }

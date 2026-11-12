@@ -1,0 +1,19 @@
+schema_version = 2
+id = "fp-trap"
+runtime = "node"
+category = "archetype-free"
+pair = "fp-decoy"
+dynamic_confirmation = true
+
+[toolchain]
+node = "24.13.1"
+
+[task]
+prompt = "The process grows."
+
+[[leak]]
+id = "L1"
+site = "src/a.js:10"
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"

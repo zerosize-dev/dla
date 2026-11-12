@@ -231,7 +231,7 @@
           "type": "string"
         },
         "decoys": {
-          "description": "Decoy and control result of every archetype row that has a pair; absent when none.",
+          "description": "Decoy and control result of every archetype row and runtime that has a pair, keyed\n`L-REGISTER (node)`; absent when none.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/DecoyRow"

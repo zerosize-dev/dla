@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Live check of the dla gate hooks with a real Claude Code session (`claude -p`).
 #
-# Opt-in: nothing runs unless DLA_LIVE_HOOKS=1. Each step is one short headless run on the
-# haiku model with --max-turns 8 (about one cent each). The plugin under test is this
+# Opt-in: nothing runs unless DLA_LIVE_HOOKS=1. Each step is one short headless run with
+# --max-turns 8 on the model alias in DLA_LIVE_MODEL (required; a small model costs about one
+# cent per step). The plugin under test is this
 # repository (--plugin-dir), so the hooks are the ones in hooks/hooks.json; a scratch project
 # holds an active run made by `dla run init`.
 #
@@ -24,6 +25,10 @@ set -u
 if [ "${DLA_LIVE_HOOKS:-}" != 1 ]; then
   echo "live_hooks.sh: skipped (set DLA_LIVE_HOOKS=1 to run it; it uses the claude CLI)"
   exit 0
+fi
+if [ -z "${DLA_LIVE_MODEL:-}" ]; then
+  echo "live_hooks.sh: set DLA_LIVE_MODEL to the model alias to run with (claude --model)" >&2
+  exit 2
 fi
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -80,7 +85,7 @@ claude_run() {
     cd "$proj" || exit 2
     claude -p "$1" \
       --plugin-dir "$repo" \
-      --model haiku \
+      --model "$DLA_LIVE_MODEL" \
       --max-turns 8 \
       --allowedTools "Write Read Agent" \
       --output-format stream-json --verbose --include-hook-events \

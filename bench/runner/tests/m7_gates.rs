@@ -52,7 +52,7 @@ fn group(abl: &str, arch: &str, m: &Value, tokens: u64) -> Value {
             "cache_creation_input_tokens": {"sum": 0, "mean": 0.0},
             "wall_seconds": {"sum": 0.0, "mean": 0.0, "max": 0.0},
             "cost_usd": {"sum": 0.0, "mean": null}},
-        "decoys": {"L-COLLECT": decoy_row(true)},
+        "decoys": {"L-COLLECT (python)": decoy_row(true)},
         "fixtures": {
             "native-vendor-codec": fixture(3, tokens * 3),
             "python-report-memo": fixture(3, tokens * 3),
@@ -234,12 +234,12 @@ fn gates_3_4_and_6_compare_with_the_baseline() {
 #[test]
 fn gate_5_a_failing_row_or_a_missing_shipped_row_fails() {
     let mut g = group("gates", "on", &good_metrics(), 1000);
-    g["decoys"]["L-REGISTER"] = decoy_row(false);
+    g["decoys"]["L-REGISTER (node)"] = decoy_row(false);
     let m = file(vec![g, group("gates", "off", &good_metrics(), 1000)]);
     let r = run(&m, Some(&baseline()), Some(10));
     assert_eq!(failed(&r), vec![5]);
-    assert!(r[4].detail.iter().any(|d| d.contains("L-REGISTER")));
-    let rows = vec!["L-COLLECT".to_owned(), "L-TLS".to_owned()];
+    assert!(r[4].detail.iter().any(|d| d.contains("L-REGISTER (node)")));
+    let rows = vec!["L-COLLECT (python)".to_owned(), "L-TLS (jvm)".to_owned()];
     let r = gates::evaluate(&Inputs {
         metrics: &good(),
         baseline: Some(&baseline()),
@@ -835,6 +835,103 @@ fn gate_10_allows_one_run_share_of_the_previous_release_not_the_smaller_denomina
 }
 
 #[test]
+fn gate_5_rows_are_per_runtime() {
+    // L-COLLECT is graded for python only: the jvm row of the same name has no pair.
+    let m = good();
+    let run = |rows: &[&str]| {
+        let rows: Vec<String> = rows.iter().map(|r| (*r).to_owned()).collect();
+        gates::evaluate(&Inputs {
+            metrics: &m,
+            baseline: Some(&baseline()),
+            ablation: "gates",
+            recall_ablation: "gates",
+            writing: false,
+            smoke: &smoke(),
+            skill_lines: Some(10),
+            shipped_rows: Some(&rows),
+        })
+    };
+    let r = run(&["L-COLLECT (python)"]);
+    assert!(failed(&r).is_empty(), "{:?}", r[4].detail);
+    let r = run(&["L-COLLECT (python)", "L-COLLECT (jvm)"]);
+    assert_eq!(failed(&r), vec![5]);
+    assert!(
+        r[4].detail
+            .iter()
+            .any(|d| d.contains("L-COLLECT (jvm)") && d.contains("no pair")),
+        "{:?}",
+        r[4].detail
+    );
+    // A row without a runtime (the --rows file) is met by a pair of any runtime.
+    assert!(failed(&run(&["L-COLLECT"])).is_empty());
+    assert_eq!(failed(&run(&["L-TLS"])), vec![5]);
+}
+
+#[test]
+fn an_explicit_rows_file_is_never_replaced_by_the_references() {
+    let t = tempfile::tempdir().unwrap();
+    let (mf, bf, skill) = (
+        t.path().join("m.json"),
+        t.path().join("b.json"),
+        t.path().join("SKILL.md"),
+    );
+    write_json(&mf, &serde_json::to_value(good()).unwrap());
+    write_json(&bf, &serde_json::to_value(baseline()).unwrap());
+    fs::write(&skill, "line\n".repeat(120)).unwrap();
+    // The references name a jvm row without a graded pair; the rows file names a row that has one.
+    let refs = t.path().join("refs");
+    fs::create_dir_all(&refs).unwrap();
+    fs::write(refs.join("jvm-archetypes.md"), "| L-TLS | a |\n").unwrap();
+    let rows = t.path().join("rows.toml");
+    fs::write(&rows, "[L-COLLECT]\nname = \"x\"\n").unwrap();
+    let gates = |with_rows: bool| {
+        let mut c = bin();
+        c.args(["gates"])
+            .arg(&mf)
+            .arg("--baseline")
+            .arg(&bf)
+            .arg("--skill")
+            .arg(&skill)
+            .arg("--references")
+            .arg(&refs);
+        if with_rows {
+            c.arg("--rows").arg(&rows);
+        }
+        c
+    };
+    gates(true)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("10 of 10 gates pass"));
+    // Without --rows the references decide.
+    gates(false)
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("L-TLS (jvm)"));
+}
+
+#[test]
+fn shipped_runtime_rows_come_from_the_runtime_archetype_files() {
+    let t = tempfile::tempdir().unwrap();
+    fs::write(
+        t.path().join("node-archetypes.md"),
+        "| id | x |\n|---|---|\n| L-REGISTER | a |\n| L-CAPTURE | b |\n| N-WARM | c |\n",
+    )
+    .unwrap();
+    fs::write(t.path().join("go-archetypes.md"), "| L-REGISTER | a |\n").unwrap();
+    fs::write(t.path().join("notes.md"), "| L-NOPE | a |\n").unwrap();
+    assert_eq!(
+        gates::shipped_runtime_rows(t.path()).unwrap().unwrap(),
+        ["L-CAPTURE (node)", "L-REGISTER (go)", "L-REGISTER (node)"]
+    );
+    assert!(
+        gates::shipped_runtime_rows(&t.path().join("none"))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn gate_5_on_metrics_without_a_decoys_block_says_to_grade_again() {
     let mut g = group("gates", "on", &good_metrics(), 1000);
     g["decoys"] = json!({});
@@ -843,7 +940,7 @@ fn gate_5_on_metrics_without_a_decoys_block_says_to_grade_again() {
         .unwrap()
         .remove("uncited_findings");
     let m = file(vec![g, group("gates", "off", &good_metrics(), 1000)]);
-    let rows = vec!["L-TLS".to_owned()];
+    let rows = vec!["L-TLS (jvm)".to_owned()];
     let r = gates::evaluate(&Inputs {
         metrics: &m,
         baseline: Some(&baseline()),

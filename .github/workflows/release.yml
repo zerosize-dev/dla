@@ -70,7 +70,7 @@ jobs:
           key: ${{ matrix.target }}
       - name: Install musl tools
         if: matrix.musl
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y musl-tools
       - name: Build
         run: cargo build --release --locked -p dla-cli --target ${{ matrix.target }}
       - name: Package
@@ -143,7 +143,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # A tag with a hyphen (v0.9.0-preview.1, v1.0.0-rc.1) is a pre-release.
+          prerelease=()
+          case "${GITHUB_REF_NAME}" in *-*) prerelease=(--prerelease) ;; esac
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
+            "${prerelease[@]}" \
             dla-*.tar.gz dla-*.tar.gz.sha256 SHA256SUMS

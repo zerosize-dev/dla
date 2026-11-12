@@ -731,6 +731,13 @@ fn the_class_histogram_diffs_snapshots_and_ties_to_nothing() {
     assert_eq!(v["tied"].as_array().unwrap().len(), 0, "{v}");
     let top = v["top"].as_array().unwrap();
     assert!(top.iter().any(|t| t["type"] == "Object"), "{v}");
+    // Node types never tie by name, so the text names what does, not accumulation classes.
+    {
+        assert_eq!(v["gate"], "pass", "{v}");
+        let needed = v["needed"].as_str().unwrap();
+        assert!(!needed.contains("accumulation class"), "{needed}");
+        assert!(needed.contains("holder probe"), "{needed}");
+    }
     // String text is data: a string is only ever the class `(string)`.
     assert!(!p.run_texts().iter().any(|(_, t)| t.contains(SECRET)));
 }

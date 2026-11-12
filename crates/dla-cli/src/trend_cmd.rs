@@ -14,7 +14,7 @@ use std::{
 
 use clap::Args;
 use dla_core::{
-    EvidenceId, FindingId, FindingState, Ledger, MAX_RESULT_BYTES, RunState,
+    CoverageManifest, EvidenceId, FindingId, FindingState, Ledger, MAX_RESULT_BYTES, RunState,
     discriminator::{DiscriminatorResult, Favors},
     error::codes,
     evidence::{
@@ -206,7 +206,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
 
     let th = GateThresholds::default();
     let mut cols = analysis::analyze_series(&main.series, &idx, &th);
-    candidates::Matcher::new(project, &ledger).fill(&mut cols);
+    candidates::Matcher::new(project, &ledger)
+        .with_census(&ctx.run_dir)
+        .fill(&mut cols);
 
     // Persist the full report first: the evidence points at it.
     let trend_id = tc.next_trend_id();
@@ -329,8 +331,33 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     if let Some(k) = &keys {
         out.insert("keys".into(), k.summary.clone());
     }
+    // Close to the rule of `dla gate check --final`, but over all of the series' rows (the
+    // gate looks only at the rows of the column's own region): `dla gap` is named only while
+    // the series has no row, or a row over its threshold has no open item and no other row
+    // has one to resolve; otherwise the final gate lists what is left.
+    let has_gap_row = CoverageManifest::load(&ctx.run_dir)
+        .ok()
+        .flatten()
+        .is_some_and(|m| {
+            let rows: Vec<_> = m
+                .residual
+                .iter()
+                .filter(|r| r.series.as_deref() == Some(main.series.id.as_str()))
+                .collect();
+            let open_item = rows.iter().any(|r| {
+                r.residual > r.threshold
+                    && r.open_item.as_ref().is_some_and(|id| {
+                        !ledger.open_item(id).is_some_and(|o| o.resolution.is_some())
+                    })
+            });
+            let orphan = rows
+                .iter()
+                .any(|r| r.residual > r.threshold && r.open_item.is_none());
+            !rows.is_empty() && (open_item || !orphan)
+        });
     let next = suggestions(
         &ledger,
+        has_gap_row,
         &main.series,
         &passed,
         &evidence,
@@ -488,8 +515,16 @@ fn harness_evidence(ledger: &Ledger, series: &SeriesFile) -> Option<String> {
 const REFUTE_IF: &str = "growth continues over the extra cycles";
 const MAX_NEXT: usize = 8;
 
+/// The hint for a whole-process or type-count column of a series that has a gap row.
+fn gap_row_hint(series: &str) -> String {
+    format!(
+        "dla gate check --final   # {series} has a gap row: the final gate lists what is left (an open item is resolved with dla ledger resolve O<n> ...); do not run dla gap again"
+    )
+}
+
 fn suggestions(
     ledger: &Ledger,
+    has_gap_row: bool,
     series: &SeriesFile,
     passed: &[&ColumnTrend],
     evidence: &[(EvidenceKind, EvidenceId)],
@@ -538,10 +573,14 @@ fn suggestions(
                 // The gate never ties a whole-process column to a finding: the residual
                 // accounting covers it, so a `ledger add` would open a finding that can
                 // never be tied.
-                let hint = format!(
-                    "dla gap {} --residual   # column {} measures the whole process: account for it with the residual rows",
-                    series.id, c.name
-                );
+                let hint = if has_gap_row {
+                    gap_row_hint(&series.id)
+                } else {
+                    format!(
+                        "dla gap {} --residual   # column {} measures the whole process: account for it with the residual rows",
+                        series.id, c.name
+                    )
+                };
                 if !next.contains(&hint)
                     && next.iter().filter(|n| n.starts_with("dla gap ")).count() < 1
                 {
@@ -552,10 +591,14 @@ fn suggestions(
                 // The gate accounts for a type count that ties to no finding through the
                 // residual rows of its series; a `ledger add` would open a finding that
                 // can never be tied (generic types never tie).
-                let hint = format!(
-                    "dla gap {} --residual   # column {} counts the instances of one type and ties to no finding: account for it with the residual rows",
-                    series.id, c.name
-                );
+                let hint = if has_gap_row {
+                    gap_row_hint(&series.id)
+                } else {
+                    format!(
+                        "dla gap {} --residual   # column {} counts the instances of one type and ties to no finding: account for it with the residual rows",
+                        series.id, c.name
+                    )
+                };
                 if !next.contains(&hint)
                     && next.iter().filter(|n| n.starts_with("dla gap ")).count() < 1
                 {

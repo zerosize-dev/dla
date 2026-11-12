@@ -874,14 +874,29 @@ function heapStats(values) {
   }
 }
 
-function purgeRecord(kind, preGc, limitations) {
-  const snapshot = () => {
-    const mem = memValues();
-    return { 'os.rss': mem['os.rss'], 'node.heap_used': mem['node.heap_used'] };
-  };
+// The purge record's readings are the same measurement each column's series holds at the last
+// point: `before` is that point's own (post-GC) `values`, `after` is taken with the same keys
+// after one more forced collection. (A pre-GC reading as `before` would make every column with
+// per-step garbage look released.) The `*.pre_gc` columns carry no purge pair.
+const PURGE_KEYS = ['node.heap_used', 'node.heap_total', 'node.external', 'node.array_buffers', 'os.rss'];
+
+function purgeRecord(kind, values, limitations) {
   if (kind === 'gc') {
-    const after = snapshot();
-    return { kind, before: preGc, after };
+    const before = {};
+    for (const k of PURGE_KEYS) if (values[k] !== undefined) before[k] = values[k];
+    if (gcFn === null) {
+      limitations.push('gc() unavailable: the purge changed nothing');
+    } else {
+      try {
+        gcFn();
+      } catch (_) {
+        limitations.push('forced gc failed: the purge changed nothing');
+      }
+    }
+    const mem = memValues();
+    const after = {};
+    for (const k of PURGE_KEYS) if (mem[k] !== undefined) after[k] = mem[k];
+    return { kind, before, after };
   }
   limitations.push(`purge '${kind}' is not supported by the node agent (only gc)`);
   return { kind };
@@ -1420,7 +1435,7 @@ function build(phase, x, last) {
     'node.listeners': orderedGroup(listeners.sites),
   };
   const purge = env('DLA_PURGE');
-  if (last && !tick && purge !== null && purge !== 'none') rec.purge = purgeRecord(purge, preGc, limitations);
+  if (last && !tick && purge !== null && purge !== 'none') rec.purge = purgeRecord(purge, values, limitations);
   if (!tick) {
     rec.probes = runProbes(limitations);
     if (detectors.length > 0) rec.detectors = detectors.slice();

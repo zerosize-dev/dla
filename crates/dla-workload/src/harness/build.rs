@@ -13,7 +13,7 @@ use dla_core::{
     runtime::Runtime,
     series::{
         Axis, Column, KeyMode, MAX_COLUMNS, Point, SERIES_SCHEMA_VERSION, SeriesEvent, SeriesFile,
-        SeriesSource, SeriesSourceKind, column_meta,
+        SeriesRegion, SeriesSource, SeriesSourceKind, column_meta,
     },
     toolctx::ToolCtx,
 };
@@ -296,6 +296,9 @@ pub fn build_series(
                 if let Some(b) = probe.bytes {
                     put(&mut t, format!("{base}.bytes"), b);
                 }
+                if let Some(c) = probe.classes {
+                    put(&mut t, format!("{base}.classes"), c);
+                }
             }
             for ty in d.types.iter().flatten() {
                 if let (Some(name), Some(c)) = (&ty.name, ty.count) {
@@ -442,11 +445,23 @@ pub fn build_series(
         .map(|name| {
             let meta = column_meta(name);
             let a = &t.cols[name];
+            // The primary figure of a probed class loader is its defined classes plus the
+            // objects of its own fields: the classes are not heap, so with a `.classes`
+            // sibling the column is filed as non-heap, like the sibling.
+            let loader = name.starts_with("probe:")
+                && !name.ends_with(".size")
+                && !name.ends_with(".bytes")
+                && !name.ends_with(".classes")
+                && t.cols.contains_key(&format!("{name}.classes"));
             Column {
                 name: name.clone(),
                 unit: meta.unit,
                 kind: meta.kind,
-                region: meta.region,
+                region: if loader {
+                    SeriesRegion::NonHeap
+                } else {
+                    meta.region
+                },
                 baseline: meta.baseline,
                 after_gc: meta.after_gc,
                 scope: meta.scope,
@@ -613,6 +628,60 @@ mod tests {
             s.values(g),
             [Some(100.0), Some(200.0), Some(300.0), Some(400.0)]
         );
+    }
+
+    #[test]
+    fn a_class_loader_probe_is_a_non_heap_primary_column_with_classes_and_bytes_of_its_fields() {
+        let pts: Vec<PointInput> = (1..=4)
+            .map(|k| {
+                let n = 100.0 * f64::from(k);
+                pt(
+                    n,
+                    json!({"dla_harness":1,"phase":"exit","pid":1,"runtime":"jvm",
+                    "values":{"os.rss": 5e6},
+                    "probes":[{"id":"P1","path":"quotes.PricingRules.LOADER","size":null,
+                        "reachable":n*0.9+4.0*n,"bytes":2048.0*n,"classes":n*0.9}]}),
+                )
+            })
+            .collect();
+        let s = build_series(&ctx(), &manifest(Runtime::Jvm), &params(), &pts);
+        s.validate().unwrap();
+        let names: Vec<_> = s.columns.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"probe:quotes.PricingRules.LOADER"));
+        assert!(names.contains(&"probe:quotes.PricingRules.LOADER.classes"));
+        assert!(
+            names.contains(&"probe:quotes.PricingRules.LOADER.bytes"),
+            "{names:?}"
+        );
+        let c = s
+            .column_index("probe:quotes.PricingRules.LOADER.classes")
+            .unwrap();
+        assert_eq!(s.values(c)[3], Some(360.0));
+        // The primary column mixes the classes with heap objects: it is filed non-heap,
+        // as its `.classes` sibling, while the byte estimate of the fields stays heap.
+        let region = |n: &str| s.columns[s.column_index(n).unwrap()].region;
+        assert_eq!(
+            region("probe:quotes.PricingRules.LOADER"),
+            SeriesRegion::NonHeap
+        );
+        assert_eq!(
+            region("probe:quotes.PricingRules.LOADER.bytes"),
+            SeriesRegion::Heap
+        );
+        // A probe with no `.classes` column keeps the heap figure.
+        let plain: Vec<PointInput> = (1..=4)
+            .map(|k| {
+                pt(
+                    f64::from(k),
+                    json!({"dla_harness":1,"phase":"exit","pid":1,"runtime":"jvm",
+                    "values":{"os.rss": 5e6},
+                    "probes":[{"id":"P1","path":"shop.Cache.M","size":3,"reachable":9.0,"bytes":null}]}),
+                )
+            })
+            .collect();
+        let s2 = build_series(&ctx(), &manifest(Runtime::Jvm), &params(), &plain);
+        let i = s2.column_index("probe:shop.Cache.M").unwrap();
+        assert_eq!(s2.columns[i].region, SeriesRegion::Heap);
     }
 
     #[test]

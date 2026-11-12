@@ -652,24 +652,20 @@ fn superseded(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> bool {
     })
 }
 
-/// True when the residual accounting covers a whole-process column: `dla gap --residual`
-/// wrote rows for the series the column's trend analysed (`series`; a row that does not
-/// record its series covers nothing), and the rows of the column's region (all of that
-/// series' rows for a column of no region) are under their threshold or have a resolved
-/// open item.
-fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
+/// The residual rows that account for column `c` of `series`: the rows of the column's own
+/// region (all of the series' rows for a column of no region), or all of the series' rows
+/// when none is of that region. A row that does not record its series covers nothing.
+fn column_rows<'a>(
+    cov: &'a crate::coverage::CoverageManifest,
+    series: &str,
+    c: &ColumnTrend,
+) -> Vec<&'a crate::coverage::ResidualRow> {
     use crate::{finding::Region, series::SeriesRegion};
-    let Some(cov) = &view.coverage else {
-        return false;
-    };
     let all: Vec<_> = cov
         .residual
         .iter()
         .filter(|r| r.series.as_deref() == Some(series))
         .collect();
-    if all.is_empty() {
-        return false;
-    }
     let region = match crate::series::column_meta(&c.name).region {
         SeriesRegion::Heap => Some(Region::Heap),
         SeriesRegion::OffHeap => Some(Region::OffHeap),
@@ -681,13 +677,64 @@ fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
         .copied()
         .filter(|r| region.is_none_or(|g| r.region == g))
         .collect();
-    let rows = if own.is_empty() { all } else { own };
+    if own.is_empty() { all } else { own }
+}
+
+/// True when the residual accounting covers a whole-process column: `dla gap --residual`
+/// wrote rows for the series the column's trend analysed (`series`; a row that does not
+/// record its series covers nothing), and the rows of the column's region (all of that
+/// series' rows for a column of no region) are under their threshold or have a resolved
+/// open item.
+fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
+    let Some(cov) = &view.coverage else {
+        return false;
+    };
+    let rows = column_rows(cov, series, c);
+    if rows.is_empty() {
+        return false;
+    }
     rows.iter().all(|r| {
         r.residual <= r.threshold
             || r.open_item
                 .as_ref()
                 .is_some_and(|id| residual_item_resolved(view, id, &r.region.to_string()))
     })
+}
+
+/// The fix for a whole-process column (or per-type count) that the residual accounting of
+/// `series` does not yet cover. Before the series has a gap row, `dla gap` writes it. Once
+/// it has one, running `dla gap` again only reopens or keeps items, so the fix lists the
+/// open items to resolve instead (a resolved item makes the row cover the column).
+fn residual_fix(view: &RunView, series: &str, c: &ColumnTrend) -> String {
+    let gap = format!(
+        "dla gap {series} --residual   (rows under the threshold, or over it with a resolved open item, account for the column)"
+    );
+    let Some(cov) = &view.coverage else {
+        return gap;
+    };
+    let rows = column_rows(cov, series, c);
+    if rows.is_empty() {
+        return gap;
+    }
+    let open: Vec<String> = rows
+        .iter()
+        .filter(|r| r.residual > r.threshold)
+        .filter_map(|r| r.open_item.as_ref().map(|id| (id, r)))
+        .filter(|(id, r)| !residual_item_resolved(view, id, &r.region.to_string()))
+        .map(|(id, _)| id.to_string())
+        .collect();
+    if open.is_empty() {
+        // A row over its threshold without an item: only `dla gap` raises it.
+        return gap;
+    }
+    open.iter()
+        .map(|id| {
+            format!(
+                "dla ledger resolve {id} --by <F>   or   dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("   ;   ")
 }
 
 /// True for the total of a summarize-made series (`metric:<category>/total`): the sum of the
@@ -816,10 +863,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                         t.id,
                         c.shape_name()
                     ),
-                    format!(
-                        "dla gap {} --residual   (rows under the threshold, or over it with a resolved open item, account for the column)",
-                        t.series
-                    ),
+                    residual_fix(view, &t.series, c),
                 );
                 continue;
             }
@@ -849,10 +893,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                         t.id,
                         c.shape_name()
                     ),
-                    format!(
-                        "dla gap {} --residual   (rows under the threshold, or over it with a resolved open item, account for the column)",
-                        t.series
-                    ),
+                    residual_fix(view, &t.series, c),
                 );
                 continue;
             }
@@ -1084,7 +1125,12 @@ fn final_items(view: &RunView, out: &mut Out) {
                         "residual growth in {} ({:.3} {}, threshold {:.3}) has no resolved open item",
                         r.region, r.residual, r.unit, r.threshold
                     ),
-                    "dla gap --residual   then resolve the open item it raises",
+                    match &r.open_item {
+                        Some(id) => format!(
+                            "dla ledger resolve {id} --by <F>   or   dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+                        ),
+                        None => "dla gap --residual   then resolve the open item it raises".to_owned(),
+                    },
                 );
             }
         }

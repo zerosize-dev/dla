@@ -4,6 +4,7 @@
 use dla_core::{
     HarnessDump,
     evidence::{Authority, tool_class},
+    runtime::Runtime,
 };
 use dla_parsers::model::{Histogram, HistogramRow};
 
@@ -51,6 +52,10 @@ impl Adapter for HarnessTypes {
     }
     fn run(&self, ctx: &Ctx<'_>, inputs: &[Input], opts: &Opts) -> Res<AdapterOut> {
         let mut captures = Vec::new();
+        // The runtime the dumps name (every harness writes `runtime`), so the `needed`
+        // text matches it; the first dump with types that names a parsable runtime decides, none
+        // leaves it unset.
+        let mut runtime: Option<Runtime> = None;
         for i in inputs {
             let text = i.read_text(MAX_BYTES)?;
             let (dumps, _bad) = HarnessDump::parse_lines(&text);
@@ -60,6 +65,9 @@ impl Adapter for HarnessTypes {
                     continue;
                 };
                 k += 1;
+                if runtime.is_none() {
+                    runtime = d.runtime.as_deref().and_then(|r| r.parse().ok());
+                }
                 captures.push(Capture {
                     label: format!("{}#{k}", i.shown()),
                     hist: Histogram {
@@ -87,7 +95,7 @@ impl Adapter for HarnessTypes {
                 "malformed-artifact",
                 "the harness dump files hold no `types` rows".to_owned(),
                 "dump files from a harness run that captured types",
-                "dla harness run <H> --capture histogram   (JVM harnesses write types at each checkpoint)",
+                "dla harness run <H> --capture histogram   (harnesses write types at each checkpoint)",
             ));
         }
         histogram::run_diff(
@@ -98,7 +106,7 @@ impl Adapter for HarnessTypes {
                 tool: self.name(),
                 class: self.tool_class(),
                 authority: Authority::Test,
-                runtime: None,
+                runtime,
                 partial: true,
                 order_by_time: false,
                 limitations: vec![

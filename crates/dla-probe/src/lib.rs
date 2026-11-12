@@ -29,6 +29,8 @@
 //! * `registry`: the backend registry (binary names, install hints) and tool lookup on
 //!   PATH and in the tools directory;
 //! * `privilege`: uid, ptrace scope, container hints, macOS SIP;
+//! * `project_copy`: the file list and symlink rule shared by the build copy and the harness's
+//!   scratch copy;
 //! * `build`: the per-runtime build command and its timeout handling;
 //! * `exec`: child processes with a timeout.
 
@@ -39,6 +41,7 @@ pub mod go_toolchain;
 pub mod known_leaks;
 mod manifests;
 mod privilege;
+pub mod project_copy;
 mod registry;
 mod scan;
 mod tier3;

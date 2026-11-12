@@ -387,7 +387,11 @@ string_enum! {
     }
 }
 
-/// A purge applied just before the last reading.
+/// A purge applied around the last reading. The Python, JVM and Go agents apply a `gc`
+/// purge just before the last reading (its `before` is read before the collection) and
+/// their trim-type purges (`trim`, `trim-native-heap`, `free-os-memory`) after it; the Node
+/// agent applies it after the last point (its `before` is that point's own post-GC reading,
+/// its `after` is taken after one more forced GC when `gc` is available).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
 pub struct DumpPurge {
     /// `trim`, `gc`, `free-os-memory`, ...
@@ -422,6 +426,9 @@ pub struct DumpProbe {
     /// Estimated bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes: Option<f64>,
+    /// Classes a probed class loader defined (JVM `ClassLoader` holders only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classes: Option<f64>,
     /// Why it could not be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

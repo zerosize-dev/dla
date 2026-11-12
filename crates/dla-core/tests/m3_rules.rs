@@ -915,3 +915,79 @@ fn a_version_one_ledger_stays_valid_and_new_lines_are_the_current_version() {
     assert_eq!(versions, [1, 1, 1, 6]);
     Ledger::load(dir.path()).unwrap();
 }
+
+// ----- the resolve route a growth-not-tied refusal offers ----------------------------------
+
+/// The `dla ledger resolve ...` alternative the refusal's fix ends with.
+fn offered_resolve(fix: &str) -> &str {
+    let at = fix.rfind("dla ledger resolve").expect(fix);
+    &fix[at..]
+}
+
+/// Runs the printed route's own flags (`--as`, `--reason`, `--evidence`) as the ledger move
+/// `dla ledger resolve` makes, so the line is what is tested, not a copy of it.
+fn run_offered(l: &mut Ledger, id: &FindingId, route: &str) -> Result<(), Error> {
+    let words: Vec<&str> = route.split_whitespace().collect();
+    let after = |flag: &str| {
+        words
+            .iter()
+            .position(|w| *w == flag)
+            .and_then(|i| words.get(i + 1))
+            .map(|w| w.trim_matches('"'))
+    };
+    let to: S = after("--as").expect(route).parse().expect(route);
+    let reason = after("--reason").map(|r| r.parse().expect(route));
+    let evidence: Vec<_> = after("--evidence")
+        .map(|e| e.parse().expect(route))
+        .into_iter()
+        .collect();
+    l.transition(id, to, reason, Some("x".into()), evidence, "test")
+        .map(|_| ())
+}
+
+#[test]
+fn the_growth_not_tied_fix_offers_a_resolve_the_ledger_accepts() {
+    // F1 rests on a static hit: suspected_static_only with that evidence is offered.
+    let (mut l, f, _) = ready();
+    let r = refusal(mv(&mut l, &f, S::Confirmed, &[E_GROWTH_OTHER]));
+    assert_eq!(r.code, codes::GROWTH_NOT_TIED);
+    let route = offered_resolve(&r.fix);
+    assert!(
+        route.contains("--as suspected_static_only") && route.contains("--evidence E1"),
+        "{route}"
+    );
+    assert!(route.contains("--reason not_exercised"), "{route}");
+    run_offered(&mut l, &f, route).unwrap();
+
+    // A finding that rests on a growth record alone has no static evidence: the offered
+    // route is unresolved with tool_missing, and it is accepted without --evidence.
+    let mut l = m3_ledger();
+    let mut nf = NewFinding::new(origin("growth-series"), vec![eid(E_GROWTH_OTHER)]);
+    nf.site = Some("a.go:1".into());
+    nf.holder = Some(Holder::StaticGlobal);
+    let g = match l.add_finding(nf).unwrap().record {
+        dla_core::Record::FindingAdded { finding } => finding.id,
+        _ => unreachable!(),
+    };
+    let n = add_sibling(&mut l, &g, "N-WARM");
+    go(&mut l, &n, S::Refuted, &[E_DISC_LEAK]);
+    go(&mut l, &g, S::UnderTest, &[E_HARNESS]);
+    let r = refusal(mv(&mut l, &g, S::Confirmed, &[E_GROWTH_OTHER]));
+    assert_eq!(r.code, codes::GROWTH_NOT_TIED);
+    let route = offered_resolve(&r.fix);
+    assert!(
+        route.contains("--as unresolved --reason tool_missing") && !route.contains("--evidence"),
+        "{route}"
+    );
+    // The same route as a refused move would be: suspected_static_only without static evidence.
+    let bad = refusal(l.transition(
+        &g,
+        S::SuspectedStaticOnly,
+        Some(dla_core::finding::UnresolvedReason::NotExercised),
+        Some("x".into()),
+        vec![],
+        "test",
+    ));
+    assert_eq!(bad.code, codes::STATIC_EVIDENCE_REQUIRED);
+    run_offered(&mut l, &g, route).unwrap();
+}

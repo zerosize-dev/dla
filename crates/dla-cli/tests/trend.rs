@@ -193,6 +193,61 @@ fn a_whole_process_column_is_hinted_to_the_residual_accounting_not_ledger_add() 
 }
 
 #[test]
+fn a_series_with_a_gap_row_is_not_hinted_to_run_gap_again() {
+    let pr = project();
+    let p = pr.dir.path();
+    write_series(
+        &pr,
+        "S1",
+        "fresh",
+        &[("os.rss", "gauge", "process", None, rising(2.0e7, 4.0e5))],
+    );
+    let next_of = || -> Vec<String> {
+        ok(p, &["trend", "S1"])["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert!(
+        next_of()
+            .iter()
+            .any(|n| n.starts_with("dla gap S1 --residual"))
+    );
+    // A row over its threshold that names no item: only `dla gap` raises one, as the final
+    // gate says too, so the hint stays gap.
+    let row = dla_core::coverage::ResidualRow {
+        series: Some("S1".into()),
+        region: dla_core::finding::Region::Heap,
+        total_slope: 10.0,
+        attributed_slope: 2.0,
+        residual: 8.0,
+        unit: "bytes/iteration".into(),
+        threshold: 1.0,
+        open_item: None,
+    };
+    dla_core::CoverageManifest::update(&pr.run_dir, |m| m.set_residual(vec![row.clone()])).unwrap();
+    assert!(
+        next_of()
+            .iter()
+            .any(|n| n.starts_with("dla gap S1 --residual"))
+    );
+    // Each `dla gap` over an unexplained growth opens another item, so once the row has an
+    // open item the hint points at resolving it instead.
+    let mut with_item = row.clone();
+    with_item.open_item = Some("O1".parse().unwrap());
+    dla_core::CoverageManifest::update(&pr.run_dir, |m| m.set_residual(vec![with_item.clone()]))
+        .unwrap();
+    let next = next_of();
+    assert!(next.iter().all(|n| !n.starts_with("dla gap ")), "{next:?}");
+    assert!(
+        next.iter().any(|n| n.starts_with("dla gate check --final")),
+        "{next:?}"
+    );
+}
+
+#[test]
 fn a_leak_goes_from_trend_to_confirmed() {
     let pr = project();
     let p = pr.dir.path();

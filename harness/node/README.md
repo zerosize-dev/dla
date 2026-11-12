@@ -70,8 +70,12 @@ missing. Without any `gc` the dump says so in `limitations` and `gc_forced` is f
     `globalThis` are counted but not followed. `bytes` is always null (no cheap estimate).
   - The breakdown reports each own object-valued property of the binding (not of arrays, maps, sets),
     capped at 64, each walked on its own; a truncated walk sets `error`.
-- `purge`: `DLA_PURGE=gc` records `os.rss` and `node.heap_used` before the forced collection and
-  after it; any other kind is a limitation (the node purge is `gc` only).
+- `purge`: `DLA_PURGE=gc` records `node.heap_used`, `node.heap_total`, `node.external`,
+  `node.array_buffers` and `os.rss`. `before` is the last point's own `values` (collected when
+  `gc` is available, otherwise as read), the same measurement each column's series holds there;
+  `after` is read with the same keys after one more forced collection when `gc` is available, so
+  it measures what a further collection frees. The `*.pre_gc` columns carry no pair. Any other
+  kind is a limitation (the node purge is `gc` only).
 - Coverage is written by Node itself to `NODE_V8_COVERAGE` (the harness sets it to `<harness>/cov`);
   the agent adds nothing to the dump.
 - `detectors`: `MaxListenersExceededWarning` raised during the run.

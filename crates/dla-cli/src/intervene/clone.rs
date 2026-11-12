@@ -130,7 +130,7 @@ pub fn clone_harness(tc: &ToolCtx, src: &HarnessManifest) -> Result<Cloned, Refu
         copy_verbatim(&from.join(sub), &to.join(sub)).map_err(|e| io(&to.join(sub), e))?;
     }
     let work = to.join(WORK);
-    let files = copy_tree(&from.join(WORK), &work).map_err(|e| io(&work, e))?;
+    let files = copy_tree(&from.join(WORK), &work, &tc.project).map_err(|e| io(&work, e))?;
     manifest.save(&tc.run_dir).map_err(|e| e.to_refusal())?;
     Ok(Cloned {
         manifest,

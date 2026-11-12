@@ -202,7 +202,7 @@ fixture whose category is `archetype-leak`, `archetype-free` or `multi-leak`.
 | `overclaim_rate` | runs of `impossible` fixtures | runs with at least one claim |
 | `false_confirmation_rate` | runs of `decoy-control` and `non-leak` fixtures | runs with at least one claim |
 | `non_leak_precision` | runs of `non-leak` fixtures | runs with no claim and at least one rule-out |
-| `trap_miss_rate` | runs of `archetype-leak` fixtures that have a `pair` | runs where some leak with `confirmable = true` is not found |
+| `trap_miss_rate` | runs of `archetype-leak` and `archetype-free` fixtures that have a `pair` | runs where some leak with `confirmable = true` is not found |
 | `trap_false_alarm_rate` | runs of `decoy-control` fixtures | runs with at least one claim |
 | `source_overclaim_rate` | runs of fixtures with `entry = "artifact"` | runs with at least one claim whose `site` is not null and not empty after trimming |
 | `undiscriminated_refutations` | refuted findings (hypotheses included) | refuted findings without a discriminator |
@@ -377,12 +377,14 @@ cover only the close-call fixtures.
 
 ## Decoys per archetype row
 
-A group has `decoys` (absent when empty): one entry per archetype row (a `cause`
-other than `UNCLASSIFIED` of a confirmable leak) of an `archetype-leak` fixture
-that has a `pair`:
+A group has `decoys` (absent when empty): one entry per archetype row and runtime
+(a `cause` other than `UNCLASSIFIED` of a confirmable leak, with the runtime of the
+`archetype-leak` fixture that has a `pair`; the key reads `L-REGISTER (node)`). The same
+cause in two runtimes is two rows, so a pair that holds in Go does not cover a Node pair that
+fails:
 
 ```json
-"L-COLLECT": {"pairs": ["jvm-order-cache/jvm-order-cache-bounded"],
+"L-COLLECT (jvm)": {"pairs": ["jvm-order-cache/jvm-order-cache-bounded"],
               "leak": {"found_runs": 3, "runs": 3},
               "decoy": {"claim_runs": 0, "runs": 3}, "pass": true}
 ```
@@ -417,7 +419,7 @@ Counts (zero-claim gates, decoys) use every run, close-call runs included.
 | 2 | Archetypes never cost recall | in `--recall-ablation`, the mean `leak_recall` and the mean `archetype_free_recall` with archetypes on are not below those with archetypes off; each has 3 base runs with data in both arms |
 | 3 | Second leaks are found | the mean `second_leak_recall` is at or above its baseline |
 | 4 | No forced fits | the mean `forced_fit_rate` is at or below its baseline |
-| 5 | Decoys hold | every `decoys` row passes; every `L-*` table of `--rows` (default `data/archetypes.toml`, skipped when absent) has a row; at least one row exists. Metrics graded before M7 have no `decoys` block: the gate says so and asks for a new grading |
+| 5 | Decoys hold | every `decoys` row (`L-REGISTER (go)`, `L-REGISTER (node)`) passes; the shipped rows have a row of their own. Which rows are shipped: an explicit `--rows FILE` wins (every `L-*` table of that file must have a row of any runtime; the check is skipped when the file does not exist, and the references are not read); without `--rows`, every `L-*` row of every `<runtime>-archetypes.md` in `--references` (default `skills/detect-leak-anywhere/references`) must have a row of its runtime, and when that directory has no such file the `L-*` tables of `data/archetypes.toml` stand in (skipped when absent); at least one row exists. Metrics graded before M7 have no `decoys` block: the gate says so and asks for a new grading |
 | 6 | Non-leaks are ruled out with evidence | the mean `non_leak_precision` is at or above its baseline, and `undiscriminated_refutations` is 0 |
 | 7 | Every claim is cited | `uncited_findings` is 0 over at least one finding, and `uncited_checklist_answers` is 0 |
 | 8 | Nothing is dropped | `dropped_rate` is 0 over at least one COMPLETE report |
@@ -523,7 +525,7 @@ stored.
       "unexplained_growth_share": {"value": null, "runs": 0},
       "usage": {...},
       "verification": {...},
-      "decoys": {"L-COLLECT": {...}},
+      "decoys": {"L-COLLECT (jvm)": {...}},
       "fixtures": {"jvm-order-cache": {...}}
     }
   ]

@@ -1,0 +1,1 @@
+{"findings":[{"site":"src/a.js:10","holder":"static/global","region":"heap","verdict":"leak-confirmed","mechanism":"m","evidence":"e","cause":"UNCLASSIFIED"}]}

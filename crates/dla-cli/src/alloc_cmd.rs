@@ -1050,6 +1050,77 @@ mod tests {
         assert!(p.tested.iter().any(|c| c == "os.vm_data"), "{:?}", p.tested);
     }
 
+    /// A series with one purge event whose detail is `detail` (a recorded node purge record).
+    fn purged(detail: &str) -> SeriesFile {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("node.heap_used"), col("node.timers")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            // node.heap_used grows 1 MB a step above a 60 MB warm-up level
+            p.values = vec![
+                Some(150e6),
+                Some(60e6 + 1e6 * i as f64),
+                Some(10.0 * i as f64),
+            ];
+        }
+        s.events.push(dla_core::series::SeriesEvent {
+            after_point: 13,
+            kind: "purge:gc".to_owned(),
+            detail: Some(detail.to_owned()),
+        });
+        s
+    }
+
+    fn purge_verdict(s: &SeriesFile, name: &str) -> PurgeVerdict {
+        let ev = purge_event(s).unwrap();
+        let mut lim = Vec::new();
+        let r = test_column(s, name, true, 6, Some(&ev), &mut lim).unwrap();
+        r.purge.unwrap().verdict
+    }
+
+    #[test]
+    fn a_node_gc_purge_record_with_the_series_own_reading_as_before_is_retained() {
+        // The last point's heap_used is 73 MB. Recorded after the fix: `before` is that
+        // post-GC reading, `after` follows one more collection.
+        let kept = purged(
+            r#"{"kind":"gc","before":{"node.heap_used":73000000.0,"os.rss":150000000.0},
+                "after":{"node.heap_used":72900000.0,"os.rss":150000000.0}}"#,
+        );
+        assert_eq!(
+            purge_verdict(&kept, "node.heap_used"),
+            PurgeVerdict::Retained
+        );
+        // The pre-fix record took `before` before the point's forced collections, so the
+        // garbage that collection frees read as released growth. That record is released.
+        let old = purged(
+            r#"{"kind":"gc","before":{"node.heap_used":88700000.0,"os.rss":153000000.0},
+                "after":{"node.heap_used":72600000.0,"os.rss":153000000.0}}"#,
+        );
+        assert_eq!(
+            purge_verdict(&old, "node.heap_used"),
+            PurgeVerdict::Released
+        );
+    }
+
+    #[test]
+    fn a_purge_record_without_the_columns_key_abstains() {
+        let rec = purged(
+            r#"{"kind":"gc","before":{"node.heap_used":73000000.0},
+                "after":{"node.heap_used":72900000.0}}"#,
+        );
+        assert_eq!(purge_verdict(&rec, "os.rss"), PurgeVerdict::NotRun);
+        let ev = purge_event(&rec).unwrap();
+        let mut lim = Vec::new();
+        let r = test_column(&rec, "os.rss", true, 6, Some(&ev), &mut lim).unwrap();
+        // a missing reading is not "released": no purge support is claimed
+        assert!(
+            !r.supports
+                .iter()
+                .any(|x| x == "N-HEADROOM" || x == "N-ALLOC"),
+            "{:?}",
+            r.supports
+        );
+    }
+
     #[test]
     fn only_process_columns_use_the_rss_reference() {
         let s = series(&[]);

@@ -224,7 +224,8 @@ pub struct PassedColumn {
 }
 
 /// True when the probe column `column` (`probe:<Class>.<field>`, optionally with a
-/// `.size` or `.bytes` suffix) measures the holder named `owner` (`<Class>.<field>`,
+/// `.size`, `.bytes` or `.classes` suffix; `.classes` is the classes a probed JVM class loader
+/// defined) measures the holder named `owner` (`<Class>.<field>`,
 /// possibly package-qualified). A probe column matches when the names are equal or one is
 /// a trailing run of dotted components of the other (probes may be named without the
 /// package). A heap-dump column (`holder:<key>[.count]`) always carries the qualified
@@ -247,7 +248,7 @@ pub fn probe_column_matches_owner(column: &str, owner: &str) -> bool {
     } else {
         return false;
     };
-    let stem = ["size", "bytes"]
+    let stem = ["size", "bytes", "classes"]
         .iter()
         .find_map(|s| name.strip_suffix(s).and_then(|n| n.strip_suffix('.')));
     let dotted_suffix = |long: &str, short: &str| {
@@ -266,7 +267,10 @@ pub fn probe_column_matches_owner(column: &str, owner: &str) -> bool {
 
 impl PassedColumn {
     /// True when the column is tied to the finding `id` with `site`: by its `finding`,
-    /// by an equal site, or by listing the finding among its candidates.
+    /// by an equal site, or by listing the finding among its candidates. `dla trend`
+    /// lists as candidates only the findings at the column's site, in its enclosing
+    /// body, or with a census writer at exactly that site; a finding that only shares the file is
+    /// never listed, so this method does not re-check the candidates.
     pub fn tied_to(&self, id: &FindingId, site: Option<&str>) -> bool {
         let id = id.to_string();
         self.finding.as_deref() == Some(id.as_str())
@@ -381,6 +385,15 @@ mod tests {
             "Audit.trail"
         ));
         assert!(probe_column_matches_owner("probe:Cache.size", "Cache.size"));
+        // The classes a probed class loader defined are a measure of that holder.
+        assert!(probe_column_matches_owner(
+            "probe:quotes.PricingRules.LOADER.classes",
+            "PricingRules.LOADER"
+        ));
+        assert!(!probe_column_matches_owner(
+            "probe:quotes.PricingRules.LOADER.classes",
+            "quotes.PricingRules.OTHER"
+        ));
         assert!(!probe_column_matches_owner(
             "probe:Audit.trail",
             "shop.codec.Audit.other"

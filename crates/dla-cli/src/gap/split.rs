@@ -1,7 +1,7 @@
 //! `dla gap <S>`: whole-process memory split into runtime-accounted and unexplained.
 
 use dla_core::{
-    EvidenceId, RunState,
+    CoverageManifest, EvidenceId, RunState,
     evidence::{CoverageStatus, EvidenceCoverage, EvidenceKind},
     runtime::Runtime,
     series::{
@@ -266,17 +266,37 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile) -> Res<Value> {
     let ev: EvidenceId = tc.add_evidence(&mut ledger, spec)?;
 
     let h = src.source.harness.as_deref().unwrap_or("<H>");
+    // Once the series has a gap row, another `--residual` opens a new open item for the same
+    // growth; the final gate lists what is left instead (as `dla trend` and the gate do).
+    let has_gap_row = CoverageManifest::load(&tc.run_dir)
+        .ok()
+        .flatten()
+        .is_some_and(|m| {
+            m.residual
+                .iter()
+                .any(|r| r.series.as_deref() == Some(src.id.as_str()))
+        });
+    let residual = if has_gap_row {
+        format!(
+            "dla gate check --final   ({} has a gap row: the final gate lists what is left; do not run dla gap --residual again)",
+            src.id
+        )
+    } else if route.is_some() {
+        format!("dla gap {} --residual", src.id)
+    } else {
+        format!(
+            "dla gap {} --residual   (growth no finding explains yet)",
+            src.id
+        )
+    };
     let next: Vec<String> = if route.is_some() {
         vec![
             "the growth is outside the runtime's accounting: native allocations, the allocator, or mappings".to_owned(),
             format!("dla alloc-test {h} --purge trim"),
-            format!("dla gap {} --residual", src.id),
+            residual,
         ]
     } else {
-        vec![format!(
-            "dla gap {} --residual   (growth no finding explains yet)",
-            src.id
-        )]
+        vec![residual]
     };
     let mut limitations = derived.limitations.clone();
     limitations.truncate(4);

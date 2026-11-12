@@ -95,19 +95,19 @@ fn no_skill_runs_have_no_ledger_counts_and_undiscriminated_refutations_count() {
 fn decoy_rows_pass_only_when_the_leak_is_found_every_run_and_the_decoy_never_claims() {
     let m = sample();
     let g = gates_on(&m);
-    let a = &g.decoys["L-COLLECT"];
+    let a = &g.decoys["L-COLLECT (python)"];
     assert_eq!(a.pairs, ["m7-leak/m7-decoy"]);
     assert_eq!((a.leak.found_runs, a.leak.runs), (3, 3));
     assert_eq!((a.decoy.claim_runs, a.decoy.runs), (0, 3));
     assert!(a.pass);
     // L-REGISTER: the leak is missed in run 2 and the decoy claims in run 3.
-    let b = &g.decoys["L-REGISTER"];
+    let b = &g.decoys["L-REGISTER (node)"];
     assert_eq!((b.leak.found_runs, b.leak.runs), (2, 3));
     assert_eq!((b.decoy.claim_runs, b.decoy.runs), (1, 3));
     assert!(!b.pass);
     // A group that never ran the decoy has no data and does not pass.
     let ns = m.groups.iter().find(|g| g.ablation == "no-skill").unwrap();
-    assert!(!ns.decoys["L-COLLECT"].pass);
+    assert!(!ns.decoys["L-COLLECT (python)"].pass);
 }
 
 #[test]
@@ -386,16 +386,16 @@ fn the_table_renders_the_m7_metric_rows_and_the_decoys_table() {
     // The decoys table lists a passing and a failing row of the gates arm.
     assert!(md.contains("### Decoys"), "{md}");
     assert!(
-        md.contains("| L-COLLECT | m7-leak/m7-decoy | 3/3 | 0/3 | yes |"),
+        md.contains("| L-COLLECT (python) | m7-leak/m7-decoy | 3/3 | 0/3 | yes |"),
         "{md}"
     );
     assert!(
-        md.contains("| L-REGISTER | m7-pair2/m7-decoy2 | 2/3 | 1/3 | no |"),
+        md.contains("| L-REGISTER (node) | m7-pair2/m7-decoy2 | 2/3 | 1/3 | no |"),
         "{md}"
     );
     // The no-skill arm has a decoys row with no decoy runs: it fails and says so.
     assert!(
-        md.contains("| L-COLLECT | m7-leak/m7-decoy | 1/1 | 0/0 | no |"),
+        md.contains("| L-COLLECT (python) | m7-leak/m7-decoy | 1/1 | 0/0 | no |"),
         "{md}"
     );
     // A group without decoys has no Decoys heading.

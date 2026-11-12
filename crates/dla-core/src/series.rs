@@ -634,7 +634,14 @@ pub struct ColumnMeta {
 ///   (`after_gc = false`); otherwise managed-runtime heap figures are after GC.
 /// * `<base>@<file:line>` is a grouped counter of `<base>` tied to that site.
 /// * `probe:<target>` counts entries or reachable objects (counter, heap);
-///   `probe:<target>.bytes` is a byte estimate (gauge, heap).
+///   `probe:<target>.bytes` is a byte estimate (gauge, heap);
+///   `probe:<target>.classes` counts the classes a probed class loader defined (counter, non-heap).
+///   The primary column of a loader probe (`probe:<loader>`, classes plus the objects of its
+///   own fields) is non-heap too, but its name does not say so: only the series builder, which
+///   sees the `.classes` sibling, files it non-heap. `column_meta` takes a name alone and
+///   returns heap for it; a caller that reads by name (`gate::residual_covers` serves
+///   whole-process columns and per-type counts such as `jvm.class:`, no `probe:` column)
+///   must not rely on the region of a `probe:` column.
 /// * `jvm.class:<name>.count` and `py.type:<name>.count` are per-type instance counts.
 ///
 /// Unknown names are gauges in bytes, region process, not baseline.
@@ -668,6 +675,8 @@ pub fn column_meta(name: &str) -> ColumnMeta {
     if let Some(rest) = name.strip_prefix("probe:") {
         return if rest.ends_with(".bytes") {
             meta(Bytes, Gauge, Heap, false, true)
+        } else if rest.ends_with(".classes") {
+            meta(Count, Counter, NonHeap, false, true)
         } else {
             meta(Count, Counter, Heap, false, true)
         };
@@ -753,6 +762,11 @@ mod catalog_tests {
         assert_eq!(
             column_meta("probe:shop.OrderCache.ORDERS_BY_ID.bytes").kind,
             ColumnKind::Gauge
+        );
+        let m = column_meta("probe:quotes.PricingRules.LOADER.classes");
+        assert_eq!(
+            (m.unit, m.kind, m.region),
+            (Unit::Count, ColumnKind::Counter, SeriesRegion::NonHeap)
         );
         assert_eq!(column_meta("cgroup.current").scope, ColumnScope::Container);
         assert_eq!(column_meta("os.rss").region, SeriesRegion::Process);

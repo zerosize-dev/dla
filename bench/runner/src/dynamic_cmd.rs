@@ -52,6 +52,10 @@
 //!    evidence ids in the ledger, evidence results within 2048 bytes, a `tie`
 //!    reason on every tied column); a violation fails the fixture. The policy
 //!    never names a backend: it reads `--list` and the printed commands.
+//!    A candidate that a call ties but writes no discriminator for gets its own
+//!    `dla alloc-test` (`favors leak` is the discriminator); its holder comes from
+//!    the finding, a true known-leaks row that matches its site line, or the
+//!    alloc-test evidence, never from another finding's census entry.
 //!    Driver mode needs hooks filled in by judgement, so the policy stays in
 //!    command mode.
 //! 6. `dla gap S --residual` (refusals ignored); every leak-side candidate or
@@ -59,8 +63,9 @@
 //!    (`not_exercised`) when it has static evidence, else `unresolved`
 //!    (`time_budget`). Finally `dla report`.
 //!
-//! At most [`MAX_ALLOC_TESTS`] alloc-tests run per fixture; the findings that
-//! do not get one are resolved `unresolved` (`time_budget`).
+//! At most [`MAX_ALLOC_TESTS`] alloc-tests run per fixture in steps 2 to 4; the
+//! findings that do not get one are resolved `unresolved` (`time_budget`). Step 5
+//! adds at most 2 more for the findings its calls tie without a discriminator.
 //!
 //! # Checks per fixture
 //!
@@ -89,6 +94,7 @@ use serde_json::Value;
 use crate::{
     Res,
     fixture::{fixture_dirs, load_expected},
+    fixture_toolchain::{Host, Provided, Toolchain, provide_all},
     grade::{Finding, Source, State, findings_from_ledger, grade_findings, site_matches},
     model::{Category, Entry, Expected},
     run::{Archetypes, apply_archetypes_off, collect_run_files, copy_tree},
@@ -143,6 +149,11 @@ pub struct DynamicArgs {
     /// Keep the scratch copies of the fixtures.
     #[arg(long)]
     pub keep_work: bool,
+    /// Directory the `[toolchain]` releases of the fixtures are unpacked into. A release found
+    /// there is reused, so an `--archetypes on` run and an `--archetypes off` run fetch once
+    /// (default: `<repo-root>/target/dla-bench-toolchains`).
+    #[arg(long)]
+    pub toolchain_cache: Option<PathBuf>,
     /// Longest time one dla command may run, in seconds; its process group is killed after
     /// that and the fixture fails.
     #[arg(long, default_value_t = DEFAULT_COMMAND_TIMEOUT_S)]
@@ -176,6 +187,19 @@ pub struct DynamicArgs {
 static GEN_FLAGS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
 impl DynamicArgs {
+    /// Where the toolchains of the fixtures are kept between runs.
+    ///
+    /// The path is absolute: every `dla` call runs in the fixture's project directory, where a
+    /// relative store (the default `--repo-root .`) would name nothing, and the tools would
+    /// silently come from the host.
+    pub fn toolchain_store(&self) -> PathBuf {
+        let store = self
+            .toolchain_cache
+            .clone()
+            .unwrap_or_else(|| self.repo_root.join("target/dla-bench-toolchains"));
+        std::path::absolute(&store).unwrap_or(store)
+    }
+
     /// The `harness gen` flags these options give, in order.
     pub fn gen_flags(&self) -> Vec<String> {
         let mut v = Vec::new();
@@ -448,6 +472,28 @@ struct Fx<'a> {
     unset_vars: Vec<&'static str>,
     /// Leak confirmations held back until the summarize steps ran ([`ops::run`]).
     pending: Vec<ops::Pending>,
+    /// The tools the fixture's `[toolchain]` names, put in front of every command's environment.
+    provided: Option<Provided>,
+}
+
+/// The variables a `dla` command gets on top of the inherited environment: the `PATH` of a
+/// `--without` run, and what a fixture's `[toolchain]` provides (its directories first on
+/// `PATH`, `GOTOOLCHAIN`, `JAVA_HOME`), the way `dla-bench run` gives them to its children.
+fn command_env(
+    path_dir: Option<&Path>,
+    provided: Option<&Provided>,
+    inherited_path: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    match (path_dir, inherited_path) {
+        (Some(d), _) => env.push(("PATH".to_owned(), d.to_string_lossy().into_owned())),
+        (None, Some(p)) => env.push(("PATH".to_owned(), p.to_owned())),
+        (None, None) => {}
+    }
+    if let Some(p) = provided {
+        p.apply(&mut env);
+    }
+    env
 }
 
 /// How a command ended.
@@ -553,11 +599,18 @@ impl Fx<'_> {
             };
         }
         let mut cmd = Command::new(self.bin);
-        if let Some(dir) = &self.path_dir {
-            cmd.env("PATH", dir);
+        if self.path_dir.is_some() {
             for var in &self.unset_vars {
                 cmd.env_remove(var);
             }
+        }
+        let inherited = std::env::var("PATH").ok();
+        for (k, v) in command_env(
+            self.path_dir.as_deref(),
+            self.provided.as_ref(),
+            inherited.as_deref(),
+        ) {
+            cmd.env(k, v);
         }
         cmd.arg("--project").arg(&self.project);
         if let Some(w) = &self.worker {
@@ -2140,6 +2193,8 @@ struct Shared<'a> {
     log_root: &'a Path,
     /// The `PATH` directory of a `--without` run.
     path_dir: Option<&'a Path>,
+    /// What each fixture's `[toolchain]` needs, by fixture id.
+    toolchains: BTreeMap<String, Provided>,
 }
 
 fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
@@ -2200,6 +2255,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         path_dir: sh.path_dir.map(Path::to_path_buf),
         unset_vars: without::home_vars_for(&sh.args.without),
         pending: Vec::new(),
+        provided: sh.toolchains.get(&id).cloned(),
     };
     let _ = fs::remove_dir_all(&fx.log_dir);
     drive(&mut fx);
@@ -2527,6 +2583,41 @@ pub fn run(args: &DynamicArgs) -> Res<String> {
     }
 }
 
+/// Fetches what the `[toolchain]` tables of the fixtures name, once per distinct request,
+/// before any fixture runs (the same code as `dla-bench run`). A release that cannot be
+/// provided stops the run with the fixture's name: a version pair never runs on the wrong tool.
+fn fixture_toolchains(
+    host: &Host,
+    args: &DynamicArgs,
+    dirs: &[PathBuf],
+) -> Res<BTreeMap<String, Provided>> {
+    let mut requests: Vec<(String, Toolchain)> = Vec::new();
+    for d in dirs {
+        let id = d
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // A fixture that does not load fails in `run_fixture`, with its own message.
+        if let Ok(e) = load_expected(&args.fixtures, &id)
+            && let Some(t) = e.toolchain
+        {
+            requests.push((id, t));
+        }
+    }
+    let provided = provide_all(host, &args.toolchain_store(), &requests)?;
+    // A fixture's toolchain must never bring back a hidden tool: refuse the run.
+    for (id, p) in &provided {
+        if let Some((tool, from)) = without::provided_conflict(&args.without, &p.path_first, &p.env)
+        {
+            return Err(format!(
+                "--without {tool}: the [toolchain] of fixture {id} provides it ({from}); \
+                 run without that fixture or without --without {tool}"
+            ));
+        }
+    }
+    Ok(provided)
+}
+
 fn run_in(
     args: &DynamicArgs,
     bin: &Path,
@@ -2573,6 +2664,7 @@ fn run_in(
     if dirs.is_empty() {
         return Err(format!("no fixtures under {}", args.fixtures.display()));
     }
+    let toolchains = fixture_toolchains(&Host::system(), args, &dirs)?;
     let sh = Shared {
         args,
         bin,
@@ -2580,6 +2672,7 @@ fn run_in(
         work,
         log_root,
         path_dir: path_dir.as_deref(),
+        toolchains,
     };
     let queue: Mutex<VecDeque<PathBuf>> = Mutex::new(dirs.into());
     let done: Mutex<Vec<FixtureRow>> = Mutex::new(Vec::new());
@@ -2636,6 +2729,35 @@ fn run_in(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_fixtures_toolchain_goes_first_on_the_path_of_a_dla_command() {
+        let p = Provided {
+            path_first: vec!["/tc/node/bin".into()],
+            env: vec![("GOTOOLCHAIN".into(), "go1.22.12".into())],
+            go_toolchain_dirs: Vec::new(),
+        };
+        let env = command_env(None, Some(&p), Some("/usr/bin:/bin"));
+        assert!(env.contains(&("PATH".to_owned(), "/tc/node/bin:/usr/bin:/bin".to_owned())));
+        assert!(env.contains(&("GOTOOLCHAIN".to_owned(), "go1.22.12".to_owned())));
+        // A `--without` run keeps its own directory as the base of `PATH`.
+        let env = command_env(Some(Path::new("/hidden")), Some(&p), Some("/usr/bin"));
+        assert!(env.contains(&("PATH".to_owned(), "/tc/node/bin:/hidden".to_owned())));
+    }
+
+    #[test]
+    fn a_fixture_without_a_toolchain_changes_no_variable() {
+        assert!(
+            command_env(None, None, Some("/usr/bin"))
+                .iter()
+                .all(|(k, _)| k == "PATH")
+        );
+        assert_eq!(command_env(None, None, None), Vec::new());
+        assert_eq!(
+            command_env(Some(Path::new("/h")), None, Some("/usr/bin")),
+            vec![("PATH".to_owned(), "/h".to_owned())]
+        );
+    }
+
     #[test]
     fn the_dump_backed_message_names_every_accepted_kind() {
         let m = super::dump_backed_missing();

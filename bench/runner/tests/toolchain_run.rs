@@ -310,7 +310,10 @@ impl Env {
 
     fn config(&self, fx: &str) -> PathBuf {
         self.root
-            .join(format!("work/res/no-skill/archetypes-on/{fx}/1/config"))
+            .join("work")
+            .join(dla_bench::run::work_key("res", "", "", "", 0))
+            .join(dla_bench::run::work_key("res", "no-skill", "on", fx, 1))
+            .join("config")
     }
 }
 

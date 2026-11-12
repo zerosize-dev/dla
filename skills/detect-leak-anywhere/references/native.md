@@ -54,7 +54,9 @@ Capture with the harness, then read the files (`references/backends.md` has ever
 - Command mode reads live bytes at exit: memory freed before exit shows only in the peak columns.
 - The shim slows allocation-heavy programs a lot; shorten the run with a smaller `--step` in
   `dla harness gen` if it times out.
-- Allocation stacks group by allocation site, not by owner; the holder must be read from code.
+- Allocation stacks group by allocation site, not by owner. Read the owner from code (the field,
+  table or global that keeps the pointer). The holder kind of C/C++ heap memory is
+  `native-handle/global-ref`, whatever the owner is.
 - Memory a program maps or allocates outside the C allocator (mmap, custom arenas) shows only in
   the `os.*` columns.
 - JNI and FFI: the native side is measured only when the process runs through the shim.

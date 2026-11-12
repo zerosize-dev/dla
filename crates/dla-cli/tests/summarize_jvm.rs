@@ -858,6 +858,116 @@ fn class_loader_and_native_memory_growth_are_columns_that_tie_to_nothing() {
     }
 }
 
+/// A `VM.classloader_stats` text: `loader` defined `classes` classes in one CLD, next to the
+/// application loader.
+fn loader_stats(loader: &str, classes: u32) -> String {
+    format!(
+        "1411:\n\nClassLoader         Parent              CLD*               Classes   ChunkSz   BlockSz  Type\n\
+         0x00007f93c4002800  0x00007f93c3068770  0x00007f9434186f90  {classes:>6}   6144000     94400  {loader}\n\
+         0x00007f93c3068770  0x00007f93c3069008  0x00007f9434145360       4     12288     10432  jdk.internal.loader.ClassLoaders$AppClassLoader\n\
+         Total = 2                                                     {total}   4574208    337968  \n\
+         ChunkSz: Total size of all allocated metaspace chunks\n\
+         BlockSz: Total size of all allocated metaspace blocks (each chunk has several blocks)\n",
+        total = classes + 4,
+    )
+}
+
+/// A project whose static `LOADER` of type `field_type` is a census finding.
+fn loader_project(field_type: &str, package: &str) -> (Project, String) {
+    let p = Project::new();
+    p.put(
+        "src/quotes/RuleLoader.java",
+        b"package quotes;\n\nfinal class RuleLoader extends ClassLoader {\n}\n",
+    );
+    p.put(
+        "src/quotes/PricingRules.java",
+        format!(
+            "package {package};\n\nimport java.nio.charset.StandardCharsets;\n\nfinal class PricingRules {{\n\n    private static final {field_type} LOADER = new {field_type}();\n}}\n"
+        )
+        .as_bytes(),
+    );
+    let id = census_finding(
+        &p,
+        &format!("{package}.PricingRules.LOADER"),
+        "src/quotes/PricingRules.java:7",
+        &[],
+    );
+    (p, id)
+}
+
+fn loader_files(p: &Project, loader: &str) -> Vec<String> {
+    (0..3)
+        .map(|i| {
+            p.put(
+                &format!("in/ld{i}.txt"),
+                loader_stats(loader, 100 + 400 * i).as_bytes(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_loader_group_ties_to_the_finding_whose_holder_is_declared_with_that_loader_class() {
+    let (p, id) = loader_project("RuleLoader", "quotes");
+    let files = loader_files(&p, "quotes.RuleLoader");
+    let v = nonheap(&p, &files);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(v["tied"], json!([id]), "{v}");
+    let growth = p.evidence("growth-series");
+    let passed = growth.last().unwrap()["result"]["passed"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let col = passed
+        .iter()
+        .find(|c| c["column"] == "group:classloader/quotes.RuleLoader")
+        .unwrap_or_else(|| panic!("{passed:?}"));
+    assert_eq!(col["finding"], json!(id), "{col}");
+    assert_eq!(col["tie"]["rule"], "type", "{col}");
+    assert_eq!(col["tie"]["key"], "quotes.RuleLoader", "{col}");
+}
+
+#[test]
+fn a_loader_group_ties_by_exact_class_identity_only() {
+    // The holder is declared with a loader of another package of the same simple name.
+    let (p, _) = loader_project("RuleLoader", "shop");
+    p.put(
+        "src/shop/RuleLoader.java",
+        b"package shop;\n\nfinal class RuleLoader extends ClassLoader {\n}\n",
+    );
+    let v = nonheap(&p, &loader_files(&p, "quotes.RuleLoader"));
+    assert_eq!(v["tied"], json!([]), "{v}");
+    // The group is a longer name that starts with the holder's type.
+    let (p, _) = loader_project("RuleLoader", "quotes");
+    let v = nonheap(&p, &loader_files(&p, "quotes.RuleLoaderPlus"));
+    assert_eq!(v["tied"], json!([]), "{v}");
+    // A JDK loader never ties, whatever the holder's declared type.
+    let (p, _) = loader_project("RuleLoader", "quotes");
+    let v = nonheap(
+        &p,
+        &loader_files(&p, "jdk.internal.loader.ClassLoaders$AppClassLoader"),
+    );
+    assert_eq!(v["tied"], json!([]), "{v}");
+    // A finding of the same file that holds something else is not tied.
+    let (p, _) = loader_project("java.util.List", "quotes");
+    let v = nonheap(&p, &loader_files(&p, "quotes.RuleLoader"));
+    assert_eq!(v["tied"], json!([]), "{v}");
+}
+
+#[test]
+fn two_findings_holding_the_same_loader_class_tie_none() {
+    let (p, a) = loader_project("RuleLoader", "quotes");
+    p.put(
+        "src/quotes/Other.java",
+        b"package quotes;\n\nfinal class Other {\n\n\n\n    static RuleLoader SECOND = null;\n}\n",
+    );
+    let b = census_finding(&p, "quotes.Other.SECOND", "src/quotes/Other.java:7", &[]);
+    let v = nonheap(&p, &loader_files(&p, "quotes.RuleLoader"));
+    assert_eq!(v["tied"], json!([]), "{v}");
+    let amb = v["ambiguous"].to_string();
+    assert!(amb.contains(&a) && amb.contains(&b), "{v}");
+}
+
 #[test]
 fn the_list_names_the_jvm_adapters_and_their_tools() {
     let d = tempfile::tempdir().unwrap();

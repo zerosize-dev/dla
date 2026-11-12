@@ -394,6 +394,99 @@ fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
 }
 
 #[test]
+fn once_a_series_has_a_gap_row_the_final_gate_lists_the_resolve_and_not_gap_again() {
+    let r = init("repository");
+    write_trend(&r, "T1", "S1", &["probe:CACHE", "os.rss"]);
+    let disc = alloc_discriminator(&r, "T1", &["probe:CACHE", "os.rss"]);
+    let f = finding_citing(&r, &disc);
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    let fix_of = || {
+        let items = r.items(&["--final"]);
+        let item = items
+            .iter()
+            .find(|m| m["id"] == "T1:os.rss")
+            .unwrap()
+            .clone();
+        item["fix"].as_str().unwrap().to_owned()
+    };
+    // No gap row yet: gap is the route.
+    let fix = fix_of();
+    assert!(
+        fix.contains("dla gap S1 --residual") && !fix.contains("ledger resolve"),
+        "{fix}"
+    );
+    // A gap row over its threshold with an open item: running gap again would only open a
+    // new item each time, so only the resolve of that item is listed.
+    let row = dla_core::coverage::ResidualRow {
+        series: Some("S1".into()),
+        region: dla_core::finding::Region::Heap,
+        total_slope: 10.0,
+        attributed_slope: 2.0,
+        residual: 8.0,
+        unit: "bytes/iteration".into(),
+        threshold: 1.0,
+        open_item: Some("O1".parse().unwrap()),
+    };
+    // A row over its threshold that names no item: only `dla gap` raises one, so gap stays.
+    let mut bare = row.clone();
+    bare.open_item = None;
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![bare.clone()]))
+        .unwrap();
+    assert!(fix_of().contains("dla gap S1 --residual"), "{}", fix_of());
+    {
+        let mut l = Ledger::load(&r.run_dir()).unwrap();
+        l.open_item_add(
+            "unexplained growth: 8.0 B in heap (S1); add a hypothesis or record it unresolved",
+            None,
+            "dla gap --residual",
+        )
+        .unwrap();
+    }
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![row.clone()]))
+        .unwrap();
+    let fix = fix_of();
+    assert!(fix.contains("dla ledger resolve O1 "), "{fix}");
+    assert!(!fix.contains("dla gap"), "{fix}");
+    // The residual item of the final list names the resolve alone, too.
+    let items = r.items(&["--final"]);
+    let res = items.iter().find(|m| m["kind"] == "residual").unwrap();
+    let rfix = res["fix"].as_str().unwrap();
+    assert!(
+        rfix.contains("dla ledger resolve O1 ") && !rfix.contains("dla gap"),
+        "{rfix}"
+    );
+    // Resolving the item they name clears both: the row now accounts for the column.
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "O1",
+        "--as",
+        "unresolved",
+        "--reason",
+        "time_budget",
+        "--remedy",
+        "profile the whole process",
+    ]);
+    let items = r.items(&["--final"]);
+    assert!(
+        !items
+            .iter()
+            .any(|m| m["id"] == "T1:os.rss" || m["kind"] == "residual"),
+        "{items:?}"
+    );
+}
+
+#[test]
 fn a_type_count_column_with_no_tie_is_accounted_for_by_the_residual() {
     // The jni-order-codec shape: the probe column is tied to the finding, the instance
     // counts of the entry type and of `byte[]` grow with it and tie to no finding (a
@@ -466,6 +559,25 @@ fn a_type_count_column_with_no_tie_is_accounted_for_by_the_residual() {
     assert!(
         trend_columns(&m).contains(&"T1:jvm.class:shop.codec.Entry.count".to_owned()),
         "{m:?}"
+    );
+    // Several regions: the column is covered by the rows of its own region (the heap), so a
+    // heap row over its threshold without an item is not sent to resolve the item of
+    // another region's row; gap is the route that raises the heap item.
+    let mut heap = row(8.0);
+    heap.open_item = None;
+    let mut off = row(8.0);
+    off.region = dla_core::finding::Region::NonHeap;
+    off.open_item = Some("O1".parse().unwrap());
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| m.set_residual(vec![heap, off])).unwrap();
+    let items = r.items(&["--final"]);
+    let item = items
+        .iter()
+        .find(|m| m["id"] == "T1:jvm.class:shop.codec.Entry.count")
+        .unwrap();
+    let fix = item["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("dla gap S1 --residual") && !fix.contains("ledger resolve O1"),
+        "{fix}"
     );
 }
 

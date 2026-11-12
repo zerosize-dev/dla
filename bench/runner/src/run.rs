@@ -1366,6 +1366,38 @@ fn run_dir_of(ctx: &Ctx, t: &Task) -> PathBuf {
         .join(t.n.to_string())
 }
 
+/// An opaque, stable name for one run's working directory: the first 12 hex digits of a
+/// SHA-256 of the arm, the fixture and the run number. The child's paths carry neither the
+/// fixture id nor the arm; `run.json` records the mapping.
+pub fn work_key(scope: &str, ablation: &str, archetypes: &str, fixture: &str, n: u32) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for part in [scope, ablation, archetypes, fixture, &n.to_string()] {
+        h.update(part.as_bytes());
+        h.update([0]);
+    }
+    h.finalize()
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn work_key_of(ctx: &Ctx, t: &Task) -> String {
+    let scope = ctx
+        .out_root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    work_key(
+        &scope,
+        ctx.args.ablation.as_str(),
+        ctx.args.archetypes.as_str(),
+        &t.fixture,
+        t.n,
+    )
+}
+
 fn copy_if_exists(from: &Path, to: &Path) {
     // `symlink_metadata`: a link in an agent-writable directory is not followed.
     if fs::symlink_metadata(from).is_ok_and(|m| m.file_type().is_file()) {
@@ -1386,6 +1418,22 @@ fn collect_dla_files(project: &Path, out_dir: &Path) {
         return;
     }
     collect_run_files(&project.join(".dla").join(id), out_dir);
+}
+
+/// Lists the results directory among the denied paths unless a denied tree already covers
+/// it. Returns true when it was added: a results directory outside the repository and the
+/// fixtures tree shows its path (which can carry the arm name) in the child's settings.
+///
+/// The paths are compared in canonical form (a `..` or a link in `--out` must not make an
+/// outside directory look inside); a path that does not exist is compared as given.
+fn add_results_dir(denied: &mut Vec<PathBuf>, out_root: &Path) -> bool {
+    let canon = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let real = canon(out_root);
+    if denied.iter().any(|d| real.starts_with(canon(d))) {
+        return false;
+    }
+    denied.push(out_root.to_path_buf());
+    true
 }
 
 /// The denied-read paths that lie inside the writable system temporary directory:
@@ -1566,12 +1614,8 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
     }
     remove_worker_ledgers(&out_dir);
     let _ = fs::remove_dir_all(out_dir.join("bundle"));
-    let work = ctx
-        .work_root
-        .join(args.ablation.as_str())
-        .join(format!("archetypes-{}", args.archetypes.as_str()))
-        .join(&t.fixture)
-        .join(t.n.to_string());
+    let work_key = work_key_of(ctx, t);
+    let work = ctx.work_root.join(&work_key);
     let src = args.fixtures_dir.join(&t.fixture).join("project");
     let project = prepare_workdir(&src, &work)?;
     let config = work.join("config");
@@ -1701,6 +1745,7 @@ fn execute(ctx: &Ctx, t: &Task) -> Res<RunJson> {
         incomplete_reason,
         stop_blocks,
         toolchain,
+        work_key: Some(work_key),
     };
     let mut body = serde_json::to_string_pretty(&rj).map_err(|e| e.to_string())?;
     body.push('\n');
@@ -1802,7 +1847,7 @@ pub fn run(args: &RunArgs) -> Res<String> {
         Some(p) => absolute(p)?,
         None => default_work_root()?,
     }
-    .join(&results_name);
+    .join(work_key(&results_name, "", "", "", 0));
     let repo_abs = absolute(&args.repo_root)?;
     if work_root.starts_with(&repo_abs) {
         return Err(format!(
@@ -1905,11 +1950,18 @@ pub fn run(args: &RunArgs) -> Res<String> {
         ablation: args.ablation,
         archetypes_off: args.archetypes == Archetypes::Off,
     });
-    let mut denied: Vec<PathBuf> = vec![
-        repo_abs.clone(),
-        args.fixtures_dir.clone(),
-        out_root.clone(),
-    ];
+    // The results directory is named after the arm (`bench/results/full`); the child's
+    // settings list the denied paths, so a results directory inside a denied tree is not listed.
+    let mut denied: Vec<PathBuf> = vec![repo_abs.clone(), args.fixtures_dir.clone()];
+    if add_results_dir(&mut denied, &out_root) {
+        eprintln!(
+            "warning: --out {} lies outside the repository, so its path is listed in the child's \
+             denyRead setting (the child cannot read the directory, but it can see the path, \
+             which may carry the arm name); give --out a directory inside the repository (the \
+             default bench/results) to keep the path out of its settings",
+            out_root.display()
+        );
+    }
     if let Some(a) = &args.ablations_dir {
         denied.push(absolute(a)?);
     }
@@ -2028,6 +2080,53 @@ fn absolute(p: &Path) -> Res<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_results_dir_inside_a_denied_tree_is_not_listed_and_one_outside_is() {
+        let mut denied = vec![
+            PathBuf::from("/repo"),
+            PathBuf::from("/repo/bench/fixtures"),
+        ];
+        // Inside the repository: the arm name stays out of the settings.
+        assert!(!add_results_dir(
+            &mut denied,
+            Path::new("/repo/bench/results/full")
+        ));
+        assert_eq!(denied.len(), 2);
+        // Outside: listed, and the caller warns.
+        assert!(add_results_dir(&mut denied, Path::new("/data/m7-full-on")));
+        assert_eq!(denied.last().unwrap(), Path::new("/data/m7-full-on"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_results_dir_that_leaves_the_repository_by_dotdot_or_a_link_is_listed() {
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().join("repo");
+        fs::create_dir_all(repo.join("bench/results")).unwrap();
+        fs::create_dir_all(t.path().join("outside")).unwrap();
+        let repo = fs::canonicalize(&repo).unwrap();
+        // `..` out of the repository: the text starts with the repository path.
+        let dotdot = repo.join("bench/results/../../../outside");
+        assert!(dotdot.starts_with(&repo));
+        let mut denied = vec![repo.clone()];
+        assert!(add_results_dir(&mut denied, &dotdot));
+        // A link under the results directory that points outside.
+        std::os::unix::fs::symlink(t.path().join("outside"), repo.join("bench/results/link"))
+            .unwrap();
+        let mut denied = vec![repo.clone()];
+        assert!(add_results_dir(
+            &mut denied,
+            &repo.join("bench/results/link")
+        ));
+        // A `..` that stays inside is still covered.
+        let mut denied = vec![repo.clone()];
+        assert!(!add_results_dir(
+            &mut denied,
+            &repo.join("bench/results/../results")
+        ));
+        assert_eq!(denied.len(), 1);
+    }
 
     #[cfg(unix)]
     #[test]

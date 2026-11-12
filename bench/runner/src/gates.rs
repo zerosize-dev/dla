@@ -69,9 +69,17 @@ pub struct GatesArgs {
     #[arg(long, default_value = "skills/detect-leak-anywhere/SKILL.md")]
     pub skill: PathBuf,
     /// The archetype data file: every `L-*` table in it is a shipped row and needs a decoy
-    /// and control pair. Skipped when the file does not exist.
-    #[arg(long, default_value = "data/archetypes.toml")]
-    pub rows: PathBuf,
+    /// and control pair of any runtime. An explicit `--rows` always wins: the references
+    /// are not read, and a file that does not exist skips the check. Without it the
+    /// references are read (`--references`), and `data/archetypes.toml` is the fallback
+    /// when they hold no `<runtime>-archetypes.md` file.
+    #[arg(long)]
+    pub rows: Option<PathBuf>,
+    /// The skill's reference directory: when it holds `<runtime>-archetypes.md` files, every
+    /// row in them is a shipped row of that runtime (`L-REGISTER (node)`) and needs a graded
+    /// pair of that runtime. Not read when `--rows` is given.
+    #[arg(long, default_value = "skills/detect-leak-anywhere/references")]
+    pub references: PathBuf,
     /// Print JSON instead of a table.
     #[arg(long)]
     pub json: bool,
@@ -550,7 +558,11 @@ pub fn evaluate(i: &Inputs) -> Vec<GateResult> {
             }
             if let Some(rows) = i.shipped_rows {
                 for row in rows {
-                    if !g.decoys.contains_key(row) {
+                    // A row without a runtime (from `--rows`) is met by a pair of any runtime.
+                    let met = g.decoys.contains_key(row)
+                        || (!row.contains(" (")
+                            && g.decoys.keys().any(|k| k.starts_with(&format!("{row} ("))));
+                    if !met {
                         g5.fail(format!("{row}: shipped, but no pair was graded"));
                     }
                 }
@@ -907,6 +919,40 @@ pub fn shipped_rows(path: &Path) -> Res<Vec<String>> {
     Ok(rows)
 }
 
+/// The shipped rows of every runtime, `L-REGISTER (node)`, read from the `L-*` rows of the
+/// `<runtime>-archetypes.md` files of `dir`. `None` when the directory holds no such file.
+pub fn shipped_runtime_rows(dir: &Path) -> Res<Option<Vec<String>>> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(None);
+    };
+    let mut rows: Vec<String> = Vec::new();
+    let mut files = 0;
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(runtime) = name.strip_suffix("-archetypes.md") else {
+            continue;
+        };
+        files += 1;
+        let text = fs::read_to_string(e.path()).map_err(|e2| format!("{name}: {e2}"))?;
+        for line in text.lines() {
+            let first = line
+                .strip_prefix('|')
+                .and_then(|l| l.split('|').next())
+                .map(str::trim)
+                .unwrap_or("");
+            if first.starts_with("L-") {
+                rows.push(format!("{first} ({runtime})"));
+            }
+        }
+    }
+    if files == 0 {
+        return Ok(None);
+    }
+    rows.sort();
+    rows.dedup();
+    Ok(Some(rows))
+}
+
 /// Renders the results as a table.
 pub fn render(results: &[GateResult]) -> String {
     let mut s = String::new();
@@ -955,10 +1001,20 @@ pub fn run(a: &GatesArgs) -> Res<(String, bool)> {
         )?),
         None => None,
     };
-    let rows = if a.rows.exists() {
-        Some(shipped_rows(&a.rows)?)
-    } else {
-        None
+    let rows = match &a.rows {
+        Some(p) if p.exists() => Some(shipped_rows(p)?),
+        Some(_) => None,
+        None => match shipped_runtime_rows(&a.references)? {
+            Some(r) => Some(r),
+            None => {
+                let fallback = Path::new("data/archetypes.toml");
+                if fallback.exists() {
+                    Some(shipped_rows(fallback)?)
+                } else {
+                    None
+                }
+            }
+        },
     };
     let skill_lines = fs::read_to_string(&a.skill).ok().map(|t| t.lines().count());
     let results = evaluate(&Inputs {

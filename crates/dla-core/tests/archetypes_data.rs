@@ -259,7 +259,7 @@ const HEADER: [&str; 5] = [
 
 /// The rows shipped per runtime: exactly the rows with a decoy/control pair (decision D1).
 const ROWS: [(&str, &[&str]); 6] = [
-    ("jvm", &["L-COLLECT", "L-TLS", "L-UNLOAD"]),
+    ("jvm", &["L-COLLECT", "L-TLS", "L-UNLOAD", "L-STALE"]),
     ("go", &["L-WORKER"]),
     ("node", &["L-REGISTER", "L-CAPTURE"]),
     ("python", &["L-COLLECT"]),

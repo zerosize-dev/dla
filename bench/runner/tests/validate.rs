@@ -157,7 +157,11 @@ fn pairs_are_reciprocal_with_identical_prompts() {
             "schema_version = 1\nid = \"{id}\"\nruntime = \"python\"\ncategory = \"decoy-control\"\npair = \"{pair}\"\ndynamic_confirmation = true\n[task]\nprompt = \"{prompt}\"\n[[non_leak]]\nid = \"N1\"\ncause = \"N-WARM\"\ndiscriminator = \"d\"\n"
         )
     };
-    make(t.path(), "a", &decoy("a", "b", "p"));
+    make(
+        t.path(),
+        "a",
+        &trap("a", "").replace("archetype-leak\"\n", "archetype-leak\"\npair = \"b\"\n"),
+    );
     make(t.path(), "b", &decoy("b", "a", "p"));
     assert_eq!(problems(t.path()), Vec::<String>::new());
     make(t.path(), "b", &decoy("b", "a", "different"));
@@ -292,6 +296,32 @@ fn hint_words_with_word_boundaries() {
         &filler("d", 10),
     );
     assert!(has(&problems(t.path()), "file name contains hint word"));
+}
+
+#[test]
+fn a_project_file_that_carries_the_fixture_id_is_refused() {
+    let t = tempfile::tempdir().unwrap();
+    make(t.path(), "py-quota-cache", &trap("py-quota-cache", ""));
+    assert_eq!(problems(t.path()), Vec::<String>::new());
+    write(
+        &t.path().join("py-quota-cache/project/src/a.py"),
+        &format!("{}# part of py-quota-cache\n", filler("a", 60)),
+    );
+    let p = problems(t.path());
+    assert!(
+        has(&p, "src/a.py:61: the line contains the fixture id"),
+        "{p:?}"
+    );
+    write(
+        &t.path().join("py-quota-cache/project/src/a.py"),
+        &filler("a", 60),
+    );
+    write(
+        &t.path().join("py-quota-cache/project/py-quota-cache.txt"),
+        "x\n",
+    );
+    let p = problems(t.path());
+    assert!(has(&p, "the path contains the fixture id"), "{p:?}");
 }
 
 #[test]
@@ -745,4 +775,114 @@ fn kotlin_counts_as_source_and_needs_a_build_script_with_kotlinc() {
         "#!/bin/sh\nif command -v kotlinc >/dev/null; then kotlinc src/*.kt; else java -cp \"$KCP\" K2JVMCompiler src/*.kt; fi\n",
     );
     assert_eq!(problems(t.path()), Vec::<String>::new());
+}
+
+fn decoy(id: &str, pair: &str, toolchain: &str, version: u32) -> String {
+    format!(
+        r#"schema_version = {version}
+id = "{id}"
+runtime = "python"
+category = "decoy-control"
+pair = "{pair}"
+dynamic_confirmation = true
+{toolchain}
+[task]
+prompt = "p"
+[[non_leak]]
+id = "N1"
+cause = "N-WARM"
+discriminator = "d"
+"#
+    )
+}
+
+fn free_trap(id: &str, pair: &str, toolchain: &str, version: u32) -> String {
+    format!(
+        r#"schema_version = {version}
+id = "{id}"
+runtime = "python"
+category = "archetype-free"
+pair = "{pair}"
+dynamic_confirmation = true
+{toolchain}
+[task]
+prompt = "p"
+[[leak]]
+id = "L1"
+site = "src/a.py:10"
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+"#
+    )
+}
+
+#[test]
+fn an_unclassified_version_pair_is_accepted() {
+    let t = tempfile::tempdir().unwrap();
+    make(
+        t.path(),
+        "zs-3144",
+        &free_trap("zs-3144", "zs-3145", "[toolchain]\npython = \"3.14.4\"", 2),
+    );
+    make(
+        t.path(),
+        "zs-3145",
+        &decoy("zs-3145", "zs-3144", "[toolchain]\npython = \"3.14.5\"", 2),
+    );
+    assert_eq!(problems(t.path()), Vec::<String>::new());
+}
+
+#[test]
+fn a_pair_needs_one_trap_and_one_decoy() {
+    let t = tempfile::tempdir().unwrap();
+    make(t.path(), "a", &free_trap("a", "b", "", 1));
+    make(t.path(), "b", &free_trap("b", "a", "", 1));
+    let p = problems(t.path());
+    assert!(
+        p.iter().any(
+            |l| l.contains("one trap (archetype-leak or archetype-free) and one decoy-control")
+        ),
+        "{p:?}"
+    );
+}
+
+#[test]
+fn a_version_pair_may_not_swap_the_tool_it_names() {
+    let t = tempfile::tempdir().unwrap();
+    make(
+        t.path(),
+        "a",
+        &free_trap("a", "b", "[toolchain]\npython = \"3.14.4\"", 2),
+    );
+    make(t.path(), "b", &decoy("b", "a", "", 1));
+    let p = problems(t.path());
+    assert!(
+        p.iter()
+            .any(|l| l.contains("names other tools in [toolchain]")),
+        "{p:?}"
+    );
+}
+
+#[test]
+fn a_version_pair_may_not_swap_one_tool_for_another() {
+    let t = tempfile::tempdir().unwrap();
+    make(
+        t.path(),
+        "a",
+        &free_trap("a", "b", "[toolchain]\npython = \"3.14.4\"", 2),
+    );
+    make(
+        t.path(),
+        "b",
+        &decoy("b", "a", "[toolchain]\nnode = \"22.12.0\"", 2),
+    );
+    let p = problems(t.path());
+    assert!(
+        p.iter()
+            .any(|l| l.contains("names other tools in [toolchain]")
+                && l.contains("python")
+                && l.contains("node")),
+        "{p:?}"
+    );
 }

@@ -4,7 +4,7 @@
       "ablation": "full",
       "archetypes": "off",
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (jvm)": {
           "decoy": {
             "claim_runs": 0,
             "runs": 0
@@ -607,7 +607,7 @@
       "ablation": "full",
       "archetypes": "on",
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (jvm)": {
           "decoy": {
             "claim_runs": 1,
             "runs": 3
@@ -1346,7 +1346,7 @@
       "ablation": "no-skill",
       "archetypes": "on",
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (jvm)": {
           "decoy": {
             "claim_runs": 1,
             "runs": 3

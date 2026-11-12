@@ -403,7 +403,7 @@
         }
       },
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (python)": {
           "pairs": [
             "fx-trap/fx-decoy"
           ],
@@ -1078,7 +1078,7 @@
         }
       },
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (python)": {
           "pairs": [
             "fx-trap/fx-decoy"
           ],
@@ -1671,7 +1671,7 @@
         }
       },
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (python)": {
           "pairs": [
             "fx-trap/fx-decoy"
           ],

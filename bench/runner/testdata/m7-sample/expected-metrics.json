@@ -505,7 +505,7 @@
         }
       },
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (python)": {
           "pairs": [
             "m7-leak/m7-decoy"
           ],
@@ -519,7 +519,7 @@
           },
           "pass": true
         },
-        "L-REGISTER": {
+        "L-REGISTER (node)": {
           "pairs": [
             "m7-pair2/m7-decoy2"
           ],
@@ -1056,7 +1056,7 @@
         }
       },
       "decoys": {
-        "L-COLLECT": {
+        "L-COLLECT (python)": {
           "pairs": [
             "m7-leak/m7-decoy"
           ],

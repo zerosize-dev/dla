@@ -58,6 +58,8 @@
 #include <malloc.h>
 #endif
 #ifdef __APPLE__
+#include <limits.h>
+#include <mach-o/dyld.h>
 #include <malloc/malloc.h>
 #endif
 
@@ -1381,6 +1383,21 @@ __attribute__((constructor(101))) static void dla_shim_init(void)
 #ifdef __linux__
     ssize_t n = readlink("/proc/self/exe", exe_path, sizeof exe_path - 1);
     exe_path[n > 0 ? n : 0] = 0;
+#elif defined(__APPLE__)
+    {
+        /* The executable's path with its links resolved, as /proc/self/exe gives it on Linux;
+         * without it a DLA_SHIM_ONLY name would match no process. */
+        char raw[PATH_MAX], real[PATH_MAX];
+        uint32_t len = sizeof raw;
+        if (_NSGetExecutablePath(raw, &len) == 0) {
+            const char *src = realpath(raw, real) != NULL ? real : raw;
+            size_t k = strlen(src);
+            if (k >= sizeof exe_path)
+                k = sizeof exe_path - 1;
+            memcpy(exe_path, src, k);
+            exe_path[k] = 0;
+        }
+    }
 #endif
     const char *only = getenv("DLA_SHIM_ONLY");
     if (only != NULL && only[0] != 0) {

@@ -456,6 +456,24 @@ pub fn run_diff(
             "a refuted non-leak sibling and a holder, then dla ledger confirm {f} --evidence {}",
             g.evidence.id
         )
+    } else if origin.runtime.is_some_and(|r| r != Runtime::Jvm) {
+        // A type ties only on the JVM (declared element types and accumulation classes are
+        // JVM facts); generic and runtime-internal types never tie. What ties here is a
+        // column that names the holder or its site.
+        let target = opts
+            .finding
+            .as_ref()
+            .map_or("a finding".to_owned(), ToString::to_string);
+        // Owner-named columns (timers, listeners, resource groups) and heap-graph holder
+        // columns exist for Node only.
+        let columns = if origin.runtime == Some(Runtime::Node) {
+            "a column at its site or named after its owner (a timers, listeners or resource group column, or a holder: column of dla summarize heap-graph)"
+        } else {
+            "a column at its site"
+        };
+        format!(
+            "this runtime's types never tie to a finding by name; what ties {target} is a holder probe on its owner (dla harness gen with the probe, then dla harness run and dla trend), or {columns}"
+        )
     } else if let Some((ty, ids)) = ambiguous.first() {
         let names: Vec<String> = ids.iter().map(ToString::to_string).collect();
         format!(

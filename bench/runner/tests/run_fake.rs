@@ -9,7 +9,17 @@ use std::{
     time::Instant,
 };
 
-use dla_bench::run::{Ablation, VariantSpec, build_variant};
+use dla_bench::run::{Ablation, VariantSpec, build_variant, work_key};
+
+/// The opaque scope directory of the results directory `res`.
+fn scope() -> String {
+    work_key("res", "", "", "", 0)
+}
+
+/// The opaque name of one run's working directory.
+fn run_key(abl: &str, arch: &str, fx: &str, n: u32) -> String {
+    work_key("res", abl, arch, fx, n)
+}
 
 fn write(p: &Path, text: &str) {
     fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -77,12 +87,16 @@ impl Env {
     }
 
     fn cmd(&self, extra: &[&str]) -> Command {
+        self.cmd_out(&self.root.join("out/res"), extra)
+    }
+
+    fn cmd_out(&self, out: &Path, extra: &[&str]) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_dla-bench"));
         c.arg("run")
             .args(["--fixtures-dir"])
             .arg(self.root.join("fx"))
             .arg("--out")
-            .arg(self.root.join("out/res"))
+            .arg(out)
             .args(if extra.contains(&"--work-root") {
                 vec![]
             } else {
@@ -115,7 +129,9 @@ impl Env {
 
     fn work_dir(&self, abl: &str, arch: &str, fx: &str, n: u32) -> PathBuf {
         self.root
-            .join(format!("work/res/{abl}/archetypes-{arch}/{fx}/{n}"))
+            .join("work")
+            .join(scope())
+            .join(run_key(abl, arch, fx, n))
     }
 }
 
@@ -160,6 +176,11 @@ fn no_skill_run_collects_everything_and_resumes() {
     assert_eq!(rj["ablation"], "no-skill");
     assert_eq!(rj["archetypes"], "on");
     assert_eq!(rj["run"], 1);
+    assert_eq!(
+        rj["work_key"],
+        run_key("no-skill", "on", "fx-a", 1),
+        "run.json records the opaque work directory name"
+    );
     assert_eq!(rj["exit_code"], 0);
     assert_eq!(rj["timed_out"], false);
     assert_eq!(rj["cost_usd"], 0.5);
@@ -343,6 +364,124 @@ fn no_skill_run_collects_everything_and_resumes() {
     assert_eq!(e.calls(), 6);
     // clean runs without --keep-work remove their working copy
     assert!(!e.work_dir("no-skill", "on", "fx-a", 3).exists());
+}
+
+/// The child must not learn the fixture id or the arm from anything it can read: its work
+/// path, environment, arguments, settings and prompt (P1 of the M7 repair).
+#[test]
+fn child_visible_paths_and_environment_carry_neither_fixture_id_nor_arm() {
+    let e = Env::new(FAKE_OK);
+    let out = e
+        .cmd(&[
+            "--ablation",
+            "no-skill",
+            "--runs",
+            "1",
+            "--keep-work",
+            "--fixtures",
+            "fx-a",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let work = e.work_dir("no-skill", "on", "fx-a", 1);
+    let cfg = work.join("config");
+    let mut seen = String::new();
+    for f in ["env.txt", "args.txt", "pwd.txt"] {
+        seen.push_str(&fs::read_to_string(cfg.join(f)).unwrap());
+    }
+    seen.push_str(&fs::read_to_string(work.join("settings.json")).unwrap());
+    for needle in ["fx-a", "no-skill", "archetypes-on", "archetypes-off"] {
+        assert!(
+            !seen.contains(needle),
+            "{needle} is visible to the child:\n{seen}"
+        );
+    }
+    assert!(!work.display().to_string().contains("fx-a"));
+    assert_eq!(work.file_name().unwrap().len(), 12);
+}
+
+/// The denyRead list of the settings a run wrote, and the run's stderr, for `--out` given
+/// as `out` (relative to the Env root).
+fn deny_read_and_stderr_for_out(e: &Env, out: &Path) -> (Vec<String>, String) {
+    let o = e
+        .cmd_out(
+            out,
+            &[
+                "--ablation",
+                "no-skill",
+                "--runs",
+                "1",
+                "--keep-work",
+                "--fixtures",
+                "fx-a",
+            ],
+        )
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(o.status.success(), "{stderr}");
+    let scope = work_key(out.file_name().unwrap().to_str().unwrap(), "", "", "", 0);
+    let key = work_key(
+        out.file_name().unwrap().to_str().unwrap(),
+        "no-skill",
+        "on",
+        "fx-a",
+        1,
+    );
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            e.root
+                .join("work")
+                .join(scope)
+                .join(key)
+                .join("settings.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let deny = settings["sandbox"]["filesystem"]["denyRead"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    (deny, stderr)
+}
+
+/// P1': a results directory inside the repository stays out of the child's denyRead list (its
+/// name would carry the arm) and gives no warning; one outside is listed and warned about, also
+/// when `..` makes a path that starts with the repository end up outside it.
+#[test]
+fn a_results_dir_is_listed_in_denyread_only_when_outside_the_repository() {
+    let inside = Env::new(FAKE_OK);
+    let out = inside.root.join("repo/bench/results/full");
+    let (deny, stderr) = deny_read_and_stderr_for_out(&inside, &out);
+    let canon = |p: PathBuf| p.canonicalize().unwrap().display().to_string();
+    assert!(!deny.contains(&canon(out.clone())), "{deny:?}");
+    assert!(deny.contains(&canon(inside.root.join("repo"))), "{deny:?}");
+    assert!(!stderr.contains("lies outside the repository"), "{stderr}");
+
+    let outside = Env::new(FAKE_OK);
+    let out = outside.root.join("out/res");
+    let (deny, stderr) = deny_read_and_stderr_for_out(&outside, &out);
+    assert!(deny.contains(&canon(out.clone())), "{deny:?}");
+    assert!(stderr.contains("lies outside the repository"), "{stderr}");
+
+    // A path that starts with the repository and leaves it by `..`.
+    let sneaky = Env::new(FAKE_OK);
+    fs::create_dir_all(sneaky.root.join("repo/bench/results")).unwrap();
+    let out = sneaky.root.join("repo/bench/results/../../../sneaky-out");
+    let (deny, stderr) = deny_read_and_stderr_for_out(&sneaky, &out);
+    assert!(
+        deny.contains(&canon(sneaky.root.join("sneaky-out"))),
+        "{deny:?}"
+    );
+    assert!(stderr.contains("lies outside the repository"), "{stderr}");
 }
 
 #[test]
@@ -704,7 +843,7 @@ fn gates_run_passes_the_plugin_dir_binary_and_consent() {
     let work = e.work_dir("gates", "off", "fx-a", 1);
     let envtxt = fs::read_to_string(work.join("config/env.txt")).unwrap();
     // the binary is copied next to the working copies: the repository is unreadable to the child
-    let copy = e.root.join("work/res/bin/dla");
+    let copy = e.root.join("work").join(scope()).join("bin/dla");
     assert!(copy.is_file());
     assert!(envtxt.contains(&format!("DLA_BIN={}", copy.display())));
     assert!(envtxt.contains("DLA_CONSENT_TIERS=1-4"));
@@ -911,7 +1050,7 @@ fn a_hook_process_finds_the_dla_binary_through_the_child_environment() {
         let work = e.work_dir(abl, "on", "fx-a", 1);
         let cfg = work.join("config");
         let envtxt = fs::read_to_string(cfg.join("env.txt")).unwrap();
-        let copy = e.root.join("work/res/bin/dla");
+        let copy = e.root.join("work").join(scope()).join("bin/dla");
         assert!(
             envtxt.contains(&format!("DLA_BIN={}", copy.display())),
             "{abl}: {envtxt}"
@@ -1553,7 +1692,10 @@ fn the_default_work_root_is_in_the_cache_directory() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        xdg.join("dla-bench/res/no-skill/archetypes-on/fx-a/1/project/src/main.py")
+        xdg.join("dla-bench")
+            .join(scope())
+            .join(run_key("no-skill", "on", "fx-a", 1))
+            .join("project/src/main.py")
             .is_file()
     );
     // Without XDG_CACHE_HOME the directory comes from HOME.
@@ -1584,7 +1726,10 @@ fn the_default_work_root_is_in_the_cache_directory() {
     let out = c.output().unwrap();
     assert!(out.status.success());
     assert!(
-        home.join(".cache/dla-bench/res/no-skill/archetypes-on/fx-a/1/project")
+        home.join(".cache/dla-bench")
+            .join(scope())
+            .join(run_key("no-skill", "on", "fx-a", 1))
+            .join("project")
             .is_dir()
     );
     // A work root inside a denied path is still refused.

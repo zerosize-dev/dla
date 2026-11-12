@@ -69,7 +69,11 @@ Per (fixture, run index) the runner:
 1. copies the files of `bench/fixtures/<id>/project` that git tracks, plus
    untracked files that are not ignored (every file when the directory is not
    in a git repository), into
-   `<work-root>/<results name>/<ablation>/archetypes-<x>/<fixture>/<n>/project`,
+   `<work-root>/<scope>/<key>/project`, where `<scope>` and `<key>` are the first 12
+   hex digits of a SHA-256 (of the results name, and of the results name, ablation,
+   archetypes setting, fixture and run number), so that neither the fixture id nor the
+   arm name is in any path the child sees (`run.json` records the `work_key`; the
+   validator refuses a project file that contains the fixture id),
    runs `git init` and commits it as `bench <bench@example.invalid>`;
    `expected.toml` and `README.md` are never copied. `--work-root` defaults to
    `${XDG_CACHE_HOME:-$HOME/.cache}/dla-bench` (resolved when the command runs,
@@ -151,7 +155,7 @@ carries an optional `owner` (`package.Class.field`); both graders read `owner` f
 `findings.json` and match owner-only leaks by it (`GRADING.md`).
 
 `gates` and `full` build `dla` once with `cargo build --release -p dla-cli`
-(or use `--dla-bin`) and copy the binary to `<work-root>/<results name>/bin/dla`,
+(or use `--dla-bin`) and copy the binary to `<work-root>/<scope>/bin/dla`,
 because the repository is unreadable to the child; `DLA_BIN` points at the
 copy. The plugin variants are built under the work root as well. `--archetypes off` removes
 `skills/*/references/*-archetypes.md`, `skills/*/references/known-leaks.md`,
@@ -159,7 +163,9 @@ copy. The plugin variants are built under the work root as well. `--archetypes o
 blanks every `suggested_archetype = "..."` in `data/detectors/*.toml`, removes
 every `<!-- archetypes:begin -->` ... `<!-- archetypes:end -->` block from every `.md`
 file of the variant (`agents/verifier.md` carries the 17 IDs in one; an unbalanced marker
-fails the build of the variant) and sets `DLA_ARCHETYPES=off`. Plugin ablations also set `DLA_CONSENT_TIERS=1-4` and
+fails the build of the variant) and sets `DLA_ARCHETYPES=off`. That variable is the setting `dla`
+itself reads; it names no fixture and no answer, and the child can see it in its environment, which
+is how an archetypes-off arm differs from an archetypes-on arm there. Plugin ablations also set `DLA_CONSENT_TIERS=1-4` and
 `DLA_CONSENT_RAW_VALUES=1`, so the runner (not the model) gives consent.
 
 The variant of an ablation can be assembled without running anything, for
@@ -368,12 +374,26 @@ The policy, per fixture (repository entry, one runtime):
      discriminator, then `ledger confirm F` citing the growth evidence and the
      call's evidence. Only a finding with a site (an owner on an artifact run)
      that no other driven finding shares is driven. A finding that is not a
-     candidate (a refuted one stays refuted) or that has no discriminator
-     favoring leak is left alone. This confirms `node-price-board` L1.
+     candidate (a refuted one stays refuted) is left alone. This confirms
+     `node-price-board` L1.
+   - A tied finding that the call wrote no discriminator for (a detector
+     finding at a timer, for example) gets `dla alloc-test H --finding F` (at most 2 per
+     fixture, on top of the 8 of the trend steps), and its `favors leak` evidence is the
+     discriminator. Its holder comes from, in order: the finding's own holder; the holder
+     of a `data/known-leaks.toml` row that the probe evidence lists as `true` for the
+     runtime and whose `when` source regex matches the finding's site line; a holder the
+     alloc-test evidence names. The census entry of another finding at the same site is
+     never used. With none the finding is left alone and a step line says why; a verdict
+     other than `favors leak` leaves it alone as well. With archetypes on this
+     confirms `go-ticker-legacy` F1 (registration-table, from the row
+     `go-timer-unstopped-before-1.23`); with archetypes off the row is absent and F1 is
+     left alone. (`go-ticker-legacy` still fails afterwards: the label is refused with
+     `label-evidence-missing`, since Go command mode has no timer evidence for it.)
    - Each held-back `ledger confirm` cites the trend evidence and, when a
      summarize call's passing growth column is tied (with a reason) to the
      finding, that call's evidence (its histogram, allocation or retention
-     evidence and its growth series), so the leak is `dump_backed`. The policy
+     evidence and its growth series), so the leak is `dump_backed`. Apart from the
+     alloc-test route above, the policy
      runs `dla ledger annotate F --holder H` only when a summarize call's
      `needed` names it (a finding with no holder) and the call's
      `observed_holder` agrees. If the
@@ -388,12 +408,12 @@ The policy, per fixture (repository entry, one runtime):
    confirmed.
    - Label. A finding that matches an expected leak whose `cause` is a row with a shipped
      prose file (`L-CAPTURE`, `L-COLLECT`, `L-CYCLE`, `L-HANDLE`, `L-OWNERSHIP`,
-     `L-REGISTER`, `L-TLS`, `L-UNLOAD`, `L-WORKER`; `tests/archetype_lists.rs` keeps the
+     `L-REGISTER`, `L-STALE`, `L-TLS`, `L-UNLOAD`, `L-WORKER`; `tests/archetype_lists.rs` keeps the
      list equal to the rows of the `*-archetypes.md` files) gets `ledger label F --as
      <cause>`; a leak whose cause is `UNCLASSIFIED` gets `--as UNCLASSIFIED --note`. A
      refused label of a shipped row fails the fixture, so the table says whether every label
      is reachable. A finding whose holder differs from the expected one is not labelled (that
-     is a failure already); a cause without a shipped row (`L-STALE`) is not tried.
+     is a failure already); a cause without a shipped row is not tried.
      `ledger label F --suggest` runs for every confirmed finding and must say `on` or `off`
      as the run is.
    - Explain. Every confirmed or strong leak-side finding gets `ledger explain` with
@@ -452,10 +472,19 @@ entries and 64 MiB; whatever it left out is listed in `collect-skipped.txt` next
 to the copied files and logged to stderr.
 
 CI runs the command in the `dynamic` job with all four toolchains installed
-and, for `jni-order-codec`, the Kotlin compiler 2.0.21 (the official release zip,
+(and `uv`, pinned in `astral-sh/setup-uv`, for the Python version pairs: the runner
+installs the CPython release a fixture's `[toolchain]` names with `uv python install`;
+the Node and Go releases the runner fetches itself) and, for `jni-order-codec`, the Kotlin compiler 2.0.21 (the official release zip,
 pinned with its sha256; the job also copies the compiler's `kotlin-stdlib.jar`
 to the `~/.m2` path the fixture's `build.sh` runs its classes with, because the
-runner has no Maven cache). The `static` job covers the `--archetypes off` path,
+runner has no Maven cache). The fetched Node releases and the CPython releases are unpacked into
+`--toolchain-cache` (default `<repo-root>/target/dla-bench-toolchains`, made absolute) and reused by
+later runs, so an on run and an off run fetch once; a Node release is fetched under names of its
+own (process id and a counter) and moved into place, one that another run put there first is kept,
+and a failed fetch removes its own files. Go releases are
+not stored there: `go` fetches them into the host's module cache (`GOMODCACHE`); `dla-bench run`
+links them into each child's cache, while `dla-bench dynamic` uses the host's module cache
+directly (through `GOTOOLCHAIN`). The CI job caches the directory; it runs the archetypes-on arm only. The `static` job covers the `--archetypes off` path,
 so `dynamic` does not repeat it; it needs no Kotlin, because the failed JVM build
 only drops the class-file census and the source census and the DLA rules still
 flag both leaks.
@@ -549,6 +578,11 @@ belong to a hidden tool are unset for the call: `JAVA_HOME`, `JDK_HOME`,
 `java`, ...), `GOROOT` for `go`, `ASYNC_PROFILER_HOME` and `ASPROF_HOME` for
 `asprof`, `MAT_HOME` for `mat`, `NODE_HOME` for `node`; hiding `valgrind` leaves
 them alone.
+
+A fixture whose `[toolchain]` would bring a hidden tool back (an executable of that
+name in its bin directory, or its tool-home variable such as `JAVA_HOME`) stops the
+run before any command, naming the fixture and the tool: hide another tool or run
+without that fixture.
 
 A run with hidden tools must still complete: a `dla` call that exits with 101 or
 prints no JSON is a failure of the fixture (a JSON refusal such as `missing_tool`
@@ -766,6 +800,11 @@ final gate passed 34 / 34, gaps only 0 / 0, missing 0 / 0.
   must work offline, and `GOPROXY=off`, `PIP_NO_INDEX=1`,
   `CARGO_NET_OFFLINE=true` say so to the tools). `WebFetch` and `WebSearch`
   are denied.
+- The results directory (`--out`, default `bench/results/<arm>`) is listed in `denyRead` only when
+  it lies outside the repository and the fixtures tree, which are denied already. Inside them its
+  path, which can carry the arm name, stays out of the child's `settings.json`. With an `--out`
+  outside the repository the runner prints a warning: the path is visible to the child there, so
+  give it a neutral name.
 - The paths in `sandbox.filesystem.denyRead` are invisible to Bash. The Read,
   Edit, Write, Glob and Grep tools are not covered by the sandbox, so the same
   paths are also in `permissions.deny` (as `Tool(//absolute/path/**)`), and

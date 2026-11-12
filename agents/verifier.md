@@ -22,7 +22,7 @@ IDs (`L-` a leak mechanism, `N-` growth that is not a leak):
 - `L-HANDLE`: A file, socket, descriptor or native buffer is acquired and not released on some path.
 - `L-OWNERSHIP`: A buffer or object is handed across a boundary and neither side takes ownership, so neither frees it.
 - `L-REGISTER`: A listener, callback, timer or subscription is added to a long-lived table and never removed.
-- `L-STALE`: A reference to logical state that is dead (removed, replaced or finished) is still held.
+- `L-STALE`: An index, registry or cache entry still names state that was removed, replaced or finished elsewhere; the entry is reachable from a container the program owns, not through a chain of the objects' own fields.
 - `L-TLS`: A thread-local value outlives its unit of work on a long-lived pooled thread, so each thread keeps what it has seen.
 - `L-UNLOAD`: A reload, redeploy or unload leaves the old module, class loader or plugin reachable from a long-lived holder.
 - `L-WORKER`: A thread, goroutine or task is started per unit of work and never finishes because it waits on a signal that never comes.

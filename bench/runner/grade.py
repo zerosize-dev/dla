@@ -698,7 +698,7 @@ def evaluate_run(fixture, findings):
     if cat == "non-leak":
         contrib["non_leak_precision"][1] += 1
         contrib["non_leak_precision"][0] += 1 if (not claims and rule_outs) else 0
-    if cat == "archetype-leak" and fixture.get("pair"):
+    if cat in ("archetype-leak", "archetype-free") and fixture.get("pair"):
         contrib["trap_miss_rate"][1] += 1
         missed = any(
             (not found) for leak, found, _, _ in statuses if leak.get("confirmable", True) is not False
@@ -957,7 +957,8 @@ def grade_group(ablation, archetypes, runs, fixtures, incomplete=0):
 def decoy_rows(runs, fixtures):
     """The decoy and control result of every archetype row that has a pair among the graded
     fixtures: the row is the cause of the confirmable leaks of an archetype-leak fixture with
-    a pair, and the pair is that fixture and the decoy it names."""
+    a pair and the fixture's runtime ("L-REGISTER (node)"), and the pair is that fixture and
+    the decoy it names."""
     by_fixture = {}
     for r in runs:
         by_fixture.setdefault(r["fixture"], []).append(r)
@@ -980,8 +981,9 @@ def decoy_rows(runs, fixtures):
             }
         )
         for cause in causes:
+            # One row per archetype row and runtime: "L-REGISTER (go)" is not "L-REGISTER (node)".
             row = rows.setdefault(
-                cause,
+                f"{cause} ({fx.get('runtime')})",
                 {
                     "pairs": [],
                     "leak": {"found_runs": 0, "runs": 0},

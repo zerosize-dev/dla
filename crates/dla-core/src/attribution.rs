@@ -449,11 +449,25 @@ impl Resolver {
         if let Some(f) = file.filter(|f| f.contains('/') || f.contains('\\')) {
             let f = f.replace('\\', "/");
             let p = Path::new(&f);
+            // A harness run executes a copy of the project under
+            // `.dla/<run>/harness/H<n>/work`: a frame in that copy is the project's own
+            // file at the path below it. Other files of a run directory (the harness
+            // agent) are not project files.
+            if let Some(rest) = below_scratch(&f) {
+                return self
+                    .project
+                    .join(rest)
+                    .is_file()
+                    .then(|| format!("{rest}:{line}"));
+            }
             let rel = if p.is_absolute() {
                 p.strip_prefix(&self.project).ok().map(to_slash)
             } else {
                 self.project.join(p).is_file().then(|| f.clone())
             }?;
+            if rel == ".dla" || rel.starts_with(".dla/") {
+                return None;
+            }
             return Some(format!("{rel}:{line}"));
         }
         let class_path = function.rsplit_once('.')?.0;
@@ -466,6 +480,30 @@ impl Resolver {
         let rel = files[0].strip_prefix(&self.project).ok()?;
         Some(format!("{}:{line}", to_slash(rel)))
     }
+}
+
+/// The path below the scratch copy of a harness run, `src/a.js` of
+/// `/p/.dla/r1/harness/H1/work/src/a.js` (slash form), or `None` for any other path.
+/// The scratch directory must sit in a `.dla/<run>` directory.
+pub fn below_scratch(path: &str) -> Option<&str> {
+    let mut from = 0;
+    while let Some(i) = path[from..].find("/harness/H") {
+        let at = from + i;
+        from = at + 1;
+        let rest = &path[at + "/harness/H".len()..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let Some(below) = rest[digits..].strip_prefix("/work/").filter(|_| digits > 0) else {
+            continue;
+        };
+        // The two components above `harness` are `.dla` and the run id.
+        let in_run_dir = path[..at].rsplit_once('/').is_some_and(|(above, run)| {
+            !run.is_empty() && (above == ".dla" || above.ends_with("/.dla"))
+        });
+        if in_run_dir && !below.is_empty() {
+            return Some(below);
+        }
+    }
+    None
 }
 
 /// Finds the declaration line of `field` in source `text` (Java or Kotlin): a line where
@@ -516,6 +554,62 @@ fn is_ident(b: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_in_the_harness_copy_is_the_project_file_below_it() {
+        assert_eq!(
+            below_scratch("/p/.dla/20261111-1-ab/harness/H1/work/src/handler.js"),
+            Some("src/handler.js")
+        );
+        assert_eq!(
+            below_scratch(".dla/r/harness/H12/work/a/b.go"),
+            Some("a/b.go")
+        );
+        // Not a scratch copy: no `.dla/<run>` above, no digits, the agent directory.
+        assert_eq!(below_scratch("/p/harness/H1/work/src/a.js"), None);
+        assert_eq!(below_scratch("/p/.dla/r/harness/Hx/work/a.js"), None);
+        assert_eq!(
+            below_scratch("/p/.dla/r/harness/H1/agent/dla-preload.js"),
+            None
+        );
+        assert_eq!(below_scratch("/p/.dla/r/harness/H1/work/"), None);
+    }
+
+    #[test]
+    fn frame_site_maps_the_harness_copy_to_the_project_path() {
+        let project = tempfile::tempdir().unwrap();
+        let run = tempfile::tempdir().unwrap();
+        fs::create_dir_all(project.path().join("src")).unwrap();
+        fs::write(project.path().join("src/handler.js"), "x\n").unwrap();
+        let r = Resolver::new(run.path(), project.path());
+        let p = project.path().to_string_lossy().replace('\\', "/");
+        let scratch = format!("{p}/.dla/20261111-1-ab/harness/H1/work/src/handler.js");
+        assert_eq!(
+            r.frame_site("handle", Some(&scratch), Some(10)).as_deref(),
+            Some("src/handler.js:10")
+        );
+        // The same file as the project path, and a copy of another run directory.
+        assert_eq!(
+            r.frame_site("handle", Some(&format!("{p}/src/handler.js")), Some(10))
+                .as_deref(),
+            Some("src/handler.js:10")
+        );
+        assert_eq!(
+            r.frame_site(
+                "handle",
+                Some("/elsewhere/.dla/r2/harness/H3/work/src/handler.js"),
+                Some(4)
+            )
+            .as_deref(),
+            Some("src/handler.js:4")
+        );
+        // A file of the run directory that is not a project file is no frame.
+        let agent = format!("{p}/.dla/20261111-1-ab/harness/H1/agent/dla-preload.js");
+        assert_eq!(r.frame_site("hook", Some(&agent), Some(161)), None);
+        // A copy path whose file the project does not have is no frame.
+        let gone = format!("{p}/.dla/20261111-1-ab/harness/H1/work/src/nope.js");
+        assert_eq!(r.frame_site("f", Some(&gone), Some(1)), None);
+    }
 
     #[test]
     fn normalize_accepts_keys_and_owners() {

@@ -813,6 +813,20 @@ fn require_tied_growth(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
         }
     }
     let id = &f.id;
+    // Offer only the resolve route the ledger accepts for this finding: suspected_static_only
+    // needs static-class evidence (cited with --evidence); a finding that rests on growth
+    // records alone is left unresolved.
+    let static_id = judged(ctx)
+        .find(|e| e.kind.class() == EvidenceClass::Static)
+        .map(|e| e.evidence_id.to_string());
+    let resolve = match static_id {
+        Some(sid) => format!(
+            "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence {sid}"
+        ),
+        None => format!(
+            "dla ledger resolve {id} --as unresolved --reason tool_missing --remedy \"<text>\""
+        ),
+    };
     let named = if untied.is_empty() {
         String::new()
     } else {
@@ -827,7 +841,7 @@ fn require_tied_growth(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
             "a passing growth column tied to {id}: its probe, a group column at its site, or a column naming it as a candidate"
         ),
         format!(
-            "dla harness gen --lang <lang> (a probe on {id}'s holder)   then   dla harness run <H>, dla trend <S>, dla ledger confirm {id} --evidence <trend evidence id>   or   dla summarize heap-graph on 3 or more dumps of one process (a holder: column for {id}'s owner), dla ledger confirm {id} --evidence <its growth evidence id>   or   dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\""
+            "dla harness gen --lang <lang> (a probe on {id}'s holder)   then   dla harness run <H>, dla trend <S>, dla ledger confirm {id} --evidence <trend evidence id>   or   dla summarize heap-graph on 3 or more dumps of one process (a holder: column for {id}'s owner), dla ledger confirm {id} --evidence <its growth evidence id>   or   {resolve}"
         ),
     ))
 }

@@ -113,8 +113,8 @@ column the discriminator did not test is not covered by it.
 A whole-process column (`os.*`, `cgroup.*`, `fd.*`, `jvm.*`, `go.*`, `node.*`, `py.*` and `native.*` totals,
 `metric:*/total`) is never tied to a finding, whatever evidence a finding cites: no one holder explains it.
 A JVM type-count column (`jvm.class:<type>.count`) that ties to no finding (a generic type such as `byte[]`
-never ties) is accounted for the same way. `dla trend` and the gate both print `dla gap S<n> --residual` for
-it. A type count tied only to undispositioned findings still needs their disposition.
+never ties) is accounted for the same way. `dla trend` and the gate print `dla gap S<n> --residual` for it
+until the series has a gap row; after that they point to its open item instead. A type count tied only to undispositioned findings still needs their disposition.
 The classify gate does not ask for it. The final gate accounts for it through the residual rows: run `dla gap
 S<n> --residual`; the column is covered when the rows of its region are under their threshold, or over it with
 a resolved open item. A resolved open item that names the column and its trend also covers it.
@@ -261,7 +261,7 @@ coverage rows are in `references/backends.md`; `dla summarize --list` prints bac
 | `heap-graph` | HPROF dumps or V8 snapshots of one process (3 or more), 3 or more command-mode heap captures of one harness (a per-point series over n), or the native vgdb chain | retention path per dump, a `holder:` growth column, `via_holders` |
 | `type-histogram-diff` | class histograms, shim stack groups | growth by type or by allocation stack |
 | `alloc-stack-diff` | JFR old objects, valgrind, heaptrack, dhat, LeakSanitizer, Go heap profiles, Node sampling profiles, Python tracemalloc and memray | growth by allocation stack, site is the first project frame |
-| `non-heap` | thread dumps, class loaders, NMT, descriptors; Go goroutine dumps and leak profile; Node resources; Python threads, tasks, ResourceWarnings | counts by group; ties to a finding only by creation site (Go goroutines, Node `Type@file:line`, Python threads and tasks); JVM thread dumps and the other counts never tie |
+| `non-heap` | thread dumps, class loaders, NMT, descriptors; Go goroutine dumps and leak profile; Node resources; Python threads, tasks, ResourceWarnings | counts by group; ties to a finding only by creation site (Go goroutines, Node `Type@file:line`, Python threads and tasks); a JVM class loader group ties by exact loader class to the finding whose holder is declared with that class; JVM thread dumps and the other counts never tie |
 
 Reading the result:
 

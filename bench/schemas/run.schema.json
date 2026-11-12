@@ -107,6 +107,13 @@
       "description": "Wall-clock seconds.",
       "type": "number",
       "format": "double"
+    },
+    "work_key": {
+      "description": "The opaque name of the child's working directory (12 hex digits of a SHA-256 of the\nresults directory, ablation, archetypes setting, fixture and run number). The child\nnever reads `run.json`; the mapping from this name to the arm and the fixture is here.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

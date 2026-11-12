@@ -50,6 +50,19 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
+    /// The tools the table names, in a fixed order.
+    pub fn tool_names(&self) -> Vec<&'static str> {
+        [
+            ("go", self.go.is_some()),
+            ("node", self.node.is_some()),
+            ("python", self.python.is_some()),
+            ("java", self.java.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(n, on)| on.then_some(n))
+        .collect()
+    }
+
     /// True when no tool is named.
     pub fn is_empty(&self) -> bool {
         self.go.is_none() && self.node.is_none() && self.python.is_none() && self.java.is_none()
@@ -412,8 +425,14 @@ fn provide_node(host: &Host, store: &Path, version: &str, p: &mut Provided) -> R
         let tarball = format!("{stem}.tar.gz");
         let base = format!("{}/v{version}", host.node_dist.trim_end_matches('/'));
         fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
-        let part = root.join(format!("{tarball}.part"));
-        let sums = root.join(format!("SHASUMS256-{version}.txt"));
+        // Names of this process only: another `dla-bench` may fetch the same release into the
+        // shared store at the same time.
+        let own = unique_suffix();
+        let part = root.join(format!("{tarball}.{own}.part"));
+        let sums = root.join(format!("SHASUMS256-{version}.{own}.txt"));
+        let tmp = root.join(format!(".unpack-{stem}-{own}"));
+        // Whatever fails below, this fetch's own files do not stay in the shared store.
+        let _cleanup = Cleanup(vec![part.clone(), sums.clone(), tmp.clone()]);
         for (url, to) in [
             (format!("{base}/{tarball}"), &part),
             (format!("{base}/SHASUMS256.txt"), &sums),
@@ -426,7 +445,9 @@ fn provide_node(host: &Host, store: &Path, version: &str, p: &mut Provided) -> R
                 &format!("download of {url}"),
             )?;
         }
-        let listing = fs::read_to_string(&sums).map_err(|e| format!("{}: {e}", sums.display()))?;
+        let listing = fs::read_to_string(&sums).map_err(|e| format!("{}: {e}", sums.display()));
+        let _ = fs::remove_file(&sums);
+        let listing = listing?;
         let want = listing
             .lines()
             .filter_map(|l| l.split_once("  "))
@@ -442,8 +463,6 @@ fn provide_node(host: &Host, store: &Path, version: &str, p: &mut Provided) -> R
                 "{tarball}: sha256 {have} does not match the published {want}"
             ));
         }
-        let tmp = root.join(format!(".unpack-{stem}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         run_tool(
             Command::new(&host.tar)
@@ -454,17 +473,64 @@ fn provide_node(host: &Host, store: &Path, version: &str, p: &mut Provided) -> R
             &format!("unpacking {tarball}"),
         )?;
         let _ = fs::remove_file(&part);
-        let target = root.join(&stem);
-        let _ = fs::remove_dir_all(&target);
-        fs::rename(tmp.join(&stem), &target)
-            .map_err(|e| format!("{tarball} does not unpack to {stem}/: {e}"))?;
-        let _ = fs::remove_dir_all(&tmp);
+        install_release(&tmp.join(&stem), &root.join(&stem))
+            .map_err(|e| format!("{tarball}: {e}"))?;
         if !bin.join("node").is_file() {
             return Err(format!("{tarball} has no bin/node"));
         }
     }
     p.path_first.push(bin);
     Ok(())
+}
+
+/// Removes the files and directories of one fetch when it ends, with or without an error.
+struct Cleanup(Vec<PathBuf>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = fs::remove_file(p);
+            let _ = fs::remove_dir_all(p);
+        }
+    }
+}
+
+/// A name part no other fetch has: the process id and a counter (two fetches of one process,
+/// such as parallel tests, must not share a download either).
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Moves an unpacked Node release into the store. A release that is there already (another
+/// process was faster) is kept and ours is dropped with the caller's temporary directory;
+/// an existing release is never removed.
+fn install_release(unpacked: &Path, target: &Path) -> Result<(), String> {
+    if !unpacked.is_dir() {
+        return Err(format!(
+            "does not unpack to {}/",
+            unpacked
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+        ));
+    }
+    match fs::rename(unpacked, target) {
+        Ok(()) => Ok(()),
+        Err(_) if target.join("bin").join("node").is_file() => Ok(()),
+        Err(_) if target.exists() => Err(format!(
+            "{} is in the store already but has no bin/node (a broken release; it is left as it is, remove it by hand)",
+            target.display()
+        )),
+        Err(e) => Err(format!(
+            "cannot move the unpacked release to {}: {e}",
+            target.display()
+        )),
+    }
 }
 
 fn provide_python(host: &Host, store: &Path, version: &str, p: &mut Provided) -> Res<()> {
@@ -1010,6 +1076,103 @@ mod provide_tests {
                 .path_first,
             vec![bin]
         );
+    }
+
+    #[test]
+    fn a_release_that_is_in_the_store_already_is_kept_and_ours_is_dropped() {
+        let t = root();
+        let r = t.path();
+        let release = |name: &str, mark: &str| {
+            let d = r.join(name);
+            script(&d.join("bin/node"), "echo node");
+            fs::write(d.join("mark"), mark).unwrap();
+            d
+        };
+        let (theirs, ours) = (release("theirs", "theirs"), release("ours", "ours"));
+        install_release(&ours, &theirs).unwrap();
+        assert_eq!(fs::read_to_string(theirs.join("mark")).unwrap(), "theirs");
+        // A target that is no usable release is an error, and is left as it is.
+        let broken = r.join("broken");
+        fs::create_dir_all(broken.join("junk")).unwrap();
+        fs::write(broken.join("junk/f"), "x").unwrap();
+        assert!(install_release(&ours, &broken).is_err());
+        assert!(broken.join("junk/f").is_file());
+        // A free target takes the release.
+        let free = r.join("free");
+        install_release(&ours, &free).unwrap();
+        assert_eq!(fs::read_to_string(free.join("mark")).unwrap(), "ours");
+    }
+
+    #[test]
+    fn two_fetches_of_one_release_both_succeed_and_leave_one_release() {
+        let t = root();
+        let r = t.path();
+        node_dist(r, "22.12.0", false);
+        let store = r.join("store");
+        let want = store.join("node/node-v22.12.0-linux-x64/bin");
+        let fetch = || {
+            provide(&host(r), &store, &tc("", "22.12.0", "", ""))
+                .unwrap()
+                .path_first
+        };
+        let (a, b) = std::thread::scope(|s| {
+            let a = s.spawn(fetch);
+            let b = s.spawn(fetch);
+            (a.join().unwrap(), b.join().unwrap())
+        });
+        assert_eq!((a, b), (vec![want.clone()], vec![want.clone()]));
+        assert!(want.join("node").is_file());
+        // No part, checksum or unpack leftovers.
+        let left: Vec<String> = fs::read_dir(store.join("node"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(left, ["node-v22.12.0-linux-x64"], "{left:?}");
+    }
+
+    #[test]
+    fn a_failed_unpack_or_a_broken_release_in_the_store_leaves_no_files_of_the_fetch() {
+        let names = |store: &Path| -> Vec<String> {
+            let mut v: Vec<String> = fs::read_dir(store.join("node"))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        // A tarball whose checksum is right but that does not unpack.
+        let t = root();
+        let r = t.path();
+        node_dist(r, "22.12.0", false);
+        let dir = r.join("dist/v22.12.0");
+        let tarball = dir.join("node-v22.12.0-linux-x64.tar.gz");
+        fs::write(&tarball, "not a tarball").unwrap();
+        fs::write(
+            dir.join("SHASUMS256.txt"),
+            format!(
+                "{}  node-v22.12.0-linux-x64.tar.gz\n",
+                sha256_hex(&tarball).unwrap()
+            ),
+        )
+        .unwrap();
+        let store = r.join("store");
+        for _ in 0..2 {
+            let e = provide(&host(r), &store, &tc("", "22.12.0", "", "")).unwrap_err();
+            assert!(e.contains("unpacking"), "{e}");
+        }
+        assert!(names(&store).is_empty(), "{:?}", names(&store));
+        // A broken release directory already in the store: named as such, left as it is.
+        let t = root();
+        let r = t.path();
+        node_dist(r, "22.12.0", false);
+        let store = r.join("store");
+        let broken = store.join("node/node-v22.12.0-linux-x64");
+        fs::create_dir_all(broken.join("junk")).unwrap();
+        fs::write(broken.join("junk/f"), "x").unwrap();
+        let e = provide(&host(r), &store, &tc("", "22.12.0", "", "")).unwrap_err();
+        assert!(e.contains("has no bin/node"), "{e}");
+        assert!(broken.join("junk/f").is_file());
+        assert_eq!(names(&store), ["node-v22.12.0-linux-x64"]);
     }
 
     #[test]

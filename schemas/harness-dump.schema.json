@@ -339,6 +339,14 @@
           ],
           "format": "double"
         },
+        "classes": {
+          "description": "Classes a probed class loader defined (JVM `ClassLoader` holders only).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
         "error": {
           "description": "Why it could not be read.",
           "type": [
@@ -386,7 +394,7 @@
       }
     },
     "DumpPurge": {
-      "description": "A purge applied just before the last reading.",
+      "description": "A purge applied around the last reading. The Python, JVM and Go agents apply a `gc`\npurge just before the last reading (its `before` is read before the collection) and\ntheir trim-type purges (`trim`, `trim-native-heap`, `free-os-memory`) after it; the Node\nagent applies it after the last point (its `before` is that point's own post-GC reading,\nits `after` is taken after one more forced GC when `gc` is available).",
       "type": "object",
       "properties": {
         "after": {

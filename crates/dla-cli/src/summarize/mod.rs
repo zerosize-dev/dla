@@ -46,6 +46,7 @@ pub mod input;
 pub mod jcmd_histogram;
 pub mod jfr;
 pub mod jvm_nonheap;
+pub mod loader_tie;
 pub mod lsan;
 pub mod node_heapprofile;
 pub mod node_heapsnapshot;

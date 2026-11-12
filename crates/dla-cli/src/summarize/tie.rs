@@ -328,7 +328,7 @@ pub fn is_allocator_frame(function: &str) -> bool {
 }
 
 /// The runtime a finding's site belongs to, by its file extension.
-fn site_is_jvm(site: &str) -> bool {
+pub(super) fn site_is_jvm(site: &str) -> bool {
     let file = site.rsplit_once(':').map_or(site, |(f, _)| f);
     ["java", "kt", "kts", "scala", "groovy"]
         .iter()
@@ -678,12 +678,12 @@ pub fn own_type(text: &str, line: u32, field: &str) -> Option<String> {
 
 /// The classes a project's sources declare: `(package, simple name)`, read once.
 #[derive(Debug, Default)]
-struct ProjectClasses {
+pub(super) struct ProjectClasses {
     declared: BTreeSet<(String, String)>,
 }
 
 impl ProjectClasses {
-    fn scan(project: &Path) -> Self {
+    pub(super) fn scan(project: &Path) -> Self {
         let mut out = Self::default();
         let mut stack = vec![project.to_path_buf()];
         let mut files = 0usize;
@@ -735,7 +735,7 @@ impl ProjectClasses {
 
     /// True when the project declares the class `qualified` (`pkg.Name`, or a nested
     /// `pkg.Outer.Inner`, whose outer class is the one checked).
-    fn declares(&self, qualified: &str) -> bool {
+    pub(super) fn declares(&self, qualified: &str) -> bool {
         let segs: Vec<&str> = qualified.split('.').collect();
         let Some(first_cap) = segs
             .iter()

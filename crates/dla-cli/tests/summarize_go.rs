@@ -448,6 +448,11 @@ fn a_heap_stack_ties_by_its_allocation_site_and_a_function_row_never_ties() {
             assert!(c["finding"].is_null(), "{c}");
         }
     }
+    // A non-JVM model is not sent to accumulation classes (a JVM fact that never ties a
+    // type here): it is told what does tie (a holder probe, a site or owner column).
+    let needed = v["needed"].as_str().unwrap();
+    assert!(!needed.contains("accumulation class"), "{needed}");
+    assert!(needed.contains("holder probe"), "{needed}");
 }
 
 #[test]
@@ -555,4 +560,42 @@ fn a_damaged_profile_is_refused_with_the_fix() {
         "{e}"
     );
     assert!(e["fix"].as_str().is_some_and(|f| !f.is_empty()));
+}
+
+#[test]
+fn the_harness_types_needed_text_follows_the_runtime_the_dumps_name() {
+    // The Python agent writes `types` into its dumps as the JVM agent does; a type never ties
+    // outside the JVM, so the text names what does. The node case is a hand-written dump (the
+    // Node agent keeps its types in resources.json, which this backend does not read): it
+    // only shows that the text follows the `runtime` field. A JVM dump keeps the
+    // accumulation-class text.
+    for (runtime, jvm) in [("python", false), ("node", false), ("jvm", true)] {
+        let p = Project::new();
+        let text = (0..4u64)
+            .map(|k| {
+                json!({"dla_harness": 1, "phase": "checkpoint", "pid": 1, "runtime": runtime,
+                    "x": (k * 1000) as f64, "t_ms": k * 1000, "gc_forced": true,
+                    "types": [{"name": "app.Receipt", "count": 100 + 50 * k, "bytes": 4000 + 2000 * k}]})
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let file = p.put(&format!("in/{runtime}.jsonl"), text.as_bytes());
+        let (_, v) = summarize(&p, "type-histogram-diff", "harness-types", &[file]);
+        assert_eq!(v["gate"], "pass", "{runtime}: {v}");
+        assert!(v["tied"].as_array().is_none_or(Vec::is_empty), "{v}");
+        let needed = v["needed"].as_str().unwrap();
+        assert_eq!(
+            needed.contains("accumulation class"),
+            jvm,
+            "{runtime}: {needed}"
+        );
+        assert_eq!(needed.contains("holder probe"), !jvm, "{runtime}: {needed}");
+        // heap-graph holder columns and owner-named columns exist for Node only.
+        assert_eq!(
+            needed.contains("holder: column"),
+            runtime == "node",
+            "{runtime}: {needed}"
+        );
+    }
 }

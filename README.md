@@ -323,14 +323,16 @@ cargo run -p dla-cli -- schema --check   # JSON Schemas under schemas/ are up to
 ```
 
 CI runs `cargo fmt --check`, `cargo clippy -D warnings` and the tests on Linux, macOS and Windows,
-validates the plugin with `claude plugin validate . --strict`, and exercises the shim and
-downloader on all three systems (`tests/shim/run.sh`).
+validates the plugin with `claude plugin validate . --strict`, exercises the shim and
+downloader on all three systems (`tests/shim/run.sh`), and builds and runs the allocator shim on
+Linux and macOS (`tests/shim/alloc-shim.sh`).
 
 ## Releasing
 
 Tag `v<version>` where the version matches the workspace version in `Cargo.toml`, `plugin.json`
 and `marketplace.json`; the release workflow refuses to run if they disagree. It builds the five
-targets, packages them with checksums and publishes a GitHub release.
+targets, packages them with checksums and publishes a GitHub release. A version with a hyphen
+(`0.9.0-preview.1`, `1.0.0-rc.1`) is published as a pre-release.
 
 The release workflow can also be started by hand (`workflow_dispatch`). That is a dry run: it
 builds and verifies the five targets but publishes nothing.

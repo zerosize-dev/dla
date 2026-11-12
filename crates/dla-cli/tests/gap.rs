@@ -288,6 +288,15 @@ fn the_split_routes_unexplained_growth_to_native() {
     let off = rows.iter().find(|x| x["region"] == "off-heap").unwrap();
     assert_eq!(off["total"].as_f64().unwrap().round(), 500.0);
     assert_eq!(off["attributed"], 0.0);
+
+    // With a gap row for S1, the split no longer sends the model to run the residual again
+    // (each run would open another item for the same growth).
+    let again = ok(p, &["gap", "S1"]);
+    let next = again["next"].to_string();
+    assert!(
+        next.contains("dla gate check --final") && !next.contains("dla gap S1 --residual"),
+        "{next}"
+    );
 }
 
 #[test]

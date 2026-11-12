@@ -293,6 +293,48 @@ pub fn check_attempted(
         .collect()
 }
 
+/// The first hidden tool that a fixture's `[toolchain]` would bring back: an executable entry
+/// of a hidden name in one of its `PATH` directories (on Windows also `<name>.exe`, and the
+/// other suffixes of a fixed `PATHEXT`; a file that is not executable does not count), or a tool-home variable (`JAVA_HOME`, `GOROOT`)
+/// of a hidden tool. Returns the tool and where it comes from.
+pub fn provided_conflict(
+    without: &[String],
+    path_first: &[PathBuf],
+    env: &[(String, String)],
+) -> Option<(String, String)> {
+    for dir in path_first {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter(|e| is_executable(&e.path()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        for name in names {
+            if is_hidden(without, &name) {
+                return Some((
+                    tool_name(&name).to_owned(),
+                    format!("the bin directory {}", dir.display()),
+                ));
+            }
+        }
+    }
+    for (var, tools) in TOOL_HOME_VARS {
+        if !env.iter().any(|(k, _)| k == var) {
+            continue;
+        }
+        if let Some(w) = without
+            .iter()
+            .find(|w| tools.iter().any(|t| names_equal(w, t)))
+        {
+            return Some((w.clone(), (*var).to_owned()));
+        }
+    }
+    None
+}
+
 /// The directory `dla` calls get as `PATH`, under the work directory.
 pub fn path_dir_of(work: &Path) -> PathBuf {
     work.join("bin-without")
@@ -309,6 +351,41 @@ mod tests {
         let p = dir.join(name);
         fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_toolchain_that_provides_a_hidden_tool_is_a_conflict() {
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("jdk/bin");
+        exe(&bin, "java");
+        exe(&bin, "jcmd");
+        let env = vec![("JAVA_HOME".to_owned(), "/x/jdk".to_owned())];
+        let w = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let c = provided_conflict(&w(&["jcmd"]), std::slice::from_ref(&bin), &[]).unwrap();
+        assert_eq!(c.0, "jcmd");
+        assert!(c.1.contains("jdk/bin"), "{c:?}");
+        // The home variable alone brings the tool back too.
+        let c = provided_conflict(&w(&["jmap"]), &[], &env).unwrap();
+        assert_eq!((c.0.as_str(), c.1.as_str()), ("jmap", "JAVA_HOME"));
+        // A tool the toolchain does not provide stays hideable.
+        assert!(provided_conflict(&w(&["valgrind"]), std::slice::from_ref(&bin), &env).is_none());
+        // A file of a hidden name that is not executable (a doc, a data file) is no tool.
+        fs::write(bin.join("valgrind"), "notes").unwrap();
+        assert!(provided_conflict(&w(&["valgrind"]), &[bin], &env).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_toolchain_exe_of_a_hidden_name_is_a_conflict_on_windows() {
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("jdk/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("jcmd.exe"), "").unwrap();
+        fs::write(bin.join("README.txt"), "").unwrap();
+        let c = provided_conflict(&["jcmd".to_owned()], &[bin.clone()], &[]).unwrap();
+        assert_eq!(c.0, "jcmd");
+        assert!(provided_conflict(&["README".to_owned()], &[bin], &[]).is_none());
     }
 
     #[cfg(unix)]

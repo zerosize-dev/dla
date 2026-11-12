@@ -71,6 +71,7 @@ fn both_graders_write_identical_metrics_for_every_sample() {
     assert_eq!(
         graded,
         [
+            "free-pair-sample",
             "label-sample",
             "m4-sample",
             "m7-sample",

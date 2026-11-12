@@ -26,7 +26,7 @@ Coverage: jvm no iterations, 1 of 2 entry points exercised
 - **jvm/sweep**: no sweep has run for runtime jvm. Fix: `dla sweep --lang jvm`
 - **F2**: finding F2 is under test and has no result. Fix: `dla ledger confirm F2 or dla ledger refute F2 (with --evidence)`
 - **F2**: finding F2 has no non-leak sibling hypothesis. Fix: `dla ledger add --sibling-of F2 --origin hypothesis --hypothesis N-WARM --refute-if "<result>" --evidence E..`
-- **off-heap**: residual growth in off-heap (6.000 MB/h, threshold 1.000) has no resolved open item. Fix: `dla gap --residual then resolve the open item it raises`
+- **off-heap**: residual growth in off-heap (6.000 MB/h, threshold 1.000) has no resolved open item. Fix: `dla ledger resolve O1 --by <F> or dla ledger resolve O1 --as unresolved --reason time_budget --remedy "<text>"`
 
 ## Findings
 

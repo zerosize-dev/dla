@@ -635,7 +635,7 @@ pub fn grade_findings(exp: &Expected, source: Source, findings: &[Finding]) -> R
     if cat == Category::NonLeak {
         p[9] = (u64::from(!claim && rule_out), 1);
     }
-    if cat == Category::ArchetypeLeak && exp.pair.is_some() {
+    if matches!(cat, Category::ArchetypeLeak | Category::ArchetypeFree) && exp.pair.is_some() {
         let missed = exp
             .leak
             .iter()
@@ -967,7 +967,8 @@ const TOKEN_KEYS: [&str; 4] = [
 
 /// The decoy and control result of every archetype row that has a pair among the graded
 /// fixtures: the row is the `cause` of the confirmable leaks of an `archetype-leak` fixture
-/// with a `pair`, and the pair is that fixture and the decoy it names.
+/// with a `pair` and the fixture's runtime (`L-REGISTER (node)`), and the pair is that fixture
+/// and the decoy it names.
 fn decoy_rows(
     runs: &[RunData],
     expected: &HashMap<String, Expected>,
@@ -1004,7 +1005,9 @@ fn decoy_rows(
             .map(|l| l.cause.as_str())
             .collect();
         for cause in causes {
-            let row = rows.entry(cause.to_owned()).or_default();
+            // One row per archetype row and runtime: `L-REGISTER (go)` is not `L-REGISTER (node)`.
+            let key = format!("{cause} ({})", exp.runtime.as_str());
+            let row = rows.entry(key).or_default();
             row.pairs.push(format!("{fx}/{decoy}"));
             row.leak.found_runs += found;
             row.leak.runs += leak_runs.len() as u64;

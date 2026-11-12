@@ -537,6 +537,9 @@ public final class DlaDump {
             if (v instanceof ThreadLocal<?> tl) {
                 return threadLocalProbe(id, f, path, tl, lim);
             }
+            if (v instanceof ClassLoader cl) {
+                return loaderProbe(id, f, path, cl, lim);
+            }
             Long size = sizeOf(v);
             long[] w = walk(v);
             if (w[2] != 0) {
@@ -546,6 +549,50 @@ public final class DlaDump {
         } catch (Throwable t) {
             return probeRecord(id, f.getName(), path, null, 0, 0, null, t.toString());
         }
+    }
+
+    /**
+     * A ClassLoader field is measured through the classes it defines and through its own fields.
+     * The loader's fields declared by the JDK are flat however many classes it has defined, so a
+     * shallow walk alone would read as a plateau and clear a loader that holds every class it ever
+     * defined. The `classes` figure is the number of loaded classes whose defining loader is this
+     * one (Instrumentation.getAllLoadedClasses). The fields below java.lang.ClassLoader (those of
+     * the project's subclass) are walked like any other holder and add their objects and bytes, so
+     * a cache kept in the loader grows the byte column. `reachable` is the classes plus the
+     * objects reached from those fields; `bytes` is the shallow estimate of those objects (the
+     * metaspace of the classes is not measurable here). The probe abstains when the agent has no
+     * Instrumentation, so that a missing measurement never reads as zero.
+     */
+    private static Map<String, Object> loaderProbe(String id, Field f, String path, ClassLoader cl,
+            List<String> lim) {
+        Instrumentation in = inst;
+        if (in == null) {
+            String why = "no Instrumentation: the classes of this ClassLoader cannot be counted";
+            lim.add("probe " + path + ": " + why);
+            return probeRecord(id, f.getName(), path, null, 0, 0, null, why);
+        }
+        long n = 0;
+        for (Class<?> c : in.getAllLoadedClasses()) {
+            if (c.getClassLoader() == cl) {
+                n++;
+            }
+        }
+        Walker w = new Walker();
+        for (Field lf : fieldsOf(cl.getClass())) {
+            try {
+                w.add(lf.get(cl));
+            } catch (Throwable ignored) {
+                // inaccessible: leaf
+            }
+        }
+        w.run();
+        if (w.truncated) {
+            lim.add("probe " + path + " walk of the loader's own fields truncated at " + MAX_OBJECTS + " objects");
+        }
+        Map<String, Object> r = probeRecord(id, f.getName(), path, null, n + w.count, w.bytes, null, null);
+        r.put("classes", n);
+        lim.add("probe " + path + " is a ClassLoader: the classes it defined, plus the objects its own fields reach");
+        return r;
     }
 
     /**

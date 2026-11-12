@@ -1,6 +1,6 @@
 schema_version = 1
 id = "m7-decoy2"
-runtime = "python"
+runtime = "node"
 category = "decoy-control"
 pair = "m7-pair2"
 dynamic_confirmation = true
