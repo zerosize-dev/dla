@@ -2736,12 +2736,22 @@ mod tests {
             env: vec![("GOTOOLCHAIN".into(), "go1.22.12".into())],
             go_toolchain_dirs: Vec::new(),
         };
-        let env = command_env(None, Some(&p), Some("/usr/bin:/bin"));
-        assert!(env.contains(&("PATH".to_owned(), "/tc/node/bin:/usr/bin:/bin".to_owned())));
+        // The separator is the platform's (`;` on Windows).
+        let join = |d: &[&str]| {
+            std::env::join_paths(d)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let env = command_env(None, Some(&p), Some(&join(&["/usr/bin", "/bin"])));
+        assert!(env.contains(&(
+            "PATH".to_owned(),
+            join(&["/tc/node/bin", "/usr/bin", "/bin"])
+        )));
         assert!(env.contains(&("GOTOOLCHAIN".to_owned(), "go1.22.12".to_owned())));
         // A `--without` run keeps its own directory as the base of `PATH`.
         let env = command_env(Some(Path::new("/hidden")), Some(&p), Some("/usr/bin"));
-        assert!(env.contains(&("PATH".to_owned(), "/tc/node/bin:/hidden".to_owned())));
+        assert!(env.contains(&("PATH".to_owned(), join(&["/tc/node/bin", "/hidden"]))));
     }
 
     #[test]
