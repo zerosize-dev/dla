@@ -1349,24 +1349,41 @@ fn the_holder_of_the_finding_is_in_every_retention_record_and_the_label_is_accep
             .any(|k| k == "closure:src.board.publish.previous"),
         "{first}"
     );
-    // Without --finding the record lists the three largest holders: `previous` is
-    // dominated by larger ones and is not among them.
+    // Without --finding the record lists the three largest holders. `previous` is usually
+    // dominated by larger ones and not among them, but its size is within a fraction of a
+    // percent of the third (a macOS runner put it third), so the test reads which dumps
+    // already list it instead of assuming.
+    let mut listed = Vec::new();
     for holders in retention_holders(&p, &first) {
         assert_eq!(holders.len(), 3, "{holders:?}");
-        assert!(
+        let retained: Vec<u64> = holders
+            .iter()
+            .map(|h| h["retained"].as_u64().unwrap())
+            .collect();
+        assert!(retained.windows(2).all(|w| w[0] >= w[1]), "{holders:?}");
+        listed.push(
             holders
                 .iter()
-                .all(|h| h["key"] != "closure:src.board.publish.previous"),
-            "{holders:?}"
+                .any(|h| h["key"] == "closure:src.board.publish.previous"),
         );
     }
+    assert_eq!(listed.len(), 4, "{listed:?}");
+    assert!(
+        listed.iter().any(|l| !l),
+        "the bound holder was in every top three: {listed:?}"
+    );
     // With --finding the record also lists the finding's holder, with its holder_kind.
     let v = heap_graph(&p, &files, &["--finding", &f]);
     let records = retention_holders(&p, &v);
     assert_eq!(records.len(), 4);
     let mut cited = Vec::new();
-    for (holders, d) in records.iter().zip(v["dumps"].as_array().unwrap()) {
-        assert_eq!(holders.len(), 4, "{holders:?}");
+    for ((holders, d), already) in records
+        .iter()
+        .zip(v["dumps"].as_array().unwrap())
+        .zip(&listed)
+    {
+        let expected = if *already { 3 } else { 4 };
+        assert_eq!(holders.len(), expected, "{holders:?}");
         let h = holders
             .iter()
             .find(|h| h["key"] == "closure:src.board.publish.previous")
