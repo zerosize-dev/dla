@@ -334,8 +334,10 @@ and `marketplace.json`; the release workflow refuses to run if they disagree. It
 targets, packages them with checksums and publishes a GitHub release. A version with a hyphen
 (`0.9.0-preview.1`, `1.0.0-rc.1`) is published as a pre-release.
 
-The release workflow can also be started by hand (`workflow_dispatch`). That is a dry run: it
-builds and verifies the five targets but publishes nothing.
+The release workflow can also be started by hand (`workflow_dispatch`). By default that is a dry
+run: it builds and verifies the five targets but publishes nothing. With the `publish` input set,
+it publishes the release and creates the tag `v<version>` on the commit it ran on; it refuses when
+that tag already exists.
 
 ## Layout
 

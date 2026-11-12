@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the release (tag v<workspace version> on this commit); off = dry run"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,9 +21,12 @@ jobs:
   verify:
     name: verify versions
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.versions.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
       - name: Tag, plugin.json, marketplace.json and workspace version must agree
+        id: versions
         env:
           EVENT: ${{ github.event_name }}
         run: |
@@ -32,8 +40,11 @@ jobs:
           if [ "$EVENT" = "push" ]; then
             test "$tag" = "v$workspace" || { echo "::error::tag $tag does not match workspace version $workspace"; exit 1; }
           else
-            echo "dry run: the tag comparison is skipped"
+            # A manual run publishes (when asked) under the tag of the workspace version.
+            tag="v$workspace"
+            echo "manual run: the release tag is $tag"
           fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           test "$plugin" = "$workspace" || { echo "::error::plugin.json version $plugin does not match workspace version $workspace"; exit 1; }
           if [ -n "$market" ] && [ "$market" != "$workspace" ]; then
             echo "::error::marketplace.json version $market does not match workspace version $workspace"
@@ -127,8 +138,10 @@ jobs:
 
   publish:
     name: publish release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: assemble
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    needs: [verify, assemble]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -142,12 +155,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          EVENT: ${{ github.event_name }}
         run: |
+          set -eu
+          # A manual run creates the tag on this commit; it must not exist yet.
+          if [ "$EVENT" = "workflow_dispatch" ] && gh api "repos/${GH_REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::tag ${TAG} already exists; bump the version or publish by pushing the tag"
+            exit 1
+          fi
           # A tag with a hyphen (v0.9.0-preview.1, v1.0.0-rc.1) is a pre-release.
           prerelease=()
-          case "${GITHUB_REF_NAME}" in *-*) prerelease=(--prerelease) ;; esac
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
+          case "${TAG}" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "${TAG}" \
+            --target "${GITHUB_SHA}" \
+            --title "${TAG}" \
             --generate-notes \
             "${prerelease[@]}" \
             dla-*.tar.gz dla-*.tar.gz.sha256 SHA256SUMS
