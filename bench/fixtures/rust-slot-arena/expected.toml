@@ -1,0 +1,22 @@
+schema_version = 1
+id = "rust-slot-arena"
+runtime = "rust"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the booking desk's resident memory grows steadily with the number of booking requests it has handled, and the process is restarted every few days. The number of seats on hold at any moment stays in the low hundreds and every hold is released when its party is done. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/arena.rs:46"
+lines = [46, 46]
+alt_sites = ["src/arena.rs:84-93", "src/arena.rs:25", "src/arena.rs:41"]
+holder = "container-field"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true
+dump_backed = false

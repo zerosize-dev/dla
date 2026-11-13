@@ -1,0 +1,19 @@
+schema_version = 1
+id = "python-pool-fragmentation"
+runtime = "python"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+After the nightly statement import the reconciliation service's resident
+memory is several times what it holds between imports, and the container
+monitor reports it as growing during the first hour after every restart. Find
+out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "statements/importer.py:21"
+cause = "N-ALLOC"
+discriminator = "traced memory stays at about 1.2 MB after every batch (the 64 kept summaries only) at 300 and 1000 batches, and resident memory stops rising after the first 74 batches at 33 to 34 MB; a malloc_trim(0) call afterwards returns about 12 MB, so the allocator holds freed pages that the program no longer uses"

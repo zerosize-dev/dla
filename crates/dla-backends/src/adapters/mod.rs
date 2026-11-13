@@ -46,6 +46,9 @@ pub struct Job<'a> {
     pub timeout: Duration,
     /// The run's scope (`None`: everything is in scope).
     pub scope: Option<Scope>,
+    /// Backends of this sweep that already ran (not blocked, not missing), in order; the
+    /// server-only Sonar row names them.
+    pub ran: Vec<String>,
 }
 
 impl Job<'_> {

@@ -55,6 +55,7 @@ pub mod slice;
 pub mod state;
 pub mod static_hit;
 mod strict;
+pub mod timebudget;
 pub mod toolctx;
 pub mod trend;
 pub mod verify;
@@ -72,8 +73,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// version 5 lines may also change a holder already set, when the annotation cites heap-graph
 /// growth evidence whose passing column tied to the finding observed that holder; version 6
 /// lines add `finding_labeled`, `finding_explained` and `integrity_resealed` records, the
-/// `strong` rule, the verifier's `agrees_label`, and refuse an explanation on `ledger add`.
-pub const LEDGER_SCHEMA_VERSION: u32 = 6;
+/// `strong` rule, the verifier's `agrees_label`, and refuse an explanation on `ledger add`;
+/// version 7 lines may carry the reason `inconclusive`, which needs a measurement tied to
+/// the finding's family.
+pub const LEDGER_SCHEMA_VERSION: u32 = 7;
 /// Bound on the serialized size of an evidence `result`.
 pub const MAX_RESULT_BYTES: usize = 2048;
 /// Bound on the size of CLI stdout.

@@ -184,6 +184,44 @@ fn coverage_line_reports_iterations_and_exercised_entry_points() {
 }
 
 #[test]
+fn coverage_line_says_how_many_project_classes_loaded_when_no_entry_point_matched() {
+    let cov = |exercised: serde_json::Value, project: serde_json::Value| -> CoverageManifest {
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "workers": {"jvm": {
+                "runtime": "jvm",
+                "entry_points": {"discovered": ["a/B.kt::B.f", "a/C.kt::C.g"], "exercised": exercised},
+                "iterations": 750,
+                "project_classes": project
+            }}
+        }))
+        .unwrap()
+    };
+    let md = render_markdown(&view("dynamic", Some(cov(json!([]), json!(37)))));
+    assert!(
+        md.contains(
+            "Coverage: jvm 750 iterations, 0 of 2 entry points exercised, 37 project classes loaded\n"
+        ),
+        "{md}"
+    );
+    // One class reads in the singular.
+    let md = render_markdown(&view("dynamic", Some(cov(json!([]), json!(1)))));
+    assert!(
+        md.contains("0 of 2 entry points exercised, 1 project class loaded\n"),
+        "{md}"
+    );
+    // Nothing loaded, or an entry point matched: the line is the plain one.
+    for (exercised, project) in [
+        (json!([]), json!(0)),
+        (json!([]), json!(null)),
+        (json!(["a/B.kt::B.f"]), json!(37)),
+    ] {
+        let md = render_markdown(&view("dynamic", Some(cov(exercised.clone(), project))));
+        assert!(!md.contains("project class"), "{exercised} {md}");
+    }
+}
+
+#[test]
 fn complete_header_and_sections_in_order() {
     let md = render_markdown(&gate_complete_view());
     assert!(md.starts_with("# DLA report\n\nRun: `20260101-000000-abcd`\n\nStatus: COMPLETE\n"));
@@ -557,6 +595,24 @@ fn workers_section_lists_status_lines_done_and_torn_tail() {
     );
     assert!(!unmerged.contains("jvm"), "{unmerged}");
     assert!(md.contains("Scope: module `services/api`; excluded: `services/api/generated`, `vendor`; out of scope: jvm 12 files, rust 1 file\n"), "{md}");
+}
+
+#[test]
+fn scope_line_names_the_build_logic_that_was_not_read() {
+    let mut st = state("20260101-000000-abcd");
+    st.entry = dla_core::state::EntryPath::Repository;
+    let cov: CoverageManifest = serde_json::from_value(json!({
+        "schema_version": 1,
+        "workers": {"jvm": {"runtime": "jvm", "build_logic": 3}}
+    }))
+    .unwrap();
+    let md = render_markdown(&RunView::new(st, Ledger::from_text("").unwrap(), Some(cov)));
+    assert!(
+        md.contains(
+            "Scope: repository; excluded: none; out of scope: none; build logic not read: jvm 3 files\n"
+        ),
+        "{md}"
+    );
 }
 
 #[test]
@@ -1264,7 +1320,7 @@ mod measured_line {
     fn nothing_measured_follows_the_status_line_for_complete_and_incomplete() {
         let md = render_markdown(&gate_complete_view());
         assert!(
-            md.contains(&format!("Status: COMPLETE\n\n{NOTHING}\nEntry:")),
+            md.contains(&format!("Status: COMPLETE\n\n{NOTHING}\nTime: budget 1h")),
             "{md}"
         );
         let md = render_markdown(&view("incomplete", None));
@@ -1304,5 +1360,453 @@ mod measured_line {
             "{md}"
         );
         assert!(!md.contains("Measured: nothing"));
+    }
+}
+
+// ------------------------------------------------------------------ Time line
+
+mod time_line {
+    use super::*;
+    use dla_core::state::{BudgetEstimate, BudgetExtension};
+
+    fn mins(n: u64) -> std::time::Duration {
+        std::time::Duration::from_secs(n * 60)
+    }
+
+    /// The report of a state whose budget started `used` minutes before its newest
+    /// ledger line (the ledger line is stamped now).
+    fn report(mut st: RunState, ledger: Ledger, used: u64) -> String {
+        st.budget.started_at = now_utc() - mins(used);
+        render_markdown(&RunView::new(st, ledger, None))
+    }
+
+    fn time_of(md: &str) -> &str {
+        md.lines()
+            .find_map(|l| l.strip_prefix("Time: "))
+            .unwrap_or_else(|| panic!("no Time line in {md}"))
+    }
+
+    fn with_evidence() -> Ledger {
+        let mut l = Ledger::from_text("").unwrap();
+        l.add_evidence(dla_core::NewEvidence {
+            source: dla_core::Source::Repo {
+                commit: "abc".into(),
+                path: None,
+            },
+            tool: dla_core::Tool {
+                name: "t".into(),
+                version: "0".into(),
+            },
+            authority: dla_core::Authority::Static,
+            kind: dla_core::EvidenceKind::StaticHit,
+            result: json!({"lang": "jvm"}),
+            raw: None,
+            coverage: dla_core::evidence::EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        l
+    }
+
+    #[test]
+    fn it_follows_the_measured_line_and_leaves_the_status_line_alone() {
+        let md = report(
+            state("20260101-000000-abcd"),
+            Ledger::from_text("").unwrap(),
+            0,
+        );
+        let lines: Vec<&str> = md.lines().collect();
+        let status = lines
+            .iter()
+            .position(|l| l.starts_with("Status: "))
+            .unwrap();
+        let measured = lines
+            .iter()
+            .position(|l| l.starts_with("Measured: "))
+            .unwrap();
+        let time = lines.iter().position(|l| l.starts_with("Time: ")).unwrap();
+        assert!(status < measured && time > measured, "{md}");
+        assert_eq!(time, measured + 2, "right after the Measured line: {md}");
+        assert!(
+            lines[status] == "Status: COMPLETE"
+                || lines[status].starts_with("Status: INCOMPLETE (")
+        );
+    }
+
+    #[test]
+    fn a_fixed_budget_names_its_length_and_the_time_used() {
+        let mut st = state("20260101-000000-abcd");
+        st.budget.seconds = 2700;
+        let md = report(st, with_evidence(), 12);
+        assert_eq!(time_of(&md), "budget 45m, 12m used.", "{md}");
+    }
+
+    #[test]
+    fn a_settled_extended_auto_budget_says_how_it_was_sized_and_extended() {
+        let mut st = state("20260101-000000-abcd");
+        st.budget.auto = true;
+        st.budget.settled = true;
+        st.budget.seconds = 3 * 3600;
+        st.budget.estimate = Some(BudgetEstimate::new(1, 362));
+        st.budget.extensions = vec![BudgetExtension {
+            at: now_utc(),
+            seconds: 1800,
+            lapsed_seconds: 0,
+            deadline: now_utc(),
+        }];
+        let md = report(st, with_evidence(), 178);
+        assert_eq!(
+            time_of(&md),
+            "budget 3h (auto: 1 runtime, 362 candidates; extended by 30m), 2h58m used.",
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn an_extension_made_after_the_deadline_says_what_was_spent_past_it() {
+        let mut st = state("20260101-000000-abcd");
+        // Fixed 60 m, extended by 30 m at minute 70: the budget is 100 m long, and the
+        // 10 m past the deadline are named rather than left unexplained.
+        st.budget.seconds = 6000;
+        st.budget.extensions = vec![BudgetExtension {
+            at: now_utc(),
+            seconds: 1800,
+            lapsed_seconds: 600,
+            deadline: now_utc(),
+        }];
+        let md = report(st, with_evidence(), 75);
+        assert_eq!(
+            time_of(&md),
+            "budget 1h40m (extended by 30m, plus 10m spent past the deadline), 1h15m used.",
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn a_budget_in_seconds_is_not_truncated_to_minutes() {
+        let mut st = state("20260101-000000-abcd");
+        st.budget.seconds = 90;
+        let md = report(st, with_evidence(), 0);
+        assert!(time_of(&md).starts_with("budget 1m30s, "), "{md}");
+    }
+
+    #[test]
+    fn an_unsized_auto_budget_says_so() {
+        let mut st = state("20260101-000000-abcd");
+        st.budget.auto = true;
+        let md = report(st, with_evidence(), 5);
+        assert_eq!(
+            time_of(&md),
+            "budget 1h (auto, not sized), 5m used.",
+            "{md}"
+        );
+    }
+
+    /// Three python/jvm candidates, two closed `time_budget`, one open.
+    fn closed_for_time() -> Ledger {
+        closed_for_time_n(2)
+    }
+
+    /// Three candidates, the first `closed` of them closed `time_budget`.
+    fn closed_for_time_n(closed: usize) -> Ledger {
+        let mut text = String::new();
+        text += "{\"schema_version\":1,\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"evidence\",\"evidence_id\":\"E1\",\"source\":{\"repo\":{\"commit\":\"abc\"}},\"tool\":{\"name\":\"t\",\"version\":\"0\"},\"authority\":\"static\",\"kind\":\"static-hit\",\"result\":{\"lang\":\"jvm\"}}\n";
+        let mut seq = 2;
+        for n in 1..=3 {
+            text += &format!(
+                "{{\"schema_version\":1,\"seq\":{seq},\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"finding_added\",\"finding\":{{\"id\":\"F{n}\",\"state\":\"candidate\",\"origin\":\"census\",\"supports\":[\"E1\"],\"site\":\"src/f{n}.kt:{n}\"}}}}\n"
+            );
+            seq += 1;
+        }
+        for n in 1..=closed {
+            text += &format!(
+                "{{\"schema_version\":1,\"seq\":{seq},\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F{n}\",\"from\":\"candidate\",\"to\":\"unresolved\",\"evidence\":[],\"by\":\"t\",\"reason\":\"time_budget\",\"remedy\":\"x\"}}\n"
+            );
+            seq += 1;
+        }
+        Ledger::from_text(&text).unwrap()
+    }
+
+    #[test]
+    fn findings_closed_for_lack_of_time_say_what_measuring_them_needs() {
+        let mut st = state("20260101-000000-abcd");
+        st.budget.seconds = 3600;
+        st.budget.started_at = now_utc() - mins(60);
+        let md = render_markdown(&RunView::new(st, closed_for_time(), None));
+        // The two findings closed for time x 3 + their one runtime without a harness run
+        // x 15 = 21 more minutes (the open third finding is not in the sentence); 60 + 21.
+        assert!(
+            time_of(&md).ends_with(
+                "2 findings were closed for lack of time; measuring them needs about 21 more minutes (a new run with --budget 81m)."
+            ),
+            "{md}"
+        );
+        assert!(time_of(&md).starts_with("budget 1h, "), "{md}");
+    }
+
+    #[test]
+    fn one_finding_closed_for_lack_of_time_reads_in_the_singular() {
+        let mut st = state("20260101-000000-abcd");
+        st.budget.seconds = 3600;
+        st.budget.started_at = now_utc() - mins(60);
+        let l = closed_for_time_n(1);
+        let md = render_markdown(&RunView::new(st, l, None));
+        assert!(
+            time_of(&md).contains(" 1 finding was closed for lack of time; measuring it needs"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn a_run_with_nothing_closed_for_time_has_no_such_sentence() {
+        let md = report(state("20260101-000000-abcd"), with_evidence(), 3);
+        assert!(!md.contains("closed for lack of time"), "{md}");
+    }
+}
+
+mod findings_line {
+    use super::*;
+
+    const DISC: &str = "{\"schema_version\":1,\"seq\":2,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"evidence\",\"evidence_id\":\"E2\",\"source\":{\"repo\":{\"commit\":\"abc\"}},\"tool\":{\"name\":\"t\",\"version\":\"0\"},\"authority\":\"test\",\"kind\":\"discriminator\",\"result\":{\"favors\":\"non-leak\"}}\n";
+
+    fn findings_of(md: &str) -> &str {
+        md.lines()
+            .find(|l| l.starts_with("Findings: "))
+            .unwrap_or_else(|| panic!("{md}"))
+    }
+
+    /// The run of the user's report: a leak hypothesis refuted by a discriminator, and its
+    /// `N-WARM` sibling confirmed. One test, two states.
+    fn a_warmup_that_held() -> Ledger {
+        let mut t = String::new();
+        t += "{\"schema_version\":1,\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"evidence\",\"evidence_id\":\"E1\",\"source\":{\"repo\":{\"commit\":\"abc\"}},\"tool\":{\"name\":\"t\",\"version\":\"0\"},\"authority\":\"static\",\"kind\":\"static-hit\",\"result\":{}}\n";
+        t += DISC;
+        t += "{\"schema_version\":1,\"seq\":3,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"state\":\"candidate\",\"origin\":\"census\",\"supports\":[\"E1\"]}}\n";
+        t += "{\"schema_version\":1,\"seq\":4,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"finding_added\",\"finding\":{\"id\":\"F1.n1\",\"state\":\"candidate\",\"origin\":\"hypothesis\",\"supports\":[\"E1\"],\"parent\":\"F1\",\"hypothesis\":\"N-WARM: jit\",\"refute_if\":\"x\"}}\n";
+        t += "{\"schema_version\":1,\"seq\":5,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F1\",\"from\":\"candidate\",\"to\":\"refuted\",\"evidence\":[\"E2\"],\"by\":\"t\"}\n";
+        t += "{\"schema_version\":1,\"seq\":6,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F1.n1\",\"from\":\"candidate\",\"to\":\"under_test\",\"evidence\":[],\"by\":\"t\"}\n";
+        t += "{\"schema_version\":1,\"seq\":7,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F1.n1\",\"from\":\"under_test\",\"to\":\"confirmed\",\"evidence\":[\"E2\"],\"by\":\"t\"}\n";
+        Ledger::from_text(&t).unwrap()
+    }
+
+    #[test]
+    fn a_confirmed_explanation_is_not_a_confirmed_leak() {
+        let md = render_markdown(&RunView::new(
+            state("20260101-000000-abcd"),
+            a_warmup_that_held(),
+            None,
+        ));
+        let line = findings_of(&md);
+        assert!(
+            line.starts_with("Findings: 2 enumerated, 2 dispositioned; leak hypotheses: confirmed 0, strong 0, refuted 1, suspected 0, unresolved 0; non-leak explanations: confirmed 1, refuted 0, suspected 0, unresolved 0"),
+            "{line}"
+        );
+        // A discriminator of authority test is a measurement, and no leak is confirmed.
+        assert!(line.ends_with("; no leak confirmed"), "{line}");
+    }
+
+    #[test]
+    fn a_measured_run_with_no_leak_says_so_in_words() {
+        let mut t = String::new();
+        t += "{\"schema_version\":1,\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"evidence\",\"evidence_id\":\"E1\",\"source\":{\"repo\":{\"commit\":\"abc\"}},\"tool\":{\"name\":\"t\",\"version\":\"0\"},\"authority\":\"static\",\"kind\":\"static-hit\",\"result\":{}}\n";
+        t += DISC;
+        t += "{\"schema_version\":1,\"seq\":3,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"state\":\"candidate\",\"origin\":\"census\",\"supports\":[\"E1\"]}}\n";
+        t += "{\"schema_version\":1,\"seq\":4,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F1\",\"from\":\"candidate\",\"to\":\"refuted\",\"evidence\":[\"E2\"],\"by\":\"t\"}\n";
+        let md = render_markdown(&RunView::new(
+            state("20260101-000000-abcd"),
+            Ledger::from_text(&t).unwrap(),
+            None,
+        ));
+        // E2 is a test-authority discriminator: something was measured.
+        let line = findings_of(&md);
+        assert!(line.ends_with("; no leak confirmed"), "{line}");
+        assert!(
+            line.contains("leak hypotheses: confirmed 0, strong 0, refuted 1"),
+            "{line}"
+        );
+    }
+}
+
+mod coverage_warning_and_explained {
+    use super::*;
+
+    fn cov(
+        discovered: usize,
+        exercised: usize,
+        iterations: Option<u64>,
+        project: Option<u64>,
+    ) -> CoverageManifest {
+        let names = |n: usize| {
+            (0..n)
+                .map(|i| format!("a/B{i}.kt::B{i}.f"))
+                .collect::<Vec<_>>()
+        };
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "workers": {"jvm": {
+                "runtime": "jvm",
+                "entry_points": {"discovered": names(discovered), "exercised": names(exercised)},
+                "iterations": iterations,
+                "project_classes": project
+            }}
+        }))
+        .unwrap()
+    }
+
+    fn md_of(c: CoverageManifest) -> String {
+        render_markdown(&RunView::new(
+            state("20260101-000000-abcd"),
+            Ledger::from_text("").unwrap(),
+            Some(c),
+        ))
+    }
+
+    fn warning(md: &str) -> Option<&str> {
+        md.lines().find(|l| l.starts_with("Coverage warning: "))
+    }
+
+    #[test]
+    fn zero_of_many_after_iterations_is_flagged_next_to_measured() {
+        let md = md_of(cov(225, 0, Some(750), Some(37)));
+        let w = warning(&md).unwrap_or_else(|| panic!("{md}"));
+        assert!(
+            w.contains("this run exercised 0 of 225 entry points (jvm)"),
+            "{w}"
+        );
+        assert!(w.contains("hypotheses, not measured leaks"), "{w}");
+        assert!(
+            w.contains("750 iterations ran and none called an entry point"),
+            "{w}"
+        );
+        assert!(w.contains("37 project classes loaded"), "{w}");
+        assert!(
+            w.contains("To measure: dla harness gen --lang jvm --driver, fill the DLA-HOOK bodies"),
+            "{w}"
+        );
+        // Right after the Measured line, before the Time line.
+        let lines: Vec<&str> = md.lines().collect();
+        let measured = lines
+            .iter()
+            .position(|l| l.starts_with("Measured: "))
+            .unwrap();
+        let time = lines.iter().position(|l| l.starts_with("Time: ")).unwrap();
+        assert_eq!(lines[measured + 2], w, "{md}");
+        assert!(time > measured + 2, "{md}");
+        // The Status line and the Measured text are unchanged.
+        assert!(md.contains("Status: INCOMPLETE") || md.contains("Status: COMPLETE"));
+    }
+
+    #[test]
+    fn a_minority_is_flagged_and_half_or_more_is_not() {
+        let md = md_of(cov(10, 4, Some(100), None));
+        let w = warning(&md).unwrap_or_else(|| panic!("{md}"));
+        assert!(w.contains("exercised 4 of 10"), "{w}");
+        assert!(w.contains("most entry points were never called"), "{w}");
+        assert!(warning(&md_of(cov(10, 5, Some(100), None))).is_none());
+        assert!(warning(&md_of(cov(2, 1, None, None))).is_none());
+        // No entry points discovered, or no manifest: nothing to warn about.
+        assert!(warning(&md_of(cov(0, 0, Some(5), None))).is_none());
+        let none = render_markdown(&RunView::new(
+            state("20260101-000000-abcd"),
+            Ledger::from_text("").unwrap(),
+            None,
+        ));
+        assert!(warning(&none).is_none());
+    }
+
+    #[test]
+    fn a_runtime_that_cannot_record_exercised_entry_points_gets_no_warning() {
+        for rt in ["rust", "native"] {
+            let c: CoverageManifest = serde_json::from_value(json!({
+                "schema_version": 1,
+                "workers": {rt: {
+                    "runtime": rt,
+                    "entry_points": {"discovered": ["src/lib.rs::f", "src/lib.rs::g"], "exercised": []},
+                    "iterations": 880
+                }},
+                "blind_spots": [{"runtime": rt, "text": "the allocator shim does not record which entry points ran"}]
+            }))
+            .unwrap();
+            assert!(warning(&md_of(c)).is_none(), "{rt}");
+        }
+        // With no iteration at all, "0 exercised" is no shim limit: the warning stays.
+        let c: CoverageManifest = serde_json::from_value(json!({
+            "schema_version": 1,
+            "workers": {"rust": {
+                "runtime": "rust",
+                "entry_points": {"discovered": ["src/lib.rs::f", "src/lib.rs::g"], "exercised": []}
+            }},
+            "blind_spots": [{"runtime": "rust", "text": "the allocator shim does not record which entry points ran"}]
+        }))
+        .unwrap();
+        let md = md_of(c);
+        let w = warning(&md).unwrap_or_else(|| panic!("{md}"));
+        assert!(w.contains("no workload iteration was recorded"), "{w}");
+    }
+
+    #[test]
+    fn no_iterations_names_that_cause() {
+        let md = md_of(cov(3, 0, None, None));
+        let w = warning(&md).unwrap_or_else(|| panic!("{md}"));
+        assert!(w.contains("no workload iteration was recorded"), "{w}");
+    }
+
+    const E: &str = "{\"schema_version\":1,\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"evidence\",\"evidence_id\":\"E1\",\"source\":{\"repo\":{\"commit\":\"abc\"}},\"tool\":{\"name\":\"t\",\"version\":\"0\"},\"authority\":\"static\",\"kind\":\"static-hit\",\"result\":{}}\n";
+
+    /// A leak hypothesis F1 still unresolved and its `N-WARM` sibling confirmed.
+    fn explained_ledger() -> Ledger {
+        let mut t = String::from(E);
+        t += "{\"schema_version\":1,\"seq\":2,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"evidence\",\"evidence_id\":\"E2\",\"source\":{\"repo\":{\"commit\":\"abc\"}},\"tool\":{\"name\":\"t\",\"version\":\"0\"},\"authority\":\"test\",\"kind\":\"discriminator\",\"result\":{\"favors\":\"non-leak\"}}\n";
+        t += "{\"schema_version\":1,\"seq\":3,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"finding_added\",\"finding\":{\"id\":\"F1\",\"state\":\"candidate\",\"origin\":\"census\",\"supports\":[\"E1\"]}}\n";
+        t += "{\"schema_version\":1,\"seq\":4,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"finding_added\",\"finding\":{\"id\":\"F1.n1\",\"state\":\"candidate\",\"origin\":\"hypothesis\",\"supports\":[\"E1\"],\"parent\":\"F1\",\"hypothesis\":\"N-WARM: jit\",\"refute_if\":\"x\"}}\n";
+        t += "{\"schema_version\":1,\"seq\":5,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F1\",\"from\":\"candidate\",\"to\":\"refuted\",\"evidence\":[\"E2\"],\"by\":\"t\"}\n";
+        t += "{\"schema_version\":1,\"seq\":6,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F1.n1\",\"from\":\"candidate\",\"to\":\"under_test\",\"evidence\":[],\"by\":\"t\"}\n";
+        t += "{\"schema_version\":1,\"seq\":7,\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"transition\",\"finding\":\"F1.n1\",\"from\":\"under_test\",\"to\":\"confirmed\",\"evidence\":[\"E2\"],\"by\":\"t\"}\n";
+        Ledger::from_text(&t).unwrap()
+    }
+
+    #[test]
+    fn a_confirmed_explanation_has_its_own_section_not_the_findings_list() {
+        let md = render_markdown(&RunView::new(
+            state("20260101-000000-abcd"),
+            explained_ledger(),
+            None,
+        ));
+        let findings = md.split("## Findings").nth(1).unwrap();
+        let findings = findings.split("## Explained, not leaks").next().unwrap();
+        assert!(!findings.contains("### F1.n1"), "{md}");
+        assert!(
+            findings.contains("No leak hypotheses to report"),
+            "{findings}"
+        );
+        let explained = md.split("## Explained, not leaks").nth(1).unwrap();
+        let explained = explained.split("\n## ").next().unwrap();
+        assert!(explained.contains("### F1.n1: Hypothesis N-WARM"), "{md}");
+        assert!(
+            explained.contains("not a leak and not a defect"),
+            "{explained}"
+        );
+        assert!(explained.contains("Supporting evidence"), "{explained}");
+    }
+
+    #[test]
+    fn golden_zero_coverage_with_an_explanation() {
+        let md = render_markdown(&RunView::new(
+            state("20260101-000000-abcd"),
+            explained_ledger(),
+            Some(cov(225, 0, Some(750), Some(37))),
+        ));
+        check_golden("zero_coverage_explained", &md);
+    }
+
+    #[test]
+    fn no_explanation_means_no_section() {
+        let md = render_markdown(&RunView::new(
+            state("20260101-000000-abcd"),
+            Ledger::from_text(E).unwrap(),
+            None,
+        ));
+        assert!(!md.contains("## Explained, not leaks"), "{md}");
     }
 }

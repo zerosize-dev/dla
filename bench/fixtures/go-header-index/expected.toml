@@ -1,0 +1,21 @@
+schema_version = 1
+id = "go-header-index"
+runtime = "go"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The edge proxy's resident memory keeps climbing during long replay runs, far faster than the size of the request data it handles would explain, and it has to be restarted every few hours. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "internal/edge/index.go:36"
+lines = [36, 36]
+alt_sites = ["internal/edge/request.go:45", "internal/edge/router.go:48"]
+holder = "container-field"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

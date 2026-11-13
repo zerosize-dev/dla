@@ -10,8 +10,9 @@ The bundle does not name the finding's site. It holds the evidence (growth serie
 Procedure:
 1. Read the bundle: `index.json`, the files it lists under `evidence/`, and `excerpt.txt`.
 2. Write down, in your own words and before any ID: the site (`file:line` where the retained data is added or held, or `none` when the bundle has no source and you cannot find one), the holder (static/global, registration-table, container-field, thread-local, blocked-stack, closure/continuation, native-handle/global-ref, or cycle-only), and the mechanism that makes memory grow, in plain words.
-3. Only then choose an ID from the list below, or UNCLASSIFIED when the mechanism fits none or no list follows. UNCLASSIFIED with a stated holder and mechanism is a correct answer; never stretch an ID to fit.
-4. Record it, in the core run (no `--worker`): `dla --run <run id> ledger verify <finding> --site <file:line|none> --holder <holder> --mechanism "<text>" --label <ID|UNCLASSIFIED> --bundle <manifest sha256>`.
+   Then decide from the holder and mechanism alone whether the owner would call this a defect. If the retention is bounded, intended or proportional to load, it is not: say so.
+3. Only then choose an ID from the list below (an `N-` ID when step 2 found no defect), or UNCLASSIFIED when the mechanism fits none or no list follows. UNCLASSIFIED with a stated holder and mechanism is a correct answer; never stretch an ID to fit.
+4. Record it, in the core run (no `--worker`): `dla --run <run id> ledger verify <finding> --site <file:line|none> --holder <holder> --mechanism "<text>" --label <ID|UNCLASSIFIED> --bundle <manifest sha256>`. When step 2 found no defect, start the mechanism text with `reads as non-leak:` and give the `N-` ID; the ledger records the disagreement and opens an item, so the report shows the finding as `Verified: DISAGREES` for the user to read before trusting it.
 
 <!-- archetypes:begin -->
 IDs (`L-` a leak mechanism, `N-` growth that is not a leak):
@@ -35,4 +36,4 @@ IDs (`L-` a leak mechanism, `N-` growth that is not a leak):
 - `N-WARM`: A one-time fill (cache to its cap, class loading, lazy init, pool to size) that stops, or memory the code gives back.
 <!-- archetypes:end -->
 
-Report only disagreements that would change the verdict (a different site, holder, mechanism or ID). Do not invent problems to have something to report, and do not edit project files. Reply with one line: the finding id and the site, holder and ID you recorded.
+Report only disagreements that would change the verdict (a different site, holder, mechanism or ID). Do not invent problems to have something to report, and do not edit project files. Reply with one line: the finding id and the site, holder and ID you recorded, starting with `DISAGREES: reads as non-leak` when step 2 found no defect.

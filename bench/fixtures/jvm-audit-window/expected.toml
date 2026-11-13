@@ -1,0 +1,18 @@
+schema_version = 1
+id = "jvm-audit-window"
+runtime = "jvm"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The administration service's heap use rises for the first hours after every
+restart: the live set after a garbage collection is larger at the end of each
+shift than at its start. The team wants to know what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/audit/AuditTail.java:19"
+cause = "N-INTENT"
+discriminator = "the tail keeps the last three hours of actions on purpose (its documented console window) and drops older entries on every append; the entry count stops near 9400 once three hours of traffic have been recorded (about 9400 actions), and the post-GC heap is flat from there on, with a zero slope in the second half of a longer run"

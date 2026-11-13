@@ -26,8 +26,8 @@
     "time_budget": {
       "type": "string",
       "title": "Default time budget",
-      "description": "Wall-clock budget for one diagnosis run, such as 90s, 45m or 2h. The default is 60m.",
-      "default": "60m"
+      "description": "Wall-clock budget for one diagnosis run. The default, auto, starts at 60 minutes and is sized to the project once the sweep has found its candidates (20 minutes plus 15 per runtime and 3 per candidate, between 60 minutes and 3 hours). A fixed value such as 90s, 45m or 2h is also accepted and is never resized.",
+      "default": "auto"
     }
   }
 }

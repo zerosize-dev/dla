@@ -6,7 +6,7 @@ lists its placeholders and hooks:
 
 | Directory | Contents |
 |---|---|
-| `jvm/` | `DlaAgent.java` (premain agent), `DlaDump.java` (dump and probe code), `DlaHarness.java` (driver), `DlaJUnitHarness.java` (JUnit repeat driver, no hooks), `dla-junit-build.sh` and `dla-junit.init.gradle` (its build step), `MANIFEST.MF` |
+| `jvm/` | `DlaAgent.java` (premain agent), `DlaDump.java` (dump and probe code), `DlaHarness.java` (driver), `DlaJUnitHarness.java` (JUnit repeat driver, no hooks), `dla-junit-build.sh` and `dla-junit.init.gradle` (the build step that resolves the class path: test mode for the JUnit repeat, main mode for a driver on a Gradle or Maven project), `MANIFEST.MF` |
 | `python/` | `sitecustomize.py` (agent), `dla_harness.py` (driver), `test_dla_harness.py` (pytest-memray variant) |
 | `node/` | `dla-preload.js` (agent), `dla-harness.js` (driver) |
 | `go/` | `zz_dla_harness_test.go.tmpl` (command mode), `zz_dla_driver_test.go.tmpl` (driver), `zz_dla_goleak_test.go.tmpl` (optional goleak check) |
@@ -29,7 +29,7 @@ writes one `exit` line at exit and may write periodic `tick` lines. One record:
  "groups":{}, "raw_sites":{},
  "probes":[{"id":"P1","name":"ORDERS_BY_ID","path":"shop.OrderCache.ORDERS_BY_ID","size":1750,"reachable":5400,"bytes":null,"error":null}],
  "types":[{"name":"shop.Order","count":1750,"bytes":84000}],
- "coverage":{"kind":"classes|functions","items":["shop.OrderCache"]},
+ "coverage":{"kind":"classes|functions","items":["shop.OrderCache"],"project":1,"sources":["shop/OrderCache.java"]},
  "detectors":[], "limitations":["..."]}
 ```
 
@@ -43,6 +43,8 @@ or the last checkpoint. Absent optional sections are simply left out.
 | `DLA_HARNESS_PROBES` | path of `probes.json`: a JSON array of `ProbeSpec` (`{"id","finding","target":{"kind",...},"site"}`); an object with a `probes` array is also accepted. A runtime reads only its own probe kinds. Kind spelling is compared ignoring case, `-` and `_` (`JvmClass`, `jvm-class`) |
 | `DLA_PURGE` | `none`, `trim`, `gc`, `free-os-memory`, `trim-native-heap`, `jemalloc`, `empty-cache`. Handled per runtime: JVM `trim-native-heap` and `gc`; Python `trim` and `gc`; Node `gc`; Go `free-os-memory` and `gc` (agent and driver); the allocator shim `trim` and `jemalloc` (the latter untested); the Rust and C drivers `trim`. An unsupported kind becomes a limitation. `empty-cache` has no handler yet |
 | `DLA_PROJECT` | scratch project root; used to select project classes/functions for coverage |
+| `DLA_PROJECT_PACKAGES` | JVM only: comma list of the packages the project's own sources declare (`com.acme.shop,com.acme.billing`); the agent ranks classes of these packages with the project's, so a jar that lies outside `DLA_PROJECT` or a package that sorts late never drops the project's classes from the coverage list. `dla harness run` sets it from the scratch copy's `.java` and `.kt` files |
+| `DLA_WARM_ROUNDS` | JVM only: how many times the agent runs its own readings before its first checkpoint, so its first use of the compiler and metaspace is not read as growth of the program (default 30, at most 3 seconds; 0 turns it off) |
 | `DLA_TICK_MS` | optional period of light `tick` records (no forced collection, no probes) |
 | `DLA_ITER` | iteration count `n` of a command-mode run; copied into `x` of the exit record |
 | `DLA_CAPTURE` | JVM only: comma list of raw captures to write next to the records: `histogram` (full class histogram text), `heap` (HPROF dump), `jfr` (flight recording with old-object samples and paths to GC roots), `nonheap` (thread dump as JSON, class loader statistics, native memory summary and its change since a baseline). Unset: none |

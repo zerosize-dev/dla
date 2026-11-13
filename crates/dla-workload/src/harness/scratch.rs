@@ -126,9 +126,10 @@ fn copy_symlink(project: &Path, dest: &Path, src: &Path, to: &Path) -> Result<()
 /// Whether a file outside the scope is still needed to build what is inside it: any
 /// non-source file in a directory above the scope (`svc/go.mod` for the scope
 /// `svc/a`, a parent `pom.xml` or `Cargo.toml`) and everything under the root-level
-/// build directories.
+/// build directories. Build logic (Gradle scripts, `buildSrc`) is always kept, inside the
+/// scope or not: the build needs it, and the run never measures it.
 fn keeps_for_build(scope: &Scope, rel: &Path, slash: &str) -> bool {
-    if under_root_build_dir(rel) {
+    if under_root_build_dir(rel) || dla_core::paths::is_build_logic(slash) {
         return true;
     }
     if Lang::from_path(rel).is_some() {
@@ -696,6 +697,48 @@ mod tests {
         for dropped in ["svc/main.go", "svc/b", "other"] {
             assert!(!dest.join(dropped).exists(), "{dropped} copied");
         }
+    }
+
+    #[test]
+    fn scoped_copy_keeps_kotlin_dsl_build_logic_above_and_inside_excluded_parts() {
+        use dla_core::state::ScopeKind;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("p");
+        for f in [
+            "svc/build.gradle.kts",
+            "svc/settings.gradle.kts",
+            "svc/docker.gradle.kts",
+            "svc/b/build.gradle.kts",
+            "svc/a/src/A.kt",
+            "svc/a/gen/G.kt",
+            "svc/b/B.kt",
+        ] {
+            let path = p.join(f);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x").unwrap();
+        }
+        let scope = Scope {
+            kind: ScopeKind::Module,
+            path: "svc/a".into(),
+            excluded: vec!["svc/docker.gradle.kts".into()],
+        };
+        let dest = d.path().join("w");
+        let r = copy_project_scoped(&p, &dest, Some(&scope)).unwrap();
+        for kept in [
+            "svc/build.gradle.kts",
+            "svc/settings.gradle.kts",
+            "svc/docker.gradle.kts",
+            "svc/b/build.gradle.kts",
+            "svc/a/src/A.kt",
+        ] {
+            assert!(dest.join(kept).is_file(), "{kept} missing");
+        }
+        assert!(!dest.join("svc/b/B.kt").exists());
+        assert_eq!(
+            r.out_of_scope_sources[&Runtime::Jvm],
+            1,
+            "only svc/b/B.kt counts; build logic is kept: {r:?}"
+        );
     }
 
     #[test]

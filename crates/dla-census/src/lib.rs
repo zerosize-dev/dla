@@ -168,6 +168,8 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
 
     let enumerated = u64::try_from(entries.len()).unwrap_or(u64::MAX);
     record_out_of_scope(ctx, lang, out_of_scope)?;
+    let build_logic = walk::count_build_logic(&ctx.project, lang).max(writer.build_logic());
+    record_build_logic(ctx, lang, build_logic)?;
     let duplicates = writer.skipped();
     CoverageManifest::update(&ctx.run_dir, |m| {
         let mut cov = BackendCoverage::ran(Some(env!("CARGO_PKG_VERSION").to_owned()), enumerated);
@@ -181,17 +183,20 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
         candidates: writer.added(),
         skipped_duplicates: writer.skipped(),
         artifacts: vec![ctx.pointer(&raw_name)],
-        summary: with_out_of_scope(
-            json!({
-                "lang": lang.as_str(),
-                "source": found.source,
-                "holders": enumerated,
-                "by_holder": by_holder,
-                "annotated": annotated,
-                "files": files.iter().filter(|f| !f.is_test).count(),
-                "class_files": found.classes,
-            }),
-            out_of_scope,
+        summary: with_build_logic(
+            with_out_of_scope(
+                json!({
+                    "lang": lang.as_str(),
+                    "source": found.source,
+                    "holders": enumerated,
+                    "by_holder": by_holder,
+                    "annotated": annotated,
+                    "files": files.iter().filter(|f| !f.is_test).count(),
+                    "class_files": found.classes,
+                }),
+                out_of_scope,
+            ),
+            build_logic,
         ),
     })
 }
@@ -209,6 +214,30 @@ pub fn record_out_of_scope(ctx: &ToolCtx, runtime: Runtime, n: u64) -> Result<()
     })
     .map(|_| ())
     .map_err(|e| e.to_refusal())
+}
+
+/// Records in `coverage.json` that `n` source files of `runtime` are build logic and were
+/// not read. The larger count wins, as for [`record_out_of_scope`].
+pub fn record_build_logic(ctx: &ToolCtx, runtime: Runtime, n: u64) -> Result<(), Refusal> {
+    if n == 0 {
+        return Ok(());
+    }
+    CoverageManifest::update(&ctx.run_dir, |m| {
+        let w = m.worker_mut(runtime.as_str());
+        w.build_logic = w.build_logic.max(n);
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_refusal())
+}
+
+/// Adds `build_logic` to a summary object when it is non-zero.
+pub fn with_build_logic(mut v: Value, n: u64) -> Value {
+    if n > 0
+        && let Value::Object(m) = &mut v
+    {
+        m.insert("build_logic".into(), json!(n));
+    }
+    v
 }
 
 /// Adds `out_of_scope` to a summary object when it is non-zero.

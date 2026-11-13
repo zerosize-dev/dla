@@ -714,12 +714,142 @@ fn stop_hook_blocks_while_the_final_gate_fails_then_allows_when_it_passes() {
     assert!(reason.contains("intake.target"), "{reason}");
     assert!(reason.contains("dla ledger resolve"), "{reason}");
     assert!(reason.contains("dla gate check --final"), "{reason}");
+    // The block says how much of the budget is left, so a stop with time to spare is not
+    // mistaken for a natural end.
+    assert!(
+        reason.contains("budget minutes remain: measure what is open instead of stopping"),
+        "{reason}"
+    );
     assert_eq!(p.state()["stop_blocks"], 1);
     // Fixing it lets the session stop, and the counter does not stamp the run.
     answer_intake(&p);
     let out = p.hook(&["stop-hook"], &stop_json(p.path()));
     assert!(out.allowed(), "{out:?}");
     assert_eq!(p.state()["status"], "active");
+}
+
+#[test]
+fn stop_hook_block_says_to_close_not_to_measure_under_the_budget_floor() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let soon = (chrono::Utc::now() + chrono::Duration::minutes(4))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(soon);
+    fs::write(&path, st.to_string()).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let v = out.json();
+    assert_eq!(v["decision"], "block", "{out:?}");
+    let reason = v["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("budget minutes remain, too few to start another measurement"),
+        "{reason}"
+    );
+    assert!(
+        !reason.contains("measure what is open instead of stopping"),
+        "{reason}"
+    );
+    // The default run here is unattended (consent from the runner): it never extends.
+    assert!(
+        reason.contains("too few to start another measurement: close what is open"),
+        "{reason}"
+    );
+    assert!(!reason.contains("extend"), "{reason}");
+}
+
+#[test]
+fn stop_hook_under_the_floor_offers_an_interactive_core_the_extension_first() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let soon = (chrono::Utc::now() + chrono::Duration::minutes(4))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(soon);
+    // Interactive: the consent object exists (stage 1) but the user gave it.
+    st["consent"]["given_by"] = json!("user");
+    fs::write(&path, st.to_string()).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("too few to start another measurement: ask the user once whether to extend the budget (dla run extend <dur>)"),
+        "{reason}"
+    );
+    // Closing comes only after a no, or no answer.
+    assert!(
+        reason.contains("if the user declines or does not answer, close what is open"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn stop_hook_after_a_refusal_with_nothing_smaller_that_fits_counts_as_the_floor() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    st["consent"]["given_by"] = json!("user");
+    fs::write(&path, st.to_string()).unwrap();
+    let refusals = p.run_dir().join("time_refusals.jsonl");
+    let line = |none_fits: bool| {
+        format!(
+            "{}\n",
+            json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                   "worker": null, "none_fits": none_fits})
+        )
+    };
+    // A refusal that suggested a smaller run leaves the keep-measuring instruction.
+    fs::write(&refusals, line(false)).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("measure what is open instead of stopping"),
+        "{reason}"
+    );
+    // One that said even the smallest run does not fit puts the core at the floor.
+    fs::write(&refusals, line(true)).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("ask the user once whether to extend the budget (dla run extend <dur>)"),
+        "{reason}"
+    );
+    assert!(
+        !reason.contains("measure what is open instead of stopping"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn stop_hook_at_a_spent_budget_asks_an_interactive_core_to_extend_first() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let past = (chrono::Utc::now() - chrono::Duration::minutes(4))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(past);
+    let consent = st["consent"].clone();
+    // Interactive: the consent object exists (stage 1) but the user gave it.
+    st["consent"]["given_by"] = json!("user");
+    fs::write(&path, st.to_string()).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("ask the user once whether to extend the budget"),
+        "{reason}"
+    );
+    assert!(reason.contains("dla run extend"), "{reason}");
+    // An unattended run (consent from the runner) never extends: it only closes.
+    st["consent"] = consent;
+    fs::write(&path, st.to_string()).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("budget minutes are spent: close what is open"),
+        "{reason}"
+    );
+    assert!(!reason.contains("extend"), "{reason}");
 }
 
 #[test]

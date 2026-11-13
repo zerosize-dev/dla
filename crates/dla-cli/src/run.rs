@@ -1,6 +1,7 @@
-//! `dla run init`, `dla run status`, `dla run dispatch` and `dla run abort`.
+//! `dla run init`, `dla run status`, `dla run extend`, `dla run dispatch` and `dla run abort`.
 
 mod abort;
+mod extend;
 mod reseal;
 mod workers;
 
@@ -32,6 +33,8 @@ pub enum RunCmd {
     Init(InitArgs),
     /// Show run id, stage, status, entry path, workers, running processes, counts and the first blocking items.
     Status,
+    /// Add time to the run's budget: the new deadline is the later of the current one and now, plus DUR (core only).
+    Extend(extend::ExtendArgs),
     /// Register one worker per runtime with its share of the remaining budget (core only).
     Dispatch(workers::DispatchArgs),
     /// Stop the processes the run started, undo what it attached, and mark the run aborted (core only).
@@ -43,7 +46,7 @@ pub enum RunCmd {
 /// Flags of `dla run init`.
 #[derive(Args, Debug)]
 pub struct InitArgs {
-    /// Time budget: 90s, 45m or 2h (default: DLA_DEFAULT_BUDGET, else 60m).
+    /// Time budget: auto, or a fixed 90s, 45m or 2h (default: DLA_DEFAULT_BUDGET, else auto). `auto` starts at 60m and is sized to the project by the first passing gate check at sweep or later (60m to 180m); `dla run extend` adds time to any budget.
     #[arg(long)]
     budget: Option<String>,
     /// Session ID (default: CLAUDE_SESSION_ID, then CLAUDE_CODE_SESSION_ID, else "unknown").
@@ -78,6 +81,7 @@ fn run_config_result(
     root_text: &str,
     session: &str,
     seconds: u64,
+    auto: bool,
     scope: &Option<Scope>,
     entry: EntryPath,
     artifacts: &[String],
@@ -97,6 +101,7 @@ fn run_config_result(
         "project_root": root_text,
         "session_id": session,
         "budget_seconds": seconds,
+        "budget": if auto { "auto" } else { "fixed" },
         "scope": scope,
         "entry": entry.as_str(),
         "artifacts": artifacts,
@@ -224,6 +229,7 @@ pub fn dispatch(
     match cmd {
         RunCmd::Init(a) => init(project_arg, a),
         RunCmd::Status => run_status(&ctx()?),
+        RunCmd::Extend(a) => extend::run(&ctx()?, &project_root(project_arg)?, &a),
         RunCmd::Dispatch(a) => workers::dispatch(&ctx()?, a),
         RunCmd::Abort(a) => abort::run(&ctx()?, &project_root(project_arg)?, a),
         RunCmd::Reseal(a) => reseal::run(&ctx()?, a),
@@ -234,9 +240,14 @@ pub fn dispatch(
 /// directory created by a failing init is removed again.
 pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
     let project = project_root(project_arg)?;
-    let seconds = match a.budget.or_else(|| env_nonempty("DLA_DEFAULT_BUDGET")) {
-        Some(b) => budget::parse(&b)?,
-        None => budget::DEFAULT_SECONDS,
+    let spec = budget::parse(
+        &a.budget
+            .or_else(|| env_nonempty("DLA_DEFAULT_BUDGET"))
+            .unwrap_or_else(|| budget::DEFAULT.to_owned()),
+    )?;
+    let (seconds, auto) = match spec {
+        budget::Spec::Auto => (state::AUTO_START_SECS, true),
+        budget::Spec::Fixed(s) => (s, false),
     };
     let session = a
         .session_id
@@ -266,6 +277,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         &root_text,
         &session_text,
         seconds,
+        auto,
         &scope,
         entry,
         &artifacts,
@@ -280,6 +292,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         scope.clone(),
         state::now_utc(),
     )?;
+    st.budget.auto = auto;
     st.consent = headless;
     st.entry = entry;
     st.artifacts = artifacts;
@@ -343,6 +356,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         "status": st.status.as_str(),
         "session_id": st.session_id,
         "budget_seconds": seconds,
+        "budget_auto": auto,
         "entry": st.entry.as_str(),
         "artifacts": st.artifacts,
         "evidence": "E1",
@@ -413,6 +427,7 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         "counts": rs.counts,
         "blocking_total": total,
         "blocking": shown,
+        "budget": extend::status_json(&view, ctx.worker.as_deref()),
         "record": ctx.pointer(STATE_FILE),
         "ledger": ctx.pointer(dla_core::state::LEDGER_FILE),
         "report": view.state.report.as_ref().map(|r| r.path.clone()),
@@ -458,6 +473,26 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     }
     out["revisit"] = Value::Array(Vec::new());
     out["revisit_total"] = json!(revisit_total);
+    let (generated, ran) = gate::harness_counts(&view);
+    out["harnesses_generated"] = json!(generated);
+    out["harnesses_run"] = json!(ran);
+    out["closed_static_only"] = json!(
+        view.ledger
+            .findings()
+            .filter(|f| f.state == FindingState::SuspectedStaticOnly)
+            .filter(|f| ctx
+                .worker
+                .as_deref()
+                .is_none_or(|w| f.id.prefix() == Some(w)))
+            .filter(|f| view.ledger.merged_into(&f.id).is_none())
+            .count()
+    );
+    out["next_command"] = json!(next_command(
+        &view,
+        &missing,
+        &revisit,
+        ctx.worker.as_deref()
+    ));
     let mut truncated = total > shown.len();
     // Add revisit entries one by one while the whole object stays inside the output bound.
     let room = MAX_OUTPUT_BYTES - 1 - 40;
@@ -477,6 +512,53 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         out["truncated"] = Value::Bool(true);
     }
     Ok(out)
+}
+
+/// What to do next: `dla gate check --final` while the final gate lists an item (its fix is
+/// `blocking[0].fix`; the output of `status` is bounded, so it is not repeated); else, while the budget
+/// has room (more than the floor `dla gate check` uses), the remedy of the first finding to
+/// revisit that is not closed on a blocker and whose remedy is a `dla` command; else
+/// `dla report` (a remedy in prose is read in the `revisit` list, never offered as a command).
+fn next_command(
+    view: &RunView,
+    missing: &[gate::Missing],
+    revisit: &[Value],
+    worker: Option<&str>,
+) -> String {
+    if !missing.is_empty() {
+        return "dla gate check --final".to_owned();
+    }
+    let room = gate::budget_over_floor(&view.state, worker).is_some();
+    // A finding closed with a blocker reason waits for the user: it is not a next step.
+    // Of the others, only a remedy that is a `dla` command is a command.
+    let open = |e: &&Value| {
+        !matches!(
+            e["reason"].as_str(),
+            Some("env_unavailable" | "tool_missing" | "build_fails" | "privilege_declined")
+        )
+    };
+    let remedies: Vec<&str> = revisit
+        .iter()
+        .filter(open)
+        .filter_map(|e| e["remedy"].as_str())
+        .filter(|r| !r.is_empty())
+        .collect();
+    remedies
+        .iter()
+        .find(|r| r.starts_with("dla "))
+        .filter(|_| room)
+        .map_or_else(|| "dla report".to_owned(), |r| clip_command(r))
+}
+
+/// The output of `dla run status` is bounded; the full fix is in `blocking` and the gate file.
+const NEXT_COMMAND_CHARS: usize = 110;
+
+fn clip_command(s: &str) -> String {
+    if s.chars().count() <= NEXT_COMMAND_CHARS {
+        return s.to_owned();
+    }
+    let cut: String = s.chars().take(NEXT_COMMAND_CHARS).collect();
+    format!("{cut}...")
 }
 
 /// The counts of `status` and the blocking list `dla gate check --final` would print.
@@ -504,15 +586,9 @@ fn worker_status(ctx: &Ctx, w: &str) -> Res<(RunView, StatusParts)> {
     for f in view.ledger.findings().filter(|f| mine(&f.id.to_string())) {
         counts.enumerated += 1;
         counts.dispositioned += usize::from(f.state.is_dispositioned());
-        let slot = &mut counts.by_state;
-        match f.state {
-            FindingState::Candidate => slot.candidate += 1,
-            FindingState::UnderTest => slot.under_test += 1,
-            FindingState::Confirmed => slot.confirmed += 1,
-            FindingState::Strong => slot.strong += 1,
-            FindingState::Refuted => slot.refuted += 1,
-            FindingState::SuspectedStaticOnly => slot.suspected_static_only += 1,
-            FindingState::Unresolved => slot.unresolved += 1,
+        counts.by_state.bump(f.state);
+        if f.polarity() == dla_core::finding::Polarity::NonLeak {
+            counts.non_leak.bump(f.state);
         }
     }
     counts.open_items = missing.iter().filter(|b| b.kind == "open_item").count();

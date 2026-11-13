@@ -1,0 +1,22 @@
+schema_version = 2
+id = "python-zstd-options-3145"
+runtime = "python"
+category = "decoy-control"
+pair = "python-zstd-options-3144"
+dynamic_confirmation = true
+
+[toolchain]
+python = "3.14.5"
+
+[task]
+prompt = """
+The archive service's resident memory grows with the number of log segments it
+has read. It is restarted every few days when the container reaches its
+limit. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "archive/reader.py:17"
+cause = "N-WARM"
+discriminator = "traced memory stays at 0 KB over the baseline and the count of allocated blocks stays at base + 11 or 12 at 2000 and at 8000 reads, although two thirds of the reads (5334 of 8000) take the fallback decoder after the options were rejected; the process is flat from the first reading"

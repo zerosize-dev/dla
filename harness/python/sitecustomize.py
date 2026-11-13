@@ -40,6 +40,7 @@ _COVERAGE_CAP = 20000
 _PROBE_DEADLINE_S = 60.0
 _MODULE_NAME_CAP = 150
 _checkpoint_written = False
+_checkpoint_count = 0
 _lock = threading.RLock()
 _coverage = set()
 _coverage_on = False
@@ -1097,7 +1098,10 @@ def _build(phase, x, last):
                 rec["captures"] = captures
         del objs, types_full
         rec["probes"] = _probes(limitations)
-        if phase == "exit":
+        # A driver writes no `exit` record, so its last checkpoint carries the section, and so do
+        # the first, second, fourth, eighth... (a driver cut off by its timeout never writes the
+        # last one). The harness takes the union of all of them.
+        if phase == "exit" or (phase == "checkpoint" and (last or bin(_checkpoint_count).count("1") == 1)):
             if _coverage_on:
                 rec["coverage"] = {"kind": "functions", "items": sorted(_coverage)}
                 if len(_coverage) >= _COVERAGE_CAP:
@@ -1138,8 +1142,9 @@ def dump(phase="exit", x=None, last=True):
 
 def checkpoint(x, last=False):
     """Driver entry: write a checkpoint record; x is the number of units completed."""
-    global _checkpoint_written
+    global _checkpoint_written, _checkpoint_count
     _checkpoint_written = True
+    _checkpoint_count += 1
     dump("checkpoint", x, last)
 
 

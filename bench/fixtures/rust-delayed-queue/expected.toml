@@ -1,0 +1,22 @@
+schema_version = 1
+id = "rust-delayed-queue"
+runtime = "rust"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the order timer service's resident memory grows in step with the number of orders it has taken, and the process is restarted every few days. Almost every order is paid within a second and the number of orders waiting for payment stays in the dozens. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/scheduler.rs:53"
+lines = [53, 53]
+alt_sites = ["src/scheduler.rs:58-64", "src/scheduler.rs:41", "src/scheduler.rs:70-82"]
+holder = "container-field"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true
+dump_backed = true

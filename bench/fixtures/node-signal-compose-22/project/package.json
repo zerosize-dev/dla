@@ -1,0 +1,14 @@
+{
+  "name": "export-gateway",
+  "version": "1.6.0",
+  "private": true,
+  "description": "Serves account statement exports to the back office, with a time budget per request.",
+  "main": "src/handler.js",
+  "scripts": {
+    "test": "node --test",
+    "load": "node load.js --iterations 20000"
+  },
+  "engines": {
+    "node": "22.12.0"
+  }
+}

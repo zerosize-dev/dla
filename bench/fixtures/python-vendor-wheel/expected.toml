@@ -1,0 +1,23 @@
+schema_version = 1
+id = "python-vendor-wheel"
+runtime = "python"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = """
+The telemetry gateway's resident memory grows in step with the number of
+packets it decodes; the process is restarted by the supervisor several times a
+day. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "ingestd/sessions.py:7"
+lines = [7, 7]
+alt_sites = ["ingestd/sessions.py:3", "ingestd/gateway.py:12"]
+holder = "static/global"
+region = "heap"
+cause = "L-COLLECT"
+share = 1.0
+confirmable = false

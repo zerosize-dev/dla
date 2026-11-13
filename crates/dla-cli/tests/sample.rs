@@ -397,6 +397,78 @@ fn refusals_name_the_missing_item_and_the_fix() {
 }
 
 #[test]
+fn an_interval_too_long_for_the_time_left_says_so_and_suggests_one_that_fits() {
+    let dir = tempfile::tempdir().unwrap();
+    let init = ok(
+        dir.path(),
+        &["run", "init", "--session-id", "t", "--budget", "20s"],
+    );
+    let run_dir = dir
+        .path()
+        .join(".dla")
+        .join(init["run_id"].as_str().unwrap());
+    ok(dir.path(), &["consent", "--tiers", "1-4"]);
+    let s = sleeper();
+    let pid = s.pid().to_string();
+    // 20 s of budget cannot take two samples 15 s apart, but it is not used up.
+    let e = refused(
+        dir.path(),
+        &[
+            "sample",
+            "--pid",
+            &pid,
+            "--interval",
+            "15s",
+            "--counters",
+            "none",
+        ],
+    );
+    assert_eq!(e["code"], "time-budget", "{e}");
+    let msg = e["message"].as_str().unwrap();
+    assert!(!msg.contains("used up"), "{e}");
+    assert!(msg.contains("--interval 15s"), "{e}");
+    let fix = e["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("dla sample --pid") && fix.contains("--interval "),
+        "{e}"
+    );
+    let secs: u64 = fix
+        .split("--interval ")
+        .nth(1)
+        .and_then(|t| {
+            t.trim_end_matches(|c: char| !c.is_ascii_digit())
+                .parse()
+                .ok()
+        })
+        .unwrap_or_else(|| panic!("no interval in {fix}"));
+    // It leaves a margin: at most (20 s - 5 s) / 2.
+    assert!((1..=7).contains(&secs), "{fix}");
+    // Like every tool, it notes the refusal, so `time_budget` is an honest reason later.
+    assert!(
+        run_dir
+            .join(dla_core::toolctx::TIME_REFUSALS_FILE)
+            .is_file()
+    );
+    // The suggestion fits, and still does after the time a model needs to act on it.
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    let ok_interval = format!("{secs}s");
+    ok(
+        dir.path(),
+        &[
+            "sample",
+            "--pid",
+            &pid,
+            "--interval",
+            &ok_interval,
+            "--duration",
+            "1s",
+            "--counters",
+            "none",
+        ],
+    );
+}
+
+#[test]
 fn a_process_dla_started_is_tier_one_and_others_are_tier_two() {
     let p = project_with(Some("1"));
     let s = sleeper();
@@ -597,6 +669,12 @@ fn jcmd_backend_reads_heap_threads_and_nmt() {
         assert!(vals.iter().all(|v| *v > 0.0), "{c}: {vals:?}");
     }
     assert!(values(&series, "jvm.heap_used").len() >= 2);
+    // The classes loaded now, shared (CDS) ones included: the cumulative counter alone read 7
+    // here. The unloads are their own column; the subtraction itself is pinned by the jcmd
+    // unit test.
+    let loaded = values(&series, "jvm.classes_loaded");
+    assert!(loaded.iter().all(|v| *v > 100.0), "{loaded:?}");
+    assert!(!values(&series, "jvm.classes_unloaded").is_empty());
     let meta = |name: &str| {
         series["columns"]
             .as_array()

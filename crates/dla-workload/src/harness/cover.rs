@@ -5,7 +5,7 @@
 //!
 //! | Runtime | Source | Match |
 //! |---|---|---|
-//! | JVM | loaded project classes in the dump | the entry's file is the class's source file |
+//! | JVM | loaded classes and the source files of the project's classes in the dump | the entry's file is the class's source file (by path, or by the `SourceFile` attribute) |
 //! | Python | `module:qualname@file:line` items in the dump | `file::qualname` |
 //! | Node | `NODE_V8_COVERAGE` JSON files in `cov/` | file and function name, count above 0 |
 //! | Go | `-coverprofile` files in `cov/`, read with `go tool cover -func` | file and function name, coverage above 0.0% |
@@ -34,6 +34,8 @@ pub struct Exercised {
     pub entries: BTreeSet<String>,
     /// What the data could not tell.
     pub limitations: Vec<String>,
+    /// JVM: distinct top-level classes of the project that were loaded, when the agent says.
+    pub project_classes: Option<u64>,
 }
 
 /// `file` and bare function name of an entry-point ID.
@@ -140,7 +142,61 @@ fn dump_items(dump_cov: &[DumpCoverage], hdir: &Path) -> (BTreeSet<String>, Vec<
     (items, notes)
 }
 
-fn jvm_entries(discovered: &[String], loaded: &BTreeSet<String>) -> BTreeSet<String> {
+/// The directory part of a `/` separated path (`""` when there is none).
+fn dir_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// The last component of a `/` separated path.
+fn base_of(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The JVM class a Kotlin file's top-level functions compile to: the `@file:JvmName` the
+/// file declares, else the file name with `Kt` (`Util.kt` gives `UtilKt`).
+fn facade_class(work: &Path, file: &str, stem_name: &str) -> String {
+    let named = fs::read(work.join(file)).ok().and_then(|bytes| {
+        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(16 * 1024)]).into_owned();
+        let at = head.find("@file:JvmName(")?;
+        let rest = &head[at + "@file:JvmName(".len()..];
+        let rest = rest.trim_start();
+        let rest = rest
+            .strip_prefix("name")
+            .map(|r| r.trim_start().trim_start_matches('=').trim_start())
+            .unwrap_or(rest);
+        let rest = rest.strip_prefix('"')?;
+        let name = &rest[..rest.find('"')?];
+        (!name.is_empty()).then(|| name.to_owned())
+    });
+    named.unwrap_or_else(|| format!("{stem_name}Kt"))
+}
+
+/// The package of a source file as a `/` path (`com/acme/shop`, `""` for the default package),
+/// read from the file itself; `None` when the file cannot be read.
+fn declared_package(work: &Path, file: &str) -> Option<String> {
+    let path = work.join(file);
+    fs::metadata(&path).ok()?;
+    Some(package_of(&path).unwrap_or_default().replace('.', "/"))
+}
+
+/// The discovered entry points whose file a loaded class came from.
+///
+/// A class belongs to a file in three ways, all by names the project's own files and the
+/// loaded classes share (never by a name alone: `kotlin.text.StringsKt` is not the facade of
+/// a project's `Strings.kt`):
+/// - the file's path ends with the class's package path and name (the Java layout);
+/// - the class's `SourceFile` attribute (`sources`, as `package/path/File.kt`) names a file
+///   that declares that package, and the entry's owner class is itself loaded from that
+///   package (a Kotlin file need not hold the class it is named for, nor sit in the
+///   directory of its package);
+/// - for a top-level function, the file's facade class (`UtilKt`, or the `@file:JvmName`)
+///   is loaded from the file's own package.
+fn jvm_entries(
+    discovered: &[String],
+    loaded: &BTreeSet<String>,
+    sources: &BTreeSet<String>,
+    work: &Path,
+) -> BTreeSet<String> {
     // Top-level class paths (`shop/OrderCache`) and simple names of every loaded class.
     let tops: BTreeSet<String> = loaded
         .iter()
@@ -150,6 +206,12 @@ fn jvm_entries(discovered: &[String], loaded: &BTreeSet<String>) -> BTreeSet<Str
         .iter()
         .filter_map(|c| c.rsplit(['.', '$', '/']).next())
         .collect();
+    // Does a loaded class (or one nested in it) have this dotted name?
+    let is_loaded = |name: &str| {
+        loaded
+            .iter()
+            .any(|c| c == name || c.strip_prefix(name).is_some_and(|r| r.starts_with('$')))
+    };
     discovered
         .iter()
         .filter(|id| {
@@ -158,17 +220,139 @@ fn jvm_entries(discovered: &[String], loaded: &BTreeSet<String>) -> BTreeSet<Str
             };
             let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
             let stem_name = stem.rsplit('/').next().unwrap_or(stem);
-            let owner = qualified(id)
-                .and_then(|q| q.rsplit_once('.').map(|(o, _)| o))
-                .map(|o| o.rsplit('.').next().unwrap_or(o))
-                .unwrap_or(stem_name);
-            let file_loaded = tops
+            let qualified = qualified(id).unwrap_or_default();
+            let package = declared_package(work, file);
+            let Some((owner, _)) = qualified.rsplit_once('.') else {
+                // A top-level function: it ran when the file's facade class is loaded.
+                let Some(package) = package else {
+                    return false;
+                };
+                let facade = facade_class(work, file, stem_name);
+                let fqn = if package.is_empty() {
+                    facade
+                } else {
+                    format!("{}/{facade}", package)
+                };
+                return tops.contains(&fqn);
+            };
+            let owner_simple = owner.rsplit('.').next().unwrap_or(owner);
+            let by_path = tops
                 .iter()
-                .any(|t| stem == t || stem.ends_with(&format!("/{t}")));
-            file_loaded && (owner == stem_name || simple.contains(owner))
+                .any(|t| stem == t || stem.ends_with(&format!("/{t}")))
+                && (owner_simple == stem_name || simple.contains(owner_simple));
+            let by_source = package.is_some_and(|package| {
+                sources
+                    .iter()
+                    .any(|s| base_of(s) == base_of(file) && dir_of(s) == package)
+                    && is_loaded(&if package.is_empty() {
+                        owner.replace('.', "$")
+                    } else {
+                        format!("{}.{}", package.replace('/', "."), owner.replace('.', "$"))
+                    })
+            });
+            by_path || by_source
         })
         .cloned()
         .collect()
+}
+
+/// The packages the project's own JVM sources declare, as the comma list `DLA_PROJECT_PACKAGES`
+/// carries: every `package` of a non-test `.java` or `.kt` file under `work`, without the
+/// packages inside another one listed (`com.acme` stands for `com.acme.shop`). Bounded in
+/// files read and packages listed.
+pub fn jvm_project_packages(work: &Path) -> String {
+    // `buildSrc` holds build logic (kept in the scratch copy so the build runs), not the
+    // program: its packages are not the project's.
+    const SKIP: [&str; 10] = [
+        "buildSrc",
+        "build",
+        "out",
+        "target",
+        "node_modules",
+        "test",
+        "tests",
+        "testFixtures",
+        "integrationTest",
+        "androidTest",
+    ];
+    // Roots shared by unrelated code: never a project's package on their own.
+    const SHARED: [&str; 12] = [
+        "com", "org", "net", "io", "java", "javax", "jakarta", "kotlin", "kotlinx", "android",
+        "androidx", "sun",
+    ];
+    let mut found: BTreeSet<String> = BTreeSet::new();
+    let mut stack = vec![work.to_path_buf()];
+    let mut files = 0usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            let name = e.file_name().to_string_lossy().into_owned();
+            let path = e.path();
+            if ft.is_dir() {
+                if !name.starts_with('.') && !SKIP.contains(&name.as_str()) {
+                    stack.push(path);
+                }
+            } else if ft.is_file()
+                && (name.ends_with(".java") || name.ends_with(".kt"))
+                && files < 20_000
+            {
+                files += 1;
+                if let Some(p) = package_of(&path) {
+                    found.insert(p);
+                }
+            }
+        }
+    }
+    let all: Vec<String> = found.into_iter().collect();
+    let mut kept: Vec<String> = Vec::new();
+    for p in &all {
+        let covered = all
+            .iter()
+            .any(|q| q != p && p.starts_with(&format!("{q}.")) && !SHARED.contains(&q.as_str()));
+        if !covered && !SHARED.contains(&p.as_str()) {
+            kept.push(p.clone());
+        }
+    }
+    kept.truncate(200);
+    kept.join(",")
+}
+
+/// The `package` of a Java or Kotlin source file, read from its head.
+fn package_of(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(8 * 1024)
+        .read_to_end(&mut head)
+        .ok()?;
+    let text = String::from_utf8_lossy(&head);
+    // A byte order mark in front of the first line is not part of it.
+    let text = text.trim_start_matches('\u{feff}');
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("package ") {
+            // `package com.acme // core` and `package com.acme /* core */`.
+            let rest = rest.split("//").next().unwrap_or(rest);
+            let rest = rest.split("/*").next().unwrap_or(rest);
+            let name: String = rest
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .trim_matches('`')
+                .to_owned();
+            let ok = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '.');
+            return ok.then_some(name);
+        }
+        if line.starts_with("import ") {
+            return None;
+        }
+    }
+    None
 }
 
 fn python_entries(
@@ -345,12 +529,35 @@ pub fn exercised(
                 res.limitations
                     .push("the JVM agent reported no loaded classes".to_owned());
             }
-            res.entries = jvm_entries(discovered, &items);
+            let sources: BTreeSet<String> = dump_cov
+                .iter()
+                .flat_map(|c| c.sources.iter().cloned())
+                .collect();
+            res.project_classes = dump_cov.iter().filter_map(|c| c.project).max();
+            res.entries = jvm_entries(discovered, &items, &sources, &work);
+            if let Some(n) = res
+                .project_classes
+                .filter(|n| *n > 0 && res.entries.is_empty())
+            {
+                let loaded = if n == 1 {
+                    "1 project class was".to_owned()
+                } else {
+                    format!("{n} project classes were")
+                };
+                res.limitations.push(format!(
+                    "{loaded} loaded, but none holds a discovered entry point: the run executed project code outside the listed entry points (a class the driver or the tests call that no entry point names, or a file this match cannot place)"
+                ));
+            }
         }
         Runtime::Python => {
             let (items, notes) = dump_items(dump_cov, hdir);
             res.limitations.extend(notes);
-            if items.is_empty() {
+            // An agent on 3.12+ always writes a `functions` section, empty or not: an empty one
+            // is a driver that ran no listed code, not a missing monitor.
+            let reported = dump_cov
+                .iter()
+                .any(|c| c.kind.as_deref() == Some("functions"));
+            if items.is_empty() && !reported {
                 res.limitations.push(
                     "the Python agent reported no executed functions (sys.monitoring needs Python 3.12 or newer)"
                         .to_owned(),
@@ -422,6 +629,8 @@ pub fn record(
         })
         .unwrap_or_default();
     let mut limitations = Vec::new();
+    let mut project_classes = None;
+    let mut agent_blind = false;
     let found = match outcome {
         CoverageOutcome::Ran {
             dump_cov,
@@ -431,7 +640,13 @@ pub fn record(
             ..
         } => {
             let ex = exercised(runtime, &discovered, dump_cov, hdir, cov_dir, work);
+            agent_blind = runtime == Runtime::Python
+                && ex
+                    .limitations
+                    .iter()
+                    .any(|l| l.contains("sys.monitoring needs Python 3.12"));
             limitations.extend(ex.limitations);
+            project_classes = ex.project_classes;
             ex.entries
         }
         CoverageOutcome::Failed { .. } => BTreeSet::new(),
@@ -439,11 +654,22 @@ pub fn record(
     CoverageManifest::update(&ctx.run_dir, |m| match outcome {
         CoverageOutcome::Ran { iterations, .. } => {
             m.set_iterations(worker, *iterations);
+            if let Some(n) = project_classes {
+                m.set_project_classes(worker, n);
+            }
             m.add_exercised(worker, found.iter().cloned());
             if matches!(runtime, Runtime::Rust | Runtime::Native) {
                 m.add_blind_spot(
                     worker,
                     "the allocator shim does not record which entry points ran",
+                );
+            }
+            // A Python before 3.12 has no `sys.monitoring`: the empty list is a limit
+            // of the interpreter, not a driver that missed the code.
+            if agent_blind {
+                m.add_blind_spot(
+                    worker,
+                    "the Python agent cannot say which entry points ran (sys.monitoring needs Python 3.12 or newer)",
                 );
             }
             // An entry point that ran is no longer unrunnable.
@@ -510,6 +736,66 @@ mod tests {
         v.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    /// A Python before 3.12 reports no executed function: the empty result is a limit of
+    /// the interpreter, recorded as a blind spot so the gate and the report do not read it
+    /// as a driver that missed the code. A Python that did report functions records none.
+    #[test]
+    fn a_python_without_function_coverage_records_a_blind_spot() {
+        // (items, kind of the section the agent wrote, blind spot expected). An empty
+        // `functions` section is an agent that watched and saw nothing run: not blind.
+        for (items, kind, blind) in [
+            (vec![], None, true),
+            (vec!["m.py::f".to_owned()], None, false),
+            (vec![], Some("functions".to_owned()), false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let run_dir = dir.path().join("run");
+            fs::create_dir_all(&run_dir).unwrap();
+            let ctx = ToolCtx {
+                project: dir.path().to_path_buf(),
+                run_dir: run_dir.clone(),
+                run_id: "r".into(),
+                source_commit: "c".into(),
+                data_flag: None,
+                worker: None,
+            };
+            CoverageManifest::update(&run_dir, |m| {
+                m.set_entry_points(
+                    "python",
+                    dla_core::coverage::EntryPoints {
+                        discovered: vec!["m.py::f".into(), "m.py::g".into()],
+                        exercised: vec![],
+                        not_exercisable: vec![],
+                    },
+                );
+            })
+            .unwrap();
+            let dump = vec![DumpCoverage {
+                items,
+                kind,
+                ..DumpCoverage::default()
+            }];
+            record(
+                &ctx,
+                Runtime::Python,
+                &CoverageOutcome::Ran {
+                    iterations: 3520,
+                    dump_cov: dump,
+                    hdir: dir.path(),
+                    cov_dir: dir.path(),
+                    work: dir.path(),
+                },
+            )
+            .unwrap();
+            let m = CoverageManifest::load(&run_dir).unwrap().unwrap();
+            let got = m
+                .blind_spots
+                .iter()
+                .any(|b| b.runtime == "python" && b.text.contains("which entry points ran"));
+            assert_eq!(got, blind);
+        }
+    }
+
     #[test]
     fn jvm_classes_map_to_the_entries_of_their_source_file() {
         let discovered = d(&[
@@ -520,10 +806,430 @@ mod tests {
         let loaded: BTreeSet<String> = ["shop.OrderCache", "shop.Order$Line"]
             .map(String::from)
             .into();
-        let got = jvm_entries(&discovered, &loaded);
+        let got = jvm_entries(&discovered, &loaded, &BTreeSet::new(), Path::new("/w"));
         assert!(got.contains("src/shop/OrderCache.java::OrderCache.store"));
         assert!(got.contains("src/shop/Order.java::Order.Line.total"));
         assert!(!got.iter().any(|e| e.contains("Catalog")));
+    }
+
+    fn set(v: &[&str]) -> BTreeSet<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    const KOTLIN_ENTRIES: [&str; 7] = [
+        "src/main/kotlin/billing/Invoices.kt::Invoices.total",
+        "src/main/kotlin/com/acme/shop/Routes.kt::UserController.ping",
+        "src/main/kotlin/com/acme/shop/Routes.kt::UserController.user",
+        "src/main/kotlin/com/acme/shop/Routes.kt::routeCount",
+        "src/main/kotlin/com/acme/shop/UserService.kt::UserService.lookup",
+        "src/main/kotlin/com/acme/shop/UserService.kt::UserService.size",
+        "src/main/kotlin/com/acme/shop/Util.kt::slug",
+    ];
+
+    /// A scratch copy holding `files` (path, text), as the harness's work directory does.
+    fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, text) in files {
+            let full = dir.path().join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, text).unwrap();
+        }
+        dir
+    }
+
+    fn shop() -> tempfile::TempDir {
+        project(&[
+            (
+                "src/main/kotlin/billing/Invoices.kt",
+                "package com.acme.shop.billing\n\nclass Invoices { fun total() = 1 }\n",
+            ),
+            (
+                "src/main/kotlin/com/acme/shop/Routes.kt",
+                "package com.acme.shop\n\nclass UserController { fun ping() = 1 }\nfun routeCount() = 2\n",
+            ),
+            (
+                "src/main/kotlin/com/acme/shop/UserService.kt",
+                "package com.acme.shop\n\nclass UserService\n",
+            ),
+            (
+                "src/main/kotlin/com/acme/shop/Util.kt",
+                "package com.acme.shop\n\nfun slug(s: String) = s\n",
+            ),
+        ])
+    }
+
+    #[test]
+    fn a_kotlin_file_holding_a_class_of_another_name_is_matched_by_its_source_file() {
+        // `Routes.kt` holds `UserController`: no loaded class path ends with `.../Routes`.
+        let dir = shop();
+        let loaded = set(&[
+            "com.acme.shop.UserController",
+            "com.acme.shop.UserController$ping$1",
+        ]);
+        let sources = set(&["com/acme/shop/Routes.kt"]);
+        let got = jvm_entries(&d(&KOTLIN_ENTRIES), &loaded, &sources, dir.path());
+        assert_eq!(
+            got,
+            set(&[
+                "src/main/kotlin/com/acme/shop/Routes.kt::UserController.ping",
+                "src/main/kotlin/com/acme/shop/Routes.kt::UserController.user",
+            ]),
+            "the top-level routeCount needs RoutesKt, and the other files are not loaded"
+        );
+        // Without the sources (an older agent) the old rule finds nothing: the defect.
+        let got = jvm_entries(&d(&KOTLIN_ENTRIES), &loaded, &BTreeSet::new(), dir.path());
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn a_class_of_the_file_that_is_not_the_entry_owner_does_not_run_the_entry() {
+        // `Reports.kt` holds `class Reports` (never used) and `data class ReportRow` (loaded).
+        let dir = project(&[(
+            "src/main/kotlin/com/acme/shop/Reports.kt",
+            "package com.acme.shop\n\nclass Reports { fun build() = 1 }\ndata class ReportRow(val a: Int)\n",
+        )]);
+        let disc = d(&["src/main/kotlin/com/acme/shop/Reports.kt::Reports.build"]);
+        let sources = set(&["com/acme/shop/Reports.kt"]);
+        let got = jvm_entries(
+            &disc,
+            &set(&["com.acme.shop.ReportRow"]),
+            &sources,
+            dir.path(),
+        );
+        assert!(got.is_empty(), "{got:?}");
+        let got = jvm_entries(
+            &disc,
+            &set(&["com.acme.shop.Reports"]),
+            &sources,
+            dir.path(),
+        );
+        assert_eq!(got.len(), 1);
+        // The same for Java: a package-private helper of `Order.java` is not `Order`.
+        let dir = project(&[(
+            "src/main/java/shop/Order.java",
+            "package shop;\n\npublic class Order { int total() { return 1; } }\nclass OrderHelper {}\n",
+        )]);
+        let disc = d(&["src/main/java/shop/Order.java::Order.total"]);
+        let got = jvm_entries(
+            &disc,
+            &set(&["shop.OrderHelper"]),
+            &set(&["shop/Order.java"]),
+            dir.path(),
+        );
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn a_kotlin_top_level_function_runs_when_its_facade_class_is_loaded() {
+        let dir = shop();
+        let disc = d(&KOTLIN_ENTRIES);
+        let got = jvm_entries(
+            &disc,
+            &set(&["com.acme.shop.UtilKt"]),
+            &set(&["com/acme/shop/Util.kt"]),
+            dir.path(),
+        );
+        assert_eq!(got, set(&["src/main/kotlin/com/acme/shop/Util.kt::slug"]));
+        // A class named like the file is not the facade: `Util` alone does not run `slug`.
+        let got = jvm_entries(
+            &disc,
+            &set(&["com.acme.shop.Util"]),
+            &set(&["com/acme/shop/Util.kt"]),
+            dir.path(),
+        );
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn a_library_class_named_like_a_facade_does_not_run_a_project_function() {
+        // `kotlin.text.StringsKt` is loaded in every Kotlin program; the project's own
+        // `Strings.kt` (package com.acme.text) never ran its `padLeft`.
+        let dir = project(&[
+            (
+                "src/main/kotlin/com/acme/text/Strings.kt",
+                "package com.acme.text\n\nfun padLeft(s: String) = s\n",
+            ),
+            (
+                "src/main/kotlin/com/acme/other/Strings.kt",
+                "package com.acme.other\n\nfun trim2(s: String) = s\n",
+            ),
+            (
+                "src/main/kotlin/com/acme/Extensions.kt",
+                "package com.acme\n\nfun toJson(s: String) = s\n",
+            ),
+        ]);
+        let disc = d(&[
+            "src/main/kotlin/com/acme/text/Strings.kt::padLeft",
+            "src/main/kotlin/com/acme/other/Strings.kt::trim2",
+            "src/main/kotlin/com/acme/Extensions.kt::toJson",
+        ]);
+        let loaded = set(&[
+            "kotlin.text.StringsKt",
+            "com.fasterxml.jackson.module.kotlin.ExtensionsKt",
+        ]);
+        let got = jvm_entries(&disc, &loaded, &BTreeSet::new(), dir.path());
+        assert!(got.is_empty(), "{got:?}");
+        // The project's own facade, loaded from the file's package, does run it.
+        let got = jvm_entries(
+            &disc,
+            &set(&["com.acme.text.StringsKt", "kotlin.text.StringsKt"]),
+            &BTreeSet::new(),
+            dir.path(),
+        );
+        assert_eq!(
+            got,
+            set(&["src/main/kotlin/com/acme/text/Strings.kt::padLeft"])
+        );
+    }
+
+    #[test]
+    fn a_file_jvm_name_renames_the_facade_class() {
+        let dir = project(&[(
+            "src/main/kotlin/com/acme/shop/Util.kt",
+            "@file:JvmName(\"Strings\")\n\npackage com.acme.shop\n\nfun slug(s: String) = s\n",
+        )]);
+        let disc = d(&["src/main/kotlin/com/acme/shop/Util.kt::slug"]);
+        let sources = set(&["com/acme/shop/Util.kt"]);
+        let got = jvm_entries(
+            &disc,
+            &set(&["com.acme.shop.Strings"]),
+            &sources,
+            dir.path(),
+        );
+        assert_eq!(got.len(), 1, "{got:?}");
+        // The default facade name is no longer the one that holds the function.
+        let got = jvm_entries(&disc, &set(&["com.acme.shop.UtilKt"]), &sources, dir.path());
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn a_kotlin_package_that_omits_the_root_of_its_directory_is_matched() {
+        // `billing/Invoices.kt` declares `package com.acme.shop.billing`.
+        let dir = shop();
+        let loaded = set(&["com.acme.shop.billing.Invoices"]);
+        let sources = set(&["com/acme/shop/billing/Invoices.kt"]);
+        let got = jvm_entries(&d(&KOTLIN_ENTRIES), &loaded, &sources, dir.path());
+        assert_eq!(
+            got,
+            set(&["src/main/kotlin/billing/Invoices.kt::Invoices.total"])
+        );
+        // The old path rule cannot see it.
+        let got = jvm_entries(&d(&KOTLIN_ENTRIES), &loaded, &BTreeSet::new(), dir.path());
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    #[test]
+    fn files_of_one_name_are_told_apart_by_the_package_they_declare() {
+        let dir = project(&[
+            (
+                "src/main/kotlin/a/Config.kt",
+                "package x.a\n\nclass Config { fun load() = 1 }\n",
+            ),
+            (
+                "src/main/kotlin/b/Config.kt",
+                "package x.b\n\nclass Config { fun load() = 1 }\n",
+            ),
+            (
+                "src/main/kotlin/domain/User.kt",
+                "package com.acme.shop.domain\n\nclass User { fun rename() = 1 }\n",
+            ),
+        ]);
+        let disc = d(&[
+            "src/main/kotlin/a/Config.kt::Config.load",
+            "src/main/kotlin/b/Config.kt::Config.load",
+            "src/main/kotlin/domain/User.kt::User.rename",
+        ]);
+        let got = jvm_entries(
+            &disc,
+            &set(&["x.b.Config"]),
+            &set(&["x/b/Config.kt"]),
+            dir.path(),
+        );
+        assert_eq!(got, set(&["src/main/kotlin/b/Config.kt::Config.load"]));
+        // A package no file of that name declares places nothing, even for a name used once:
+        // `com.acme.shop.api.User` is another class than the discovered `domain.User`.
+        let got = jvm_entries(
+            &disc,
+            &set(&["x.c.Config", "com.acme.shop.api.User"]),
+            &set(&["x/c/Config.kt", "com/acme/shop/api/User.kt"]),
+            dir.path(),
+        );
+        assert!(got.is_empty(), "{got:?}");
+        // A name used once with the root of its package omitted is placed by what it declares.
+        let got = jvm_entries(
+            &disc,
+            &set(&["com.acme.shop.domain.User"]),
+            &set(&["com/acme/shop/domain/User.kt"]),
+            dir.path(),
+        );
+        assert_eq!(got, set(&["src/main/kotlin/domain/User.kt::User.rename"]));
+    }
+
+    #[test]
+    fn a_package_line_with_a_comment_or_a_byte_order_mark_is_still_read() {
+        let dir = project(&[
+            (
+                "src/main/kotlin/x/Commented.kt",
+                "package com.acme.shop // core\n\nclass Svc { fun run() = 1 }\nfun slug() = 1\n",
+            ),
+            (
+                "src/main/kotlin/y/Block.kt",
+                "package com.acme.shop /* core */\n\nclass Blk { fun go() = 1 }\n",
+            ),
+            (
+                "src/main/kotlin/z/Bom.kt",
+                "\u{feff}package com.acme.bom\n\nclass Bom { fun go() = 1 }\nfun bomTop() = 1\n",
+            ),
+        ]);
+        let disc = d(&[
+            "src/main/kotlin/x/Commented.kt::Svc.run",
+            "src/main/kotlin/x/Commented.kt::slug",
+            "src/main/kotlin/y/Block.kt::Blk.go",
+            "src/main/kotlin/z/Bom.kt::Bom.go",
+            "src/main/kotlin/z/Bom.kt::bomTop",
+        ]);
+        let loaded = set(&[
+            "com.acme.shop.Svc",
+            "com.acme.shop.CommentedKt",
+            "com.acme.shop.Blk",
+            "com.acme.bom.Bom",
+            "com.acme.bom.BomKt",
+        ]);
+        let sources = set(&[
+            "com/acme/shop/Commented.kt",
+            "com/acme/shop/Block.kt",
+            "com/acme/bom/Bom.kt",
+        ]);
+        let got = jvm_entries(&disc, &loaded, &sources, dir.path());
+        assert_eq!(
+            got,
+            set(&disc.iter().map(String::as_str).collect::<Vec<_>>())
+        );
+        assert_eq!(
+            jvm_project_packages(dir.path()),
+            "com.acme.bom,com.acme.shop"
+        );
+    }
+
+    #[test]
+    fn the_java_layout_still_matches_without_sources() {
+        let disc = d(&["src/main/java/shop/OrderCache.java::OrderCache.store"]);
+        let got = jvm_entries(
+            &disc,
+            &set(&["shop.OrderCache"]),
+            &BTreeSet::new(),
+            Path::new("/w"),
+        );
+        assert_eq!(got.len(), 1);
+        // A class of the same simple name in another package does not place it.
+        let got = jvm_entries(
+            &disc,
+            &set(&["other.Thing"]),
+            &set(&["other/Thing.java"]),
+            Path::new("/w"),
+        );
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn project_packages_come_from_the_non_test_sources_and_nest() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        for (rel, text) in [
+            (
+                "src/main/kotlin/com/acme/shop/A.kt",
+                "package com.acme.shop\n\nclass A\n",
+            ),
+            (
+                "src/main/kotlin/billing/B.kt",
+                "package com.acme.shop.billing\nclass B\n",
+            ),
+            (
+                "src/main/java/org/other/C.java",
+                "/* c */\npackage org.other;\npublic class C {}\n",
+            ),
+            ("src/main/java/lone/D.java", "package lone;\nclass D {}\n"),
+            ("src/test/kotlin/com/acme/T.kt", "package tests.only\n"),
+            ("build/gen/G.java", "package generated;\n"),
+            ("buildSrc/src/main/kotlin/Conv.kt", "package conventions\n"),
+            ("src/main/kotlin/Top.kt", "package com\nclass Top\n"),
+            ("src/main/kotlin/NoPkg.kt", "import a.b\npackage late\n"),
+        ] {
+            let p = w.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        }
+        // `com.acme.shop.billing` is inside `com.acme.shop`; a bare `com` is never a package of
+        // its own; tests, build output and `buildSrc` are not the project.
+        assert_eq!(jvm_project_packages(w), "com.acme.shop,lone,org.other");
+    }
+
+    #[test]
+    fn loaded_project_classes_without_a_matched_entry_are_counted_and_said() {
+        let dump = vec![DumpCoverage {
+            kind: Some("classes".into()),
+            items: vec!["com.acme.shop.Elsewhere".into()],
+            project: Some(37),
+            sources: vec!["com/acme/shop/Elsewhere.kt".into()],
+            ..Default::default()
+        }];
+        let ex = exercised(
+            Runtime::Jvm,
+            &d(&KOTLIN_ENTRIES),
+            &dump,
+            Path::new("/h"),
+            Path::new("/c"),
+            Path::new("/w"),
+        );
+        assert!(ex.entries.is_empty());
+        assert_eq!(ex.project_classes, Some(37));
+        assert!(
+            ex.limitations
+                .iter()
+                .any(|l| l.contains("37 project classes were loaded")),
+            "{:?}",
+            ex.limitations
+        );
+        // One loaded class says it in the singular.
+        let dump = vec![DumpCoverage {
+            kind: Some("classes".into()),
+            items: vec!["com.acme.shop.Elsewhere".into()],
+            project: Some(1),
+            sources: vec!["com/acme/shop/Elsewhere.kt".into()],
+            ..Default::default()
+        }];
+        let ex = exercised(
+            Runtime::Jvm,
+            &d(&KOTLIN_ENTRIES),
+            &dump,
+            Path::new("/h"),
+            Path::new("/c"),
+            Path::new("/w"),
+        );
+        assert!(
+            ex.limitations
+                .iter()
+                .any(|l| l.starts_with("1 project class was loaded")),
+            "{:?}",
+            ex.limitations
+        );
+        // An entry that matched needs no such note.
+        let dump = vec![DumpCoverage {
+            items: vec!["com.acme.shop.UserService".into()],
+            project: Some(2),
+            sources: vec!["com/acme/shop/UserService.kt".into()],
+            ..Default::default()
+        }];
+        let ex = exercised(
+            Runtime::Jvm,
+            &d(&KOTLIN_ENTRIES),
+            &dump,
+            Path::new("/h"),
+            Path::new("/c"),
+            Path::new("/w"),
+        );
+        assert_eq!(ex.entries.len(), 2);
+        assert!(ex.limitations.is_empty(), "{:?}", ex.limitations);
     }
 
     #[test]

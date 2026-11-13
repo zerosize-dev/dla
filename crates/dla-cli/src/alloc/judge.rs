@@ -451,6 +451,20 @@ pub fn overall(columns: &[(Favors, Vec<String>)]) -> (Favors, Vec<String>) {
     }
 }
 
+/// Holds a non-leak verdict back unless every `required` column favours non-leak too: a
+/// column that keeps growing next to a plateaued primary (a category of native memory that
+/// is not in the pools) leaves the result inconclusive. Any other verdict is unchanged.
+pub fn require_non_leak(
+    verdict: (Favors, Vec<String>),
+    required: &[Favors],
+) -> (Favors, Vec<String>) {
+    if verdict.0 == Favors::NonLeak && required.iter().any(|f| *f != Favors::NonLeak) {
+        (Favors::Inconclusive, Vec::new())
+    } else {
+        verdict
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +489,64 @@ mod tests {
             plateau(&main, &flat, false, 0.0, 0.0).verdict,
             PlateauVerdict::Plateau
         );
+    }
+
+    #[test]
+    fn a_required_column_that_does_not_plateau_holds_a_non_leak_verdict_back() {
+        let non = (Favors::NonLeak, vec!["N-WARM".to_owned()]);
+        let kept = require_non_leak(non.clone(), &[Favors::NonLeak, Favors::NonLeak]);
+        assert_eq!(kept, non);
+        for bad in [Favors::Leak, Favors::Inconclusive] {
+            let held = require_non_leak(non.clone(), &[Favors::NonLeak, bad]);
+            assert_eq!(held, (Favors::Inconclusive, Vec::new()), "{bad:?}");
+        }
+        // Only a non-leak verdict is held back; a leak stays the primary's.
+        let leak = (Favors::Leak, vec!["leak".to_owned()]);
+        assert_eq!(require_non_leak(leak.clone(), &[Favors::NonLeak]), leak);
+        assert_eq!(require_non_leak(non.clone(), &[]), non);
+    }
+
+    /// JVM non-heap bytes on a level of about 50 MB, sampled every 10 000 iterations.
+    fn nonheap(from: usize, to: usize, f: impl Fn(f64) -> f64) -> Vec<(f64, f64)> {
+        (from..to)
+            .map(|i| {
+                let x = 10_000.0 * (i as f64 + 1.0);
+                (x, 50e6 + f(x))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_jit_shaped_non_heap_curve_that_has_levelled_off_is_a_plateau() {
+        // Profiling data and compiled code: a quickly decaying rise to about 1.5 MB, then
+        // nothing but a few KB of noise. Over the extra window it rises less than 32 KiB.
+        let warm = |x: f64| 1.5e6 * (1.0 - (-x / 15_000.0).exp());
+        let main = nonheap(0, 8, warm);
+        let extra = nonheap(8, 16, warm);
+        let p = plateau(&main, &extra, false, 0.0, MIN_BYTE_RISE);
+        assert_eq!(p.verdict, PlateauVerdict::Plateau, "{p:?}");
+        assert!(p.extra_rise.unwrap() < MIN_BYTE_RISE);
+    }
+
+    #[test]
+    fn a_steady_per_iteration_non_heap_rise_keeps_its_slope_and_continues() {
+        // 28 bytes per iteration for the whole run, as run 3 saw: 56 320 iterations are
+        // 1.5 MB, more than 1% of the level.
+        let steady = |x: f64| 28.0 * x;
+        let main = nonheap(0, 8, steady);
+        let extra = nonheap(8, 16, steady);
+        let p = plateau(&main, &extra, false, 0.0, MIN_BYTE_RISE);
+        assert_eq!(p.verdict, PlateauVerdict::Continues, "{p:?}");
+        // A real Metaspace leak, a class of about a kilobyte per iteration, is far above it.
+        let leak = |x: f64| 1_000.0 * x;
+        let p = plateau(
+            &nonheap(0, 8, leak),
+            &nonheap(8, 16, leak),
+            false,
+            0.0,
+            MIN_BYTE_RISE,
+        );
+        assert_eq!(p.verdict, PlateauVerdict::Continues, "{p:?}");
     }
 
     #[test]

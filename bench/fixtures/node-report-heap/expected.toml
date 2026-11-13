@@ -1,0 +1,16 @@
+schema_version = 1
+id = "node-report-heap"
+runtime = "node"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The month-end report service's memory is far higher than expected. Resident memory reaches about 250 MB within the first minute of the finance team's queue and the heap size swings by tens of megabytes between samples, although the service only ever keeps its last 24 reports. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/aggregate.js:11"
+cause = "N-HEADROOM"
+discriminator = "heap in use swings between 27 and 107 MB between collections but returns to about 3 MB after a forced collection at 60, 240 and 480 reports, and resident memory stops at about 250 MB; the slope of the second half is zero"

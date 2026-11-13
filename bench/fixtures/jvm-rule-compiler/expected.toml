@@ -1,0 +1,25 @@
+schema_version = 1
+id = "jvm-rule-compiler"
+runtime = "jvm"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The quoting service's resident memory climbs as its customer base grows and
+quote requests keep arriving, although every quote is priced and answered
+within milliseconds. Only a restart brings it back down. Find out what is
+holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/quotes/RuleLoader.java:17"
+lines = [17, 17]
+alt_sites = ["src/quotes/PricingRules.java:7", "src/quotes/PricingRules.java:13"]
+holder = "static/global"
+region = "non-heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true
+dump_backed = true

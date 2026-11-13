@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use dla_core::{
     MAX_RESULT_BYTES,
     evidence::Signal,
-    series::{ColumnKind, SeriesFile},
+    series::{ColumnKind, SeriesFile, Unit},
     trend::{ColumnTrend, GrowthSummary, PassedColumn},
 };
 use dla_stats::GateVerdict;
@@ -42,12 +42,14 @@ fn bound_to_something(c: &ColumnTrend) -> bool {
 }
 
 /// The passing columns of `columns`, most important first: bound to a finding or a
-/// site, then by p-value (columns without a p last), then by name.
+/// site, then by p-value (columns without a p last), then by name. A column in seconds
+/// (`jvm.jit_seconds`, the compile time so far) counts runtime activity, not memory: it
+/// is cumulative, so it rises on every run, and never passes as growth.
 pub fn passing<'a>(columns: &[&'a ColumnTrend]) -> Vec<&'a ColumnTrend> {
     let mut v: Vec<&ColumnTrend> = columns
         .iter()
         .copied()
-        .filter(|c| c.gate == GateVerdict::Pass)
+        .filter(|c| c.gate == GateVerdict::Pass && c.unit != Unit::Seconds)
         .collect();
     v.sort_by(|a, b| {
         let key = |c: &ColumnTrend| {
@@ -94,6 +96,16 @@ pub fn summarize(
         ),
         passed: ordered.iter().map(|c| passed_column(c)).collect(),
         failed: Some(u32::try_from(columns.len() - ordered.len()).unwrap_or(u32::MAX)),
+        failed_beyond_process: Some(
+            u32::try_from(
+                columns
+                    .iter()
+                    .filter(|c| !ordered.iter().any(|o| std::ptr::eq(*o, **c)))
+                    .filter(|c| !dla_core::gate::is_whole_process(&c.name))
+                    .count(),
+            )
+            .unwrap_or(u32::MAX),
+        ),
         shapes,
         gate: Some(if ordered.is_empty() {
             GateVerdict::Fail
@@ -216,6 +228,25 @@ mod tests {
     }
 
     #[test]
+    fn cumulative_time_is_activity_and_never_passes_as_growth() {
+        let s = series(
+            "S1",
+            1,
+            vec![
+                Col::gauge("jvm.heap_used", &rising(1e7, 1e6)),
+                Col::gauge("jvm.jit_seconds", &rising(1.0, 0.5)),
+            ],
+        );
+        let mut t = analyze_series(&s, &[0, 1], &GateThresholds::default());
+        // The test series builder knows only bytes and counts; the real one reads the catalog.
+        t[1].unit = Unit::Seconds;
+        assert!(t.iter().all(|c| c.gate == GateVerdict::Pass), "{t:?}");
+        let refs: Vec<&ColumnTrend> = t.iter().collect();
+        let names: Vec<&str> = passing(&refs).iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["jvm.heap_used"]);
+    }
+
+    #[test]
     fn no_passing_column_gives_a_failing_gate_and_counts() {
         let s = series("S1", 1, vec![Col::counter("a", &plateau(100.0))]);
         let t = analyze_series(&s, &[0], &GateThresholds::default());
@@ -225,5 +256,30 @@ mod tests {
         assert_eq!(g.gate, Some(GateVerdict::Fail));
         assert_eq!(g.failed, Some(1));
         assert_eq!(g.shapes["plateau"], 1);
+        // `a` is not a whole-process column: a finding could be made from it.
+        assert_eq!(g.failed_beyond_process, Some(1));
+    }
+
+    #[test]
+    fn a_failed_trend_says_how_many_failed_columns_are_not_whole_process() {
+        let s = series(
+            "S1",
+            1,
+            vec![
+                Col::counter("os.rss", &plateau(100.0)),
+                Col::counter("fd.open", &plateau(10.0)),
+                Col::counter("probe:Cache", &plateau(5.0)),
+            ],
+        );
+        let t = analyze_series(&s, &[0, 1, 2], &GateThresholds::default());
+        let refs: Vec<&ColumnTrend> = t.iter().collect();
+        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &sig())).unwrap();
+        assert_eq!(g.failed, Some(3));
+        assert_eq!(g.failed_beyond_process, Some(1));
+        // Only the process: nothing a finding could be made from.
+        let refs: Vec<&ColumnTrend> = t.iter().take(2).collect();
+        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &sig())).unwrap();
+        assert_eq!(g.gate, Some(GateVerdict::Fail));
+        assert_eq!(g.failed_beyond_process, Some(0));
     }
 }

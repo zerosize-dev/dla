@@ -844,6 +844,10 @@ pub struct DriverSpec {
     pub crate_dir: String,
     /// JVM: run the project's own JUnit 5 tests in a loop (no hooks, see [`JunitSpec`]).
     pub junit: Option<JunitSpec>,
+    /// JVM: the project's Gradle or Maven build resolves the driver's class path (the main
+    /// runtime class path, see [`ClasspathSet::Main`]) instead of the workload's classes
+    /// directory; the hooks driver is compiled and run against it.
+    pub main_build: Option<JunitSpec>,
 }
 
 /// Build tool of a JUnit repeat harness.
@@ -865,7 +869,28 @@ impl JunitTool {
     }
 }
 
-/// What a JUnit repeat harness is built from.
+/// Which class path the build step resolves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClasspathSet {
+    /// The tests' runtime class path (JUnit repeat harness).
+    Test,
+    /// The main runtime class path: the project's main classes of every language (Gradle:
+    /// `build/classes/java/main` and `build/classes/kotlin/main`), resources and the runtime
+    /// dependency jars (driver harness).
+    Main,
+}
+
+impl ClasspathSet {
+    /// The word `dla-junit-build.sh` takes as its mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Main => "main",
+        }
+    }
+}
+
+/// What a JUnit repeat harness, or a build-resolved driver harness, is built from.
 #[derive(Debug, Clone)]
 pub struct JunitSpec {
     /// Which build tool resolves the test class path.
@@ -886,6 +911,29 @@ pub const JUNIT_ARGS_FILE: &str = "run.args";
 /// Build and run of a JUnit repeat harness: the build step resolves the class path of the
 /// project's tests and compiles the driver against it, the run is `java @run.args DlaJUnitLoop`.
 fn plan_junit(cwd: &str, layout: &Layout, sw: &Switches, j: &JunitSpec) -> Plan {
+    plan_resolved(
+        cwd,
+        layout,
+        sw,
+        j,
+        ClasspathSet::Test,
+        &format!("{JUNIT_DRIVER_CLASS}.java"),
+        JUNIT_DRIVER_CLASS,
+    )
+}
+
+/// Build and run of a driver whose class path the build tool resolves: the build step writes
+/// the class path, compiles `source` (a file of the driver directory) against it and writes the
+/// argument file; the run is `java @run.args <class>`.
+fn plan_resolved(
+    cwd: &str,
+    layout: &Layout,
+    sw: &Switches,
+    j: &JunitSpec,
+    set: ClasspathSet,
+    source: &str,
+    class: &str,
+) -> Plan {
     let driver = |file: &str| abs(&layout.driver.join(file));
     let jar = abs(&layout.agent.join("dla-agent.jar"));
     let mut build = CommandSpec {
@@ -897,6 +945,8 @@ fn plan_junit(cwd: &str, layout: &Layout, sw: &Switches, j: &JunitSpec) -> Plan 
             abs(&layout.driver),
             jar,
             path_sep().into(),
+            set.as_str().into(),
+            driver(source),
         ],
         cwd: cwd.to_owned(),
         env: Vec::new(),
@@ -907,7 +957,7 @@ fn plan_junit(cwd: &str, layout: &Layout, sw: &Switches, j: &JunitSpec) -> Plan 
         argv: vec![
             "java".into(),
             format!("@{}", driver(JUNIT_ARGS_FILE)),
-            JUNIT_DRIVER_CLASS.into(),
+            class.into(),
         ],
         cwd: cwd.to_owned(),
         env: Vec::new(),
@@ -944,6 +994,16 @@ pub fn plan_driver(
         Runtime::Jvm if spec.junit.is_some() => {
             let j = spec.junit.as_ref().ok_or("no JUnit spec")?;
             plan_junit(cwd, layout, sw, j)
+        }
+        Runtime::Jvm if spec.main_build.is_some() => {
+            let j = spec.main_build.as_ref().ok_or("no build spec")?;
+            let file = spec
+                .work_rel
+                .rsplit('/')
+                .next()
+                .filter(|f| !f.is_empty())
+                .ok_or("no driver source")?;
+            plan_resolved(cwd, layout, sw, j, ClasspathSet::Main, file, &spec.target)
         }
         Runtime::Jvm => {
             let (pre, run_piece): (Vec<String>, String) = match w {
@@ -1675,6 +1735,11 @@ mod tests {
         assert_eq!(build.argv[4], abs(&l.driver));
         assert!(build.argv[5].ends_with("dla-agent.jar"));
         assert_eq!(build.argv[6], path_sep());
+        assert_eq!(build.argv[7], "test");
+        assert_eq!(
+            build.argv[8],
+            format!("{}/DlaJUnitLoop.java", abs(&l.driver))
+        );
         assert_eq!(build.cwd, "svc");
         assert_eq!(
             p.run.argv,
@@ -1690,5 +1755,71 @@ mod tests {
             jto.contains("-javaagent:") && jto.contains("StartFlightRecording"),
             "{jto}"
         );
+    }
+
+    #[test]
+    fn a_gradle_driver_resolves_the_main_runtime_class_path() {
+        let l = layout();
+        let spec = DriverSpec {
+            work_rel: format!("{}/DlaLoop.java", abs(&l.driver)),
+            target: "app.DlaLoop".into(),
+            main_build: Some(JunitSpec {
+                tool: JunitTool::Gradle,
+                launcher: "/w/gradlew".into(),
+            }),
+            ..DriverSpec::default()
+        };
+        // A Spring Boot dev-server workload: its command names no classes directory.
+        let w = Workload {
+            id: "jvm:dev-server:src/main/kotlin/app/App.kt".into(),
+            kind: WorkloadKind::DevServer,
+            file: "src/main/kotlin/app/App.kt".into(),
+            cwd: "svc".into(),
+            ..wl(Runtime::Jvm, "gradle -q --offline bootRun")
+        };
+        let p = plan_driver(
+            Runtime::Jvm,
+            Some(&w),
+            "svc",
+            &l,
+            &Switches {
+                kotlin_stdlib: Some("/m2/kotlin-stdlib-2.2.0.jar".into()),
+                ..Switches::default()
+            },
+            &spec,
+        )
+        .unwrap();
+        let build = p.build.unwrap();
+        assert_eq!(
+            &build.argv[..4],
+            [
+                "sh",
+                &format!("{}/dla-junit-build.sh", abs(&l.driver)),
+                "gradle",
+                "/w/gradlew"
+            ]
+        );
+        assert_eq!(build.argv[7], "main");
+        assert_eq!(build.argv[8], format!("{}/DlaLoop.java", abs(&l.driver)));
+        let all = build.argv.join(" ");
+        assert!(
+            !all.contains("javac -cp out") && !all.contains("build/classes/java/main"),
+            "the build step, not a guessed classes directory: {all}"
+        );
+        assert!(
+            !all.contains("kotlin-stdlib"),
+            "the project's own stdlib: {all}"
+        );
+        assert_eq!(
+            p.run.argv,
+            [
+                "java".to_owned(),
+                format!("@{}/run.args", abs(&l.driver)),
+                "app.DlaLoop".to_owned()
+            ]
+        );
+        assert_eq!(p.agent, AgentKind::DriverJvm);
+        let jto = env(&p.run, "JAVA_TOOL_OPTIONS").unwrap();
+        assert!(jto.contains("-javaagent:"), "{jto}");
     }
 }

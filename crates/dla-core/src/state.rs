@@ -193,11 +193,96 @@ pub struct Consent {
 /// Time budget.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct Budget {
-    /// Budget in seconds.
+    /// Budget in seconds: always the length from `started_at` to `deadline`, so it follows
+    /// a settled `auto` budget and every extension.
     pub seconds: u64,
     /// Start of the budget.
     pub started_at: DateTime<Utc>,
     /// Start plus budget.
+    pub deadline: DateTime<Utc>,
+    /// The budget was asked for as `auto`: it starts at [`AUTO_START_SECS`] and is sized to
+    /// the project by the first passing gate check at `sweep` or later; in a dispatched run each
+    /// worker's first passing check may raise it again until every worker has settled.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto: bool,
+    /// An `auto` budget is final: sized by the run's own gate, or, in a dispatched run, once
+    /// every registered worker has passed its first gate at `sweep` or later (always false
+    /// for a fixed budget). Until then each worker's first passing gate may still raise it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub settled: bool,
+    /// The workers whose first passing gate at `sweep` or later has already sized the
+    /// budget, in the order they did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settled_workers: Vec<String>,
+    /// What an `auto` budget was sized from: the largest estimate so far, stored by the first
+    /// worker gate that sizes it, before the budget is final.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate: Option<BudgetEstimate>,
+    /// Extensions by `dla run extend`, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<BudgetExtension>,
+}
+
+/// Length of an `auto` budget before it is sized, in seconds.
+pub const AUTO_START_SECS: u64 = 60 * 60;
+
+/// Constants of the `auto` budget formula: `clamp(BASE + PER_RUNTIME * R + PER_CANDIDATE * C,
+/// FLOOR, CAP)` minutes, where R is the number of runtimes with a candidate and C the
+/// number of candidates (`dla run init --budget auto`; references/stages.md states the
+/// same formula). One place, so the gate line, the report and the docs cannot drift apart.
+pub mod auto {
+    /// Fixed minutes: intake, probe, report.
+    pub const BASE_MINUTES: u64 = 20;
+    /// Minutes per runtime with a candidate: build, harness, one measured run.
+    pub const PER_RUNTIME_MINUTES: u64 = 15;
+    /// Minutes per candidate: the share of a measured run each one needs.
+    pub const PER_CANDIDATE_MINUTES: u64 = 3;
+    /// The smallest sized budget, in minutes (also the start).
+    pub const FLOOR_MINUTES: u64 = 60;
+    /// The largest sized budget, in minutes.
+    pub const CAP_MINUTES: u64 = 180;
+}
+
+/// What an `auto` budget was sized from.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct BudgetEstimate {
+    /// Runtimes with at least one non-duplicate candidate (R).
+    pub runtimes: u64,
+    /// Non-duplicate top-level candidates of any state (C).
+    pub candidates: u64,
+    /// `BASE + PER_RUNTIME * R + PER_CANDIDATE * C`, before the floor and the cap.
+    pub minutes: u64,
+    /// The budget it was sized to, in minutes, after the floor and the cap.
+    pub total_minutes: u64,
+}
+
+impl BudgetEstimate {
+    /// Sizes the budget for `runtimes` and `candidates`.
+    pub fn new(runtimes: u64, candidates: u64) -> Self {
+        let minutes = auto::BASE_MINUTES
+            .saturating_add(auto::PER_RUNTIME_MINUTES.saturating_mul(runtimes))
+            .saturating_add(auto::PER_CANDIDATE_MINUTES.saturating_mul(candidates));
+        Self {
+            runtimes,
+            candidates,
+            minutes,
+            total_minutes: minutes.clamp(auto::FLOOR_MINUTES, auto::CAP_MINUTES),
+        }
+    }
+}
+
+/// One `dla run extend`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct BudgetExtension {
+    /// When it was made.
+    pub at: DateTime<Utc>,
+    /// Seconds asked for.
+    pub seconds: u64,
+    /// Seconds the run deadline had already passed when it was made (an extension counts
+    /// from now, so the budget grows by `seconds + lapsed_seconds`).
+    #[serde(default, skip_serializing_if = "is_zero_secs")]
+    pub lapsed_seconds: u64,
+    /// The run deadline after it.
     pub deadline: DateTime<Utc>,
 }
 
@@ -376,6 +461,10 @@ impl StopCounter {
     }
 }
 
+fn is_zero_secs(n: &u64) -> bool {
+    *n == 0
+}
+
 fn is_zero(n: &u32) -> bool {
     *n == 0
 }
@@ -423,6 +512,11 @@ impl RunState {
                 seconds: budget_seconds,
                 started_at: now,
                 deadline,
+                auto: false,
+                settled: false,
+                settled_workers: Vec::new(),
+                estimate: None,
+                extensions: Vec::new(),
             },
             scope,
             processes: Vec::new(),
@@ -495,6 +589,135 @@ impl RunState {
         if let Some(n) = next {
             self.stage = n;
         }
+    }
+
+    /// Sizes an `auto` budget from `estimate`: the deadline becomes
+    /// `started_at + total_minutes + extensions`, never earlier than it is, and the same
+    /// delta is added to every worker deadline whose worker has not finished. An extension
+    /// made before the budget was sized stays on top of the sized total, so sizing never
+    /// absorbs it.
+    ///
+    /// `by` is `None` for the run's own gate: the budget is final at once. In a dispatched
+    /// run each worker's first passing gate (`by` is its name) sizes it again, and may only
+    /// raise it: a smaller estimate leaves the stored one and the deadlines as they are. The
+    /// worker is recorded in `budget.settled_workers`; once every registered worker is in it
+    /// the budget is final. A worker that already sized the budget changes nothing.
+    /// Returns the delta in seconds, or `None` when the budget is fixed, already final, or
+    /// this worker already sized it (nothing changes).
+    pub fn settle_budget(&mut self, estimate: BudgetEstimate, by: Option<&str>) -> Option<i64> {
+        if !self.budget.auto || self.budget.settled {
+            return None;
+        }
+        if let Some(w) = by {
+            if self.budget.settled_workers.iter().any(|x| x == w) {
+                return None;
+            }
+            self.budget.settled_workers.push(w.to_owned());
+        }
+        let extended: u64 = self
+            .budget
+            .extensions
+            .iter()
+            .map(|x| x.seconds.saturating_add(x.lapsed_seconds))
+            .sum();
+        let sized = i64::try_from(
+            estimate
+                .total_minutes
+                .saturating_mul(60)
+                .saturating_add(extended),
+        )
+        .ok()
+        .and_then(TimeDelta::try_seconds)
+        .and_then(|d| self.budget.started_at.checked_add_signed(d))
+        .unwrap_or(self.budget.deadline);
+        let delta = (sized - self.budget.deadline).num_seconds().max(0);
+        self.budget.settled = by.is_none()
+            || self
+                .workers
+                .iter()
+                .all(|w| self.budget.settled_workers.contains(&w.name));
+        if self
+            .budget
+            .estimate
+            .as_ref()
+            .is_none_or(|e| estimate.total_minutes >= e.total_minutes)
+        {
+            self.budget.estimate = Some(estimate);
+        }
+        self.shift_deadlines(delta);
+        Some(delta)
+    }
+
+    /// Adds `delta` seconds to the run deadline and to every unfinished worker deadline,
+    /// and keeps `budget.seconds` equal to the length of the budget.
+    fn shift_deadlines(&mut self, delta: i64) {
+        let Some(d) = TimeDelta::try_seconds(delta) else {
+            return;
+        };
+        if let Some(t) = self.budget.deadline.checked_add_signed(d) {
+            self.budget.deadline = t;
+        }
+        self.budget.seconds = u64::try_from(
+            (self.budget.deadline - self.budget.started_at)
+                .num_seconds()
+                .max(0),
+        )
+        .unwrap_or(0);
+        for w in &mut self.workers {
+            if matches!(w.status, WorkerStatus::Registered | WorkerStatus::Running)
+                && let Some(t) = w.deadline.checked_add_signed(d)
+            {
+                w.deadline = t;
+            }
+        }
+    }
+
+    /// `dla run extend`: the new run deadline is `max(deadline, now) + seconds`, and every
+    /// unfinished worker's deadline is moved the same way (`max(its deadline, now) +
+    /// seconds`, so a worker never ends up past the run). Records the extension. Returns
+    /// the new run deadline.
+    pub fn extend_budget(
+        &mut self,
+        now: DateTime<Utc>,
+        seconds: u64,
+    ) -> Result<DateTime<Utc>, Error> {
+        let too_large = || {
+            Error::Refused(crate::Refusal::new(
+                crate::error::codes::INVALID_VALUE,
+                format!("an extension of {seconds} s is too large"),
+                "an extension such as 30m or 1h",
+                "dla run extend 30m",
+            ))
+        };
+        let by = i64::try_from(seconds)
+            .ok()
+            .and_then(TimeDelta::try_seconds)
+            .ok_or_else(too_large)?;
+        let new_deadline = self
+            .budget
+            .deadline
+            .max(now)
+            .checked_add_signed(by)
+            .ok_or_else(too_large)?;
+        let lapsed = u64::try_from((now - self.budget.deadline).num_seconds()).unwrap_or(0);
+        self.budget.deadline = new_deadline;
+        self.budget.seconds =
+            u64::try_from((new_deadline - self.budget.started_at).num_seconds().max(0))
+                .unwrap_or(0);
+        for w in &mut self.workers {
+            if matches!(w.status, WorkerStatus::Registered | WorkerStatus::Running)
+                && let Some(t) = w.deadline.max(now).checked_add_signed(by)
+            {
+                w.deadline = t;
+            }
+        }
+        self.budget.extensions.push(BudgetExtension {
+            at: now,
+            seconds,
+            lapsed_seconds: lapsed,
+            deadline: new_deadline,
+        });
+        Ok(new_deadline)
     }
 
     /// True when the worker's own `gate check --stage` passed for `stage`.

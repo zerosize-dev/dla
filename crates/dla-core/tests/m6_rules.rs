@@ -535,7 +535,7 @@ fn replay_re_checks_the_proof_in_the_record() {
     // A schema 5 line cannot carry the record.
     let n = text.lines().count();
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    lines[n - 1] = lines[n - 1].replace("\"schema_version\":6", "\"schema_version\":5");
+    lines[n - 1] = lines[n - 1].replace("\"schema_version\":7", "\"schema_version\":5");
     assert!(Ledger::from_text(&(lines.join("\n") + "\n")).is_err());
 }
 

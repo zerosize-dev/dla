@@ -12,6 +12,7 @@ use dla_core::{
     fsutil::{to_pretty_json, write_atomic},
     gate::{self, GateTarget},
     state::Stage,
+    timebudget,
 };
 use serde_json::{Value, json};
 
@@ -135,6 +136,56 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     let mut out = serde_json::to_value(&report).unwrap_or(Value::Null);
     if let Some(w) = worker {
         out["worker"] = json!(w);
+    }
+    // The first passing check at `sweep` or a later stage sizes an `auto` budget from the
+    // view this check saw, and in the run's own gate that is final. In a dispatched run each
+    // worker's first passing check sizes it again from every worker's slice plus the main
+    // ledger and may only raise it; it is final once every registered worker has. The final
+    // gate does not size: it passes only once every finding is dispositioned, so the run's work is
+    // done by then; a run that reaches it unsized reports `auto, not sized`.
+    let settles = match target {
+        GateTarget::Stage(s) => s.at_least(Stage::Sweep),
+        GateTarget::Final => false,
+    };
+    let sized_by_worker =
+        worker.is_some_and(|w| view.state.budget.settled_workers.iter().any(|x| x == w));
+    if report.ok
+        && settles
+        && view.state.budget.auto
+        && !view.state.budget.settled
+        && !sized_by_worker
+    {
+        let estimate = match worker {
+            Some(_) => timebudget::estimate_across(&ctx.run_dir, &view),
+            None => timebudget::estimate(&view, None),
+        };
+        let settled = RunState::update(&ctx.run_dir, |st| {
+            let ext: u64 = st
+                .budget
+                .extensions
+                .iter()
+                .map(|x| x.seconds + x.lapsed_seconds)
+                .sum();
+            Ok(st.settle_budget(estimate.clone(), worker).map(|_| {
+                let shown = st
+                    .budget
+                    .estimate
+                    .clone()
+                    .unwrap_or_else(|| estimate.clone());
+                (shown, ext)
+            }))
+        })?;
+        if let Some((e, ext)) = settled {
+            let mut line = timebudget::settled_line(&e);
+            if ext > 0 {
+                line.push_str(&format!(
+                    "; plus {} already extended",
+                    timebudget::human(ext)
+                ));
+            }
+            out["budget"] = json!(line);
+            out["budget_estimate"] = json!(e);
+        }
     }
     if report.ok
         && let GateTarget::Stage(s) = target

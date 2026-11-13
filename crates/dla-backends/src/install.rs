@@ -52,6 +52,11 @@ pub mod pins {
     pub const KOTLIN_STDLIB: &str = "2.2.0";
     /// kotlinx-coroutines for the same classpath.
     pub const COROUTINES: &str = "1.10.2";
+    /// CodeQL bundle release (`codeql-bundle-<tag>` of github/codeql-action). Pinned so the
+    /// Kotlin versions its extractor supports do not change between installs; a HEAD
+    /// request answered 302 for the linux64, osx64 and win64 assets (nothing was
+    /// downloaded). Never run against a real bundle here, see docs/VERIFY.md.
+    pub const CODEQL_BUNDLE: &str = "codeql-bundle-v2.27.0";
     /// RAPx git revision (crates.io 0.7.71 no longer builds on current nightly).
     pub const RAPX_REV: &str = "385907a5";
     /// RAPx repository.
@@ -468,7 +473,8 @@ pub fn recipe(backend: &str, tools: &Path, p: Platform) -> Result<Recipe, String
             let dir = tools.join("codeql");
             let tarball = dir.join("bundle.tar.gz");
             let url = format!(
-                "https://github.com/github/codeql-action/releases/latest/download/{}",
+                "https://github.com/github/codeql-action/releases/download/{}/{}",
+                pins::CODEQL_BUNDLE,
                 p.codeql_asset()
             );
             r(
@@ -500,7 +506,7 @@ pub fn recipe(backend: &str, tools: &Path, p: Platform) -> Result<Recipe, String
                     dir.join("codeql").join(p.exe("codeql")),
                     vec!["version".into(), "--format=terse".into()],
                 ),
-                "The bundle is about 700 MB; GitHub release downloads must be reachable. The CodeQL license restricts use to open source code and research, check it applies.",
+                "The bundle (pinned release) is about 1 GB; GitHub release downloads must be reachable. The CodeQL license restricts use to open source code and research, check it applies.",
             )
         }
         "rapx" => {
@@ -546,7 +552,7 @@ pub fn recipe(backend: &str, tools: &Path, p: Platform) -> Result<Recipe, String
         }
         "sonar" => {
             return Err(
-                "Sonar analyses on a SonarQube or SonarCloud server, there is nothing DLA can install: set up a server, install sonar-scanner, and export SONAR_HOST_URL and SONAR_TOKEN"
+                "Sonar analyses on a SonarQube or SonarCloud server and DLA does not query one: there is nothing to install, and the sonar row stays blocked as server-only"
                     .to_owned(),
             );
         }
@@ -631,6 +637,11 @@ fn keep_missing(ctx: &ToolCtx, backend: &str, reason: &str) -> Result<(), Refusa
     let Some(b) = registry::backend(backend) else {
         return Ok(());
     };
+    // Sonar is a server-only row (`blocked`, no install hint); an install attempt that
+    // cannot lead to a run must not turn it into a gap with a hint.
+    if backend == "sonar" {
+        return Ok(());
+    }
     CoverageManifest::update(&ctx.run_dir, |m| {
         for rt in b.runtimes {
             let worker = m.worker_mut(rt.as_str());
@@ -990,12 +1001,12 @@ mod tests {
         let r = recipe("codeql", &tools(), LINUX).unwrap();
         let rs = runs(&r);
         assert_eq!(rs[0].program, "curl");
+        let url = rs[0].args.last().unwrap();
+        assert!(url.ends_with("/codeql-bundle-linux64.tar.gz"));
         assert!(
-            rs[0]
-                .args
-                .last()
-                .unwrap()
-                .ends_with("/codeql-bundle-linux64.tar.gz")
+            url.contains(&format!("/releases/download/{}/", pins::CODEQL_BUNDLE))
+                && !url.contains("/latest/"),
+            "the bundle is pinned: {url}"
         );
         assert_eq!(rs[1].program, "tar");
         let m = recipe(
@@ -1033,7 +1044,7 @@ mod tests {
     #[test]
     fn sonar_has_no_recipe_and_govet_and_dla_need_nothing() {
         let e = recipe("sonar", &tools(), LINUX).unwrap_err();
-        assert!(e.contains("SONAR_HOST_URL"));
+        assert!(e.contains("nothing to install"), "{e}");
         assert!(recipe("govet", &tools(), LINUX).unwrap().steps.is_empty());
         assert!(recipe("dla", &tools(), LINUX).unwrap().steps.is_empty());
         assert!(recipe("nope", &tools(), LINUX).is_err());
@@ -1082,5 +1093,35 @@ mod tests {
             &ToolEnv::default(),
         );
         assert_eq!(v.as_deref(), Some("2.52.0"));
+    }
+
+    #[test]
+    fn a_failed_install_leaves_the_sonar_row_blocked_and_marks_other_backends_missing() {
+        use dla_core::coverage::{BackendCoverage, BackendStatus, CoverageManifest};
+        let d = tempfile::tempdir().unwrap();
+        let ctx = ToolCtx {
+            project: d.path().to_path_buf(),
+            run_dir: d.path().to_path_buf(),
+            run_id: "r1".into(),
+            source_commit: "c".into(),
+            data_flag: None,
+            worker: None,
+        };
+        CoverageManifest::update(&ctx.run_dir, |m| {
+            m.set_backend("jvm", "sonar", BackendCoverage::blocked("server-only: x"));
+        })
+        .unwrap();
+        keep_missing(&ctx, "sonar", "nothing to install").unwrap();
+        let m = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+        let row = &m.workers["jvm"].backends["sonar"];
+        assert_eq!(row.status, BackendStatus::Blocked, "{row:?}");
+        assert_eq!(row.install_hint, None);
+        // Any other backend that is not installed becomes a gap with its hint.
+        keep_missing(&ctx, "spotbugs", "install failed").unwrap();
+        let m = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+        assert_eq!(
+            m.workers["jvm"].backends["spotbugs"].status,
+            BackendStatus::Missing
+        );
     }
 }

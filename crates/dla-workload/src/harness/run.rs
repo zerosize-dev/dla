@@ -26,7 +26,8 @@
 //! The manifest's `run.env` is merged over the inherited environment (`JAVA_TOOL_OPTIONS`
 //! and `NODE_OPTIONS` appended with a space; `PYTHONPATH`, `LD_PRELOAD` and
 //! `DYLD_INSERT_LIBRARIES` prepended with the path separator), then `DLA_HARNESS_OUT`,
-//! `DLA_HARNESS_PROBES`, `DLA_PROJECT`, `DLA_ITER`, `DLA_TICK_MS`, `DLA_PURGE` (last point
+//! `DLA_HARNESS_PROBES`, `DLA_PROJECT`, `DLA_PROJECT_PACKAGES` (JVM: the packages the scratch
+//! copy's sources declare), `DLA_ITER`, `DLA_TICK_MS`, `DLA_PURGE` (last point
 //! only, command mode) and, in driver mode, `DLA_KEY_MODE`, `DLA_STEP`, `DLA_WARMUP`,
 //! `DLA_ROUNDS` (the measured rounds: `iterations + extra`), `DLA_REPEAT` are set. Tokens
 //! `{n}`, `{label}`, `{mode}`, `{out}` and `{cov}` in argv and env values are replaced.
@@ -679,6 +680,8 @@ struct Paths {
     logs: PathBuf,
     cov: PathBuf,
     probes: Option<PathBuf>,
+    /// JVM: the packages the scratch copy's sources declare (`DLA_PROJECT_PACKAGES`).
+    packages: Option<String>,
 }
 
 impl Paths {
@@ -705,7 +708,11 @@ impl Paths {
         })?;
         let work = dla_core::paths::plain(work);
         let probes = hdir.join(PROBES);
+        let packages = (manifest.runtime == dla_core::runtime::Runtime::Jvm)
+            .then(|| cover::jvm_project_packages(&work))
+            .filter(|p| !p.is_empty());
         Ok(Self {
+            packages,
             out: hdir.join(OUT),
             logs: hdir.join(LOGS),
             cov: hdir.join(COV),
@@ -984,6 +991,9 @@ impl PointEnv<'_> {
             "DLA_PROJECT",
             self.paths.work.to_string_lossy().into_owned(),
         );
+        if let Some(p) = &self.paths.packages {
+            set("DLA_PROJECT_PACKAGES", p.clone());
+        }
         set("DLA_ITER", self.n.to_string());
         set("DLA_TICK_MS", "100".to_owned());
         if let Some(p) = self.purge {

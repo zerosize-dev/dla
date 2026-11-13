@@ -746,7 +746,59 @@ fn clip(mut s: String, max: usize) -> String {
     s
 }
 
-fn block_reason(missing: &[Missing], worker: Option<&str>) -> String {
+/// `N of M budget minutes remain`, from the nearest deadline (the worker's, in a worker, and
+/// the run's). Above the shared floor it says to keep measuring and never to ask or close,
+/// unless a command was refused for time with nothing smaller that fits: that counts as being
+/// at the floor.
+/// At or under the floor, or once the run's deadline has passed, the core of an interactive
+/// run is told to ask the user once whether to extend (`dla run extend`) and to close what
+/// is open only if the user declines or does not answer; a worker (after its own deadline,
+/// or under the floor) and an unattended run are told to close what is open with a reason
+/// and a remedy, since neither extends.
+fn budget_note(state: &RunState, worker: Option<&str>, run_dir: &Path) -> String {
+    let minutes = |deadline: chrono::DateTime<chrono::Utc>| {
+        u64::try_from((deadline - state::now_utc()).num_seconds()).unwrap_or(0) / 60
+    };
+    let total = state.budget.seconds / 60;
+    let run_left = minutes(state.budget.deadline);
+    let mut deadline = state.budget.deadline;
+    if let Some(w) = worker.and_then(|w| state.worker(w)) {
+        deadline = deadline.min(w.deadline);
+    }
+    let left = minutes(deadline);
+    let asks_first = worker.is_none() && !dla_core::toolctx::is_unattended(state);
+    let close = "close what is open with a reason and a remedy";
+    let extend_first = "ask the user once whether to extend the budget (dla run extend <dur>); if the user declines or does not answer, close what is open with a reason and a remedy";
+    if run_left == 0 {
+        let next = if asks_first { extend_first } else { close };
+        format!("The {total} budget minutes are spent: {next}.")
+    } else if left == 0 {
+        format!(
+            "This worker's time is spent ({run_left} of {total} run budget minutes remain): {close}."
+        )
+    } else if gate::budget_over_floor(state, worker).is_some()
+        && !dla_core::toolctx::nothing_fits_since(run_dir, worker, state.budget.started_at)
+    {
+        format!(
+            "{left} of {total} budget minutes remain: measure what is open instead of stopping."
+        )
+    } else if asks_first {
+        format!(
+            "{left} of {total} budget minutes remain, too few to start another measurement: {extend_first}."
+        )
+    } else {
+        format!(
+            "{left} of {total} budget minutes remain, too few to start another measurement: {close}."
+        )
+    }
+}
+
+fn block_reason(
+    missing: &[Missing],
+    worker: Option<&str>,
+    state: Option<&RunState>,
+    run_dir: &Path,
+) -> String {
     let full = match worker {
         Some(w) => format!("dla --worker {w} gate check --final"),
         None => "dla gate check --final".to_owned(),
@@ -756,6 +808,10 @@ fn block_reason(missing: &[Missing], worker: Option<&str>) -> String {
         missing.len(),
         if worker.is_some() { "worker" } else { "run" }
     );
+    if let Some(st) = state {
+        s.push('\n');
+        s.push_str(&budget_note(st, worker, run_dir));
+    }
     for m in missing.iter().take(3) {
         s.push_str(&format!(
             "\n- {}: {} Fix: {}",
@@ -830,7 +886,12 @@ fn stop_core(found: &Found) -> Result<HookOut, String> {
             code: 0,
         });
     }
-    Ok(HookOut::block(&block_reason(&missing, None)))
+    Ok(HookOut::block(&block_reason(
+        &missing,
+        None,
+        found.state.as_ref(),
+        &found.run_dir,
+    )))
 }
 
 fn stop_worker(found: &Found, worker: &str) -> Result<HookOut, String> {
@@ -867,7 +928,12 @@ fn stop_worker(found: &Found, worker: &str) -> Result<HookOut, String> {
             code: 0,
         });
     }
-    Ok(HookOut::block(&block_reason(&missing, Some(worker))))
+    Ok(HookOut::block(&block_reason(
+        &missing,
+        Some(worker),
+        found.state.as_ref(),
+        &found.run_dir,
+    )))
 }
 
 // ------------------------------------------------------------ transcripts

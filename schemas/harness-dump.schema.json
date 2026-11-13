@@ -277,6 +277,22 @@
             "string",
             "null"
           ]
+        },
+        "project": {
+          "description": "JVM: how many distinct top-level classes of the project were loaded (classes under\n`DLA_PROJECT`, or in a package the project's sources declare).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sources": {
+          "description": "JVM: the source file of each loaded project class, as `package/path/File.kt` (the\nclass file's `SourceFile` attribute under the package directory).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

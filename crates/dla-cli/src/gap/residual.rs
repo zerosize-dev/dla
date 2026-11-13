@@ -18,7 +18,7 @@ use super::{fit, series_authority};
 use crate::fail::{Failure, Res};
 
 /// `opened_by` of the open items this command raises.
-pub const OPENED_BY: &str = "dla gap --residual";
+pub const OPENED_BY: &str = dla_core::record::RESIDUAL_OPENED_BY;
 
 /// Heap columns in order of preference.
 const HEAP: [&str; 5] = [
@@ -381,7 +381,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
                 Some(f) => Action::Resolve(id, f),
                 None => {
                     limitations.push(format!(
-                        "{id} ({}) is under threshold but no confirmed finding is credited in that region to cite; resolve it with dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\"",
+                        "{id} ({}) is under threshold but no confirmed finding is credited in that region to cite; resolve it with dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\" (the growth was measured and is now under its threshold)",
                         region_name(c.region)
                     ));
                     Action::LeaveOpen(id)
@@ -459,8 +459,21 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     for (c, a) in calcs.iter().zip(&actions) {
         match a {
             Action::Open(id) => {
+                let what = if c.region == Region::NonHeap
+                    && let Some(h) = src.source.harness.as_deref()
+                {
+                    // Decide non-heap growth with evidence before any close: the plateau
+                    // of an extra window tells warm-up from a leak.
+                    format!(
+                        "add a hypothesis (dla ledger add --origin residual --region non-heap --evidence {ev} ...), give it an N-WARM sibling and test it with dla alloc-test {h} --finding <F>, or record it unresolved"
+                    )
+                } else {
+                    format!(
+                        "add a hypothesis (dla ledger add --origin residual --evidence {ev} ...) or record it unresolved"
+                    )
+                };
                 let text = format!(
-                    "unexplained growth: {} {unit} in {} ({}); add a hypothesis (dla ledger add --origin residual --evidence {ev} ...) or record it unresolved",
+                    "unexplained growth: {} {unit} in {} ({}); {what}",
                     fit::human(c.residual),
                     region_name(c.region),
                     src.id
@@ -495,9 +508,18 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     let mut next = Vec::new();
     for (c, a) in calcs.iter().zip(&actions) {
         if let Some(id) = a.item().filter(|_| c.over()) {
-            next.push(format!(
-                "{id}: dla ledger add --origin residual --evidence {ev} ...   or   dla ledger resolve {id} --as unresolved --reason <r> --remedy \"<text>\""
-            ));
+            match src.source.harness.as_deref() {
+                Some(h) if c.region == Region::NonHeap => {
+                    next.push(dla_core::gate::nonheap_alloc_route(
+                        &id.to_string(),
+                        &ev.to_string(),
+                        h,
+                    ));
+                }
+                _ => next.push(format!(
+                    "{id}: dla ledger add --origin residual --evidence {ev} ...   or   dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\"   (it was measured, so the reason is inconclusive)"
+                )),
+            }
         }
     }
     if next.is_empty() {

@@ -112,7 +112,18 @@ pub fn count_out_of_scope(root: &Path, runtime: Runtime, in_scope: &dyn Fn(&str)
         Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime)
     });
     rels.iter()
-        .filter(|r| !in_scope(r) && !is_test_path(r))
+        .filter(|r| !dla_core::paths::is_build_logic(r) && !in_scope(r) && !is_test_path(r))
+        .count() as u64
+}
+
+/// Number of non-test source files of `runtime` under `root` that are build logic
+/// (`*.gradle.kts`, `buildSrc/**`): they are never read (names only).
+pub fn count_build_logic(root: &Path, runtime: Runtime) -> u64 {
+    let rels = list_files(root, false, &|rel| {
+        Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime)
+    });
+    rels.iter()
+        .filter(|r| dla_core::paths::is_build_logic(r) && !is_test_path(r))
         .count() as u64
 }
 
@@ -130,6 +141,11 @@ pub fn source_files_in(
     let mut out = Vec::new();
     let mut skipped = 0u64;
     for rel in rels {
+        // Build logic is not part of the measured process: not read, not counted as out of
+        // scope (it has its own count, `count_build_logic`).
+        if dla_core::paths::is_build_logic(&rel) {
+            continue;
+        }
         if !in_scope(&rel) {
             if !is_test_path(&rel) {
                 skipped += 1;

@@ -28,13 +28,13 @@ use crate::{
     explain::{self, ExplainInput},
     finding::{
         Explanation, Finding, FindingState, Holder, Locus, NON_LEAK_IDS, Origin, Region,
-        RepairClass, Shape, UNCLASSIFIED, check_site, claims_nonleak, nonleak_id,
+        RepairClass, Shape, UNCLASSIFIED, UnresolvedReason, check_site, claims_nonleak, nonleak_id,
     },
     ids::{EvidenceId, FindingId, OpenItemId},
     labels::{self, Archetypes, LabelInput},
     m6::codes as m6_codes,
     machine::{
-        self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, M4Rules, M5Rules, M6Rules,
+        self, EvidenceLookup, FindingLookup, M0Rules, M3Rules, M4Rules, M5Rules, M6Rules, M7Rules,
         TransitionContext,
     },
     record::{
@@ -401,7 +401,7 @@ impl Index {
                 }
                 Ok(())
             }
-            Record::OpenItemResolved(r) => self.check_open_item_resolved(r),
+            Record::OpenItemResolved(r) => self.check_open_item_resolved(r, version),
             Record::ChecklistAnswer(a) => self.check_answer(a),
             Record::FindingAnnotated(a) => self.check_annotation(a, version),
             Record::SliceStarted(s) => self.check_slice_started(s),
@@ -432,6 +432,27 @@ impl Index {
                 Ok(())
             }
         }
+    }
+
+    /// The reason `inconclusive` exists from schema 7 on: an older line that carries it was
+    /// not written by a build that checks it.
+    fn require_schema7_reason(
+        &self,
+        reason: Option<UnresolvedReason>,
+        version: u32,
+        what: &str,
+    ) -> Result<(), Refusal> {
+        if reason != Some(UnresolvedReason::Inconclusive) || version >= 7 {
+            return Ok(());
+        }
+        Err(Refusal::new(
+            codes::INVALID_VALUE,
+            format!(
+                "{what} carries the reason inconclusive, which is a schema 7 reason, but this line says schema version {version}"
+            ),
+            "schema_version 7 or later",
+            "write the line with a build that writes schema 7",
+        ))
     }
 
     /// A record type that exists from schema 6 on.
@@ -1259,16 +1280,18 @@ impl Index {
             findings: self,
             entry: self.entry,
         };
+        self.require_schema7_reason(t.reason, version, &format!("the move of {}", t.finding))?;
         match version {
             0..=1 => machine::check_transition(&M0Rules, &ctx),
             2 => machine::check_transition(&M3Rules, &ctx),
             3 => machine::check_transition(&M4Rules, &ctx),
             4..=5 => machine::check_transition(&M5Rules, &ctx),
-            _ => machine::check_transition(&M6Rules, &ctx),
+            6 => machine::check_transition(&M6Rules, &ctx),
+            _ => machine::check_transition(&M7Rules, &ctx),
         }
     }
 
-    fn check_open_item_resolved(&self, r: &OpenItemResolved) -> Result<(), Refusal> {
+    fn check_open_item_resolved(&self, r: &OpenItemResolved, version: u32) -> Result<(), Refusal> {
         let Some(state) = self.open_items.get(&r.id) else {
             return Err(Refusal::new(
                 codes::UNKNOWN_OPEN_ITEM,
@@ -1286,23 +1309,54 @@ impl Index {
             ));
         }
         match &r.resolution {
-            Resolution::Unresolved { remedy, .. } => {
+            Resolution::Unresolved { remedy, reason } => {
                 if remedy.trim().is_empty() {
                     return Err(Refusal::new(
                         codes::REMEDY_REQUIRED,
                         format!("resolving {} as unresolved needs a remedy", r.id),
                         "--remedy",
                         format!(
-                            "dla ledger resolve {} --as unresolved --reason time_budget --remedy \"<text>\"",
-                            r.id
+                            "dla ledger resolve {} --as unresolved --reason {} --remedy \"<text>\"",
+                            r.id,
+                            self.open_item_reason(&state.item)
                         ),
                     ));
+                }
+                if *reason == UnresolvedReason::Inconclusive {
+                    self.require_schema7_reason(
+                        Some(*reason),
+                        version,
+                        &format!("the resolution of {}", r.id),
+                    )?;
+                    if !self.open_item_measured(&state.item) {
+                        return Err(machine::inconclusive_refusal(&r.id.to_string()));
+                    }
                 }
                 Ok(())
             }
             Resolution::Hypothesis(f) => {
                 self.require_finding(f, "open item resolution").map(|_| ())
             }
+        }
+    }
+
+    /// An open item was raised by a measurement when `dla gap --residual` opened it, or
+    /// when its finding has a measurement tied to the finding's family.
+    fn open_item_measured(&self, item: &OpenItem) -> bool {
+        item.opened_by == crate::record::RESIDUAL_OPENED_BY
+            || item
+                .finding
+                .as_ref()
+                .and_then(|f| self.findings.get(f))
+                .is_some_and(|f| machine::tied_measurement(self, self, f))
+    }
+
+    /// The reason the evidence supports for closing an open item unresolved.
+    fn open_item_reason(&self, item: &OpenItem) -> UnresolvedReason {
+        if self.open_item_measured(item) {
+            UnresolvedReason::Inconclusive
+        } else {
+            UnresolvedReason::NotExercised
         }
     }
 
@@ -1346,7 +1400,22 @@ impl Index {
                         format!("{} cannot be unresolved without a reason", a.item),
                         "--reason",
                         format!(
-                            "dla ledger resolve {} --status unresolved --reason time_budget --remedy \"<text>\"",
+                            "dla ledger resolve {} --status unresolved --reason <env_unavailable, tool_missing, no_harness, not_exercised, build_fails or privilege_declined> --remedy \"<text>\"",
+                            a.item
+                        ),
+                    ));
+                }
+                if a.reason == Some(UnresolvedReason::Inconclusive) {
+                    // An intake question is not a measurement.
+                    return Err(Refusal::new(
+                        codes::INVALID_VALUE,
+                        format!(
+                            "{} cannot be unresolved with reason inconclusive: an intake question is answered or left open for a reason, it is not measured",
+                            a.item
+                        ),
+                        "a reason that says why the question is open",
+                        format!(
+                            "dla ledger resolve {} --status unresolved --reason env_unavailable --remedy \"<text>\"   (or tool_missing, no_harness, not_exercised, build_fails, privilege_declined)",
                             a.item
                         ),
                     ));
@@ -1357,8 +1426,9 @@ impl Index {
                         format!("{} cannot be unresolved without a remedy", a.item),
                         "--remedy",
                         format!(
-                            "dla ledger resolve {} --status unresolved --reason time_budget --remedy \"<text>\"",
-                            a.item
+                            "dla ledger resolve {} --status unresolved --reason {} --remedy \"<text>\"",
+                            a.item,
+                            a.reason.unwrap_or(UnresolvedReason::NotExercised)
                         ),
                     ));
                 }
@@ -2001,6 +2071,21 @@ impl Ledger {
     pub fn finding(&self, id: &FindingId) -> Option<&Finding> {
         self.index.findings.get(id)
     }
+    /// The reason the evidence supports for closing a finding unresolved: `inconclusive`
+    /// when a measurement is tied to its family, else `not_exercised`.
+    pub fn supported_reason(&self, id: &FindingId) -> UnresolvedReason {
+        match self.index.findings.get(id) {
+            Some(f) => machine::supported_reason(&self.index, &self.index, f),
+            None => UnresolvedReason::NotExercised,
+        }
+    }
+    /// The reason the evidence supports for closing an open item unresolved.
+    pub fn open_item_supported_reason(&self, id: &OpenItemId) -> UnresolvedReason {
+        match self.index.open_items.get(id) {
+            Some(o) => self.index.open_item_reason(&o.item),
+            None => UnresolvedReason::NotExercised,
+        }
+    }
     /// All open items, ordered by ID.
     pub fn open_items(&self) -> impl Iterator<Item = &OpenItemState> {
         self.index.open_items.values()
@@ -2455,6 +2540,75 @@ impl Ledger {
             evidence,
             by: by.to_owned(),
         }))
+    }
+
+    /// Runs the checks [`Self::transition`] would run, writing nothing. A caller that adds
+    /// a rule of its own checks after the ledger's, so the ledger's refusal comes first.
+    pub fn check_transition_only(
+        &self,
+        finding: &FindingId,
+        to: FindingState,
+        reason: Option<crate::finding::UnresolvedReason>,
+        remedy: Option<String>,
+        evidence: Vec<EvidenceId>,
+    ) -> Result<(), Error> {
+        let finding = self.own_finding_id(finding);
+        let evidence: Vec<EvidenceId> = evidence.iter().map(|e| self.own_evidence_id(e)).collect();
+        let from = self
+            .index
+            .require_finding(&finding, "transition")
+            .map_err(Error::Refused)?
+            .state;
+        let record = Record::Transition(Transition {
+            finding,
+            from,
+            to,
+            reason,
+            remedy,
+            evidence,
+            by: String::new(),
+        });
+        self.index
+            .check(&record, LEDGER_SCHEMA_VERSION)
+            .map_err(Error::Refused)
+    }
+
+    /// Runs the checks [`Self::resolve_open_item`] would run, writing nothing.
+    pub fn check_open_item_resolution(
+        &self,
+        id: &OpenItemId,
+        resolution: Resolution,
+    ) -> Result<(), Error> {
+        let resolution = match resolution {
+            Resolution::Hypothesis(f) => Resolution::Hypothesis(self.own_finding_id(&f)),
+            other => other,
+        };
+        let record = Record::OpenItemResolved(OpenItemResolved {
+            id: self.own_open_item_id(id),
+            resolution,
+        });
+        self.index
+            .check(&record, LEDGER_SCHEMA_VERSION)
+            .map_err(Error::Refused)
+    }
+
+    /// When the line that raised finding `id` was written; `None` when it is not in this
+    /// ledger's lines.
+    pub fn finding_added_at(&self, id: &FindingId) -> Option<DateTime<Utc>> {
+        let id = self.own_finding_id(id);
+        self.lines.iter().find_map(|l| match &l.record {
+            Record::FindingAdded { finding } if finding.id == id => Some(l.ts),
+            _ => None,
+        })
+    }
+
+    /// When the line that raised open item `id` was written.
+    pub fn open_item_added_at(&self, id: &OpenItemId) -> Option<DateTime<Utc>> {
+        let id = self.own_open_item_id(id);
+        self.lines.iter().find_map(|l| match &l.record {
+            Record::OpenItem(o) if o.id == id => Some(l.ts),
+            _ => None,
+        })
     }
 
     /// Raises an open item, allocating `O<n>`.

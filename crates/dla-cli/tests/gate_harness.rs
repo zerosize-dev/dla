@@ -604,6 +604,22 @@ fn worker_mode_refuses_and_lists_the_harness_of_its_own_runtime() {
 }
 
 #[test]
+fn a_workers_nearer_deadline_lifts_the_rule_for_its_findings() {
+    // The run has 60 minutes left; the worker has 5, so it may close without running.
+    let r = scene(Runtime::Jvm, Some("jvm"));
+    assert_eq!(
+        r.close(Some("jvm"), "no_harness").as_deref(),
+        Some("harness-not-run"),
+        "both deadlines far"
+    );
+    r.set_state(|st| {
+        let ws = st["workers"].as_array_mut().unwrap();
+        ws[0]["deadline"] = json!(rfc3339_in(5 * 60));
+    });
+    assert_eq!(r.close(Some("jvm"), "no_harness"), None);
+}
+
+#[test]
 fn an_intervention_clone_is_not_a_generated_harness() {
     // `dla intervene` clones H1 into H2 and runs it without `dla harness run`: no
     // attempt, and no series when the effect is invalid. H1 itself was tried.

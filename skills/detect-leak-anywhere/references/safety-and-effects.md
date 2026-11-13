@@ -36,11 +36,11 @@ Never work around a refusal by running the tool by hand.
 
 | Command | Tier | Notes |
 |---|---|---|
-| `dla run init`, `consent`, `workload discover`, `census`, `sweep`, `trend`, `gap`, `ledger ...`, `report` | none | Read project files and the run directory; `sweep` runs the installed analyzers on the project, except the Rust RAPx backend (`cargo check` runs build scripts), which needs tier 1 |
+| `dla run init`, `consent`, `workload discover`, `census`, `sweep`, `trend`, `gap`, `ledger ...`, `report` | none | Read project files and the run directory; `sweep` runs the installed analyzers on the project, except the Rust RAPx backend (`cargo check` runs build scripts) and the JVM CodeQL backend on a project with Kotlin (a traced offline Gradle or Maven build in a copy under the run directory), which need tier 1; without tier 1 CodeQL reads the Java only and the coverage row names the Kotlin it did not read |
 | `dla harness gen` | none | Writes only under the run directory (the scratch copy, the manifest, the agent files, the generated driver) |
 | `dla probe --build` | 1 | Runs each runtime's build |
 | `dla install <backend>` | 1 | Installs into the plugin data directory or through the project's package manager, never into project source |
-| `dla harness run <H>` | 1 | Builds and runs the workload in the scratch copy with an agent, shim or driver injected |
+| `dla harness run <H>` | 1 | Builds and runs the workload in the scratch copy with an agent, shim or driver injected. A JVM harness of a Gradle or Maven project (the JUnit repeat, and a driver) resolves its class path through the project's build: offline first, and when that fails online, where the build tool downloads dependencies into its own cache (the log says `DLA-BUILD the offline attempt failed; retrying online`); the project's source is not touched |
 | `dla alloc-test <H>` | 1 | Re-runs the harness with extra points and a purge |
 | `dla sample --pid <P>` | 1 for a process DLA started (it is in the run's process registry), 2 for any other process | The OS figures need only read access to `/proc` or the platform process API |
 | `dla sample` with `node-inspect` on a process DLA did not start | 2 | If the process has no inspector DLA sends it `SIGUSR1`, which opens one on port 9229 and stays open until the process exits. DLA signals only an executable named `node` or `nodejs`, and only when `--counters node-inspect` was asked for |
@@ -97,7 +97,7 @@ What the hooks do (all call `dla gate <subcommand>`; with no active run they all
 | `write-hook` | SKILL.md frontmatter (core session) and `hooks/hooks.json` (also inside workers) | `Write`, `Edit` and `NotebookEdit` of any file under `.dla/` except the harness driver files (`.dla/<run>/harness/H<n>/driver/`): the sealed run files (`report.md`, `state.json`, `coverage.json`, `ledger*.jsonl`) and the files the gates read that no seal covers (`integrity/`, `trend/`, `series/`, `gate/`, `bundle/`, `intervene/`, `alloc/`, `probe/`, harness output and evidence files) |
 | `read-hook` | the same two places | `Read` of `*-archetypes.md`, `known-leaks.md`, `archetypes.toml` and `known-leaks.toml` until `dla gate check --stage classify` has passed (for the core, or for the worker whose subagent reads: `dla --worker <name> gate check --stage classify`); in the core session also `Grep` and `Glob` naming them |
 | `bash-hook` | SKILL.md frontmatter only | a Bash command that names `.dla/` with a write form (a driver file excepted) (`>`, `tee`, `sed -i`, `cp`, `mv`, `rm`, `truncate`, an interpreter one-liner, `dd`) or that reads an archetype file before the classify gate; commands that start with `dla` are allowed. Best effort on the command text |
-| `stop-hook` | SKILL.md frontmatter (the core's Stop) | the end of the turn while `dla gate check --final` fails; it prints the first missing items and their fixes (among them `harness_not_run`: a generated harness never run while budget remains) |
+| `stop-hook` | SKILL.md frontmatter (the core's Stop) | the end of the turn while `dla gate check --final` fails; it prints the first missing items and their fixes (among them `harness_not_run`: a generated harness never run while budget remains; `coverage_contradiction`; `budget_left_unrevisited`) and how many budget minutes remain |
 | `stop-hook --subagent` | `hooks/hooks.json`, matcher `^dla:worker$` (SubagentStop) | a worker's stop while its slice is not done and dispositioned |
 
 Plugin agents ignore `hooks:` in their own frontmatter, which is why the worker hooks are in

@@ -1,0 +1,14 @@
+{
+  "name": "notice-renderer",
+  "version": "2.8.0",
+  "private": true,
+  "description": "Renders customer notices (statements, reminders, receipts) from templates in the customer's language.",
+  "main": "src/renderer.js",
+  "scripts": {
+    "test": "node --test",
+    "load": "node load.js --iterations 20000"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -530,3 +530,67 @@ fn a_series_without_any_region_column_is_refused() {
     let e = refused(p, &["gap", "S7"]);
     assert_eq!(e["code"], "invalid-value");
 }
+
+#[test]
+fn a_nonheap_residual_with_a_harness_prints_the_alloc_test_route() {
+    let pr = project();
+    let p = pr.dir.path();
+    write_series(
+        &pr,
+        "S1",
+        "jvm",
+        &[(
+            "jvm.nonheap_used",
+            "gauge",
+            "non-heap",
+            None,
+            rising(5.0e7, 3.0e5),
+        )],
+    );
+    let r = ok(p, &["gap", "--residual"]);
+    assert_eq!(r["rows"][0]["region"], "non-heap", "{r}");
+    assert_eq!(r["open_items"]["opened"], json!(["O1"]), "{r}");
+    // The open item names the route that decides the growth with evidence.
+    let ledger = fs::read_to_string(pr.run_dir.join("ledger.jsonl")).unwrap();
+    let item: Value = ledger
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|l| l["type"] == "open_item")
+        .unwrap();
+    let text = item["text"].as_str().unwrap();
+    assert!(
+        text.contains("dla ledger add --origin residual --region non-heap --evidence E")
+            && text.contains("N-WARM")
+            && text.contains("dla alloc-test H1 --finding"),
+        "{text}"
+    );
+    // The next step is the whole route, ending in the open item resolved by the sibling,
+    // and never pre-fills time_budget.
+    let next = r["next"].to_string();
+    assert!(
+        next.contains("dla alloc-test H1 --finding F")
+            && next.contains("dla ledger resolve O1 --by F.n1")
+            && !next.contains("time_budget"),
+        "{next}"
+    );
+    // A heap residual keeps the generic hint, with the reason that is true.
+    let (pr2, p2) = {
+        let pr2 = project();
+        let p2 = pr2.dir.path().to_path_buf();
+        (pr2, p2)
+    };
+    heap_series(&pr2);
+    let ga = growth(
+        &pr2,
+        "growth-series",
+        "S1",
+        passed_bytes("F1", "probe:A.bytes", "src/a.go:6", 250.0),
+    );
+    confirm(&pr2, "src/a.go:6", &ga);
+    let r = ok(&p2, &["gap", "--residual"]);
+    let next = r["next"].to_string();
+    assert!(
+        next.contains("--reason inconclusive") && !next.contains("alloc-test"),
+        "{next}"
+    );
+}

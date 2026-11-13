@@ -1,0 +1,16 @@
+schema_version = 1
+id = "rust-alloc-threads"
+runtime = "rust"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the report export service's resident memory is several times what its jobs hold: it climbs to about twelve megabytes within the first few hundred exports and stays there, even when the queue is empty. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/render.rs:28"
+cause = "N-ALLOC"
+discriminator = "live allocations are 300 to 302 blocks, about 19.7 kB, from the first 220 exports to 8000 (26 blocks and 3.9 kB at start), the second-half slope of live bytes is zero, and resident memory sits at 11.6 to 12.9 MB (2.4 MB at start) because the eight worker threads' malloc arenas keep the freed section and document buffers; a malloc_trim at the end gives back 2.8 to 4.9 MB of it"

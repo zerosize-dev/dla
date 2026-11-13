@@ -29,7 +29,7 @@ pub struct DispatchArgs {
     reserve: f64,
 }
 
-fn refuse_worker_mode(ctx: &Ctx, what: &str) -> Res<()> {
+pub(super) fn refuse_worker_mode(ctx: &Ctx, what: &str) -> Res<()> {
     match &ctx.worker {
         None => Ok(()),
         Some(w) => Err(Failure::refuse(
@@ -126,7 +126,7 @@ pub fn dispatch(ctx: &Ctx, a: DispatchArgs) -> Res<Value> {
                     rfc3339(st.budget.deadline)
                 ),
                 "time before the run deadline",
-                "dla run init --budget <longer>   (a run's budget is fixed at init)",
+                dla_core::toolctx::deadline_fix(false, Some(st)),
             )));
         }
         // Truncation is intended: whole seconds, never more than the pool.

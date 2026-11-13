@@ -20,7 +20,7 @@
 
 use serde_json::Value;
 
-use super::{Fx, Out, resolve, strings};
+use super::{Fx, Out, resolve_undecided, strings};
 
 /// Common remedy for runs that end without a series of three dumps.
 const MORE_DUMPS: &str = "take at least 3 heap dumps of the same process, minutes apart under load, and run dla summarize heap-graph with all of them";
@@ -111,11 +111,9 @@ fn confirm_candidate(fx: &mut Fx, f: &str, growth: &str, discriminators: &[Value
             format!("refute refused ({})", r.code())
         };
     }
-    resolve(
+    resolve_undecided(
         fx,
         f,
-        "unresolved",
-        "time_budget",
         "take another dump after more traffic and rerun dla summarize heap-graph with all dumps",
     );
     "the dump-plateau discriminator is inconclusive: left unresolved".to_owned()

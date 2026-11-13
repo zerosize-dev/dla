@@ -50,7 +50,8 @@ documentation.
   aliases, reflection, dependency injection or another module, and it pairs same-named but unrelated
   calls. Its lists are leads for the model to check, not proof that a remover exists or is missing.
 - **Some static backends are absent here.** CodeQL's bundle could not be extracted in the build
-  sandbox and Sonar needs a server, so their rules did not run; coverage shows them as `missing`.
+  sandbox, so its rules did not run (coverage shows it as `missing`); Sonar needs a server DLA does not
+  query, so its row is always `blocked` as server-only and names the offline backends that ran.
   Hits from tools that did run depend on which rules were enabled and verified.
 - **Some analyzers need more than source.** SpotBugs and Error Prone work on compiled classes or a
   working build, and others need module dependencies resolved. When the project does not build, those

@@ -1,0 +1,19 @@
+schema_version = 1
+id = "native-arena-reuse"
+runtime = "native"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The settlement run's resident memory is much higher than expected for the
+amount of data it works on and an alert fires on it. It stays that high for the
+whole run, long after each batch of payments has been totalled. Find out what
+is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/record.c:7"
+cause = "N-ALLOC"
+discriminator = "every record is freed at the end of its batch and the summaries are replaced, so the program holds 77 kB in use against 3.65 MB free inside the allocator (mallinfo2); peak RSS is 5.4 MB from the second batch to the 160th, valgrind reports all heap blocks freed, and malloc_trim(0) returns the resident size from 5372 kB to 1996 kB"

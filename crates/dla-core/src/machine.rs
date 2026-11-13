@@ -10,7 +10,7 @@
 //! retention path can stand in for static evidence). Ledger lines written with schema
 //! version 1 replay under [`M0Rules`], version 2 under [`M3Rules`], version 3 under
 //! [`M4Rules`], versions 4 and 5 under [`M5Rules`], version 6 under [`M6Rules`] (which adds
-//! the `strong` rule).
+//! the `strong` rule), version 7 under [`M7Rules`] (which adds the reason `inconclusive`).
 
 use crate::{
     discriminator::{Favors, favors_of, finding_of},
@@ -26,6 +26,7 @@ use crate::{
     slice::codes as m4_codes,
     state::EntryPath,
     trend::{GrowthSummary, PassedColumn, finding_region, finding_shape},
+    view::is_measurement,
 };
 
 /// States reachable from `from` in one move.
@@ -100,18 +101,23 @@ pub fn check_transition(
 ) -> Result<(), Refusal> {
     let from = ctx.finding.state;
     if !is_allowed(from, ctx.to) {
-        return Err(illegal(ctx.finding, ctx.to));
+        let reason = supported_reason(ctx.lookup, ctx.findings, ctx.finding);
+        return Err(illegal(ctx.finding, ctx.to, reason));
     }
     rules.check(ctx)
 }
 
 /// The command that performs the edge `finding -> to`, and whether it exists in this
 /// build. Commands that arrive in a later milestone are labelled with that milestone.
-fn edge_command(id: &crate::ids::FindingId, to: FindingState) -> (String, bool) {
+fn edge_command(
+    id: &crate::ids::FindingId,
+    to: FindingState,
+    reason: UnresolvedReason,
+) -> (String, bool) {
     match to {
         FindingState::Unresolved => (
             format!(
-                "dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+                "dla ledger resolve {id} --as unresolved --reason {reason} --remedy \"<text>\""
             ),
             true,
         ),
@@ -144,7 +150,7 @@ fn edge_command(id: &crate::ids::FindingId, to: FindingState) -> (String, bool) 
     }
 }
 
-fn illegal(finding: &Finding, to: FindingState) -> Refusal {
+fn illegal(finding: &Finding, to: FindingState, reason: UnresolvedReason) -> Refusal {
     let from = finding.state;
     let targets = allowed_targets(from);
     let id = &finding.id;
@@ -174,7 +180,10 @@ fn illegal(finding: &Finding, to: FindingState) -> Refusal {
         )
     };
     // Build the fix from the source state: commands that exist now first.
-    let cmds: Vec<(String, bool)> = targets.iter().map(|t| edge_command(id, *t)).collect();
+    let cmds: Vec<(String, bool)> = targets
+        .iter()
+        .map(|t| edge_command(id, *t, reason))
+        .collect();
     let now: Vec<&str> = cmds
         .iter()
         .filter(|(_, ok)| *ok)
@@ -198,13 +207,13 @@ fn illegal(finding: &Finding, to: FindingState) -> Refusal {
     )
 }
 
-fn resolve_fix(id: &crate::ids::FindingId, to: FindingState) -> String {
-    let as_ = if to == FindingState::SuspectedStaticOnly {
-        "suspected_static_only"
-    } else {
-        "unresolved"
-    };
-    format!("dla ledger resolve {id} --as {as_} --reason time_budget --remedy \"<text>\"")
+fn resolve_fix(id: &crate::ids::FindingId, to: FindingState, reason: UnresolvedReason) -> String {
+    if to == FindingState::SuspectedStaticOnly {
+        return format!(
+            "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\""
+        );
+    }
+    format!("dla ledger resolve {id} --as unresolved --reason {reason} --remedy \"<text>\"")
 }
 
 /// The rules enforced in M0.
@@ -265,7 +274,11 @@ fn check_m0(ctx: &TransitionContext<'_>, dump_retention: bool) -> Result<(), Ref
                         .collect::<Vec<_>>()
                         .join("|")
                 ),
-                resolve_fix(id, to),
+                resolve_fix(
+                    id,
+                    to,
+                    supported_reason(ctx.lookup, ctx.findings, ctx.finding),
+                ),
             ));
         }
         if ctx.remedy.is_none_or(|r| r.trim().is_empty()) {
@@ -273,7 +286,11 @@ fn check_m0(ctx: &TransitionContext<'_>, dump_retention: bool) -> Result<(), Ref
                 codes::REMEDY_REQUIRED,
                 format!("{id} cannot become {to} without a remedy"),
                 "--remedy, the step that would resolve it",
-                resolve_fix(id, to),
+                resolve_fix(
+                    id,
+                    to,
+                    supported_reason(ctx.lookup, ctx.findings, ctx.finding),
+                ),
             ));
         }
     } else if ctx.reason.is_some() || ctx.remedy.is_some() {
@@ -574,6 +591,197 @@ impl TransitionRules for M6Rules {
     }
 }
 
+/// The rule set of milestone 7: [`M6Rules`] plus the reason `inconclusive`.
+///
+/// `inconclusive` means "measured, and the measurement cannot decide". Only `unresolved`
+/// takes it (`suspected_static_only` is by definition never exercised), and only when a
+/// measurement is tied to the finding's family: see [`tied_measurement`]. A measurement
+/// cited on the resolve line alone does not count: it could be any record of the run.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct M7Rules;
+
+impl TransitionRules for M7Rules {
+    fn check(&self, ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+        M6Rules.check(ctx)?;
+        if ctx.reason == Some(UnresolvedReason::Inconclusive) {
+            check_inconclusive(ctx)?;
+        }
+        Ok(())
+    }
+}
+
+/// True for the kinds whose record says something about one finding when the finding's
+/// family cites it: a residual, a non-heap record, a capture, a discriminator or an
+/// intervention. A `workload` record only says the harness ran, and a growth series is
+/// judged on its columns (see [`tied_measurement`]).
+fn is_bound_capture(e: &EvidenceRecord) -> bool {
+    is_measurement(e)
+        && !matches!(
+            e.kind,
+            EvidenceKind::Workload | EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
+        )
+}
+
+/// Whether a growth record ties to nothing when a finding cites it, by the gate's rule:
+///
+/// * a trend (`trend` or `gate` present) whose passed columns are all whole-process
+///   columns (`os.rss`, `jvm.heap_used`...) says the process grew, which no finding
+///   explains; a trend with no passed column (it failed its gate) says the same when every
+///   column it measured is a whole-process one (`failed_beyond_process` is zero), and is
+///   otherwise the measurement a finding was made from;
+/// * the raw `growth-series` record of `dla sample` has no trend and no gate, only a
+///   `columns` list of names, and `gate::tied_findings` never reaches it: it ties to
+///   nothing unless a column it lists is not whole-process (a sampler that lists only
+///   `os.rss` and `os.threads` measured the process, not a finding).
+fn only_whole_process(e: &EvidenceRecord) -> bool {
+    let Some(s) = GrowthSummary::from_result(&e.result) else {
+        return false;
+    };
+    if !s.passed.is_empty() {
+        return s
+            .passed
+            .iter()
+            .all(|c| crate::gate::is_whole_process(&c.column));
+    }
+    if s.trend.is_some() || s.gate.is_some() {
+        // A trend with no passed column ties nothing by the gate's rule. It is the
+        // measurement a finding was made from only when a failed column is not a
+        // whole-process one; a record that does not say (written before the count existed)
+        // is given the benefit of the doubt.
+        return s.failed_beyond_process == Some(0);
+    }
+    e.result
+        .get("columns")
+        .and_then(|c| c.as_array())
+        .is_none_or(|cols| {
+            cols.iter()
+                .filter_map(|c| c.as_str())
+                .all(crate::gate::is_whole_process)
+        })
+}
+
+/// Whether a measurement is tied to the family of `f` (its root and the root's
+/// siblings), by one of:
+///
+/// * a discriminator or an intervention (authority test, live or dump) whose `finding` is
+///   in the family, or that a member of the family already cites;
+/// * a growth record that a member of the family already cites (unless every passed
+///   column of it is a whole-process column), or whose passing column is tied to a
+///   member of the family ([`PassedColumn::tied_to_owner`]); these are the findings the
+///   gate's tie rule (`gate::tied_findings`) ties to a growth column;
+/// * a residual, non-heap or capture record that is already among the `supports` of a
+///   member of the family.
+///
+/// A workload record never counts (the harness ran, which says nothing about this
+/// finding), and neither does evidence that is only cited on the line being judged.
+pub fn tied_measurement(
+    lookup: &dyn EvidenceLookup,
+    findings: &dyn FindingLookup,
+    f: &Finding,
+) -> bool {
+    let mut family = findings.family(&f.id);
+    if family.is_empty() {
+        family.push(f);
+    }
+    let cited = |e: &EvidenceRecord| {
+        family
+            .iter()
+            .any(|m| m.supports.contains(&e.evidence_id) || m.contradicts.contains(&e.evidence_id))
+    };
+    if family.iter().any(|m| {
+        m.supports
+            .iter()
+            .chain(m.contradicts.iter())
+            .filter_map(|e| lookup.evidence(e))
+            .any(|e| match e.kind {
+                EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => {
+                    is_measurement(e) && !only_whole_process(e)
+                }
+                _ => is_bound_capture(e),
+            })
+    }) {
+        return true;
+    }
+    lookup
+        .evidence_ids()
+        .iter()
+        .filter_map(|id| lookup.evidence(id))
+        .filter(|e| is_measurement(e))
+        .any(|e| match e.kind {
+            EvidenceKind::Discriminator => {
+                finding_of(e).is_some_and(|id| family.iter().any(|m| m.id == id)) || cited(e)
+            }
+            EvidenceKind::Intervention => {
+                InterventionResult::of(e)
+                    .and_then(|r| r.finding)
+                    .and_then(|id| id.parse::<FindingId>().ok())
+                    .is_some_and(|id| family.iter().any(|m| m.id == id))
+                    || cited(e)
+            }
+            EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => {
+                GrowthSummary::from_result(&e.result).is_some_and(|s| {
+                    s.passed.iter().any(|c| {
+                        family
+                            .iter()
+                            .any(|m| c.tied_to_owner(&m.id, m.site.as_deref(), m.owner.as_deref()))
+                    })
+                })
+            }
+            _ => false,
+        })
+}
+
+/// The reason the evidence supports for closing `f` unresolved: `inconclusive` when a
+/// measurement is tied to its family, else `not_exercised`. Every printed fix that names a
+/// reason uses this, so none of them pre-fills `time_budget` (which is true only when the
+/// deadline is near).
+pub fn supported_reason(
+    lookup: &dyn EvidenceLookup,
+    findings: &dyn FindingLookup,
+    f: &Finding,
+) -> UnresolvedReason {
+    if tied_measurement(lookup, findings, f) {
+        UnresolvedReason::Inconclusive
+    } else {
+        UnresolvedReason::NotExercised
+    }
+}
+
+fn check_inconclusive(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
+    let id = &ctx.finding.id;
+    if ctx.to != FindingState::Unresolved {
+        return Err(Refusal::new(
+            codes::INVALID_VALUE,
+            format!(
+                "{id} cannot become {} with reason inconclusive: that state means the finding was never exercised, and inconclusive means it was measured",
+                ctx.to
+            ),
+            "--as unresolved for a measured finding, or --reason not_exercised",
+            format!(
+                "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static-hit or census-holder id>   or   dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\" (after a measurement tied to it)"
+            ),
+        ));
+    }
+    if tied_measurement(ctx.lookup, ctx.findings, ctx.finding) {
+        return Ok(());
+    }
+    Err(inconclusive_refusal(&format!("{id}")))
+}
+
+/// The refusal for `inconclusive` on a target no measurement is tied to.
+pub fn inconclusive_refusal(what: &str) -> Refusal {
+    Refusal::new(
+        codes::MEASUREMENT_REQUIRED,
+        format!(
+            "{what} cannot be closed inconclusive: no measurement is tied to it (a discriminator or intervention for it, a growth column tied to it, or a residual, non-heap or capture record it already cites). A workload record only shows the harness ran"
+        ),
+        "a measurement tied to the finding: dla alloc-test <H> --finding <F>, a probe column from dla trend, or a residual or non-heap record cited with dla ledger add --evidence",
+        format!(
+            "measure it: dla alloc-test <H> --finding {what}   or   dla trend <S> (a probe on its holder), then dla ledger resolve {what} --as unresolved --reason inconclusive --remedy \"<text>\"   or, when nothing reached it: dla ledger resolve {what} --as unresolved --reason not_exercised --remedy \"<text>\""
+        ),
+    )
+}
+
 fn signal_text(e: &EvidenceRecord) -> String {
     match Signal::of(e) {
         Some(s) => format!(
@@ -815,7 +1023,8 @@ fn require_tied_growth(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
     let id = &f.id;
     // Offer only the resolve route the ledger accepts for this finding: suspected_static_only
     // needs static-class evidence (cited with --evidence); a finding that rests on growth
-    // records alone is left unresolved.
+    // records alone is left unresolved, with the reason its evidence supports: `inconclusive`
+    // when a measurement is tied to its family, else `not_exercised`.
     let static_id = judged(ctx)
         .find(|e| e.kind.class() == EvidenceClass::Static)
         .map(|e| e.evidence_id.to_string());
@@ -824,7 +1033,8 @@ fn require_tied_growth(ctx: &TransitionContext<'_>) -> Result<(), Refusal> {
             "dla ledger resolve {id} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence {sid}"
         ),
         None => format!(
-            "dla ledger resolve {id} --as unresolved --reason tool_missing --remedy \"<text>\""
+            "dla ledger resolve {id} --as unresolved --reason {} --remedy \"<text>\"",
+            supported_reason(ctx.lookup, ctx.findings, f)
         ),
     };
     let named = if untied.is_empty() {

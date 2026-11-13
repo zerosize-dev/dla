@@ -6,11 +6,13 @@ Status: INCOMPLETE (22 open)
 
 Measured: nothing. No harness ran and nothing was sampled or captured, so every finding rests on reading the code: this report neither shows nor rules out a leak.
 
+Time: budget 1h, 0s used.
+
 Entry: repository
 
 Scope: module `services/api`; excluded: `services/api/generated`, `vendor`; out of scope: jvm 12 files, rust 1 file
 
-Findings: 3 enumerated, 0 dispositioned; confirmed 0, strong 0, refuted 0, suspected 0, unresolved 0
+Findings: 3 enumerated, 0 dispositioned; leak hypotheses: confirmed 0, strong 0, refuted 0, suspected 0, unresolved 0; non-leak explanations: confirmed 0, refuted 0, suspected 0, unresolved 0
 
 Residual: not measured
 
@@ -18,11 +20,11 @@ Coverage: not measured
 
 ## Open items
 
-- **jvm/F1**: finding jvm/F1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1 --as unresolved --reason time_budget --remedy "<text>"`
-- **jvm/F1.n1**: finding jvm/F1.n1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1.n1 --as unresolved --reason time_budget --remedy "<text>"`
-- **rust/F2**: finding rust/F2 is candidate and has no disposition. Fix: `dla ledger resolve rust/F2 --as unresolved --reason time_budget --remedy "<text>"`
-- **O1**: open item O1: worker rust did not finish (slice ends at line 3). Fix: `dla ledger resolve O1 --as unresolved --reason time_budget --remedy "<text>"`
-- **O2**: open item O2: verifier disagrees with rust/F2 (site: finding native/pool.rs:7 vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local); bundle aaaaaaaaaaaa. Fix: `dla ledger resolve O2 --as unresolved --reason time_budget --remedy "<text>"`
+- **jvm/F1**: finding jvm/F1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1 --as unresolved --reason not_exercised --remedy "<text>"`
+- **jvm/F1.n1**: finding jvm/F1.n1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1.n1 --as unresolved --reason not_exercised --remedy "<text>"`
+- **rust/F2**: finding rust/F2 is candidate and has no disposition. Fix: `dla ledger resolve rust/F2 --as unresolved --reason not_exercised --remedy "<text>"`
+- **O1**: open item O1: worker rust did not finish (slice ends at line 3). Fix: `dla ledger resolve O1 --as unresolved --reason not_exercised --remedy "<text>"`
+- **O2**: open item O2: verifier disagrees with rust/F2 (site: finding native/pool.rs:7 vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local); bundle aaaaaaaaaaaa. Fix: `dla ledger resolve O2 --as unresolved --reason not_exercised --remedy "<text>"`
 - **intake.target**: checklist item intake.target is unanswered: Is the target a repository, a local process, an artifact, or only a symptom? Fix: `dla ledger resolve intake.target --status answered --evidence E1`
 - **intake.scope**: checklist item intake.scope is unanswered: Does the investigation cover the whole repository, one module or one service, and what is excluded? Fix: `dla ledger resolve intake.scope --status answered --evidence E1`
 - **intake.symptom**: checklist item intake.symptom is unanswered: What growth was observed, where, and over what time? Fix: `dla ledger resolve intake.symptom --status answered --evidence E1`

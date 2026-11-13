@@ -9,7 +9,7 @@ use crate::{
     checklist::ChecklistEntry,
     coverage::CoverageManifest,
     error::Error,
-    evidence::{Authority, EvidenceKind},
+    evidence::{Authority, EvidenceKind, EvidenceRecord},
     finding::FindingState,
     integrity::{self, Tamper},
     ledger::Ledger,
@@ -195,6 +195,21 @@ pub struct StateCounts {
 }
 
 impl StateCounts {
+    /// This count less `other`, state by state (saturating).
+    pub fn minus(&self, other: &StateCounts) -> StateCounts {
+        StateCounts {
+            candidate: self.candidate.saturating_sub(other.candidate),
+            under_test: self.under_test.saturating_sub(other.under_test),
+            confirmed: self.confirmed.saturating_sub(other.confirmed),
+            strong: self.strong.saturating_sub(other.strong),
+            refuted: self.refuted.saturating_sub(other.refuted),
+            suspected_static_only: self
+                .suspected_static_only
+                .saturating_sub(other.suspected_static_only),
+            unresolved: self.unresolved.saturating_sub(other.unresolved),
+        }
+    }
+
     /// The count for one state.
     pub fn get(&self, s: FindingState) -> usize {
         match s {
@@ -208,7 +223,8 @@ impl StateCounts {
         }
     }
 
-    fn bump(&mut self, s: FindingState) {
+    /// Adds one finding in state `s`.
+    pub fn bump(&mut self, s: FindingState) {
         let slot = match s {
             FindingState::Candidate => &mut self.candidate,
             FindingState::UnderTest => &mut self.under_test,
@@ -229,8 +245,12 @@ pub struct StatusCounts {
     pub enumerated: usize,
     /// Findings in confirmed, strong, refuted, suspected_static_only or unresolved.
     pub dispositioned: usize,
-    /// Per-state counts.
+    /// Per-state counts of all findings, leak hypotheses and non-leak explanations alike.
     pub by_state: StateCounts,
+    /// Per-state counts of the non-leak explanations (`N-*` siblings) alone; the leak
+    /// hypotheses are `by_state` less this.
+    #[serde(default)]
+    pub non_leak: StateCounts,
     /// Open items without a resolution.
     pub open_items: usize,
     /// Checklist items without an answer.
@@ -252,7 +272,12 @@ pub struct ReportStatus {
     pub counts: StatusCounts,
 }
 
-const RESOLVE_FINDING: &str = "--as unresolved --reason time_budget --remedy \"<text>\"";
+/// The arguments that disposition a finding or open item as unresolved, with the reason
+/// the evidence supports: `inconclusive` when it was measured, else `not_exercised`.
+/// `time_budget` is never pre-filled here: it is true only when the deadline is near.
+fn resolve_args(reason: crate::finding::UnresolvedReason) -> String {
+    format!("--as unresolved --reason {reason} --remedy \"<text>\"")
+}
 
 /// The fix text for a run that is aborted or incomplete, by the reason it was stamped.
 fn incomplete_fix(view: &RunView) -> String {
@@ -286,6 +311,9 @@ pub fn status(view: &RunView) -> ReportStatus {
         }
         counts.enumerated += 1;
         counts.by_state.bump(f.state);
+        if f.polarity() == crate::finding::Polarity::NonLeak {
+            counts.non_leak.bump(f.state);
+        }
         if f.state.is_dispositioned() {
             counts.dispositioned += 1;
         } else {
@@ -293,7 +321,11 @@ pub fn status(view: &RunView) -> ReportStatus {
                 kind: BlockingKind::Finding,
                 id: f.id.to_string(),
                 description: format!("finding {} is {} and has no disposition", f.id, f.state),
-                fix: format!("dla ledger resolve {} {RESOLVE_FINDING}", f.id),
+                fix: format!(
+                    "dla ledger resolve {} {}",
+                    f.id,
+                    resolve_args(view.ledger.supported_reason(&f.id))
+                ),
             });
         }
     }
@@ -304,7 +336,11 @@ pub fn status(view: &RunView) -> ReportStatus {
                 kind: BlockingKind::OpenItem,
                 id: o.item.id.to_string(),
                 description: format!("open item {}: {}", o.item.id, o.item.text),
-                fix: format!("dla ledger resolve {} {RESOLVE_FINDING}", o.item.id),
+                fix: format!(
+                    "dla ledger resolve {} {}",
+                    o.item.id,
+                    resolve_args(view.ledger.open_item_supported_reason(&o.item.id))
+                ),
             });
         }
     }
@@ -417,6 +453,16 @@ impl Measured {
     }
 }
 
+/// True for a record that measures something: authority `test`, `live` or `dump`, and a
+/// kind that is neither `run-config` nor `probe`. A `workload` record counts here (the
+/// harness ran); whether it says anything about one finding is a separate question.
+pub fn is_measurement(e: &EvidenceRecord) -> bool {
+    matches!(
+        e.authority,
+        Authority::Test | Authority::Live | Authority::Dump
+    ) && !matches!(e.kind, EvidenceKind::RunConfig | EvidenceKind::Probe)
+}
+
 /// What the run measured. A pure function of the view, so the report, `dla run status`
 /// and the stop hook agree. Static hits, census holders, the probe, workload discovery and
 /// a generated (never run) harness measure nothing.
@@ -424,11 +470,7 @@ pub fn measured(view: &RunView) -> Measured {
     let mut m = Measured::default();
     let mut series_records = 0;
     for e in view.ledger.evidence() {
-        let measuring = matches!(
-            e.authority,
-            Authority::Test | Authority::Live | Authority::Dump
-        ) && !matches!(e.kind, EvidenceKind::RunConfig | EvidenceKind::Probe);
-        if !measuring {
+        if !is_measurement(e) {
             continue;
         }
         m.records += 1;

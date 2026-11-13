@@ -394,6 +394,76 @@ fn a_whole_process_column_is_never_tied_and_is_accounted_for_by_the_residual() {
 }
 
 #[test]
+fn the_jvm_non_heap_category_columns_are_never_tied_and_the_non_heap_row_accounts_for_them() {
+    let r = init("repository");
+    let cols = [
+        "probe:CACHE",
+        "jvm.nonheap_used",
+        "jvm.nmt.metaspace",
+        "jvm.nmt.symbol",
+        "jvm.nmt.code",
+        "jvm.classes_unloaded",
+        "jvm.jit_seconds",
+        "jvm.metaspace_used",
+    ];
+    write_trend(&r, "T1", "S1", &cols);
+    let disc = alloc_discriminator(&r, "T1", &cols);
+    let f = finding_citing(&r, &disc);
+    // Classify: none of the whole-process columns is asked for as a trend column.
+    assert!(trend_columns(&r.missing(&["--stage", "classify"])).is_empty());
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    let row = |region, residual: f64| dla_core::coverage::ResidualRow {
+        series: Some("S1".into()),
+        region,
+        total_slope: 10.0,
+        attributed_slope: 10.0 - residual,
+        residual,
+        unit: "bytes/iteration".into(),
+        threshold: 1.0,
+        open_item: None,
+    };
+    use dla_core::finding::Region;
+    // A heap row over its threshold does not decide a non-heap column: the non-heap row does,
+    // and it is under its threshold, so the new columns add no trend_column item.
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| {
+        m.set_residual(vec![row(Region::Heap, 8.0), row(Region::NonHeap, 0.5)]);
+    })
+    .unwrap();
+    let m = r.missing(&["--final"]);
+    let got = trend_columns(&m);
+    assert!(
+        !got.iter().any(|c| c.contains("jvm.")),
+        "the jvm non-heap columns need no disposition of their own: {got:?}"
+    );
+    // A non-heap row over its threshold is what they wait for, all of them together.
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| {
+        m.residual.clear();
+        m.set_residual(vec![row(Region::Heap, 0.5), row(Region::NonHeap, 8.0)]);
+    })
+    .unwrap();
+    let m = r.missing(&["--final"]);
+    let got = trend_columns(&m);
+    for c in [
+        "T1:jvm.nonheap_used",
+        "T1:jvm.nmt.symbol",
+        "T1:jvm.classes_unloaded",
+        "T1:jvm.jit_seconds",
+    ] {
+        assert!(got.contains(&c.to_owned()), "{c} in {got:?}");
+    }
+}
+
+#[test]
 fn once_a_series_has_a_gap_row_the_final_gate_lists_the_resolve_and_not_gap_again() {
     let r = init("repository");
     write_trend(&r, "T1", "S1", &["probe:CACHE", "os.rss"]);
@@ -473,7 +543,7 @@ fn once_a_series_has_a_gap_row_the_final_gate_lists_the_resolve_and_not_gap_agai
         "--as",
         "unresolved",
         "--reason",
-        "time_budget",
+        "inconclusive",
         "--remedy",
         "profile the whole process",
     ]);
@@ -484,6 +554,155 @@ fn once_a_series_has_a_gap_row_the_final_gate_lists_the_resolve_and_not_gap_agai
             .any(|m| m["id"] == "T1:os.rss" || m["kind"] == "residual"),
         "{items:?}"
     );
+}
+
+/// `series/<id>.json`: two points of one non-heap column, made by `harness` (or by a live
+/// sample when `None`).
+fn write_series(r: &Run, id: &str, harness: Option<&str>) {
+    use dla_core::series::{
+        Axis, Column, ColumnKind, ColumnScope, Point, SeriesFile, SeriesRegion, SeriesSource,
+        SeriesSourceKind, Unit,
+    };
+    let mut source = SeriesSource::new(if harness.is_some() {
+        SeriesSourceKind::Harness
+    } else {
+        SeriesSourceKind::Sample
+    });
+    source.harness = harness.map(str::to_owned);
+    SeriesFile {
+        schema_version: 1,
+        id: id.into(),
+        source,
+        axis: Axis::Iteration,
+        warmup: 0,
+        columns: vec![Column {
+            name: "jvm.nonheap_used".into(),
+            unit: Unit::Bytes,
+            kind: ColumnKind::Gauge,
+            region: SeriesRegion::NonHeap,
+            baseline: true,
+            after_gc: false,
+            scope: ColumnScope::Process,
+            site: None,
+            finding: None,
+            source: "jvm-agent".into(),
+        }],
+        points: (0..2)
+            .map(|i| Point {
+                x: f64::from(i),
+                t_ms: u64::from(i as u32) * 1000,
+                values: vec![Some(1000.0 + f64::from(i))],
+            })
+            .collect(),
+        events: vec![],
+        limitations: vec![],
+    }
+    .save(&r.run_dir())
+    .unwrap();
+}
+
+#[test]
+fn a_nonheap_residual_row_with_a_harness_lists_the_alloc_test_route() {
+    let r = init("repository");
+    write_trend(&r, "T1", "S1", &["probe:CACHE", "os.rss"]);
+    let disc = alloc_discriminator(&r, "T1", &["probe:CACHE", "os.rss"]);
+    let f = finding_citing(&r, &disc);
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &f,
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "run the workload",
+    ]);
+    {
+        let mut l = Ledger::load(&r.run_dir()).unwrap();
+        l.open_item_add(
+            "unexplained growth: 8.0 B in non-heap (S1); add a hypothesis or record it unresolved",
+            None,
+            "dla gap --residual",
+        )
+        .unwrap();
+    }
+    let row = |region| dla_core::coverage::ResidualRow {
+        series: Some("S1".into()),
+        region,
+        total_slope: 10.0,
+        attributed_slope: 2.0,
+        residual: 8.0,
+        unit: "bytes/iteration".into(),
+        threshold: 1.0,
+        open_item: Some("O1".parse().unwrap()),
+    };
+    let fix_of = || {
+        let items = r.items(&["--final"]);
+        let res = items.iter().find(|m| m["kind"] == "residual").unwrap();
+        res["fix"].as_str().unwrap().to_owned()
+    };
+    // Without a harness the open item has no alloc-test to run: the generic resolve, with
+    // the reason a measured residual supports, never time_budget.
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| {
+        m.set_residual(vec![row(dla_core::finding::Region::NonHeap)])
+    })
+    .unwrap();
+    let fix = fix_of();
+    assert!(
+        fix.contains("--reason inconclusive") && !fix.contains("alloc-test"),
+        "{fix}"
+    );
+    assert!(!fix.contains("time_budget"), "{fix}");
+    // A harness exists in the run, but the series S1 came from a live sample, not from it:
+    // there is no alloc-test to run on the series.
+    fs::create_dir_all(r.run_dir().join("harness/H1")).unwrap();
+    write_series(&r, "S1", None);
+    let fix = fix_of();
+    assert!(!fix.contains("alloc-test"), "{fix}");
+    // With the series made by H2 (H1 is another harness of the run), the non-heap row names
+    // the route that decides it with evidence, on H2, with the residual record's real id.
+    fs::create_dir_all(r.run_dir().join("harness/H2")).unwrap();
+    write_series(&r, "S1", Some("H2"));
+    let residual = {
+        let mut l = Ledger::load(&r.run_dir()).unwrap();
+        l.add_evidence(dla_core::NewEvidence {
+            source: dla_core::Source::Repo {
+                commit: "abc".into(),
+                path: None,
+            },
+            tool: dla_core::Tool {
+                name: "dla".into(),
+                version: "0".into(),
+            },
+            authority: dla_core::Authority::Test,
+            kind: dla_core::EvidenceKind::Residual,
+            result: json!({"series": "S1", "rows": [], "calibrated": false}),
+            raw: None,
+            coverage: dla_core::evidence::EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+        l.evidence().last().unwrap().evidence_id.to_string()
+    };
+    let fix = fix_of();
+    assert!(
+        fix.contains("dla alloc-test H2 --finding F")
+            && !fix.contains("alloc-test H1")
+            && fix.contains(&format!("--evidence {residual} -> F"))
+            && fix.contains("--region non-heap")
+            && fix.contains("dla ledger resolve O1 --by F.n1")
+            && !fix.contains("time_budget"),
+        "{fix}"
+    );
+    // A heap row keeps the generic resolve.
+    dla_core::CoverageManifest::update(&r.run_dir(), |m| {
+        m.set_residual(vec![row(dla_core::finding::Region::Heap)])
+    })
+    .unwrap();
+    let fix = fix_of();
+    assert!(!fix.contains("alloc-test"), "{fix}");
 }
 
 #[test]

@@ -973,18 +973,34 @@ fn run_dla_line(fx: &mut Fx, line: &str) -> Out {
     fx.call_quiet(&args)
 }
 
-fn resolve_unresolved(fx: &mut Fx, target: &str) -> Out {
-    fx.call_quiet(&[
-        "ledger",
-        "resolve",
-        target,
-        "--as",
-        "unresolved",
-        "--reason",
-        "not_exercised",
-        "--remedy",
-        REMEDY,
-    ])
+/// Closes a finding or open item unresolved with the reason the evidence supports. The fix
+/// the gate printed names it (`--reason not_exercised` when nothing was measured for the
+/// item, `--reason inconclusive` when something was): `hint` is that fix. Without one,
+/// `inconclusive` is tried first and the ledger decides: it refuses it with
+/// `measurement-required` when no measurement is tied to the item, and the close is then
+/// repeated as `not_exercised`.
+fn resolve_unresolved(fx: &mut Fx, target: &str, hint: Option<&str>) -> Out {
+    let close = |fx: &mut Fx, reason: &str| {
+        fx.call_quiet(&[
+            "ledger",
+            "resolve",
+            target,
+            "--as",
+            "unresolved",
+            "--reason",
+            reason,
+            "--remedy",
+            REMEDY,
+        ])
+    };
+    if hint.is_some_and(|h| h.contains("--reason not_exercised")) {
+        return close(fx, "not_exercised");
+    }
+    let o = close(fx, "inconclusive");
+    if o.ok {
+        return o;
+    }
+    close(fx, "not_exercised")
 }
 
 /// One item, with the command the gate names for it. Returns what was done, if anything.
@@ -1022,7 +1038,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                     REMEDY,
                 ])
             } else {
-                resolve_unresolved(fx, &item.id)
+                resolve_unresolved(fx, &item.id, Some(&item.fix))
             };
             Some(format!(
                 "resolve {} {}: {}",
@@ -1090,7 +1106,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
             if o.ok
                 && let Some(new) = o.json["id"].as_str()
             {
-                let r = resolve_unresolved(fx, new);
+                let r = resolve_unresolved(fx, new, None);
                 said.push_str(&format!(
                     "; resolve {new} unresolved: {}",
                     if r.ok { "ok".to_owned() } else { refusal(&r) }
@@ -1268,7 +1284,13 @@ case "$1 $2" in
   echo '{"ok":true}';;
 "summarize heap-graph") touch narrowed; echo '{"ok":true}';;
 "ledger add") echo '{"ok":true,"id":"F12"}';;
-"ledger resolve") echo '{"ok":true}';;
+"ledger resolve")
+  if [ -n "$FAKE_NOTHING_MEASURED" ]; then
+    case "$*" in *"--reason inconclusive"*)
+      echo '{"ok":false,"error":{"code":"measurement-required","message":"m","fix":"f"}}'; exit 2;;
+    esac
+  fi
+  echo '{"ok":true}';;
 "trend S2") echo '{"ok":true}';;
 "gate check")
   n=$(cat gate.count 2>/dev/null || echo 0)
@@ -1295,7 +1317,7 @@ esac
     const GATE1: &str = r#"{"missing":[
       {"kind":"checklist_item","id":"intake.target","description":"d","fix":"dla ledger resolve intake.target --status answered --evidence E1"},
       {"kind":"series","id":"S2","description":"d","fix":"dla trend S2"},
-      {"kind":"open_item","id":"O1","description":"d","fix":"dla ledger resolve O1 --as unresolved --reason time_budget --remedy \"<text>\""},
+      {"kind":"open_item","id":"O1","description":"d","fix":"dla ledger resolve O1 --as unresolved --reason inconclusive --remedy \"<text>\""},
       {"kind":"trend_column","id":"T1:os.rss","description":"d","fix":"dla ledger add --origin growth-series --evidence E11   # column os.rss"},
       {"kind":"trend_column","id":"T2:os.rss","description":"d","fix":"dla trend S3"},
       {"kind":"explanation","id":"F9","description":"d","fix":"dla ledger explain F9 ..."}]}"#;
@@ -1415,6 +1437,7 @@ cause = "{cause}"
             unset_vars: Vec::new(),
             pending: Vec::new(),
             provided: None,
+            last_harness_refusal: None,
         };
         fx.row.harnesses = vec!["H1".to_owned()];
         fx.row.summarize_cmds = vec![
@@ -1826,12 +1849,12 @@ cause = "{cause}"
         );
         assert!(c("trend S2"));
         assert!(c(
-            "ledger resolve O1 --as unresolved --reason not_exercised --remedy "
+            "ledger resolve O1 --as unresolved --reason inconclusive --remedy "
         ));
         assert!(c("ledger add --origin growth-series --evidence E11"));
         assert!(!calls.contains("# column"), "the gate's comment is cut");
         assert!(c(
-            "ledger resolve F12 --as unresolved --reason not_exercised"
+            "ledger resolve F12 --as unresolved --reason inconclusive"
         ));
         // The gate's own fixes are followed, the artifact explanation included. The stand-in
         // gate never passes, so what it still names is missing, not a known gap.
@@ -1848,6 +1871,56 @@ cause = "{cause}"
 
     #[cfg(unix)]
     #[test]
+    fn the_close_out_falls_back_to_not_exercised_when_nothing_was_measured_for_the_item() {
+        // The ledger refuses `inconclusive` with `measurement-required` for an item no
+        // measurement is tied to; the close is then repeated with the reason that is true.
+        let (_, calls) = drive_fake(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1"), ("FAKE_NOTHING_MEASURED", "1")],
+        );
+        let c = |s: &str| calls.lines().any(|l| l.starts_with(s));
+        assert!(
+            c("ledger resolve O1 --as unresolved --reason inconclusive"),
+            "{calls}"
+        );
+        assert!(
+            c("ledger resolve O1 --as unresolved --reason not_exercised --remedy "),
+            "{calls}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_close_out_takes_the_reason_the_gate_names_without_a_refused_try() {
+        let gate2 = r#"{"missing":[
+          {"kind":"open_item","id":"O5","description":"d","fix":"dla ledger resolve O5 --as unresolved --reason not_exercised --remedy \"<text>\""},
+          {"kind":"open_item","id":"O6","description":"d","fix":"dla ledger resolve O6 --as unresolved --reason inconclusive --remedy \"<text>\""}]}"#;
+        let (_, calls) = drive_fake_with(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1"), ("FAKE_NOTHING_MEASURED", "1")],
+            gate2,
+        );
+        let c = |s: &str| calls.lines().any(|l| l.starts_with(s));
+        // Nothing measured for O5: one call, the reason that is true.
+        assert!(
+            c("ledger resolve O5 --as unresolved --reason not_exercised"),
+            "{calls}"
+        );
+        assert!(
+            !c("ledger resolve O5 --as unresolved --reason inconclusive"),
+            "{calls}"
+        );
+        // O6 is tried as the gate names it (the stand-in refuses it here, so it falls back).
+        assert!(
+            c("ledger resolve O6 --as unresolved --reason inconclusive"),
+            "{calls}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_gate_that_passes_after_the_close_out_is_not_a_gap() {
         let (row, _) = drive_fake(&expected("L-COLLECT", "container-field"), false, &[]);
         let g = row.policy.gate.as_ref().unwrap();
@@ -1859,7 +1932,7 @@ cause = "{cause}"
     #[test]
     fn an_item_the_policy_cannot_fix_fails_the_fixture_and_is_named() {
         let gate2 = r#"{"missing":[
-          {"kind":"accounting","id":"jvm/census","description":"backend census: 2 of 3 enumerated item(s) are dispositioned","fix":"dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\""},
+          {"kind":"accounting","id":"jvm/census","description":"backend census: 2 of 3 enumerated item(s) are dispositioned","fix":"dla ledger resolve <F> --as unresolved --reason not_exercised --remedy \"<text>\""},
           {"kind":"explanation","id":"F9","description":"d","fix":"dla ledger explain F9 ..."}]}"#;
         let (row, _) = drive_fake_with(
             &expected("L-COLLECT", "container-field"),

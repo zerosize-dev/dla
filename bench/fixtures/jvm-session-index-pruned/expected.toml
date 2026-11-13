@@ -1,0 +1,20 @@
+schema_version = 1
+id = "jvm-session-index-pruned"
+runtime = "jvm"
+category = "decoy-control"
+pair = "jvm-session-index"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The member portal's heap keeps growing over a working day even though the
+number of people signed in at any moment stays about the same. After a rolling
+restart the heap is low again and then climbs the same way. Find out what is
+holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/portal/SessionStore.java:11"
+cause = "N-WARM"
+discriminator = "the per-user list holds only open sessions, because close removes the session from it (and drops an empty list): the list entry count equals the open-session count (about 200), and the post-GC heap is flat from 1000 logins onward with a zero slope in the second half"

@@ -118,8 +118,16 @@ pub mod codes {
     /// A finding was closed without exercising it while a generated harness of its runtime
     /// was never run and budget remains.
     pub const HARNESS_NOT_RUN: &str = "harness-not-run";
+    /// A finding was closed without exercising it in a runtime with discovered entry
+    /// points and no generated harness, while budget remains.
+    pub const HARNESS_NOT_GENERATED: &str = "harness-not-generated";
     /// The run's or the worker's time budget has passed.
     pub const TIME_BUDGET: &str = "time-budget";
+    /// `inconclusive` was given for a finding with no measurement tied to its family.
+    pub const MEASUREMENT_REQUIRED: &str = "measurement-required";
+    /// `time_budget` was given while more than the shared floor of the budget is left and
+    /// no command was refused for time.
+    pub const TIME_LEFT: &str = "time-left";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

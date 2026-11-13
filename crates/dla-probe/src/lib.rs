@@ -255,7 +255,8 @@ fn summarize(r: &ProbeReport) -> Summary {
     let missing: Vec<String> = r
         .tools
         .iter()
-        .filter(|t| !t.available)
+        // Sonar is server-only (a blocked row), not a tool to install.
+        .filter(|t| !t.available && t.name != "sonar")
         .map(|t| format!("{}:{}", t.runtime.as_str(), t.name))
         .collect();
     let builds: serde_json::Map<String, serde_json::Value> = r
@@ -335,6 +336,9 @@ fn bounded(full: serde_json::Value, counts: &serde_json::Value) -> serde_json::V
     }
 }
 
+/// The `sonar` row's reason before a sweep adds the backends that ran.
+const SONAR_REASON: &str = "server-only: S5164 and S2095 are evaluated on a SonarQube or SonarCloud server, which DLA does not query";
+
 fn record_coverage(ctx: &ToolCtx, r: &ProbeReport) -> Result<(), Refusal> {
     CoverageManifest::update(&ctx.run_dir, |m| {
         for t in &r.tools {
@@ -358,6 +362,10 @@ fn record_coverage(ctx: &ToolCtx, r: &ProbeReport) -> Result<(), Refusal> {
             }
             let cov = if t.available {
                 BackendCoverage::ran(t.version.clone(), 0)
+            } else if t.name == "sonar" {
+                // Not a gap an install can close: the sweep writes the same row, naming the
+                // offline backends that ran.
+                BackendCoverage::blocked(SONAR_REASON)
             } else {
                 let note = BACKENDS
                     .iter()

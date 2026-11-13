@@ -18,7 +18,7 @@ use crate::{
     checklist::AnswerStatus,
     coverage::{BackendStatus, CoverageManifest},
     evidence::EvidenceKind,
-    finding::{Finding, FindingState, Polarity, UnresolvedReason},
+    finding::{Finding, FindingState, Polarity, Region, UnresolvedReason},
     ids::FindingId,
     record::Record,
     series::ColumnKind,
@@ -720,25 +720,75 @@ fn residual_fix(view: &RunView, series: &str, c: &ColumnTrend) -> String {
     if rows.is_empty() {
         return gap;
     }
-    let open: Vec<String> = rows
+    let open: Vec<(String, Region)> = rows
         .iter()
         .filter(|r| r.residual > r.threshold)
         .filter_map(|r| r.open_item.as_ref().map(|id| (id, r)))
         .filter(|(id, r)| !residual_item_resolved(view, id, &r.region.to_string()))
-        .map(|(id, _)| id.to_string())
+        .map(|(id, r)| (id.to_string(), r.region))
         .collect();
     if open.is_empty() {
         // A row over its threshold without an item: only `dla gap` raises it.
         return gap;
     }
     open.iter()
-        .map(|id| {
-            format!(
-                "dla ledger resolve {id} --by <F>   or   dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
-            )
-        })
+        .map(|(id, region)| residual_item_fix(view, id, *region, Some(series)))
         .collect::<Vec<_>>()
         .join("   ;   ")
+}
+
+/// The harness that produced `series` (`source.harness` of its file), the one a non-heap
+/// route names: the alloc-test must run on the harness that made the growing series, not
+/// on the first harness directory of the run. `None` for a series with no harness (a live
+/// `dla sample`) or no series.
+fn series_harness(view: &RunView, series: Option<&str>) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    crate::series::SeriesFile::load(run_dir, series?)
+        .ok()?
+        .source
+        .harness
+}
+
+/// The residual evidence `dla gap --residual` wrote for `series` (the newest one).
+fn residual_evidence_of(view: &RunView, series: Option<&str>) -> Option<String> {
+    let series = series?;
+    view.ledger
+        .evidence()
+        .filter(|e| {
+            e.kind == EvidenceKind::Residual
+                && e.result.get("series").and_then(|v| v.as_str()) == Some(series)
+        })
+        .last()
+        .map(|e| e.evidence_id.to_string())
+}
+
+/// The fix of an over-threshold residual row whose open item `id` is not resolved. A
+/// non-heap residual whose series came from a harness goes through the alloc-test route
+/// (a plateau in the extra window decides warm-up); any other region is resolved by a
+/// finding or closed with the reason the evidence supports.
+fn residual_item_fix(view: &RunView, id: &str, region: Region, series: Option<&str>) -> String {
+    if region == Region::NonHeap
+        && let Some(h) = series_harness(view, series)
+    {
+        let ev = residual_evidence_of(view, series).unwrap_or_else(|| "E<residual>".to_owned());
+        return nonheap_alloc_route(id, &ev, &h);
+    }
+    let reason = id
+        .parse::<crate::ids::OpenItemId>()
+        .map(|i| view.ledger.open_item_supported_reason(&i))
+        .unwrap_or(UnresolvedReason::NotExercised);
+    format!(
+        "dla ledger resolve {id} --by <F>   or   dla ledger resolve {id} --as unresolved --reason {reason} --remedy \"<text>\""
+    )
+}
+
+/// The route that decides a non-heap residual with evidence: a finding for the residual,
+/// an N-WARM sibling, the alloc-test on the harness, then refute and confirm, and the
+/// open item resolved by the confirmed sibling.
+pub fn nonheap_alloc_route(item: &str, evidence: &str, harness: &str) -> String {
+    format!(
+        "{item} is non-heap growth; decide it with evidence: (1) dla ledger add --origin residual --region non-heap --evidence {evidence} -> F; (2) dla ledger add --origin hypothesis --sibling-of F --hypothesis \"N-WARM: <warm-up that levels off>\" --refute-if \"<the column keeps rising over the extra window>\" --evidence {evidence}; (3) dla ledger test F --evidence <workload id>; (4) dla alloc-test {harness} --finding F; (5) dla ledger refute F / confirm F.n1 as it prints; (6) dla ledger resolve {item} --by F.n1; if the alloc-test favours leak instead, confirm F as it prints and resolve the item with dla ledger resolve {item} --by F. If the alloc-test is inconclusive: dla ledger resolve {item} --as unresolved --reason inconclusive --remedy \"<text>\""
+    )
 }
 
 /// True for the total of a summarize-made series (`metric:<category>/total`): the sum of the
@@ -1100,6 +1150,8 @@ fn residual_item_resolved(view: &RunView, id: &crate::ids::OpenItemId, region: &
 
 fn final_items(view: &RunView, out: &mut Out) {
     unrun_harness_items(view, None, out);
+    coverage_contradiction_items(view, out);
+    budget_left_unrevisited_items(view, out);
     // (b) per backend: every hit has a candidate and every candidate a disposition. The
     // undispositioned findings themselves are listed by `status`.
     for a in accounting(view) {
@@ -1111,7 +1163,7 @@ fn final_items(view: &RunView, out: &mut Out) {
                     "backend {} of {}: {} of {} enumerated item(s) are dispositioned",
                     a.backend, a.worker, a.dispositioned, a.enumerated
                 ),
-                "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"",
+                "dla ledger resolve <F> --as unresolved --reason not_exercised --remedy \"<text>\"",
             );
         }
     }
@@ -1131,8 +1183,11 @@ fn final_items(view: &RunView, out: &mut Out) {
                         r.region, r.residual, r.unit, r.threshold
                     ),
                     match &r.open_item {
-                        Some(id) => format!(
-                            "dla ledger resolve {id} --by <F>   or   dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+                        Some(id) => residual_item_fix(
+                            view,
+                            &id.to_string(),
+                            r.region,
+                            r.series.as_deref(),
                         ),
                         None => "dla gap --residual   then resolve the open item it raises".to_owned(),
                     },
@@ -1289,23 +1344,34 @@ impl UnrunHarness {
 
 /// True for the reasons that close a finding without exercising it: the ones the rule
 /// covers. `env_unavailable`, `build_fails`, `tool_missing` and `privilege_declined` name a
-/// blocker and are never refused.
+/// blocker and are never refused. `inconclusive` is not here either: the ledger accepts it
+/// only when a measurement is tied to the finding's family, so something ran.
 pub fn closes_without_exercise(reason: UnresolvedReason) -> bool {
-    matches!(
-        reason,
-        UnresolvedReason::NoHarness | UnresolvedReason::NotExercised | UnresolvedReason::TimeBudget
-    )
+    match reason {
+        UnresolvedReason::NoHarness
+        | UnresolvedReason::NotExercised
+        | UnresolvedReason::TimeBudget => true,
+        UnresolvedReason::EnvUnavailable
+        | UnresolvedReason::BuildFails
+        | UnresolvedReason::PrivilegeDeclined
+        | UnresolvedReason::ToolMissing
+        | UnresolvedReason::Inconclusive => false,
+    }
 }
 
-/// The reasons that record a blocker on `intake.workload`.
+/// The reasons that record a blocker on `intake.workload`. `inconclusive` is not one: it
+/// says a measurement could not decide, not that something stopped the harness.
 fn is_blocker_reason(reason: UnresolvedReason) -> bool {
-    matches!(
-        reason,
+    match reason {
         UnresolvedReason::EnvUnavailable
-            | UnresolvedReason::ToolMissing
-            | UnresolvedReason::BuildFails
-            | UnresolvedReason::PrivilegeDeclined
-    )
+        | UnresolvedReason::ToolMissing
+        | UnresolvedReason::BuildFails
+        | UnresolvedReason::PrivilegeDeclined => true,
+        UnresolvedReason::NoHarness
+        | UnresolvedReason::NotExercised
+        | UnresolvedReason::TimeBudget
+        | UnresolvedReason::Inconclusive => false,
+    }
 }
 
 /// The harness directories of the run, `H1`, `H2`, ... in numeric order.
@@ -1423,20 +1489,28 @@ pub fn unrun_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
 /// the budget in minutes, when the rule applies: the run is still going and more than
 /// the floor is left.
 fn budget_for_rule(view: &RunView, worker: Option<&str>) -> Option<(u64, u64)> {
+    budget_over_floor(&view.state, worker)
+}
+
+/// Minutes left to the nearest deadline and the budget in minutes while more than the
+/// shared floor, `max(10 min, 20 % of the budget)`, is left (and the run is going); `None`
+/// otherwise. The unrun-harness rule and the refusal of `time_budget` share it. `worker` is
+/// the worker whose deadline also counts, in worker mode.
+pub fn budget_over_floor(
+    state: &crate::state::RunState,
+    worker: Option<&str>,
+) -> Option<(u64, u64)> {
     use crate::state::RunStatus;
-    if matches!(
-        view.state.status,
-        RunStatus::Aborted | RunStatus::Incomplete
-    ) {
+    if matches!(state.status, RunStatus::Aborted | RunStatus::Incomplete) {
         return None;
     }
     let now = crate::state::now_utc();
-    let mut deadline = view.state.budget.deadline;
-    if let Some(w) = worker.and_then(|w| view.state.worker(w)) {
+    let mut deadline = state.budget.deadline;
+    if let Some(w) = worker.and_then(|w| state.worker(w)) {
         deadline = deadline.min(w.deadline);
     }
     let left = u64::try_from((deadline - now).num_seconds()).unwrap_or(0);
-    let total = view.state.budget.seconds;
+    let total = state.budget.seconds;
     let floor = HARNESS_MIN_LEFT_SECS.max(total * HARNESS_MIN_LEFT_PERCENT / 100);
     (left > floor).then_some((left / 60, total / 60))
 }
@@ -1549,6 +1623,479 @@ fn unrun_harness_items(view: &RunView, worker: Option<&str>, out: &mut Out) {
                 u.id, u.runtime, u.state(), u.minutes_left, u.minutes_total
             ),
             u.fix(&view.state.run_id),
+        );
+    }
+}
+
+// ------------------------------------------------- no harness, unspent budget
+
+/// A runtime whose entry points were discovered and for which no harness was ever
+/// generated, while the budget has room to make one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoHarness {
+    /// Its runtime (`jvm`).
+    pub runtime: String,
+    /// Discovered entry points that are not marked not exercisable.
+    pub entry_points: usize,
+    /// Whole minutes of budget left (the nearest of the run's and the worker's deadline).
+    pub minutes_left: u64,
+    /// Whole minutes of the run's budget.
+    pub minutes_total: u64,
+    /// True when `dla harness gen --lang <runtime>` would refuse for lack of a workload
+    /// with an iteration argument, so the way to a harness is a driver.
+    pub needs_driver: bool,
+}
+
+impl NoHarness {
+    /// The command that clears the rule, for a refusal or a missing item: the same step
+    /// the report's coverage warning gives for a run with no harness.
+    pub fn fix(&self) -> String {
+        let rt = &self.runtime;
+        let make = if self.needs_driver {
+            make_driver_step(rt)
+        } else {
+            format!("dla harness gen --lang {rt}, then dla harness run <H>")
+        };
+        format!(
+            "{make}. If no harness can be made, close the finding with the reason that names the blocker (build_fails, env_unavailable, tool_missing, privilege_declined), or record it once: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<what blocks the harness>\". If only the user can unblock it (services, credentials, data), ask the user before closing the run."
+        )
+    }
+}
+
+/// True when `intake.workload` was ever answered `unresolved` with a remedy and a reason
+/// that `blocker_only` accepts: a blocker reason (`env_unavailable`, `tool_missing`,
+/// `build_fails`, `privilege_declined`), or any reason when `blocker_only` is false,
+/// except `time_budget` while more than the shared floor of the budget is left (the
+/// answer must not be the early stop the rule exists to close).
+fn workload_unresolved(view: &RunView, blocker_only: bool) -> bool {
+    let time_left = !blocker_only && budget_over_floor(&view.state, None).is_some();
+    view.ledger.lines().iter().any(|l| {
+        matches!(&l.record, Record::ChecklistAnswer(a)
+            if a.item == "intake.workload"
+                && a.status == AnswerStatus::Unresolved
+                && a.reason.is_some_and(|r| {
+                    if blocker_only {
+                        is_blocker_reason(r)
+                    } else {
+                        !(time_left && r == UnresolvedReason::TimeBudget)
+                    }
+                })
+                && a.remedy.as_deref().is_some_and(|r| !r.trim().is_empty()))
+    })
+}
+
+/// True when the run has a harness directory of `runtime` with a manifest, generated by
+/// `dla harness gen` or cloned by `dla intervene`.
+fn runtime_has_harness(run_dir: &Path, runtime: &str) -> bool {
+    harness_ids(run_dir).into_iter().any(|(_, id)| {
+        crate::harness::HarnessManifest::load(run_dir, &id)
+            .is_ok_and(|m| m.runtime.as_str() == runtime)
+    })
+}
+
+/// The named tool a JUnit repeat harness lists in its manifest: such a harness is a
+/// driver that runs the project's own tests and has no DLA-HOOK bodies to fill.
+const JUNIT_TOOL: &str = "junit-platform-launcher";
+
+/// True when harness `h` of `runtime` is a JUnit repeat (its manifest names the JUnit
+/// launcher).
+fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
+    crate::harness::HarnessManifest::load(run_dir, h)
+        .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
+}
+
+/// The first harness of `runtime` that is a driver with DLA-HOOK bodies to fill. A JUnit
+/// repeat is a driver too, but it has no hooks, so it is passed over.
+fn hook_driver_in(run_dir: &Path, runtime: &str) -> Option<HarnessId> {
+    harness_ids(run_dir).into_iter().find_map(|(_, id)| {
+        crate::harness::HarnessManifest::load(run_dir, &id)
+            .ok()
+            .filter(|m| {
+                m.runtime.as_str() == runtime
+                    && m.mode == crate::harness::HarnessMode::Driver
+                    && !m.tools.iter().any(|t| t == JUNIT_TOOL)
+            })
+            .map(|_| id)
+    })
+}
+
+/// A harness of `runtime` whose last attempt failed to build, which never measured
+/// anything and which was generated after every harness of the runtime that did run:
+/// making another driver would only meet the same build. A build failure of an older
+/// harness, passed over by a later one that ran, is not what stops measuring.
+pub fn build_failed_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    let mut last_ran = 0;
+    let mut failed: Option<(u32, HarnessId)> = None;
+    for (n, id) in harness_ids(run_dir) {
+        let Ok(m) = crate::harness::HarnessManifest::load(run_dir, &id) else {
+            continue;
+        };
+        if m.runtime.as_str() != runtime {
+            continue;
+        }
+        if harness_ran(view, run_dir, &id) {
+            last_ran = last_ran.max(n);
+        } else if attempt_of(run_dir, &id).is_some_and(|a| {
+            a.outcome == crate::harness::AttemptOutcome::Failed
+                && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
+        }) {
+            failed = Some((n, id));
+        }
+    }
+    failed.filter(|(n, _)| *n > last_ran).map(|(_, id)| id)
+}
+
+/// The command that makes a driver of `runtime` and what to do with it.
+fn make_driver_step(runtime: &str) -> String {
+    format!(
+        "dla harness gen --lang {runtime} --driver, fill the DLA-HOOK bodies of the harness it prints so the driver calls the entry points, then dla harness run <the harness it prints>"
+    )
+}
+
+/// How to get a driver of `runtime` whose DLA-HOOK bodies call an entry point: fill the
+/// hooks of the driver harness the run has, or make one (`dla harness gen` always makes a
+/// new harness, so the step names the one it prints, never the command harness that
+/// produced the zero). A harness whose build failed gets its build fixed first, and a run
+/// whose only harness is a JUnit repeat (no hooks) is told to make a hook driver.
+fn driver_step(view: &RunView, runtime: &str) -> String {
+    let dir = view.run_dir.as_deref();
+    let build_step = |h: &HarnessId| {
+        format!(
+            "harness {h} did not build (its attempt record says build_fails): fix the build error that `dla harness run {h}` prints, then run it again, or record the blocker with dla ledger resolve intake.workload --status unresolved --reason build_fails --remedy \"<what breaks the build>\""
+        )
+    };
+    if let Some(h) = build_failed_harness(view, runtime) {
+        return build_step(&h);
+    }
+    if let Some(h) = dir.and_then(|d| hook_driver_in(d, runtime)) {
+        // The hook driver the step would send the user to never built: filling its hooks
+        // would meet the same build error.
+        let failed_build = dir.is_some_and(|d| {
+            !harness_ran(view, d, &h)
+                && attempt_of(d, &h).is_some_and(|a| {
+                    a.outcome == crate::harness::AttemptOutcome::Failed
+                        && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
+                })
+        });
+        if failed_build {
+            return build_step(&h);
+        }
+        return format!(
+            "fill the DLA-HOOK bodies of {h} so its driver calls the entry points, then dla harness run {h}"
+        );
+    }
+    // The tests' own count is only the answer when a JUnit repeat ran and no other
+    // harness of the runtime did.
+    let junit_only = dir.is_some_and(|d| {
+        let ran: Vec<HarnessId> = harness_ids(d)
+            .into_iter()
+            .map(|(_, id)| id)
+            .filter(|id| {
+                crate::harness::HarnessManifest::load(d, id)
+                    .is_ok_and(|m| m.runtime.as_str() == runtime)
+                    && harness_ran(view, d, id)
+            })
+            .collect();
+        !ran.is_empty() && ran.iter().all(|id| is_junit_harness(d, runtime, id))
+    });
+    if junit_only && let Some(w) = view.coverage.as_ref().and_then(|c| c.workers.get(runtime)) {
+        return format!(
+            "the project's tests reach {} of {} entry points; make a hook driver with {}",
+            w.entry_points.exercised.len(),
+            w.entry_points.discovered.len(),
+            make_driver_step(runtime)
+        );
+    }
+    make_driver_step(runtime)
+}
+
+/// The runtime for the rule "no harness generated" when its precondition holds: the run
+/// is going, more than the shared floor of budget is left, entry points of `runtime` were
+/// discovered (one marked not exercisable does not count, unless the mark is `no_harness`), no
+/// harness of the runtime exists, and `intake.workload` carries no blocker. `None` for a
+/// view without a run directory. `worker` is the worker whose deadline also counts.
+pub fn harness_not_generated(
+    view: &RunView,
+    runtime: &str,
+    worker: Option<&str>,
+) -> Option<NoHarness> {
+    let run_dir = view.run_dir.as_deref()?;
+    let (minutes_left, minutes_total) = budget_over_floor(&view.state, worker)?;
+    let w = view.coverage.as_ref()?.workers.get(runtime)?;
+    let ep = &w.entry_points;
+    let entry_points = ep
+        .discovered
+        .iter()
+        .filter(|e| {
+            // `no_harness` is what discovery writes for an entry point no test or main
+            // workload names: exactly what a driver harness would reach.
+            !ep.not_exercisable
+                .iter()
+                .any(|n| &n.entry == *e && n.reason != "no_harness")
+        })
+        .count();
+    if entry_points == 0 || runtime_has_harness(run_dir, runtime) || workload_unresolved(view, true)
+    {
+        return None;
+    }
+    Some(NoHarness {
+        runtime: runtime.to_owned(),
+        entry_points,
+        minutes_left,
+        minutes_total,
+        needs_driver: gen_needs_driver(view, runtime),
+    })
+}
+
+/// What opens the way to measuring a runtime: a step to take, or the blocker the run
+/// recorded that says no step can be taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HarnessStep {
+    /// The command (or commands) to run next.
+    Do(String),
+    /// The blocker recorded on `intake.workload`: its reason and remedy.
+    Blocked(String),
+}
+
+/// The latest blocker recorded on `intake.workload` (a reason that says the environment,
+/// a tool, the build or the user's consent stops measuring), as `reason: remedy`.
+fn workload_blocker(view: &RunView) -> Option<String> {
+    view.ledger
+        .lines()
+        .iter()
+        .rev()
+        .find_map(|l| match &l.record {
+            Record::ChecklistAnswer(a)
+                if a.item == "intake.workload"
+                    && a.status == AnswerStatus::Unresolved
+                    && a.reason.is_some_and(is_blocker_reason) =>
+            {
+                let remedy = a
+                    .remedy
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|r| !r.is_empty())?;
+                Some(format!("{}: {remedy}", a.reason?.as_str()))
+            }
+            _ => None,
+        })
+}
+
+/// True when `dla harness gen --lang <runtime>` (no `--driver`) would refuse for lack of a
+/// workload: the run has no main or script workload of the runtime with an iteration
+/// argument. A run with no discovery result counts as having none.
+fn gen_needs_driver(view: &RunView, runtime: &str) -> bool {
+    use crate::workload::{WorkloadKind, WorkloadReport};
+    let Some(dir) = view.run_dir.as_deref() else {
+        return true;
+    };
+    let Ok(files) = std::fs::read_dir(dir.join("workload")) else {
+        return true;
+    };
+    !files.flatten().any(|f| {
+        let path = f.path();
+        path.extension().is_some_and(|e| e == "json")
+            && std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<WorkloadReport>(&t).ok())
+                .is_some_and(|r| {
+                    r.workloads.iter().any(|w| {
+                        w.runtime.as_str() == runtime
+                            && matches!(w.kind, WorkloadKind::Main | WorkloadKind::Script)
+                            && w.iteration_arg.is_some()
+                    })
+                })
+    })
+}
+
+/// The step that opens the way to measuring `runtime`: run the harness that was generated
+/// and never run; when `intake.workload` records a blocker, say so instead; fix the build
+/// of one that did not build; fill the driver's hooks of one that ran without reaching an
+/// entry point (or only a few); generate a harness when there is none, the way `dla
+/// harness gen` would take it (a driver when it refuses for lack of a workload). Pure of
+/// the clock and of the budget; used by the report's coverage warning.
+pub fn open_harness_step(view: &RunView, runtime: &str) -> HarnessStep {
+    if let Some(h) = unrun_harness(view, runtime) {
+        return HarnessStep::Do(format!("dla harness run {h}"));
+    }
+    if let Some(b) = workload_blocker(view) {
+        return HarnessStep::Blocked(b);
+    }
+    let any = view
+        .run_dir
+        .as_deref()
+        .is_some_and(|d| runtime_has_harness(d, runtime));
+    HarnessStep::Do(if any {
+        driver_step(view, runtime)
+    } else if gen_needs_driver(view, runtime) {
+        make_driver_step(runtime)
+    } else {
+        format!("dla harness gen --lang {runtime}")
+    })
+}
+
+/// How many harnesses `dla harness gen` generated for the run and how many of them
+/// measured something (`dla run status`): the numbers behind "a harness was never run".
+pub fn harness_counts(view: &RunView) -> (usize, usize) {
+    let Some(run_dir) = view.run_dir.as_deref() else {
+        return (0, 0);
+    };
+    let generated: Vec<HarnessId> = harness_ids(run_dir)
+        .into_iter()
+        .filter_map(|(_, id)| {
+            crate::harness::HarnessManifest::load(run_dir, &id).ok()?;
+            generated_at(view, &id).map(|_| id)
+        })
+        .collect();
+    let ran = generated
+        .iter()
+        .filter(|id| harness_ran(view, run_dir, id))
+        .count();
+    (generated.len(), ran)
+}
+
+/// Text every blind spot carries when a runtime cannot say which entry points ran
+/// (the allocator shim of Rust and native).
+pub const EXERCISED_UNMEASURED: &str = "which entry points ran";
+
+/// True when `exercised` means something for `runtime`: Rust and native never record
+/// calls, and a runtime whose coverage carries the blind spot above could not either.
+/// Then "0 exercised" is a limit of the measurement, not a finding about the driver.
+/// (A Python without `sys.monitoring` records the same blind spot, so its coverage is not
+/// judged either.)
+pub fn exercised_is_measured(cov: &crate::coverage::CoverageManifest, runtime: &str) -> bool {
+    !matches!(runtime, "rust" | "native")
+        && !cov
+            .blind_spots
+            .iter()
+            .any(|b| b.runtime == runtime && b.text.contains(EXERCISED_UNMEASURED))
+}
+
+/// `coverage_contradiction`: a runtime that ran iterations, has discovered entry points
+/// and exercised none of them. The driver never called the code under test, or the
+/// match between entry points and what ran is blind; either way "0 of N exercised" after
+/// a run is not a result. Cleared by a driver that reaches an entry point, or by
+/// `intake.workload` answered `unresolved` with a remedy that says why it cannot.
+fn coverage_contradiction_items(view: &RunView, out: &mut Out) {
+    let Some(cov) = &view.coverage else {
+        return;
+    };
+    let mut escaped: Option<bool> = None;
+    for (rt, w) in &cov.workers {
+        if !exercised_is_measured(cov, rt) {
+            continue;
+        }
+        let iterations = w.iterations.unwrap_or(0);
+        let discovered = w.entry_points.discovered.len();
+        if iterations == 0 || discovered == 0 || !w.entry_points.exercised.is_empty() {
+            continue;
+        }
+        if *escaped.get_or_insert_with(|| workload_unresolved(view, false)) {
+            return;
+        }
+        let loaded = match w.project_classes {
+            Some(1) => ", 1 project class loaded".to_owned(),
+            Some(n) if n > 1 => format!(", {n} project classes loaded"),
+            _ => String::new(),
+        };
+        out.add(
+            "coverage_contradiction",
+            rt.clone(),
+            format!(
+                "{rt}: {iterations} iteration(s) ran and 0 of {discovered} entry points were exercised{loaded}: the driver did not call the code under test, so the run says nothing about the entry points"
+            ),
+            format!(
+                "{}. If the driver cannot reach them, record why: dla ledger resolve intake.workload --status unresolved --reason not_exercised --remedy \"<why no entry point can be called>\"",
+                driver_step(view, rt)
+            ),
+        );
+    }
+}
+
+/// `budget_left_unrevisited`: more than the shared floor of the budget is left while
+/// findings are closed in a way the remaining time could still change. Two shapes:
+/// findings closed `time_budget` although no command was refused for time since they were
+/// added, and findings closed without exercise in a runtime that has discovered entry
+/// points and no harness at all. Cleared by measuring (the fix names the command) or by the
+/// blocker on `intake.workload` (a closed finding cannot be closed again, only tested).
+fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
+    let Some(run_dir) = view.run_dir.as_deref() else {
+        return;
+    };
+    let Some((left, total)) = budget_over_floor(&view.state, None) else {
+        return;
+    };
+    // A blocker recorded on the workload item says nothing more can be measured.
+    if workload_unresolved(view, true) {
+        return;
+    }
+    let mut only: Option<Option<String>> = None;
+    let mut by_runtime: BTreeMap<String, Option<NoHarness>> = BTreeMap::new();
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut early: Vec<&Finding> = Vec::new();
+    for f in view.ledger.findings() {
+        let closed = matches!(
+            f.state,
+            FindingState::Unresolved | FindingState::SuspectedStaticOnly
+        );
+        if !closed || view.ledger.merged_into(&f.id).is_some() {
+            continue;
+        }
+        let Some(reason) = f.reason else {
+            continue;
+        };
+        if reason == UnresolvedReason::TimeBudget {
+            let since = view
+                .ledger
+                .finding_added_at(&f.id)
+                .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
+            if !crate::toolctx::time_refused_since(run_dir, None, since) {
+                early.push(f);
+                continue;
+            }
+        }
+        if !closes_without_exercise(reason) {
+            continue;
+        }
+        let Some(rt) = finding_runtime_with(view, f, &mut only) else {
+            continue;
+        };
+        if by_runtime
+            .entry(rt.clone())
+            .or_insert_with(|| harness_not_generated(view, &rt, None))
+            .is_some()
+        {
+            *counts.entry(rt).or_default() += 1;
+        }
+    }
+    if let Some(first) = early.first() {
+        let n = early.len();
+        out.add(
+            "budget_left_unrevisited",
+            first.id.to_string(),
+            format!(
+                "{n} finding(s) are closed with time_budget (first {}) although {left} of {total} budget minutes remain and no command was refused for time since they were added",
+                first.id
+            ),
+            format!(
+                "measure it with the command its remedy names (dla run status lists the revisit items); dla ledger test {} --evidence <harness evidence id> puts it back under test. If nothing can be measured, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<what blocks it>\"",
+                first.id
+            ),
+        );
+    }
+    for (rt, n) in counts {
+        let Some(Some(u)) = by_runtime.get(&rt) else {
+            continue;
+        };
+        out.add(
+            "budget_left_unrevisited",
+            rt.clone(),
+            format!(
+                "{n} finding(s) of {rt} are closed without exercise, its {} discovered entry point(s) have no harness, and {} of {} budget minutes remain",
+                u.entry_points, u.minutes_left, u.minutes_total
+            ),
+            u.fix(),
         );
     }
 }

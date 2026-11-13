@@ -96,7 +96,7 @@ pub(crate) fn hit(rule: &str, file: &SrcFile, line: u32, message: impl Into<Stri
 }
 
 /// True for test sources, which the rules do not look at.
-fn is_test_path(rel: &str) -> bool {
+pub(crate) fn is_test_path(rel: &str) -> bool {
     let lower = rel.to_ascii_lowercase();
     let name = lower.rsplit('/').next().unwrap_or("");
     let stem = name.split('.').next().unwrap_or("");
@@ -149,7 +149,9 @@ fn collect(
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            if is_test_path(&rel) || !inside(&rel) {
+            // Build logic (Gradle scripts, buildSrc) is not part of the measured process: not
+            // even parsed.
+            if dla_core::paths::is_build_logic(&rel) || is_test_path(&rel) || !inside(&rel) {
                 continue;
             }
             if e.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
@@ -265,6 +267,49 @@ mod tests {
             include_str!("../../../../data/detectors/native.toml"),
         ),
     ];
+
+    /// Build logic (Gradle scripts, `buildSrc`) is not parsed at all, so no rule can fire there.
+    #[test]
+    fn build_logic_is_not_collected() {
+        let d = tempfile::tempdir().unwrap();
+        for (rel, body) in [
+            ("build.gradle.kts", "val extra = mutableListOf<String>()\n"),
+            (
+                "docker.gradle.kts",
+                "val props = mutableMapOf<String, String>()\n",
+            ),
+            (
+                "buildSrc/src/main/kotlin/Conventions.kt",
+                "object Conventions { val registry = mutableMapOf<String, String>() }\n",
+            ),
+            (
+                "src/main/kotlin/app/Cache.kt",
+                "object Cache { val entries = mutableMapOf<String, String>() }\n",
+            ),
+            (
+                "scripts/tool.main.kts",
+                "val seen = mutableSetOf<String>()\n",
+            ),
+        ] {
+            let p = d.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        let mut out = Vec::new();
+        collect(
+            d.path(),
+            d.path(),
+            &Lang::of_runtime(Runtime::Jvm),
+            &|_| true,
+            &mut out,
+        );
+        let mut rels: Vec<&str> = out.iter().map(|f| f.rel.as_str()).collect();
+        rels.sort_unstable();
+        assert_eq!(
+            rels,
+            ["scripts/tool.main.kts", "src/main/kotlin/app/Cache.kt"]
+        );
+    }
 
     /// The shipped detector tables hold exactly one `dla` row per rule here,
     /// with the same tag, prior and verified flag.

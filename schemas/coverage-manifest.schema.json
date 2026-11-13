@@ -333,6 +333,12 @@
           },
           "default": {}
         },
+        "build_logic": {
+          "description": "Source files of the runtime that are build logic (Gradle scripts, `buildSrc`) and\nwere not read: they run in the build tool's process, not in the measured one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "entry_points": {
           "description": "Entry points.",
           "$ref": "#/$defs/EntryPoints",
@@ -354,6 +360,15 @@
         "out_of_scope": {
           "description": "Source files skipped because they lie outside the run's scope.",
           "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "project_classes": {
+          "description": "JVM: distinct top-level classes of the project a harness run loaded. A run that executed\nproject code but matched no discovered entry point still shows it.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0
         },

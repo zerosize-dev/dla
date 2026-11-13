@@ -1,0 +1,21 @@
+schema_version = 1
+id = "node-token-cache"
+runtime = "node"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The edge auth service's resident memory climbs with the number of clients it has served, much faster than its JavaScript heap does. The live heap after a collection is small and grows slowly, yet the process is restarted every few days when the container limit is reached. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/cache.js:36"
+lines = [36, 36]
+alt_sites = ["src/cache.js:10", "src/gateway.js:28", "src/service.js:10"]
+holder = "static/global"
+region = "off-heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

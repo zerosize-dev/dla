@@ -1,0 +1,25 @@
+schema_version = 1
+id = "native-split-freelist"
+runtime = "native"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The message relay's resident memory grows steadily while it forwards device
+traffic, in proportion to the number of messages it has handled, even though
+the amount of data it is buffering at any moment stays the same. It is
+restarted every few days. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/pool.c:67"
+lines = [67, 67]
+alt_sites = ["src/pool.c:48", "src/pool.c:88"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true
+dump_backed = true

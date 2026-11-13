@@ -1,0 +1,21 @@
+schema_version = 1
+id = "go-private-module"
+runtime = "go"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = """
+The settlement dispatcher's goroutine count and memory climb through the day and come back down only when the service is restarted. Find out what is holding them.
+"""
+
+[[leak]]
+id = "L1"
+site = "internal/dispatch/dispatcher.go:46"
+lines = [46, 46]
+alt_sites = ["internal/dispatch/dispatcher.go:51-57", "internal/dispatch/dispatcher.go:21"]
+holder = "blocked-stack"
+region = "non-heap"
+cause = "L-WORKER"
+share = 1.0
+confirmable = false

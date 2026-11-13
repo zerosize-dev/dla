@@ -1,13 +1,31 @@
-// DLA: prints the test runtime class path of the project in the current directory, with the
-// JUnit Platform launcher added when the project does not declare it. Used by the build step of a
-// JUnit repeat harness (-Pdla.cpfile=<file>); it changes nothing in the project.
+// DLA: prints the runtime class path of the project in the current directory (-Pdla.cpfile=<file>);
+// it changes nothing in the project. Used by the build step of a JVM harness:
+//   dlaPrintTestClasspath  the test runtime class path, with the JUnit Platform launcher added when
+//                          the project does not declare it (JUnit repeat harness);
+//   dlaPrintMainClasspath  sourceSets.main.runtimeClasspath after `classes`: the main classes of
+//                          every language (build/classes/java/main, build/classes/kotlin/main),
+//                          resources and the runtime dependency jars (driver harness).
 allprojects { p ->
     p.afterEvaluate {
         def sourceSets = p.extensions.findByName('sourceSets')
-        if (sourceSets == null || p.tasks.findByName('testClasses') == null) {
+        if (sourceSets == null || p.tasks.findByName('classes') == null) {
             return
         }
         if (p.projectDir.canonicalFile != p.gradle.startParameter.currentDir.canonicalFile) {
+            return
+        }
+        p.tasks.register('dlaPrintMainClasspath') {
+            dependsOn 'classes'
+            doLast {
+                def target = p.findProperty('dla.cpfile')
+                if (target == null) {
+                    throw new GradleException('DLA: -Pdla.cpfile is not set')
+                }
+                def files = new ArrayList<File>(sourceSets.getByName('main').runtimeClasspath.files)
+                new File(target.toString()).text = files.collect { it.absolutePath }.join(File.pathSeparator)
+            }
+        }
+        if (p.tasks.findByName('testClasses') == null) {
             return
         }
         p.tasks.register('dlaPrintTestClasspath') {

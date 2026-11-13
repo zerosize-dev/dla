@@ -3,7 +3,8 @@
 //!
 //! Columns: `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used` (Metaspace used),
 //! `jvm.nmt_committed` (only when the JVM runs with `-XX:NativeMemoryTracking`),
-//! `jvm.threads` (`java.threads.live`) and `jvm.classes_loaded`. None of them is read after a
+//! `jvm.threads` (`java.threads.live`), `jvm.classes_loaded` (the classes loaded now: the
+//! cumulative counter minus the unloads) and `jvm.classes_unloaded`. None of them is read after a
 //! forced collection: `jcmd` does not force one.
 
 use std::{collections::BTreeMap, path::PathBuf, process::Command, thread, time::Duration};
@@ -165,21 +166,43 @@ pub fn parse_nmt(text: &str) -> Option<Nmt> {
     parse_size(token).map(Nmt::Committed)
 }
 
-/// Parses `PerfCounter.print` into `jvm.threads` and `jvm.classes_loaded`.
+/// Parses `PerfCounter.print` into `jvm.threads`, `jvm.classes_loaded` and
+/// `jvm.classes_unloaded`.
+///
+/// `java.cls.loadedClasses` counts every class ever loaded that did not come from the CDS
+/// archive, and `java.cls.sharedLoadedClasses` those that did (checked on JDK 21: an idle JVM
+/// reads 7 and 447, a process that defined and dropped 30 000 classes read 30 119 and 737 and
+/// `ClassLoadingMXBean.getLoadedClassCount()` read 856 = 30 119 + 737 - 30 000). The harness column
+/// `jvm.classes_loaded` is the number loaded now; so that both sources mean the same, this column
+/// is the sum of both cumulative counts minus both unload counts, and the unloads are their own column.
 pub fn parse_perf_counters(text: &str) -> BTreeMap<String, f64> {
     let mut out = BTreeMap::new();
+    let (mut loaded, mut unloaded) = (None, None);
+    let (mut shared_loaded, mut shared_unloaded) = (0.0, 0.0);
     for line in text.lines() {
         let Some((key, value)) = line.trim().split_once('=') else {
             continue;
         };
-        let column = match key {
-            "java.threads.live" => "jvm.threads",
-            "java.cls.loadedClasses" => "jvm.classes_loaded",
-            _ => continue,
+        let Ok(v) = value.trim().parse::<f64>() else {
+            continue;
         };
-        if let Ok(v) = value.trim().parse::<f64>() {
-            out.insert(column.to_owned(), v);
+        match key {
+            "java.threads.live" => {
+                out.insert("jvm.threads".to_owned(), v);
+            }
+            "java.cls.loadedClasses" => loaded = Some(v),
+            "java.cls.unloadedClasses" => unloaded = Some(v),
+            "java.cls.sharedLoadedClasses" => shared_loaded = v,
+            "java.cls.sharedUnloadedClasses" => shared_unloaded = v,
+            _ => {}
         }
+    }
+    if let Some(l) = loaded {
+        let now = l + shared_loaded - unloaded.unwrap_or(0.0) - shared_unloaded;
+        out.insert("jvm.classes_loaded".to_owned(), now);
+    }
+    if let Some(u) = unloaded {
+        out.insert("jvm.classes_unloaded".to_owned(), u + shared_unloaded);
     }
     out
 }
@@ -378,6 +401,18 @@ mod tests {
         assert_eq!(m["jvm.threads"], 7.0);
         assert_eq!(m["jvm.classes_loaded"], 543.0);
         assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn the_cumulative_class_counter_becomes_the_number_loaded_now() {
+        // Read on JDK 21 from a process that defined and dropped 30 000 hidden classes: the
+        // shared (CDS) classes are not in `loadedClasses`.
+        let text = "993:\njava.cls.loadedClasses=30121\njava.cls.sharedLoadedClasses=736\njava.cls.unloadedClasses=30000\njava.threads.live=12\n";
+        let m = parse_perf_counters(text);
+        assert_eq!(m["jvm.classes_loaded"], 121.0 + 736.0);
+        assert_eq!(m["jvm.classes_unloaded"], 30_000.0);
+        assert_eq!(m["jvm.threads"], 12.0);
+        assert_eq!(m.len(), 3);
     }
 
     #[test]

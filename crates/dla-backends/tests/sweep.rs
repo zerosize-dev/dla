@@ -251,6 +251,337 @@ fn module_scope_drops_hits_outside_it_and_counts_the_files() {
     assert_eq!(cov.workers["python"].out_of_scope, 2);
 }
 
+/// A ruff stand-in that reports one hit in a project file and two in build logic.
+#[cfg(unix)]
+const FAKE_RUFF_BUILD_LOGIC: &str = r#"
+if [ "$1" = "--version" ]; then echo "ruff 9.9.9"; exit 0; fi
+cat <<'EOF'
+{"runs":[{"results":[
+ {"ruleId":"B019","message":{"text":"cache on method"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"pkg/a.py"},"region":{"startLine":7}}}]},
+ {"ruleId":"B019","message":{"text":"cache in a build script"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"docker.gradle.kts"},"region":{"startLine":4}}}]},
+ {"ruleId":"B019","message":{"text":"cache in buildSrc"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"buildSrc/b.py"},"region":{"startLine":2}}}]}
+]}]}
+EOF
+exit 1
+"#;
+
+#[cfg(unix)]
+#[test]
+fn hits_in_build_logic_are_dropped_named_and_counted() {
+    let f = fixture(
+        TABLE,
+        &[
+            ("pkg/a.py", "x = 1\n"),
+            ("buildSrc/b.py", "y = 2\n"),
+            ("docker.gradle.kts", "val d = 1\n"),
+        ],
+    );
+    fake_tool(&f, "ruff", FAKE_RUFF_BUILD_LOGIC);
+    let out = sweep_with(&f.ctx, Runtime::Python, &env(&f)).unwrap();
+    assert_eq!(out.candidates, 1, "{out:?}");
+    let ledger = f.ctx.ledger().unwrap();
+    let sites: Vec<_> = ledger.findings().filter_map(|x| x.site.clone()).collect();
+    assert_eq!(sites, ["pkg/a.py:7"]);
+    let cov = CoverageManifest::load(&f.ctx.run_dir).unwrap().unwrap();
+    // `buildSrc/b.py` is a Python source that was not read; `docker.gradle.kts` is Kotlin.
+    assert_eq!(cov.workers["python"].build_logic, 1);
+    let raw: serde_json::Value = serde_json::from_slice(
+        &fs::read(f.ctx.run_dir.join("sweep").join("python-ruff.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(raw["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(raw["build_logic_hits"], 2);
+    let named = ledger.evidence().any(|e| {
+        e.limitations
+            .iter()
+            .any(|l| l.contains("2 hit(s) in build logic"))
+    });
+    assert!(named, "the evidence names the dropped build-logic hits");
+}
+
+#[cfg(unix)]
+const JVM_CODEQL_TABLE: &str = r#"
+[[detector]]
+id = "codeql/java/input-resource-leak"
+backend = "codeql"
+rule = "java/input-resource-leak"
+suggested_archetype = "L-HANDLE"
+verified = false
+"#;
+
+/// A `codeql` stand-in: records every call (arguments and working directory) in `log`,
+/// writes one SARIF result for `analyze`. Not real CodeQL output.
+#[cfg(unix)]
+fn fake_codeql(f: &Fixture, log: &Path) {
+    fs::write(f.data.join("detectors/jvm.toml"), JVM_CODEQL_TABLE).unwrap();
+    let ql = f
+        .tools
+        .join("bin/qlpacks/codeql/java-queries/1.0.0/Likely Bugs/Resource Leaks/CloseReader.ql");
+    fs::create_dir_all(ql.parent().unwrap()).unwrap();
+    fs::write(&ql, "").unwrap();
+    fake_tool(
+        f,
+        "codeql",
+        &format!(
+            r#"
+if [ "$1" = "version" ]; then echo 2.99.0; exit 0; fi
+echo "$1 $2 cwd=$(pwd) :: $*" >> '{log}'
+case "$*" in *--build-mode=manual*) if [ -f '{log}.failbuild' ]; then echo "Error: the traced build failed" >&2; echo "Could not resolve org.jetbrains.kotlin:kotlin-stdlib:1.9.24" >&2; exit 2; fi;; esac
+if [ "$2" = "analyze" ] || [ "$1 $2" = "database analyze" ]; then
+  for a in "$@"; do case "$a" in --output=*) out="${{a#--output=}}";; esac; done
+  cat > "$out" <<'SARIF'
+{{"runs":[{{"results":[{{"ruleId":"java/input-resource-leak","message":{{"text":"not closed"}},"locations":[{{"physicalLocation":{{"artifactLocation":{{"uri":"src/main/java/app/B.java"}},"region":{{"startLine":5}}}}}}]}}]}}]}}
+SARIF
+fi
+exit 0
+"#,
+            log = log.display()
+        ),
+    );
+}
+
+#[cfg(unix)]
+fn gradle_project(f: &Fixture, java: bool) {
+    let put = |rel: &str, body: &str| {
+        let p = f.project.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
+    };
+    put("build.gradle.kts", "plugins { kotlin(\"jvm\") }\n");
+    put("docker.gradle.kts", "val d = 1\n");
+    put("src/main/kotlin/app/A.kt", "package app\nclass A\n");
+    if java {
+        put("src/main/java/app/B.java", "package app;\nclass B {}\n");
+    }
+    use std::os::unix::fs::PermissionsExt;
+    put("gradlew", "#!/bin/sh\nexit 0\n");
+    fs::set_permissions(f.project.join("gradlew"), fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_kotlin_project_gets_a_traced_build_in_a_copy() {
+    let f = fixture(TABLE, &[]);
+    let log = f.project.parent().unwrap().join("codeql.log");
+    fake_codeql(&f, &log);
+    gradle_project(&f, false);
+    let out = sweep_with(&f.ctx, Runtime::Jvm, &env(&f)).unwrap();
+    let calls = fs::read_to_string(&log).unwrap();
+    let create = calls
+        .lines()
+        .find(|l| l.starts_with("database create"))
+        .unwrap();
+    assert!(create.contains("--build-mode=manual"), "{create}");
+    assert!(!create.contains("--build-mode=none"), "{create}");
+    assert!(
+        create.contains("--command ./gradlew --no-daemon --offline"),
+        "{create}"
+    );
+    // The build runs in a copy under the run's scratch directory, never in the project.
+    let root = create
+        .split("--source-root ")
+        .nth(1)
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap();
+    assert!(root.ends_with(".dla/r1/tmp/jvm-codeql/src"), "{root}");
+    // CodeQL ignores the process directory for --command: the build directory is an argument.
+    let wd = create
+        .split("--working-dir ")
+        .nth(1)
+        .unwrap()
+        .split(' ')
+        .next()
+        .unwrap();
+    assert!(wd.ends_with(".dla/r1/tmp/jvm-codeql/src"), "{wd}");
+    // The copy is not kept once the database is analysed.
+    assert!(!f.ctx.run_dir.join("tmp/jvm-codeql/src").exists());
+    assert!(!f.project.join("build").exists());
+    let cov = CoverageManifest::load(&f.ctx.run_dir).unwrap().unwrap();
+    let c = &cov.workers["jvm"].backends["codeql"];
+    assert_eq!(c.status, BackendStatus::Ran, "{c:?} {out:?}");
+    // The hit is mapped back to the project's path; build logic is counted, not read.
+    assert_eq!(c.enumerated, 1);
+    assert_eq!(
+        cov.workers["jvm"].build_logic, 2,
+        "build.gradle.kts and docker.gradle.kts"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_traced_build_falls_back_to_the_java_and_says_why() {
+    let f = fixture(TABLE, &[]);
+    let log = f.project.parent().unwrap().join("codeql.log");
+    fake_codeql(&f, &log);
+    gradle_project(&f, true);
+    fs::write(f.project.parent().unwrap().join("codeql.log.failbuild"), "").unwrap();
+    sweep_with(&f.ctx, Runtime::Jvm, &env(&f)).unwrap();
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("--build-mode=manual"), "{calls}");
+    assert!(
+        calls.contains("--build-mode=none"),
+        "the Java is still analysed: {calls}"
+    );
+    let cov = CoverageManifest::load(&f.ctx.run_dir).unwrap().unwrap();
+    let c = &cov.workers["jvm"].backends["codeql"];
+    assert_eq!(c.status, BackendStatus::Ran, "{c:?}");
+    let lims: Vec<String> = f
+        .ctx
+        .ledger()
+        .unwrap()
+        .evidence()
+        .flat_map(|e| e.limitations.clone())
+        .collect();
+    let named = lims
+        .iter()
+        .find(|l| l.starts_with("1 Kotlin file not extracted: the traced build failed (exit 2)"))
+        .unwrap_or_else(|| panic!("{lims:?}"));
+    assert!(named.contains("Error: the traced build failed"), "{named}");
+    assert!(
+        named.contains("run the project's own build online"),
+        "{named}"
+    );
+    assert!(!named.contains("probe --build"), "{named}");
+    // The coverage row's reason is one cut line: it leads with the Kotlin note, cut at a word.
+    let why = c.reason.clone().unwrap();
+    assert!(why.starts_with("1 Kotlin file not extracted"), "{why}");
+    assert!(why.chars().count() <= 104, "{why}");
+    assert!(
+        why.ends_with(" ...") && !why.ends_with("fai ..."),
+        "cut at a word: {why}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_kotlin_only_project_whose_traced_build_fails_is_blocked() {
+    let f = fixture(TABLE, &[]);
+    let log = f.project.parent().unwrap().join("codeql.log");
+    fake_codeql(&f, &log);
+    gradle_project(&f, false);
+    fs::write(f.project.parent().unwrap().join("codeql.log.failbuild"), "").unwrap();
+    sweep_with(&f.ctx, Runtime::Jvm, &env(&f)).unwrap();
+    let cov = CoverageManifest::load(&f.ctx.run_dir).unwrap().unwrap();
+    let c = &cov.workers["jvm"].backends["codeql"];
+    assert_eq!(c.status, BackendStatus::Blocked, "{c:?}");
+    let why = c.reason.clone().unwrap();
+    assert!(why.contains("failed (exit 2)"), "{why}");
+    assert!(!why.contains("probe --build"), "{why}");
+}
+
+#[cfg(unix)]
+#[test]
+fn kotlin_only_in_tests_does_not_trigger_a_traced_build() {
+    let f = fixture(TABLE, &[]);
+    let log = f.project.parent().unwrap().join("codeql.log");
+    fake_codeql(&f, &log);
+    gradle_project(&f, true);
+    let p = f.project.join("src/main/kotlin/app/A.kt");
+    let t = f.project.join("src/test/kotlin/app/ATest.kt");
+    fs::create_dir_all(t.parent().unwrap()).unwrap();
+    fs::rename(p, t).unwrap();
+    sweep_with(&f.ctx, Runtime::Jvm, &env(&f)).unwrap();
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("--build-mode=none"), "{calls}");
+    assert!(!calls.contains("--build-mode=manual"), "{calls}");
+}
+
+#[cfg(unix)]
+#[test]
+fn kotlin_only_without_tier_1_is_blocked_and_codeql_is_not_run() {
+    let f = fixture(TABLE, &[]);
+    let log = f.project.parent().unwrap().join("codeql.log");
+    fake_codeql(&f, &log);
+    gradle_project(&f, false);
+    RunState::update(&f.ctx.run_dir, |s| {
+        s.consent = None;
+        Ok(())
+    })
+    .unwrap();
+    sweep_with(&f.ctx, Runtime::Jvm, &env(&f)).unwrap();
+    assert!(
+        !log.exists(),
+        "codeql must not be called: {:?}",
+        fs::read_to_string(&log)
+    );
+    let cov = CoverageManifest::load(&f.ctx.run_dir).unwrap().unwrap();
+    let c = &cov.workers["jvm"].backends["codeql"];
+    assert_eq!(c.status, BackendStatus::Blocked);
+    let why = c.reason.clone().unwrap();
+    assert!(why.contains("Kotlin"), "{why}");
+    assert!(why.contains("traced build"), "{why}");
+    assert!(why.contains("tier 1"), "{why}");
+}
+
+#[cfg(unix)]
+#[test]
+fn mixed_sources_without_tier_1_run_on_the_java_and_name_the_kotlin_not_extracted() {
+    let f = fixture(TABLE, &[]);
+    let log = f.project.parent().unwrap().join("codeql.log");
+    fake_codeql(&f, &log);
+    gradle_project(&f, true);
+    RunState::update(&f.ctx.run_dir, |s| {
+        s.consent = None;
+        Ok(())
+    })
+    .unwrap();
+    sweep_with(&f.ctx, Runtime::Jvm, &env(&f)).unwrap();
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("--build-mode=none"), "{calls}");
+    let named = f.ctx.ledger().unwrap().evidence().any(|e| {
+        e.limitations
+            .iter()
+            .any(|l| l.starts_with("1 Kotlin file not extracted"))
+    });
+    assert!(
+        named,
+        "the evidence names the Kotlin that was not extracted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sonar_is_a_server_only_blocked_row_without_an_install_hint() {
+    let f = fixture(TABLE, &[]);
+    let log = f.project.parent().unwrap().join("codeql.log");
+    fake_codeql(&f, &log);
+    // A Java-only project: CodeQL runs buildless, so it counts among the offline backends.
+    let put = |rel: &str, body: &str| {
+        let p = f.project.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
+    };
+    put("src/main/java/app/B.java", "package app;\nclass B {}\n");
+    let mut table = JVM_CODEQL_TABLE.to_owned();
+    table.push_str(
+        r#"
+[[detector]]
+id = "sonar/S2095"
+backend = "sonar"
+rule = "S2095"
+suggested_archetype = "L-HANDLE"
+verified = false
+"#,
+    );
+    fs::write(f.data.join("detectors/jvm.toml"), table).unwrap();
+    sweep_with(&f.ctx, Runtime::Jvm, &env(&f)).unwrap();
+    let cov = CoverageManifest::load(&f.ctx.run_dir).unwrap().unwrap();
+    let b = &cov.workers["jvm"].backends;
+    assert_eq!(b["codeql"].status, BackendStatus::Ran, "{:?}", b["codeql"]);
+    let sonar = &b["sonar"];
+    assert_eq!(sonar.status, BackendStatus::Blocked);
+    assert_eq!(sonar.install_hint, None, "an install cannot lead to a run");
+    let why = sonar.reason.clone().unwrap();
+    assert!(why.starts_with("server-only: S5164 and S2095"), "{why}");
+    assert!(
+        why.contains("offline backends that ran for the same shapes: codeql"),
+        "{why}"
+    );
+    assert!(!why.contains("install"), "{why}");
+}
+
 #[test]
 fn two_languages_never_share_a_raw_file() {
     assert_eq!(

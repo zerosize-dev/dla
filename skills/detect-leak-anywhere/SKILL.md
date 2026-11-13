@@ -1,6 +1,6 @@
 ---
 name: detect-leak-anywhere
-description: Diagnose memory leaks in any runtime. Use when someone reports growing memory, a rising RSS, an out-of-memory kill or OOMKilled pod, a heap that never shrinks, a slow leak, file descriptor or thread growth, or asks to find, prove or rule out a leak in JVM/Kotlin, Go, Rust, Node.js/TypeScript, Python or native/FFI code, in a repository, a running process or captured heap dumps. Diagnosis only; it never edits project source.
+description: Diagnose memory leaks in any runtime. Use when someone reports growing memory, a rising RSS, an out-of-memory kill or OOMKilled pod, a heap that never shrinks, a slow leak, file descriptor or thread growth, or asks to find, prove or rule out a leak in JVM/Kotlin, Go, Rust, Node.js/TypeScript, Python or native/FFI code, in a repository, a running process or captured heap dumps; also for a service whose memory keeps growing, leak named or not. Diagnosis only, never edits source; not CPU profiling or GC tuning.
 hooks:
   PreToolUse:
     - matcher: "Write|Edit|NotebookEdit"
@@ -65,8 +65,8 @@ Copy this into your notes. Details for each stage are in `references/stages.md`.
 - [ ] 8. Verify every confirmed finding, in every path (not only with workers):
         dla bundle F, one dla:verifier subagent, dla ledger verify --label
         with workers: dla ledger merge first
-        dla gate check --final      (passes, or every item has a reason and a next step)
-- [ ] 9. dla report, then revisit what is unresolved
+        dla gate check --final
+- [ ] 9. dla report; loop: run what `dla run status` names, report again, until nothing is runnable or time ends
 ```
 
 Rules that stay in force at every stage:
@@ -75,26 +75,29 @@ Rules that stay in force at every stage:
 - Measure first and explain afterwards. Harness, trend, alloc-test and the plateau verdict decide leak versus non-leak; a runtime-heap sample alone is only a lead.
 - Confirmation needs passing growth tied to the finding (its probe, a column at its site, or a column listing it as a candidate), a holder, a refuted `N-*` sibling and a `file:line` (artifact runs: an owner and no site). Growth of another holder or of the whole process (`os.rss`) does not confirm a particular holder: `growth-not-tied`. When `confirm` prints a warning that the tied column observed another holder, run the `ledger annotate --holder --evidence` command it prints.
 - Attribute with `dla summarize <heap-graph|type-histogram-diff|alloc-stack-diff|non-heap> <files...>` on the captures `dla harness run` (`--capture`, `--tool`) or `dla attach` wrote; `references/backends.md` says which op reads which file and which tool it needs. Cite the evidence it returns. A column confirms only the holder it is tied to (the output's `tie`: holder, site or type); `--finding` never forces a tie. An empty or failed-gate result never refutes a leak, and a missing tool is a coverage row, not a finding. Native growth under a JNI boundary reaches a managed finding only through `dla correlate <H>`; `dla probe` known-leak verdicts are context, never findings.
-- A candidate that could not be exercised is never confirmed or refuted: `dla ledger resolve <F> --as suspected_static_only|unresolved --reason <r> --remedy "<text>"`. Reasons: `not_exercised`, `no_harness`, `env_unavailable`, `build_fails`, `privilege_declined`, `tool_missing`, `time_budget`.
-- A `time-budget` refusal whose fix names a smaller command (fewer `--iterations`, a smaller `--step`, fewer `--extra`): run that command. When the deadline has passed or nothing smaller fits, resolve the open items as `unresolved` with reason `time_budget` and a remedy, then report. A result marked `partial run` is inconclusive: it never confirms or refutes.
+- A candidate that could not be exercised is never confirmed or refuted: `dla ledger resolve <F> --as suspected_static_only|unresolved --reason <r> --remedy "<text>"`. Reasons: see Before you stop.
+- A `time-budget` refusal whose fix names a smaller command (fewer `--iterations`, a smaller `--step`, fewer `--extra`): run that command. When the deadline has passed or nothing smaller fits, the floor rule of Time budget applies, then report. A result marked `partial run` is inconclusive: it never confirms or refutes.
 - A refused command is fixed with the command the refusal prints, never retried in a loop.
 - If a run is interrupted, `dla run abort --reason "<why>"` stops what DLA started and undoes what it attached.
 
 ## When nothing fits
 
-UNCLASSIFIED is a result, not a failure; use it only when no archetype fits the mechanism. When the best fit is refused for missing evidence, run the command the refusal names once, then label again. If it repeats, or no archetype fits, record `dla ledger label F --as UNCLASSIFIED --note "<holder and mechanism in your own words>"`. A finding with a holder and mechanism and no ID is a success, reported like a labelled one. Never force a label: it counts as a mistake. `dla ledger label F --as <ID>` refuses without the required evidence, a holder the archetype fits, and a refuted look-alike sibling; it lists what is missing, or the runtime's rows when the ID has none (choose one, or UNCLASSIFIED; `--note` only to keep the ID, and it must say why none of the runtime's rows fits). `dla ledger label F --suggest` lists each archetype of the finding's side with its summary, what is met and what is missing, then UNCLASSIFIED: compare the summaries with your mechanism. Findings of one leak: `dla ledger duplicate F --of G` merges F into the labelled G. `dla gate check --final` needs a label decision for each confirmed finding (an ID, or UNCLASSIFIED with a note).
+UNCLASSIFIED is a result, not a failure; use it only when no archetype fits the mechanism. When the best fit is refused for missing evidence, run the command the refusal names once, then label again. If it repeats, or no archetype fits, record `dla ledger label F --as UNCLASSIFIED --note "<holder and mechanism in your own words>"`. A finding with a holder and mechanism but no ID is a success, weighed like a labelled one. Never force a label: it counts as a mistake. `dla ledger label F --as <ID>` refuses without the required evidence, a holder the archetype fits, and a refuted look-alike sibling; it lists what is missing, or the runtime's rows when the ID has none (choose one, or UNCLASSIFIED; `--note` only to keep the ID, and it must say why none of the runtime's rows fits). `dla ledger label F --suggest` lists each archetype with its summary, what is met and what is missing: compare the summaries with your mechanism. Findings of one leak: `dla ledger duplicate F --of G` merges F into the labelled G. `dla gate check --final` needs a label decision for each confirmed finding (an ID, or UNCLASSIFIED with a note).
 
-When you annotate a site or writer, take `file:line` from `grep -n` or `cat -n` output, never from counting an unnumbered listing.
+Take the `file:line` of an annotated site or writer from `grep -n` or `cat -n` output, never from counting an unnumbered listing.
 
 ## Before you stop
 
-- `dla gate check --final` passes, or every open item has a reason and a next step (`dla ledger resolve ... --as unresolved --reason <r> --remedy "<text>"`). Every confirmed leak has an explanation and a verification record.
-- Run a harness `dla harness gen` wrote (`dla harness run`) before closing any finding of its runtime as `no_harness`, `not_exercised` or `time_budget`. If it cannot run, record the blocker on `intake.workload`; if only the user can unblock it (services, credentials, data), ask the user before closing, not after the report.
+- `dla gate check --final` passes, or every open item has a reason and a next step (`dla ledger resolve ... --as unresolved --reason <r> --remedy "<text>"`). Every confirmed leak has an explanation and a verification record; a passing gate shows the records are complete, not that the finding is a leak, and a `Verified: DISAGREES` finding is told to the user as disputed.
+- Reasons, each true only when it says what happened: `not_exercised` (nothing reached it); `inconclusive` (measured, and the measurement cannot decide; `unresolved` only, and the ledger wants a measurement tied to the finding, else `measurement-required`); `no_harness`, `env_unavailable`, `build_fails`, `privilege_declined`, `tool_missing` (what stopped it); `time_budget` only when the deadline is near or a command was refused for time (`time-left` otherwise, while more than the larger of 10 minutes and 20% of the budget, the floor, remains). Non-heap growth is decided first: a finding for it with an `N-WARM` sibling and `dla alloc-test <H> --finding <F>`, not a close.
+- Keep measuring while time is left. The budget is the work allowance: a run that ends with most of it unspent and entry points unexercised measured nothing, so it shows neither a leak nor its absence. While more than the floor is left (`budget.remaining_seconds`) and a harness or `revisit` item can still run, run it; never ask whether to continue and never close `time_budget`. At or under the floor: Time budget. Ask for what only the user can supply (services, credentials, data) once, naming the finding ids and the input, before closing, not after the report. An unattended run records the blocker with `--remedy` instead.
+- Run a harness `dla harness gen` wrote (`dla harness run`), or generate one when entry points were discovered, before closing a finding of its runtime as `no_harness`, `not_exercised` or `time_budget`; the ledger refuses otherwise. If it cannot run, record the blocker on `intake.workload`.
 - If the report's `Measured:` line says nothing was measured, say first and plainly that the run measured nothing, so it neither shows nor rules out a leak, and name what would let it measure (the harness and what it needs).
+- Closing message: one line from the report's `Findings:` line, numbers copied (leaks confirmed and verified; the line's "non-leak explanations: confirmed N" you write as "N explanations, not leaks", never "confirmed"; unresolved), then the Coverage line. When it shows 0 or a minority of entry points exercised, say first that this run did not test the rest, so it neither shows nor rules out a leak there; name the cause and quote the ledger's remedy. One summary line for the `suspected_static_only` findings (count, why untested, remedy). Copy every number from `dla report` or `dla run status`.
 - If `dla report` shows INCOMPLETE, say so plainly and list what is still open. Never write "done" over it.
-- A Stop hook may block your stop while `gate check --final` fails. Do not rely on it: it blocks the first two stop attempts, lets the third go if nothing changed in the ledger, and stamps the run INCOMPLETE, and older Claude Code versions do not run it at all.
+- A Stop hook may block your stop while `gate check --final` fails. Do not rely on it: it lets the third attempt go if the ledger did not change, stamping the run INCOMPLETE, and older Claude Code versions do not run it.
 - Never edit `.dla` files to make a check pass. The write hook refuses them (the harness driver excepted), the integrity seals on the protected files detect an edit that gets past it, the report names it, and `dla run reseal --reason` is for a change made outside `dla` that you disclose.
-- DLA does not call a leak confirmed because a pattern looks familiar. When it suggests a repair it names only the class of repair, for example deregistering the listener on dispose.
+- A familiar pattern never confirms a leak; a suggested repair names only a class of repair, for example deregistering the listener on dispose.
 
 ## Router: pick the entry path before anything else
 
@@ -107,7 +110,15 @@ The target is what the request names (a path, a pid or port, dump files). Otherw
 | artifact | heap dump files, no live process | `dla run init --entry artifact --artifact <path>...` | 1, 6 (`dla summarize heap-graph` once over ALL dumps), `dla gate check --stage classify` (it unlocks `references/<lang>-archetypes.md` and `known-leaks.md`), 5, 8, 9 |
 | symptom | only "memory grows", nothing named and no source here | ask once, then re-route; else stop as above | 1, then the path the answer picks |
 
-Add `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` to `dla run init`. Per-path rules (process consent tiers, artifact series rules, scope) are in `references/stages.md`; failures and the INCOMPLETE stamp in `references/recovery.md`; hooks and integrity in `references/safety-and-effects.md`; per-runtime notes in `references/<jvm|go|rust|node|python|native>.md`; the summarize backends and `dla intervene` in `references/backends.md`; the records and report lines in `references/evidence-and-report.md`.
+Add `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}` to `dla run init`. Read by situation (`references/`):
+
+- a refusal, a stalled worker, the INCOMPLETE stamp, a tempting move (a table): `recovery.md`;
+- classifying with a harness, labels, final gate, reasons, revisit loop: `stages.md` (sections 4, "Label", 8, 9); report wording and the closing message: `evidence-and-report.md`;
+- hooks, integrity, consent tiers: `safety-and-effects.md`; a runtime: `<jvm|go|rust|node|python|native>.md`; summarize backends, `dla intervene`: `backends.md`.
+
+## Time budget
+
+`dla run init --budget ${user_config.time_budget}` takes `auto` (starts at 60m; the first passing `dla gate check` at `sweep` or later sizes it to the project) or a fixed `90s`, `45m`, `2h`. Answer `intake.budget` with the `dla run init` evidence. While more than the floor is left, never ask whether to continue and never close a finding `time_budget`. At or under the floor, or when a command is refused with nothing smaller that fits, the core of an interactive run asks the user once: "extend by <to_finish> minutes to measure the next <n> candidates?" (`budget.to_finish_minutes` and `budget.to_finish_findings` of `dla run status`, your n); on yes run `dla run extend <dur>` and carry on; it closes `time_budget` only if the user declines or does not answer. A worker, or a run whose `dla run init` reported a `consent` object, never extends: it closes `time_budget` with a remedy.
 
 ## Dispatch: one runtime in the core, several in workers
 

@@ -314,6 +314,12 @@ pub struct GrowthSummary {
     /// Number of columns that failed the gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed: Option<u32>,
+    /// Of the failed columns, how many are not whole-process columns
+    /// ([`crate::gate::is_whole_process`]): the ones a finding could be made from. Zero
+    /// with no passed column means the trend measured only the process. Absent in a record
+    /// written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_beyond_process: Option<u32>,
     /// Count of columns per shape.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub shapes: BTreeMap<String, u32>,

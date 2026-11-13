@@ -1,0 +1,21 @@
+schema_version = 1
+id = "rust-private-registry"
+runtime = "rust"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = """
+Operators report that the parcel relay's resident memory climbs for as long as a link stays up and only comes back after a restart. About one frame in five on the link is a heartbeat or a control frame, and the rest carry data. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/frames.rs:21"
+lines = [21, 25]
+alt_sites = ["src/frames.rs:14", "src/frames.rs:19"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-OWNERSHIP"
+share = 1.0
+confirmable = false

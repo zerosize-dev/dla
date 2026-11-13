@@ -648,7 +648,7 @@ pub struct ColumnMeta {
 pub fn column_meta(name: &str) -> ColumnMeta {
     use ColumnKind::{Counter, Gauge};
     use SeriesRegion::{Heap, NonHeap, OffHeap, Process};
-    use Unit::{Bytes, Count};
+    use Unit::{Bytes, Count, Seconds};
     let meta = |unit, kind, region, baseline, after_gc| ColumnMeta {
         unit,
         kind,
@@ -703,6 +703,13 @@ pub fn column_meta(name: &str) -> ColumnMeta {
         "jvm.nonheap_used" | "jvm.nonheap_committed" => meta(Bytes, Gauge, NonHeap, true, true),
         "jvm.nmt_committed" => meta(Bytes, Gauge, Process, true, true),
         "jvm.threads" | "jvm.classes_loaded" => meta(Count, Counter, NonHeap, true, true),
+        // Whole-process like every `jvm.` name (they tie to nothing, the non-heap residual rows
+        // cover them): the committed bytes of an NMT category (`jvm.nmt.symbol`), the classes
+        // unloaded so far, the compile time so far, and the pool readings used without NMT.
+        "jvm.classes_unloaded" => meta(Count, Counter, NonHeap, false, true),
+        "jvm.jit_seconds" => meta(Seconds, Gauge, NonHeap, false, true),
+        "jvm.metaspace_used" | "jvm.codecache_used" => meta(Bytes, Gauge, NonHeap, false, true),
+        _ if name.starts_with("jvm.nmt.") => meta(Bytes, Gauge, NonHeap, false, true),
         // Go.
         "go.heap_live" | "go.heap_objects" | "go.heap_inuse" => {
             meta(Bytes, Gauge, Heap, true, true)
@@ -775,5 +782,53 @@ mod catalog_tests {
             SeriesRegion::Heap
         );
         assert_eq!(column_meta("gap.unexplained").region, SeriesRegion::OffHeap);
+    }
+
+    #[test]
+    fn the_jvm_non_heap_columns_are_whole_process_non_heap_levels() {
+        for name in [
+            "jvm.nmt.symbol",
+            "jvm.nmt.metaspace",
+            "jvm.metaspace_used",
+            "jvm.codecache_used",
+        ] {
+            let m = column_meta(name);
+            assert_eq!(
+                (m.unit, m.kind, m.region, m.baseline, m.after_gc),
+                (
+                    Unit::Bytes,
+                    ColumnKind::Gauge,
+                    SeriesRegion::NonHeap,
+                    false,
+                    true
+                ),
+                "{name}"
+            );
+        }
+        let m = column_meta("jvm.classes_unloaded");
+        assert_eq!(
+            (m.unit, m.kind, m.region, m.baseline),
+            (
+                Unit::Count,
+                ColumnKind::Counter,
+                SeriesRegion::NonHeap,
+                false
+            )
+        );
+        let m = column_meta("jvm.jit_seconds");
+        assert_eq!(
+            (m.unit, m.kind, m.region, m.baseline),
+            (
+                Unit::Seconds,
+                ColumnKind::Gauge,
+                SeriesRegion::NonHeap,
+                false
+            )
+        );
+        // The committed total of NMT keeps its own meaning (region process).
+        assert_eq!(
+            column_meta("jvm.nmt_committed").region,
+            SeriesRegion::Process
+        );
     }
 }

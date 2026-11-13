@@ -18,7 +18,9 @@
 //!    two workloads) and `dla harness run H`. Without any harness that ran,
 //!    every leak-side candidate is resolved `suspected_static_only`
 //!    (`build_fails` when the probe's build of the runtime failed, else
-//!    `no_harness`) and the policy goes to the grading.
+//!    `env_unavailable` with the refusals `dla harness gen` and `run` gave in
+//!    its remedy: a blocker reason, which the ledger never refuses and which
+//!    leaves `intake.workload` alone) and the policy goes to the grading.
 //! 2. `dla trend S` per series. For every passed column with candidates, the
 //!    first candidate (the trend lists the column's own finding first; N-*
 //!    siblings are never listed) is chosen once per run. For each chosen
@@ -60,11 +62,14 @@
 //!    command mode.
 //! 6. `dla gap S --residual` (refusals ignored); every leak-side candidate or
 //!    finding under test left over is resolved `suspected_static_only`
-//!    (`not_exercised`) when it has static evidence, else `unresolved`
-//!    (`time_budget`). Finally `dla report`.
+//!    (`not_exercised`) when it has static evidence, else `unresolved` with the reason
+//!    the evidence supports: `inconclusive` when a measurement is tied to it, else
+//!    `not_exercised` (never `time_budget`: the ledger refuses that while the budget has
+//!    room, and a bench run closes with an hour left). Finally `dla report`.
 //!
 //! At most [`MAX_ALLOC_TESTS`] alloc-tests run per fixture in steps 2 to 4; the
-//! findings that do not get one are resolved `unresolved` (`time_budget`). Step 5
+//! findings that do not get one are resolved `unresolved` (`inconclusive`, or
+//! `not_exercised` when nothing was measured for them). Step 5
 //! adds at most 2 more for the findings its calls tie without a discriminator.
 //!
 //! # Checks per fixture
@@ -474,6 +479,10 @@ struct Fx<'a> {
     pending: Vec<ops::Pending>,
     /// The tools the fixture's `[toolchain]` names, put in front of every command's environment.
     provided: Option<Provided>,
+    /// The refusals of `harness gen` and `harness run` so far, one `<runtime>: <code>` entry
+    /// each, joined with `; `: named in the remedy of the findings closed for lack of a
+    /// harness when no runtime got one.
+    last_harness_refusal: Option<String>,
 }
 
 /// The variables a `dla` command gets on top of the inherited environment: the `PATH` of a
@@ -1078,6 +1087,18 @@ fn read_workloads(run_dir: &Path, worker: Option<&str>) -> Vec<(String, String)>
     list.into_iter().map(|(_, id, rt)| (id, rt)).collect()
 }
 
+/// Adds one refusal to the list the closes for lack of a harness name.
+fn note_refusal(fx: &mut Fx, entry: &str) {
+    match fx.last_harness_refusal.as_mut() {
+        Some(all) if all.contains(entry) => {}
+        Some(all) => {
+            all.push_str("; ");
+            all.push_str(entry);
+        }
+        None => fx.last_harness_refusal = Some(entry.to_owned()),
+    }
+}
+
 /// Step 1: harness gen and run per runtime. Returns the harnesses that ran and
 /// the reason (`build_fails` or `no_harness`) for the first runtime without one.
 fn make_harnesses(
@@ -1087,6 +1108,9 @@ fn make_harnesses(
 ) -> (Vec<Ran>, Option<&'static str>) {
     let mut ran = Vec::new();
     let mut missing = None;
+    // The refusals named in a close are those of this call's runtimes, not of an earlier
+    // worker that used the same fixture state.
+    fx.last_harness_refusal = None;
     let run_dir = fx.run_dir().unwrap_or_default();
     let gen_flags = GEN_FLAGS.get().cloned().unwrap_or_default();
     for lang in runtimes {
@@ -1129,6 +1153,7 @@ fn make_harnesses(
             if !gen_out.ok {
                 let msg = format!("harness gen {lang}: {}", gen_out.message());
                 fx.step(msg.clone());
+                note_refusal(fx, &format!("{lang}: {}", gen_out.code()));
                 if matches!(
                     gen_out.code(),
                     "workload-required" | "iteration-arg-unknown"
@@ -1151,6 +1176,7 @@ fn make_harnesses(
             if !run_out.ok {
                 let msg = format!("harness run {h}: {}", run_out.message());
                 fx.step(msg.clone());
+                note_refusal(fx, &format!("{lang}: harness run {h} failed"));
                 fx.row.errors.push(msg);
                 continue;
             }
@@ -1264,6 +1290,28 @@ fn add_sibling(fx: &mut Fx, root: &str, hyp: &str, evidence: &str) -> Option<Str
     } else {
         None
     }
+}
+
+/// Closes `id` unresolved with the reason the evidence supports: `inconclusive` when a
+/// measurement is tied to it, else `not_exercised`. The ledger decides: it refuses
+/// `inconclusive` with `measurement-required` when nothing measured was tied to the
+/// finding, and the close is then repeated as `not_exercised`.
+fn resolve_undecided(fx: &mut Fx, id: &str, remedy: &str) -> bool {
+    let o = fx.call_quiet(&[
+        "ledger",
+        "resolve",
+        id,
+        "--as",
+        "unresolved",
+        "--reason",
+        "inconclusive",
+        "--remedy",
+        remedy,
+    ]);
+    if o.ok {
+        return true;
+    }
+    resolve(fx, id, "unresolved", "not_exercised", remedy)
 }
 
 fn resolve(fx: &mut Fx, id: &str, disposition: &str, reason: &str, remedy: &str) -> bool {
@@ -1536,11 +1584,9 @@ fn test_candidate(
         return "ledger test refused".to_owned();
     }
     if *alloc_tests >= MAX_ALLOC_TESTS {
-        resolve(
+        resolve_undecided(
             fx,
             &f.id,
-            "unresolved",
-            "time_budget",
             "the alloc-test budget of this run is used up; run dla alloc-test for this finding",
         );
         return "alloc-test budget used up".to_owned();
@@ -1581,18 +1627,13 @@ fn test_candidate(
                 Verdict::Leak => "growth continues in a column that did not pass".to_owned(),
                 _ => "alloc-test is inconclusive".to_owned(),
             };
-            let reason = if matches!(v, Verdict::Failed(_)) {
-                "env_unavailable"
+            let remedy =
+                "re-run dla alloc-test with more extra cycles (--extra) or a longer workload";
+            if matches!(v, Verdict::Failed(_)) {
+                resolve(fx, &f.id, "unresolved", "env_unavailable", remedy);
             } else {
-                "time_budget"
-            };
-            resolve(
-                fx,
-                &f.id,
-                "unresolved",
-                reason,
-                "re-run dla alloc-test with more extra cycles (--extra) or a longer workload",
-            );
+                resolve_undecided(fx, &f.id, remedy);
+            }
             why
         }
     }
@@ -1609,13 +1650,7 @@ fn test_growth(fx: &mut Fx, t: &TrendInfo, g: &str, ev: &str, alloc_tests: &mut 
         return "ledger test refused".to_owned();
     }
     if *alloc_tests >= MAX_ALLOC_TESTS {
-        resolve(
-            fx,
-            g,
-            "unresolved",
-            "time_budget",
-            "run dla alloc-test for this growth",
-        );
+        resolve_undecided(fx, g, "run dla alloc-test for this growth");
         return "alloc-test budget used up".to_owned();
     }
     *alloc_tests += 1;
@@ -1630,18 +1665,12 @@ fn test_growth(fx: &mut Fx, t: &TrendInfo, g: &str, ev: &str, alloc_tests: &mut 
             }
         }
         (v, _) => {
-            let reason = if matches!(v, Verdict::Failed(_)) {
-                "env_unavailable"
+            let remedy = "attribute the growth to a site: dla harness gen --probe <finding> on the suspected holder, then dla alloc-test --finding";
+            if matches!(v, Verdict::Failed(_)) {
+                resolve(fx, g, "unresolved", "env_unavailable", remedy);
             } else {
-                "time_budget"
-            };
-            resolve(
-                fx,
-                g,
-                "unresolved",
-                reason,
-                "attribute the growth to a site: dla harness gen --probe <finding> on the suspected holder, then dla alloc-test --finding",
-            );
+                resolve_undecided(fx, g, remedy);
+            }
             format!("{v:?}: left unresolved")
         }
     }
@@ -1671,13 +1700,25 @@ fn finish(fx: &mut Fx, ran: &[Ran], no_harness: Option<&str>, report: bool) {
             (f.id.clone(), has_static)
         })
         .collect();
+    let refused = fx
+        .last_harness_refusal
+        .as_deref()
+        .unwrap_or("none recorded")
+        .to_owned();
+    let refusal_remedy = if refused.contains("harness run") {
+        format!(
+            "a harness was generated but did not run (what dla harness gen and run refused: {refused}); fix what dla harness run printed (a missing build input or package), then run it again, or write a driver: dla harness gen --lang <l> --driver"
+        )
+    } else {
+        format!(
+            "no loop harness could be made for a runtime of this run (what dla harness gen and run refused: {refused}); name a workload with an iteration argument or write a driver: dla harness gen --lang <l> --driver"
+        )
+    };
     for (id, has_static) in todo {
         if !has_static {
-            resolve(
+            resolve_undecided(
                 fx,
                 &id,
-                "unresolved",
-                "time_budget",
                 "no dynamic evidence reached this finding; re-run dla alloc-test with a probe",
             );
             continue;
@@ -1687,10 +1728,12 @@ fn finish(fx: &mut Fx, ran: &[Ran], no_harness: Option<&str>, report: bool) {
                 "build_fails",
                 "fix the build (see probe/probe.json), then dla harness gen --lang <l>",
             ),
-            Some(_) => (
-                "no_harness",
-                "write a loop harness: dla harness gen --lang <l> --driver",
-            ),
+            // No runtime got a harness: each finding names the blocker, the refusals `dla
+            // harness gen` gave. A blocker reason is never refused (the ledger refuses
+            // `no_harness` while entry points and budget are left), and it is a close of
+            // that finding alone: it records nothing on `intake.workload`, so no other
+            // runtime's item is silenced.
+            Some(_) => ("env_unavailable", refusal_remedy.as_str()),
             None => (
                 "not_exercised",
                 "no loop test reached this site; extend the harness (dla harness gen --probe <finding>), then dla ledger test",
@@ -2255,6 +2298,7 @@ fn run_fixture(sh: &Shared, fixture_dir: &Path) -> FixtureRow {
         path_dir: sh.path_dir.map(Path::to_path_buf),
         unset_vars: without::home_vars_for(&sh.args.without),
         pending: Vec::new(),
+        last_harness_refusal: None,
         provided: sh.toolchains.get(&id).cloned(),
     };
     let _ = fs::remove_dir_all(&fx.log_dir);

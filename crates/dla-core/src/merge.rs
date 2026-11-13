@@ -337,6 +337,9 @@ pub fn merge(run_dir: &Path) -> Result<MergeReport, Error> {
                 .map(|o| o.item.id.clone())
                 .collect();
             for id in open {
+                // Written through the core API, not `dla ledger resolve`, so the CLI rule
+                // that refuses `time_budget` while time is left does not apply: the
+                // worker's own time did run out when it was called unfinished.
                 main.resolve_open_item(
                     &id,
                     Resolution::Unresolved {

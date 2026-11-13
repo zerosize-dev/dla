@@ -466,9 +466,14 @@
           "const": "tool_missing"
         },
         {
-          "description": "The time budget ran out.",
+          "description": "The time budget ran out: the deadline is near, or a command was refused for\ntime. Not a stand-in for any other reason.",
           "type": "string",
           "const": "time_budget"
+        },
+        {
+          "description": "Measured, and the measurement cannot decide: too few points, no plateau yet, a\nsingle snapshot, or a discriminator that came back inconclusive. Only\n`unresolved` takes it, and only with a measurement tied to the finding's family.",
+          "type": "string",
+          "const": "inconclusive"
         }
       ]
     }

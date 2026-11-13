@@ -553,6 +553,14 @@ pub struct DumpCoverage {
     /// Or a file holding them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    /// JVM: how many distinct top-level classes of the project were loaded (classes under
+    /// `DLA_PROJECT`, or in a package the project's sources declare).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<u64>,
+    /// JVM: the source file of each loaded project class, as `package/path/File.kt` (the
+    /// class file's `SourceFile` attribute under the package directory).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
 }
 
 /// A library detector hit.

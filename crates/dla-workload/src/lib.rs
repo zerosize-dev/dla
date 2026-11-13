@@ -342,6 +342,10 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
                 let w = m.worker_mut(rt.as_str());
                 w.out_of_scope = w.out_of_scope.max(*n);
             }
+            if let Some(n) = scan.build_logic.get(rt) {
+                let w = m.worker_mut(rt.as_str());
+                w.build_logic = w.build_logic.max(*n);
+            }
             let mine = |id: &str| runtime_of_entry(&scan, id) == Some(*rt);
             let prev = m.worker_mut(rt.as_str()).entry_points.exercised.clone();
             m.set_entry_points(
@@ -774,6 +778,46 @@ mod tests {
         assert_eq!(ep.not_exercisable.len(), 1);
         let ledger = ctx.ledger().unwrap();
         assert_eq!(ledger.findings().count(), 0);
+    }
+
+    #[test]
+    fn gradle_build_logic_lists_no_entry_points_but_still_finds_the_build_root() {
+        let d = tempfile::tempdir().unwrap();
+        put(d.path(), "build.gradle.kts", "fun tagFor(n: String) = n\n");
+        put(d.path(), "docker.gradle.kts", "fun loadDockerProps() {}\n");
+        put(
+            d.path(),
+            "buildSrc/src/main/kotlin/Conventions.kt",
+            "object Conventions { fun register() {} }\n",
+        );
+        put(
+            d.path(),
+            "src/main/kotlin/app/Tool.kt",
+            "package app\n\nclass Tool { fun run() {} }\n\nfun main() { Tool().run() }\n",
+        );
+        let scan = Scan::new(d.path());
+        assert_eq!(scan.build_logic[&Runtime::Jvm], 3);
+        let (rep, _) = build_report(&scan, Some(Runtime::Jvm), &BTreeSet::new());
+        assert_eq!(
+            rep.entry_points,
+            ["src/main/kotlin/app/Tool.kt::Tool.run"],
+            "{rep:?}"
+        );
+        // The build root is still found from `build.gradle.kts` in the file list.
+        let w = find(&rep, "jvm:main:src/main/kotlin/app/Tool.kt");
+        assert!(w.command.contains("gradle"), "{}", w.command);
+        let ctx = run_ctx(d.path(), None);
+        discover(&ctx, Some(Runtime::Jvm)).unwrap();
+        let cov = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+        assert_eq!(cov.workers["jvm"].build_logic, 3);
+        assert_eq!(cov.workers["jvm"].out_of_scope, 0);
+        assert!(
+            cov.workers["jvm"]
+                .entry_points
+                .discovered
+                .iter()
+                .all(|e| !e.contains("gradle.kts") && !e.contains("buildSrc"))
+        );
     }
 
     fn run_ctx(root: &Path, worker: Option<&str>) -> ToolCtx {

@@ -79,6 +79,9 @@ pub struct Scan {
     pub scope: Option<Scope>,
     /// Non-test source files outside the scope that were not parsed, by runtime.
     pub out_of_scope: BTreeMap<Runtime, u64>,
+    /// Non-test build-logic source files (`*.gradle.kts`, `buildSrc/**`) that were not
+    /// parsed, by runtime.
+    pub build_logic: BTreeMap<Runtime, u64>,
 }
 
 pub fn dir_of(rel: &str) -> &str {
@@ -150,10 +153,19 @@ impl Scan {
         }
         let mut infos = BTreeMap::new();
         let mut out_of_scope: BTreeMap<Runtime, u64> = BTreeMap::new();
+        let mut build_logic: BTreeMap<Runtime, u64> = BTreeMap::new();
         for rel in &all {
             let Some(lang) = Lang::from_path(Path::new(rel)) else {
                 continue;
             };
+            // Build logic stays in `all` (the build root is found from it) but is neither
+            // parsed nor listed: it runs in the build tool's process, not in the measured one.
+            if dla_core::paths::is_build_logic(rel) {
+                if !dla_census::walk::is_test_path(rel) {
+                    *build_logic.entry(lang.runtime()).or_default() += 1;
+                }
+                continue;
+            }
             if scope.as_ref().is_some_and(|s| !s.includes(rel)) {
                 if !dla_census::walk::is_test_path(rel) {
                     *out_of_scope.entry(lang.runtime()).or_default() += 1;
@@ -175,6 +187,7 @@ impl Scan {
             infos,
             scope,
             out_of_scope,
+            build_logic,
         }
     }
 

@@ -1,0 +1,34 @@
+schema_version = 1
+id = "rust-ledger-sync"
+runtime = "rust"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the ledger sync agent's resident memory grows in step with the number of bank batches it has processed, and the agent is restarted every few days. The account balances it keeps cover a fixed pool of accounts and the statement lines are written out every fifty batches. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/journal.rs:25"
+lines = [25, 25]
+alt_sites = ["src/journal.rs:26", "src/journal.rs:15", "src/journal.rs:8"]
+holder = "cycle-only"
+region = "heap"
+cause = "L-CYCLE"
+share = 0.67
+confirmable = true
+dump_backed = false
+
+[[leak]]
+id = "L2"
+site = "src/outbox.rs:44"
+lines = [44, 44]
+alt_sites = ["src/outbox.rs:34", "src/outbox.rs:45"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-OWNERSHIP"
+share = 0.33
+confirmable = true
+dump_backed = true

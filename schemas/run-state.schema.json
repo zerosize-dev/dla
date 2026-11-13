@@ -169,16 +169,49 @@
       "description": "Time budget.",
       "type": "object",
       "properties": {
+        "auto": {
+          "description": "The budget was asked for as `auto`: it starts at [`AUTO_START_SECS`] and is sized to\nthe project by the first passing gate check at `sweep` or later; in a dispatched run each\nworker's first passing check may raise it again until every worker has settled.",
+          "type": "boolean"
+        },
         "deadline": {
           "description": "Start plus budget.",
           "type": "string",
           "format": "date-time"
         },
+        "estimate": {
+          "description": "What an `auto` budget was sized from: the largest estimate so far, stored by the first\nworker gate that sizes it, before the budget is final.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensions": {
+          "description": "Extensions by `dla run extend`, oldest first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BudgetExtension"
+          }
+        },
         "seconds": {
-          "description": "Budget in seconds.",
+          "description": "Budget in seconds: always the length from `started_at` to `deadline`, so it follows\na settled `auto` budget and every extension.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "settled": {
+          "description": "An `auto` budget is final: sized by the run's own gate, or, in a dispatched run, once\nevery registered worker has passed its first gate at `sweep` or later (always false\nfor a fixed budget). Until then each worker's first passing gate may still raise it.",
+          "type": "boolean"
+        },
+        "settled_workers": {
+          "description": "The workers whose first passing gate at `sweep` or later has already sized the\nbudget, in the order they did.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "started_at": {
           "description": "Start of the budget.",
@@ -189,6 +222,75 @@
       "required": [
         "seconds",
         "started_at",
+        "deadline"
+      ]
+    },
+    "BudgetEstimate": {
+      "description": "What an `auto` budget was sized from.",
+      "type": "object",
+      "properties": {
+        "candidates": {
+          "description": "Non-duplicate top-level candidates of any state (C).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "minutes": {
+          "description": "`BASE + PER_RUNTIME * R + PER_CANDIDATE * C`, before the floor and the cap.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runtimes": {
+          "description": "Runtimes with at least one non-duplicate candidate (R).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_minutes": {
+          "description": "The budget it was sized to, in minutes, after the floor and the cap.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "runtimes",
+        "candidates",
+        "minutes",
+        "total_minutes"
+      ]
+    },
+    "BudgetExtension": {
+      "description": "One `dla run extend`.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "When it was made.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "deadline": {
+          "description": "The run deadline after it.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "lapsed_seconds": {
+          "description": "Seconds the run deadline had already passed when it was made (an extension counts\nfrom now, so the budget grows by `seconds + lapsed_seconds`).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "seconds": {
+          "description": "Seconds asked for.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "at",
+        "seconds",
         "deadline"
       ]
     },

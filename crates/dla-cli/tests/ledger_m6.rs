@@ -680,6 +680,86 @@ fn the_verifier_label_is_compared_with_the_findings() {
     assert_eq!(v["verified"], true);
 }
 
+/// A verifier that reads a confirmed leak-side finding as a non-leak records the matching
+/// `N-*` ID: the ledger accepts it with no new disposition, the label disagrees, and an
+/// open item carries the verifier's mechanism (which starts with the reading). The
+/// finding keeps its state; the open item and `Verified: DISAGREES` are what the user reads.
+#[test]
+fn a_verifier_that_reads_a_leak_as_a_nonleak_is_recorded_as_a_disagreement() {
+    let e = env();
+    ok(
+        &e,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-COLLECT",
+            "--evidence",
+            "E4,E5",
+            "--note",
+            "fits none of the go rows",
+        ],
+    );
+    // The shipped table has the N-* rows the verifier is offered.
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/archetypes.toml"),
+        e.data.path().join("archetypes.toml"),
+    )
+    .unwrap();
+    let bundle = bundle_for(&e, "F1");
+    let (code, v) = run_with(
+        &e,
+        &[],
+        &[
+            "ledger",
+            "verify",
+            "F1",
+            "--site",
+            "a.go:1",
+            "--holder",
+            "static/global",
+            "--mechanism",
+            "reads as non-leak: the map is capped at 512 entries and filled once at start-up",
+            "--label",
+            "N-WARM",
+            "--bundle",
+            &bundle,
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        (&v["agrees_label"], &v["verified"]),
+        (&json!(false), &json!(false)),
+        "{v}"
+    );
+    let text = v["disagreement"].as_str().unwrap();
+    assert!(
+        text.contains("label: finding L-COLLECT vs verifier N-WARM")
+            && text.contains("reads as non-leak: the map is capped"),
+        "{v}"
+    );
+    let l = reload(&e);
+    let open: Vec<_> = l
+        .open_items()
+        .filter(|o| {
+            o.resolution.is_none()
+                && o.item
+                    .finding
+                    .as_ref()
+                    .is_some_and(|f| f.to_string() == "F1")
+        })
+        .collect();
+    assert_eq!(open.len(), 1, "one open item for F1");
+    assert!(
+        open[0]
+            .item
+            .text
+            .contains("reads as non-leak: the map is capped")
+    );
+    assert_eq!(open[0].item.opened_by, "dla ledger verify");
+}
+
 // ---------------------------------------------------------------------------- bundle
 
 fn all_bundle_text(dir: &Path) -> String {

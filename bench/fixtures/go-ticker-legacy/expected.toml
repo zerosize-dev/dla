@@ -1,0 +1,25 @@
+schema_version = 2
+id = "go-ticker-legacy"
+runtime = "go"
+category = "archetype-leak"
+pair = "go-ticker-modern"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The reservation service's heap grows steadily with the number of orders it has handled, and only a restart brings it back down. Find out what is holding the memory.
+"""
+
+[toolchain]
+go = "1.22.12"
+
+[[leak]]
+id = "L1"
+site = "internal/reserve/wait.go:11"
+lines = [11, 11]
+alt_sites = ["internal/reserve/wait.go:10-25", "internal/reserve/service.go:46"]
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 1.0
+confirmable = true

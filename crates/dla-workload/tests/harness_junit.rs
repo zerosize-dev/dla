@@ -31,6 +31,17 @@ const GRADLE_BUILD: &str = "plugins { id 'java' }\nrepositories { mavenCentral()
 const GRADLE_KTS_BUILD: &str = "plugins { kotlin(\"jvm\") version \"1.9.24\" }\nrepositories { mavenCentral() }\ndependencies {\n    testImplementation(platform(\"org.junit:junit-bom:5.10.2\"))\n    testImplementation(\"org.junit.jupiter:junit-jupiter\")\n}\ntasks.test { useJUnitPlatform() }\n";
 const POM: &str = "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>leak</groupId>\n  <artifactId>leak</artifactId>\n  <version>1</version>\n  <properties>\n    <maven.compiler.source>17</maven.compiler.source>\n    <maven.compiler.target>17</maven.compiler.target>\n    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>\n  </properties>\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>5.10.2</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n  <build>\n    <plugins>\n      <plugin>\n        <artifactId>maven-surefire-plugin</artifactId>\n        <version>3.2.5</version>\n      </plugin>\n    </plugins>\n  </build>\n</project>\n";
 
+const BOOT_KTS_BUILD: &str = "plugins {\n    kotlin(\"jvm\") version \"1.9.25\"\n    kotlin(\"plugin.spring\") version \"1.9.25\"\n    id(\"org.springframework.boot\") version \"3.3.5\"\n    id(\"io.spring.dependency-management\") version \"1.1.6\"\n}\nrepositories { mavenCentral() }\ndependencies {\n    implementation(\"org.springframework.boot:spring-boot-starter\")\n    testImplementation(\"org.springframework.boot:spring-boot-starter-test\")\n}\ntasks.withType<Test> { useJUnitPlatform() }\n";
+const BOOT_APP_KT: &str = "package com.acme.shop\n\nimport org.springframework.boot.autoconfigure.SpringBootApplication\nimport org.springframework.boot.runApplication\n\n@SpringBootApplication\nclass Application\n\nfun main(args: Array<String>) {\n    runApplication<Application>(*args)\n}\n";
+// `Routes.kt` holds `UserController`, and a top-level function that compiles to `RoutesKt`.
+const BOOT_ROUTES_KT: &str = "package com.acme.shop\n\nimport org.springframework.stereotype.Component\n\n@Component\nclass UserController(private val users: UserService) {\n    fun user(id: String): String = users.lookup(id)\n\n    fun ping(): String = slug(\"Ping Pong\")\n}\n\nfun routeCount(): Int = 2\n";
+const BOOT_SERVICE_KT: &str = "package com.acme.shop\n\nimport org.springframework.stereotype.Service\n\n@Service\nclass UserService {\n    private val cache = HashMap<String, String>()\n\n    fun lookup(id: String): String = cache.getOrPut(id) { \"user-$id\" }\n}\n";
+const BOOT_UTIL_KT: &str =
+    "package com.acme.shop\n\nfun slug(s: String): String = s.lowercase().replace(' ', '-')\n";
+// The directory omits the root of the package, as Kotlin projects do.
+const BOOT_INVOICES_KT: &str = "package com.acme.shop.billing\n\nimport org.springframework.stereotype.Component\n\n@Component\nclass Invoices {\n    fun total(n: Int): Int = n * 3\n}\n";
+const BOOT_TEST_KT: &str = "package com.acme.shop\n\nimport com.acme.shop.billing.Invoices\nimport org.junit.jupiter.api.Test\nimport org.springframework.beans.factory.annotation.Autowired\nimport org.springframework.boot.test.context.SpringBootTest\n\n@SpringBootTest\nclass ApplicationTests(\n    @Autowired val routes: UserController,\n    @Autowired val invoices: Invoices,\n) {\n    @Test\n    fun serves() {\n        routes.user(\"u\" + System.nanoTime())\n        routes.ping()\n        invoices.total(2)\n    }\n}\n";
+
 struct Fx {
     _dir: TempDir,
     ctx: ToolCtx,
@@ -697,6 +708,70 @@ fn kotlin_gradle_project_series_grows_with_the_repeated_tests() {
         return;
     };
     check_series(&fx, &series);
+}
+
+#[test]
+fn a_kotlin_spring_boot_test_run_exercises_the_entry_points_of_the_classes_it_loads() {
+    if !tool_ready("gradle") {
+        return;
+    }
+    let fx = project(&[
+        ("build.gradle.kts", BOOT_KTS_BUILD),
+        ("settings.gradle.kts", "rootProject.name = \"shop\"\n"),
+        ("src/main/kotlin/com/acme/shop/Application.kt", BOOT_APP_KT),
+        ("src/main/kotlin/com/acme/shop/Routes.kt", BOOT_ROUTES_KT),
+        (
+            "src/main/kotlin/com/acme/shop/UserService.kt",
+            BOOT_SERVICE_KT,
+        ),
+        ("src/main/kotlin/com/acme/shop/Util.kt", BOOT_UTIL_KT),
+        ("src/main/kotlin/billing/Invoices.kt", BOOT_INVOICES_KT),
+        (
+            "src/test/kotlin/com/acme/shop/ApplicationTests.kt",
+            BOOT_TEST_KT,
+        ),
+    ]);
+    gen_ok(&fx, &junit_opts());
+    let Some(_series) = run_harness(&fx) else {
+        return;
+    };
+    let cov = dla_core::CoverageManifest::load(&fx.ctx.run_dir)
+        .unwrap()
+        .unwrap();
+    let w = &cov.workers["jvm"];
+    let p = "src/main/kotlin/";
+    let want = [
+        // A class in a file of another name.
+        format!("{p}com/acme/shop/Routes.kt::UserController.ping"),
+        format!("{p}com/acme/shop/Routes.kt::UserController.user"),
+        // A package directory that omits the root of the package.
+        format!("{p}billing/Invoices.kt::Invoices.total"),
+        // A top-level function, through its facade class.
+        format!("{p}com/acme/shop/Util.kt::slug"),
+        format!("{p}com/acme/shop/UserService.kt::UserService.lookup"),
+    ];
+    for id in &want {
+        assert!(
+            w.entry_points.exercised.contains(id),
+            "{id} is not exercised: {:?} of {:?}",
+            w.entry_points.exercised,
+            w.entry_points.discovered
+        );
+    }
+    // The facade of Routes.kt (`RoutesKt`) was never loaded: its function did not run.
+    assert!(
+        !w.entry_points
+            .exercised
+            .contains(&format!("{p}com/acme/shop/Routes.kt::routeCount")),
+        "{:?}",
+        w.entry_points.exercised
+    );
+    assert!(
+        w.project_classes.is_some_and(|n| n >= 4),
+        "{:?}",
+        w.project_classes
+    );
+    assert!(w.iterations.is_some_and(|n| n > 0), "{:?}", w.iterations);
 }
 
 #[test]

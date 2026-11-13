@@ -466,6 +466,252 @@ fn join_series(prev: &SeriesFile, extra: &SeriesFile) -> SeriesFile {
     }
 }
 
+/// The verdict over the tested columns: the bound column's, or the voting columns together;
+/// a non-leak verdict stands only when every required column favours non-leak too. Returns the
+/// verdict, its supports and the required columns that held a non-leak verdict back.
+fn decide(results: &[ColumnResult], picked: &pick::Picked) -> (Favors, Vec<String>, Vec<String>) {
+    let deciding: Vec<(Favors, Vec<String>)> = results
+        .iter()
+        .filter(|r| match &picked.primary {
+            Some(p) => &r.name == p,
+            None => r.voting,
+        })
+        .map(|r| (r.favors, r.supports.clone()))
+        .collect();
+    let required: Vec<(&str, Favors)> = results
+        .iter()
+        .filter(|r| picked.required.contains(&r.name))
+        .map(|r| (r.name.as_str(), r.favors))
+        .collect();
+    let overall = judge::overall(&deciding);
+    let was_non_leak = overall.0 == Favors::NonLeak;
+    let favours: Vec<Favors> = required.iter().map(|r| r.1).collect();
+    let (favors, supports) = judge::require_non_leak(overall, &favours);
+    let held_back = if was_non_leak && favors != Favors::NonLeak {
+        required
+            .iter()
+            .filter(|r| r.1 != Favors::NonLeak)
+            .map(|r| r.0.to_owned())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (favors, supports, held_back)
+}
+
+/// The least extra rise under which a `jvm.nonheap_used` leak verdict on a flat class count may
+/// still be the agent's own checkpoint work.
+const AGENT_DRIFT_RISE: f64 = 1024.0 * 1024.0;
+
+/// The most the agent's own checkpoint work was measured to add per checkpoint on an idle driver
+/// (measured 10 to 20 KB; the highest is used).
+const AGENT_DRIFT_PER_CHECKPOINT: f64 = 20.0 * 1024.0;
+
+/// The most a class count that reads inconclusive may have risen over the extra window and still
+/// be called flat (jitter of a few classes, not a staircase).
+const AGENT_DRIFT_CLASS_JITTER: f64 = 3.0;
+
+/// The margin on the measured per-checkpoint drift.
+const AGENT_DRIFT_MARGIN: f64 = 2.0;
+
+/// The extra rise under which a leak reading may be the agent's drift: the larger of 1 MiB and
+/// the measured drift of every extra checkpoint with the margin (the drift scales with the window).
+fn agent_drift_line(extra: u32) -> f64 {
+    AGENT_DRIFT_RISE.max(AGENT_DRIFT_PER_CHECKPOINT * f64::from(extra) * AGENT_DRIFT_MARGIN)
+}
+
+/// What the alloc-test knows of the harness that decides how its non-heap reading is read.
+#[derive(Clone, Copy)]
+struct DriftCtx {
+    /// The extra checkpoints of the window.
+    extra: u32,
+    /// A command-mode harness: a fresh JVM per point, so no checkpoint drift builds up.
+    command: bool,
+    /// A JUnit repeat harness (its `next` keeps `--junit`).
+    junit: bool,
+}
+
+/// How a small non-heap leak reading on a flat class count is read.
+enum Drift {
+    /// The agent's own checkpoint work: inconclusive, with this caution.
+    Agent(String),
+    /// The class count rises over the extra window (a net rise over the jitter): not the agent's
+    /// drift, so the verdict stands; this names the column.
+    Classes(String),
+    /// A required column rises. The reading is not the agent's drift: `limitation` names the
+    /// column, `next` the capture that decides it, and `inconclusive` says whether the verdict
+    /// is dropped (a thread count is no agent drift, so a thread leak keeps its verdict).
+    Growing {
+        limitation: String,
+        next: String,
+        inconclusive: bool,
+    },
+}
+
+/// The capture that decides a rising column: the thread capture when a thread count rises (the
+/// thread category of NMT rises with it), the NMT category for the other `jvm.nmt.*` columns.
+fn deciding_capture(columns: &[&str], harness: &str) -> String {
+    let threads = columns
+        .iter()
+        .any(|c| matches!(*c, "jvm.threads" | "os.threads"));
+    let nmt: Vec<&str> = columns
+        .iter()
+        .copied()
+        .filter(|c| c.starts_with("jvm.nmt.") && !(threads && *c == "jvm.nmt.thread"))
+        .collect();
+    let nmt_text = format!(
+        "read nmt-diff.txt for {} with dla summarize non-heap: the category that rises says what grows",
+        nmt.join(", ")
+    );
+    match (threads, nmt.is_empty()) {
+        (true, true) => format!(
+            "dla harness run {harness} --capture nonheap   (the thread count keeps rising: read threads.json with dla summarize non-heap for the group that grows; a longer --extra cannot decide a thread leak)"
+        ),
+        (true, false) => format!(
+            "dla harness run {harness} --capture nonheap   (read threads.json with dla summarize non-heap for the thread group that grows; {nmt_text}; a longer --extra does not decide either)"
+        ),
+        (false, _) => format!(
+            "dla harness run {harness} --capture nonheap   ({nmt_text}; a longer --extra does not decide it)"
+        ),
+    }
+}
+
+/// Splits column names into those that keep rising (growth continues) and those that only could
+/// not be judged yet. The thread category of NMT counts as rising when a thread count does: it
+/// rises with the threads and is decided by the same capture.
+fn split_rising(results: &[ColumnResult], names: &[String]) -> (Vec<String>, Vec<String>) {
+    let continues = |n: &str| {
+        results
+            .iter()
+            .any(|r| r.name == n && r.plateau.verdict == PlateauVerdict::Continues)
+    };
+    let threads_rise = continues("jvm.threads") || continues("os.threads");
+    names
+        .iter()
+        .cloned()
+        .partition(|n| continues(n) || (threads_rise && n == "jvm.nmt.thread"))
+}
+
+/// The required columns (NMT categories and thread counts) that are not shown to plateau.
+fn rising_required<'a>(results: &'a [ColumnResult], picked: &pick::Picked) -> Vec<&'a str> {
+    results
+        .iter()
+        .filter(|r| picked.required.contains(&r.name) && r.favors != Favors::NonLeak)
+        .map(|r| r.name.as_str())
+        .collect()
+}
+
+/// The reading of a leak verdict taken from the JVM's non-heap bytes alone. With the class count
+/// flat and a rise under the drift line over the extra window, the checkpoints' own work
+/// (compiled code and metadata of the agent) can make the figure rise, but only when no required
+/// column (a `jvm.nmt.*` category or a thread count) rises itself: then it is that column that is
+/// named. A command-mode harness (a fresh JVM per point) has no checkpoint drift.
+fn agent_drift(
+    results: &[ColumnResult],
+    picked: &pick::Picked,
+    favors: Favors,
+    harness: &str,
+    ctx: DriftCtx,
+) -> Option<Drift> {
+    if ctx.command
+        || favors != Favors::Leak
+        || picked.primary.as_deref() != Some("jvm.nonheap_used")
+    {
+        return None;
+    }
+    let rise = results
+        .iter()
+        .find(|r| r.name == "jvm.nonheap_used")?
+        .plateau
+        .extra_rise?;
+    // Flat: at a plateau, or too jittery to judge with a net rise of a few classes at most. A
+    // class count with a steady net rise (a staircase) is a class leak, however slow.
+    let classes_flat = results
+        .iter()
+        .find(|r| r.name == "jvm.classes_loaded")
+        .is_some_and(|r| match r.plateau.verdict {
+            PlateauVerdict::Plateau => true,
+            PlateauVerdict::Inconclusive => r
+                .plateau
+                .extra_rise
+                .is_some_and(|n| n <= AGENT_DRIFT_CLASS_JITTER),
+            _ => false,
+        });
+    let line = agent_drift_line(ctx.extra);
+    if rise >= line {
+        return None;
+    }
+    if !classes_flat {
+        let class_rise = results
+            .iter()
+            .find(|r| r.name == "jvm.classes_loaded")
+            .and_then(|r| r.plateau.extra_rise)
+            .unwrap_or(0.0);
+        return Some(Drift::Classes(format!(
+            "jvm.classes_loaded rose {class_rise:.0} classes over the extra window (more than the {AGENT_DRIFT_CLASS_JITTER:.0} of an idle driver's jitter) while jvm.nonheap_used rose {:.0} KB: that is no flat class count, so the rise is not blamed on the agent's own drift and the verdict stands; the classes that load say what grows",
+            rise / 1024.0
+        )));
+    }
+    // Only the columns that keep rising: one that could not be judged yet is no growth shown.
+    let names: Vec<String> = rising_required(results, picked)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let (rising, _) = split_rising(results, &names);
+    let rising: Vec<&str> = rising.iter().map(String::as_str).collect();
+    if !rising.is_empty() {
+        let threads = rising
+            .iter()
+            .any(|c| matches!(*c, "jvm.threads" | "os.threads"));
+        // The thread category of NMT rises with the thread count; any other category is not
+        // thread work, so it leaves the verdict open.
+        let others = rising.iter().any(|c| {
+            !matches!(*c, "jvm.threads" | "os.threads") && !(threads && *c == "jvm.nmt.thread")
+        });
+        return Some(Drift::Growing {
+            limitation: format!(
+                "{} {} rising over the extra window (jvm.nonheap_used itself rose {:.0} KB on a flat class count): that is not the agent's own drift, so it is not blamed on it; {}",
+                rising.join(", "),
+                if rising.len() == 1 { "keeps" } else { "keep" },
+                rise / 1024.0,
+                if !others {
+                    "a thread count is no checkpoint work, so the verdict stands and the thread capture decides what holds the threads"
+                } else {
+                    "the result is inconclusive until the NMT category that rises is read"
+                }
+            ),
+            next: deciding_capture(&rising, harness),
+            inconclusive: others,
+        });
+    }
+    Some(Drift::Agent(format!(
+        "jvm.nonheap_used rose {:.0} KB over the extra window with a flat class count: that is under {:.0} KB, the line for what the agent's own checkpoints add by themselves ({:.0} KB per checkpoint measured on an idle driver, with a {:.0}x margin, over {} checkpoints; at least 1 MiB), and no jvm.nmt.* category or thread count rises, so a small JVM cannot decide this and the result is inconclusive, not a leak. Only a rise over that line, a growing jvm.nmt.* category (Symbol or Metaspace) or a harness that does more work per checkpoint ({}) can decide it.",
+        rise / 1024.0,
+        line / 1024.0,
+        AGENT_DRIFT_PER_CHECKPOINT / 1024.0,
+        AGENT_DRIFT_MARGIN,
+        ctx.extra,
+        if ctx.junit {
+            "a larger --step at harness gen --junit"
+        } else {
+            "a larger --step at harness gen"
+        }
+    )))
+}
+
+/// The `next` of a result read as the agent's drift: the harness is rebuilt with more work per
+/// checkpoint, in the mode it ran in.
+fn drift_next(ctx: DriftCtx) -> String {
+    let gen_cmd = if ctx.junit {
+        "dla harness gen --lang jvm --junit --step <larger>"
+    } else {
+        "dla harness gen --lang jvm --driver --step <larger>"
+    };
+    format!(
+        "{gen_cmd}   (a rise under the drift line on a flat class count is the agent's own drift: do not refute or confirm from this result; read the jvm.nmt.* columns, or give each checkpoint more work)"
+    )
+}
+
 /// A run the deadline stopped short is inconclusive: its verdict and supports are dropped.
 fn cap_for_partial(
     partial: &[String],
@@ -622,16 +868,74 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         ));
     }
 
-    // The verdict: the bound column's, or the voting columns together.
-    let deciding: Vec<(Favors, Vec<String>)> = results
-        .iter()
-        .filter(|r| match &picked.primary {
-            Some(p) => &r.name == p,
-            None => r.voting,
-        })
-        .map(|r| (r.favors, r.supports.clone()))
-        .collect();
-    let (favors, supports) = judge::overall(&deciding);
+    // The verdict: the bound column's, or the voting columns together, with the required
+    // columns able to hold a non-leak verdict back.
+    let (favors, supports, held_back) = decide(&results, &picked);
+    // A required column that keeps rising is decided by its capture, a longer run does not; one
+    // that only could not be judged (still levelling off) may show its plateau in a longer window.
+    let split_open = |names: &[String]| split_rising(&results, names);
+    let primary_name = picked.primary.as_deref().unwrap_or("the deciding column");
+    let (held_rising, held_levelling) = split_open(&held_back);
+    if !held_rising.is_empty() {
+        limitations.push(format!(
+            "{} did not plateau: the plateau of {primary_name} is held back, so the result is inconclusive; a longer --extra does not decide a column that keeps rising: capture it (the thread capture for a thread count, the NMT category for jvm.nmt.*) and read that column's series",
+            held_rising.join(", ")
+        ));
+    }
+    if !held_levelling.is_empty() {
+        limitations.push(format!(
+            "{} could not be judged yet (still levelling off): the plateau of {primary_name} is held back, so the result is inconclusive; a longer --extra may show whether it plateaus",
+            held_levelling.join(", ")
+        ));
+    }
+    // An inconclusive result with a required column that is not at a plateau.
+    let open_columns: Vec<String> = if held_back.is_empty() && favors == Favors::Inconclusive {
+        rising_required(&results, &picked)
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let (open_rising, open_levelling) = split_open(&open_columns);
+    if !open_rising.is_empty() {
+        limitations.push(format!(
+            "{} did not plateau and the result is inconclusive; a longer --extra does not decide a column that keeps rising: capture it (the thread capture for a thread count, the NMT category for jvm.nmt.*)",
+            open_rising.join(", ")
+        ));
+    }
+    if !open_levelling.is_empty() {
+        limitations.push(format!(
+            "{} could not be judged yet (still levelling off) and the result is inconclusive; a longer --extra may show whether it plateaus",
+            open_levelling.join(", ")
+        ));
+    }
+    let rising_open: Vec<String> = held_rising.iter().chain(&open_rising).cloned().collect();
+    // A small non-heap rise on a flat class count, with no required column rising, is no evidence
+    // of a leak: the verdict becomes inconclusive, so no refute or confirm is printed for it, and
+    // the caution is shown. When a required column rises, it is named instead, never the drift.
+    let ctx = DriftCtx {
+        extra,
+        command: manifest.mode == HarnessMode::Command,
+        junit: manifest
+            .tools
+            .iter()
+            .any(|t| t == "junit-platform-launcher"),
+    };
+    let drift = agent_drift(&results, &picked, favors, &a.harness, ctx);
+    let (favors, supports) = match &drift {
+        Some(Drift::Agent(_))
+        | Some(Drift::Growing {
+            inconclusive: true, ..
+        }) => (Favors::Inconclusive, Vec::new()),
+        _ => (favors, supports),
+    };
+    match &drift {
+        Some(Drift::Agent(note)) => limitations.push(note.clone()),
+        Some(Drift::Growing { limitation, .. }) => limitations.push(limitation.clone()),
+        Some(Drift::Classes(note)) => limitations.push(note.clone()),
+        None => {}
+    }
     // A run the deadline cut short measured less than it planned: whatever its columns
     // say, it never favours non-leak (and never confirms) on its own.
     let (favors, supports) = cap_for_partial(&partial, favors, supports);
@@ -742,15 +1046,41 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         .push("gate and plateau thresholds are provisional (not calibrated)".to_owned());
     let evidence = tc.add_evidence(&mut ledger, spec)?;
 
-    let next = next_commands(
-        &ledger,
-        bound.as_ref(),
-        &a.harness,
-        favors,
-        &supports,
-        &evidence,
-        extra,
-    );
+    let next = match &drift {
+        Some(Drift::Agent(_)) => vec![drift_next(ctx)],
+        Some(Drift::Growing {
+            next, inconclusive, ..
+        }) => {
+            let mut n = vec![next.clone()];
+            if !inconclusive {
+                n.extend(next_commands(
+                    &ledger,
+                    bound.as_ref(),
+                    &a.harness,
+                    favors,
+                    &supports,
+                    &evidence,
+                    extra,
+                ));
+            }
+            n
+        }
+        None | Some(Drift::Classes(_))
+            if favors == Favors::Inconclusive && !rising_open.is_empty() =>
+        {
+            let cols: Vec<&str> = rising_open.iter().map(String::as_str).collect();
+            vec![deciding_capture(&cols, &a.harness)]
+        }
+        None | Some(Drift::Classes(_)) => next_commands(
+            &ledger,
+            bound.as_ref(),
+            &a.harness,
+            favors,
+            &supports,
+            &evidence,
+            extra,
+        ),
+    };
     let mut out = Map::new();
     out.insert("ok".into(), json!(true));
     out.insert("command".into(), json!("alloc-test"));
@@ -762,6 +1092,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     out.insert("finding".into(), json!(a.finding));
     out.insert("basis".into(), json!(picked.basis));
     out.insert("purge".into(), json!(purge_kind));
+    if let Some(Drift::Agent(note)) = &drift {
+        out.insert("caution".into(), json!(note));
+    }
     if !partial.is_empty() {
         out.insert(
             "partial".into(),
@@ -919,6 +1252,430 @@ mod tests {
     use dla_core::series::{
         Axis, Column, ColumnScope, Point, SeriesRegion, SeriesSource, SeriesSourceKind,
     };
+
+    #[test]
+    fn a_growing_required_column_holds_back_the_plateau_of_the_primary() {
+        let result = |name: &str, voting: bool, favors: Favors| ColumnResult {
+            name: name.to_owned(),
+            voting,
+            plateau: Plateau {
+                main_slope: None,
+                extra_slope: None,
+                extra_rise: None,
+                noise: None,
+                verdict: PlateauVerdict::Plateau,
+            },
+            purge: None,
+            gc: None,
+            favors,
+            supports: vec![format!("{name} supports")],
+        };
+        let picked = pick::Picked {
+            tested: vec!["jvm.nonheap_used".into(), "jvm.nmt.symbol".into()],
+            voting: vec!["jvm.nonheap_used".into()],
+            primary: Some("jvm.nonheap_used".into()),
+            required: vec!["jvm.nmt.symbol".into()],
+            basis: String::new(),
+        };
+        // The pools plateau and Symbol keeps rising: inconclusive, and the column is named.
+        let results = [
+            result("jvm.nonheap_used", true, Favors::NonLeak),
+            result("jvm.nmt.symbol", false, Favors::Leak),
+        ];
+        let (favors, supports, held) = decide(&results, &picked);
+        assert_eq!(favors, Favors::Inconclusive);
+        assert!(supports.is_empty());
+        assert_eq!(held, ["jvm.nmt.symbol"]);
+        // Both plateau: the primary's verdict stands.
+        let results = [
+            result("jvm.nonheap_used", true, Favors::NonLeak),
+            result("jvm.nmt.symbol", false, Favors::NonLeak),
+        ];
+        let (favors, supports, held) = decide(&results, &picked);
+        assert_eq!(favors, Favors::NonLeak);
+        assert_eq!(supports, ["jvm.nonheap_used supports"]);
+        assert!(held.is_empty());
+        // A leak of the primary is not held back by anything.
+        let results = [
+            result("jvm.nonheap_used", true, Favors::Leak),
+            result("jvm.nmt.symbol", false, Favors::NonLeak),
+        ];
+        assert_eq!(decide(&results, &picked).0, Favors::Leak);
+    }
+
+    fn drift_result(
+        name: &str,
+        rise: f64,
+        verdict: PlateauVerdict,
+        favors: Favors,
+    ) -> ColumnResult {
+        ColumnResult {
+            name: name.to_owned(),
+            voting: true,
+            plateau: Plateau {
+                main_slope: None,
+                extra_slope: None,
+                extra_rise: Some(rise),
+                noise: None,
+                verdict,
+            },
+            purge: None,
+            gc: None,
+            favors,
+            supports: vec![],
+        }
+    }
+
+    const CTX: DriftCtx = DriftCtx {
+        extra: 20,
+        command: false,
+        junit: false,
+    };
+
+    fn nonheap_picked(required: &[&str]) -> pick::Picked {
+        pick::Picked {
+            primary: Some("jvm.nonheap_used".into()),
+            required: required.iter().map(|c| (*c).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_small_non_heap_leak_verdict_on_a_flat_class_count_carries_the_agent_caution() {
+        let result = |name: &str, rise: f64, verdict: PlateauVerdict| {
+            drift_result(name, rise, verdict, Favors::Leak)
+        };
+        let picked = nonheap_picked(&[]);
+        let flat = result("jvm.classes_loaded", 0.0, PlateauVerdict::Plateau);
+        let small = [
+            result("jvm.nonheap_used", 90_000.0, PlateauVerdict::Continues),
+            flat,
+        ];
+        let Some(Drift::Agent(note)) = agent_drift(&small, &picked, Favors::Leak, "H1", CTX) else {
+            panic!("an agent caution")
+        };
+        assert!(
+            note.contains("88 KB")
+                && note.contains("inconclusive")
+                && note.contains("under 1024 KB")
+                && !note.contains("well over")
+                && note.trim_end().ends_with("decide it."),
+            "{note}"
+        );
+        // A big rise, a rising class count or another verdict gets none.
+        let big = [
+            result("jvm.nonheap_used", 9e6, PlateauVerdict::Continues),
+            result("jvm.classes_loaded", 0.0, PlateauVerdict::Plateau),
+        ];
+        assert!(agent_drift(&big, &picked, Favors::Leak, "H1", CTX).is_none());
+        let classes = [
+            result("jvm.nonheap_used", 90_000.0, PlateauVerdict::Continues),
+            result("jvm.classes_loaded", 500.0, PlateauVerdict::Continues),
+        ];
+        assert!(matches!(
+            agent_drift(&classes, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Classes(_))
+        ));
+        assert!(agent_drift(&small, &picked, Favors::Inconclusive, "H1", CTX).is_none());
+        // Command mode has no checkpoint drift: a fresh JVM per point.
+        let command = DriftCtx {
+            command: true,
+            ..CTX
+        };
+        assert!(agent_drift(&small, &picked, Favors::Leak, "H1", command).is_none());
+    }
+
+    #[test]
+    fn the_drift_line_scales_with_the_extra_window() {
+        assert_eq!(agent_drift_line(20), AGENT_DRIFT_RISE);
+        assert_eq!(agent_drift_line(25), AGENT_DRIFT_RISE);
+        // 20 KB per checkpoint with a 2x margin over 100 checkpoints.
+        assert_eq!(agent_drift_line(100), 2.0 * 20.0 * 1024.0 * 100.0);
+        // A rise of 1.5 MB is over the line at the default window and drift at extra 100.
+        let result = |name: &str, rise: f64, verdict: PlateauVerdict| {
+            drift_result(name, rise, verdict, Favors::Leak)
+        };
+        let rows = [
+            result("jvm.nonheap_used", 1.5e6, PlateauVerdict::Continues),
+            result("jvm.classes_loaded", 0.0, PlateauVerdict::Plateau),
+        ];
+        let picked = nonheap_picked(&[]);
+        assert!(agent_drift(&rows, &picked, Favors::Leak, "H1", CTX).is_none());
+        let wide = DriftCtx { extra: 100, ..CTX };
+        assert!(matches!(
+            agent_drift(&rows, &picked, Favors::Leak, "H1", wide),
+            Some(Drift::Agent(_))
+        ));
+    }
+
+    #[test]
+    fn a_rising_required_column_is_named_and_never_blamed_on_the_agent() {
+        let rows = |col: &str| {
+            [
+                drift_result(
+                    "jvm.nonheap_used",
+                    350_000.0,
+                    PlateauVerdict::Continues,
+                    Favors::Leak,
+                ),
+                drift_result(
+                    "jvm.classes_loaded",
+                    0.0,
+                    PlateauVerdict::Plateau,
+                    Favors::NonLeak,
+                ),
+                drift_result(col, 40.0, PlateauVerdict::Continues, Favors::Leak),
+            ]
+        };
+        // A thread leak: the verdict stands, and the thread capture decides.
+        let picked = nonheap_picked(&["jvm.threads"]);
+        let Some(Drift::Growing {
+            limitation,
+            next,
+            inconclusive,
+        }) = agent_drift(&rows("jvm.threads"), &picked, Favors::Leak, "H1", CTX)
+        else {
+            panic!("the growing column is named")
+        };
+        assert!(!inconclusive);
+        assert!(
+            limitation.contains("jvm.threads") && !limitation.contains("agent's own checkpoints")
+        );
+        assert!(
+            next.starts_with("dla harness run H1 --capture nonheap"),
+            "{next}"
+        );
+        // An NMT category: inconclusive, and the category is named.
+        let picked = nonheap_picked(&["jvm.nmt.symbol"]);
+        let Some(Drift::Growing {
+            limitation,
+            next,
+            inconclusive,
+        }) = agent_drift(&rows("jvm.nmt.symbol"), &picked, Favors::Leak, "H1", CTX)
+        else {
+            panic!("the growing column is named")
+        };
+        assert!(inconclusive && limitation.contains("jvm.nmt.symbol"));
+        assert!(
+            next.contains("nmt-diff.txt") && next.contains("jvm.nmt.symbol"),
+            "{next}"
+        );
+        // The same required column at a plateau leaves the agent caution.
+        let flat = [
+            drift_result(
+                "jvm.nonheap_used",
+                350_000.0,
+                PlateauVerdict::Continues,
+                Favors::Leak,
+            ),
+            drift_result(
+                "jvm.classes_loaded",
+                0.0,
+                PlateauVerdict::Plateau,
+                Favors::NonLeak,
+            ),
+            drift_result(
+                "jvm.nmt.symbol",
+                0.0,
+                PlateauVerdict::Plateau,
+                Favors::NonLeak,
+            ),
+        ];
+        assert!(matches!(
+            agent_drift(&flat, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Agent(_))
+        ));
+    }
+
+    #[test]
+    fn a_class_count_with_a_net_rise_is_not_flat() {
+        let picked = nonheap_picked(&[]);
+        let rows = |class_rise: f64, class_verdict| {
+            [
+                drift_result(
+                    "jvm.nonheap_used",
+                    360_000.0,
+                    PlateauVerdict::Continues,
+                    Favors::Leak,
+                ),
+                drift_result(
+                    "jvm.classes_loaded",
+                    class_rise,
+                    class_verdict,
+                    Favors::Leak,
+                ),
+            ]
+        };
+        // A staircase (one hidden class every few checkpoints) reads inconclusive with a net
+        // rise of 19 classes: a class leak, not the agent's drift.
+        for n in [19.0, 6.0, 4.0] {
+            let stair = rows(n, PlateauVerdict::Inconclusive);
+            let Some(Drift::Classes(note)) = agent_drift(&stair, &picked, Favors::Leak, "H1", CTX)
+            else {
+                panic!("a net rise of {n} classes is no flat class count")
+            };
+            assert!(note.contains("jvm.classes_loaded"), "{note}");
+        }
+        // The limit itself (3 classes) is still jitter.
+        let edge = rows(3.0, PlateauVerdict::Inconclusive);
+        assert!(matches!(
+            agent_drift(&edge, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Agent(_))
+        ));
+        // Jitter of a class or two on an idle driver is still flat.
+        let jitter = rows(1.0, PlateauVerdict::Inconclusive);
+        assert!(matches!(
+            agent_drift(&jitter, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Agent(_))
+        ));
+    }
+
+    #[test]
+    fn a_required_column_that_only_could_not_be_judged_is_no_growth() {
+        let rows = [
+            drift_result(
+                "jvm.nonheap_used",
+                350_000.0,
+                PlateauVerdict::Continues,
+                Favors::Leak,
+            ),
+            drift_result(
+                "jvm.classes_loaded",
+                0.0,
+                PlateauVerdict::Plateau,
+                Favors::NonLeak,
+            ),
+            drift_result(
+                "jvm.nmt.code",
+                35_000.0,
+                PlateauVerdict::Inconclusive,
+                Favors::Inconclusive,
+            ),
+        ];
+        let picked = nonheap_picked(&["jvm.nmt.code"]);
+        // Not shown to grow: the agent caution, not a rising column that drops the verdict.
+        assert!(matches!(
+            agent_drift(&rows, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Agent(_))
+        ));
+    }
+
+    #[test]
+    fn the_nmt_thread_category_rises_with_the_thread_count() {
+        let rows = [
+            drift_result(
+                "jvm.nmt.thread",
+                1e7,
+                PlateauVerdict::Inconclusive,
+                Favors::Leak,
+            ),
+            drift_result("jvm.threads", 40.0, PlateauVerdict::Continues, Favors::Leak),
+            drift_result(
+                "jvm.nmt.class",
+                1e6,
+                PlateauVerdict::Inconclusive,
+                Favors::Leak,
+            ),
+        ];
+        let names: Vec<String> = ["jvm.nmt.thread", "jvm.nmt.class", "jvm.threads"]
+            .map(str::to_owned)
+            .to_vec();
+        let (rising, levelling) = split_rising(&rows, &names);
+        assert_eq!(rising, ["jvm.nmt.thread", "jvm.threads"]);
+        assert_eq!(levelling, ["jvm.nmt.class"]);
+        // Without a rising thread count the category is judged on its own.
+        let (rising, _) = split_rising(&rows[..1], &names[..1]);
+        assert!(rising.is_empty());
+    }
+
+    #[test]
+    fn a_thread_leak_with_its_nmt_category_points_at_the_thread_capture() {
+        let rows = [
+            drift_result(
+                "jvm.nonheap_used",
+                430_000.0,
+                PlateauVerdict::Continues,
+                Favors::Leak,
+            ),
+            drift_result(
+                "jvm.classes_loaded",
+                0.0,
+                PlateauVerdict::Plateau,
+                Favors::NonLeak,
+            ),
+            drift_result(
+                "jvm.nmt.thread",
+                4e5,
+                PlateauVerdict::Continues,
+                Favors::Leak,
+            ),
+            drift_result("jvm.threads", 40.0, PlateauVerdict::Continues, Favors::Leak),
+            drift_result("os.threads", 40.0, PlateauVerdict::Continues, Favors::Leak),
+        ];
+        let picked = nonheap_picked(&["jvm.nmt.thread", "jvm.threads", "os.threads"]);
+        let Some(Drift::Growing {
+            limitation,
+            next,
+            inconclusive,
+        }) = agent_drift(&rows, &picked, Favors::Leak, "H1", CTX)
+        else {
+            panic!("the growing columns are named")
+        };
+        assert!(!inconclusive);
+        assert!(
+            next.contains("threads.json") && !next.contains("nmt-diff"),
+            "{next}"
+        );
+        assert!(limitation.contains("keep rising"), "{limitation}");
+        // Another NMT category beside the threads leaves the verdict open and is named too.
+        let mut mixed = rows;
+        mixed[2] = drift_result(
+            "jvm.nmt.symbol",
+            4e5,
+            PlateauVerdict::Continues,
+            Favors::Leak,
+        );
+        let picked = nonheap_picked(&["jvm.nmt.symbol", "jvm.threads", "os.threads"]);
+        let Some(Drift::Growing {
+            next, inconclusive, ..
+        }) = agent_drift(&mixed, &picked, Favors::Leak, "H1", CTX)
+        else {
+            panic!("named")
+        };
+        assert!(inconclusive);
+        assert!(
+            next.contains("threads.json") && next.contains("nmt-diff.txt"),
+            "{next}"
+        );
+    }
+
+    #[test]
+    fn a_column_that_only_could_not_be_judged_still_gets_the_longer_window() {
+        let rows = [
+            drift_result("jvm.threads", 40.0, PlateauVerdict::Continues, Favors::Leak),
+            drift_result(
+                "jvm.nmt.code",
+                1.0,
+                PlateauVerdict::Inconclusive,
+                Favors::Inconclusive,
+            ),
+        ];
+        let names = vec!["jvm.threads".to_owned(), "jvm.nmt.code".to_owned()];
+        let (rising, levelling) = split_rising(&rows, &names);
+        assert_eq!(rising, ["jvm.threads"]);
+        assert_eq!(levelling, ["jvm.nmt.code"]);
+    }
+
+    #[test]
+    fn the_drift_next_keeps_the_junit_mode() {
+        assert!(drift_next(CTX).contains("--driver --step <larger>"));
+        let junit = DriftCtx { junit: true, ..CTX };
+        let n = drift_next(junit);
+        assert!(
+            n.contains("--junit") && n.contains("--step <larger>") && !n.contains("--driver"),
+            "{n}"
+        );
+    }
 
     #[test]
     fn a_partial_run_never_favours_either_side() {

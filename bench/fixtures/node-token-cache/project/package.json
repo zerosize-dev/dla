@@ -1,0 +1,14 @@
+{
+  "name": "edge-auth",
+  "version": "0.9.4",
+  "private": true,
+  "description": "Checks bearer tokens at the edge and remembers the ones it has already verified.",
+  "main": "src/gateway.js",
+  "scripts": {
+    "test": "node --test",
+    "load": "node load.js --iterations 20000"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

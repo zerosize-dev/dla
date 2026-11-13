@@ -128,9 +128,17 @@ pub struct WorkerCoverage {
     /// Workload iterations run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iterations: Option<u64>,
+    /// JVM: distinct top-level classes of the project a harness run loaded. A run that executed
+    /// project code but matched no discovered entry point still shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_classes: Option<u64>,
     /// Source files skipped because they lie outside the run's scope.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub out_of_scope: u64,
+    /// Source files of the runtime that are build logic (Gradle scripts, `buildSrc`) and
+    /// were not read: they run in the build tool's process, not in the measured one.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub build_logic: u64,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -198,7 +206,9 @@ impl WorkerCoverage {
             backends: BTreeMap::new(),
             entry_points: EntryPoints::default(),
             iterations: None,
+            project_classes: None,
             out_of_scope: 0,
+            build_logic: 0,
         }
     }
 }
@@ -278,6 +288,13 @@ impl CoverageManifest {
     /// Records how many workload iterations ran for a worker.
     pub fn set_iterations(&mut self, worker: &str, iterations: u64) {
         self.worker_mut(worker).iterations = Some(iterations);
+    }
+
+    /// Records how many classes of the project a harness run loaded; the larger count of the
+    /// runs of a worker stays.
+    pub fn set_project_classes(&mut self, worker: &str, classes: u64) {
+        let w = self.worker_mut(worker);
+        w.project_classes = Some(w.project_classes.map_or(classes, |n| n.max(classes)));
     }
 
     /// Adds entry points that were exercised, keeping the list sorted and without

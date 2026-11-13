@@ -84,6 +84,34 @@ fn test_files_and_build_output_are_not_enumerated() {
 }
 
 #[test]
+fn kotlin_build_logic_is_not_enumerated_and_is_counted() {
+    let holder = |what: &str| {
+        format!("import java.util.Properties\n\nval {what} = mutableListOf<String>()\n")
+    };
+    let (_d, ctx) = project(&[
+        ("build.gradle.kts", &holder("extraTags")),
+        ("docker.gradle.kts", &holder("dockerProperties")),
+        (
+            "buildSrc/src/main/kotlin/Conventions.kt",
+            "object Conventions {\n    val registry = mutableMapOf<String, String>()\n}\n",
+        ),
+        (
+            "src/main/kotlin/app/Cache.kt",
+            "package app\n\nobject Cache {\n    val entries = mutableMapOf<String, String>()\n}\n",
+        ),
+    ]);
+    let out = census(&ctx, Runtime::Jvm).unwrap();
+    assert_eq!(out.candidates, 1, "{out:?}");
+    assert_eq!(out.summary["build_logic"], 3);
+    let ledger = ctx.ledger().unwrap();
+    let sites: Vec<_> = ledger.findings().filter_map(|f| f.site.clone()).collect();
+    assert_eq!(sites, ["src/main/kotlin/app/Cache.kt:4"]);
+    let cov = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+    assert_eq!(cov.workers["jvm"].build_logic, 3);
+    assert_eq!(cov.workers["jvm"].out_of_scope, 0);
+}
+
+#[test]
 fn class_files_take_precedence_and_cover_their_source() {
     let (d, ctx) = project(&[(
         "src/a/b/Foo.java",

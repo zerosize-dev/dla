@@ -1,0 +1,25 @@
+schema_version = 2
+id = "node-signal-compose-24"
+runtime = "node"
+category = "archetype-free"
+pair = "node-signal-compose-22"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The export gateway's heap climbs slowly while it serves statement exports: after every replay of requests the live heap is a little larger than after the previous replay, although each request finishes and nothing is kept per account. The process is restarted at the weekend to keep it healthy. Find out what is holding the memory.
+"""
+
+[toolchain]
+node = "24.13.1"
+
+[[leak]]
+id = "L1"
+site = "src/handler.js:12"
+lines = [12, 12]
+alt_sites = ["src/lifecycle.js:6"]
+holder = "registration-table"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

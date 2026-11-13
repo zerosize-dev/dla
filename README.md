@@ -47,6 +47,7 @@ Commands:
 | Command | What it does |
 |---|---|
 | `dla run init` | Creates a run under `.dla/` (flags include `--budget` and `--session-id`) |
+| `dla run extend <dur>` | Adds time to the run budget (and to every unfinished worker's deadline); records a static run-config evidence record |
 | `dla run status` | Shows run id, entry, stage, status, workers, counts and the first blocking items (in worker mode, the worker's own) |
 | `dla run dispatch --workers <rt,...>` | Registers one worker per runtime with an equal share of the remaining budget and prints what each worker needs |
 | `dla run abort` | Stops the processes DLA started and runs the cleanup of what it attached to (never kills an attached target) |
@@ -192,10 +193,14 @@ the skill trigger.
 
 The plugin has three optional settings, asked for at install time or set later with
 `/plugin configure`: value redaction (`shapes` by default), the highest privilege tier DLA may
-offer, and the default time budget for a run (60 minutes). Claude Code does not export these to the
+offer, and the default time budget for a run (`auto`). Claude Code does not export these to the
 Bash tool, so the skill passes them to `dla` as arguments (for example `--budget`). The binary has
-a default only for the time budget: 60 minutes, overridable with `--budget` or the
-`DLA_DEFAULT_BUDGET` environment variable. The other two settings reach `dla` only through the
+a default only for the time budget: `auto`, overridable with `--budget` or the
+`DLA_DEFAULT_BUDGET` environment variable. `auto` starts at 60 minutes and is sized to the project
+by the first passing gate check at the sweep stage or later (in a dispatched run each worker's
+first passing check may raise it until every worker has settled): `20 + 15 x runtimes + 3 x
+candidates` minutes, between 60 minutes and 3 hours. A fixed value (`90s`, `45m`, `2h`) is never
+resized, and `dla run extend <dur>` adds time to either. The other two settings reach `dla` only through the
 skill.
 
 On Windows, install Git for Windows: the plugin's hooks run in Git Bash, and so does the `bin/dla`

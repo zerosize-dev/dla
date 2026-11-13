@@ -63,17 +63,13 @@ pub fn has_kotlin_sources(root: &Path) -> bool {
             if path.is_dir() {
                 let skip = matches!(
                     name.as_str(),
-                    "target" | "node_modules" | "out" | "build" | ".git" | ".gradle"
+                    "target" | "node_modules" | "out" | "build" | ".git" | ".gradle" | "buildSrc"
                 );
                 if !skip && depth < 6 && walk(&path, depth + 1) {
                     return true;
                 }
             } else if name.ends_with(".kt")
-                || (name.ends_with(".kts")
-                    && !matches!(
-                        name.as_str(),
-                        "build.gradle.kts" | "settings.gradle.kts" | "init.gradle.kts"
-                    ))
+                || (name.ends_with(".kts") && !dla_core::paths::is_build_logic(&name))
             {
                 return true;
             }
@@ -314,6 +310,8 @@ mod tests {
         touch(&d.path().join("build.gradle.kts"));
         touch(&d.path().join("sub/settings.gradle.kts"));
         touch(&d.path().join("init.gradle.kts"));
+        touch(&d.path().join("docker.gradle.kts"));
+        touch(&d.path().join("buildSrc/src/main/kotlin/Conventions.kt"));
         assert!(!has_kotlin_sources(d.path()));
         touch(&d.path().join("scripts/tool.main.kts"));
         assert!(has_kotlin_sources(d.path()));

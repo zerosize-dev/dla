@@ -60,8 +60,13 @@ string_enum! {
         PrivilegeDeclined = "privilege_declined",
         /// A required tool is missing.
         ToolMissing = "tool_missing",
-        /// The time budget ran out.
+        /// The time budget ran out: the deadline is near, or a command was refused for
+        /// time. Not a stand-in for any other reason.
         TimeBudget = "time_budget",
+        /// Measured, and the measurement cannot decide: too few points, no plateau yet, a
+        /// single snapshot, or a discriminator that came back inconclusive. Only
+        /// `unresolved` takes it, and only with a measurement tied to the finding's family.
+        Inconclusive = "inconclusive",
     }
 }
 

@@ -1,0 +1,24 @@
+schema_version = 1
+id = "python-retry-chain"
+runtime = "python"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The webhook delivery worker's resident memory climbs with the number of events
+it has sent. It is restarted every few days when the container reaches its
+limit, and the climb starts again from the first hour. Find out what is
+holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "dispatch/sender.py:27"
+lines = [27, 27]
+alt_sites = ["dispatch/health.py:3", "dispatch/health.py:8", "dispatch/sender.py:19", "dispatch/sender.py:30"]
+holder = "static/global"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

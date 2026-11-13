@@ -3,8 +3,10 @@ package dla.harness;
 import java.io.IOException;
 import java.lang.instrument.Instrumentation;
 import java.lang.management.ClassLoadingMXBean;
+import java.lang.management.CompilationMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryPoolMXBean;
 import java.lang.ref.Reference;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Field;
@@ -23,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -35,17 +38,22 @@ import javax.management.ObjectName;
  * entry point catches Throwable.
  *
  * <p>Environment: DLA_HARNESS_OUT, DLA_HARNESS_PROBES (probes.json), DLA_PURGE, DLA_PROJECT,
- * DLA_TICK_MS, DLA_ITER.
+ * DLA_PROJECT_PACKAGES (comma separated packages of the project's own sources), DLA_TICK_MS, DLA_ITER.
  */
 public final class DlaDump {
     /** Upper bound of objects visited by one reachable-object walk. */
     public static final int MAX_OBJECTS = 2_000_000;
     private static final int TYPES_TOP = 20;
+    /** Upper bound of the classes listed in the coverage section after the project's own. */
     private static final int COVERAGE_CAP = 4000;
+    /** Upper bound of the project's own classes listed in the coverage section. */
+    private static final int PROJECT_CAP = 20000;
     private static final Object PRESENT = new Object();
 
     private static volatile Instrumentation inst;
     private static volatile boolean checkpointWritten;
+    /** How many checkpoint records this JVM has written (the coverage section follows a schedule). */
+    private static volatile int checkpointCount;
 
     private DlaDump() {}
 
@@ -95,7 +103,7 @@ public final class DlaDump {
             String[] tools = {"com.sun.tools.", "sun.tools.", "jdk.compiler", "jdk.jartool", "jdk.jshell",
                 "jdk.jdeps", "jdk.javadoc", "jdk.jcmd", "jdk.jlink", "org.apache.maven", "org.codehaus.plexus",
                 "plexus-classworlds", "org.gradle", "GradleWrapperMain", "gradle-launcher", "gradle-wrapper",
-                "org.jetbrains.kotlin", "org.apache.tools.ant", "sbt-launch"};
+                "org.jetbrains.kotlin", "org.apache.tools.ant", "sbt-launch", "net.bytebuddy.agent.Attacher"};
             for (String t : tools) {
                 if (head.contains(t)) {
                     return true;
@@ -115,6 +123,7 @@ public final class DlaDump {
      */
     public static void checkpoint(long x, boolean last) {
         checkpointWritten = true;
+        checkpointCount++;
         dump("checkpoint", x, last);
     }
 
@@ -151,6 +160,39 @@ public final class DlaDump {
         }
     }
 
+    private static boolean warmed;
+    /** Rounds of the checkpoint path run once before the first checkpoint reads its values. */
+    private static final int WARM_ROUNDS = envLong("DLA_WARM_ROUNDS") == null ? 30 : envLong("DLA_WARM_ROUNDS").intValue();
+
+    /**
+     * Runs the checkpoint's own readings (heap and pool values, the NMT summary, the class histogram,
+     * a few probe walks) a number of times before the first one is taken. Their code is compiled and
+     * their metadata loaded only after dozens of calls, which would otherwise show up as non-heap
+     * growth over the first checkpoints of a small JVM: a rise the alloc-test's main and extra windows
+     * would share out between them. Bounded in time, so a large heap pays at most a few seconds once, at the first checkpoint of a driver.
+     */
+    private static void warmUp() {
+        if (warmed) {
+            return;
+        }
+        warmed = true;
+        long end = System.nanoTime() + 3_000_000_000L;
+        for (int i = 0; i < WARM_ROUNDS && System.nanoTime() < end; i++) {
+            List<String> sink = new ArrayList<>();
+            try {
+                jvmHeap();
+                jvmOther(sink);
+                osValues();
+                types(sink);
+                if (i < 3) {
+                    probes(sink);
+                }
+            } catch (Throwable ignored) {
+                return;
+            }
+        }
+    }
+
     private static void build(Map<String, Object> rec, List<String> lim, String phase, Long x, boolean last) {
         boolean tick = phase.equals("tick");
         rec.put("dla_harness", 1);
@@ -175,6 +217,12 @@ public final class DlaDump {
                 osBeforeGc = new LinkedHashMap<>(osValues());
                 osBeforeGc.put("jvm.heap_used", preGc.get("jvm.heap_used"));
             }
+            // After the pre-GC readings: the warm-up's class histograms force full GCs, which would
+            // turn those readings into post-GC ones. Only a checkpoint warms up: a command-mode exit
+            // record is a fresh JVM's first record, where the warm-up would cost time for no gain.
+            if (phase.equals("checkpoint")) {
+                warmUp();
+            }
             System.gc();
             System.gc();
         }
@@ -194,7 +242,12 @@ public final class DlaDump {
         }
         rec.put("probes", probes(lim));
         rec.put("types", types(lim));
-        if (phase.equals("exit")) {
+        // A driver's last checkpoint is its final record (the exit hook stays quiet after checkpoints),
+        // but a driver cut off by its timeout never writes it (and is killed before any exit hook):
+        // the first, second, fourth, eighth... checkpoint carry the section too, so a run that ends
+        // early still says which classes it loaded. The harness takes the union of all of them.
+        if (phase.equals("exit")
+            || (phase.equals("checkpoint") && (last || Integer.bitCount(checkpointCount) == 1))) {
             Map<String, Object> cov = coverage(lim);
             if (cov != null) {
                 rec.put("coverage", cov);
@@ -227,18 +280,86 @@ public final class DlaDump {
         v.put("jvm.threads", ManagementFactory.getThreadMXBean().getThreadCount());
         ClassLoadingMXBean cl = ManagementFactory.getClassLoadingMXBean();
         v.put("jvm.classes_loaded", cl.getLoadedClassCount());
+        v.put("jvm.classes_unloaded", cl.getUnloadedClassCount());
+        jit(v, lim);
+        boolean nmtOn = false;
         try {
             String nmt = diag("vmNativeMemory", "summary");
             Matcher m = Pattern.compile("Total:\\s+reserved=(\\d+)(\\w+),\\s+committed=(\\d+)(\\w+)").matcher(nmt);
             if (m.find()) {
+                nmtOn = true;
                 v.put("jvm.nmt_committed", Long.parseLong(m.group(3)) * unit(m.group(4)));
+                nmtCategories(nmt, v);
             } else {
-                lim.add("NMT off: jvm.nmt_committed unavailable (run with -XX:NativeMemoryTracking=summary)");
+                lim.add("NMT off: jvm.nmt_committed and the jvm.nmt.<category> columns unavailable (run with -XX:NativeMemoryTracking=summary)");
             }
         } catch (Throwable t) {
             lim.add("NMT unavailable: " + t);
         }
+        if (!nmtOn) {
+            pools(v);
+        }
         return v;
+    }
+
+    /** The NMT categories that explain non-heap growth; each becomes the column {@code jvm.nmt.<slug>}. */
+    private static final Set<String> NMT_CATEGORIES =
+        Set.of("metaspace", "class", "code", "compiler", "symbol", "arena_chunk", "thread");
+
+    private static final Pattern NMT_CATEGORY =
+        Pattern.compile("(?m)^-\\s+(.+?)\\s+\\(reserved=\\d+\\w+,\\s+committed=(\\d+)(\\w+)");
+
+    /** Committed bytes of each allow-listed category of a {@code VM.native_memory summary}. */
+    static void nmtCategories(String nmt, Map<String, Object> v) {
+        Matcher m = NMT_CATEGORY.matcher(nmt);
+        while (m.find()) {
+            String slug = m.group(1).trim().toLowerCase().replace(' ', '_');
+            if (NMT_CATEGORIES.contains(slug)) {
+                v.put("jvm.nmt." + slug, Long.parseLong(m.group(2)) * unit(m.group(3)));
+            }
+        }
+    }
+
+    /** Total compilation time in seconds, when the JVM reports it (otherwise a limitation). */
+    private static void jit(Map<String, Object> v, List<String> lim) {
+        try {
+            CompilationMXBean c = ManagementFactory.getCompilationMXBean();
+            if (c != null && c.isCompilationTimeMonitoringSupported()) {
+                v.put("jvm.jit_seconds", c.getTotalCompilationTime() / 1000.0);
+                return;
+            }
+        } catch (Throwable ignored) {
+            // fall through to the limitation
+        }
+        lim.add("compilation time monitoring is not supported by this JVM: jvm.jit_seconds unavailable");
+    }
+
+    /** Metaspace and code-cache pool readings, for a JVM whose native memory tracking is off. */
+    private static void pools(Map<String, Object> v) {
+        try {
+            long meta = 0;
+            long code = 0;
+            boolean haveMeta = false;
+            boolean haveCode = false;
+            for (MemoryPoolMXBean p : ManagementFactory.getMemoryPoolMXBeans()) {
+                String n = p.getName();
+                if (n.equals("Metaspace")) {
+                    meta += p.getUsage().getUsed();
+                    haveMeta = true;
+                } else if (n.startsWith("CodeHeap") || n.equals("CodeCache")) {
+                    code += p.getUsage().getUsed();
+                    haveCode = true;
+                }
+            }
+            if (haveMeta) {
+                v.put("jvm.metaspace_used", meta);
+            }
+            if (haveCode) {
+                v.put("jvm.codecache_used", code);
+            }
+        } catch (Throwable ignored) {
+            // the pool columns are optional
+        }
     }
 
     private static long unit(String u) {
@@ -368,7 +489,8 @@ public final class DlaDump {
             return null;
         }
         Path project = projectRoot();
-        List<String> own = new ArrayList<>();
+        List<String> packages = projectPackages();
+        Map<String, Class<?>> own = new java.util.TreeMap<>();
         List<String> other = new ArrayList<>();
         for (Class<?> c : in.getAllLoadedClasses()) {
             try {
@@ -383,8 +505,8 @@ public final class DlaDump {
                 if (n.startsWith("java.") || n.startsWith("jdk.") || n.startsWith("sun.")) {
                     continue;
                 }
-                if (project != null && underProject(c, project)) {
-                    own.add(n);
+                if (isProjectClass(c, project, packages)) {
+                    own.put(n, c);
                 } else {
                     other.add(n);
                 }
@@ -392,23 +514,47 @@ public final class DlaDump {
                 // skip this class
             }
         }
-        own.sort(null);
         other.sort(null);
-        List<Object> items = new ArrayList<>(own);
-        for (String n : other) {
-            if (items.size() >= COVERAGE_CAP) {
-                lim.add("coverage capped at " + COVERAGE_CAP + " classes");
+        // The project's classes are never cut by the cap: it only limits the others.
+        List<Object> items = new ArrayList<>();
+        for (String n : own.keySet()) {
+            if (items.size() >= PROJECT_CAP) {
+                lim.add("coverage capped at " + PROJECT_CAP + " project classes");
                 break;
             }
             items.add(n);
         }
-        if (items.size() > COVERAGE_CAP) {
-            items = new ArrayList<>(items.subList(0, COVERAGE_CAP));
-            lim.add("coverage capped at " + COVERAGE_CAP + " classes");
+        int budget = items.size() + COVERAGE_CAP;
+        for (String n : other) {
+            if (items.size() >= budget) {
+                lim.add("coverage lists the first " + COVERAGE_CAP + " classes that are not the project's of "
+                    + other.size());
+                break;
+            }
+            items.add(n);
         }
         Map<String, Object> cov = new LinkedHashMap<>();
         cov.put("kind", "classes");
         cov.put("items", items);
+        // How many project classes ran, and which source files they came from.
+        java.util.Set<String> tops = new java.util.TreeSet<>();
+        java.util.Set<String> sources = new java.util.TreeSet<>();
+        for (Map.Entry<String, Class<?>> e : own.entrySet()) {
+            String n = e.getKey();
+            int dollar = n.indexOf('$');
+            String top = dollar > 0 ? n.substring(0, dollar) : n;
+            tops.add(top);
+            if (dollar > 0 && own.containsKey(top)) {
+                continue;
+            }
+            String file = sourceFile(e.getValue());
+            if (file != null) {
+                int dot = n.lastIndexOf('.');
+                sources.add((dot < 0 ? "" : n.substring(0, dot).replace('.', '/') + "/") + file);
+            }
+        }
+        cov.put("project", tops.size());
+        cov.put("sources", new ArrayList<Object>(sources));
         return cov;
     }
 
@@ -417,12 +563,214 @@ public final class DlaDump {
         return p == null ? null : Path.of(p).toAbsolutePath().normalize();
     }
 
-    private static boolean underProject(Class<?> c, Path project) throws Exception {
-        var cs = c.getProtectionDomain().getCodeSource();
-        if (cs == null || cs.getLocation() == null || !"file".equals(cs.getLocation().getProtocol())) {
+    /** The packages the project's own sources declare (DLA_PROJECT_PACKAGES, comma separated). */
+    private static List<String> projectPackages() {
+        List<String> out = new ArrayList<>();
+        String v = env("DLA_PROJECT_PACKAGES");
+        if (v != null) {
+            for (String p : v.split(",")) {
+                if (!p.isBlank()) {
+                    out.add(p.trim());
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * True for a class of the project: in a package the project's sources declare, or loaded from a
+     * file, directory or jar under DLA_PROJECT (a Spring Boot jar's own classes included, its
+     * loader and nested libraries not).
+     */
+    static boolean isProjectClass(Class<?> c, Path project, List<String> packages) throws Exception {
+        String n = c.getName();
+        String top = n.contains("$") ? n.substring(0, n.indexOf('$')) : n;
+        String simple = top.substring(top.lastIndexOf('.') + 1);
+        // DLA's own drivers are compiled next to the project's classes but are not its code.
+        if (simple.equals("DlaLoop") || simple.equals("DlaJUnitLoop")) {
             return false;
         }
-        return Path.of(cs.getLocation().toURI()).toAbsolutePath().normalize().startsWith(project);
+        var source = c.getProtectionDomain().getCodeSource();
+        if (source != null && source.getLocation() != null && isTestLocation(source.getLocation().toExternalForm(), project)) {
+            return false;
+        }
+        for (String p : packages) {
+            if (n.startsWith(p + ".")) {
+                return true;
+            }
+        }
+        // The loader that starts a Spring Boot jar sits at the jar's root, next to BOOT-INF.
+        if (n.startsWith("org.springframework.boot.loader.")) {
+            return false;
+        }
+        var cs = c.getProtectionDomain().getCodeSource();
+        if (project == null || cs == null || cs.getLocation() == null) {
+            return false;
+        }
+        String location = cs.getLocation().toExternalForm();
+        // With the project's packages known, the root of a jar is not the project's unless the
+        // class is in one of them (a shaded jar holds its dependencies there).
+        return locationUnder(location, project) && !(!packages.isEmpty() && isJarRoot(location));
+    }
+
+    /** True for the output directory of a build's tests (`build/classes/kotlin/test`, `target/test-classes`). */
+    static boolean isTestLocation(String location, Path project) {
+        // Only the part below the project counts: a project may itself live in a directory named `test`.
+        String below = location;
+        try {
+            Path file = locationFile(location);
+            if (file != null && project != null && file.toAbsolutePath().normalize().startsWith(project)) {
+                int bang = location.indexOf('!');
+                below = project.relativize(file.toAbsolutePath().normalize())
+                    + (bang < 0 ? "" : location.substring(bang));
+            }
+        } catch (Throwable ignored) {
+            // the whole location is checked
+        }
+        // A relativized path has backslashes on Windows.
+        String[] parts = below.replace('\\', '/').split("[/!]");
+        for (int i = 0; i < parts.length; i++) {
+            if (parts[i].equals("test-classes")) {
+                return true;
+            }
+            if (parts[i].equals("test") && i > 0
+                && (parts[i - 1].equals("kotlin") || parts[i - 1].equals("java") || parts[i - 1].equals("scala")
+                    || parts[i - 1].equals("groovy") || parts[i - 1].equals("classes") || parts[i - 1].equals("out"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** True for the whole of a jar file: `file:/x.jar` or `jar:file:/x.jar!/` (not a directory inside one). */
+    static boolean isJarRoot(String location) {
+        if (location.startsWith("jar:")) {
+            return location.endsWith("!/") && location.indexOf('!') == location.length() - 2;
+        }
+        return location.startsWith("file:") && location.endsWith(".jar");
+    }
+
+    /** True when the code source location names a file or directory under project. */
+    static boolean locationUnder(String location, Path project) {
+        try {
+            Path p = locationFile(location);
+            return p != null && p.toAbsolutePath().normalize().startsWith(project);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * The file or directory a code source location names: the path of a `file:` URL, or the outer
+     * jar of `jar:file:/x.jar!/...` and of a Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`.
+     * Null for anything else, and for a library jar nested in another jar (`!BOOT-INF/lib/x.jar!/`).
+     */
+    static Path locationFile(String location) {
+        if (location.startsWith("file:")) {
+            return Path.of(java.net.URI.create(location));
+        }
+        if (!location.startsWith("jar:")) {
+            return null;
+        }
+        String rest = location.substring(4);
+        if (rest.startsWith("nested:")) {
+            rest = rest.substring("nested:".length());
+        } else if (rest.startsWith("file:")) {
+            rest = rest.substring("file:".length());
+        } else {
+            return null;
+        }
+        int bang = rest.indexOf('!');
+        if (bang < 0 || rest.substring(bang).contains(".jar")) {
+            return null;
+        }
+        String outer = rest.substring(0, bang);
+        if (outer.length() > 1 && outer.endsWith("/")) {
+            outer = outer.substring(0, outer.length() - 1);
+        }
+        return Path.of(java.net.URI.create("file:" + outer));
+    }
+
+    /** The SourceFile attribute of a loaded class (`Routes.kt`), read from its class file; null when unavailable. */
+    private static String sourceFile(Class<?> c) {
+        try {
+            ClassLoader l = c.getClassLoader();
+            if (l == null) {
+                return null;
+            }
+            try (java.io.InputStream in = l.getResourceAsStream(c.getName().replace('.', '/') + ".class")) {
+                return in == null ? null : sourceFileOf(new java.io.DataInputStream(
+                    new java.io.BufferedInputStream(in)));
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Reads the SourceFile attribute of a class file; null when there is none or the file is not understood. */
+    static String sourceFileOf(java.io.DataInputStream in) throws IOException {
+        if (in.readInt() != 0xCAFEBABE) {
+            return null;
+        }
+        in.readUnsignedShort();
+        in.readUnsignedShort();
+        int n = in.readUnsignedShort();
+        String[] utf = new String[n];
+        for (int i = 1; i < n; i++) {
+            switch (in.readUnsignedByte()) {
+                case 1 -> utf[i] = in.readUTF();
+                case 3, 4, 9, 10, 11, 12, 17, 18 -> skip(in, 4);
+                case 5, 6 -> {
+                    skip(in, 8);
+                    i++;
+                }
+                case 7, 8, 16, 19, 20 -> skip(in, 2);
+                case 15 -> skip(in, 3);
+                default -> {
+                    return null;
+                }
+            }
+        }
+        skip(in, 6);
+        skip(in, 2L * in.readUnsignedShort());
+        for (int member = 0; member < 2; member++) {
+            int members = in.readUnsignedShort();
+            for (int m = 0; m < members; m++) {
+                skip(in, 6);
+                skipAttributes(in);
+            }
+        }
+        int attrs = in.readUnsignedShort();
+        for (int a = 0; a < attrs; a++) {
+            int name = in.readUnsignedShort();
+            long len = in.readInt() & 0xFFFFFFFFL;
+            if (name < n && "SourceFile".equals(utf[name]) && len == 2) {
+                int idx = in.readUnsignedShort();
+                return idx < n ? utf[idx] : null;
+            }
+            skip(in, len);
+        }
+        return null;
+    }
+
+    private static void skipAttributes(java.io.DataInputStream in) throws IOException {
+        int attrs = in.readUnsignedShort();
+        for (int a = 0; a < attrs; a++) {
+            skip(in, 2);
+            skip(in, in.readInt() & 0xFFFFFFFFL);
+        }
+    }
+
+    private static void skip(java.io.DataInputStream in, long n) throws IOException {
+        long left = n;
+        while (left > 0) {
+            long got = in.skip(left);
+            if (got <= 0) {
+                in.readByte();
+                got = 1;
+            }
+            left -= got;
+        }
     }
 
     // ------------------------------------------------------------------ probes

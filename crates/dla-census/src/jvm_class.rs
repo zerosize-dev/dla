@@ -33,10 +33,11 @@ pub struct Loaded {
 }
 
 /// Reads every `*.class` under `root` (build output directories included), except
-/// test class directories.
+/// test class directories and build logic (`buildSrc`).
 pub fn load(root: &Path) -> Loaded {
     let rels = list_files(root, true, &|r| {
         r.ends_with(".class")
+            && !dla_core::paths::is_build_logic(r)
             && !r.contains("test-classes")
             && !r.contains("/test/")
             && !r.starts_with("test/")

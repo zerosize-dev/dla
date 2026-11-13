@@ -134,8 +134,11 @@ cleanly is removed; keep it with `--keep-work`, failed runs are always kept.
 
 Other flags: `--fixtures a,b|all`, `--fixtures-dir`, `--model`, `--max-turns`
 (default 80), `--timeout` (default 1500), `--child-budget` (default `20m`: the
-time budget the child's `dla` runs get, passed as `DLA_DEFAULT_BUDGET`; a
-duration such as `90s`, `20m` or `2h`), `--repo-root` (where the plugin
+time budget the child's `dla run init` gets when it is given no `--budget`, passed as
+`DLA_DEFAULT_BUDGET`; a duration such as `90s`, `20m` or `2h`. The skill passes
+`--budget ${user_config.time_budget}`, a flag beats the variable, and the plugin default is
+`auto`, so a child may run with an `auto` budget (60 to 180 minutes) and stop at `--timeout`;
+which of the two a child gets is not verified), `--repo-root` (where the plugin
 sources are), `--ablations-dir`, `--dla-bin`, `--claude-bin`, `--deny-read
 <path>` (repeatable, see below) and `--probe-prompt <file>` (use the file as
 the prompt instead of the fixture's task; for checking the sandbox).
@@ -320,7 +323,8 @@ The policy, per fixture (repository entry, one runtime):
    `iteration-arg-unknown`, or when the harness does not run, the next main or
    script workload with an iteration argument, at most two) and
    `harness run H`. If no harness ran, every candidate becomes
-   `suspected_static_only` (`build_fails` or `no_harness`). The policy runs every harness it generates with `dla harness run`, so each has an `attempt.json`; a harness that `dla intervene` clones is not a generated one, so the `harness-not-run` rule never holds the policy's closures back.
+   `suspected_static_only` (`build_fails`, else `env_unavailable` with the refusals of
+   `harness gen` and `run` in its remedy; nothing is recorded on `intake.workload`). The policy runs every harness it generates with `dla harness run`, so each has an `attempt.json`; a harness that `dla intervene` clones is not a generated one, so the `harness-not-run` rule never holds the policy's closures back.
 3. `trend S`. For every passed column with candidates, the column's first
    candidate (once per run): add an N-WARM sibling, `ledger test`, `alloc-test
    H --finding F`. Favors leak: refute the sibling, annotate the holder if
@@ -328,7 +332,10 @@ The policy, per fixture (repository entry, one runtime):
    thread column, `registration-table` for a timer, listener or handle
    column, else `static/global`); the `ledger confirm` waits for step 6.
    Favors non-leak: refute the finding. Inconclusive: `unresolved`
-   (`time_budget`).
+   (`inconclusive`: measured, and the measurement cannot decide; `not_exercised` when no
+   measurement is tied to the finding). The bench never closes with `time_budget`: the
+   ledger refuses it while more than `max(10 min, 20 %)` of the budget is left, and a
+   bench run closes with about an hour left.
 4. Candidates tied only to non-passing columns: sibling, test, alloc-test;
    refuted when it favors non-leak, else unresolved.
 5. When no passed column had candidates but a non-container column passed: a
@@ -401,7 +408,8 @@ The policy, per fixture (repository entry, one runtime):
      evidence alone and the refusal is logged.
 7. `gap S --residual`; whatever is still a candidate or under test becomes
    `suspected_static_only` (`not_exercised`) when it has static evidence, else
-   `unresolved`; then `report`.
+   `unresolved` with the reason the evidence supports (`inconclusive` when a measurement
+   is tied to it, else `not_exercised`); then `report`.
 
 8. The M6 steps (`bench/runner/src/dynamic/policy.rs`), after the steps above, on the
    confirmed and strong leak-side findings. They never change which findings are

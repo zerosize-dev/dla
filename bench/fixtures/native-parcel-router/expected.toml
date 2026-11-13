@@ -1,0 +1,36 @@
+schema_version = 1
+id = "native-parcel-router"
+runtime = "native"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The parcel router's resident memory grows steadily while it works through the
+sorting hub's feed, in step with the number of parcels it has handled, and the
+process has to be restarted every few days. Find out what is holding the
+memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/spool.c:34"
+lines = [31, 39]
+alt_sites = ["src/router.c:45", "src/router.c:32"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "L-HANDLE"
+share = 0.6
+confirmable = true
+dump_backed = true
+
+[[leak]]
+id = "L2"
+site = "src/intern.c:52"
+lines = [52, 52]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "UNCLASSIFIED"
+share = 0.4
+confirmable = true
+dump_backed = true

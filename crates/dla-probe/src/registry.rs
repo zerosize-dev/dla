@@ -98,7 +98,7 @@ pub const BACKENDS: &[Backend] = &[
         binaries: &["sonar-scanner"],
         jar: None,
         version_args: Some(&["--version"]),
-        hint_note: "needs a SonarQube or SonarCloud server as well",
+        hint_note: "server-only: the rules run on a SonarQube or SonarCloud server that DLA does not query",
     },
     Backend {
         name: "ruff",
@@ -358,6 +358,10 @@ impl Backend {
 impl Backend {
     /// The install hint recorded when the backend is missing.
     pub fn install_hint(&self) -> String {
+        if self.name == "sonar" {
+            // A scanner alone leads to no run: the rules are evaluated on a server.
+            return "nothing to install: Sonar rules are evaluated on a SonarQube or SonarCloud server, which DLA does not query".to_owned();
+        }
         format!("dla install {}", self.name)
     }
 }
@@ -604,6 +608,16 @@ mod tests {
         fs::write(&p, body).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
         p
+    }
+
+    #[test]
+    fn sonar_has_no_install_hint_that_cannot_lead_to_a_run() {
+        let sonar = BACKENDS.iter().find(|b| b.name == "sonar").unwrap();
+        let hint = sonar.install_hint();
+        assert!(hint.starts_with("nothing to install"), "{hint}");
+        assert!(!hint.contains("dla install"), "{hint}");
+        let ruff = BACKENDS.iter().find(|b| b.name == "ruff").unwrap();
+        assert_eq!(ruff.install_hint(), "dla install ruff");
     }
 
     #[test]

@@ -1,0 +1,21 @@
+schema_version = 1
+id = "node-native-addon"
+runtime = "node"
+category = "impossible"
+dynamic_confirmation = false
+
+[task]
+prompt = """
+The telemetry relay's resident memory climbs with the number of field gateways that have connected over the past weeks, although only a few hundred are connected at any moment. The process is restarted at every release. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/session.js:14"
+lines = [14, 18]
+alt_sites = ["src/session.js:25-27", "src/relay.js:23"]
+holder = "registration-table"
+region = "non-heap"
+cause = "L-REGISTER"
+share = 1.0
+confirmable = false

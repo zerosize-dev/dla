@@ -40,7 +40,7 @@ use crate::{
     ids::{EvidenceId, FindingId},
     paths,
     series::{SERIES_DIR, next_number},
-    state::{DLA_DIR, ProcessRecord, Scope, now_utc},
+    state::{ConsentGiver, DLA_DIR, ProcessRecord, Scope, now_utc},
     trend::TREND_DIR,
 };
 
@@ -50,6 +50,98 @@ pub const ALLOC_DIR: &str = "alloc";
 pub const ATTACH_DIR: &str = "attach";
 /// Directory of verifier bundles (`bundle/<finding>/`).
 pub const BUNDLE_DIR: &str = "bundle";
+
+/// The fix of a refusal for a spent deadline: more time (core only, and asked of the user
+/// first in an interactive run), else close what cannot be measured.
+pub const DEADLINE_FIX: &str = "dla run extend 30m   (core only; in an interactive run ask the user first)   or   dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"";
+
+/// The fix of a spent deadline where extending is not on offer: a worker (only the core
+/// extends, and it waits on the workers) or an unattended run (it never extends). It
+/// closes what cannot be measured.
+pub const DEADLINE_FIX_CLOSE: &str = "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"   (this run does not extend its budget: only the core of an interactive run does)";
+
+/// File of the run directory where each time-budget refusal of a tool is noted, one JSON
+/// line `{"ts", "worker"}` each.
+pub const TIME_REFUSALS_FILE: &str = "time_refusals.jsonl";
+
+/// True when a tool refused a command for time after `since`: in the core, any refusal of
+/// the run; in a worker (`worker` is its name), that worker's own. The reason
+/// `time_budget` is honest for a finding added before such a refusal even when time is
+/// left, because the measurement it needed was refused for lack of it. A refusal made
+/// before the latest `dla run extend` no longer counts: the extension gave the time back.
+pub fn time_refused_since(
+    run_dir: &Path,
+    worker: Option<&str>,
+    since: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    refused_since(run_dir, worker, since, false)
+}
+
+/// Like [`time_refused_since`], but only a refusal that said nothing smaller fits (the
+/// deadline passed, or even the smallest run is too long) counts. Such a refusal puts the
+/// run at the floor of the budget whatever time is left.
+pub fn nothing_fits_since(
+    run_dir: &Path,
+    worker: Option<&str>,
+    since: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    refused_since(run_dir, worker, since, true)
+}
+
+fn refused_since(
+    run_dir: &Path,
+    worker: Option<&str>,
+    since: chrono::DateTime<chrono::Utc>,
+    only_none_fits: bool,
+) -> bool {
+    let Ok(text) = fs::read_to_string(run_dir.join(TIME_REFUSALS_FILE)) else {
+        return false;
+    };
+    let extended = RunState::load(run_dir)
+        .ok()
+        .and_then(|s| s.budget.extensions.iter().map(|e| e.at).max());
+    let since = extended.map_or(since, |at| since.max(at));
+    text.lines().any(|l| {
+        let Ok(v) = serde_json::from_str::<Value>(l) else {
+            return false;
+        };
+        let Some(ts) = v
+            .get("ts")
+            .and_then(Value::as_str)
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        else {
+            return false;
+        };
+        if only_none_fits && v.get("none_fits").and_then(Value::as_bool) != Some(true) {
+            return false;
+        }
+        let by = v.get("worker").and_then(Value::as_str);
+        // A refusal at the very instant of the extension predates it.
+        ts >= since && (extended.is_none_or(|at| ts > at)) && (worker.is_none() || by == worker)
+    })
+}
+
+/// True when the run is unattended: its consent came from the runner (`DLA_CONSENT_TIERS`
+/// at init). A consent the user gave through `dla consent` does not make a run unattended.
+pub fn is_unattended(state: &RunState) -> bool {
+    state
+        .consent
+        .as_ref()
+        .is_some_and(|c| c.given_by == ConsentGiver::Runner)
+}
+
+/// Which fix a spent deadline gets: [`DEADLINE_FIX`] for the core of an interactive run,
+/// [`DEADLINE_FIX_CLOSE`] for a worker or an unattended run ([`is_unattended`]: the runner
+/// gave the consent at init; every interactive run has a consent object too, given by the
+/// user at intake).
+/// `state` is `None` when `state.json` cannot be read (the interactive fix then).
+pub fn deadline_fix(worker: bool, state: Option<&RunState>) -> &'static str {
+    if worker || state.is_some_and(is_unattended) {
+        DEADLINE_FIX_CLOSE
+    } else {
+        DEADLINE_FIX
+    }
+}
 
 /// Where a stage runs and what it may do.
 #[derive(Debug, Clone)]
@@ -310,8 +402,9 @@ impl ToolCtx {
 
     /// Refuses with code `time-budget` when the worker's deadline (worker mode, from the
     /// registry; an unregistered worker has only the run's) or the run's deadline has
-    /// passed. `what` names the step for the message. The fix records the open finding
-    /// as unresolved for lack of time.
+    /// passed. `what` names the step for the message. The fix is [`deadline_fix`]: more time
+    /// for the core of an interactive run, else the open finding recorded as unresolved for
+    /// lack of time.
     pub fn require_time(&self, what: &str) -> Result<(), Refusal> {
         let state = RunState::load(&self.run_dir).map_err(|e| e.to_refusal())?;
         let now = now_utc();
@@ -323,15 +416,35 @@ impl ToolCtx {
         for (who, deadline) in limits {
             if now > deadline {
                 let when = deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                self.note_time_refusal(true);
                 return Err(Refusal::new(
                     codes::TIME_BUDGET,
                     format!("{what} cannot start: the {who} deadline {when} has passed"),
                     format!("time before the {who} deadline {when}"),
-                    "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"",
+                    deadline_fix(self.worker.is_some(), Some(&state)),
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Notes that a command was refused for time, in the one place every time-budget refusal
+    /// of a tool passes through ([`Self::require_time`] and [`Self::time_budget_refusal`]).
+    /// `dla ledger resolve --reason time_budget` accepts the reason while time is left only
+    /// when a note is newer than the finding ([`time_refused_since`]). A failure to write the
+    /// note is ignored: the refusal itself is what the caller returns.
+    /// `none_fits` records that nothing smaller would have fit ([`nothing_fits_since`]).
+    fn note_time_refusal(&self, none_fits: bool) {
+        let line = serde_json::json!({
+            "ts": now_utc().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "worker": self.worker,
+            "none_fits": none_fits,
+        });
+        let path = self.run_dir.join(TIME_REFUSALS_FILE);
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
     }
 
     /// Time left before the nearest deadline (the worker's, in worker mode, and the
@@ -369,8 +482,13 @@ impl ToolCtx {
         deadline: &str,
         suggestion: &str,
     ) -> Refusal {
+        self.note_time_refusal(suggestion.is_empty());
         let fix = if suggestion.is_empty() {
-            "even the smallest run does not fit: dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"".to_owned()
+            let state = RunState::load(&self.run_dir).ok();
+            format!(
+                "even the smallest run does not fit: {}",
+                deadline_fix(self.worker.is_some(), state.as_ref())
+            )
         } else {
             suggestion.to_owned()
         };
@@ -499,6 +617,7 @@ pub struct CandidateWriter {
     skipped: u64,
     scope: Option<Scope>,
     out_of_scope: u64,
+    build_logic: u64,
 }
 
 impl CandidateWriter {
@@ -514,6 +633,7 @@ impl CandidateWriter {
             skipped: 0,
             scope: None,
             out_of_scope: 0,
+            build_logic: 0,
         }
     }
 
@@ -530,8 +650,9 @@ impl CandidateWriter {
         self
     }
 
-    /// Adds `c` unless `(origin, site)` exists. Returns the new ID, or `None` for a
-    /// duplicate.
+    /// Adds `c` unless `(origin, site)` exists. Returns the new ID, or `None` when nothing
+    /// was added: a duplicate, a site outside the scope, or a build-logic site (which is
+    /// counted in [`Self::build_logic`]).
     pub fn add(&mut self, ledger: &mut Ledger, c: Candidate) -> Result<Option<FindingId>, Refusal> {
         check_site(&c.site).map_err(|m| {
             Refusal::new(
@@ -541,6 +662,14 @@ impl CandidateWriter {
                 "report this as a dla bug",
             )
         })?;
+        // Build logic (Gradle scripts, buildSrc) runs in the build tool's process, not in the
+        // measured one: never a candidate, whichever stage or backend found it.
+        if let Some((file, _)) = c.site.rsplit_once(':')
+            && paths::is_build_logic(file)
+        {
+            self.build_logic += 1;
+            return Ok(None);
+        }
         if let Some(scope) = &self.scope
             && let Some((file, _)) = c.site.rsplit_once(':')
             && !scope.includes(file)
@@ -590,6 +719,11 @@ impl CandidateWriter {
     pub fn out_of_scope(&self) -> u64 {
         self.out_of_scope
     }
+
+    /// Candidates skipped so far because their site file is build logic.
+    pub fn build_logic(&self) -> u64 {
+        self.build_logic
+    }
 }
 
 /// What a stage reports; the CLI prints it as the command's JSON object (bounded).
@@ -623,7 +757,7 @@ mod tests {
     use crate::{
         CoverageManifest, EvidenceKind,
         evidence::{Authority, Unknown},
-        state::{Consent, ConsentGiver, now_utc},
+        state::{Consent, now_utc},
     };
     use serde_json::json;
 
@@ -958,6 +1092,44 @@ mod tests {
     }
 
     #[test]
+    fn a_build_logic_site_is_never_a_candidate_and_is_counted() {
+        let (_d, ctx) = run(None);
+        let mut ledger = ctx.ledger().unwrap();
+        let ev = ctx
+            .add_evidence(
+                &mut ledger,
+                EvidenceSpec::new(EvidenceKind::StaticHit, "detekt", "2", json!({"hits": 4})),
+            )
+            .unwrap();
+        let cand = |site: &str| Candidate {
+            origin: "detector:detekt/GlobalCoroutineUsage".into(),
+            evidence: vec![ev.clone()],
+            site: site.into(),
+            ..Candidate::default()
+        };
+        let mut w = CandidateWriter::for_ctx(&ctx, &ledger).unwrap();
+        for site in [
+            "docker.gradle.kts:4",
+            "build.gradle.kts:3",
+            "svc/buildSrc/src/main/kotlin/Conventions.kt:2",
+        ] {
+            assert!(w.add(&mut ledger, cand(site)).unwrap().is_none(), "{site}");
+        }
+        assert!(
+            w.add(&mut ledger, cand("src/main/kotlin/App.kt:9"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            w.add(&mut ledger, cand("scripts/tool.main.kts:1"))
+                .unwrap()
+                .is_some(),
+            "a .main.kts script is a source"
+        );
+        assert_eq!((w.added(), w.build_logic(), w.out_of_scope()), (2, 3, 0));
+    }
+
+    #[test]
     fn require_time_names_the_deadline_and_the_fix() {
         let (_d, mut ctx) = run(None);
         ctx.require_time("sampling").unwrap();
@@ -975,10 +1147,9 @@ mod tests {
             e.message
                 .contains(&past.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
         );
-        assert_eq!(
-            e.fix,
-            "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\""
-        );
+        assert_eq!(e.fix, super::DEADLINE_FIX);
+        assert!(e.fix.starts_with("dla run extend 30m"), "{}", e.fix);
+        assert!(e.fix.contains("--reason time_budget"), "{}", e.fix);
         // A worker past its own deadline while the run still has time.
         let future = now_utc() + chrono::TimeDelta::try_seconds(600).unwrap();
         RunState::update(&ctx.run_dir, |s| {
@@ -1003,6 +1174,97 @@ mod tests {
         // An unregistered worker only has the run's deadline.
         ctx.worker = Some("go".into());
         ctx.require_time("alloc-test").unwrap();
+    }
+
+    #[test]
+    fn every_time_budget_refusal_of_a_tool_is_noted_for_the_reason_check() {
+        let before = now_utc() - chrono::TimeDelta::try_seconds(1).unwrap();
+        // Nothing refused yet.
+        let (_d, mut ctx) = run(None);
+        assert!(!time_refused_since(&ctx.run_dir, None, before));
+        // A command refused for lack of time notes it, whatever the deadline.
+        let _ = ctx.time_budget_refusal("sample", 10, 5, "run deadline", "");
+        assert!(time_refused_since(&ctx.run_dir, None, before));
+        // The core sees a worker's too; a worker sees only its own.
+        assert!(!time_refused_since(&ctx.run_dir, Some("jvm"), before));
+        ctx.worker = Some("jvm".into());
+        let _ = ctx.time_budget_refusal("sample", 10, 5, "worker deadline", "");
+        assert!(time_refused_since(&ctx.run_dir, Some("jvm"), before));
+        assert!(!time_refused_since(&ctx.run_dir, Some("go"), before));
+        // A note older than the finding does not count.
+        let later = now_utc() + chrono::TimeDelta::try_seconds(60).unwrap();
+        assert!(!time_refused_since(&ctx.run_dir, None, later));
+
+        // `require_time` on a spent deadline is a refusal too.
+        let (_d, ctx) = run(None);
+        RunState::update(&ctx.run_dir, |s| {
+            s.budget.deadline = now_utc() - chrono::TimeDelta::try_seconds(60).unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert!(!time_refused_since(&ctx.run_dir, None, before));
+        ctx.require_time("sampling").unwrap_err();
+        assert!(time_refused_since(&ctx.run_dir, None, before));
+        // A passing check notes nothing.
+        let (_d, ctx) = run(None);
+        ctx.require_time("sampling").unwrap();
+        assert!(!time_refused_since(&ctx.run_dir, None, before));
+    }
+
+    #[test]
+    fn a_refusal_before_an_extension_no_longer_counts() {
+        let before = now_utc() - chrono::TimeDelta::try_seconds(1).unwrap();
+        let (_d, ctx) = run(None);
+        let _ = ctx.time_budget_refusal("sample", 10, 5, "run deadline", "");
+        assert!(time_refused_since(&ctx.run_dir, None, before));
+        // The extension gives the time back: the earlier refusal is spent.
+        let later = now_utc() + chrono::TimeDelta::try_seconds(2).unwrap();
+        RunState::update(&ctx.run_dir, |s| s.extend_budget(later, 7200).map(|_| ())).unwrap();
+        assert!(!time_refused_since(&ctx.run_dir, None, before));
+        assert!(!time_refused_since(&ctx.run_dir, Some("jvm"), before));
+    }
+
+    #[test]
+    fn a_spent_deadline_offers_extending_only_to_the_core_of_an_interactive_run() {
+        let past = now_utc() - chrono::TimeDelta::try_seconds(60).unwrap();
+        // Interactive core (no consent object): extend, after asking the user.
+        let (_d, mut ctx) = run(None);
+        RunState::update(&ctx.run_dir, |s| {
+            s.budget.deadline = past;
+            Ok(())
+        })
+        .unwrap();
+        let e = ctx.require_time("sampling").unwrap_err();
+        assert!(e.fix.starts_with("dla run extend"), "{}", e.fix);
+        // A worker cannot extend (and the core waits on it): close what cannot be measured.
+        ctx.worker = Some("jvm".into());
+        let e = ctx.require_time("sampling").unwrap_err();
+        assert_eq!(e.fix, super::DEADLINE_FIX_CLOSE);
+        assert!(!e.fix.contains("dla run extend"), "{}", e.fix);
+        let e = ctx.time_budget_refusal("sample", 10, 5, "run deadline", "");
+        assert!(!e.fix.contains("dla run extend"), "{}", e.fix);
+        // An interactive core after `dla consent` (a consent object given by the user): the
+        // user can still be asked, so it extends.
+        let (_d, ctx) = run(Some(vec![1, 2]));
+        RunState::update(&ctx.run_dir, |s| {
+            s.budget.deadline = past;
+            s.consent.as_mut().unwrap().given_by = ConsentGiver::User;
+            Ok(())
+        })
+        .unwrap();
+        let e = ctx.require_time("sampling").unwrap_err();
+        assert_eq!(e.fix, super::DEADLINE_FIX);
+        // An unattended core (consent given by the runner): nobody to ask, so it never extends.
+        let (_d, ctx) = run(Some(vec![1, 2]));
+        RunState::update(&ctx.run_dir, |s| {
+            s.budget.deadline = past;
+            Ok(())
+        })
+        .unwrap();
+        let e = ctx.require_time("sampling").unwrap_err();
+        assert_eq!(e.fix, super::DEADLINE_FIX_CLOSE);
+        let e = ctx.time_budget_refusal("sample", 10, 5, "run deadline", "");
+        assert!(!e.fix.contains("dla run extend"), "{}", e.fix);
     }
 
     #[test]

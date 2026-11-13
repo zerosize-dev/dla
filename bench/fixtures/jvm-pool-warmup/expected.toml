@@ -1,0 +1,18 @@
+schema_version = 1
+id = "jvm-pool-warmup"
+runtime = "jvm"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The export service's heap usage climbs steadily after every deployment: the
+live set after a garbage collection is larger each time we look during the
+first part of the day. The team wants to know what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/exports/BufferPool.java:39"
+cause = "N-WARM"
+discriminator = "the pool takes new buffers only until it owns 200 of them, which happens while the number of jobs in flight is still rising (about the first 4000 jobs); after that the buffers owned, the idle count and the post-GC heap are flat and the slope of the second half is zero, while the unpooled counter only counts short-lived arrays that are garbage collected"

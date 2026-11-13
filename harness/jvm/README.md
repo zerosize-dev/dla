@@ -31,13 +31,51 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
 ## What the exit dump records
 
 - `values` after `System.gc()` twice: `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used`,
-  `jvm.nonheap_committed`, `jvm.threads`, `jvm.classes_loaded`, `jvm.nmt_committed` (only when NMT
-  is on, otherwise a limitation), and `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`,
+  `jvm.nonheap_committed` (the memory pools: Metaspace, class space, code cache),
+  `jvm.threads`, `jvm.classes_loaded` (the number loaded now) and `jvm.classes_unloaded` (so far),
+  `jvm.jit_seconds` (total compile time, only when the JVM supports compilation time monitoring,
+  otherwise a limitation), and, only when NMT is on (otherwise one limitation): `jvm.nmt_committed`
+  and the committed bytes of the NMT categories `jvm.nmt.metaspace`, `jvm.nmt.class`,
+  `jvm.nmt.code`, `jvm.nmt.compiler`, `jvm.nmt.symbol`, `jvm.nmt.arena_chunk` and
+  `jvm.nmt.thread` (from the summary the agent reads anyway; other categories are not kept).
+  Without NMT the pool readings `jvm.metaspace_used` and `jvm.codecache_used` stand in. Together
+  they let `dla alloc-test` tell a JIT warm-up (non-heap and Code plateau, class count flat) from a
+  class or symbol leak. The agent's own checkpoint work is part of these figures: an idle driver
+  (no workload) rose 2.3 MB in `jvm.nonheap_used` over 150 checkpoints, most of it in the first
+  30 (Code and Metaspace for the agent's own first use). Before its first checkpoint reads its
+  values the agent runs its own readings `DLA_WARM_ROUNDS` times (default 30, at most 3 seconds;
+  0 turns it off), which takes about two thirds of that early rise out of the series. A drift of
+  about 10 to 20 KB per checkpoint stays: on a small JVM (non-heap near 10 MB) an idle workload
+  reads `leak` on `jvm.nonheap_used` (7 of 7 idle-driver runs at the default extra), so the
+  alloc-test of a non-heap finding cannot decide from that column alone. `dla alloc-test` turns a
+  leak verdict with a class count that is not rising and an extra rise under the drift line (the
+  larger of 1 MiB and 2x the measured drift of every extra checkpoint, so it grows with `--extra`)
+  into an inconclusive one with a caution, unless a `jvm.nmt.*` category or a thread count rises
+  (then that column is named instead) or the harness is in command mode (no checkpoint drift). The
+  warm-up runs at a checkpoint only, after the pre-GC readings (a command-mode exit record keeps
+  its `values_pre_gc` above `values`).
+  And `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`,
   `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.threads` read from `/proc/self/status`.
 - `values_pre_gc`: `jvm.heap_used`, `jvm.heap_committed`, `os.rss` just before the collections.
 - `types`: top 20 classes by instance count from `gcClassHistogram` (array names as `byte[]`).
-- `coverage`: `{"kind":"classes","items":[...]}`; classes loaded from `DLA_PROJECT` first, then
-  other non-JDK classes of the application and library loaders; capped at 4000.
+- `coverage`: `{"kind":"classes","items":[...],"project":N,"sources":[...]}`. Written by the
+  exit record and by a driver's first, second, fourth, eighth... and last checkpoint (a driver
+  writes no exit record: the shutdown hook stays quiet once a checkpoint was written; a driver
+  cut off by its timeout or the run deadline is killed before its last checkpoint, so the
+  earlier ones carry the section and the harness takes the union). The project's classes come
+  first and are not cut by the 4000 cap (their own limit is 20000); up to 4000 of the other
+  non-JDK classes of the application and library loaders follow. Test output directories
+  (`build/classes/kotlin/test`, `target/test-classes`) and DLA's own drivers (`DlaLoop`,
+  `DlaJUnitLoop`) are not the project's. A class is the project's when its code source is a
+  file, directory or jar under `DLA_PROJECT` (the outer jar of `jar:file:/x.jar!/...` and of a
+  Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`; a library nested in the jar, Spring
+  Boot's loader and, once packages are known, the root of a jar are not) or when it is in a
+  package named by `DLA_PROJECT_PACKAGES` (comma separated: the packages the project's own
+  sources declare, set by `dla harness run`). `project` is the number of distinct top-level project
+  classes; `sources` lists `package/path/File.kt` for the project classes, from each class file's
+  `SourceFile` attribute (the class file is read for project classes only), so a Kotlin class in
+  a file of another name, a facade class (`UtilKt`) and a package that does not mirror its
+  directory still name their source file.
 - `probes`: `JvmClass` yields one record per static field of reference type (primitives, strings,
   numbers, enums and `Class` constants are skipped); `JvmStatic` yields one record. `size` is the
   size of a Collection/Map/array, `reachable` the objects reached by a bounded iterative walk
@@ -90,11 +128,28 @@ paths (`$KOTLIN_HOME/lib`, next to `kotlinc`, or the version the build script na
 classes on the classpath (`javac -cp agent/classes ...`) into the scratch build output. The driver
 writes one `checkpoint` record per round via `DlaDump.checkpoint(unitsDone, lastRound)`.
 
+For a Gradle or Maven project (the workload's command runs `gradle`, `./gradlew`, `mvn` or `./mvnw`, or
+the project root has a `pom.xml` or a Gradle build file and no workload was named) the class path is not
+guessed: the manifest's build step is `sh driver/dla-junit-build.sh <gradle|maven> <tool> <driver dir>
+<agent jar> <separator> main <driver>/DlaLoop.java`, the same script as the JUnit repeat in its `main`
+mode, and the run is `java @driver/run.args <package>.DlaLoop`. The script resolves the project's main
+runtime class path (offline first, online as the fallback), compiles the driver against it into
+`driver/classes` (the driver keeps the workload's package, so package-private API stays usable) and
+writes `driver/run.args`. Gradle: `dlaPrintMainClasspath` of `dla-junit.init.gradle` depends on `classes`
+and writes `sourceSets.main.runtimeClasspath` to `driver/cp.txt`: `build/classes/java/main`,
+`build/classes/kotlin/main`, resources and the runtime dependency jars, with the project's own
+`kotlin-stdlib` (no stdlib is looked for in `~/.m2` on this path). Maven: `compile
+dependency:build-classpath -Dmdep.includeScope=runtime` with `target/classes` prepended. A project built by a
+script (`build.sh`) or without a build tool, and a project whose build tool is neither installed nor
+wrapped, keep the workload's classes directory (and, for Kotlin, the stdlib found in `~/.m2`); the
+manifest says so. The online retry downloads dependencies into the build tool's own cache, and
+`dla harness gen` still runs no project code.
+
 ### JUnit repeat (`dla harness gen --lang jvm --junit`)
 
 For a Gradle or Maven project whose tests use JUnit 5 (`org.junit.jupiter`), `dla harness gen --lang jvm --junit [--workload jvm:test:<file>] [--tests pkg.Class[#method],..]` writes a driver with no hooks: `driver/DlaJUnitLoop.java` (template `DlaJUnitHarness.java`) runs the selected classes or methods through the JUnit Platform Launcher once per unit, in one JVM with one Launcher, and calls `DlaDump.checkpoint(done, last)` after each round. An explicit `--driver` is always the plain driver with hooks (`DlaHarness.java`), also when the workload is a JUnit 5 test file; `--junit` (alone or with `--driver`) is the way to ask for the JUnit repeat. Defaults: warm-up 1, rounds 8, step 2 (one unit = one run of the selected tests), timeout 1800 s; `--warmup`, `--iterations` and `--step` override them, and `DLA_STEP`, `DLA_WARMUP`, `DLA_ROUNDS` at run time.
 
-The manifest's build step is `sh driver/dla-junit-build.sh <gradle|maven> <tool> <driver dir> <agent jar> <separator>`, so `dla harness gen` runs no project code. The script resolves the test class path (offline first, online as the fallback), adds `junit-platform-launcher` of the project's `junit-platform-engine` version when the project does not declare it, compiles the driver against it (`javac -proc:none -nowarn`) and writes `driver/run.args`; the run is `java @driver/run.args DlaJUnitLoop`.
+The manifest's build step is `sh driver/dla-junit-build.sh <gradle|maven> <tool> <driver dir> <agent jar> <separator> test <driver>/DlaJUnitLoop.java` (the last two arguments are optional and default to these), so `dla harness gen` runs no project code. The script resolves the test class path (offline first, online as the fallback), adds `junit-platform-launcher` of the project's `junit-platform-engine` version when the project does not declare it, compiles the driver against it (`javac -proc:none -nowarn`) and writes `driver/run.args`; the run is `java @driver/run.args DlaJUnitLoop`.
 
 - Gradle: `./gradlew` when the project has one at or above the workload's directory, else `gradle`; always `--no-daemon -q`, with the configuration cache turned off for that call (the init script reads the project model in the task action). An init script (`dla-junit.init.gradle`, passed with `--init-script`; the project is not edited) registers `dlaPrintTestClasspath`, which depends on `testClasses` and writes `sourceSets.test.runtimeClasspath` (test and main classes, resources, dependencies) to `driver/cp.txt`. The launcher comes from a detached configuration, so it works with and without a BOM.
 - Maven: `mvnw` or `mvn`; `test-compile dependency:build-classpath -Dmdep.includeScope=test`, with `target/test-classes` and `target/classes` prepended and the launcher taken from the local repository of the engine jar (`dependency:get` when absent). A module of a multi-module build is built from its own directory, so its sibling modules must already be installed.

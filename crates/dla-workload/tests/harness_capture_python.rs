@@ -667,3 +667,32 @@ fn the_memray_helper_finds_memray_through_site() {
         "{with_site}"
     );
 }
+
+#[test]
+fn a_driver_reports_the_functions_it_ran_in_its_checkpoints() {
+    if !have_python() || !python3_ok("import sys; sys.monitoring") {
+        return;
+    }
+    let run = Run::new();
+    let driver = write_driver(&run);
+    run.python(&[driver.to_str().unwrap()], &[("DLA_PY_MEMRAY", "0")]);
+    let recs = run.records();
+    // A driver writes no `exit` record, so the coverage section rides on its checkpoints
+    // (the first, the second, the fourth... and the last).
+    assert!(recs.iter().all(|r| r["phase"] != "exit"), "{recs:?}");
+    let last = recs
+        .iter()
+        .rfind(|r| r["phase"] == "checkpoint")
+        .expect("a checkpoint");
+    let cov = &last["coverage"];
+    assert_eq!(cov["kind"], "functions", "{last}");
+    let items = cov["items"].as_array().unwrap();
+    assert!(
+        items.iter().any(|i| i.as_str().unwrap().contains("ingest")
+            && i.as_str().unwrap().contains("process_batch")),
+        "{items:?}"
+    );
+    // The first checkpoint carries it too, so a driver cut off early still says what ran.
+    let first = recs.iter().find(|r| r["phase"] == "checkpoint").unwrap();
+    assert_eq!(first["coverage"]["kind"], "functions", "{first}");
+}

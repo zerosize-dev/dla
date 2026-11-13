@@ -62,7 +62,9 @@ fn candidate_and_under_test_block_with_a_fix() {
     assert_eq!(s.blocking[0].id, "F1");
     assert_eq!(
         s.blocking[0].fix,
-        "dla ledger resolve F1 --as unresolved --reason time_budget --remedy \"<text>\""
+        // The fixture ledger holds a discriminator for F1: it was measured, so the reason the
+        // evidence supports is inconclusive. The printed fix never pre-fills time_budget.
+        "dla ledger resolve F1 --as unresolved --reason inconclusive --remedy \"<text>\""
     );
     assert_eq!((s.counts.enumerated, s.counts.dispositioned), (2, 0));
     assert_eq!(

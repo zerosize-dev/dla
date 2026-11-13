@@ -568,6 +568,68 @@ fn junit_pick(
     }))
 }
 
+/// The build tool and wrapper of a plain JVM driver (`--driver`, no `--junit`) on a Gradle or
+/// Maven project, whose build resolves the driver's class path (the main runtime class path:
+/// the project's classes of every language, resources and the dependency jars). `None` for a
+/// project built by a script (`build.sh`) or without a build tool, and, with a note pushed to
+/// `gaps`, when the build tool is not installed and the project has no wrapper: the driver then
+/// keeps the workload's classes directory.
+fn driver_build_pick(
+    project: &Path,
+    w: Option<&Workload>,
+    gaps: &mut Vec<String>,
+) -> Option<JunitPick> {
+    let (tool, cwd) = match w {
+        Some(w) if w.command.contains("build.sh") => return None,
+        Some(w) => (junit_tool(w)?, w.cwd.as_str()),
+        None => {
+            let has = |n: &str| project.join(n).is_file();
+            let tool = if has("pom.xml") {
+                commands::JunitTool::Maven
+            } else if has("build.gradle")
+                || has("build.gradle.kts")
+                || has("settings.gradle")
+                || has("settings.gradle.kts")
+            {
+                commands::JunitTool::Gradle
+            } else {
+                return None;
+            };
+            (tool, ".")
+        }
+    };
+    let (wrapper_name, program) = match tool {
+        commands::JunitTool::Gradle => ("gradlew", "gradle"),
+        commands::JunitTool::Maven => ("mvnw", "mvn"),
+    };
+    let wrapper = find_wrapper(project, cwd, wrapper_name);
+    if wrapper.is_none() && !on_path(program) {
+        gaps.push(format!(
+            "{program} is not installed and the project has no {wrapper_name}: the driver's class path is the workload's classes directory, not the project's resolved runtime class path"
+        ));
+        return None;
+    }
+    Some(JunitPick {
+        tool,
+        wrapper,
+        select: Vec::new(),
+        gaps: vec![format!(
+            "the driver's class path is resolved by the project's build ({program}: the main runtime class path, its classes of every language and the dependency jars) when dla harness run builds the harness; the build step tries offline first and retries online, downloading dependencies into the build tool's own cache"
+        )],
+    })
+}
+
+/// The build tool executable or wrapper script of `j` as the build step takes it.
+fn launcher_of(j: &JunitPick, work: &Path) -> String {
+    j.wrapper.as_ref().map_or_else(
+        || match j.tool {
+            commands::JunitTool::Gradle => "gradle".to_owned(),
+            commands::JunitTool::Maven => "mvn".to_owned(),
+        },
+        |rel| dla_core::paths::to_slash(&work.join(rel)),
+    )
+}
+
 /// The wrapper script `name` in the workload's directory or the nearest parent, as a path
 /// relative to the project root.
 fn find_wrapper(project: &Path, cwd: &str, name: &str) -> Option<String> {
@@ -1017,6 +1079,8 @@ struct DriverCtx<'a> {
     cwd: &'a str,
     step: u64,
     junit: Option<&'a JunitPick>,
+    /// A plain JVM driver whose class path the project's build resolves.
+    main_build: Option<&'a JunitPick>,
 }
 
 fn driver_vars(d: &DriverCtx<'_>) -> [(String, String); 4] {
@@ -1085,13 +1149,7 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
             )?;
             out.hooks = templates::hooks(&text);
             // Nothing to edit: the driver runs the project's own tests.
-            let launcher = j.wrapper.as_ref().map_or_else(
-                || match j.tool {
-                    commands::JunitTool::Gradle => "gradle".to_owned(),
-                    commands::JunitTool::Maven => "mvn".to_owned(),
-                },
-                |rel| dla_core::paths::to_slash(&d.work.join(rel)),
-            );
+            let launcher = launcher_of(j, d.work);
             out.spec.junit = Some(commands::JunitSpec {
                 tool: j.tool,
                 launcher,
@@ -1125,6 +1183,30 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
                 format!("{package}.{JVM_DRIVER_CLASS}")
             };
             let _ = d.agent;
+            if let Some(m) = d.main_build {
+                // The project's build resolves the class path: the same build step as the
+                // JUnit repeat, in its main mode.
+                write(
+                    &d.driver.join(commands::JUNIT_INIT_SCRIPT),
+                    templates::JVM_JUNIT_INIT,
+                )?;
+                write(
+                    &d.driver.join(commands::JUNIT_BUILD_SCRIPT),
+                    templates::JVM_JUNIT_BUILD,
+                )?;
+                out.spec.main_build = Some(commands::JunitSpec {
+                    tool: m.tool,
+                    launcher: launcher_of(m, d.work),
+                });
+                out.tools.push(
+                    match m.tool {
+                        commands::JunitTool::Gradle => "gradle",
+                        commands::JunitTool::Maven => "maven",
+                    }
+                    .to_owned(),
+                );
+                out.gaps.extend(m.gaps.iter().cloned());
+            }
         }
         Runtime::Python => {
             let text = fill_with(templates::PY_DRIVER, &vars)?;
@@ -1511,10 +1593,18 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             Err(gap) => gaps.push(gap),
         }
     }
+    let main_build = if rt == Runtime::Jvm && opts.driver && junit.is_none() {
+        driver_build_pick(&work, workload.as_ref(), &mut gaps)
+    } else {
+        None
+    };
     let mut kotlin_stdlib: Option<String> = None;
+    // The build-resolved class path holds the project's own Kotlin standard library: the newest
+    // one in ~/.m2 is looked for only when a script or a bare project builds the classes.
     if rt == Runtime::Jvm
         && opts.driver
         && junit.is_none()
+        && main_build.is_none()
         && super::kotlin::has_kotlin_sources(&work)
     {
         match super::kotlin::find_stdlib(&work, &super::kotlin::Lookup::current()) {
@@ -1551,6 +1641,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             cwd,
             step,
             junit: junit.as_ref(),
+            main_build: main_build.as_ref(),
         };
         let info = build_driver(&dctx)?;
         let mut sw = switches.clone();

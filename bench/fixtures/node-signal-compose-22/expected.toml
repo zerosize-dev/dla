@@ -1,0 +1,20 @@
+schema_version = 2
+id = "node-signal-compose-22"
+runtime = "node"
+category = "decoy-control"
+pair = "node-signal-compose-24"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The export gateway's heap climbs slowly while it serves statement exports: after every replay of requests the live heap is a little larger than after the previous replay, although each request finishes and nothing is kept per account. The process is restarted at the weekend to keep it healthy. Find out what is holding the memory.
+"""
+
+[toolchain]
+node = "22.12.0"
+
+[[non_leak]]
+id = "N1"
+site = "src/handler.js:12"
+cause = "N-WARM"
+discriminator = "AbortSignal.any on this Node release does not keep the derived signals: heap after GC stays within a few hundred KB of the start from 5000 to 80000 requests and the slope of the second half is zero"

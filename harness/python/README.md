@@ -82,6 +82,8 @@ with the allocation traceback tracemalloc keeps for the object.
 `PYTHONPATH=<harness dir>:. python <harness dir>/dla_harness.py` from the scratch project root.
 It imports `sitecustomize` (already loaded when the path is set) and calls
 `checkpoint(units_done, last)` after every round; the agent then writes no `exit` record.
+The `coverage` section then rides on the checkpoints (the first, second, fourth, eighth... and the last),
+which the harness merges.
 
 `test_dla_harness.py` imports the hooks from `dla_harness.py` and runs the measured units under
 `@pytest.mark.limit_leaks("0B")` from pytest-memray, so the leaking call sites are reported by

@@ -6,6 +6,10 @@ are provisional: they are uncalibrated until benchmark milestone M7, and every t
 and residual result says so (`calibrated: false`, or a limitation "thresholds are provisional").
 Do not present a gate verdict as more precise than that.
 
+Contents: Series (Column names) · Trend (The slope gate) · Discriminators · Ledger rules for dynamic
+findings · Residual · How the report shows it (the lines, the coverage warning, the explained section,
+the closing message) · Integrity.
+
 ## Series
 
 A series is one table of measurements: `.dla/<run>/series/S<n>.json`. Rows are points ordered by
@@ -39,7 +43,7 @@ Every column has a unit (`bytes`, `count`, `ratio`, `seconds`), a kind, a region
 | OS, every run (Linux) | `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`, `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.pss`, `os.pss_anon`, `os.private_dirty`, `os.fds`, `os.threads` |
 | OS, macOS / Windows | macOS `os.rss`, `os.phys_footprint`, `os.threads`, `os.fds`; Windows `os.rss` (working set), `os.private`, `os.pagefile`, `os.handles`, `os.threads` |
 | Container | `cgroup.current`, `cgroup.anon`, `cgroup.file` |
-| JVM | `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used`, `jvm.nmt_committed`, `jvm.threads`, `jvm.classes_loaded` |
+| JVM | `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used`, `jvm.nmt_committed`, `jvm.nmt.<category>`, `jvm.threads`, `jvm.classes_loaded`, `jvm.classes_unloaded`, `jvm.jit_seconds` |
 | Go | `go.heap_live`, `go.heap_objects`, `go.total`, `go.released`, `go.stacks`, `go.goroutines` |
 | Node | `node.heap_used`, `node.heap_total`, `node.external`, `node.array_buffers` |
 | Python | `py.traced`, `py.gc_objects` |
@@ -125,8 +129,13 @@ no command to add one by hand. Its `result` carries:
 
 `dla alloc-test H1 [--finding F3]` re-runs the harness with `iterations + extra` points (extra
 defaults to the iteration count) and a purge applied at the last point, then tests each chosen
-column. The column is `--column`, else the one tied to `--finding`, else every column that passed
-the gate in the latest trend of the harness plus `os.rss`.
+column. The column is `--column`, else the one tied to `--finding`, else (a finding with a region
+and no tied column) the region's primary column, else every column that passed the gate in the
+latest trend of the harness plus `os.rss`. For a JVM non-heap finding the primary is
+`jvm.nonheap_used`, which must plateau together with every `jvm.nmt.*` category that passed the gate
+in the latest trend and with `jvm.threads` and `os.threads` (when those passed the gate, or when the
+harness has no trend yet); `jvm.classes_loaded`, `jvm.classes_unloaded` and `jvm.jit_seconds` are reported
+and never decide.
 
 - **Plateau test.** Main window = the first `iterations` post-warm-up points, extra window = the
   rest. If the extra slope is at least half the main slope and the extra rise exceeds 3 noise
@@ -149,7 +158,8 @@ the gate in the latest trend of the harness plus `os.rss`.
   `alloc-test`) and its trend.
 
 An `inconclusive` discriminator moves nothing. Run again with a larger `--extra` or more
-iterations (`dla harness run H1 --iterations N`), or record the item `unresolved`.
+iterations (`dla harness run H1 --iterations N`), or record the item `unresolved` with reason
+`inconclusive` (the discriminator is the measurement tied to the finding that the ledger asks for).
 
 ## Ledger rules for dynamic findings
 
@@ -208,8 +218,8 @@ its growth evidence, which is how independence is judged.
 
 - `total` is the Theil-Sen slope of the region's primary column: the runtime heap after GC
   (`jvm.heap_used`, `go.heap_live`, `node.heap_used`, `py.traced`, `native.live_bytes`) for heap,
-  `gap.unexplained` for off-heap (run `dla gap S1` first), thread or goroutine stack bytes for
-  non-heap.
+  `gap.unexplained` for off-heap (run `dla gap S1` first), `jvm.nonheap_used` (Metaspace, class space
+  and code cache) for a JVM and `go.stacks` for Go for non-heap.
 - `attributed` is the sum, over confirmed findings, of the slope of the passing column their
   growth evidence cites in that region (a column counted once), capped at `total`. A finding whose
   growth was measured as a count contributes no bytes and the limitation says so.
@@ -231,7 +241,18 @@ made after tracemalloc started.
 
 ## How the report shows it
 
-`dla report` is the only report writer. For dynamic findings it prints:
+`dla report` is the only report writer. Under `Status:` and `Measured:` it prints a `Time:` line:
+`Time: budget 3h (auto: 1 runtime, 362 candidates; extended by 30m), 2h58m used.` (a fixed
+budget reads `Time: budget 45m, 12m used.`; the time used runs to the newest ledger line). When any
+finding was closed `time_budget` the line ends with `<n> findings were closed for lack of time;
+measuring them needs about <m> more minutes (a new run with --budget <total>m).` Pass that sentence
+on to the user. The `Findings:` line counts the leak hypotheses and the non-leak explanations (the
+`N-*` siblings) apart: `Findings: 37 enumerated, 37 dispositioned; leak hypotheses: confirmed 0,
+strong 0, refuted 13, suspected 9, unresolved 2; non-leak explanations: confirmed 13, refuted 0,
+suspected 0, unresolved 0; no leak confirmed`. A non-leak explanation that held is `confirmed` on its
+side and its leak-side root is `refuted`, so one test is not two leaks; the closing `no leak
+confirmed` appears when something was measured and no leak is confirmed or strong. Read the leak side
+for the verdict. For dynamic findings it prints:
 
 - confirmed: `Growth: <column> <slope> <unit>/<axis> (<shape>, gate pass, E12)`, for example
   `Growth: probe:reports.builder.ReportBuilder.category_totals 36.73 count/n (steady, gate pass, E12)`;
@@ -240,8 +261,31 @@ made after tracemalloc started.
   on;
 - a `Coverage:` line with iterations and exercised entry points per runtime
   (`Coverage: python 7040 iterations, 10 of 10 entry points exercised`), or "not measured" for
-  runtimes whose entry points cannot be measured (Rust, native);
-- open items, including residual items, with the command that closes each.
+  runtimes whose entry points cannot be measured (Rust, native); when a JVM run loaded project
+  classes but matched no entry point it adds the count (`..., 0 of 225 entry points exercised,
+  37 project classes loaded`): project code ran, the listed entry points were not the ones driven;
+- a `Coverage warning:` line after `Measured:` (before `Time:`) when a runtime has discovered entry points and
+  exercised none of them or fewer than half: it says that findings outside the exercised ones rest on
+  reading the code and are hypotheses, not measured leaks, names the cause (no iteration recorded; or
+  iterations ran and none called an entry point, so the driver did not reach the code under test; or
+  most entry points were never called) and the step that would measure the rest: run the harness that
+  was never run; fix the build of one that did not build (when no iteration was recorded, the cause says so too); fill the DLA-HOOK
+  bodies of a driver; make a hook driver with `dla harness gen --lang <rt> --driver` when every
+  harness that ran is a JUnit repeat (it has no hooks: the step says how many entry points the
+  project's tests reach) or when `dla harness gen` would refuse for lack of a workload with an
+  iteration argument. When `intake.workload` records a blocker, the line ends `Blocked: ...` with its
+  reason and remedy instead of a step. The warning is skipped only after iterations, when the exercised
+  entry points of the runtime cannot be measured (Rust and native, or a Python without
+  `sys.monitoring`); with no iteration recorded it stands for those too;
+- a `## Explained, not leaks` section after `## Findings`: the confirmed `N-*` explanations (warm-up,
+  bounded cache, load that scales, a high-water mark) with the discriminator that decided each. They are
+  explanations, not leaks and not defects, and are never in the leak findings list;
+- open items, including residual items, with the command that closes each. Two final items guard an
+  early stop: `coverage_contradiction` (a runtime ran iterations, has entry points and exercised none)
+  and `budget_left_unrevisited` (more than the floor of the budget is left while findings closed
+  `time_budget`, or closed without exercise in a runtime with entry points and no harness). Each has a
+  fix and an escape recorded on `intake.workload` (stages.md, section 8): any reason with a remedy for
+  the first (`time_budget` only once the time left is at or under the floor), a blocker reason for the second;
 
 For labelled, explained and verified findings it also prints, per finding:
 
@@ -254,6 +298,21 @@ For labelled, explained and verified findings it also prints, per finding:
   (dla-trend)` (or `intervention that removed the growth`);
 - `Verified: agrees (verifier site .., holder .., label ..; bundle ..)`, or `Verified: DISAGREES` with
   what differs and both mechanisms, or `Verified: no` for a confirmed leak nobody verified.
+
+Show the report exactly as printed. If it says INCOMPLETE, say so and list what is open.
+
+### The closing message
+
+After the report, say it in this order, copying every number from `dla report` or `dla run status`:
+
+1. One line from the `Findings:` line: leaks confirmed and verified, non-leak explanations (the `N-*`
+   siblings: "explanation, not a leak", never "confirmed"), unresolved.
+2. The `Coverage:` line. When it shows 0 or a minority of the entry points exercised, say first that this
+   run did not test the rest, so it neither shows nor rules out a leak there; name the cause and quote the
+   ledger's remedy as printed.
+3. One summary line for the `suspected_static_only` findings (count, why untested, remedy); the report
+   file holds the list.
+4. What is open, from the gate's `missing` list, and what only the user can supply.
 
 ## Integrity
 
@@ -273,5 +332,3 @@ resolved), disclose it and run `dla run reseal --reason "<what changed and why>"
 Integrity. A run created before ledger schema 6 has no `integrity/` directory and is reported as unsealed,
 not as tampered. If `report.md` is edited after it was rendered, the next `dla report` replaces it and
 says so.
-
-Show the report exactly as printed. If it says INCOMPLETE, say so and list what is open.

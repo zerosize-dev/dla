@@ -1,0 +1,24 @@
+schema_version = 1
+id = "python-frozen-gc"
+runtime = "python"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The fare pricing workers' resident memory grows with the number of itineraries
+they have priced, even though each batch's results are handed back and
+dropped. The pool is recycled every night to stay under the container limit.
+Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "journeys/worker.py:25"
+lines = [25, 25]
+alt_sites = ["journeys/worker.py:19", "journeys/models.py:8", "journeys/models.py:25", "journeys/models.py:28"]
+holder = "cycle-only"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

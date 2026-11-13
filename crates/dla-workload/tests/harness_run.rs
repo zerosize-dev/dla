@@ -19,7 +19,7 @@ use dla_core::{
     FindingId, Ledger,
     harness::{AgentKind, CommandSpec, HarnessManifest, HarnessMode, ProbeSpec, ProbeTarget},
     runtime::Runtime,
-    series::{KeyMode, SeriesFile},
+    series::{KeyMode, SeriesFile, SeriesRegion},
     state::{Consent, ConsentGiver, RunState, now_utc},
     toolctx::ToolCtx,
 };
@@ -1055,12 +1055,94 @@ fn jvm_agent_heap_and_probe_show_the_order_cache_leak() {
     let leak_rise = rise(leak);
     assert!(leak_rise > 400_000.0, "leak heap rise {leak_rise}");
     assert!(leak.column_index("jvm.nmt_committed").is_some());
+    // The non-heap columns the alloc-test judges a warm-up by: the NMT categories (committed
+    // bytes, from the summary the agent already reads), the unloads and the compile time.
+    for c in [
+        "jvm.nmt.metaspace",
+        "jvm.nmt.code",
+        "jvm.nmt.symbol",
+        "jvm.classes_unloaded",
+        "jvm.jit_seconds",
+    ] {
+        let i = leak
+            .column_index(c)
+            .unwrap_or_else(|| panic!("no column {c}"));
+        assert_eq!(
+            leak.columns[i].region,
+            SeriesRegion::NonHeap,
+            "{c} is a non-heap column"
+        );
+    }
+    let code = post(leak, "jvm.nmt.code");
+    assert!(
+        code.iter().all(|p| p.1 > 100_000.0),
+        "code cache bytes {code:?}"
+    );
+    assert!(
+        leak.column_index("jvm.metaspace_used").is_none(),
+        "the pool readings stand in only without NMT"
+    );
     let ctl = &results[1];
     assert!(!passes(ctl, probe));
     let ctl_rise = rise(ctl);
     assert!(
         ctl_rise < leak_rise / 3.0,
         "bounded heap rise {ctl_rise} against the leak's {leak_rise}"
+    );
+}
+
+/// Without native memory tracking the agent keeps the pool readings (Metaspace and the code
+/// cache) in place of the NMT categories, and says why.
+#[test]
+fn jvm_agent_without_nmt_reads_the_pools_instead_of_the_categories() {
+    if !have(&["java", "javac", "jar"]) {
+        return;
+    }
+    let fx = fixture("jvm-order-cache", &["jvm"], &[1]);
+    let jar = build_jvm_agent(&fx);
+    let mut m = manifest(
+        Runtime::Jvm,
+        &["java", "-cp", "out", "shop.Main", "{n}"],
+        vec![(
+            s("JAVA_TOOL_OPTIONS"),
+            format!("-javaagent:{}", jar.display()),
+        )],
+        1000,
+    );
+    m.build = Some(spec(&[
+        "sh",
+        "-c",
+        "rm -rf out && mkdir out && javac -d out src/shop/*.java",
+    ]));
+    m.agent = AgentKind::JvmAgent;
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let series = load(&fx, &out, 0);
+    for c in [
+        "jvm.metaspace_used",
+        "jvm.codecache_used",
+        "jvm.nonheap_used",
+    ] {
+        let i = series
+            .column_index(c)
+            .unwrap_or_else(|| panic!("no column {c}"));
+        assert_eq!(series.columns[i].region, SeriesRegion::NonHeap, "{c}");
+    }
+    assert!(
+        series
+            .columns
+            .iter()
+            .all(|c| !c.name.starts_with("jvm.nmt")),
+        "{:?}",
+        series.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("NMT off") && l.contains("jvm.nmt.<category>")),
+        "{:?}",
+        series.limitations
     );
 }
 

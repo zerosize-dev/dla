@@ -1,0 +1,25 @@
+schema_version = 1
+id = "native-tombstone-table"
+runtime = "native"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The connection broker's resident memory grows steadily the longer it runs, in
+step with the number of leases it has granted, although the number of leases
+it holds at any moment stays the same. It is restarted every few days. Find
+out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/lease_table.c:103"
+lines = [102, 103]
+alt_sites = ["src/lease_table.c:24", "src/lease_table.c:139"]
+holder = "native-handle/global-ref"
+region = "off-heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true
+dump_backed = true

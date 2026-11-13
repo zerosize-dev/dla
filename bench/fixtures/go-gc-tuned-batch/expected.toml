@@ -1,0 +1,22 @@
+schema_version = 1
+id = "go-gc-tuned-batch"
+runtime = "go"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+Operators report that the tally service's resident memory rose sharply during its first minutes of replaying batches and has stayed far above what the account data it keeps would need. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "run.sh:5"
+cause = "N-HEADROOM"
+discriminator = "the launcher sets GOGC=400, so the collector lets garbage grow to five times the live heap; heap in use before a collection is 50 to 80 MB, but after runtime.GC() it is 9.3 MB at batch 1, 50, 100, 200 and 400, so the series after a forced collection is flat"
+
+[[non_leak]]
+id = "N2"
+site = "internal/tally/event.go:45"
+cause = "N-HEADROOM"
+discriminator = "each batch decodes about 60000 events into a new slice that is garbage once the batch is applied; the slice is not kept, so live heap after a collection does not depend on the number of batches"

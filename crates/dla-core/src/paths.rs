@@ -140,6 +140,26 @@ pub fn rel_slash(root: &Path, path: &Path) -> Option<String> {
     path.strip_prefix(root).ok().map(to_slash)
 }
 
+/// True for build logic: a Gradle build, settings, init or applied script (`*.gradle.kts`,
+/// `*.gradle`, anywhere) or anything under a `buildSrc` directory (at any depth). It runs in
+/// the build tool's process at build time, not in the process a run measures, so it is
+/// neither a candidate nor an entry point. A `*.main.kts` script is not build logic.
+/// `rel` is a project-relative path; `\` and `/` both separate components.
+pub fn is_build_logic(rel: &str) -> bool {
+    let rel = slash(rel);
+    let mut parts = rel.split('/').filter(|p| !p.is_empty()).peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_some() {
+            if part == "buildSrc" {
+                return true;
+            }
+        } else {
+            return part.ends_with(".gradle.kts") || part.ends_with(".gradle");
+        }
+    }
+    false
+}
+
 /// `path` without the verbatim prefix `canonicalize` adds on Windows (`\\?\C:\x` becomes
 /// `C:\x`, `\\?\UNC\host\share` becomes `\\host\share`); other paths are returned as they
 /// are. Use it on a canonical path passed to a child process: Java rejects the `?` in a
@@ -166,6 +186,34 @@ mod tests {
             .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
             .collect();
         move |k| v.iter().find(|(a, _)| a == k).map(|(_, b)| b.clone())
+    }
+
+    #[test]
+    fn build_logic_is_gradle_scripts_and_build_src() {
+        for yes in [
+            "build.gradle.kts",
+            "settings.gradle.kts",
+            "docker.gradle.kts",
+            "build.gradle",
+            "svc/build.gradle.kts",
+            "gradle/x.gradle.kts",
+            "buildSrc/src/main/kotlin/A.kt",
+            "a/buildSrc/b.kt",
+            "buildSrc\\src\\A.kt",
+        ] {
+            assert!(is_build_logic(yes), "{yes} is build logic");
+        }
+        for no in [
+            "src/main/kotlin/A.kt",
+            "scripts/tool.main.kts",
+            "src/buildSrcX/A.kt",
+            "src/gradle.kt",
+            "buildSrc",
+            "notes.gradle.kts.txt",
+            "",
+        ] {
+            assert!(!is_build_logic(no), "{no} is not build logic");
+        }
     }
 
     #[test]

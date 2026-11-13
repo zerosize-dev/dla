@@ -83,7 +83,7 @@ pub const REGISTRY: [Backend; 13] = [
         runtimes: &[Jvm],
         programs: &["sonar-scanner"],
         timeout_secs: 600,
-        summary: "SonarQube / SonarCloud (needs a server)",
+        summary: "SonarQube / SonarCloud (server-only: always blocked, DLA queries no server)",
     },
     Backend {
         name: "ruff",
@@ -123,7 +123,7 @@ pub fn backend(name: &str) -> Option<&'static Backend> {
 /// The hint stored in coverage for a missing backend.
 pub fn install_hint(name: &str) -> String {
     match name {
-        "sonar" => "install sonar-scanner, run a SonarQube or SonarCloud server and set SONAR_HOST_URL and SONAR_TOKEN (dla install sonar prints the steps)".to_owned(),
+        "sonar" => "nothing to install: Sonar rules are evaluated on a SonarQube or SonarCloud server, which DLA does not query".to_owned(),
         "govet" => "install the Go toolchain (https://go.dev/dl/); go vet ships with it".to_owned(),
         other => format!("dla install {other}"),
     }
@@ -143,6 +143,8 @@ mod tests {
     #[test]
     fn hints_name_the_installer() {
         assert_eq!(install_hint("ruff"), "dla install ruff");
-        assert!(install_hint("sonar").contains("SONAR_HOST_URL"));
+        let sonar = install_hint("sonar");
+        assert!(sonar.starts_with("nothing to install"), "{sonar}");
+        assert!(!sonar.contains("install sonar-scanner"), "{sonar}");
     }
 }

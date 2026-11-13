@@ -64,9 +64,18 @@ pub fn raw_file(lang: Runtime, backend: &str) -> String {
     format!("{}-{backend}.json", lang.as_str())
 }
 
+/// The first line of `s`, cut at a word boundary with `...` when longer than 100 characters.
 fn short(s: &str) -> String {
-    let one: String = s.lines().next().unwrap_or("").chars().take(100).collect();
-    one
+    let line = s.lines().next().unwrap_or("");
+    if line.chars().count() <= 100 {
+        return line.to_owned();
+    }
+    let cut: String = line.chars().take(97).collect();
+    let cut = match cut.rfind(char::is_whitespace) {
+        Some(i) if i > 0 => &cut[..i],
+        _ => cut.as_str(),
+    };
+    format!("{} ...", cut.trim_end())
 }
 
 /// Runs the `dla` rule backend and wraps it as an adapter outcome.
@@ -156,6 +165,14 @@ fn record_ran(
             .collect(),
     );
     let unlisted = before.saturating_sub(hits.len());
+    // Build logic (Gradle scripts, buildSrc) is not part of the measured process: a hit there
+    // is dropped and named in a limitation, never a candidate.
+    let with_logic = hits.len();
+    let hits: Vec<StaticHit> = hits
+        .into_iter()
+        .filter(|h| !dla_core::paths::is_build_logic(&h.file))
+        .collect();
+    let build_logic_hits = with_logic - hits.len();
     let in_scope = hits.len();
     let hits: Vec<StaticHit> = hits
         .into_iter()
@@ -174,6 +191,7 @@ fn record_ran(
         "load_errors": load_errors,
         "limitations": limitations,
         "note": note,
+        "build_logic_hits": build_logic_hits,
         "hits": hits,
         "capture": raw,
     });
@@ -199,6 +217,12 @@ fn record_ran(
         ));
     }
     let mut result = bounded_result(lang, listed.len(), &hits, exit, load_errors);
+    if build_logic_hits > 0 {
+        result["build_logic_hits"] = json!(build_logic_hits);
+        limitations.push(format!(
+            "{build_logic_hits} hit(s) in build logic (Gradle scripts, buildSrc) were dropped: it is not part of the measured process"
+        ));
+    }
     if dropped > 0 {
         result["out_of_scope_hits"] = json!(dropped);
         limitations.push(format!(
@@ -295,6 +319,8 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
         .filter(|b| *b != "dla")
         .map(str::to_owned)
         .collect();
+    // Sonar reports last of the external backends: its reason names those that ran.
+    order.sort_by_key(|b| b == "sonar");
     order.push("dla".to_owned());
 
     let mut coverage: Vec<(String, BackendCoverage)> = Vec::new();
@@ -318,6 +344,18 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                 scratch,
                 timeout: timeout_for(backend, env),
                 scope: scope.clone(),
+                ran: coverage
+                    .iter()
+                    // A backend that ran on nothing (not applicable) did not cover anything.
+                    .filter(|(_, c)| {
+                        c.status == dla_core::coverage::BackendStatus::Ran
+                            && !c
+                                .reason
+                                .as_deref()
+                                .is_some_and(|r| r.starts_with("not applicable"))
+                    })
+                    .map(|(b, _)| b.clone())
+                    .collect(),
             };
             adapters::run(backend, &job)
         };
@@ -377,6 +415,11 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
         0
     };
     dla_census::record_out_of_scope(ctx, lang, out_of_scope)?;
+    let build_logic = dla_census::walk::count_build_logic(&ctx.project, lang);
+    dla_census::record_build_logic(ctx, lang, build_logic)?;
+    if build_logic > 0 {
+        summary.insert("build_logic".into(), json!(build_logic));
+    }
     if out_of_scope > 0 {
         summary.insert("out_of_scope".into(), json!(out_of_scope));
     }

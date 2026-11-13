@@ -39,6 +39,7 @@ pub fn render_markdown(view: &RunView) -> String {
     integrity(&mut out, view);
     workers(&mut out, view);
     findings(&mut out, view);
+    explained(&mut out, view);
     merged_duplicates(&mut out, view);
     ruled_out(&mut out, view);
     blind_spots(&mut out, view);
@@ -224,22 +225,100 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
         let _ = writeln!(out, "Status: INCOMPLETE ({} open)\n", st.blocking.len());
     }
     let _ = writeln!(out, "{}\n", measured_line(&measured(view)));
+    for w in coverage_warnings(view) {
+        let _ = writeln!(out, "{w}\n");
+    }
+    let _ = writeln!(out, "Time: {}\n", dla_core::timebudget::report_line(view));
     let _ = writeln!(out, "Entry: {}\n", entry_line(view));
     let _ = writeln!(out, "Scope: {}\n", scope_line(view));
-    let s = &c.by_state;
-    let _ = writeln!(
-        out,
-        "Findings: {} enumerated, {} dispositioned; confirmed {}, strong {}, refuted {}, suspected {}, unresolved {}\n",
-        c.enumerated,
-        c.dispositioned,
-        s.confirmed,
-        s.strong,
-        s.refuted,
-        s.suspected_static_only,
-        s.unresolved
-    );
+    let _ = writeln!(out, "{}\n", findings_line(c));
     let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
     let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
+}
+
+/// The `Findings:` line. The leak hypotheses and the non-leak explanations (the `N-*`
+/// siblings) are counted apart: an explanation that held is `confirmed` on its side and
+/// its leak-side root is `refuted` on the other, so one test read as two leaks when the two
+/// were added together. When something was measured and no leak is confirmed or strong,
+/// the line says so in words.
+fn findings_line(c: &dla_core::view::StatusCounts) -> String {
+    let leak = c.by_state.minus(&c.non_leak);
+    let n = &c.non_leak;
+    let mut line = format!(
+        "Findings: {} enumerated, {} dispositioned; leak hypotheses: confirmed {}, strong {}, refuted {}, suspected {}, unresolved {}; non-leak explanations: confirmed {}, refuted {}, suspected {}, unresolved {}",
+        c.enumerated,
+        c.dispositioned,
+        leak.confirmed,
+        leak.strong,
+        leak.refuted,
+        leak.suspected_static_only,
+        leak.unresolved,
+        n.confirmed,
+        n.refuted,
+        n.suspected_static_only,
+        n.unresolved
+    );
+    if c.measured && leak.confirmed + leak.strong == 0 {
+        line.push_str("; no leak confirmed");
+    }
+    line
+}
+
+/// `Coverage warning:` lines, right after `Measured:`: one per runtime that has discovered
+/// entry points and exercised none of them, or fewer than half. The coverage line states
+/// the counts as data; this says what they mean for the findings, the cause, and the
+/// step that would measure the rest.
+fn coverage_warnings(view: &RunView) -> Vec<String> {
+    let Some(cov) = &view.coverage else {
+        return Vec::new();
+    };
+    cov.workers
+        .iter()
+        .filter_map(|(rt, w)| {
+            let discovered = w.entry_points.discovered.len();
+            let exercised = w.entry_points.exercised.len();
+            let iterations = w.iterations.unwrap_or(0);
+            // A runtime that cannot record which entry points ran says "0 exercised"
+            // after any run: that is its limit, not a result. With no iteration at all
+            // the warning still holds.
+            if discovered == 0
+                || (exercised > 0 && exercised * 2 >= discovered)
+                || (iterations > 0 && !gate::exercised_is_measured(cov, rt))
+            {
+                return None;
+            }
+            let cause = if exercised > 0 {
+                "most entry points were never called".to_owned()
+            } else if iterations == 0 {
+                match gate::build_failed_harness(view, rt) {
+                    Some(h) => format!(
+                        "harness {h} did not build, so no workload iteration was recorded for it"
+                    ),
+                    None => "no workload iteration was recorded for it".to_owned(),
+                }
+            } else {
+                let loaded = match w.project_classes {
+                    Some(1) => "; 1 project class loaded".to_owned(),
+                    Some(n) if n > 1 => format!("; {n} project classes loaded"),
+                    _ => String::new(),
+                };
+                format!(
+                    "{} ran and none called an entry point, so the driver did not reach the code under test{loaded}",
+                    plural_n(iterations, "iteration")
+                )
+            };
+            let next = match gate::open_harness_step(view, rt) {
+                gate::HarnessStep::Do(step) => format!("To measure: {step}."),
+                gate::HarnessStep::Blocked(why) => {
+                    format!("Blocked: intake.workload records {}.", why.trim_end_matches(['.', ' ']))
+                }
+            };
+            Some(format!(
+                "Coverage warning: this run exercised {exercised} of {discovered} entry points ({}), so findings outside them rest on reading the code and are hypotheses, not measured leaks. Cause: {cause}. {next}",
+                inline(rt),
+            ))
+        })
+        .collect()
 }
 
 /// The `Measured:` line, right after `Status:` (which stays exactly as it was: graders
@@ -311,7 +390,20 @@ fn scope_line(view: &RunView) -> String {
     } else {
         out_of_scope.join(", ")
     };
-    format!("{head}; excluded: {excluded}; out of scope: {out_of_scope}")
+    // Build logic (Gradle scripts, buildSrc) is never read: named only when some was found.
+    let build_logic: Vec<String> = view
+        .coverage
+        .iter()
+        .flat_map(|c| c.workers.iter())
+        .filter(|(_, w)| w.build_logic > 0)
+        .map(|(name, w)| format!("{} {}", inline(name), plural_n(w.build_logic, "file")))
+        .collect();
+    let build_logic = if build_logic.is_empty() {
+        String::new()
+    } else {
+        format!("; build logic not read: {}", build_logic.join(", "))
+    };
+    format!("{head}; excluded: {excluded}; out of scope: {out_of_scope}{build_logic}")
 }
 
 /// The iterations run and entry points exercised per worker, or `not measured` when the
@@ -334,8 +426,15 @@ fn coverage_line(coverage: Option<&CoverageManifest>) -> String {
                 .map_or_else(|| "no iterations".to_owned(), |n| plural_n(n, "iteration"));
             let exercised = w.entry_points.exercised.len();
             let discovered = w.entry_points.discovered.len().max(exercised);
+            // A run that executed the project's classes but matched no listed entry point
+            // must not read as if nothing ran.
+            let project = match w.project_classes {
+                Some(1) if exercised == 0 => ", 1 project class loaded".to_owned(),
+                Some(n) if exercised == 0 && n > 1 => format!(", {n} project classes loaded"),
+                _ => String::new(),
+            };
             format!(
-                "{} {iterations}, {exercised} of {discovered} entry points exercised",
+                "{} {iterations}, {exercised} of {discovered} entry points exercised{project}",
                 inline(name)
             )
         })
@@ -506,6 +605,7 @@ fn findings(out: &mut String, view: &RunView) {
         .ledger
         .findings()
         .filter(|f| f.state != FindingState::Refuted && view.ledger.merged_into(&f.id).is_none())
+        .filter(|f| !is_explanation(f))
         .collect();
     // Stable: inside a state the ledger order stays; inside suspected_static_only the
     // tier decides first.
@@ -518,7 +618,15 @@ fn findings(out: &mut String, view: &RunView) {
         (rank(f.state), tier)
     });
     if list.is_empty() {
-        out.push_str("No findings to report.\n\n");
+        let explained = view
+            .ledger
+            .findings()
+            .any(|f| is_explanation(f) && view.ledger.merged_into(&f.id).is_none());
+        out.push_str(if explained {
+            "No leak hypotheses to report; the confirmed findings are non-leak explanations, listed below.\n\n"
+        } else {
+            "No findings to report.\n\n"
+        });
         return;
     }
     let mut static_seen = 0;
@@ -545,6 +653,39 @@ fn findings(out: &mut String, view: &RunView) {
         finding_section(out, view, f);
     }
     flush(out, &mut table);
+}
+
+/// A non-leak explanation that held: an `N-*` sibling in `confirmed`. It says why the
+/// growth is not a leak, so it is listed apart from the leak hypotheses.
+fn is_explanation(f: &Finding) -> bool {
+    f.state == FindingState::Confirmed && f.polarity() == Polarity::NonLeak
+}
+
+/// `## Explained, not leaks`: the confirmed non-leak explanations, with the evidence that
+/// decided them. Left out when there are none.
+fn explained(out: &mut String, view: &RunView) {
+    let list: Vec<&Finding> = view
+        .ledger
+        .findings()
+        .filter(|f| is_explanation(f) && view.ledger.merged_into(&f.id).is_none())
+        .collect();
+    if list.is_empty() {
+        return;
+    }
+    out.push_str("## Explained, not leaks\n\n");
+    let _ = writeln!(
+        out,
+        "{} non-leak {} held: the growth covered has a benign cause (a warm-up, a bounded cache, load that scales with traffic, a high-water mark), so each is an explanation, not a leak and not a defect.\n",
+        list.len(),
+        if list.len() == 1 {
+            "explanation"
+        } else {
+            "explanations"
+        }
+    );
+    for f in list {
+        finding_section(out, view, f);
+    }
 }
 
 /// `#### Other static-only findings (<n>)`: one row per finding, no remedy per row. A

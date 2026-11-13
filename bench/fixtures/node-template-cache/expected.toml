@@ -1,0 +1,16 @@
+schema_version = 1
+id = "node-template-cache"
+runtime = "node"
+category = "non-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The notice renderer's heap climbs over the first minutes after every restart, and the dashboard shows no sign of it levelling off yet. Find out what is holding the memory.
+"""
+
+[[non_leak]]
+id = "N1"
+site = "src/cache.js:14"
+cause = "N-WARM"
+discriminator = "compiled templates are keyed by notice kind and language, so the entry count stops at 70 (14 kinds x 5 languages) after about 300 renders; heap after GC stays at 5.2 MB from 300 to 64000 renders and the slope of the second half is zero"

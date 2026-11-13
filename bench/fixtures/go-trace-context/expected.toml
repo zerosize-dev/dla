@@ -1,0 +1,21 @@
+schema_version = 1
+id = "go-trace-context"
+runtime = "go"
+category = "archetype-free"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The rates service's heap grows steadily for as long as it runs, even though it serves the same handful of currency pairs all day and its quote cache never holds more than eight entries. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "internal/rates/poller.go:32"
+lines = [32, 32]
+alt_sites = ["internal/rates/poller.go:20", "internal/trace/trace.go:35"]
+holder = "container-field"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

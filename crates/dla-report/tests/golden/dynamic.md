@@ -6,11 +6,13 @@ Status: INCOMPLETE (8 open)
 
 Measured: 1 harness run, 1 series, 0 captures
 
+Time: budget 1h, 0s used.
+
 Entry: repository
 
 Scope: repository; excluded: none; out of scope: none
 
-Findings: 3 enumerated, 3 dispositioned; confirmed 1, strong 0, refuted 2, suspected 0, unresolved 0
+Findings: 3 enumerated, 3 dispositioned; leak hypotheses: confirmed 1, strong 0, refuted 1, suspected 0, unresolved 0; non-leak explanations: confirmed 0, refuted 1, suspected 0, unresolved 0
 
 Residual: not measured
 

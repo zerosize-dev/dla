@@ -428,3 +428,30 @@ fn evidence_stays_bounded_with_every_entry_listed() {
     assert!(ledger.contains("go-timer-unstopped-before-1.23"));
     assert!(out.summary.to_string().len() <= 2048);
 }
+
+/// Sonar is server-only: `dla probe` writes the same `blocked` row the sweep does, never a
+/// `missing` row (and never lists it among the tools to install).
+#[test]
+fn sonar_is_a_blocked_server_only_row_not_a_missing_tool() {
+    use dla_core::coverage::{BackendStatus, CoverageManifest};
+    let (_d, ctx) = project(&[("pom.xml", "<project/>")], None);
+    run(&ctx, &ProbeOptions::default()).unwrap();
+    let cov = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
+    let sonar = &cov.workers["jvm"].backends["sonar"];
+    if sonar.status != BackendStatus::Ran {
+        assert_eq!(sonar.status, BackendStatus::Blocked, "{sonar:?}");
+        let why = sonar.reason.clone().unwrap();
+        assert!(why.starts_with("server-only:"), "{why}");
+        assert_eq!(sonar.install_hint, None);
+    }
+    let ledger = ctx.ledger().unwrap();
+    let all = serde_json::to_string(&ledger.evidence().collect::<Vec<_>>()).unwrap();
+    assert!(
+        all.contains("tools_missing"),
+        "the probe evidence exists: {all}"
+    );
+    assert!(
+        sonar.status == BackendStatus::Ran || !all.contains("jvm:sonar"),
+        "not listed as a missing tool: {all}"
+    );
+}

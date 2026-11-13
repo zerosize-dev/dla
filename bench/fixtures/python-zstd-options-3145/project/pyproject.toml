@@ -1,0 +1,8 @@
+[project]
+name = "segstore"
+version = "2.3.0"
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.setuptools]
+packages = ["archive"]

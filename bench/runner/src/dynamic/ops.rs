@@ -1273,6 +1273,7 @@ esac
             path_dir: None,
             unset_vars: Vec::new(),
             provided: None,
+            last_harness_refusal: None,
             pending: vec![Pending {
                 finding: "F1".into(),
                 evidence: "E0".into(),
@@ -1401,6 +1402,7 @@ esac
             unset_vars: Vec::new(),
             pending: Vec::new(),
             provided: None,
+            last_harness_refusal: None,
         };
         let tied = Tied {
             set: ["F1", "F2", "F3", "F4"]

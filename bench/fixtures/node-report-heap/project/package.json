@@ -1,0 +1,15 @@
+{
+  "name": "month-end-reports",
+  "version": "5.0.1",
+  "private": true,
+  "description": "Builds month-end ledger reports on demand for the finance team.",
+  "main": "src/reports.js",
+  "scripts": {
+    "test": "node --test",
+    "start": "node --max-old-space-size=3072 bin/serve.js",
+    "load": "node load.js --iterations 60"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

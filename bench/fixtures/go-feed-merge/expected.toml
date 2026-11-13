@@ -1,0 +1,33 @@
+schema_version = 1
+id = "go-feed-merge"
+runtime = "go"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The feed merger's memory and goroutine count both climb with every merge round during long replay runs, and the pod has to be restarted every day or so. Find out what is holding them.
+"""
+
+[[leak]]
+id = "L1"
+site = "internal/fetcher/session.go:30"
+lines = [30, 30]
+alt_sites = ["internal/fetcher/session.go:36-46", "internal/merge/merge.go:37"]
+holder = "blocked-stack"
+region = "non-heap"
+cause = "L-WORKER"
+share = 0.6
+confirmable = true
+dump_backed = true
+
+[[leak]]
+id = "L2"
+site = "internal/indexer/indexer.go:24"
+lines = [24, 24]
+alt_sites = ["internal/merge/merge.go:61", "internal/merge/item.go:36"]
+holder = "container-field"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 0.4
+confirmable = true

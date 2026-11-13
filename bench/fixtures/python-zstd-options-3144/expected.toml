@@ -1,0 +1,27 @@
+schema_version = 2
+id = "python-zstd-options-3144"
+runtime = "python"
+category = "archetype-free"
+pair = "python-zstd-options-3145"
+dynamic_confirmation = true
+
+[toolchain]
+python = "3.14.4"
+
+[task]
+prompt = """
+The archive service's resident memory grows with the number of log segments it
+has read. It is restarted every few days when the container reaches its
+limit. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "archive/reader.py:17"
+lines = [17, 17]
+alt_sites = ["archive/options.py:15", "archive/tenants.py:13"]
+holder = "native-handle/global-ref"
+region = "heap"
+cause = "UNCLASSIFIED"
+share = 1.0
+confirmable = true

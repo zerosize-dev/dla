@@ -1,0 +1,20 @@
+schema_version = 2
+id = "go-ticker-modern"
+runtime = "go"
+category = "decoy-control"
+pair = "go-ticker-legacy"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The reservation service's heap grows steadily with the number of orders it has handled, and only a restart brings it back down. Find out what is holding the memory.
+"""
+
+[toolchain]
+go = "1.23.12"
+
+[[non_leak]]
+id = "N1"
+site = "internal/reserve/wait.go:11"
+cause = "N-WARM"
+discriminator = "go.mod names Go 1.23, so a Ticker that nothing references is collected without a Stop; the heap after a forced collection is flat at about 100 KB from 100000 to 400000 orders and the runtime keeps no timer per order"

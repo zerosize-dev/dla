@@ -1,0 +1,26 @@
+schema_version = 1
+id = "jvm-session-index"
+runtime = "jvm"
+category = "archetype-leak"
+pair = "jvm-session-index-pruned"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The member portal's heap keeps growing over a working day even though the
+number of people signed in at any moment stays about the same. After a rolling
+restart the heap is low again and then climbs the same way. Find out what is
+holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/portal/SessionStore.java:19"
+lines = [19, 19]
+alt_sites = ["src/portal/SessionStore.java:11", "src/portal/SessionStore.java:28-30"]
+holder = "static/global"
+region = "heap"
+cause = "L-STALE"
+share = 1.0
+confirmable = true
+dump_backed = true

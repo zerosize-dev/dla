@@ -879,7 +879,7 @@ fn a_ledger_written_by_the_api_replays_from_disk() {
     }
     let (f, _) = confirmed_leak(&mut l);
     let text = std::fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap();
-    assert!(text.lines().all(|t| t.contains("\"schema_version\":6")));
+    assert!(text.lines().all(|t| t.contains("\"schema_version\":7")));
     let again = Ledger::load(dir.path()).unwrap();
     assert_eq!(again.finding(&f).unwrap(), l.finding(&f).unwrap());
     assert_eq!(again.finding(&f).unwrap().shape, Some(Shape::Steady));
@@ -912,7 +912,7 @@ fn a_version_one_ledger_stays_valid_and_new_lines_are_the_current_version() {
         .lines()
         .map(|t| serde_json::from_str::<serde_json::Value>(t).unwrap()["schema_version"].clone())
         .collect();
-    assert_eq!(versions, [1, 1, 1, 6]);
+    assert_eq!(versions, [1, 1, 1, 7]);
     Ledger::load(dir.path()).unwrap();
 }
 
@@ -960,7 +960,9 @@ fn the_growth_not_tied_fix_offers_a_resolve_the_ledger_accepts() {
     run_offered(&mut l, &f, route).unwrap();
 
     // A finding that rests on a growth record alone has no static evidence: the offered
-    // route is unresolved with tool_missing, and it is accepted without --evidence.
+    // route is unresolved with the reason its evidence supports (here a discriminator of its
+    // family was measured: inconclusive, never the old stand-in tool_missing), and it is
+    // accepted without --evidence.
     let mut l = m3_ledger();
     let mut nf = NewFinding::new(origin("growth-series"), vec![eid(E_GROWTH_OTHER)]);
     nf.site = Some("a.go:1".into());
@@ -976,7 +978,7 @@ fn the_growth_not_tied_fix_offers_a_resolve_the_ledger_accepts() {
     assert_eq!(r.code, codes::GROWTH_NOT_TIED);
     let route = offered_resolve(&r.fix);
     assert!(
-        route.contains("--as unresolved --reason tool_missing") && !route.contains("--evidence"),
+        route.contains("--as unresolved --reason inconclusive") && !route.contains("--evidence"),
         "{route}"
     );
     // The same route as a refused move would be: suspected_static_only without static evidence.

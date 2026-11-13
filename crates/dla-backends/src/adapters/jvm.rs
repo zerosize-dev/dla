@@ -18,6 +18,32 @@ use crate::{
     sarif,
 };
 
+/// Directories detekt does not analyse: run state, build output, dependencies, and build
+/// logic (`buildSrc`), which runs in the build tool's process, not in the measured one.
+const DETEKT_EXCLUDED_DIRS: [&str; 7] = [
+    ".dla",
+    "build",
+    "target",
+    "node_modules",
+    ".git",
+    "out",
+    "buildSrc",
+];
+
+/// The `--excludes` globs: every excluded directory and Gradle build script (`*.gradle.kts`),
+/// each in two forms. detekt matches a glob against the path relative to its input, and
+/// `**/x/**` does not match a path that starts with `x/` (checked on detekt 2.0.0-alpha.6:
+/// `**/buildSrc/**` skipped `sub/buildSrc` but not `buildSrc`), so the root form is listed too.
+fn detekt_excludes() -> String {
+    let mut globs: Vec<String> = DETEKT_EXCLUDED_DIRS
+        .iter()
+        .flat_map(|d| [format!("{d}/**"), format!("**/{d}/**")])
+        .collect();
+    globs.push("*.gradle.kts".to_owned());
+    globs.push("**/*.gradle.kts".to_owned());
+    globs.join(",")
+}
+
 fn not_applicable(version: String, why: &str) -> Outcome {
     Outcome::Ran(Box::new(Ran {
         version,
@@ -193,7 +219,11 @@ pub fn errorprone(job: &Job) -> Outcome {
             vec![],
         );
     }
-    let all_sources = fsx::files_with_ext(job.project(), &["java"]);
+    // Build logic (buildSrc) is not part of the measured process.
+    let all_sources: Vec<String> = fsx::files_with_ext(job.project(), &["java"])
+        .into_iter()
+        .filter(|s| !dla_core::paths::is_build_logic(s))
+        .collect();
     let sources: Vec<String> = all_sources
         .iter()
         .filter(|s| job.in_scope(s))
@@ -418,7 +448,7 @@ pub fn spotbugs(job: &Job) -> Outcome {
         &|r| r.ends_with(".class"),
     )
     .into_iter()
-    .filter(|r| job.in_scope(r))
+    .filter(|r| job.in_scope(r) && !dla_core::paths::is_build_logic(r))
     .collect();
     if class_files.is_empty() {
         return Outcome::blocked("no class files: run dla probe --build", vec![]);
@@ -686,10 +716,11 @@ pub fn detekt(job: &Job) -> Outcome {
     vcmd = vcmd.arg("--version");
     let version = version_of(vcmd);
     let v2 = java_major(&version).is_some_and(|m| m >= 2);
-    if !fsx::files_with_ext(job.project(), &["kt"])
-        .iter()
-        .any(|f| job.in_scope(f))
-    {
+    // Build logic (`buildSrc`, `*.gradle.kts`) is excluded from the analysis below, so it
+    // does not make the backend applicable.
+    if !has_detekt_sources(&fsx::files_with_ext(job.project(), &["kt"]), |f| {
+        job.in_scope(f)
+    }) {
         return not_applicable(version, "no Kotlin sources");
     }
     let ids = job.rule_ids();
@@ -712,7 +743,7 @@ pub fn detekt(job: &Job) -> Outcome {
         .arg("--config")
         .arg(&cfg)
         .arg("--excludes")
-        .arg("**/.dla/**,**/build/**,**/target/**,**/node_modules/**,**/.git/**,**/out/**")
+        .arg(detekt_excludes())
         .arg("--report")
         .arg(format!("sarif:{}", report.display()));
     let mut limitations = Vec::new();
@@ -775,10 +806,45 @@ pub fn detekt(job: &Job) -> Outcome {
     }))
 }
 
+/// True when one of the `.kt` files is in scope and is not build logic.
+fn has_detekt_sources(kt: &[String], in_scope: impl Fn(&str) -> bool) -> bool {
+    kt.iter()
+        .any(|f| in_scope(f) && !dla_core::paths::is_build_logic(f))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn kotlin_only_in_build_logic_makes_detekt_not_applicable() {
+        let all = |_: &str| true;
+        let only_build = ["buildSrc/src/main/kotlin/Deps.kt".to_owned()];
+        assert!(!has_detekt_sources(&only_build, all));
+        let both = [
+            "buildSrc/src/main/kotlin/Deps.kt".to_owned(),
+            "src/main/kotlin/A.kt".to_owned(),
+        ];
+        assert!(has_detekt_sources(&both, all));
+        assert!(!has_detekt_sources(&both, |f| f.starts_with("buildSrc")));
+    }
+
+    #[test]
+    fn detekt_skips_build_logic_at_the_root_and_below_it() {
+        let globs: Vec<String> = detekt_excludes().split(',').map(str::to_owned).collect();
+        for want in [
+            "buildSrc/**",
+            "**/buildSrc/**",
+            "*.gradle.kts",
+            "**/*.gradle.kts",
+            "build/**",
+            "**/build/**",
+            ".dla/**",
+        ] {
+            assert!(globs.iter().any(|g| g == want), "{want} in {globs:?}");
+        }
+    }
 
     fn data(name: &str) -> String {
         fs::read_to_string(

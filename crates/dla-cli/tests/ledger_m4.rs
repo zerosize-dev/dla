@@ -174,13 +174,13 @@ fn a_worker_writes_prefixed_ids_to_its_slice_and_the_core_merges_them() {
             "--as",
             "unresolved",
             "--reason",
-            "time_budget",
+            "not_exercised",
             "--remedy",
             "later",
         ],
     );
     assert_eq!(r["id"], "jvm/F1");
-    assert_eq!(r["state"], "unresolved(time_budget)");
+    assert_eq!(r["state"], "unresolved(not_exercised)");
     // The environment variable works as the flag does.
     let out = dla(p)
         .env("DLA_WORKER", "rust")

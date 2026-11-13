@@ -5,13 +5,22 @@ The detail behind the nine stages in `SKILL.md`. Read the stage you are on. Afte
 moving on; `dla run status` shows the same open items as a progress view. In a worker, every command
 is `dla --run <id> --worker <name> ...` (see `agents/worker.md`).
 
+Contents: Entry paths (repository, local process, artifact, symptom only) · Gates · 1. Intake
+checklist (Time budget) · 2. Probe · 3. Static sweep and holder census · 4. Classify growth (the
+harness) · 5. Confirm (Label) · 6. Attribute and explain (Explain, Strong, Verify every confirmed
+finding) · 7. Rule out non-leaks · 8. Final gate (the closing reasons, the final items) · 9. Report
+and revisit.
+
 ## Entry paths
 
 ### Repository
 Stages 1 to 9. `dla run init --entry repository` with optional `--scope module|service
 --scope-path <dir> --exclude <path>` (repeatable). Scope limits the census, the workload scan, the
 sweep and the harness copy; skipped files are counted per runtime and the report prints a Scope
-line. Ask for the scope once (`intake.scope`); the default is the whole repository.
+line. Gradle build logic (`*.gradle.kts`, `*.gradle`, `buildSrc/**`) is never a candidate or an entry
+point, wherever the scope lies: it runs in the build tool, not in the measured process, and the Scope
+line counts it as `build logic not read`. Ask for the scope once (`intake.scope`); the default is the
+whole repository.
 
 ### Local process
 `dla run init --entry process`. The consent question must include tier 2 (and 3 or 4 when you
@@ -126,12 +135,47 @@ dispositioned finding. Tie the groups (`dla ledger add --origin growth-series`, 
 ## 1. Intake checklist
 
 Ask the user only for what the repository cannot tell you. Create the run (flags per path above,
-plus `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}`). Ask the consent
+plus `--budget ${user_config.time_budget} --session-id ${CLAUDE_SESSION_ID}`; the budget is `auto` or a fixed `90s`, `45m`, `2h`; answer `intake.budget` with the init evidence). Ask the consent
 question once, as a single question covering tiers 1 to 4 up to the privilege ceiling. If `dla run
 init` reports a `consent` object, an unattended runner already answered: ask nothing, cite its
 evidence for `intake.consent`. Otherwise `dla consent --tiers <list> --ceiling
 ${user_config.privilege_ceiling}`, adding `--raw-values` only if the user explicitly agrees to see
 raw values. A second consent is refused; never ask twice.
+
+### Time budget
+
+`auto` (the default) starts at 60 minutes and is sized to the project: the first passing
+`dla gate check` at `sweep` or any later stage (not `--final`, which passes only when nothing is left open) counts R, the
+runtimes with at least one candidate, and C, the candidates, and sets the budget to
+`clamp(20 + 15*R + 3*C, 60, 180)` minutes from the start of the run. A candidate is a top-level,
+non-duplicate finding of any state (sibling hypotheses are not counted), and candidates at one site
+count once (duplicates are merged only later, so a census candidate and a sweep candidate at the same
+holder are one). The deadline never moves earlier (an extension made before sizing stays on top of the
+sized total), the same delta moves every unfinished worker's deadline, and the gate prints one line,
+for example `budget (auto): 3h for 1 runtime and 362 candidates (20 + 15x1 + 3x362 = 1121 min, capped
+at 3h)`. In the core the first such check sizes the budget for good. In a dispatched run each
+worker's first passing check at `sweep` or later sizes it from every registered worker's slice plus the
+main ledger (R is at least the number of workers), and may only raise it; the run state records
+which workers have (`budget.settled_workers`), and once every registered worker has, the budget is
+final. The Time line and the gate line show the estimate the budget was sized to (the largest). A stalled worker never sizes it, so
+the last raise stays. A worker cannot ask for more time (the core waits on its Agent
+calls and runs no commands): it closes what it cannot measure `time_budget`, and the core extends
+after the merge when the run is interactive and the user agrees. Findings a worker closed `time_budget` at its own deadline are listed by `gate check --final` while the run has time left: re-test them in the core. A fixed budget (`--budget 90m`, or
+`DLA_DEFAULT_BUDGET`) is never resized. `dla run extend <dur>` (`30m`, `2h`; core only; a run that is
+not active refuses) adds time to either kind: the new deadline is the later of the current one and
+now, plus `<dur>`, for the run and for every unfinished worker; it writes a static `run-config`
+evidence record, so it is never a measurement. `dla run status` has a `budget` object (`seconds`,
+`remaining_seconds`, `deadline`, `auto`, `settled`, `settled_workers`, `estimate`, `extensions`,
+`to_finish_findings` (the findings counted, your <n>) and `to_finish_minutes`): `budget.to_finish_*`
+is 3 minutes per non-duplicate finding that
+is open or was closed `time_budget`, plus 15 per runtime of those findings with no successful
+harness run. While more than the floor, `max(10 min, 20% of the budget)`, is left, never ask whether
+to continue and never close a finding `time_budget`. At or under the floor, or when a command is refused with nothing smaller that fits, the core of an
+interactive run asks the user once: "extend by <to_finish> minutes to measure the next <n> candidates?"; on yes
+run `dla run extend <dur>`, and it closes `time_budget` only if the user declines or does not answer.
+A worker, or a run whose `dla run init` reported a `consent` object (unattended), never extends: it
+closes `time_budget` with its remedy. The report
+has a `Time:` line in the header after `Measured:` (and after the `Coverage warning:`, when there is one).
 
 ## 2. Probe
 
@@ -175,6 +219,10 @@ under the run directory and need tier 1.
   blocker recorded on `intake.workload` (`--status unresolved --reason env_unavailable|tool_missing|build_fails|privilege_declined
   --remedy "<what blocks it>"`), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with
   `harness-not-run` while budget remains. Once its manifest loads, `harness run` leaves `harness/H<n>/attempt.json`.
+  A runtime whose entry points were discovered (`dla workload discover`) needs a harness before
+  those closes too: with none generated and budget left, `dla ledger resolve` refuses
+  `harness-not-generated` and prints `dla harness gen --lang <rt>`. The blocker reasons and a blocker
+  recorded on `intake.workload` stay accepted, so an unattended run can always finish.
 - Raw captures for stage 6 come from flags of the same command; each is a separate, costlier run, so
   add one only for a harness that grew (a passing column), not for every harness:
   - JVM: `--capture heap,histogram,jfr,nonheap` or `--capture all` (`--dumps <N>` heap dumps,
@@ -356,7 +404,10 @@ Verification is not limited to runs with workers. Once the leak-side findings ar
 `dla:verifier` subagent given only the bundle directory, the run id, `F3` and the manifest sha256. The
 bundle holds raw evidence and up to four code excerpts around frames that the evidence names; it does not
 hold the site, the hypothesis, the label or the explanation. The verifier states a site, holder and
-mechanism in words, picks an ID or UNCLASSIFIED and runs `dla ledger verify`. A different site, holder or
+mechanism in words, decides from them whether the owner would call this a defect, picks an ID or
+UNCLASSIFIED and runs `dla ledger verify`. A verifier that reads the finding as bounded, intended or
+proportional to load records the matching `N-*` ID; the ledger accepts it, the label disagrees and the open
+item carries its mechanism, which starts `reads as non-leak:`. A different site, holder or
 ID opens an open item that shows both mechanisms; resolve it by reading the code. A run that is not
 verified prints `Verified: no` for each confirmed finding and still reports.
 
@@ -366,7 +417,9 @@ Test the sibling explanations: allocator retention (`N-ALLOC`, `dla alloc-test` 
 looks for a plateau), deferred collection (`N-HEADROOM`), warm-up caches (`N-WARM`), pool
 high-water marks (`N-HWM`), workload scaling (`N-SCALE`), intended retention (`N-INTENT`), the
 instrument itself (`N-OBSERVER`). Growth a discriminator shows to be non-leak ends refuted:
-`dla alloc-test H1 --finding F3`, then `dla ledger refute F3 --evidence E12`. A candidate the
+`dla alloc-test H1 --finding F3`, then `dla ledger refute F3 --evidence E12`. A non-heap residual
+finding is tested like any other (`dla alloc-test H1 --finding F`); its `N-WARM` sibling covers JIT
+and class-metadata warm-up (references/jvm.md). A candidate the
 harness exercised whose column did not grow gets the same test and is refuted when the plateau
 verdict favors non-leak. When no column tied to any candidate grew, one unbound `dla alloc-test
 H1` judges the whole workload; if it favors non-leak, refute each exercised candidate with that
@@ -374,7 +427,7 @@ evidence. A candidate the harness could not exercise is neither confirmed nor re
 `dla ledger resolve F6 --as suspected_static_only --reason not_exercised --remedy "<text>"
 --evidence E4` (reasons `not_exercised`, `no_harness`, `build_fails`), or `--as unresolved` when
 no static evidence exists. A failed build or a run without usable points (`harness-failed`)
-confirms nothing. Closing with `no_harness`, `not_exercised` or `time_budget` while a generated harness of the runtime was never run (and more than 10 minutes and more than 20% of the budget remains) is refused (`harness-not-run`); if only the user can unblock the harness (services, credentials, data), ask the user before closing.
+confirms nothing. Closing with `no_harness`, `not_exercised` or `time_budget` while a generated harness of the runtime was never run (`harness-not-run`), or while the runtime has discovered entry points and no harness (`harness-not-generated`), is refused when more than 10 minutes and more than 20% of the budget remains; if only the user can unblock the harness (services, credentials, data), ask the user once, naming the finding ids and the exact input, before closing.
 
 ## 8. Final gate
 
@@ -383,14 +436,61 @@ every confirmed or strong leak-side finding has an explanation; every enumerated
 backend is dispositioned; every non-flat trend column is tied to a dispositioned finding (a whole-process column and a JVM type-count column that ties to no finding are accounted for by the residual rows instead); checklist
 answers cite evidence that exists; no worker slice is unmerged; the integrity seals match (see
 `references/safety-and-effects.md`); the run is not aborted. Work through the `missing` list. What cannot be
-done is recorded: `dla ledger resolve F3 --as unresolved --reason time_budget --remedy "<what to do
-next>"`. Reasons: `not_exercised`, `no_harness`, `env_unavailable`, `build_fails`,
-`privilege_declined`, `tool_missing`, `time_budget`. With workers: `dla ledger merge` first, then
+done is recorded: `dla ledger resolve F3 --as unresolved --reason <r> --remedy "<what to do
+next>"`. Pick the reason that says what happened: `not_exercised` (nothing reached it);
+`inconclusive` (it was measured and the measurement cannot decide: too few points, no plateau yet,
+a single snapshot, an inconclusive discriminator; `unresolved` only, and the ledger needs a
+measurement tied to the finding: a discriminator or intervention for it, a growth column tied to it, or a residual,
+non-heap or capture record it already cites, else it refuses with `measurement-required`; a
+harness run alone does not count); `no_harness`, `env_unavailable`, `build_fails`,
+`privilege_declined`, `tool_missing` (what stopped the run); `time_budget` only when the deadline
+is near or a command was refused for time (`dla ledger resolve` refuses it with `time-left` while
+more than the larger of 10 minutes and 20% of the budget remains, unless a tool refused a command
+for time after the finding was added). A non-heap residual is decided before any close: add a
+finding for it (`--origin residual --region non-heap`), an `N-WARM` sibling, then
+`dla alloc-test H --finding F`; the plateau of the extra window tells warm-up from a leak. With workers: `dla ledger merge` first, then
 verification, then this stage. A harness that was generated, never run (a run you stopped, or one that failed on unfilled DLA-HOOK bodies, does not count) and has findings closed without exercise is a missing item of kind `harness_not_run` while budget remains. After `dla ledger merge` the core judges every worker's harness against the run's deadline only, so a worker that stopped at its own, nearer deadline can leave its harness listed: run it from the core or record its blocker on `intake.workload`. `dla run status` shows the same open items in short.
+
+Two more final items keep a run from ending with the budget unspent. Each has a fix and an escape
+recorded on `intake.workload` (`dla ledger resolve intake.workload --status unresolved --reason <r>
+--remedy "<text>"`), so an unattended run always has a way out. The escapes differ in the reason:
+`coverage_contradiction` accepts any reason with a remedy (`time_budget` only once the time left is
+at or under the floor), `budget_left_unrevisited` only a blocker reason (`env_unavailable`, `tool_missing`, `build_fails`, `privilege_declined`).
+
+- `coverage_contradiction` (id: the runtime): a runtime ran iterations, has discovered entry points
+  and exercised none of them. It is not judged for Rust and native, whose exercised entry points are
+  never recorded, nor for Python without `sys.monitoring`. The text carries the iteration count and,
+  for the JVM, how many project classes loaded (a driver that ran project code but called no listed
+  entry point). "0 of N exercised" after
+  a run is not a result. Fix: fill the DLA-HOOK bodies of the runtime's driver harness so it calls an entry
+  point and run it, or make one with `dla harness gen --lang <rt> --driver` and fill and run the harness
+  that prints (never the command harness that produced the zero); or record why it cannot (reason `not_exercised`).
+  A JUnit repeat (`dla harness gen --lang jvm --junit`) has no hooks to fill: when every harness
+  of the runtime that ran is one, the fix says the project's tests reach N of M entry points and names the hook driver to make.
+  A harness whose build failed (its attempt record says `build_fails`) and that is newer than every
+  harness that ran is told to fix the build, not to make another driver.
+- `budget_left_unrevisited` (id: a finding, or the runtime): more than the larger of 10 minutes and
+  20% of the budget is left and either findings are closed `time_budget` with no command refused for
+  time since they were added (put one back under test with `dla ledger test F --evidence E`), or findings
+  are closed without exercise in a runtime with discovered entry points and no harness
+  (`dla harness gen --lang <rt>`, or its `--driver` step when gen would refuse for lack of a workload; entry points that discovery marked `no_harness` count, since a
+  harness is what reaches them). A blocker reason on `intake.workload` clears both.
 
 ## 9. Report and revisit
 
-`dla report` writes `report.md` from the ledger and prints it; show it exactly as printed. While
-budget remains, return to findings that are `unresolved` or `suspected_static_only`:
-`dla run status` lists up to 10 under `revisit` (`revisit_total` gives the count), each with `id`,
-`state`, `reason` and `remedy`. To stop early, `dla run abort --reason "<why>"` closes the run.
+`dla report` writes `report.md` from the ledger and prints it; show it exactly as printed. Then
+revisit, as a loop with an exit:
+
+1. `dla run status`: `budget.remaining_seconds` is the time left, `next_command` the next step,
+   `revisit` lists up to 10 findings that are `unresolved` or `suspected_static_only` (`revisit_total`
+   gives the count), each with `id`, `state`, `reason` and `remedy`; `harnesses_generated`,
+   `harnesses_run` and `closed_static_only` show whether anything was measured.
+2. Take the first `revisit` item, preferring one whose runtime has a harness that can run, and run
+   what its `remedy` or `next_command` names. A result that settles it moves it out of `revisit`.
+3. `dla report` again, then repeat from 1.
+
+Stop when every remaining item has a reason and a remedy that a command cannot clear now (a blocker,
+or something only the user can supply) or the deadline has passed, then judge the newest report. There
+is no fixed number of rounds: ending with most of the budget unspent and entry points unexercised
+measured nothing. Never ask the user whether to continue while time is left. To stop early,
+`dla run abort --reason "<why>"` closes the run.

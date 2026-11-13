@@ -408,12 +408,35 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: SampleArgs) -> 
         .to_std()
         .unwrap_or(Duration::ZERO);
     if remaining < interval * 2 {
-        return Err(Failure::refuse(
-            core_codes::RUN_NOT_ACTIVE,
-            "the run budget is used up",
-            "time left in the run budget",
-            "dla run init --budget 60m",
-        ));
+        // `require_time` above refused a deadline that has passed, so time is left: the
+        // interval is too long for it. Suggest the longest interval that still gives two
+        // samples with a margin, else the same fix as every other tool (extend, or close the item).
+        // Leave a margin (the larger of 5 s and a tenth of the time left): the model needs
+        // time to act on the fix, and an interval that only just fits is refused again.
+        let margin = Duration::from_secs(5).max(remaining / 10);
+        let fits = remaining.saturating_sub(margin) / 2;
+        let suggestion = if fits >= MIN_INTERVAL {
+            let text = if fits >= Duration::from_secs(1) {
+                format!("{}s", fits.as_secs())
+            } else {
+                format!("{}ms", fits.as_millis())
+            };
+            format!("dla sample --pid {pid} --interval {text}")
+        } else {
+            String::new()
+        };
+        let label = tc
+            .time_left()
+            .map_or_else(|| "run deadline".to_owned(), |(_, label)| label);
+        return Err(tc
+            .time_budget_refusal(
+                &format!("sampling at --interval {}", a.interval),
+                (interval * 2).as_secs(),
+                remaining.as_secs(),
+                &label,
+                &suggestion,
+            )
+            .into());
     }
     let duration = if duration > remaining {
         notes.push(format!(

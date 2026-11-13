@@ -1,0 +1,14 @@
+{
+  "name": "parcel-gateway",
+  "version": "4.1.2",
+  "private": true,
+  "description": "Front door for the parcel tracking API: routes lookups and reports how each one settled.",
+  "main": "src/gateway.js",
+  "scripts": {
+    "test": "node --test",
+    "load": "node load.js --iterations 20000"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -220,8 +220,9 @@ pub struct ResolveArgs {
     /// Findings and open items: unresolved | suspected_static_only.
     #[arg(long = "as", value_enum)]
     disposition: Option<ResolveAs>,
-    /// time_budget | not_exercised | no_harness | env_unavailable | build_fails |
-    /// privilege_declined | tool_missing
+    /// not_exercised | inconclusive (measured, undecided) | no_harness | env_unavailable |
+    /// build_fails | privilege_declined | tool_missing | time_budget (only when the deadline
+    /// is near, or a command was refused for time)
     #[arg(long, value_parser = parse_enum::<UnresolvedReason>)]
     reason: Option<UnresolvedReason>,
     /// What would resolve it (required with a reason).
@@ -603,7 +604,8 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
             return Err(missing_arg(
                 "--as",
                 format!(
-                    "dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+                    "dla ledger resolve {id} --as unresolved --reason {} --remedy \"<text>\"",
+                    ledger.supported_reason(&id)
                 ),
             ));
         }
@@ -611,6 +613,25 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
     let from = ledger.finding(&id).map(|f| f.state);
     if let Some(reason) = a.reason {
         refuse_unrun_harness(ctx, &id, reason)?;
+        refuse_no_harness(ctx, &id, reason)?;
+        if reason == UnresolvedReason::TimeBudget {
+            // After the ledger's own checks, so a missing remedy or an unknown finding is
+            // reported as such, and before anything is written.
+            ledger.check_transition_only(
+                &id,
+                to,
+                a.reason,
+                a.remedy.clone(),
+                a.evidence.clone(),
+            )?;
+            refuse_time_left(
+                ctx,
+                &id.to_string(),
+                ledger.finding_added_at(&id),
+                ledger.supported_reason(&id),
+                to == FindingState::SuspectedStaticOnly,
+            )?;
+        }
     }
     let line = ledger.transition(&id, to, a.reason, a.remedy, a.evidence, BY)?;
     let label = ledger
@@ -625,6 +646,47 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+/// Refuses `--reason time_budget` while more time is left than the shared floor,
+/// `max(10 min, 20 % of the budget)` (the worker's own deadline in a worker), unless a tool
+/// refused a command for time after `added` (see
+/// [`dla_core::toolctx::time_refused_since`]). The reason says the budget ran out; with an
+/// hour left it is not true, and the finding is told the reason the evidence supports.
+fn refuse_time_left(
+    ctx: &Ctx,
+    what: &str,
+    added: Option<chrono::DateTime<chrono::Utc>>,
+    supported: UnresolvedReason,
+    static_only: bool,
+) -> Res<()> {
+    // Only the state: in a worker the slice ledger is open (and locked) by the caller.
+    let state = RunState::load(&ctx.run_dir)?;
+    let Some((left, total)) = gate::budget_over_floor(&state, ctx.worker.as_deref()) else {
+        return Ok(());
+    };
+    let since = added.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
+    if dla_core::toolctx::time_refused_since(&ctx.run_dir, ctx.worker.as_deref(), since) {
+        return Ok(());
+    }
+    let floor =
+        (total * gate::HARNESS_MIN_LEFT_PERCENT / 100).max(gate::HARNESS_MIN_LEFT_SECS / 60);
+    Err(Failure::refuse(
+        core_codes::TIME_LEFT,
+        format!(
+            "{what} cannot be closed with time_budget: {left} of {total} budget minutes remain (the reason holds below {floor}) and no command was refused for time since it was added."
+        ),
+        format!("less than {floor} minutes left, or a command refused for time"),
+        if static_only {
+            format!(
+                "a finding that rests on static evidence was never exercised: dla ledger resolve {what} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static-hit or census-holder id>; or measure it: the run has time"
+            )
+        } else {
+            format!(
+                "use the reason the evidence supports: dla ledger resolve {what} --as unresolved --reason {supported} --remedy \"<text>\"   (the reason is inconclusive when a measurement is tied to it, else not_exercised); or measure it: the run has time"
+            )
+        },
+    ))
 }
 
 /// True when the run has a `harness/H<n>` directory. Without one the rule cannot hold, and
@@ -668,6 +730,59 @@ fn refuse_unrun_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> 
     ))
 }
 
+/// Refuses to close `id` without exercising it (`no_harness`, `not_exercised`,
+/// `time_budget`) when its runtime has discovered entry points and no harness was ever
+/// generated, while the budget has room to make one. The blocker reasons
+/// (`env_unavailable`, `build_fails`, `tool_missing`, `privilege_declined`) and a blocker
+/// recorded on `intake.workload` are never refused. The same rule feeds the final gate
+/// (`budget_left_unrevisited`).
+fn refuse_no_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> Res<()> {
+    if !gate::closes_without_exercise(reason) {
+        return Ok(());
+    }
+    // The cheap parts first: the closure of a finding is the common call, and a run with no
+    // discovered entry points, or with its budget floor passed, needs neither the ledger
+    // nor the series.
+    let state = RunState::load(&ctx.run_dir)?;
+    if gate::budget_over_floor(&state, ctx.worker.as_deref()).is_none() {
+        return Ok(());
+    }
+    let Some(cov) = dla_core::coverage::CoverageManifest::load(&ctx.run_dir)? else {
+        return Ok(());
+    };
+    if !cov
+        .workers
+        .values()
+        .any(|w| !w.entry_points.discovered.is_empty())
+    {
+        return Ok(());
+    }
+    let ledger = Ledger::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let mut view = RunView::new(state, ledger, Some(cov));
+    view.run_dir = Some(ctx.run_dir.clone());
+    let Some(finding) = view.ledger.finding(id) else {
+        return Ok(());
+    };
+    let Some(runtime) = gate::finding_runtime(&view, finding) else {
+        return Ok(());
+    };
+    let Some(n) = gate::harness_not_generated(&view, &runtime, ctx.worker.as_deref()) else {
+        return Ok(());
+    };
+    Err(Failure::refuse(
+        core_codes::HARNESS_NOT_GENERATED,
+        format!(
+            "{id} cannot be closed with {reason}: {} entry point(s) of {} were discovered, no harness was generated, and {} of {} budget minutes remain.",
+            n.entry_points, n.runtime, n.minutes_left, n.minutes_total
+        ),
+        format!(
+            "a harness for {} (dla harness gen), or its blocker recorded",
+            n.runtime
+        ),
+        n.fix(),
+    ))
+}
+
 fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveArgs) -> Res<Value> {
     let id = ledger.own_open_item_id(&id);
     reject(
@@ -693,7 +808,8 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
                 missing_arg(
                     "--reason",
                     format!(
-                        "dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+                        "dla ledger resolve {id} --as unresolved --reason {} --remedy \"<text>\"",
+                        ledger.open_item_supported_reason(&id)
                     ),
                 )
             })?;
@@ -713,7 +829,8 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
                 "an open item cannot be resolved as suspected_static_only; that is a finding state",
                 "--as unresolved or --by <finding>",
                 format!(
-                    "dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\""
+                    "dla ledger resolve {id} --as unresolved --reason {} --remedy \"<text>\"",
+                    ledger.open_item_supported_reason(&id)
                 ),
             ));
         }
@@ -721,11 +838,26 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
             return Err(missing_arg(
                 "--as or --by",
                 format!(
-                    "dla ledger resolve {id} --as unresolved --reason time_budget --remedy \"<text>\"   or   dla ledger resolve {id} --by F7"
+                    "dla ledger resolve {id} --as unresolved --reason {} --remedy \"<text>\"   or   dla ledger resolve {id} --by F7",
+                    ledger.open_item_supported_reason(&id)
                 ),
             ));
         }
     };
+    if let Resolution::Unresolved {
+        reason: UnresolvedReason::TimeBudget,
+        ..
+    } = &resolution
+    {
+        ledger.check_open_item_resolution(&id, resolution.clone())?;
+        refuse_time_left(
+            ctx,
+            &id.to_string(),
+            ledger.open_item_added_at(&id),
+            ledger.open_item_supported_reason(&id),
+            false,
+        )?;
+    }
     let line = ledger.resolve_open_item(&id, resolution)?;
     Ok(json!({
         "ok": true,

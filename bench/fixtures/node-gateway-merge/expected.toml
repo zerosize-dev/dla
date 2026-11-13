@@ -1,0 +1,32 @@
+schema_version = 1
+id = "node-gateway-merge"
+runtime = "node"
+category = "multi-leak"
+dynamic_confirmation = true
+
+[task]
+prompt = """
+The parcel gateway's heap grows in step with the number of lookups it has served: every replay of traffic leaves the process larger than the one before, even though every request has been answered and the dashboard only ever shows the last 200 notes. The service is restarted twice a week. Find out what is holding the memory.
+"""
+
+[[leak]]
+id = "L1"
+site = "src/audit.js:18"
+lines = [18, 21]
+alt_sites = ["src/audit.js:17", "src/gateway.js:29", "src/bus.js:6"]
+holder = "registration-table"
+region = "heap"
+cause = "L-REGISTER"
+share = 0.62
+confirmable = true
+
+[[leak]]
+id = "L2"
+site = "src/trail.js:12"
+lines = [11, 17]
+alt_sites = ["src/trail.js:7", "src/gateway.js:28"]
+holder = "closure/continuation"
+region = "heap"
+cause = "L-CAPTURE"
+share = 0.38
+confirmable = true

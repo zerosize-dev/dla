@@ -72,6 +72,10 @@ pub struct OpenItemResolved {
     pub resolution: Resolution,
 }
 
+/// What `opened_by` says of an open item that `dla gap --residual` raised: a residual
+/// measurement left growth no finding explains.
+pub const RESIDUAL_OPENED_BY: &str = "dla gap --residual";
+
 /// Writers and removers found for a finding's holder, and its holder, owner, region and
 /// site when none is recorded yet. It does not change the finding's state; the report lists
 /// the sites under the finding.
