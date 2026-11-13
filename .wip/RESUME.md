@@ -59,7 +59,7 @@
 4. Commit to `main` (author Mykyta Hriaznov <17167893+ngriaznov@users.noreply.github.com>, no
    trailers, no attribution), push `main` and `main:dev/wonderful-mccarthy-algc5s`; CI green.
 5. Bump to `0.9.0-preview.2` (Cargo.toml and its path dependencies, Cargo.lock,
-   `.claude-plugin/plugin.json`, the marketplace manifest), then dispatch `release.yml` on
+   `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`), then dispatch `release.yml` on
    `main` with `publish=true`.
 6. Later: the 8 failing new fixtures; the benchmark work in `bench-todo.md`; the remaining M7
    phases (calibration, rightsize suite, model baseline); `1.0.0-rc.1` and `1.0.0`, each only
