@@ -52,7 +52,7 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   larger of 1 MiB and 2x the measured drift of every extra checkpoint, so it grows with `--extra`)
   into an inconclusive one with a caution, unless a required column rises (then that column is
   named instead: a thread count when its plateau reads continues or its net rise over the extra
-  window is more than 2 threads, a `jvm.nmt.*` category when its plateau reads continues) or the
+  window is more than 2 threads, a `jvm.nmt.*` category when its plateau reads continues; `jvm.nmt.thread` also with a thread count that itself rises) or the
   harness is in command mode (no checkpoint drift). A class count that reads inconclusive with a
   net rise of more than 3 classes is not flat and is named too. The
   warm-up runs at a checkpoint only, after the pre-GC readings (a command-mode exit record keeps

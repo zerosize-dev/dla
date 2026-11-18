@@ -508,8 +508,9 @@ const AGENT_DRIFT_RISE: f64 = 1024.0 * 1024.0;
 const AGENT_DRIFT_PER_CHECKPOINT: f64 = 20.0 * 1024.0;
 
 /// The most a class count that reads inconclusive may have risen over the extra window and still
-/// be called flat (jitter of a few classes, not a staircase). Measured on the same 14 idle runs:
-/// the net rise was 0 in every run; the constant is that plus a margin of 3.
+/// be called flat (jitter of a few classes, not a staircase). Measured on idle drivers in the 14
+/// alloc-test runs described at `AGENT_DRIFT_THREAD_JITTER`: the net rise was 0 in every run; the
+/// constant is that plus a margin of 3.
 const AGENT_DRIFT_CLASS_JITTER: f64 = 3.0;
 
 /// The most a thread count may have risen over the extra window with no leak (the JVM starts and
@@ -588,21 +589,25 @@ fn deciding_capture(columns: &[&str], harness: &str) -> String {
     }
 }
 
-/// Whether a required column rises, by its kind. A thread count: its plateau reads continues, or
-/// its net rise over the extra window is over the jitter (a counter has no checkpoint jitter, so
-/// a few more threads are growth even when the plateau test cannot judge them). A `jvm.nmt.*`
-/// byte category: only when its plateau reads continues (bytes jitter); the thread category of
-/// NMT also rises when a thread count does, as it rises with the threads.
-fn column_rises(results: &[ColumnResult], name: &str) -> bool {
+/// Whether a required column rises, by its kind. A thread count: its plateau does not read
+/// plateau and either reads continues or its net rise over the extra window is over the jitter (a
+/// counter has no checkpoint jitter, so a few more threads are growth even when the plateau test
+/// cannot judge them); a thread count that is not a required column, or that plateaus, is no
+/// growth. A `jvm.nmt.*` byte category: only when its plateau reads continues (bytes jitter); the
+/// thread category of NMT also rises when a thread count that is itself rising does, as it rises
+/// with the threads.
+fn column_rises(results: &[ColumnResult], picked: &pick::Picked, name: &str) -> bool {
     let row = |n: &str| results.iter().find(|r| r.name == n);
     let continues =
         |n: &str| row(n).is_some_and(|r| r.plateau.verdict == PlateauVerdict::Continues);
     let thread_rises = |n: &str| {
-        continues(n)
-            || row(n).is_some_and(|r| {
-                r.plateau
-                    .extra_rise
-                    .is_some_and(|x| x > AGENT_DRIFT_THREAD_JITTER)
+        picked.required.iter().any(|c| c == n)
+            && row(n).is_some_and(|r| {
+                r.favors != Favors::NonLeak
+                    && (r.plateau.verdict == PlateauVerdict::Continues
+                        || r.plateau
+                            .extra_rise
+                            .is_some_and(|x| x > AGENT_DRIFT_THREAD_JITTER))
             })
     };
     match name {
@@ -615,11 +620,15 @@ fn column_rises(results: &[ColumnResult], name: &str) -> bool {
 }
 
 /// Splits column names into those that keep rising and those that only could not be judged yet.
-fn split_rising(results: &[ColumnResult], names: &[String]) -> (Vec<String>, Vec<String>) {
+fn split_rising(
+    results: &[ColumnResult],
+    picked: &pick::Picked,
+    names: &[String],
+) -> (Vec<String>, Vec<String>) {
     names
         .iter()
         .cloned()
-        .partition(|n| column_rises(results, n))
+        .partition(|n| column_rises(results, picked, n))
 }
 
 /// The required columns (NMT categories and thread counts) that are not shown to plateau.
@@ -695,7 +704,7 @@ fn agent_drift(
     let classes = class_count(results);
     let rising: Vec<&str> = rising_required(results, picked)
         .into_iter()
-        .filter(|n| column_rises(results, n))
+        .filter(|n| column_rises(results, picked, n))
         .collect();
     let stands = if ctx.partial {
         "a partial run is inconclusive whatever the columns show"
@@ -711,12 +720,13 @@ fn agent_drift(
         let others = rising.iter().any(|c| {
             !matches!(*c, "jvm.threads" | "os.threads") && !(threads && *c == "jvm.nmt.thread")
         });
-        let mut named: Vec<String> = rising.iter().map(|c| (*c).to_owned()).collect();
+        let named: Vec<&str> = rising.clone();
         let class_part = if let ClassCount::Rising(text) = &classes {
-            named.push(format!("jvm.classes_loaded ({text})"));
-            "; the classes that load say what grows there"
+            format!(
+                "; jvm.classes_loaded is not flat either ({text}), so the classes that load say what grows there"
+            )
         } else {
-            ""
+            String::new()
         };
         return Some(Drift::Growing {
             limitation: format!(
@@ -748,7 +758,7 @@ fn agent_drift(
         rise / 1024.0,
         match classes {
             ClassCount::Unknown =>
-                " (caution: jvm.classes_loaded was not recorded in this result, so a flat class count could not be checked and a class leak is not excluded)",
+                " (caution: jvm.classes_loaded was not recorded, or its plateau test could not judge it, in this result, so a flat class count could not be checked and a class leak is not excluded)",
             _ => " with a flat class count",
         },
         line / 1024.0,
@@ -761,6 +771,14 @@ fn agent_drift(
             "a larger --step at harness gen"
         }
     )))
+}
+
+/// Whether the growing-column reading also prints the ledger commands and the longer `--extra`
+/// of an ordinary result: only for a leak verdict that stays (no NMT category open) and not on a
+/// partial run, whose verdict is capped at inconclusive (a thread capture decides it, a longer
+/// `--extra` cannot, and no refute or confirm follows from it).
+fn keeps_ledger_commands(inconclusive: bool, partial: bool) -> bool {
+    !inconclusive && !partial
 }
 
 /// The `next` of a result read as the agent's drift: the harness is rebuilt with more work per
@@ -937,7 +955,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     let (favors, supports, held_back) = decide(&results, &picked);
     // A required column that keeps rising is decided by its capture, a longer run does not; one
     // that only could not be judged (still levelling off) may show its plateau in a longer window.
-    let split_open = |names: &[String]| split_rising(&results, names);
+    let split_open = |names: &[String]| split_rising(&results, &picked, names);
     let primary_name = picked.primary.as_deref().unwrap_or("the deciding column");
     let (held_rising, held_levelling) = split_open(&held_back);
     if !held_rising.is_empty() {
@@ -1117,7 +1135,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             next, inconclusive, ..
         }) => {
             let mut n = vec![next.clone()];
-            if !inconclusive {
+            if keeps_ledger_commands(*inconclusive, !partial.is_empty()) {
                 n.extend(next_commands(
                     &ledger,
                     bound.as_ref(),
@@ -1646,11 +1664,12 @@ mod tests {
         let names: Vec<String> = ["jvm.nmt.thread", "jvm.nmt.class", "jvm.threads"]
             .map(str::to_owned)
             .to_vec();
-        let (rising, levelling) = split_rising(&rows, &names);
+        let picked = nonheap_picked(&["jvm.nmt.thread", "jvm.nmt.class", "jvm.threads"]);
+        let (rising, levelling) = split_rising(&rows, &picked, &names);
         assert_eq!(rising, ["jvm.nmt.thread", "jvm.threads"]);
         assert_eq!(levelling, ["jvm.nmt.class"]);
         // Without a rising thread count the category is judged on its own.
-        let (rising, _) = split_rising(&rows[..1], &names[..1]);
+        let (rising, _) = split_rising(&rows[..1], &picked, &names[..1]);
         assert!(rising.is_empty());
     }
 
@@ -1727,9 +1746,78 @@ mod tests {
             ),
         ];
         let names = vec!["jvm.threads".to_owned(), "jvm.nmt.code".to_owned()];
-        let (rising, levelling) = split_rising(&rows, &names);
+        let picked = nonheap_picked(&["jvm.threads", "jvm.nmt.code"]);
+        let (rising, levelling) = split_rising(&rows, &picked, &names);
         assert_eq!(rising, ["jvm.threads"]);
         assert_eq!(levelling, ["jvm.nmt.code"]);
+    }
+
+    #[test]
+    fn a_held_back_thread_count_with_a_net_rise_is_rising_not_levelling() {
+        // The plateau test cannot judge a count that grows at some checkpoints only; its net rise
+        // of 10 threads says it keeps rising, so the capture decides it, not a longer window.
+        let rows = [
+            drift_result(
+                "jvm.threads",
+                10.0,
+                PlateauVerdict::Inconclusive,
+                Favors::Inconclusive,
+            ),
+            drift_result(
+                "os.threads",
+                2.0,
+                PlateauVerdict::Inconclusive,
+                Favors::Inconclusive,
+            ),
+        ];
+        let names = vec!["jvm.threads".to_owned(), "os.threads".to_owned()];
+        let picked = nonheap_picked(&["jvm.threads", "os.threads"]);
+        let (rising, levelling) = split_rising(&rows, &picked, &names);
+        assert_eq!(rising, ["jvm.threads"]);
+        assert_eq!(levelling, ["os.threads"]);
+    }
+
+    #[test]
+    fn the_nmt_thread_category_joins_only_a_thread_count_that_itself_rises() {
+        // The thread counts plateau (net rise 3, favours non-leak): they are no growth, so the
+        // category that merely could not be judged does not rise with them.
+        let rows = rows_with(
+            &[
+                ("jvm.threads", 3.0, PlateauVerdict::Plateau),
+                ("os.threads", 3.0, PlateauVerdict::Plateau),
+                ("jvm.nmt.thread", 2e5, PlateauVerdict::Inconclusive),
+            ],
+            Some((0.0, PlateauVerdict::Plateau)),
+        );
+        let picked = nonheap_picked(&["jvm.threads", "os.threads", "jvm.nmt.thread"]);
+        assert!(matches!(
+            agent_drift(&rows, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Agent(_))
+        ));
+        let names = vec!["jvm.nmt.thread".to_owned()];
+        let (rising, levelling) = split_rising(&rows, &picked, &names);
+        assert!(rising.is_empty() && levelling.len() == 1);
+        // A thread count that is not a required column (it failed the trend gate) is not
+        // collected either, so it does not carry the category.
+        let rows = rows_with(
+            &[
+                ("jvm.threads", 10.0, PlateauVerdict::Inconclusive),
+                ("jvm.nmt.thread", 2e5, PlateauVerdict::Inconclusive),
+            ],
+            Some((0.0, PlateauVerdict::Plateau)),
+        );
+        let picked = nonheap_picked(&["jvm.nmt.thread"]);
+        assert!(matches!(
+            agent_drift(&rows, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Agent(_))
+        ));
+    }
+
+    #[test]
+    fn a_partial_run_keeps_no_ledger_command_after_the_thread_capture() {
+        assert!(keeps_ledger_commands(false, false));
+        assert!(!keeps_ledger_commands(true, false));
+        assert!(!keeps_ledger_commands(false, true));
     }
 
     #[test]
@@ -1826,7 +1914,7 @@ mod tests {
     #[test]
     fn a_thread_rise_within_the_jitter_of_an_idle_driver_is_the_agents_drift() {
         let picked = nonheap_picked(&["jvm.threads", "os.threads"]);
-        for n in [0.0, 1.0, AGENT_DRIFT_THREAD_JITTER] {
+        for n in [0.0, 1.0, 2.0] {
             let rows = rows_with(
                 &[
                     ("jvm.threads", 0.0, PlateauVerdict::Plateau),
@@ -1842,13 +1930,9 @@ mod tests {
                 "a net rise of {n} threads is the compiler threads' jitter"
             );
         }
-        // One more than the jitter is growth.
+        // A net rise of 3 threads, one more than the highest rise that is still jitter, is growth.
         let rows = rows_with(
-            &[(
-                "os.threads",
-                AGENT_DRIFT_THREAD_JITTER + 1.0,
-                PlateauVerdict::Inconclusive,
-            )],
+            &[("os.threads", 3.0, PlateauVerdict::Inconclusive)],
             Some((0.0, PlateauVerdict::Plateau)),
         );
         assert!(matches!(
@@ -1920,7 +2004,7 @@ mod tests {
         assert!(
             limitation.contains("jvm.threads")
                 && limitation.contains("os.threads")
-                && limitation.contains("jvm.classes_loaded (rose 4 classes"),
+                && limitation.contains("jvm.classes_loaded is not flat either (rose 4 classes"),
             "{limitation}"
         );
         assert!(next.contains("threads.json"), "{next}");

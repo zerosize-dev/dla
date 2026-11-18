@@ -108,18 +108,21 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   stops compiler threads by itself; an idle driver measured in 14 runs, 8 of them with busy loops
   beside it, rose 0 threads, once 1; the slow leaks seen rose 6 and 10). A `jvm.nmt.*` byte
   category rises only when its plateau reads continues, as bytes jitter, and `jvm.nmt.thread` also
-  rises with a thread count. Every rising column is collected first, and the class count is not
+  rises with a thread count that itself rises (not with one at a plateau or one that is not a
+  required column). Every rising column is collected first, and the class count is not
   flat when its plateau reads continues or reads inconclusive with a net rise of more than 3
-  classes (0 on the same 14 runs). When a thread count or an NMT category rises, that is not the
+  classes (0 in the same 14 runs). When a thread count or an NMT category rises, that is not the
   agent's drift and is never blamed on it: the limitation names every column that rises (the class
   count too when it is not flat), a rising thread count keeps the leak verdict, a rising NMT
   category makes it inconclusive, and `next` points at the capture that decides it (`dla harness
   run H1 --capture nonheap`: `threads.json` for threads, `nmt-diff.txt` for the category), never at
-  a longer `--extra`, and keeps the thread capture whenever a thread count rises. Only when no
+  a longer `--extra`, and keeps the thread capture whenever a thread count rises; on a partial run,
+  whose verdict is capped at inconclusive, `next` holds only that capture, with no refute, confirm
+  or longer `--extra`. Only when no
   required column rises and the class count is not flat is the class count named alone (the leak
   verdict stands, except on a partial run, which is inconclusive). A result with no
   `jvm.classes_loaded` column is read with the class count unknown: if nothing rises it gets the
-  agent-drift reading with a caution that the class count was not recorded. Do not call a small slope "the service's JIT" without the plateau test. When
+  agent-drift reading with a caution that the class count was not recorded or could not be judged. Do not call a small slope "the service's JIT" without the plateau test. When
   such a column rises while the pools plateau, the pools' plateau is held back as inconclusive and
   the limitation names the column. A sample (`dla sample --counters jcmd`) shows the shape live but
   cannot refute: `jvm.classes_loaded` there is the classes loaded now (the cumulative counter minus

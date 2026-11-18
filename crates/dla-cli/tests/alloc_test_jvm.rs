@@ -618,15 +618,32 @@ fn a_driver_that_keeps_daemon_threads_is_not_blamed_on_the_agents_drift() {
     assert!(!next.contains("--step <larger>"), "{next}");
 }
 
-/// The thread columns of the latest alloc-test result: their plateau verdicts and net rises.
-fn thread_columns(project: &Path, a: &Value) -> String {
-    let id = a["id"].as_str().unwrap_or("A1");
-    let rel = fs::read_dir(project.join(".dla"))
-        .unwrap()
-        .map(|e| e.unwrap().path().join("alloc").join(format!("{id}.json")))
-        .find(|p| p.exists())
-        .unwrap();
-    let full: Value = serde_json::from_str(&fs::read_to_string(rel).unwrap()).unwrap();
+/// The full result of the latest alloc-test of the project (stdout carries no limitations).
+fn latest_result(project: &Path) -> Value {
+    let mut best: Option<(u32, PathBuf)> = None;
+    for e in fs::read_dir(project.join(".dla")).unwrap() {
+        let dir = e.unwrap().path().join("alloc");
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for f in rd {
+            let path = f.unwrap().path();
+            let n = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.strip_prefix('A'))
+                .and_then(|s| s.parse::<u32>().ok());
+            if let Some(n) = n
+                && best.as_ref().is_none_or(|(m, _)| n > *m)
+            {
+                best = Some((n, path));
+            }
+        }
+    }
+    let (_, path) = best.expect("an alloc result");
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// The thread columns of a full result: their plateau verdicts and net rises.
+fn thread_columns(full: &Value) -> String {
     full["columns"]
         .as_array()
         .unwrap()
@@ -651,23 +668,23 @@ fn a_driver_that_starts_a_daemon_thread_every_tenth_unit_keeps_the_leak_reading_
     let f = bound_finding(&project, &run, false);
     let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
     let text = a.to_string();
-    assert_eq!(
-        a["favors"],
-        "leak",
-        "{text} {}",
-        thread_columns(&project, &a)
-    );
+    let full = latest_result(&project);
+    assert_eq!(a["favors"], "leak", "{text} {}", thread_columns(&full));
     assert!(a.get("caution").is_none(), "{text}");
     assert!(
         !text.contains("agent's own checkpoints add by themselves"),
         "{text}"
     );
+    // The limitation (in the full result, not on stdout) names the thread count as rising.
+    let limitations = full["limitations"].to_string();
     assert!(
-        text.contains("jvm.threads") || text.contains("os.threads"),
-        "the thread count is named: {text}"
+        limitations.contains("keep rising over the extra window")
+            && (limitations.contains("jvm.threads") || limitations.contains("os.threads")),
+        "the thread count is named: {limitations}"
     );
     let next = a["next"].to_string();
     assert!(next.contains("--capture nonheap"), "{a}");
+    assert!(next.contains("the thread count keeps rising"), "{next}");
     assert!(!next.contains("--step <larger>"), "{next}");
 }
 
@@ -676,24 +693,36 @@ fn an_idle_driver_without_a_trend_is_never_a_leak_verdict_and_names_no_thread_co
     if skip() {
         return;
     }
-    // The compiler threads the JVM starts and stops by itself are no thread leak: with the
-    // thread counts required (no trend), an idle driver reads as the agent's drift, at the
-    // default window and at a long one.
-    let (_dir, project, run) = idle_run(None, "20");
-    let f = bound_finding(&project, &run, false);
+    // The compiler threads the JVM starts and stops by itself are no thread leak. A trend of the
+    // harness would drop the thread counts that pass its gate, and an alloc-test writes a trend
+    // of its own, so each window gets a fresh project: the thread counts are required columns in
+    // both (the test asserts they are in the result).
     for extra in ["20", "100"] {
+        let (_dir, project, run) = idle_run(None, "20");
+        let f = bound_finding(&project, &run, false);
         let a = ok(
             &project,
             &["alloc-test", "H1", "--finding", &f, "--extra", extra],
         );
         let text = a.to_string();
-        assert_ne!(a["favors"], "leak", "extra {extra}: {text}");
+        let full = latest_result(&project);
+        let columns = thread_columns(&full);
         assert!(
-            !text.contains("threads keep rising") && !text.contains("threads keeps rising"),
-            "extra {extra}: {text} {}",
-            thread_columns(&project, &a)
+            columns.contains("jvm.threads") && columns.contains("os.threads"),
+            "extra {extra}: the thread counts are tested: {columns}"
+        );
+        assert_ne!(a["favors"], "leak", "extra {extra}: {text} {columns}");
+        let limitations = full["limitations"].to_string();
+        assert!(
+            !limitations.contains("keep rising over the extra window")
+                && !limitations.contains("keeps rising over the extra window"),
+            "extra {extra}: {limitations} {columns}"
         );
         let next = a["next"].to_string();
         assert!(!next.contains("ledger confirm"), "extra {extra}: {next}");
+        assert!(
+            !next.contains("the thread count keeps rising"),
+            "extra {extra}: {next}"
+        );
     }
 }
