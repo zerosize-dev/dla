@@ -1704,10 +1704,18 @@ fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
         .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
 }
 
-/// True when harness `h` is the treated clone an `intervention` record made (`dla
-/// intervene`): it keeps its source's mode and tools, but its code is an edit, not a
-/// driver to fill.
+/// True when harness `h` is the treated clone `dla intervene` made: it keeps its source's
+/// mode and tools, but its code is an edit, not a driver to fill. The clone carries a marker
+/// file from the moment it is made (an intervention that stops early writes no record); runs
+/// made before the marker are told by the `intervention` record.
 fn is_intervention_clone(view: &RunView, h: &str) -> bool {
+    if view.run_dir.as_deref().is_some_and(|d| {
+        crate::harness::HarnessManifest::dir_in(d, h)
+            .join(crate::harness::CLONE_MARKER)
+            .is_file()
+    }) {
+        return true;
+    }
     view.ledger.lines().iter().any(|l| {
         matches!(&l.record, Record::Evidence(e)
             if e.kind == EvidenceKind::Intervention
@@ -1751,21 +1759,32 @@ fn built_hook_driver(view: &RunView, run_dir: &Path, runtime: &str) -> Option<Ha
         .find(|h| harness_ran(view, run_dir, h) || !last_attempt_is_build_failure(run_dir, h))
 }
 
-/// The newest harness of `runtime` that never measured and whose last attempt is a build
-/// failure, whatever the step after it is (the report names it as the cause of a missing
-/// iteration when the step is about another harness).
+/// The newest harness of `runtime` that was tried (it measured, or has an attempt record)
+/// when that harness never measured and its last attempt is a build failure. The report
+/// names it as the cause of a missing iteration when the step is about another harness; a
+/// newer harness that was tried and failed another way is the latest reason, so then
+/// nothing is named.
 pub fn unbuilt_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
     let run_dir = view.run_dir.as_deref()?;
-    harness_ids(run_dir)
-        .into_iter()
-        .rev()
-        .map(|(_, id)| id)
-        .find(|id| {
-            crate::harness::HarnessManifest::load(run_dir, id)
-                .is_ok_and(|m| m.runtime.as_str() == runtime)
-                && !harness_ran(view, run_dir, id)
-                && last_attempt_is_build_failure(run_dir, id)
-        })
+    let (_, id) = harness_ids(run_dir).into_iter().rev().find(|(_, id)| {
+        crate::harness::HarnessManifest::load(run_dir, id)
+            .is_ok_and(|m| m.runtime.as_str() == runtime)
+            && (harness_ran(view, run_dir, id) || attempt_of(run_dir, id).is_some())
+    })?;
+    (!harness_ran(view, run_dir, &id) && last_attempt_is_build_failure(run_dir, &id)).then_some(id)
+}
+
+/// The harness whose build failure `open_harness_step` gives as the step, when it does:
+/// no harness is waiting to be run, nothing blocks, and `build_failed_harness` has one.
+pub fn build_step_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    if unrun_harness(view, runtime).is_some()
+        || workload_blocker(view).is_some()
+        || !runtime_has_harness(run_dir, runtime)
+    {
+        return None;
+    }
+    build_failed_harness(view, runtime)
 }
 
 /// The harness of `runtime` whose build failure is the step to take: no hook driver of the

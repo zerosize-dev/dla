@@ -270,7 +270,7 @@ for the verdict. For dynamic findings it prints:
   iterations ran and none called an entry point, so the driver did not reach the code under test; or
   most entry points were never called) and the step that would measure the rest: run the harness that
   was never run; fix the build of one that did not build (only when no hook driver of the runtime
-  has built; the build failure is said once, in the step); fill the DLA-HOOK
+  has built; the build failure is said once: in the step when that is the build step, else in the cause, unless a newer harness was tried and failed another way); fill the DLA-HOOK
   bodies of the newest hook driver that built; make a hook driver with `dla harness gen --lang <rt> --driver`
   when every harness that ran is a JUnit repeat (it has no hooks: the step says how many entry points the
   project's tests reach), when only a command harness ran, or when `dla harness gen` would refuse for lack of a workload with an

@@ -472,7 +472,7 @@ at or under the floor), `budget_left_unrevisited` only a blocker reason (`env_un
   harness that ran, or it is a hook driver that never built. Once a hook driver has built (it ran, or
   its last attempt is not a build failure), the step names the newest such driver and its DLA-HOOK bodies,
   whatever failed to build around it, older or newer, driver or command harness; the `build_fails`
-  blocker is not offered beside it. The edited clone `dla intervene` makes is never that driver.
+  blocker is not offered beside it. The edited clone `dla intervene` makes is never that driver: it is marked when it is made, even if the intervention stops before it records anything.
 - `budget_left_unrevisited` (id: a finding, or the runtime): more than the larger of 10 minutes and
   20% of the budget is left and either findings are closed `time_budget` with no command refused for
   time since they were added (put one back under test with `dla ledger test F --evidence E`), or findings

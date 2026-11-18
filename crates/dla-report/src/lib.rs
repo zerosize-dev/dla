@@ -287,13 +287,14 @@ fn coverage_warnings(view: &RunView) -> Vec<String> {
             {
                 return None;
             }
+            let step = gate::open_harness_step(view, rt);
             let cause = if exercised > 0 {
                 "most entry points were never called".to_owned()
             } else if iterations == 0 {
                 // A failed build is said once: by the step that follows when it is the
-                // build step, else here.
+                // build step, else here (when no newer harness was tried since).
                 match gate::unbuilt_harness(view, rt) {
-                    Some(h) if gate::build_failed_harness(view, rt).is_none() => format!(
+                    Some(h) if gate::build_step_harness(view, rt).is_none() => format!(
                         "harness {h} did not build, so no workload iteration was recorded for it"
                     ),
                     _ => "no workload iteration was recorded for it".to_owned(),
@@ -309,7 +310,7 @@ fn coverage_warnings(view: &RunView) -> Vec<String> {
                     plural_n(iterations, "iteration")
                 )
             };
-            let next = match gate::open_harness_step(view, rt) {
+            let next = match step {
                 gate::HarnessStep::Do(step) => format!("To measure: {step}."),
                 gate::HarnessStep::Blocked(why) => {
                     format!("Blocked: intake.workload records {}.", why.trim_end_matches(['.', ' ']))

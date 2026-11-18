@@ -325,6 +325,10 @@ pub struct FfiMethod {
     pub declared_at: Option<String>,
 }
 
+/// File `dla intervene` writes into the harness directory of the edited clone it makes,
+/// holding the ID of the harness it was cloned from.
+pub const CLONE_MARKER: &str = "clone-of";
+
 impl HarnessManifest {
     /// `<run_dir>/harness/<id>`.
     pub fn dir_in(run_dir: &Path, id: &str) -> PathBuf {

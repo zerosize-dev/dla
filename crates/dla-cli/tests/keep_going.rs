@@ -1051,6 +1051,26 @@ fn the_step_names_the_newest_built_hook_driver_and_never_an_intervention_clone()
             "{ran}: {w}"
         );
     }
+    // An intervention that stopped before it wrote its record: the clone is marked from
+    // the moment it is made, so it is still no driver to fill.
+    let m = scene();
+    m.close("F1", "not_exercised");
+    coverage(&m, 225, 20, Some(750), 37);
+    harness_manifest(&m, "H1");
+    ran_attempt(&m, "H1");
+    harness_manifest(&m, "H2");
+    std::fs::write(
+        m.run_dir()
+            .join("harness/H2")
+            .join(dla_core::harness::CLONE_MARKER),
+        "H1",
+    )
+    .unwrap();
+    let w = warning(&m);
+    assert!(
+        w.contains("fill the DLA-HOOK bodies of H1") && !w.contains("of H2"),
+        "{w}"
+    );
     // Two hook drivers that never built, then a command harness that ran: the newest
     // failed build is the step.
     let n = scene();
@@ -1107,6 +1127,70 @@ fn a_failed_build_is_said_once_even_when_the_step_is_another_harness() {
             "Cause: harness H1 did not build, so no workload iteration was recorded for it."
         ) && w.contains("dla harness run H2")
             && w.matches("did not build").count() == 1,
+        "{w}"
+    );
+}
+
+/// A failed build is said once whenever the step is not that build: in the cause when a
+/// newer harness waits to be run or the workload is blocked, and not at all when a newer
+/// harness was tried and failed another way.
+#[test]
+fn a_failed_build_is_said_once_for_every_step_that_is_not_the_build() {
+    let said = |w: &str| w.matches("did not build").count();
+    // (a) a command harness that never built, a newer one generated and not run.
+    let a = scene();
+    a.close("F1", "not_exercised");
+    coverage(&a, 225, 0, None, 0);
+    harness_manifest_in(&a, "H1", HarnessMode::Command);
+    failed_attempt(&a, "H1", "build_fails");
+    harness_manifest_in(&a, "H2", HarnessMode::Command);
+    generation_evidence(&a, "H2");
+    let w = warning(&a);
+    assert!(
+        w.contains("Cause: harness H1 did not build")
+            && w.contains("dla harness run H2")
+            && said(&w) == 1,
+        "{w}"
+    );
+    // (b) a hook driver that never built, then a JUnit repeat generated and not run.
+    let b = scene();
+    b.close("F1", "not_exercised");
+    coverage(&b, 225, 0, None, 0);
+    harness_manifest(&b, "H1");
+    failed_attempt(&b, "H1", "build_fails");
+    junit_manifest(&b, "H2");
+    generation_evidence(&b, "H2");
+    let w = warning(&b);
+    assert!(
+        w.contains("Cause: harness H1 did not build")
+            && w.contains("dla harness run H2")
+            && said(&w) == 1,
+        "{w}"
+    );
+    // (c) a hook driver that never built and an unresolved workload.
+    let c = scene();
+    c.close("F1", "not_exercised");
+    coverage(&c, 225, 0, None, 0);
+    harness_manifest(&c, "H1");
+    failed_attempt(&c, "H1", "build_fails");
+    c.workload_blocker("env_unavailable");
+    let w = warning(&c);
+    assert!(
+        w.contains("Cause: harness H1 did not build") && w.contains("Blocked:") && said(&w) == 1,
+        "{w}"
+    );
+    // A newer driver was tried and failed another way: the old build is not the cause,
+    // and the step names the newer driver.
+    let d = scene();
+    d.close("F1", "not_exercised");
+    coverage(&d, 225, 0, None, 0);
+    harness_manifest(&d, "H1");
+    failed_attempt(&d, "H1", "build_fails");
+    harness_manifest(&d, "H2");
+    failed_attempt(&d, "H2", "no_harness");
+    let w = warning(&d);
+    assert!(
+        !w.contains("did not build") && w.contains("fill the DLA-HOOK bodies of H2"),
         "{w}"
     );
 }

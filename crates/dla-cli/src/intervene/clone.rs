@@ -129,6 +129,10 @@ pub fn clone_harness(tc: &ToolCtx, src: &HarnessManifest) -> Result<Cloned, Refu
     for sub in [AGENT, DRIVER] {
         copy_verbatim(&from.join(sub), &to.join(sub)).map_err(|e| io(&to.join(sub), e))?;
     }
+    // Marked before anything else can stop the intervention: the gate must never take the
+    // edited clone for a driver to fill.
+    let marker = to.join(dla_core::harness::CLONE_MARKER);
+    fs::write(&marker, &src.id).map_err(|e| io(&marker, e))?;
     let work = to.join(WORK);
     let files = copy_tree(&from.join(WORK), &work, &tc.project).map_err(|e| io(&work, e))?;
     manifest.save(&tc.run_dir).map_err(|e| e.to_refusal())?;
