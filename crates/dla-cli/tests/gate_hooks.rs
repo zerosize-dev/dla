@@ -1079,6 +1079,51 @@ fn a_siblings_slice_writes_do_not_reset_a_stuck_workers_counter() {
 }
 
 #[test]
+fn a_worker_stop_obeys_its_own_refusal_and_not_the_cores_or_a_siblings() {
+    let p = project("repository");
+    p.ok(&["run", "dispatch", "--workers", "jvm,go"]);
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    for w in st["workers"].as_array_mut().unwrap() {
+        w["deadline"] = json!(far);
+    }
+    fs::write(&path, st.to_string()).unwrap();
+    let refusals = p.run_dir().join("time_refusals.jsonl");
+    let line = |worker: Value| {
+        format!(
+            "{}\n",
+            json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                   "worker": worker, "none_fits": true})
+        )
+    };
+    let t = tempfile::tempdir().unwrap();
+    let tr = transcript(t.path(), &["dla --worker jvm ledger add --origin census"]);
+    let reason = |p: &P| {
+        let out = p.hook(&["stop-hook", "--subagent"], &subagent_json(p.path(), &tr));
+        out.json()["reason"].as_str().unwrap().to_owned()
+    };
+    // The core's and a sibling's refusals do not move worker jvm to the floor.
+    fs::write(&refusals, line(Value::Null) + &line(json!("go"))).unwrap();
+    let r = reason(&p);
+    assert!(
+        r.contains("measure what is open instead of stopping"),
+        "{r}"
+    );
+    assert!(!r.contains("nothing smaller that fits"), "{r}");
+    // Its own does, and it is told to close what is open (a worker never asks the user).
+    fs::write(&refusals, line(json!("jvm"))).unwrap();
+    let r = reason(&p);
+    assert!(
+        r.contains("nothing smaller that fits: close what is open"),
+        "{r}"
+    );
+    assert!(!r.contains("ask the user"), "{r}");
+}
+
+#[test]
 fn subagent_stop_allows_a_worker_that_finished_its_slice() {
     let p = project("repository");
     p.ok(&["run", "dispatch", "--workers", "jvm"]);

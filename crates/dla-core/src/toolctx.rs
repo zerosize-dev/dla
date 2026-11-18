@@ -67,8 +67,8 @@ pub const TIME_REFUSALS_FILE: &str = "time_refusals.jsonl";
 
 /// True when a tool refused a command for time after `since`: in the core (`worker` None),
 /// only the core's own refusals (a worker's never count); in a worker (`worker` is its
-/// name), that worker's own. The reason `time_budget` is honest for a finding added before such a refusal even when time is
-/// left, because the measurement it needed was refused for lack of it. A refusal made
+/// name), that worker's own. The reason `time_budget` is honest for a finding added before
+/// such a refusal even when time is left, because the measurement it needed was refused for lack of it. A refusal made
 /// before the latest `dla run extend` no longer counts: the extension gave the time back.
 pub fn time_refused_since(
     run_dir: &Path,
