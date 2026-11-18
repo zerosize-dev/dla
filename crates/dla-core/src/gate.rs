@@ -1704,17 +1704,30 @@ fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
         .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
 }
 
+/// True when harness `h` is the treated clone an `intervention` record made (`dla
+/// intervene`): it keeps its source's mode and tools, but its code is an edit, not a
+/// driver to fill.
+fn is_intervention_clone(view: &RunView, h: &str) -> bool {
+    view.ledger.lines().iter().any(|l| {
+        matches!(&l.record, Record::Evidence(e)
+            if e.kind == EvidenceKind::Intervention
+                && e.result.get("treated_harness").and_then(|v| v.as_str()) == Some(h))
+    })
+}
+
 /// The harnesses of `runtime` that are drivers with DLA-HOOK bodies to fill, oldest
-/// first. A JUnit repeat is a driver too, but it has no hooks, so it is passed over.
-fn hook_drivers_in(run_dir: &Path, runtime: &str) -> Vec<HarnessId> {
+/// first. A JUnit repeat is a driver too, but it has no hooks, so it is passed over, and
+/// so is the edited clone of an intervention.
+fn hook_drivers_in(view: &RunView, run_dir: &Path, runtime: &str) -> Vec<HarnessId> {
     harness_ids(run_dir)
         .into_iter()
         .filter(|(_, id)| {
-            crate::harness::HarnessManifest::load(run_dir, id).is_ok_and(|m| {
-                m.runtime.as_str() == runtime
-                    && m.mode == crate::harness::HarnessMode::Driver
-                    && !m.tools.iter().any(|t| t == JUNIT_TOOL)
-            })
+            !is_intervention_clone(view, id)
+                && crate::harness::HarnessManifest::load(run_dir, id).is_ok_and(|m| {
+                    m.runtime.as_str() == runtime
+                        && m.mode == crate::harness::HarnessMode::Driver
+                        && !m.tools.iter().any(|t| t == JUNIT_TOOL)
+                })
         })
         .map(|(_, id)| id)
         .collect()
@@ -1732,10 +1745,27 @@ fn last_attempt_is_build_failure(run_dir: &Path, h: &str) -> bool {
 /// build failure. This is the harness whose DLA-HOOK bodies the model fills next; an older
 /// driver that never built is not.
 fn built_hook_driver(view: &RunView, run_dir: &Path, runtime: &str) -> Option<HarnessId> {
-    hook_drivers_in(run_dir, runtime)
+    hook_drivers_in(view, run_dir, runtime)
         .into_iter()
         .rev()
         .find(|h| harness_ran(view, run_dir, h) || !last_attempt_is_build_failure(run_dir, h))
+}
+
+/// The newest harness of `runtime` that never measured and whose last attempt is a build
+/// failure, whatever the step after it is (the report names it as the cause of a missing
+/// iteration when the step is about another harness).
+pub fn unbuilt_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    harness_ids(run_dir)
+        .into_iter()
+        .rev()
+        .map(|(_, id)| id)
+        .find(|id| {
+            crate::harness::HarnessManifest::load(run_dir, id)
+                .is_ok_and(|m| m.runtime.as_str() == runtime)
+                && !harness_ran(view, run_dir, id)
+                && last_attempt_is_build_failure(run_dir, id)
+        })
 }
 
 /// The harness of `runtime` whose build failure is the step to take: no hook driver of the
@@ -1767,7 +1797,7 @@ pub fn build_failed_harness(view: &RunView, runtime: &str) -> Option<HarnessId> 
     failed
         .filter(|(n, _)| *n > last_ran)
         .map(|(_, id)| id)
-        .or_else(|| hook_drivers_in(run_dir, runtime).pop())
+        .or_else(|| hook_drivers_in(view, run_dir, runtime).pop())
 }
 
 /// The command that makes a driver of `runtime` and what to do with it.
@@ -2087,7 +2117,7 @@ fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
             "budget_left_unrevisited",
             first.id.to_string(),
             format!(
-                "{n} finding(s) are closed with time_budget (first {}) although {left} of {total} budget minutes remain and no command was refused for time since they were added",
+                "{n} finding(s) are closed with time_budget (first {}) although {left} of {total} budget minutes remain and no command of the core was refused for time since they were added",
                 first.id
             ),
             format!(

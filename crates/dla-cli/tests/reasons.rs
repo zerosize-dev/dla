@@ -340,6 +340,19 @@ fn a_workers_own_deadline_and_its_own_refusals_count() {
 }
 
 #[test]
+fn a_workers_refusal_does_not_make_time_budget_honest_for_the_core() {
+    let r = scene();
+    r.ok(&["run", "dispatch", "--workers", "go"]);
+    r.note_time_refusal(Some("go"));
+    assert_eq!(
+        r.close(None, "F1", "time_budget").as_deref(),
+        Some("time-left")
+    );
+    r.note_time_refusal(None);
+    assert_eq!(r.close(None, "F1", "time_budget"), None);
+}
+
+#[test]
 fn the_time_left_fix_of_a_static_only_finding_stays_static_only() {
     let r = scene();
     let (code, v) = r.run(&[

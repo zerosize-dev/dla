@@ -67,8 +67,7 @@ pub const TIME_REFUSALS_FILE: &str = "time_refusals.jsonl";
 
 /// True when a tool refused a command for time after `since`: in the core (`worker` None),
 /// only the core's own refusals (a worker's never count); in a worker (`worker` is its
-/// name), that worker's own. The reason
-/// `time_budget` is honest for a finding added before such a refusal even when time is
+/// name), that worker's own. The reason `time_budget` is honest for a finding added before such a refusal even when time is
 /// left, because the measurement it needed was refused for lack of it. A refusal made
 /// before the latest `dla run extend` no longer counts: the extension gave the time back.
 pub fn time_refused_since(
@@ -1197,14 +1196,16 @@ mod tests {
         let _ = ctx.time_budget_refusal("sample", 10, 5, "worker deadline", "");
         assert!(time_refused_since(&ctx.run_dir, Some("jvm"), before));
         assert!(!time_refused_since(&ctx.run_dir, Some("go"), before));
+        // A note older than the finding does not count (this run holds core lines).
+        let later = now_utc() + chrono::TimeDelta::try_seconds(60).unwrap();
+        assert!(!time_refused_since(&ctx.run_dir, None, later));
+        assert!(!time_refused_since(&ctx.run_dir, Some("jvm"), later));
+        // A run holding only a worker's line: the core sees nothing.
         let (_d, mut ctx) = run(None);
         ctx.worker = Some("jvm".into());
         let _ = ctx.time_budget_refusal("sample", 10, 5, "worker deadline", "");
         assert!(!time_refused_since(&ctx.run_dir, None, before));
         assert!(!nothing_fits_since(&ctx.run_dir, None, before));
-        // A note older than the finding does not count.
-        let later = now_utc() + chrono::TimeDelta::try_seconds(60).unwrap();
-        assert!(!time_refused_since(&ctx.run_dir, None, later));
 
         // `require_time` on a spent deadline is a refusal too.
         let (_d, ctx) = run(None);

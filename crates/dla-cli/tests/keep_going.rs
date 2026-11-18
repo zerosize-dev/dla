@@ -99,6 +99,17 @@ impl Run {
         f(&mut st);
         fs::write(path, st.to_string()).unwrap();
     }
+    /// What a tool leaves when it refuses a command for time (`worker` null for the core).
+    fn note_time_refusal(&self, worker: Option<&str>) {
+        use std::io::Write;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE))
+            .unwrap();
+        let line = json!({"ts": rfc3339_in(60), "worker": worker, "none_fits": true});
+        writeln!(f, "{line}").unwrap();
+    }
     fn workload_blocker(&self, reason: &str) {
         self.ok(&[
             "ledger",
@@ -194,6 +205,32 @@ fn coverage(r: &Run, discovered: usize, exercised: usize, iterations: Option<u64
         if classes > 0 {
             m.set_project_classes("jvm", classes);
         }
+    })
+    .unwrap();
+}
+
+/// The `intervention` evidence `dla intervene` writes: it names the treated clone.
+fn intervention_evidence(r: &Run, harness: &str, treated: &str) {
+    let mut l = Ledger::load(&r.run_dir()).unwrap();
+    let mut result =
+        json!({"test": "intervention", "harness": harness, "treated_harness": treated});
+    result["signal"] = Signal::new("t", "x", "src").to_value();
+    l.add_evidence(NewEvidence {
+        source: Source::Repo {
+            commit: "abc".into(),
+            path: None,
+        },
+        tool: Tool {
+            name: "t".into(),
+            version: "0".into(),
+        },
+        authority: Authority::Test,
+        kind: EvidenceKind::Intervention,
+        result,
+        raw: None,
+        coverage: EvidenceCoverage::default(),
+        limitations: vec![],
+        unknowns: vec![],
     })
     .unwrap();
 }
@@ -586,6 +623,20 @@ fn time_budget_closes_with_time_left_are_listed_until_reclosed() {
 }
 
 #[test]
+fn only_the_cores_own_refusal_clears_a_time_budget_close() {
+    let r = scene();
+    r.set_state(|st| st["budget"]["deadline"] = json!(rfc3339_in(5 * 60)));
+    assert!(r.close("F1", "time_budget").is_none());
+    r.set_state(|st| st["budget"]["deadline"] = json!(rfc3339_in(50 * 60)));
+    // A worker's refusal is not a command the core was refused.
+    r.note_time_refusal(Some("go"));
+    assert_eq!(r.items("budget_left_unrevisited").len(), 1);
+    // The core's own is.
+    r.note_time_refusal(None);
+    assert!(r.items("budget_left_unrevisited").is_empty());
+}
+
+#[test]
 fn findings_closed_before_any_harness_are_listed_with_the_command_that_makes_one() {
     let r = scene();
     // Closed while the run knew no entry point, as in a ledger written before the rule.
@@ -966,6 +1017,97 @@ fn an_older_hook_driver_that_never_built_does_not_hide_a_newer_one_that_ran() {
     assert!(
         fix.contains("harness H1 did not build") && !fix.contains("fill the DLA-HOOK bodies"),
         "{fix}"
+    );
+}
+
+#[test]
+fn the_step_names_the_newest_built_hook_driver_and_never_an_intervention_clone() {
+    // Two hook drivers that both built: the newest is the one to fill.
+    let r = scene();
+    r.close("F1", "not_exercised");
+    coverage(&r, 225, 20, Some(750), 37);
+    harness_manifest(&r, "H1");
+    ran_attempt(&r, "H1");
+    harness_manifest(&r, "H2");
+    ran_attempt(&r, "H2");
+    let w = warning(&r);
+    assert!(w.contains("fill the DLA-HOOK bodies of H2"), "{w}");
+    // H3 is the edited clone `dla intervene` made of H1: it keeps the mode and tools, so
+    // it is no driver to fill, whether its edited build ran or never left a record.
+    for ran in [true, false] {
+        let c = scene();
+        c.close("F1", "not_exercised");
+        coverage(&c, 225, 20, Some(750), 37);
+        harness_manifest(&c, "H1");
+        ran_attempt(&c, "H1");
+        harness_manifest(&c, "H2");
+        if ran {
+            ran_attempt(&c, "H2");
+        }
+        intervention_evidence(&c, "H1", "H2");
+        let w = warning(&c);
+        assert!(
+            w.contains("fill the DLA-HOOK bodies of H1") && !w.contains("of H2"),
+            "{ran}: {w}"
+        );
+    }
+    // Two hook drivers that never built, then a command harness that ran: the newest
+    // failed build is the step.
+    let n = scene();
+    n.close("F1", "not_exercised");
+    coverage(&n, 225, 0, Some(750), 37);
+    harness_manifest(&n, "H1");
+    failed_attempt(&n, "H1", "build_fails");
+    harness_manifest(&n, "H2");
+    failed_attempt(&n, "H2", "build_fails");
+    harness_manifest_in(&n, "H3", HarnessMode::Command);
+    ran_attempt(&n, "H3");
+    let fix = n.items("coverage_contradiction")[0].2.clone();
+    assert!(fix.contains("harness H2 did not build"), "{fix}");
+    // A hook driver whose build failed and nothing else: the build step.
+    let o = scene();
+    o.close("F1", "not_exercised");
+    coverage(&o, 225, 0, Some(750), 37);
+    harness_manifest(&o, "H1");
+    failed_attempt(&o, "H1", "build_fails");
+    let fix = o.items("coverage_contradiction")[0].2.clone();
+    assert!(
+        fix.contains("harness H1 did not build") && !fix.contains("fill the DLA-HOOK bodies"),
+        "{fix}"
+    );
+    // A hook driver that ran, then a newer driver whose build failed: the driver that
+    // built is still the one to fill, with no build_fails escape.
+    let e = scene();
+    e.close("F1", "not_exercised");
+    coverage(&e, 225, 20, Some(750), 37);
+    harness_manifest(&e, "H1");
+    ran_attempt(&e, "H1");
+    harness_manifest(&e, "H2");
+    failed_attempt(&e, "H2", "build_fails");
+    let w = warning(&e);
+    assert!(
+        w.contains("fill the DLA-HOOK bodies of H1") && !w.contains("build_fails"),
+        "{w}"
+    );
+}
+
+#[test]
+fn a_failed_build_is_said_once_even_when_the_step_is_another_harness() {
+    // H1 never built and H2 was generated and not run: the cause names H1's build, the
+    // step runs H2.
+    let r = scene();
+    r.close("F1", "not_exercised");
+    coverage(&r, 225, 0, None, 0);
+    harness_manifest(&r, "H1");
+    failed_attempt(&r, "H1", "build_fails");
+    harness_manifest(&r, "H2");
+    let w = warning(&r);
+    assert!(
+        w.contains(
+            "Cause: harness H1 did not build, so no workload iteration was recorded for it."
+        ) && w.contains("dla harness run H2")
+            && w.matches("did not build").count() == 1,
+        "{w}"
     );
 }
 

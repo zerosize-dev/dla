@@ -674,7 +674,7 @@ fn refuse_time_left(
     Err(Failure::refuse(
         core_codes::TIME_LEFT,
         format!(
-            "{what} cannot be closed with time_budget: {left} of {total} budget minutes remain (the reason holds below {floor}) and no command was refused for time since it was added."
+            "{what} cannot be closed with time_budget: {left} of {total} budget minutes remain (the reason holds below {floor}) and no command of the core was refused for time since it was added."
         ),
         format!("less than {floor} minutes left, or a command refused for time"),
         if static_only {

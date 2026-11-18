@@ -290,8 +290,14 @@ fn coverage_warnings(view: &RunView) -> Vec<String> {
             let cause = if exercised > 0 {
                 "most entry points were never called".to_owned()
             } else if iterations == 0 {
-                // A failed build is said once, by the step that follows.
-                "no workload iteration was recorded for it".to_owned()
+                // A failed build is said once: by the step that follows when it is the
+                // build step, else here.
+                match gate::unbuilt_harness(view, rt) {
+                    Some(h) if gate::build_failed_harness(view, rt).is_none() => format!(
+                        "harness {h} did not build, so no workload iteration was recorded for it"
+                    ),
+                    _ => "no workload iteration was recorded for it".to_owned(),
+                }
             } else {
                 let loaded = match w.project_classes {
                     Some(1) => "; 1 project class loaded".to_owned(),
