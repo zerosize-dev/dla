@@ -1,4 +1,4 @@
-# Where the work stands (paused 2026-11-13)
+# Where the work stands (resumed 2026-11-18)
 
 ## Code state
 - `d1fca56` on `main` (and `dev/wonderful-mccarthy-algc5s`) holds the whole round as work in
@@ -21,6 +21,18 @@
   items still open are in `open-items.md` (14: 6 budget/time, 4 coverage steps, 4 JVM non-heap).
 - CI on `d1fca56` is expected to be red in places: the new fixtures that fail, and a flaky JVM
   end-to-end test (`alloc_test_jvm::a_driver_that_keeps_daemon_threads_is_not_blamed_on_the_agents_drift`).
+
+## In flight (2026-11-18)
+A fix pass over the 14 items of `open-items.md` is running: three packages (budget and time,
+coverage steps, JVM non-heap), each fixed, checked independently and refixed up to twice, then an
+integration check over the whole round and the full acceptance run. Its brief is
+`fix-pass-brief.md` and its orchestration script `fix-pass-workflow.js` (paths inside both point
+at a scratch directory that a recycled container no longer has: copy the brief, `open-items.md`
+(as `u6/open-items-final.md`), `prune-superseded.sh` and `snapshot.sh` back first, or rewrite the
+paths). Snapshots of the working tree land on this branch after every fix ("Snapshot: ..."
+commits): the newest snapshot is the code to continue from. If the pass was cut off, compare the
+newest snapshot with `d1fca56` to see which packages already changed files, then re-run the pass
+for what is left.
 
 ## Decisions that the open items must keep
 1. Budget settling in a dispatched run: each worker's first passing gate at sweep or later
