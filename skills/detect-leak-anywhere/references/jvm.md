@@ -101,13 +101,25 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   highest measured; so 1 MiB up to extra 25) of every extra checkpoint, so it grows with `--extra`; a rise over it, or a
   harness that does more work per checkpoint (a larger `--step` at `harness gen`, also with
   `--junit` for a JUnit repeat), decides. A command-mode harness (a fresh JVM per point) has no
-  checkpoint drift and gets no such override. When a `jvm.nmt.*` category or `jvm.threads` and
-  `os.threads` rise (they are required when they passed the gate in the latest trend, and also when
-  the harness has no trend yet), that is not the agent's drift and is never blamed on it: the
-  limitation names the column, a rising thread count keeps the leak verdict, a rising NMT category
-  makes it inconclusive, and `next` points at the capture that decides it (`dla harness run H1
-  --capture nonheap`: `threads.json` for threads, `nmt-diff.txt` for the category), never at a
-  longer `--extra`. Do not call a small slope "the service's JIT" without the plateau test. When
+  checkpoint drift and gets no such override. A required column rises by its kind (the `jvm.nmt.*`
+  categories and thread counts are required when they passed the gate in the latest trend, and the
+  thread counts also when the harness has no trend yet). A thread count rises when its plateau
+  reads continues or its net rise over the extra window is more than 2 threads (the JVM starts and
+  stops compiler threads by itself; an idle driver measured in 14 runs, 8 of them with busy loops
+  beside it, rose 0 threads, once 1; the slow leaks seen rose 6 and 10). A `jvm.nmt.*` byte
+  category rises only when its plateau reads continues, as bytes jitter, and `jvm.nmt.thread` also
+  rises with a thread count. Every rising column is collected first, and the class count is not
+  flat when its plateau reads continues or reads inconclusive with a net rise of more than 3
+  classes (0 on the same 14 runs). When a thread count or an NMT category rises, that is not the
+  agent's drift and is never blamed on it: the limitation names every column that rises (the class
+  count too when it is not flat), a rising thread count keeps the leak verdict, a rising NMT
+  category makes it inconclusive, and `next` points at the capture that decides it (`dla harness
+  run H1 --capture nonheap`: `threads.json` for threads, `nmt-diff.txt` for the category), never at
+  a longer `--extra`, and keeps the thread capture whenever a thread count rises. Only when no
+  required column rises and the class count is not flat is the class count named alone (the leak
+  verdict stands, except on a partial run, which is inconclusive). A result with no
+  `jvm.classes_loaded` column is read with the class count unknown: if nothing rises it gets the
+  agent-drift reading with a caution that the class count was not recorded. Do not call a small slope "the service's JIT" without the plateau test. When
   such a column rises while the pools plateau, the pools' plateau is held back as inconclusive and
   the limitation names the column. A sample (`dla sample --counters jcmd`) shows the shape live but
   cannot refute: `jvm.classes_loaded` there is the classes loaded now (the cumulative counter minus

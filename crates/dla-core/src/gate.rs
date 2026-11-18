@@ -1704,27 +1704,51 @@ fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
         .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
 }
 
-/// The first harness of `runtime` that is a driver with DLA-HOOK bodies to fill. A JUnit
-/// repeat is a driver too, but it has no hooks, so it is passed over.
-fn hook_driver_in(run_dir: &Path, runtime: &str) -> Option<HarnessId> {
-    harness_ids(run_dir).into_iter().find_map(|(_, id)| {
-        crate::harness::HarnessManifest::load(run_dir, &id)
-            .ok()
-            .filter(|m| {
+/// The harnesses of `runtime` that are drivers with DLA-HOOK bodies to fill, oldest
+/// first. A JUnit repeat is a driver too, but it has no hooks, so it is passed over.
+fn hook_drivers_in(run_dir: &Path, runtime: &str) -> Vec<HarnessId> {
+    harness_ids(run_dir)
+        .into_iter()
+        .filter(|(_, id)| {
+            crate::harness::HarnessManifest::load(run_dir, id).is_ok_and(|m| {
                 m.runtime.as_str() == runtime
                     && m.mode == crate::harness::HarnessMode::Driver
                     && !m.tools.iter().any(|t| t == JUNIT_TOOL)
             })
-            .map(|_| id)
+        })
+        .map(|(_, id)| id)
+        .collect()
+}
+
+/// True when the last attempt of harness `h` is a failed build.
+fn last_attempt_is_build_failure(run_dir: &Path, h: &str) -> bool {
+    attempt_of(run_dir, h).is_some_and(|a| {
+        a.outcome == crate::harness::AttemptOutcome::Failed
+            && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
     })
 }
 
-/// A harness of `runtime` whose last attempt failed to build, which never measured
-/// anything and which was generated after every harness of the runtime that did run:
-/// making another driver would only meet the same build. A build failure of an older
-/// harness, passed over by a later one that ran, is not what stops measuring.
+/// The newest hook driver of `runtime` that built: it ran, or its last attempt is not a
+/// build failure. This is the harness whose DLA-HOOK bodies the model fills next; an older
+/// driver that never built is not.
+fn built_hook_driver(view: &RunView, run_dir: &Path, runtime: &str) -> Option<HarnessId> {
+    hook_drivers_in(run_dir, runtime)
+        .into_iter()
+        .rev()
+        .find(|h| harness_ran(view, run_dir, h) || !last_attempt_is_build_failure(run_dir, h))
+}
+
+/// The harness of `runtime` whose build failure is the step to take: no hook driver of the
+/// runtime has built (one that did is the harness to fill, whatever failed around it), and
+/// either a harness whose last attempt failed to build and which was generated after every
+/// harness that ran (making another driver would only meet the same build), or a hook
+/// driver that never built (filling its hooks would meet the same error). A build failure of
+/// an older harness, passed over by a later one that ran, is not what stops measuring.
 pub fn build_failed_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
     let run_dir = view.run_dir.as_deref()?;
+    if built_hook_driver(view, run_dir, runtime).is_some() {
+        return None;
+    }
     let mut last_ran = 0;
     let mut failed: Option<(u32, HarnessId)> = None;
     for (n, id) in harness_ids(run_dir) {
@@ -1736,14 +1760,14 @@ pub fn build_failed_harness(view: &RunView, runtime: &str) -> Option<HarnessId> 
         }
         if harness_ran(view, run_dir, &id) {
             last_ran = last_ran.max(n);
-        } else if attempt_of(run_dir, &id).is_some_and(|a| {
-            a.outcome == crate::harness::AttemptOutcome::Failed
-                && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
-        }) {
+        } else if last_attempt_is_build_failure(run_dir, &id) {
             failed = Some((n, id));
         }
     }
-    failed.filter(|(n, _)| *n > last_ran).map(|(_, id)| id)
+    failed
+        .filter(|(n, _)| *n > last_ran)
+        .map(|(_, id)| id)
+        .or_else(|| hook_drivers_in(run_dir, runtime).pop())
 }
 
 /// The command that makes a driver of `runtime` and what to do with it.
@@ -1768,19 +1792,7 @@ fn driver_step(view: &RunView, runtime: &str) -> String {
     if let Some(h) = build_failed_harness(view, runtime) {
         return build_step(&h);
     }
-    if let Some(h) = dir.and_then(|d| hook_driver_in(d, runtime)) {
-        // The hook driver the step would send the user to never built: filling its hooks
-        // would meet the same build error.
-        let failed_build = dir.is_some_and(|d| {
-            !harness_ran(view, d, &h)
-                && attempt_of(d, &h).is_some_and(|a| {
-                    a.outcome == crate::harness::AttemptOutcome::Failed
-                        && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
-                })
-        });
-        if failed_build {
-            return build_step(&h);
-        }
+    if let Some(h) = dir.and_then(|d| built_hook_driver(view, d, runtime)) {
         return format!(
             "fill the DLA-HOOK bodies of {h} so its driver calls the entry points, then dla harness run {h}"
         );

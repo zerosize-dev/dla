@@ -179,7 +179,7 @@
           "format": "date-time"
         },
         "estimate": {
-          "description": "What an `auto` budget was sized from: the largest estimate so far, stored by the first\nworker gate that sizes it, before the budget is final.",
+          "description": "What an `auto` budget was sized from: the largest estimate a sizing gate has computed\n(the run's own gate, or each worker's first gate in a dispatched run).",
           "anyOf": [
             {
               "$ref": "#/$defs/BudgetEstimate"

@@ -214,8 +214,8 @@ pub struct Budget {
     /// budget, in the order they did.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub settled_workers: Vec<String>,
-    /// What an `auto` budget was sized from: the largest estimate so far, stored by the first
-    /// worker gate that sizes it, before the budget is final.
+    /// What an `auto` budget was sized from: the largest estimate a sizing gate has computed
+    /// (the run's own gate, or each worker's first gate in a dispatched run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimate: Option<BudgetEstimate>,
     /// Extensions by `dla run extend`, oldest first.

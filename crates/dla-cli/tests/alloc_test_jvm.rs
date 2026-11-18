@@ -326,6 +326,16 @@ fn driver_run(
     iterations: &str,
     unit: &str,
 ) -> (tempfile::TempDir, PathBuf, Value) {
+    driver_run_step(warm, iterations, "50", unit)
+}
+
+/// `driver_run` with the units per checkpoint (`--step`) given.
+fn driver_run_step(
+    warm: Option<&str>,
+    iterations: &str,
+    step: &str,
+    unit: &str,
+) -> (tempfile::TempDir, PathBuf, Value) {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");
     fs::create_dir_all(project.join("src/zz")).unwrap();
@@ -349,7 +359,7 @@ fn driver_run(
             "--package",
             "zz",
             "--step",
-            "50",
+            step,
             "--iterations",
             iterations,
         ],
@@ -519,8 +529,16 @@ fn a_small_non_heap_rise_on_an_idle_driver_is_never_a_leak_verdict_and_prints_no
 
 /// An idle driver's finding, bound and ready for `alloc-test`.
 fn bound_non_heap_finding(project: &Path, run: &Value) -> String {
+    bound_finding(project, run, true)
+}
+
+/// A finding bound to the run's workload evidence, with the trend of the run (`dla trend S1`)
+/// computed first or not. With no trend, the thread counts are required columns.
+fn bound_finding(project: &Path, run: &Value, trend: bool) -> String {
     let workload = run["evidence"][0].as_str().unwrap().to_owned();
-    ok(project, &["trend", "S1"]);
+    if trend {
+        ok(project, &["trend", "S1"]);
+    }
     let f = ok(
         project,
         &[
@@ -598,4 +616,84 @@ fn a_driver_that_keeps_daemon_threads_is_not_blamed_on_the_agents_drift() {
     let next = a["next"].to_string();
     assert!(next.contains("--capture nonheap"), "{a}");
     assert!(!next.contains("--step <larger>"), "{next}");
+}
+
+/// The thread columns of the latest alloc-test result: their plateau verdicts and net rises.
+fn thread_columns(project: &Path, a: &Value) -> String {
+    let id = a["id"].as_str().unwrap_or("A1");
+    let rel = fs::read_dir(project.join(".dla"))
+        .unwrap()
+        .map(|e| e.unwrap().path().join("alloc").join(format!("{id}.json")))
+        .find(|p| p.exists())
+        .unwrap();
+    let full: Value = serde_json::from_str(&fs::read_to_string(rel).unwrap()).unwrap();
+    full["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["name"].as_str().is_some_and(|n| n.ends_with("threads")))
+        .map(|c| format!("{} {}", c["name"], c["plateau"]))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[test]
+fn a_driver_that_starts_a_daemon_thread_every_tenth_unit_keeps_the_leak_reading_and_names_the_thread_count()
+ {
+    if skip() {
+        return;
+    }
+    // With no trend the thread counts are required columns. One thread per ten units at a step of
+    // five is a thread every other checkpoint: the plateau test cannot judge the count (not every
+    // delta is a rise), but its net rise over the extra window is about ten threads.
+    let unit = "if (i % 10 == 0) { Thread t = new Thread(() -> { try { Thread.sleep(600000L); } catch (InterruptedException e) { } }); t.setDaemon(true); t.start(); }";
+    let (_dir, project, run) = driver_run_step(None, "20", "5", unit);
+    let f = bound_finding(&project, &run, false);
+    let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
+    let text = a.to_string();
+    assert_eq!(
+        a["favors"],
+        "leak",
+        "{text} {}",
+        thread_columns(&project, &a)
+    );
+    assert!(a.get("caution").is_none(), "{text}");
+    assert!(
+        !text.contains("agent's own checkpoints add by themselves"),
+        "{text}"
+    );
+    assert!(
+        text.contains("jvm.threads") || text.contains("os.threads"),
+        "the thread count is named: {text}"
+    );
+    let next = a["next"].to_string();
+    assert!(next.contains("--capture nonheap"), "{a}");
+    assert!(!next.contains("--step <larger>"), "{next}");
+}
+
+#[test]
+fn an_idle_driver_without_a_trend_is_never_a_leak_verdict_and_names_no_thread_count() {
+    if skip() {
+        return;
+    }
+    // The compiler threads the JVM starts and stops by itself are no thread leak: with the
+    // thread counts required (no trend), an idle driver reads as the agent's drift, at the
+    // default window and at a long one.
+    let (_dir, project, run) = idle_run(None, "20");
+    let f = bound_finding(&project, &run, false);
+    for extra in ["20", "100"] {
+        let a = ok(
+            &project,
+            &["alloc-test", "H1", "--finding", &f, "--extra", extra],
+        );
+        let text = a.to_string();
+        assert_ne!(a["favors"], "leak", "extra {extra}: {text}");
+        assert!(
+            !text.contains("threads keep rising") && !text.contains("threads keeps rising"),
+            "extra {extra}: {text} {}",
+            thread_columns(&project, &a)
+        );
+        let next = a["next"].to_string();
+        assert!(!next.contains("ledger confirm"), "extra {extra}: {next}");
+    }
 }

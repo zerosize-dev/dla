@@ -852,7 +852,9 @@ fn a_harness_whose_build_failed_is_not_answered_with_another_driver() {
     failed_attempt(&r, "H1", "build_fails");
     let w = warning(&r);
     assert!(
-        w.contains("harness H1 did not build, so no workload iteration was recorded")
+        w.contains(
+            "Cause: no workload iteration was recorded for it. To measure: harness H1 did not build"
+        ) && w.matches("did not build").count() == 1
             && w.contains("fix the build error")
             && w.contains("--reason build_fails")
             && !w.contains("harness gen"),
@@ -919,6 +921,51 @@ fn an_older_build_failure_does_not_hide_the_hook_driver_that_ran() {
             && !w.contains("did not build")
             && !w.contains("the project's tests reach"),
         "{w}"
+    );
+}
+
+#[test]
+fn an_older_hook_driver_that_never_built_does_not_hide_a_newer_one_that_ran() {
+    // H1 is a hook driver whose build failed; H2, a newer hook driver, built and ran: with
+    // none and with a minority of the entry points reached, the step names H2 and never
+    // offers the build_fails escape.
+    for exercised in [0, 20] {
+        let r = scene();
+        r.close("F1", "not_exercised");
+        coverage(&r, 225, exercised, Some(750), 37);
+        harness_manifest(&r, "H1");
+        failed_attempt(&r, "H1", "build_fails");
+        harness_manifest(&r, "H2");
+        ran_attempt(&r, "H2");
+        let w = warning(&r);
+        assert!(
+            w.contains("fill the DLA-HOOK bodies of H2")
+                && !w.contains("did not build")
+                && !w.contains("build_fails"),
+            "{exercised}: {w}"
+        );
+        if exercised == 0 {
+            let fix = r.items("coverage_contradiction")[0].2.clone();
+            assert!(
+                fix.contains("fill the DLA-HOOK bodies of H2, then dla harness run H2")
+                    || fix.contains("fill the DLA-HOOK bodies of H2 so its driver calls the entry points, then dla harness run H2"),
+                "{fix}"
+            );
+            assert!(!fix.contains("build_fails") && !fix.contains("H1"), "{fix}");
+        }
+    }
+    // Only a failed hook driver and a JUnit repeat that ran: the build step.
+    let j = scene();
+    j.close("F1", "not_exercised");
+    coverage(&j, 225, 0, Some(750), 37);
+    harness_manifest(&j, "H1");
+    failed_attempt(&j, "H1", "build_fails");
+    junit_manifest(&j, "H2");
+    ran_attempt(&j, "H2");
+    let fix = j.items("coverage_contradiction")[0].2.clone();
+    assert!(
+        fix.contains("harness H1 did not build") && !fix.contains("fill the DLA-HOOK bodies"),
+        "{fix}"
     );
 }
 

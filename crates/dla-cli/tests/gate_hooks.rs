@@ -822,6 +822,56 @@ fn stop_hook_after_a_refusal_with_nothing_smaller_that_fits_counts_as_the_floor(
 }
 
 #[test]
+fn a_workers_refusal_never_puts_the_core_at_the_floor() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    st["consent"]["given_by"] = json!("user");
+    fs::write(&path, st.to_string()).unwrap();
+    let line = format!(
+        "{}\n",
+        json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+               "worker": "go", "none_fits": true})
+    );
+    fs::write(p.run_dir().join("time_refusals.jsonl"), line).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("measure what is open instead of stopping"),
+        "{reason}"
+    );
+    assert!(!reason.contains("ask the user once"), "{reason}");
+}
+
+#[test]
+fn the_reason_after_a_refusal_with_most_of_the_budget_left_says_what_happened() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    st["consent"]["given_by"] = json!("user");
+    fs::write(&path, st.to_string()).unwrap();
+    let line = format!(
+        "{}\n",
+        json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+               "worker": null, "none_fits": true})
+    );
+    fs::write(p.run_dir().join("time_refusals.jsonl"), line).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("a command was refused with nothing smaller that fits: ask the user once"),
+        "{reason}"
+    );
+    assert!(!reason.contains("too few"), "{reason}");
+}
+
+#[test]
 fn stop_hook_at_a_spent_budget_asks_an_interactive_core_to_extend_first() {
     let p = project("symptom");
     let path = p.run_dir().join("state.json");

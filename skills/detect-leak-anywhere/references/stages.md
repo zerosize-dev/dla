@@ -467,8 +467,11 @@ at or under the floor), `budget_left_unrevisited` only a blocker reason (`env_un
   that prints (never the command harness that produced the zero); or record why it cannot (reason `not_exercised`).
   A JUnit repeat (`dla harness gen --lang jvm --junit`) has no hooks to fill: when every harness
   of the runtime that ran is one, the fix says the project's tests reach N of M entry points and names the hook driver to make.
-  A harness whose build failed (its attempt record says `build_fails`) and that is newer than every
-  harness that ran is told to fix the build, not to make another driver.
+  A harness whose build failed (its attempt record says `build_fails`) is told to fix the build, not to
+  make another driver, only when no hook driver of the runtime has built: it is newer than every
+  harness that ran, or it is a hook driver that never built. A hook driver that built (ran, or whose
+  last attempt is not a build failure) is the one whose DLA-HOOK bodies the step names, whatever
+  older driver failed to build; the `build_fails` blocker is not offered beside it.
 - `budget_left_unrevisited` (id: a finding, or the runtime): more than the larger of 10 minutes and
   20% of the budget is left and either findings are closed `time_budget` with no command refused for
   time since they were added (put one back under test with `dla ledger test F --evidence E`), or findings
