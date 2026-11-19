@@ -403,6 +403,7 @@ fn the_agents_warm_up_takes_most_of_its_own_early_non_heap_growth_off_an_idle_dr
     // A JVM told it has many processors compiles the checkpoint code before the series starts:
     // with no early rise in the cold run there is nothing for the warm-up to take off.
     if rise(&cold) < 1.0e5 {
+        eprintln!("skipped the warm-up comparison: the cold run has no early rise: {cold:?}");
         return;
     }
     assert!(

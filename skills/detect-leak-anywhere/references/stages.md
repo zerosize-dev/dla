@@ -427,7 +427,7 @@ evidence. A candidate the harness could not exercise is neither confirmed nor re
 `dla ledger resolve F6 --as suspected_static_only --reason not_exercised --remedy "<text>"
 --evidence E4` (reasons `not_exercised`, `no_harness`, `build_fails`), or `--as unresolved` when
 no static evidence exists. A failed build or a run without usable points (`harness-failed`)
-confirms nothing. Closing with `no_harness`, `not_exercised` or `time_budget` while a generated harness of the runtime was never run (`harness-not-run`), or while the runtime has discovered entry points and no harness (`harness-not-generated`), is refused when more than 10 minutes and more than 20% of the budget remains; if only the user can unblock the harness (services, credentials, data), ask the user once, naming the finding ids and the exact input, before closing.
+confirms nothing. Closing with `no_harness`, `not_exercised` or `time_budget` while a generated harness of the runtime was never run, or never built with nothing else of the runtime run and no blocker recorded (`harness-not-run`; the build is then the step), or while the runtime has discovered entry points and no harness (`harness-not-generated`), is refused when more than 10 minutes and more than 20% of the budget remains; if only the user can unblock the harness (services, credentials, data), ask the user once, naming the finding ids and the exact input, before closing.
 
 ## 8. Final gate
 
@@ -450,7 +450,7 @@ unless a command of the core was refused with nothing smaller that fits after th
 a worker's refusal counts only for that worker). A non-heap residual is decided before any close: add a
 finding for it (`--origin residual --region non-heap`), an `N-WARM` sibling, then
 `dla alloc-test H --finding F`; the plateau of the extra window tells warm-up from a leak. With workers: `dla ledger merge` first, then
-verification, then this stage. A harness that was generated, never run (a run you stopped, or one that failed on unfilled DLA-HOOK bodies, does not count) and has findings closed without exercise is a missing item of kind `harness_not_run` while budget remains. After `dla ledger merge` the core judges every worker's harness against the run's deadline only, so a worker that stopped at its own, nearer deadline can leave its harness listed: run it from the core or record its blocker on `intake.workload`. `dla run status` shows the same open items in short.
+verification, then this stage. A harness that was generated, never run (a run you stopped, a `dla harness run` refused for time, or one that failed on unfilled DLA-HOOK bodies, does not count; a harness whose build failed, with nothing else of the runtime run, is listed too, with the build step) and has findings closed without exercise is a missing item of kind `harness_not_run` while budget remains. After `dla ledger merge` the core judges every worker's harness against the run's deadline only, so a worker that stopped at its own, nearer deadline can leave its harness listed: run it from the core or record its blocker on `intake.workload`. `dla run status` shows the same open items in short.
 
 Two more final items keep a run from ending with the budget unspent. Each has a fix and an escape
 recorded on `intake.workload` (`dla ledger resolve intake.workload --status unresolved --reason <r>

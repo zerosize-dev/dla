@@ -432,10 +432,11 @@ impl ToolCtx {
 
     /// Notes that a command was refused for time, in the one place every time-budget refusal
     /// of a tool passes through ([`Self::require_time`] and [`Self::time_budget_refusal`]).
-    /// `dla ledger resolve --reason time_budget` accepts the reason while time is left only
-    /// when a note is newer than the finding ([`time_refused_since`]). A failure to write the
-    /// note is ignored: the refusal itself is what the caller returns.
-    /// `none_fits` records that nothing smaller would have fit ([`nothing_fits_since`]).
+    /// `none_fits` records that nothing smaller would have fit. `dla ledger resolve --reason
+    /// time_budget` accepts the reason while time is left only when a note with `none_fits`
+    /// true is newer than the finding ([`nothing_fits_since`]); a note that named a smaller
+    /// command does not count. A failure to write the note is ignored: the refusal itself is
+    /// what the caller returns.
     fn note_time_refusal(&self, none_fits: bool) {
         let line = serde_json::json!({
             "ts": now_utc().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),

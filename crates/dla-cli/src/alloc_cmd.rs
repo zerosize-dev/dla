@@ -533,7 +533,7 @@ const AGENT_DRIFT_CLASS_JITTER: f64 = 8.0;
 /// stops compiler threads by itself). Measured on drivers that start no thread (idle, hot loops,
 /// a growing heap, slow idle; 59 runs, many under load, the JVM told 4 to 64 processors): the net
 /// rise of `jvm.threads` was 0 every time; the constant is that rise plus 1, and at least 2. The
-/// slow thread leaks the check saw rose 6 and 10 threads. `os.threads` is not judged by its net
+/// slow thread leaks measured rose 6 and 10 threads. `os.threads` is not judged by its net
 /// rise: HotSpot's own GC worker threads came and went there (a driver that starts no thread,
 /// 32 processors told to the JVM, rose 4 on `os.threads` and 0 on `jvm.threads`), so it counts as
 /// rising only when its plateau reads continues. `jvm.threads` has no checkpoint jitter, so a net
@@ -655,7 +655,8 @@ fn is_thread_count(name: &str) -> bool {
     matches!(name, "jvm.threads" | "os.threads")
 }
 
-/// The required columns (NMT categories and thread counts) that are not shown to plateau.
+/// The required columns that may be rising: NMT categories that do not favour a non-leak
+/// reading, and the thread counts whatever they favour (their rise is judged by `column_rises`).
 fn rising_required<'a>(results: &'a [ColumnResult], picked: &pick::Picked) -> Vec<&'a str> {
     results
         .iter()
@@ -790,14 +791,14 @@ fn agent_drift(
                 if named.len() == 1 { "keeps" } else { "keep" },
                 rise / 1024.0,
                 if os_only && !class_leak {
-                    "os.threads alone rises, which the JVM's own GC worker threads can do: the result is inconclusive until the thread capture is read".to_owned()
+                    "os.threads rises without jvm.threads, which the JVM's own GC worker threads can do: the result is inconclusive until the thread capture is read".to_owned()
                 } else if !others {
                     format!(
-                        "a thread count is no checkpoint work, so {stands} and the thread capture decides what holds the threads"
+                        "a thread count is no checkpoint work; {stands}, and the thread capture decides what holds the threads"
                     )
                 } else if class_leak {
                     format!(
-                        "the class count is not flat, so {stands} and the capture reads the NMT category that rises"
+                        "the class count is not flat; {stands}, and the capture reads the NMT category that rises"
                     )
                 } else {
                     "the result is inconclusive until the NMT category that rises is read"
@@ -2016,6 +2017,53 @@ mod tests {
     }
 
     #[test]
+    fn the_thread_limitation_reads_as_one_sentence_whatever_the_run() {
+        let picked = nonheap_picked(&["jvm.threads", "os.threads"]);
+        let rows = rows_with(
+            &[
+                ("jvm.threads", 10.0, PlateauVerdict::Inconclusive),
+                ("os.threads", 10.0, PlateauVerdict::Inconclusive),
+            ],
+            Some((0.0, PlateauVerdict::Plateau)),
+        );
+        for (partial, wants) in [
+            (
+                false,
+                "no checkpoint work; the verdict stands, and the thread capture decides",
+            ),
+            (
+                true,
+                "no checkpoint work; a partial run is inconclusive whatever the columns show, and the thread capture decides",
+            ),
+        ] {
+            let ctx = DriftCtx { partial, ..CTX };
+            let Some(Drift::Growing { limitation, .. }) =
+                agent_drift(&rows, &picked, Favors::Leak, "H1", ctx)
+            else {
+                panic!("growth")
+            };
+            assert!(limitation.contains(wants), "{limitation}");
+        }
+        // os.threads that rises beside an NMT thread category that only follows it: the
+        // limitation does not say "alone" about a list that names two columns.
+        let picked = nonheap_picked(&["jvm.threads", "os.threads", "jvm.nmt.thread"]);
+        let rows = rows_with(
+            &[
+                ("jvm.threads", 0.0, PlateauVerdict::Plateau),
+                ("os.threads", 0.0, PlateauVerdict::Continues),
+                ("jvm.nmt.thread", 0.0, PlateauVerdict::Inconclusive),
+            ],
+            Some((0.0, PlateauVerdict::Plateau)),
+        );
+        let Some(Drift::Growing { limitation, .. }) =
+            agent_drift(&rows, &picked, Favors::Leak, "H1", CTX)
+        else {
+            panic!("growth")
+        };
+        assert!(!limitation.contains("alone"), "{limitation}");
+    }
+
+    #[test]
     fn a_thread_count_that_reads_inconclusive_with_a_net_rise_is_growth_not_the_agents_drift() {
         let picked = nonheap_picked(&["jvm.threads", "os.threads"]);
         // A thread started every 10th unit: the plateau test cannot judge it (not every delta is
@@ -2041,7 +2089,7 @@ mod tests {
             "os.threads is not judged by its net rise: {limitation}"
         );
         assert!(next.contains("--capture nonheap"), "{next}");
-        // The slowest leak the check saw (6 threads) is growth too.
+        // The slowest leak measured (6 threads) is growth too.
         let slow = rows_with(
             &[("jvm.threads", 6.0, PlateauVerdict::Inconclusive)],
             Some((0.0, PlateauVerdict::Plateau)),

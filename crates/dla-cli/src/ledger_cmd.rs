@@ -652,8 +652,8 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
 /// `max(10 min, 20 % of the budget)` (the worker's own deadline in a worker), unless a tool
 /// refused a command with nothing smaller that fits after `added` (see
 /// [`dla_core::toolctx::nothing_fits_since`]); a refusal whose fix names a smaller command does
-/// not count, since the smaller command can still be run. The reason says the budget ran out; with an
-/// hour left it is not true, and the finding is told the reason the evidence supports.
+/// not count, since the smaller command can still be run. The reason says the budget ran out;
+/// with an hour left it is not true, and the finding is told the reason the evidence supports.
 fn refuse_time_left(
     ctx: &Ctx,
     what: &str,

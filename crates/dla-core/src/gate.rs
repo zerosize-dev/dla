@@ -2158,8 +2158,8 @@ fn coverage_contradiction_items(view: &RunView, out: &mut Out) {
 /// `budget_left_unrevisited`: more than the shared floor of the budget is left while
 /// findings are closed in a way the remaining time could still change. Two shapes:
 /// findings closed `time_budget` although no command of the core was refused with nothing
-/// smaller that fits since they were added, and findings closed without exercise in a runtime that has discovered entry
-/// points and no harness at all. Cleared by measuring (the fix names the command) or by the
+/// smaller that fits since they were added, and findings closed without exercise in a runtime
+/// that has discovered entry points and no harness at all. Cleared by measuring (the fix names the command) or by the
 /// blocker on `intake.workload` (a closed finding cannot be closed again, only tested).
 fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
     let Some(run_dir) = view.run_dir.as_deref() else {
