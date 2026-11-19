@@ -6,6 +6,16 @@
 //! `jvm.threads` (`java.threads.live`), `jvm.classes_loaded` (the classes loaded now: the
 //! cumulative counter minus the unloads) and `jvm.classes_unloaded`. None of them is read after a
 //! forced collection: `jcmd` does not force one.
+//!
+//! `GC.heap_info` changed its layout between JDK releases, and the parser reads both. Up to
+//! JDK 21 the G1 line reads `total 221184K, used 2302K` and the Serial collector's generations
+//! are `def new generation` and `tenured generation`; on JDK 25 the G1 line reads
+//! `total reserved 262144K, committed 221184K, used 3204K`, the Serial generations are `DefNew`
+//! and `Tenured`, and the `Metaspace` lines are gone. `jvm.heap_committed` is the committed
+//! size of the heap in both: the `total` figure up to JDK 21 (which is the committed size, not
+//! the reserved one) and the `committed` figure on JDK 25. When the heap output carries no
+//! `Metaspace` line, `jvm.nonheap_used` comes from the first line of `VM.metaspace basic`, which
+//! has the same form.
 
 use std::{collections::BTreeMap, path::PathBuf, process::Command, thread, time::Duration};
 
@@ -96,8 +106,19 @@ fn keyword_sizes(line: &str) -> BTreeMap<&'static str, u64> {
     out
 }
 
-/// Parses `GC.heap_info` for the G1, Parallel, Serial, ZGC, Shenandoah and Epsilon layouts.
-/// Lines such as `Picked up JAVA_TOOL_OPTIONS: ...` and the leading `<pid>:` are ignored.
+/// The Metaspace bytes in use from a `Metaspace  used 115K, committed 320K, reserved ...` line,
+/// as `GC.heap_info` prints it up to JDK 21 and `VM.metaspace basic` prints it on every JDK.
+pub fn parse_metaspace_used(text: &str) -> Option<u64> {
+    text.lines()
+        .map(|l| l.trim().to_ascii_lowercase())
+        .find(|l| l.starts_with("metaspace"))
+        .and_then(|l| keyword_sizes(&l).get("used").copied())
+}
+
+/// Parses `GC.heap_info` for the G1, Parallel, Serial, ZGC and Shenandoah layouts of JDK 21 and
+/// of JDK 25. Lines such as `Picked up JAVA_TOOL_OPTIONS: ...` and the leading `<pid>:` are
+/// ignored. `committed` is the heap's committed size; `metaspace_used` is `None` when the output
+/// has no Metaspace line (JDK 25).
 pub fn parse_heap_info(text: &str) -> Option<HeapInfo> {
     let mut info = HeapInfo::default();
     let mut found = false;
@@ -128,17 +149,25 @@ pub fn parse_heap_info(text: &str) -> Option<HeapInfo> {
             sized_next = true;
             continue;
         }
-        const HEAPS: [&str; 5] = [
+        // `defnew` and `tenured` are the Serial collector's names from JDK 25 on, which also
+        // prefix the older `tenured generation`.
+        const HEAPS: [&str; 6] = [
             "garbage-first heap",
             "psyounggen",
             "paroldgen",
             "def new generation",
-            "tenured generation",
+            "defnew",
+            "tenured",
         ];
         const SINGLE: [&str; 1] = ["zheap"];
         if HEAPS.iter().chain(&SINGLE).any(|h| line.starts_with(h)) {
             let k = keyword_sizes(&line);
-            let size = k.get("total").or_else(|| k.get("capacity"));
+            // JDK 25's G1 line has `total reserved 262144K, committed 221184K`: the committed
+            // figure, which is what `total` meant before.
+            let size = k
+                .get("committed")
+                .or_else(|| k.get("total"))
+                .or_else(|| k.get("capacity"));
             if let (Some(&used), Some(&committed)) = (k.get("used"), size) {
                 info.used += used;
                 info.committed += committed;
@@ -213,6 +242,8 @@ struct Jcmd {
     exe: PathBuf,
     pid: u32,
     nmt: NmtState,
+    /// Whether `GC.heap_info` has no Metaspace line, so `VM.metaspace basic` is asked too.
+    metaspace_apart: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +269,7 @@ pub fn open(ctx: &OpenCtx) -> Result<Box<dyn Backend>, BackendError> {
         exe,
         pid: ctx.pid,
         nmt: NmtState::Unknown,
+        metaspace_apart: false,
     }))
 }
 
@@ -279,16 +311,22 @@ impl Backend for Jcmd {
     fn poll(&mut self) -> Result<Reading, BackendError> {
         let want_nmt = self.nmt != NmtState::Off;
         // Each jcmd is its own JVM start; run them side by side.
-        let (heap, perf, nmt) = thread::scope(|s| {
+        let want_metaspace = self.metaspace_apart;
+        let (heap, perf, nmt, metaspace) = thread::scope(|s| {
             let heap = s.spawn(|| self.call("GC.heap_info"));
             let perf = s.spawn(|| self.call("PerfCounter.print"));
             let nmt = want_nmt.then(|| s.spawn(|| self.call("VM.native_memory summary")));
+            let metaspace = want_metaspace.then(|| s.spawn(|| self.call("VM.metaspace basic")));
             (
                 heap.join()
                     .unwrap_or_else(|_| Err("jcmd thread panicked".into())),
                 perf.join()
                     .unwrap_or_else(|_| Err("jcmd thread panicked".into())),
                 nmt.map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| Err("jcmd thread panicked".into()))
+                }),
+                metaspace.map(|h| {
                     h.join()
                         .unwrap_or_else(|_| Err("jcmd thread panicked".into()))
                 }),
@@ -307,7 +345,20 @@ impl Backend for Jcmd {
         reading
             .values
             .insert("jvm.heap_committed".into(), info.committed as f64);
-        if let Some(m) = info.metaspace_used {
+        let mut metaspace_used = info.metaspace_used;
+        if metaspace_used.is_none() {
+            // JDK 25 left the Metaspace lines out of GC.heap_info.
+            self.metaspace_apart = true;
+            let text = match metaspace {
+                Some(r) => r,
+                None => self.call("VM.metaspace basic"),
+            };
+            match text {
+                Ok(t) => metaspace_used = parse_metaspace_used(&t),
+                Err(e) => reading.notes.push(e),
+            }
+        }
+        if let Some(m) = metaspace_used {
             reading.values.insert("jvm.nonheap_used".into(), m as f64);
         }
         match perf {
@@ -358,6 +409,50 @@ mod tests {
     const SERIAL: &str = "12:\n def new generation   total 9216K, used 2132K [0x00000000fec00000, 0x00000000ff600000, 0x00000000ff600000)\n  eden space 8192K,  26% used [0x00000000fec00000, 0x00000000fee15240, 0x00000000ff400000)\n tenured generation   total 20480K, used 0K [0x00000000ff600000, 0x0000000100a00000, 0x0000000100a00000)\n   the space 20480K,   0% used [0x00000000ff600000, 0x00000000ff600000, 0x00000000ff800200, 0x0000000100a00000)\n Metaspace       used 1000K, committed 1024K, reserved 1056768K\n";
     const ZGC: &str = "7:\n ZHeap           used 20M, capacity 64M, max capacity 4096M\n Metaspace       used 10K, committed 64K, reserved 1M\n";
     const SHENANDOAH: &str = "7:\nShenandoah Heap\n 65536K max, 65536K soft max, 8192K committed, 2048K used\n 10 x 1024K regions\n";
+
+    // Captured from `jcmd <pid> GC.heap_info` of JDK 25.0 (256 MB heap, idle): no Metaspace lines.
+    const G1_25: &str = "Picked up JAVA_TOOL_OPTIONS: -Dx=y\n28083:\ngarbage-first heap   total reserved 262144K, committed 221184K, used 7300K [0x00000000f0000000, 0x0000000100000000)\n region size 1024K, 6 young (6144K), 0 survivors (0K)\n";
+    const PARALLEL_25: &str = "28133:\nPSYoungGen      total 64000K, used 8362K [0x00000000fab00000, 0x00000000ff200000, 0x0000000100000000)\n eden space 55296K, 15% used [0x00000000fab00000,0x00000000fb32a888,0x00000000fe100000)\n from space 8704K, 0% used [0x00000000fe980000,0x00000000fe980000,0x00000000ff200000)\n to   space 8704K, 0% used [0x00000000fe100000,0x00000000fe100000,0x00000000fe980000)\nParOldGen       total 146432K, used 1156K [0x00000000f0000000, 0x00000000f8f00000, 0x00000000fab00000)\n object space 146432K, 0% used [0x00000000f0000000,0x00000000f0121398,0x00000000f8f00000)\n";
+    const SERIAL_25: &str = "28175:\nDefNew     total 65728K, used 8581K [0x00000000f0000000, 0x00000000f4750000, 0x00000000f5550000)\n eden space 58432K,  14% used [0x00000000f0000000, 0x00000000f08615f0, 0x00000000f3910000)\n from space 7296K,   0% used [0x00000000f3910000, 0x00000000f3910000, 0x00000000f4030000)\n to   space 7296K,   0% used [0x00000000f4030000, 0x00000000f4030000, 0x00000000f4750000)\nTenured    total 146112K, used 1156K [0x00000000f5550000, 0x00000000fe400000, 0x0000000100000000)\n the  space 146112K,   0% used [0x00000000f5550000, 0x00000000f5671398, 0x00000000fe400000)\n";
+    const ZGC_25: &str = "28216:\nZHeap            used 10M, capacity 214M, max capacity 256M\n Cache           204M (1)\n  size classes   128M (1)\n";
+    const SHENANDOAH_25: &str = "28587:\nShenandoah Heap\n 256M max, 256M soft max, 213M committed, 6601K used\n 1024 x 256 K regions\nStatus: not cancelled\nReserved region:\n - [0x00000000f0000000, 0x0000000100000000) \nCollection set:\n - map (vanilla): 0x0000000000004c00\n - map (biased):  0x0000000000001000\n";
+    // The head of `jcmd <pid> VM.metaspace basic` (JDK 25).
+    const METASPACE_25: &str = "1985:\nMetaspace        used 115K, committed 320K, reserved 1114112K\n class space     used 9K, committed 128K, reserved 1048576K\n\nUsage:\n  Non-class:    106.13 KB used.\n";
+
+    #[test]
+    fn heap_info_of_jdk_25_reads_committed_not_reserved() {
+        // `total` is followed by `reserved 262144K` there: the committed heap is 221184K.
+        let h = parse_heap_info(G1_25).unwrap();
+        assert_eq!(h.used, 7300 * 1024);
+        assert_eq!(h.committed, 221_184 * 1024);
+        assert_eq!(h.metaspace_used, None);
+    }
+
+    #[test]
+    fn heap_info_of_the_other_collectors_on_jdk_25() {
+        let h = parse_heap_info(PARALLEL_25).unwrap();
+        assert_eq!(
+            (h.used, h.committed),
+            ((8362 + 1156) * 1024, (64_000 + 146_432) * 1024)
+        );
+        // JDK 25 names the Serial generations DefNew and Tenured.
+        let h = parse_heap_info(SERIAL_25).unwrap();
+        assert_eq!(
+            (h.used, h.committed),
+            ((8581 + 1156) * 1024, (65_728 + 146_112) * 1024)
+        );
+        let h = parse_heap_info(ZGC_25).unwrap();
+        assert_eq!((h.used, h.committed), (10 << 20, 214 << 20));
+        let h = parse_heap_info(SHENANDOAH_25).unwrap();
+        assert_eq!((h.used, h.committed), (6601 * 1024, 213 << 20));
+    }
+
+    #[test]
+    fn metaspace_comes_from_either_command() {
+        assert_eq!(parse_metaspace_used(METASPACE_25), Some(115 * 1024));
+        assert_eq!(parse_metaspace_used(G1), Some(78 * 1024));
+        assert_eq!(parse_metaspace_used(G1_25), None);
+    }
 
     #[test]
     fn heap_info_g1() {

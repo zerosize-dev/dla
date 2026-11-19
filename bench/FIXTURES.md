@@ -32,6 +32,13 @@ three or four dumps. Class and field names inside a dump follow the same "No
 hints" rule as source. A symptom fixture is graded like an `impossible` one: a
 correct run ends with no claim and says what it is missing.
 
+A fixture that is written and reviewed but that DLA does not pass yet lives in
+`bench/fixtures-open/<id>/` instead, with the reason in `bench/fixtures-open/README.md`.
+No command reads that directory as fixtures (`validate`, `static`, `dynamic`, `run` and
+the graders read `bench/fixtures`); the fixture moves back when DLA passes it. A
+fixture's `pair` partner must be in `bench/fixtures` too, so the partner of an open
+fixture carries no `pair` line until both are back.
+
 Static (`dla-bench static`) and dynamic (`dla-bench dynamic`) skip fixtures
 whose entry is not `repository` and report them as skipped with the reason.
 

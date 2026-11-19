@@ -12,6 +12,7 @@ are graded). This file explains how to operate the tools.
 bench/
   FIXTURES.md  GRADING.md        contracts
   fixtures/<id>/                 project/, expected.toml, README.md
+  fixtures-open/<id>/            written fixtures DLA does not pass yet (never scanned)
   schemas/                       JSON Schemas (generated, committed)
   ablations/prose/SKILL.md       skill text for the "prose" ablation
   runner/                        dla-bench (Rust) and grade.py (Python)

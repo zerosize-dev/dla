@@ -143,9 +143,12 @@ jobs:
       # The Python version pairs run on the exact CPython releases their [toolchain] names; the
       # runner installs them with `uv python install`. The Node and Go releases are fetched by
       # the runner itself.
+      # uv carries its own list of CPython builds: 0.9.5 predates 3.14.4 and 3.14.5
+      # ("No download found for request: cpython-3.14.4-linux-x86_64-gnu"). Keep this
+      # pin at a release that lists every `python` of the fixtures' [toolchain] tables.
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.9.5"
+          version: "0.11.32"
           enable-cache: false
       # The fetched releases are kept between CI runs. The job runs the archetypes-on arm only,
       # so no second arm of the same run reuses them.

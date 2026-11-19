@@ -15,6 +15,46 @@ use dla_sample::attach::{
     inspect_target, plan, preflight, run,
 };
 
+/// Set only by [`fake_java_command`]: it makes the helper test below sleep.
+const FAKE_JAVA_ENV: &str = "DLA_TEST_FAKE_JAVA_TARGET";
+
+/// The command that starts this test binary under the name `java` in `dir`, running only the
+/// helper test below, which sleeps. The target is this binary and not a system `sleep`: on
+/// distributions whose coreutils is one multi-call binary (Ubuntu 26.04) a copy of `sleep`
+/// named `java` is an unknown tool and exits at once.
+fn fake_java_command(dir: &Path) -> (PathBuf, Command) {
+    let exe = dir.join("java");
+    let me = std::env::current_exe().expect("this test binary's path");
+    // Linux reads the executable name from /proc/<pid>/exe: a hard link (or, across file
+    // systems, a copy) carries the name. Elsewhere the name comes from argv[0], and a symlink
+    // works without copying (copies of signed binaries can be refused).
+    #[cfg(target_os = "linux")]
+    if fs::hard_link(&me, &exe).is_err() {
+        fs::copy(&me, &exe).unwrap();
+    }
+    #[cfg(not(target_os = "linux"))]
+    std::os::unix::fs::symlink(&me, &exe).unwrap();
+    let mut cmd = Command::new(&exe);
+    cmd.args([
+        "--ignored",
+        "--exact",
+        "fake_java_target_sleeps",
+        "--nocapture",
+    ])
+    .env(FAKE_JAVA_ENV, "1");
+    (exe, cmd)
+}
+
+/// Not a test of anything: the body of the fake `java` target that `fake_java_command`
+/// starts. Run on its own it returns at once.
+#[test]
+#[ignore = "the body of the fake java target; started by the tests that need one"]
+fn fake_java_target_sleeps() {
+    if std::env::var_os(FAKE_JAVA_ENV).is_some() {
+        std::thread::sleep(Duration::from_secs(300));
+    }
+}
+
 /// A child that is killed when dropped.
 struct Sleeper(Child, #[allow(dead_code)] tempfile::TempDir);
 
@@ -23,28 +63,12 @@ impl Sleeper {
     /// jcmd backend only runs against something that looks like one.
     fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("java");
-        let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-            .map(|d| d.join("sleep"))
-            .find(|p| p.is_file())
-            .expect("sleep on PATH");
-        // Linux reads the executable name from /proc/<pid>/exe, which follows a symlink, so
-        // it needs a copy. Elsewhere the name comes from argv[0], and a symlink works without
-        // copying a system binary (copies of Apple's signed arm64e tools can be refused).
-        #[cfg(target_os = "linux")]
-        fs::copy(sleep, &exe).unwrap();
-        #[cfg(not(target_os = "linux"))]
-        std::os::unix::fs::symlink(sleep, &exe).unwrap();
+        let (exe, mut cmd) = fake_java_command(dir.path());
         // A fork in another test thread can still hold the copy's write handle for a
         // moment, and exec then fails with ETXTBSY ("text file busy"): retry briefly.
         let mut tries = 0;
         let child = loop {
-            match Command::new(&exe)
-                .arg("120")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
+            match cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
                 Ok(c) => break c,
                 Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
                     tries += 1;

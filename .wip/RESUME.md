@@ -22,17 +22,28 @@
 - CI on `d1fca56` is expected to be red in places: the new fixtures that fail, and a flaky JVM
   end-to-end test (`alloc_test_jvm::a_driver_that_keeps_daemon_threads_is_not_blamed_on_the_agents_drift`).
 
-## In flight (2026-11-18)
-A fix pass over the 14 items of `open-items.md` is running: three packages (budget and time,
-coverage steps, JVM non-heap), each fixed, checked independently and refixed up to twice, then an
-integration check over the whole round and the full acceptance run. Its brief is
-`fix-pass-brief.md` and its orchestration script `fix-pass-workflow.js` (paths inside both point
-at a scratch directory that a recycled container no longer has: copy the brief, `open-items.md`
-(as `u6/open-items-final.md`), `prune-superseded.sh` and `snapshot.sh` back first, or rewrite the
-paths). Snapshots of the working tree land on this branch after every fix ("Snapshot: ..."
-commits): the newest snapshot is the code to continue from. If the pass was cut off, compare the
-newest snapshot with `d1fca56` to see which packages already changed files, then re-run the pass
-for what is left.
+## In flight (2026-11-19)
+- The 14 open items are closed and on `main` as `63a30f2` (independent checks, an integration
+  check with no problems, full local acceptance with no regression). `open-items.md` is history.
+- CI is red for reasons the Linux work machine did not show; a repair is running. Causes found:
+  - the `ubuntu-latest` runner is now Ubuntu 26.04: its `sleep` is a multi-call binary, so tests
+    that start a copy of `sleep` named `java` get a process that exits at once; its default JDK
+    (25) prints `GC.heap_info` in a layout `parse_heap_info` rejects (a product defect); one
+    Gradle Kotlin plugin test cannot resolve its plugin there;
+  - stable Rust is 1.100: clippy fails on Windows in `crates/dla-probe/src/registry.rs`;
+  - macOS: three `harness_jvm_coverage` tests count 0 project classes (likely `/var` against
+    `/private/var`), one JVM harness exits 1, the warm-up test's relation does not hold, one
+    deadline test is too tight for the runner;
+  - the benchmark jobs: eight new fixtures do not pass yet (to be moved to `bench/fixtures-open/`
+    until they do), and `uv` cannot install CPython 3.14.4 on the runner.
+- The repair's brief is `ci-repair-brief.md`, its orchestration `ci-repair-workflow.js`; it pushes
+  snapshots to this branch (every push runs CI) and reads the result with `ci-wait.sh`. Paths in
+  them point at a scratch directory a recycled container no longer has.
+- The work machine now has Rust 1.100 and JDK 25 at `/usr/lib/jvm/java-25-openjdk-amd64` (the
+  default `java` stays 21); a recycled container needs `rustup update stable` and
+  `apt-get update && apt-get install openjdk-25-jdk-headless`, then the default set back to 21.
+- When a snapshot's CI run is green: commit the tree (without `.wip/`) to `main`, push `main`
+  and `main:dev/wonderful-mccarthy-algc5s`, then the release steps below.
 
 ## Decisions that the open items must keep
 1. Budget settling in a dispatched run: each worker's first passing gate at sweep or later
@@ -58,7 +69,7 @@ for what is left.
    measured idle drift). Command-mode harnesses get no override; a JUnit harness keeps `--junit`.
 
 ## Next, in order
-1. Fix the items in `open-items.md` (fix, independent check, refix up to twice).
+1. (done) Fix the items in `open-items.md`.
 2. Integration check across all changes: shared files hold every part's change; the texts agree
    (one instruction between floor and deadline across SKILL.md, stages.md, recovery.md, the
    Stop hook and the fixes; one harness step in gate fix, Stop hook, report warning and docs).

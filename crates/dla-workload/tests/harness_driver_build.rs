@@ -24,8 +24,10 @@ use tempfile::TempDir;
 
 const CACHE_KT: &str = "package leak\n\nobject Cache {\n    val items = mutableListOf<ByteArray>()\n\n    fun touch() {\n        items.add(ByteArray(1024))\n    }\n}\n";
 const MAIN_KT: &str = "package leak\n\nfun main() {\n    Cache.touch()\n}\n";
-const GRADLE_KTS_BUILD: &str =
-    "plugins { kotlin(\"jvm\") version \"1.9.24\" }\nrepositories { mavenCentral() }\n";
+// The Kotlin Gradle plugin of these tests knows no JVM newer than 21, and Gradle defaults both
+// compilers to the JDK it runs on: without a pin, a JDK 25 build stops with "Inconsistent
+// JVM-target compatibility detected for tasks compileJava (25) and compileKotlin (21)".
+const GRADLE_KTS_BUILD: &str = "plugins { kotlin(\"jvm\") version \"1.9.24\" }\nrepositories { mavenCentral() }\njava {\n    sourceCompatibility = JavaVersion.VERSION_17\n    targetCompatibility = JavaVersion.VERSION_17\n}\ntasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions { jvmTarget = \"17\" } }\n";
 const BUILD_LOGIC_KTS: &str = "import java.util.Properties\n\nval dockerProperties = Properties()\n\nfun loadDockerProps() {}\n";
 const CACHE_JAVA: &str = "package leak;\n\nimport java.util.ArrayList;\nimport java.util.List;\n\npublic final class Cache {\n    static final List<byte[]> ITEMS = new ArrayList<>();\n\n    private Cache() {}\n\n    public static void touch() {\n        ITEMS.add(new byte[1024]);\n    }\n}\n";
 const MAIN_JAVA: &str = "package leak;\n\npublic final class Main {\n    public static void main(String[] args) {\n        Cache.touch();\n    }\n}\n";

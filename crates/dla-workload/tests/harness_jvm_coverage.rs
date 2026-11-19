@@ -344,6 +344,47 @@ fn a_drivers_last_checkpoint_carries_the_coverage_with_the_project_first() {
     );
 }
 
+/// `link` names `real` through a symlink, as macOS does for its temp dir (`/var` is a link to
+/// `/private/var`): the project is reached by one name, the JVM reports the classes by the other.
+fn symlinked_pair() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir_all(&real).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    (dir, real, link)
+}
+
+#[test]
+fn a_project_reached_through_a_symlinked_directory_still_counts_its_classes() {
+    if !have_jdk() {
+        return;
+    }
+    // The classes are loaded from the real path, the project root is given by the link.
+    let (_keep, real, link) = symlinked_pair();
+    let recs = run_driver(&real, &link.join("proj"), None);
+    assert_eq!(recs.len(), 4, "{recs:?}");
+    assert_eq!(
+        recs[3].1["coverage"]["project"],
+        2,
+        "classes under {} with DLA_PROJECT {}: {:?}",
+        real.display(),
+        link.join("proj").display(),
+        recs[3].1["coverage"]
+    );
+    // The other way round: the classpath goes through the link, the project root is the real path.
+    let (_keep2, real2, link2) = symlinked_pair();
+    let recs = run_driver(&link2, &real2.join("proj"), None);
+    assert_eq!(
+        recs[3].1["coverage"]["project"],
+        2,
+        "classes under {} with DLA_PROJECT {}: {:?}",
+        link2.display(),
+        real2.join("proj").display(),
+        recs[3].1["coverage"]
+    );
+}
+
 #[test]
 fn a_package_the_sources_declare_ranks_classes_whose_jar_lies_elsewhere() {
     if !have_jdk() {

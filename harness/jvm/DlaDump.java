@@ -560,7 +560,27 @@ public final class DlaDump {
 
     private static Path projectRoot() {
         String p = env("DLA_PROJECT");
-        return p == null ? null : Path.of(p).toAbsolutePath().normalize();
+        return p == null ? null : real(Path.of(p));
+    }
+
+    /**
+     * The path with every symlink resolved, so two names of one directory compare equal (macOS keeps
+     * its temp dir under `/var`, a link to `/private/var`, and a JVM may report either). A part that
+     * does not exist is kept as written below the longest part that does.
+     */
+    static Path real(Path p) {
+        Path abs = p.toAbsolutePath().normalize();
+        Path rest = null;
+        for (Path cur = abs; cur != null; cur = cur.getParent()) {
+            try {
+                Path r = cur.toRealPath();
+                return rest == null ? r : r.resolve(rest).normalize();
+            } catch (Exception e) {
+                Path name = cur.getFileName();
+                rest = rest == null ? name : (name == null ? rest : name.resolve(rest));
+            }
+        }
+        return abs;
     }
 
     /** The packages the project's own sources declare (DLA_PROJECT_PACKAGES, comma separated). */
@@ -619,9 +639,10 @@ public final class DlaDump {
         String below = location;
         try {
             Path file = locationFile(location);
-            if (file != null && project != null && file.toAbsolutePath().normalize().startsWith(project)) {
+            Path where = file == null ? null : real(file);
+            if (where != null && project != null && where.startsWith(real(project))) {
                 int bang = location.indexOf('!');
-                below = project.relativize(file.toAbsolutePath().normalize())
+                below = real(project).relativize(where)
                     + (bang < 0 ? "" : location.substring(bang));
             }
         } catch (Throwable ignored) {
@@ -654,7 +675,7 @@ public final class DlaDump {
     static boolean locationUnder(String location, Path project) {
         try {
             Path p = locationFile(location);
-            return p != null && p.toAbsolutePath().normalize().startsWith(project);
+            return p != null && real(p).startsWith(real(project));
         } catch (Throwable t) {
             return false;
         }

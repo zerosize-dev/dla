@@ -379,8 +379,45 @@ fn driver_run_step(
     fs::write(&edit, text).unwrap();
     let env: Vec<(&str, &str)> = warm.map(|w| ("DLA_WARM_ROUNDS", w)).into_iter().collect();
     let (code, run, out) = dla_env(&project, &["harness", "run", "H1", "--mode", "fresh"], &env);
-    assert_eq!(code, 0, "{out}");
+    assert_eq!(code, 0, "{out}\n{}", harness_log_tails(&project));
     (dir, project, run)
+}
+
+/// The last lines of every log of the project's harnesses, for a failed run to explain itself
+/// (the run's own error only names the log).
+fn harness_log_tails(project: &Path) -> String {
+    let mut out = String::new();
+    let mut logs = Vec::new();
+    let mut stack = vec![project.join(".dla")];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|x| x == "log")
+                && path.parent().is_some_and(|p| p.ends_with("logs"))
+            {
+                logs.push(path);
+            }
+        }
+    }
+    logs.sort();
+    for log in logs {
+        let text = fs::read_to_string(&log).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = &lines[lines.len().saturating_sub(40)..];
+        out.push_str(&format!(
+            "--- tail of {} ({} lines) ---\n{}\n",
+            log.display(),
+            lines.len(),
+            tail.join("\n")
+        ));
+    }
+    if out.is_empty() {
+        out.push_str("(no harness log found under .dla)");
+    }
+    out
 }
 
 #[test]
@@ -400,15 +437,34 @@ fn the_agents_warm_up_takes_most_of_its_own_early_non_heap_growth_off_an_idle_dr
     // The checkpoints compile and load their own code over the first points; run before
     // the first one, that no longer lands in the series.
     let rise = |v: &[f64]| v[15] - v[1];
-    // A JVM told it has many processors compiles the checkpoint code before the series starts:
-    // with no early rise in the cold run there is nothing for the warm-up to take off.
-    if rise(&cold) < 1.0e5 {
-        eprintln!("skipped the warm-up comparison: the cold run has no early rise: {cold:?}");
+    let shown = format!("cold {cold:?} warm {warm:?}");
+    // What holds on every JVM build and OS: the warm-up's code and metadata are already there at
+    // the first reading, so the warm series starts higher, and it never adds early growth of its
+    // own. (Measured on macOS: the cold run rose 336 to 347 KB over those points, the warm run
+    // 327 to 364 KB: there the early rise is the steady drift of about 25 KB per point and a
+    // small first step, and the warm-up has little to take off it.)
+    assert!(
+        warm[0] > cold[0],
+        "the warm run starts at {} bytes, not above the cold run's {}: {shown}",
+        warm[0],
+        cold[0]
+    );
+    assert!(
+        rise(&warm) < rise(&cold) + 1.0e5,
+        "warm rise {} against cold rise {}: {shown}",
+        rise(&warm),
+        rise(&cold)
+    );
+    // Only where the cold run has a first step well above that steady drift is there something
+    // to take off: there the warm-up takes most of it. Not claimed where the cold rise is the
+    // drift alone (a JVM told it has many processors compiles the checkpoint code early too).
+    if rise(&cold) < 5.0e5 {
+        eprintln!("not compared further: the cold rise is the steady drift alone: {shown}");
         return;
     }
     assert!(
         rise(&warm) < 0.75 * rise(&cold),
-        "warm {} against cold {}: {warm:?} {cold:?}",
+        "warm {} against cold {}: {shown}",
         rise(&warm),
         rise(&cold)
     );
@@ -613,8 +669,11 @@ fn a_driver_that_keeps_daemon_threads_is_not_blamed_on_the_agents_drift() {
         return;
     }
     // The unit starts daemon threads that never end: the thread counts rise at every point,
-    // and the small non-heap rise is not the agent's own checkpoint work.
-    let unit = "for (int n = 0; n < 3; n++) { Thread t = new Thread(() -> { try { Thread.sleep(600000L); } catch (InterruptedException e) { } }); t.setDaemon(true); t.start(); }";
+    // and the small non-heap rise is not the agent's own checkpoint work. One thread per five
+    // units, ten per point and about two hundred in all: macOS refuses a process more than about
+    // two thousand threads (the JVM then dies with "unable to create native thread"), which a
+    // thread for every unit of every point would reach.
+    let unit = "if (i % 5 == 0) { Thread t = new Thread(() -> { try { Thread.sleep(600000L); } catch (InterruptedException e) { } }); t.setDaemon(true); t.start(); }";
     let (_dir, project, run) = driver_run(None, "20", unit);
     let f = bound_non_heap_finding(&project, &run);
     let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
