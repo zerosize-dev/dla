@@ -508,18 +508,23 @@ const AGENT_DRIFT_RISE: f64 = 1024.0 * 1024.0;
 const AGENT_DRIFT_PER_CHECKPOINT: f64 = 20.0 * 1024.0;
 
 /// The most a class count that reads inconclusive may have risen over the extra window and still
-/// be called flat (jitter of a few classes, not a staircase). Measured on idle drivers in the 14
-/// alloc-test runs described at `AGENT_DRIFT_THREAD_JITTER`: the net rise was 0 in every run; the
-/// constant is that plus a margin of 3.
-const AGENT_DRIFT_CLASS_JITTER: f64 = 3.0;
+/// be called flat (jitter of a few classes, not a staircase). The JVM loads a few classes at
+/// moments tied to elapsed time, not to the workload. Measured on idle drivers (drivers that
+/// define no class), also under load: 24 fast runs rose 0 or 2 classes; of 15 runs whose unit only
+/// sleeps (4 to 25 ms per unit, so the run is slow) 13 rose 4 to 6, and the largest rise that
+/// read inconclusive was 5 and the largest that read plateau 6. The constant is the largest rise
+/// seen (6) plus a margin of 2. A class leak that adds fewer classes than this over the extra
+/// window cannot be told from the jitter by the count alone: it reads as flat, and the result
+/// is then inconclusive, never a leak.
+const AGENT_DRIFT_CLASS_JITTER: f64 = 8.0;
 
 /// The most a thread count may have risen over the extra window with no leak (the JVM starts and
-/// stops compiler threads by itself). Measured on an idle driver in 14 runs (8 of them with six
-/// busy loops beside it, at the default extra window and at 100): the net rise was 0 on both
-/// thread columns in every run but one, where `os.threads` rose 1; the constant is that largest
-/// rise plus 1, and at least 2. The slow thread leaks the check saw rose 6 and 10 threads. A
-/// thread count has no checkpoint jitter, so a net rise over this is growth even when its
-/// plateau reads inconclusive.
+/// stops compiler threads by itself). Measured on drivers that start no thread (idle, hot loops,
+/// a growing heap, slow idle; 59 runs, many under load, the JVM told 4 to 64 processors): the net
+/// rise of `jvm.threads` was 0 every time, and `os.threads` rose 1 at most; the constant is that
+/// largest rise plus 1, and at least 2. The slow thread leaks the check saw rose 6 and 10
+/// threads. A thread count has no checkpoint jitter, so a net rise over this is growth whatever
+/// its plateau reads (a count that rises in bursts near the end of the window reads plateau).
 const AGENT_DRIFT_THREAD_JITTER: f64 = 2.0;
 
 /// The margin on the measured per-checkpoint drift.
@@ -589,11 +594,11 @@ fn deciding_capture(columns: &[&str], harness: &str) -> String {
     }
 }
 
-/// Whether a required column rises, by its kind. A thread count: its plateau does not read
-/// plateau and either reads continues or its net rise over the extra window is over the jitter (a
-/// counter has no checkpoint jitter, so a few more threads are growth even when the plateau test
-/// cannot judge them); a thread count that is not a required column, or that plateaus, is no
-/// growth. A `jvm.nmt.*` byte category: only when its plateau reads continues (bytes jitter); the
+/// Whether a required column rises, by its kind. A thread count: its plateau reads continues or
+/// its net rise over the extra window is over the jitter, whatever its plateau reads (a counter
+/// has no checkpoint jitter, so a few more threads are growth even when the plateau test cannot
+/// judge them or reads a plateau because the threads came in bursts); a thread count that is not
+/// a required column is no growth. A `jvm.nmt.*` byte category: only when its plateau reads continues (bytes jitter); the
 /// thread category of NMT also rises when a thread count that is itself rising does, as it rises
 /// with the threads.
 fn column_rises(results: &[ColumnResult], picked: &pick::Picked, name: &str) -> bool {
@@ -603,11 +608,10 @@ fn column_rises(results: &[ColumnResult], picked: &pick::Picked, name: &str) -> 
     let thread_rises = |n: &str| {
         picked.required.iter().any(|c| c == n)
             && row(n).is_some_and(|r| {
-                r.favors != Favors::NonLeak
-                    && (r.plateau.verdict == PlateauVerdict::Continues
-                        || r.plateau
-                            .extra_rise
-                            .is_some_and(|x| x > AGENT_DRIFT_THREAD_JITTER))
+                r.plateau.verdict == PlateauVerdict::Continues
+                    || r.plateau
+                        .extra_rise
+                        .is_some_and(|x| x > AGENT_DRIFT_THREAD_JITTER)
             })
     };
     match name {
@@ -635,7 +639,11 @@ fn split_rising(
 fn rising_required<'a>(results: &'a [ColumnResult], picked: &pick::Picked) -> Vec<&'a str> {
     results
         .iter()
-        .filter(|r| picked.required.contains(&r.name) && r.favors != Favors::NonLeak)
+        .filter(|r| {
+            picked.required.contains(&r.name)
+                && (matches!(r.name.as_str(), "jvm.threads" | "os.threads")
+                    || r.favors != Favors::NonLeak)
+        })
         .map(|r| r.name.as_str())
         .collect()
 }
@@ -720,10 +728,13 @@ fn agent_drift(
         let others = rising.iter().any(|c| {
             !matches!(*c, "jvm.threads" | "os.threads") && !(threads && *c == "jvm.nmt.thread")
         });
+        // A class count that is not flat is a class leak whatever the categories read (a class
+        // leak always raises Metaspace): the verdict stands and the capture reads the category.
+        let class_leak = matches!(classes, ClassCount::Rising(_));
         let named: Vec<&str> = rising.clone();
         let class_part = if let ClassCount::Rising(text) = &classes {
             format!(
-                "; jvm.classes_loaded is not flat either ({text}), so the classes that load say what grows there"
+                "; jvm.classes_loaded is not flat either: it {text}, so the classes that load say what grows there"
             )
         } else {
             String::new()
@@ -738,13 +749,17 @@ fn agent_drift(
                     format!(
                         "a thread count is no checkpoint work, so {stands} and the thread capture decides what holds the threads"
                     )
+                } else if class_leak {
+                    format!(
+                        "the class count is not flat, so {stands} and the capture reads the NMT category that rises"
+                    )
                 } else {
                     "the result is inconclusive until the NMT category that rises is read"
                         .to_owned()
                 }
             ),
             next: deciding_capture(&rising, harness),
-            inconclusive: others,
+            inconclusive: others && !class_leak,
         });
     }
     if let ClassCount::Rising(text) = &classes {
@@ -1592,7 +1607,7 @@ mod tests {
         };
         // A staircase (one hidden class every few checkpoints) reads inconclusive with a net
         // rise of 19 classes: a class leak, not the agent's drift.
-        for n in [19.0, 6.0, 4.0] {
+        for n in [19.0, 12.0, 9.0] {
             let stair = rows(n, PlateauVerdict::Inconclusive);
             let Some(Drift::Classes(note)) = agent_drift(&stair, &picked, Favors::Leak, "H1", CTX)
             else {
@@ -1600,8 +1615,8 @@ mod tests {
             };
             assert!(note.contains("jvm.classes_loaded"), "{note}");
         }
-        // The limit itself (3 classes) is still jitter.
-        let edge = rows(3.0, PlateauVerdict::Inconclusive);
+        // The limit itself (8 classes) is still jitter.
+        let edge = rows(8.0, PlateauVerdict::Inconclusive);
         assert!(matches!(
             agent_drift(&edge, &picked, Favors::Leak, "H1", CTX),
             Some(Drift::Agent(_))
@@ -1779,12 +1794,12 @@ mod tests {
 
     #[test]
     fn the_nmt_thread_category_joins_only_a_thread_count_that_itself_rises() {
-        // The thread counts plateau (net rise 3, favours non-leak): they are no growth, so the
-        // category that merely could not be judged does not rise with them.
+        // The thread counts plateau with a net rise within the jitter (2): they are no growth, so
+        // the category that merely could not be judged does not rise with them.
         let rows = rows_with(
             &[
-                ("jvm.threads", 3.0, PlateauVerdict::Plateau),
-                ("os.threads", 3.0, PlateauVerdict::Plateau),
+                ("jvm.threads", 2.0, PlateauVerdict::Plateau),
+                ("os.threads", 2.0, PlateauVerdict::Plateau),
                 ("jvm.nmt.thread", 2e5, PlateauVerdict::Inconclusive),
             ],
             Some((0.0, PlateauVerdict::Plateau)),
@@ -1811,6 +1826,90 @@ mod tests {
             agent_drift(&rows, &picked, Favors::Leak, "H1", CTX),
             Some(Drift::Agent(_))
         ));
+    }
+
+    #[test]
+    fn a_thread_count_that_reads_plateau_with_a_net_rise_over_the_jitter_is_growth() {
+        // Threads added in bursts near the end of each window read plateau (the fitted rise is
+        // 0), but their net rise over the extra window is 6 threads: a thread leak, and the
+        // category that tracks them rises with them.
+        let picked = nonheap_picked(&["jvm.threads", "os.threads", "jvm.nmt.thread"]);
+        let rows = rows_with(
+            &[
+                ("jvm.threads", 6.0, PlateauVerdict::Plateau),
+                ("os.threads", 6.0, PlateauVerdict::Plateau),
+                ("jvm.nmt.thread", 2e5, PlateauVerdict::Inconclusive),
+            ],
+            Some((0.0, PlateauVerdict::Plateau)),
+        );
+        let Some(Drift::Growing {
+            limitation,
+            inconclusive,
+            ..
+        }) = agent_drift(&rows, &picked, Favors::Leak, "H1", CTX)
+        else {
+            panic!("a net rise of 6 threads is growth, whatever the plateau reads")
+        };
+        assert!(!inconclusive);
+        assert!(
+            limitation.contains("jvm.threads") && limitation.contains("jvm.nmt.thread"),
+            "{limitation}"
+        );
+    }
+
+    #[test]
+    fn a_class_leak_beside_a_rising_nmt_category_keeps_its_verdict_and_the_ledger_commands() {
+        let picked = nonheap_picked(&["jvm.nmt.metaspace"]);
+        let rows = rows_with(
+            &[("jvm.nmt.metaspace", 1.7e5, PlateauVerdict::Continues)],
+            Some((20.0, PlateauVerdict::Continues)),
+        );
+        let Some(Drift::Growing {
+            limitation,
+            next,
+            inconclusive,
+        }) = agent_drift(&rows, &picked, Favors::Leak, "H1", CTX)
+        else {
+            panic!("the category is named")
+        };
+        assert!(!inconclusive, "a rising class count keeps the verdict");
+        assert!(
+            limitation.contains("jvm.nmt.metaspace")
+                && limitation.contains("jvm.classes_loaded is not flat either: it keeps rising")
+                && limitation.contains("the verdict stands"),
+            "{limitation}"
+        );
+        assert!(next.contains("nmt-diff.txt"), "{next}");
+        assert!(keeps_ledger_commands(inconclusive, false));
+        // A flat class count leaves the verdict open, as before.
+        let flat = rows_with(
+            &[("jvm.nmt.metaspace", 1.7e5, PlateauVerdict::Continues)],
+            Some((0.0, PlateauVerdict::Plateau)),
+        );
+        assert!(matches!(
+            agent_drift(&flat, &picked, Favors::Leak, "H1", CTX),
+            Some(Drift::Growing {
+                inconclusive: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_class_column_that_could_not_be_judged_is_unknown_not_flat() {
+        let picked = nonheap_picked(&[]);
+        let rows = rows_with(&[], Some((0.0, PlateauVerdict::NotRun)));
+        let Some(Drift::Agent(note)) = agent_drift(&rows, &picked, Favors::Leak, "H1", CTX) else {
+            panic!("the agent-drift reading")
+        };
+        assert!(note.contains("could not judge it"), "{note}");
+        assert!(!note.contains("with a flat class count"), "{note}");
+        // A plateau reads flat, with no caution.
+        let rows = rows_with(&[], Some((0.0, PlateauVerdict::Plateau)));
+        let Some(Drift::Agent(note)) = agent_drift(&rows, &picked, Favors::Leak, "H1", CTX) else {
+            panic!("the agent-drift reading")
+        };
+        assert!(note.contains("with a flat class count"), "{note}");
     }
 
     #[test]
@@ -1990,7 +2089,7 @@ mod tests {
                 ("jvm.threads", 100.0, PlateauVerdict::Continues),
                 ("os.threads", 100.0, PlateauVerdict::Continues),
             ],
-            Some((4.0, PlateauVerdict::Inconclusive)),
+            Some((10.0, PlateauVerdict::Inconclusive)),
         );
         let Some(Drift::Growing {
             limitation,
@@ -2004,7 +2103,7 @@ mod tests {
         assert!(
             limitation.contains("jvm.threads")
                 && limitation.contains("os.threads")
-                && limitation.contains("jvm.classes_loaded is not flat either (rose 4 classes"),
+                && limitation.contains("jvm.classes_loaded is not flat either: it rose 10 classes"),
             "{limitation}"
         );
         assert!(next.contains("threads.json"), "{next}");
@@ -2042,10 +2141,10 @@ mod tests {
             "{n}"
         );
         // Inconclusive over the jitter: the rise and the jitter it is over.
-        let n = note(Some((4.0, PlateauVerdict::Inconclusive)), CTX);
+        let n = note(Some((9.0, PlateauVerdict::Inconclusive)), CTX);
         assert!(
             n.contains(
-                "rose 4 classes over the extra window, over the 3 of an idle driver's jitter"
+                "rose 9 classes over the extra window, over the 8 of an idle driver's jitter"
             ) && n.contains("the verdict stands"),
             "{n}"
         );
@@ -2054,7 +2153,7 @@ mod tests {
             partial: true,
             ..CTX
         };
-        let n = note(Some((4.0, PlateauVerdict::Inconclusive)), partial);
+        let n = note(Some((9.0, PlateauVerdict::Inconclusive)), partial);
         assert!(
             !n.contains("verdict stands") && n.contains("partial run is inconclusive"),
             "{n}"
