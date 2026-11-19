@@ -458,28 +458,45 @@ def _probes(limitations):
 # ---------------------------------------------------------------------------------------------
 
 
+_libc = None
+
+
 def _malloc_trim():
-    import ctypes
-    import ctypes.util
+    global _libc
+    if _libc is None:
+        import ctypes
+        import ctypes.util
 
-    libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
-    return int(libc.malloc_trim(0))
+        _libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+    return int(_libc.malloc_trim(0))
 
 
-def _purge(kind, before_gc_os, limitations):
+def _preload_trim():
+    """Load ctypes and libc and call malloc_trim once at start-up, in every measured process.
+
+    The first use maps libraries and binds the call; done at the purge it would show as
+    resident memory (RSS and file-backed pages) that the purge reading "failed" to return.
+    The purge is asked only of the process of the last point (`DLA_PURGE` is set for that
+    one), so every process loads them: the points of a series then carry the same load and the
+    last one does not stand above the others by it.
+    """
+    try:
+        if sys.platform.startswith("linux"):
+            _malloc_trim()
+    except BaseException:
+        pass
+
+
+def _purge(kind, before_gc_os, own_os, limitations):
     purge = {"kind": kind}
     if kind == "gc":
         purge["before"] = before_gc_os
         purge["after"] = _os_values()
     elif kind in ("trim", "trim-native-heap"):
-        # Import ctypes before the first reading: loading it maps libraries and would
-        # otherwise show up as RSS the trim "failed" to return.
-        try:
-            import ctypes  # noqa: F401
-            import ctypes.util  # noqa: F401
-        except BaseException:
-            pass
-        purge["before"] = _os_values()
+        # The checkpoint's own reading (the last point of the series), not a new one: reading
+        # again after loading ctypes would put the cost of the load in `before`. The load is
+        # done at start-up (`_preload_trim`).
+        purge["before"] = dict(own_os)
         try:
             import platform
 
@@ -1083,12 +1100,13 @@ def _build(phase, x, last):
     objs = None if tick else gc.get_objects()
     values["py.gc_objects"] = len(objs) if objs is not None else len(gc.get_objects())
     values["py.gc_collections"] = sum(s.get("collections", 0) for s in gc.get_stats())
-    values.update(_os_values())
+    os_own = _os_values()
+    values.update(os_own)
     rec["values"] = values
     if pre is not None:
         rec["values_pre_gc"] = pre
     if want_purge:
-        rec["purge"] = _purge(purge, os_before_gc, limitations)
+        rec["purge"] = _purge(purge, os_before_gc, os_own, limitations)
     if not tick:
         types_full = _types_top(objs, _TYPES_TOP if _CAPTURE_ON and "histogram" in _CAPTURE_KINDS else 20)
         rec["types"] = types_full[:20]
@@ -1173,6 +1191,7 @@ def _ticker(interval):
 def _init():
     if not _ACTIVE:
         return
+    _preload_trim()
     _start_tracemalloc()
     if _CAPTURE_ON and "nonheap" in _CAPTURE_KINDS:
         _install_thread_sites()

@@ -1,16 +1,14 @@
-# Where the work stands (2026-11-19, evening)
+# Where the work stands (2026-11-19, 23:10 UTC)
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `9781542` "Version 0.9.0-preview.2", on top of
   `4498323` (the CI repair: Ubuntu 26.04 with JDK 25, Rust 1.100, macOS linked temp dirs; eight
   fixtures that do not pass yet moved unchanged to `bench/fixtures-open/`), `63a30f2` (the 14 open
   items of the budget, coverage-step and JVM non-heap work) and `d1fca56` (that work itself).
-- CI was green on the tree of `4498323` (all 15 jobs, run 44576504271 of snapshot `ca43359` on this
-  branch). The run on `main` at `9781542` was started; check it with
-  `gh run list --repo zerosize-dev/dla --workflow ci.yml --branch main`.
-- Release 0.9.0-preview.2: when CI on `main` is green, dispatch `release.yml` on `main` with
-  `publish=true` (it tags `v0.9.0-preview.2` itself), then check the release's assets. If the tag
-  `v0.9.0-preview.2` exists, this is done.
+- CI is green on `main` at `9781542` (run 44608346577; its first attempt failed by chance on
+  `jni-order-codec`, the re-run of that job passed).
+- Release 0.9.0-preview.2 is published (tag `v0.9.0-preview.2` on `9781542`, pre-release, five
+  archives with `.sha256` files and `SHA256SUMS`; release run 44631010965). Nothing to do here.
 
 ## In flight: the last fix pass (brief `fix-pass-9-brief.md`, items `fix-pass-9-open-items.json`)
 - Two non-leak fixtures fail now and then with "no rule-out on a non-leak fixture"
@@ -26,18 +24,35 @@
   `sample::node_inspect_backend_reads_memory_and_active_resources`,
   `session::tests::a_backend_that_never_works_is_blocked_and_sampling_continues` (dla-sample) and
   one Go analyzer test of `dla-backends` `real_tools`; none failed in CI.
-- A third fixture fails by chance and is NOT in this pass: `jni-order-codec` on the CI runner
-  (run 44608346577 on `main`, attempt 1; also once before preview.1): both native shim summaries
-  fail their gate because the leak's stack is absent from the first capture ("holder absent from
-  dump 1"), so the L-HANDLE label has no evidence. Never reproduced on the work machine. Next
-  pass: find why the first capture can miss the stack, fix it in the product, and make
-  `dla-bench dynamic` print the failed gate's per-capture values (CI artifacts cannot be
-  downloaded from the work machine).
+- State at 23:10 UTC: N2 fixed, checked (7 minor), refixed, second check running. N1 fixed and
+  checked: 3 problems (with `os.rss_file` never voting, a real file-backed leak can read
+  non-leak: keep its plateau vote and drop only its purge reading; the Python trim step reads
+  `before` after its own `import ctypes`, which adds about 2 MB to `os.rss`, so a flat Python run
+  still reads inconclusive through `os.rss`: fix in `harness/python/sitecustomize.py`; one false
+  sentence in a VERIFY row) and 3 minor; its refix is running. Then the workflow goes on by
+  itself: CI on a snapshot of this branch, full local acceptance.
 - Steps: fix, independent check, snapshot to this branch, CI green on the snapshot, local
   acceptance, then commit to `main` and push.
 
+## In flight beside it: the `jni-order-codec` chance failure (brief `fix-pass-10-brief.md`)
+- Cause, measured on capture files a local run left behind: the fixture's `build.sh run {n}`
+  starts the project's test JVM and then the program; both write a shim exit record with stacks
+  into `harness/H1/out/p<k>-native/shim-dump.jsonl`, and the reader (`shim_run` in
+  `crates/dla-cli/src/summarize/shim_groups.rs`) keeps "the one with most live bytes". At the
+  first point the two totals were 41.9 MB (test JVM) and 47.8 MB (program); the test JVM's total
+  moves by tens of MB between runs. When it is the larger, capture 1 is the wrong process and
+  the leak's stack is "absent from dump 1".
+- Decision: choose by identity, not size. The harness writes only the measured process's shim
+  record (`shim_dump_commands` in `crates/dla-workload/src/harness/capture.rs`); the reader uses
+  the rule of `select_measured` (`dumps.rs`) for other files and uses size only as a named
+  fallback; `dla-bench dynamic` prints the failed gate's per-capture values. The gate in
+  `summarize/rule.rs` and the fixture do not change.
+- Runs as its own small workflow (fix, check, refix, check) in the same tree as the pass above;
+  its changes go into the same commit when both are checked.
+
 ## Next, in order
-1. Finish the fix pass above and commit it to `main` (CI green first).
+1. Finish the two fix passes above and commit them to `main` together (CI green on a snapshot
+   first, then the full local acceptance).
 2. The eight fixtures in `bench/fixtures-open/` (move each back when it passes, and restore the
    `pair` line of its partner: go-ticker-modern, node-signal-compose-22, python-zstd-options-3145).
 3. The benchmark work in `bench-todo.md`.

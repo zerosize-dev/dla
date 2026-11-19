@@ -348,11 +348,11 @@ fn the_bounded_twin_favors_non_leak_and_the_candidate_is_refuted() {
 }
 
 /// A flat run whose first trend passed `os.rss_file` by chance (a stair on a noisy flat series):
-/// the unbound alloc-test reports it and does not let it vote. The trend file is edited to
-/// the shape a runner showed (only `os.rss_file` passing); its purge reading is retained on a
-/// real run, because the trim step maps files itself and no purge gives file pages back.
+/// the unbound alloc-test lets it vote, and a retained purge reading of file pages (no purge
+/// gives them back) does not turn its plateau into a contradiction. The trend file is edited
+/// to the shape a runner showed (only `os.rss_file` passing).
 #[test]
-fn a_flat_file_backed_column_that_passed_the_gate_does_not_decide_a_flat_run() {
+fn a_flat_file_backed_column_that_passed_the_gate_reads_non_leak_on_a_flat_run() {
     if skip_without_python() {
         return;
     }
@@ -387,8 +387,9 @@ fn a_flat_file_backed_column_that_passed_the_gate_does_not_decide_a_flat_run() {
             .unwrap_or_else(|| panic!("no column {name}: {full}"))
             .clone()
     };
-    assert_eq!(column("os.rss_file")["voting"], false, "{full}");
-    assert_eq!(column("py.traced")["voting"], true, "{full}");
+    let file = column("os.rss_file");
+    assert_eq!(file["voting"], true, "{full}");
+    assert_eq!(file["favors"], "non-leak", "{full}");
 }
 
 #[test]

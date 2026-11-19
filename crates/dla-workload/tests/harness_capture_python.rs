@@ -224,6 +224,41 @@ fn python_keeps_histogram_alloc_and_nonheap() {
 }
 
 #[test]
+fn the_trim_purge_reads_before_from_the_checkpoints_own_reading() {
+    if !have_python() || !cfg!(target_os = "linux") {
+        eprintln!("skipped: the trim purge reads /proc/self/status on Linux");
+        return;
+    }
+    let run = Run::new();
+    run.python(&["-c", "pass"], &[("DLA_PURGE", "trim")]);
+    let recs = run.records();
+    let rec = recs.iter().find(|r| r["phase"] == "exit").unwrap();
+    let read = |section: &Value, key: &str| {
+        section[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{key} in {rec}"))
+    };
+    let purge = &rec["purge"];
+    assert_eq!(purge["kind"], "trim", "{rec}");
+    // Loading ctypes and libc for the trim maps files and anonymous memory (about 2 MB and
+    // 0.3 MB of them file-backed in a bare interpreter). Done at the purge, `before` sat that far
+    // above the checkpoint's own reading and the purge read "retained" on a flat run.
+    for (key, slack) in [("os.rss", 512.0 * 1024.0), ("os.rss_file", 128.0 * 1024.0)] {
+        let own = read(&rec["values"], key);
+        let before = read(&purge["before"], key);
+        let after = read(&purge["after"], key);
+        assert!(
+            (before - own).abs() <= slack,
+            "{key}: before {before} against the checkpoint's {own}"
+        );
+        assert!(
+            (after - before).abs() <= slack,
+            "{key}: after {after} against before {before}"
+        );
+    }
+}
+
+#[test]
 fn command_mode_writes_every_kind_at_exit_and_lists_it() {
     if !have_python() {
         return;

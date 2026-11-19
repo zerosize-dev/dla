@@ -38,19 +38,17 @@ const NMT_PREFIX: &str = "jvm.nmt.";
 /// test cannot release them and their verdict is at best inconclusive; one such vote would
 /// block every non-leak verdict. They are reported and vote only when nothing else can,
 /// even after passing the gate.
-///
-/// `os.rss_file` (resident file-backed pages) is the same kind: the step that purges memory
-/// maps files itself (the Python harness's `trim` purge loads the C library through ctypes;
-/// the other purge kinds read the runtime's own files too), no purge kind gives file-backed
-/// pages back, and a noisy flat series can pass the gate as a stair. Its purge reading is
-/// `retained` whenever it is taken, for a reason that is not growth of the program. A growth
-/// of file-backed memory still shows in `os.rss`, which always votes.
-const NO_RELEASE: &[&str] = &[
-    "os.vm_hwm",
-    "native.peak_bytes",
-    "os.vm_data",
-    "os.rss_file",
-];
+const NO_RELEASE: &[&str] = &["os.vm_hwm", "native.peak_bytes", "os.vm_data"];
+/// Columns whose retained purge reading cannot contradict a plateau: it cannot tell growth
+/// from retention, so a plateau stands (the column still votes, and the reading is still
+/// reported). `os.rss_file` (resident file-backed pages): no purge kind gives file-backed
+/// pages back, so a rise of the column is always "retained", and the step that purges can map
+/// files itself (the Python `trim` step did, inside the measurement, until the harness
+/// loaded the library at start-up; the JVM purge steps run code the program has not run
+/// before, judged by reading). The Go and Node purge records do not carry the column at
+/// all. A real growth of file-backed memory still reads as one: through its plateau test,
+/// and through a retained purge against an undecided plateau.
+pub const PURGE_CANNOT_CONTRADICT: &[&str] = &["os.rss_file"];
 /// Most tied columns tested for a bound finding.
 const MAX_TIED: usize = 6;
 /// Most gate-passing columns tested without a finding.
@@ -406,17 +404,6 @@ pub fn pick(
             }
         }
     }
-    if p.voting.is_empty() {
-        // No support column either: a passed column that cannot be released is all there is.
-        for c in trend.into_iter().flat_map(|t| t.columns.iter()) {
-            if c.gate == GateVerdict::Pass
-                && NO_RELEASE.contains(&c.name.as_str())
-                && series.column_index(&c.name).is_some()
-            {
-                add(&mut p.voting, &c.name);
-            }
-        }
-    }
     Ok(p)
 }
 
@@ -655,50 +642,18 @@ mod tests {
     }
 
     #[test]
-    fn a_file_backed_column_that_passed_the_gate_is_tested_and_does_not_vote_beside_another() {
-        // `os.rss_file` passes on a flat, noisy series as a stair; no purge gives file pages
-        // back, so its purge reading is retained for a reason that is not growth.
+    fn a_file_backed_column_that_passed_the_gate_votes_beside_os_rss() {
         let s = series_of(&["os.rss", "os.rss_file", "go.heap_live"]);
         let ledger = Ledger::from_text("").unwrap();
-        let t = trend(&["os.rss_file", "go.heap_live"]);
+        let t = trend(&["os.rss_file"]);
         let p = pick(&s, &ledger, None, &[], Some(&t), "H1").unwrap();
         assert!(
-            !p.voting.iter().any(|c| c == "os.rss_file"),
+            p.voting.iter().any(|c| c == "os.rss_file"),
             "{:?}",
             p.voting
         );
-        assert!(
-            p.voting.iter().any(|c| c == "go.heap_live"),
-            "{:?}",
-            p.voting
-        );
-        assert!(
-            p.tested.iter().any(|c| c == "os.rss_file"),
-            "{:?}",
-            p.tested
-        );
-        // Next to os.rss alone it is the same.
-        let s = series_of(&["os.rss", "os.rss_file"]);
-        let t = trend(&["os.rss_file"]);
-        let p = pick(&s, &ledger, None, &[], Some(&t), "H1").unwrap();
-        assert_eq!(p.voting, ["os.rss"], "{}", p.basis);
-        assert!(
-            p.tested.iter().any(|c| c == "os.rss_file"),
-            "{:?}",
-            p.tested
-        );
-    }
-
-    #[test]
-    fn a_file_backed_column_votes_when_nothing_else_can() {
-        let s = series_of(&["os.rss_file"]);
-        let ledger = Ledger::from_text("").unwrap();
-        let t = trend(&["os.rss_file"]);
-        let p = pick(&s, &ledger, None, &[], Some(&t), "H1").unwrap();
-        assert_eq!(p.voting, ["os.rss_file"], "{}", p.basis);
-        // Not passed: nothing votes, as before.
-        let p = pick(&s, &ledger, None, &[], Some(&trend(&[])), "H1").unwrap();
-        assert!(p.voting.is_empty(), "{:?}", p.voting);
+        assert!(p.voting.iter().any(|c| c == "os.rss"), "{:?}", p.voting);
+        assert_eq!(PURGE_CANNOT_CONTRADICT, ["os.rss_file"]);
     }
 
     #[test]
