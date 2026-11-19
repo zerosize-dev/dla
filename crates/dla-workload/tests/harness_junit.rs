@@ -33,7 +33,8 @@ const GRADLE_BUILD: &str = "plugins { id 'java' }\nrepositories { mavenCentral()
 // "Inconsistent JVM-target compatibility detected for tasks compileJava and compileKotlin"
 // (inferred from the log of a JDK 25 runner, which printed it for compileJava 25 against
 // compileKotlin 21; no JDK 22 to 24 was available to run it, and the tests pass with and
-// without the pin on JDK 21). On JDK 25 the Kotlin compiler itself cannot run; those tests skip (`kotlin_compiler_runs`).
+// without the pin on JDK 21). On JDK 25 the Kotlin compiler itself cannot run; those tests skip
+// (`kotlin_compiler_runs`).
 const GRADLE_KTS_BUILD: &str = "plugins { kotlin(\"jvm\") version \"1.9.24\" }\nrepositories { mavenCentral() }\ndependencies {\n    testImplementation(platform(\"org.junit:junit-bom:5.10.2\"))\n    testImplementation(\"org.junit.jupiter:junit-jupiter\")\n}\ntasks.test { useJUnitPlatform() }\njava {\n    sourceCompatibility = JavaVersion.VERSION_17\n    targetCompatibility = JavaVersion.VERSION_17\n}\ntasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions { jvmTarget = \"17\" } }\n";
 const POM: &str = "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>leak</groupId>\n  <artifactId>leak</artifactId>\n  <version>1</version>\n  <properties>\n    <maven.compiler.source>17</maven.compiler.source>\n    <maven.compiler.target>17</maven.compiler.target>\n    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>\n  </properties>\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>5.10.2</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n  <build>\n    <plugins>\n      <plugin>\n        <artifactId>maven-surefire-plugin</artifactId>\n        <version>3.2.5</version>\n      </plugin>\n    </plugins>\n  </build>\n</project>\n";
 

@@ -128,6 +128,12 @@ public final class CheckCoverage {
         // A project below a directory named like test output (`java/test`), reached through a link.
         java.nio.file.Files.createDirectories(tmp.resolve("ws/java/test/proj/classes"));
         java.nio.file.Files.createSymbolicLink(tmp.resolve("pl"), tmp.resolve("ws/java/test/proj"));
+        // A link named `test` above a project that is not below one: the location is spelled
+        // through it, the project root is the real path.
+        java.nio.file.Files.createDirectories(tmp.resolve("ws/main/proj/classes"));
+        java.nio.file.Files.createDirectories(tmp.resolve("outer/java"));
+        java.nio.file.Files.createSymbolicLink(tmp.resolve("outer/java/test"), tmp.resolve("ws/main"));
+        Path mainProj = tmp.resolve("ws/main/proj");
         Path deepProj = tmp.resolve("ws/java/test/proj");
         Path deepLink = tmp.resolve("pl");
         Path realProj = tmp.resolve("real/proj");
@@ -143,6 +149,8 @@ public final class CheckCoverage {
         is("below a directory named test, project by a link", DlaDump.isTestLocation("file:" + deepProj + "/classes/", deepLink), false);
         is("below a directory named test, location by a link", DlaDump.isTestLocation("file:" + deepLink + "/classes/", deepProj), false);
         is("below a directory named test, both by the link", DlaDump.isTestLocation("file:" + deepLink + "/classes/", deepLink), false);
+        is("location spelled through a link named test above the project", DlaDump.isTestLocation("file:" + tmp + "/outer/java/test/proj/classes/", mainProj), false);
+        is("the same, the project by its link name too", DlaDump.isTestLocation("file:" + tmp + "/outer/java/test/proj/classes/", tmp.resolve("outer/java/test/proj")), false);
         is("below a directory named test, its own test classes", DlaDump.isTestLocation("file:" + deepProj + "/target/test-classes/", deepLink), true);
         is("below a directory named test, its own out/test", DlaDump.isTestLocation("file:" + deepProj + "/out/test/", deepLink), true);
         is("a jar root", DlaDump.isJarRoot("file:/w/app.jar") + "/" + DlaDump.isJarRoot("jar:file:/w/app.jar!/"), "true/true");

@@ -444,13 +444,17 @@ fn warm_up_pair() -> (Vec<f64>, Vec<f64>) {
 ///   the first step and the early growth are mostly gone. Measured here, with four harness runs
 ///   at once, on JDK 21 and JDK 25: warm over cold 0.28 to 0.54 in 88 pairs, two cold runs
 ///   against each other 0.88 to 1.15 in 64 pairs. Measured elsewhere: up to 0.58 on Linux and
-///   0.66 and 0.74 on the macOS runner, and 0.72 to 1.38 for two cold runs, so the line lies
-///   between the two ranges and the test measures a second pair before it fails.
-/// * On Linux, where the cold run rises by about 0.3 MB or more from point 1 to point 15, the
-///   warm run rises by less than 0.75 of that (measured 0.29 to 0.64). Not claimed on macOS,
-///   where that rise is the steady drift of about 25 KB per point and the warm run rises as much
-///   (cold 336 to 347 KB, warm 327 to 364 KB), nor where it is under 250 KB (a JVM told it has
-///   many processors compiles the checkpoints' code early too).
+///   0.66 and 0.74 on the macOS runner, and 0.72 to 1.38 for two cold runs. The line lies between
+///   the two ranges measured here but inside the one measured elsewhere, so the test measures a
+///   second pair before it fails.
+/// * On Linux, where the cold run rises by 250 KB or more from point 1 to point 15, the warm run
+///   rises by less than 0.75 of that (measured 0.29 to 0.64 with four runs at once). This one
+///   gives way first when the machine is loaded far beyond that: with sixteen copies at once
+///   (the warm-up stops after 3 s and warms less) it failed in 4 of 16 runs even with the second
+///   pair, while the 0.85 relation held. Not claimed on macOS, where that rise is the steady
+///   drift of about 25 KB per point and the warm run rises as much (cold 336 to 347 KB, warm 327
+///   to 364 KB), nor where it is under 250 KB (a JVM told it has many processors compiles the
+///   checkpoints' code early too).
 fn warm_up_shows(pairs: &[(Vec<f64>, Vec<f64>)]) -> Result<(), String> {
     let total = |pick: fn(&(Vec<f64>, Vec<f64>)) -> f64| -> f64 { pairs.iter().map(pick).sum() };
     let (cold, warm) = (total(|p| p.0[15] - p.0[0]), total(|p| p.1[15] - p.1[0]));
