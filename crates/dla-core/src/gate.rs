@@ -160,6 +160,11 @@ pub fn missing(view: &RunView, target: GateTarget, worker: Option<&str>) -> Vec<
 fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
     let mut out = Out(Vec::new());
     let is_final = target == GateTarget::Final;
+    // A contradictory coverage comes first: the step it names is what the open findings'
+    // closes wait for, and a list cut short (the Stop hook shows three items) must show it.
+    if is_final {
+        coverage_contradiction_items(view, &mut out);
+    }
     let base = status(view).blocking;
     for b in base {
         let keep = is_final
@@ -787,7 +792,7 @@ fn residual_item_fix(view: &RunView, id: &str, region: Region, series: Option<&s
 /// open item resolved by the confirmed sibling.
 pub fn nonheap_alloc_route(item: &str, evidence: &str, harness: &str) -> String {
     format!(
-        "{item} is non-heap growth; decide it with evidence: (1) dla ledger add --origin residual --region non-heap --evidence {evidence} -> F; (2) dla ledger add --origin hypothesis --sibling-of F --hypothesis \"N-WARM: <warm-up that levels off>\" --refute-if \"<the column keeps rising over the extra window>\" --evidence {evidence}; (3) dla ledger test F --evidence <workload id>; (4) dla alloc-test {harness} --finding F; (5) dla ledger refute F / confirm F.n1 as it prints; (6) dla ledger resolve {item} --by F.n1; if the alloc-test favours leak instead, confirm F as it prints and resolve the item with dla ledger resolve {item} --by F. If the alloc-test is inconclusive: dla ledger resolve {item} --as unresolved --reason inconclusive --remedy \"<text>\""
+        "{item} is non-heap growth; decide it with evidence: (1) dla ledger add --origin residual --region non-heap --evidence {evidence} -> F; (2) dla ledger add --origin hypothesis --sibling-of F --hypothesis \"N-WARM: <warm-up that levels off>\" --refute-if \"<the column keeps rising over the extra window>\" --evidence {evidence}; (3) dla ledger test F --evidence <workload id>; (4) dla alloc-test {harness} --finding F; (5) dla ledger refute F / confirm F.n1 as it prints; (6) dla ledger resolve {item} --by F.n1; if the alloc-test favours leak instead, confirm F as it prints and resolve the item with dla ledger resolve {item} --by F. If the alloc-test is inconclusive and its next names a larger --step (a small JVM's own checkpoint work), run that harness first; if it stays inconclusive: dla ledger resolve {item} --as unresolved --reason inconclusive --remedy \"<text>\""
     )
 }
 
@@ -1150,7 +1155,6 @@ fn residual_item_resolved(view: &RunView, id: &crate::ids::OpenItemId, region: &
 
 fn final_items(view: &RunView, out: &mut Out) {
     unrun_harness_items(view, None, out);
-    coverage_contradiction_items(view, out);
     budget_left_unrevisited_items(view, out);
     // (b) per backend: every hit has a candidate and every candidate a disposition. The
     // undispositioned findings themselves are listed by `status`.
@@ -1302,20 +1306,28 @@ pub struct UnrunHarness {
     /// The driver's DLA-HOOK bodies are still the template's.
     pub hooks_unfilled: bool,
     /// The reason of its last attempt when one exists but is not a try (`hooks_unfilled`,
-    /// `interrupted`), for the wording of a refusal.
+    /// `interrupted`, `time_budget`), for the wording of a refusal.
     pub last_attempt: Option<String>,
+    /// The harness never built and no harness of the runtime ran: the way on is its build.
+    pub build_failed: bool,
 }
 
 impl UnrunHarness {
     /// What happened to the harness, for a refusal or a missing item: "was generated and
     /// never run", or what the last attempt shows.
     pub fn state(&self) -> &'static str {
+        if self.build_failed {
+            return "did not build (its attempt record says build_fails) and nothing has run";
+        }
         match self.last_attempt.as_deref() {
             Some(crate::harness::ATTEMPT_HOOKS_UNFILLED) => {
                 "was never run with its DLA-HOOK bodies filled in"
             }
             Some(crate::harness::ATTEMPT_INTERRUPTED) => {
                 "was interrupted before it measured anything"
+            }
+            Some(crate::harness::ATTEMPT_TIME_BUDGET) => {
+                "was refused for time before it measured anything"
             }
             _ => "was generated and never run",
         }
@@ -1324,7 +1336,11 @@ impl UnrunHarness {
     /// The command that clears the rule, for a refusal or a missing item.
     pub fn fix(&self, run_id: &str) -> String {
         let h = &self.id;
-        let run = if self.hooks_unfilled {
+        let run = if self.build_failed {
+            format!(
+                "fix the build error that `dla harness run {h}` prints, then dla harness run {h}"
+            )
+        } else if self.hooks_unfilled {
             let junit = if self.runtime == "jvm" {
                 "; for a JVM project with JUnit 5 tests, dla harness gen --lang jvm --junit runs an existing test in a loop instead"
             } else {
@@ -1453,11 +1469,16 @@ fn harness_tried(view: &RunView, run_dir: &Path, h: &str) -> bool {
 }
 
 /// An attempt reason that says nothing about the workload: the driver's template hooks
-/// failed, or the caller stopped the run before it measured.
+/// failed, the caller stopped the run before it measured, or the run was refused for time
+/// (the plan did not fit, which says nothing about the harness).
 fn attempt_is_no_try(reason: Option<&str>) -> bool {
     matches!(
         reason,
-        Some(crate::harness::ATTEMPT_HOOKS_UNFILLED | crate::harness::ATTEMPT_INTERRUPTED)
+        Some(
+            crate::harness::ATTEMPT_HOOKS_UNFILLED
+                | crate::harness::ATTEMPT_INTERRUPTED
+                | crate::harness::ATTEMPT_TIME_BUDGET
+        )
     )
 }
 
@@ -1524,7 +1545,10 @@ pub fn harness_not_run(
     worker: Option<&str>,
 ) -> Option<UnrunHarness> {
     let (minutes_left, minutes_total) = budget_for_rule(view, worker)?;
-    let id = unrun_harness(view, runtime)?;
+    let (id, build_failed) = match unrun_harness(view, runtime) {
+        Some(id) => (id, false),
+        None => (failed_build_unrun(view, runtime)?, true),
+    };
     let hooks_unfilled = view
         .run_dir
         .as_deref()
@@ -1537,12 +1561,69 @@ pub fn harness_not_run(
         .filter(|r| attempt_is_no_try(Some(r)));
     Some(UnrunHarness {
         id,
+        build_failed,
         last_attempt,
         hooks_unfilled,
         runtime: runtime.to_owned(),
         minutes_left,
         minutes_total,
     })
+}
+
+/// The harness whose build failed when that is all `runtime` has: it was generated, no
+/// harness of the runtime measured anything, no hook driver of the runtime built, and the blocker
+/// is not recorded. A run that cannot build its harness measured nothing, so its findings are not
+/// closed `no_harness`, `not_exercised` or `time_budget` while the budget has room; the build
+/// step is the way on and `build_fails` on `intake.workload` the way out.
+fn failed_build_unrun(view: &RunView, runtime: &str) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    let any_ran = harness_ids(run_dir).into_iter().any(|(_, id)| {
+        crate::harness::HarnessManifest::load(run_dir, &id)
+            .is_ok_and(|m| m.runtime.as_str() == runtime)
+            && harness_ran(view, run_dir, &id)
+    });
+    if any_ran {
+        return None;
+    }
+    let id = build_failed_harness(view, runtime)?;
+    (last_attempt_is_build_failure(run_dir, &id)
+        && generated_at(view, &id).is_some()
+        && !blocker_recorded(view, &id))
+    .then_some(id)
+}
+
+/// The fix of an open finding whose default close the harness rules would refuse: the step
+/// that clears the rule (run the harness, fix its build, or make one) instead of a close the
+/// ledger would turn down. `None` when the close would be accepted: the reason is one the rules
+/// leave alone (`reason` is the one the evidence supports), the run has no directory, no harness is
+/// owed, or the budget is no longer over the floor. `cache` holds the answer per runtime and
+/// `only` the runtime fallback of [`finding_runtime_with`], both for one pass over the findings.
+pub fn open_finding_step(
+    view: &RunView,
+    f: &Finding,
+    reason: UnresolvedReason,
+    cache: &mut BTreeMap<String, Option<String>>,
+    only: &mut Option<Option<String>>,
+) -> Option<String> {
+    if !closes_without_exercise(reason) || view.run_dir.is_none() {
+        return None;
+    }
+    // A worker's finding is judged against that worker's own deadline too.
+    if let Some(w) = f.id.prefix()
+        && view.state.worker(w).is_some()
+        && budget_over_floor(&view.state, Some(w)).is_none()
+    {
+        return None;
+    }
+    let rt = finding_runtime_with(view, f, only)?;
+    cache
+        .entry(rt.clone())
+        .or_insert_with(|| {
+            harness_not_run(view, &rt, None)
+                .map(|u| u.fix(&view.state.run_id))
+                .or_else(|| harness_not_generated(view, &rt, None).map(|n| n.fix()))
+        })
+        .clone()
 }
 
 /// The runtime of a finding for the rule: [`worker_key`], else the only runtime that has a
@@ -1704,27 +1785,100 @@ fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
         .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
 }
 
-/// The first harness of `runtime` that is a driver with DLA-HOOK bodies to fill. A JUnit
-/// repeat is a driver too, but it has no hooks, so it is passed over.
-fn hook_driver_in(run_dir: &Path, runtime: &str) -> Option<HarnessId> {
-    harness_ids(run_dir).into_iter().find_map(|(_, id)| {
-        crate::harness::HarnessManifest::load(run_dir, &id)
-            .ok()
-            .filter(|m| {
-                m.runtime.as_str() == runtime
-                    && m.mode == crate::harness::HarnessMode::Driver
-                    && !m.tools.iter().any(|t| t == JUNIT_TOOL)
-            })
-            .map(|_| id)
+/// True when harness `h` is the treated clone `dla intervene` made: it keeps its source's
+/// mode and tools, but its code is an edit, not a driver to fill. The clone carries a marker
+/// file from the moment it is made (an intervention that stops early writes no record); runs
+/// made before the marker are told by the `intervention` record.
+fn is_intervention_clone(view: &RunView, h: &str) -> bool {
+    if view.run_dir.as_deref().is_some_and(|d| {
+        crate::harness::HarnessManifest::dir_in(d, h)
+            .join(crate::harness::CLONE_MARKER)
+            .is_file()
+    }) {
+        return true;
+    }
+    view.ledger.lines().iter().any(|l| {
+        matches!(&l.record, Record::Evidence(e)
+            if e.kind == EvidenceKind::Intervention
+                && e.result.get("treated_harness").and_then(|v| v.as_str()) == Some(h))
     })
 }
 
-/// A harness of `runtime` whose last attempt failed to build, which never measured
-/// anything and which was generated after every harness of the runtime that did run:
-/// making another driver would only meet the same build. A build failure of an older
-/// harness, passed over by a later one that ran, is not what stops measuring.
+/// The harnesses of `runtime` that are drivers with DLA-HOOK bodies to fill, oldest
+/// first. A JUnit repeat is a driver too, but it has no hooks, so it is passed over, and
+/// so is the edited clone of an intervention.
+fn hook_drivers_in(view: &RunView, run_dir: &Path, runtime: &str) -> Vec<HarnessId> {
+    harness_ids(run_dir)
+        .into_iter()
+        .filter(|(_, id)| {
+            !is_intervention_clone(view, id)
+                && crate::harness::HarnessManifest::load(run_dir, id).is_ok_and(|m| {
+                    m.runtime.as_str() == runtime
+                        && m.mode == crate::harness::HarnessMode::Driver
+                        && !m.tools.iter().any(|t| t == JUNIT_TOOL)
+                })
+        })
+        .map(|(_, id)| id)
+        .collect()
+}
+
+/// True when the last attempt of harness `h` is a failed build.
+fn last_attempt_is_build_failure(run_dir: &Path, h: &str) -> bool {
+    attempt_of(run_dir, h).is_some_and(|a| {
+        a.outcome == crate::harness::AttemptOutcome::Failed
+            && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
+    })
+}
+
+/// The newest hook driver of `runtime` that built: it ran, or its last attempt is not a
+/// build failure. This is the harness whose DLA-HOOK bodies the model fills next; an older
+/// driver that never built is not.
+fn built_hook_driver(view: &RunView, run_dir: &Path, runtime: &str) -> Option<HarnessId> {
+    hook_drivers_in(view, run_dir, runtime)
+        .into_iter()
+        .rev()
+        .find(|h| harness_ran(view, run_dir, h) || !last_attempt_is_build_failure(run_dir, h))
+}
+
+/// The newest harness of `runtime` that was tried (it measured, or has an attempt record)
+/// when that harness never measured and its last attempt is a build failure. The report
+/// names it as the cause of a missing iteration when the step is about another harness; a
+/// newer harness that was tried and failed another way is the latest reason, so then
+/// nothing is named.
+pub fn unbuilt_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    let (_, id) = harness_ids(run_dir).into_iter().rev().find(|(_, id)| {
+        crate::harness::HarnessManifest::load(run_dir, id)
+            .is_ok_and(|m| m.runtime.as_str() == runtime)
+            && (harness_ran(view, run_dir, id) || attempt_of(run_dir, id).is_some())
+    })?;
+    (!harness_ran(view, run_dir, &id) && last_attempt_is_build_failure(run_dir, &id)).then_some(id)
+}
+
+/// The harness whose build failure `open_harness_step` gives as the step, when it does:
+/// no harness is waiting to be run, nothing blocks, and `build_failed_harness` has one.
+pub fn build_step_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
+    let run_dir = view.run_dir.as_deref()?;
+    if unrun_harness(view, runtime).is_some()
+        || workload_blocker(view).is_some()
+        || !runtime_has_harness(run_dir, runtime)
+    {
+        return None;
+    }
+    build_failed_harness(view, runtime)
+}
+
+/// The harness of `runtime` whose build failure is the step to take: no hook driver of the
+/// runtime has built (one that did is the harness to fill, whatever failed around it), and
+/// either a harness whose last attempt failed to build and which was generated after every
+/// harness that ran (making another driver would only meet the same build), or a hook
+/// driver that never built (filling its hooks would meet the same error). A build failure of
+/// an older harness, passed over by a later one that ran, is not what stops measuring.
 pub fn build_failed_harness(view: &RunView, runtime: &str) -> Option<HarnessId> {
     let run_dir = view.run_dir.as_deref()?;
+    if built_hook_driver(view, run_dir, runtime).is_some() {
+        return None;
+    }
     let mut last_ran = 0;
     let mut failed: Option<(u32, HarnessId)> = None;
     for (n, id) in harness_ids(run_dir) {
@@ -1736,14 +1890,14 @@ pub fn build_failed_harness(view: &RunView, runtime: &str) -> Option<HarnessId> 
         }
         if harness_ran(view, run_dir, &id) {
             last_ran = last_ran.max(n);
-        } else if attempt_of(run_dir, &id).is_some_and(|a| {
-            a.outcome == crate::harness::AttemptOutcome::Failed
-                && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
-        }) {
+        } else if last_attempt_is_build_failure(run_dir, &id) {
             failed = Some((n, id));
         }
     }
-    failed.filter(|(n, _)| *n > last_ran).map(|(_, id)| id)
+    failed
+        .filter(|(n, _)| *n > last_ran)
+        .map(|(_, id)| id)
+        .or_else(|| hook_drivers_in(view, run_dir, runtime).pop())
 }
 
 /// The command that makes a driver of `runtime` and what to do with it.
@@ -1768,19 +1922,7 @@ fn driver_step(view: &RunView, runtime: &str) -> String {
     if let Some(h) = build_failed_harness(view, runtime) {
         return build_step(&h);
     }
-    if let Some(h) = dir.and_then(|d| hook_driver_in(d, runtime)) {
-        // The hook driver the step would send the user to never built: filling its hooks
-        // would meet the same build error.
-        let failed_build = dir.is_some_and(|d| {
-            !harness_ran(view, d, &h)
-                && attempt_of(d, &h).is_some_and(|a| {
-                    a.outcome == crate::harness::AttemptOutcome::Failed
-                        && a.reason.as_deref() == Some(UnresolvedReason::BuildFails.as_str())
-                })
-        });
-        if failed_build {
-            return build_step(&h);
-        }
+    if let Some(h) = dir.and_then(|d| built_hook_driver(view, d, runtime)) {
         return format!(
             "fill the DLA-HOOK bodies of {h} so its driver calls the entry points, then dla harness run {h}"
         );
@@ -2015,9 +2157,9 @@ fn coverage_contradiction_items(view: &RunView, out: &mut Out) {
 
 /// `budget_left_unrevisited`: more than the shared floor of the budget is left while
 /// findings are closed in a way the remaining time could still change. Two shapes:
-/// findings closed `time_budget` although no command was refused for time since they were
-/// added, and findings closed without exercise in a runtime that has discovered entry
-/// points and no harness at all. Cleared by measuring (the fix names the command) or by the
+/// findings closed `time_budget` although no command of the core was refused with nothing
+/// smaller that fits since they were added, and findings closed without exercise in a runtime
+/// that has discovered entry points and no harness at all. Cleared by measuring (the fix names the command) or by the
 /// blocker on `intake.workload` (a closed finding cannot be closed again, only tested).
 fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
     let Some(run_dir) = view.run_dir.as_deref() else {
@@ -2050,7 +2192,7 @@ fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
                 .ledger
                 .finding_added_at(&f.id)
                 .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
-            if !crate::toolctx::time_refused_since(run_dir, None, since) {
+            if !crate::toolctx::nothing_fits_since(run_dir, None, since) {
                 early.push(f);
                 continue;
             }
@@ -2075,7 +2217,7 @@ fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
             "budget_left_unrevisited",
             first.id.to_string(),
             format!(
-                "{n} finding(s) are closed with time_budget (first {}) although {left} of {total} budget minutes remain and no command was refused for time since they were added",
+                "{n} finding(s) are closed with time_budget (first {}) although {left} of {total} budget minutes remain and no command of the core was refused with nothing smaller that fits since they were added",
                 first.id
             ),
             format!(

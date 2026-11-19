@@ -110,7 +110,7 @@ impl Run {
             .append(true)
             .open(self.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE))
             .unwrap();
-        let line = json!({"ts": rfc3339_in(1), "worker": worker});
+        let line = json!({"ts": rfc3339_in(1), "worker": worker, "none_fits": true});
         writeln!(f, "{line}").unwrap();
     }
 }
@@ -268,7 +268,10 @@ fn a_refusal_from_before_the_finding_does_not_count() {
     let path = r.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE);
     fs::write(
         &path,
-        format!("{}\n", json!({"ts": rfc3339_in(-600), "worker": null})),
+        format!(
+            "{}\n",
+            json!({"ts": rfc3339_in(-600), "worker": null, "none_fits": true})
+        ),
     )
     .unwrap();
     let mut l = Ledger::load_for(&r.run_dir(), None).unwrap();
@@ -337,6 +340,19 @@ fn a_workers_own_deadline_and_its_own_refusals_count() {
     // The worker's own is.
     r.note_time_refusal(Some("go"));
     assert_eq!(r.close(w, "F1", "time_budget"), None);
+}
+
+#[test]
+fn a_workers_refusal_does_not_make_time_budget_honest_for_the_core() {
+    let r = scene();
+    r.ok(&["run", "dispatch", "--workers", "go"]);
+    r.note_time_refusal(Some("go"));
+    assert_eq!(
+        r.close(None, "F1", "time_budget").as_deref(),
+        Some("time-left")
+    );
+    r.note_time_refusal(None);
+    assert_eq!(r.close(None, "F1", "time_budget"), None);
 }
 
 #[test]

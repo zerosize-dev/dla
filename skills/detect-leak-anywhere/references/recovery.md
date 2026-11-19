@@ -94,7 +94,7 @@ The Stop hook blocks the end of the turn while `dla gate check --final` fails. I
 stop attempts; at the third attempt with no change in the ledger it lets the stop through, stamps the run
 INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts with no ledger change"
 and the missing ids, and the report says so.
-- A `harness_not_run` item means a generated harness was never run: run it (`dla harness run H<n>`), or record why it cannot run on `intake.workload`, and ask the user first when only they can unblock it.
+- A `harness_not_run` item means a generated harness was never run, or never built: run it (`dla harness run H<n>`; for one that did not build, fix the build error first; a run refused for time is not a run), or record why it cannot run on `intake.workload`, and ask the user first when only they can unblock it.
 - A `coverage_contradiction` item means iterations ran and no entry point was exercised: fill the DLA-HOOK bodies of the driver harness so it calls one and run it again; when the harness that produced the zero is a command harness or a JUnit repeat (no hooks), make a driver (`dla harness gen --lang <rt> --driver`), fill its hooks and run the harness it prints; when the harness did not build, fix the build error first; or record on `intake.workload` why it cannot. A `budget_left_unrevisited` item means findings were closed while the budget could still measure them: run the command in its fix, or record the blocker on `intake.workload`.
 - Remedy: do not wait for it. Run `dla gate check --final`, fix the items it prints, or resolve each with
   `dla ledger resolve <F> --as unresolved --reason <r> --remedy "<text>"`, then `dla report`.
@@ -133,7 +133,7 @@ the worker's or the run's deadline; the refusal's fix names a smaller plan (`--i
   at the first passing gate check from `sweep` on (in a dispatched run by each worker's first one, raising
   it only), so a run that stalls before the sweep still has the 60 minutes it started with.
 - Record: `dla ledger resolve <F> --as unresolved --reason time_budget --remedy "<what to run next
-  and how long it needs>"` for each unresolved item that the budget cut off (the ledger refuses `time_budget` while more than the larger of 10 minutes and 20% of the budget remains, unless a command was refused for time after the finding was added; a finding that was measured and left undecided is `inconclusive`, one nothing reached `not_exercised`) (a candidate with only static evidence may be
+  and how long it needs>"` for each unresolved item that the budget cut off (the ledger refuses `time_budget` while more than the larger of 10 minutes and 20% of the budget remains, unless a command of the core (of the worker, in a worker) was refused with nothing smaller that fits after the finding was added; a finding that was measured and left undecided is `inconclusive`, one nothing reached `not_exercised`) (a candidate with only static evidence may be
   `suspected_static_only` with the same reason), then `dla ledger done` in a worker, or
   `dla ledger merge`, `dla report` in the core. Report the run as INCOMPLETE with the list. The
   report's `Time:` line says how many findings were closed for lack of time and how many minutes

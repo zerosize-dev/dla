@@ -1253,3 +1253,58 @@ fn the_maven_branch_keeps_paths_relative_and_reads_backslash_class_paths() {
         "{cp}"
     );
 }
+
+#[test]
+fn the_online_retry_of_the_build_step_says_what_it_downloads_and_the_tier_table_agrees() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let proj = root.join("proj");
+    let driver = root.join("driver");
+    fs::create_dir_all(&proj).unwrap();
+    fs::create_dir_all(&driver).unwrap();
+    // A build tool that fails every time and notes whether it was told to work offline.
+    let mvn = root.join("mvn");
+    let calls = root.join("calls.txt");
+    fs::write(
+        &mvn,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *\" -o \"*) echo offline >> '{0}';; *) echo online >> '{0}';; esac\nexit 1\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    let script = root.join("dla-junit-build.sh");
+    fs::write(&script, dla_workload::harness::templates::JVM_JUNIT_BUILD).unwrap();
+    let out = Command::new("sh")
+        .arg(&script)
+        .args(["maven"])
+        .arg(&mvn)
+        .arg(&driver)
+        .arg(root.join("agent.jar"))
+        .arg(":")
+        .arg("main")
+        .current_dir(&proj)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "DLA-BUILD the offline attempt failed; retrying online (the build tool downloads dependencies into its own cache)"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&calls).unwrap(), "offline\nonline\n");
+    // The tier table of the safety reference says the same, with the same marker.
+    let table = fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skills/detect-leak-anywhere/references/safety-and-effects.md"),
+    )
+    .unwrap();
+    assert!(
+        table.contains("DLA-BUILD the offline attempt failed; retrying online")
+            && table.contains("downloads dependencies into its own cache"),
+        "the tier table row of `dla harness run` lost the online retry"
+    );
+}

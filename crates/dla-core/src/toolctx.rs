@@ -61,14 +61,16 @@ pub const DEADLINE_FIX: &str = "dla run extend 30m   (core only; in an interacti
 pub const DEADLINE_FIX_CLOSE: &str = "dla ledger resolve <F> --as unresolved --reason time_budget --remedy \"<text>\"   (this run does not extend its budget: only the core of an interactive run does)";
 
 /// File of the run directory where each time-budget refusal of a tool is noted, one JSON
-/// line `{"ts", "worker"}` each.
+/// line `{"ts", "worker", "none_fits"}` each (`worker` is null for the core; `none_fits` is
+/// true when nothing smaller would have fit).
 pub const TIME_REFUSALS_FILE: &str = "time_refusals.jsonl";
 
-/// True when a tool refused a command for time after `since`: in the core, any refusal of
-/// the run; in a worker (`worker` is its name), that worker's own. The reason
-/// `time_budget` is honest for a finding added before such a refusal even when time is
-/// left, because the measurement it needed was refused for lack of it. A refusal made
-/// before the latest `dla run extend` no longer counts: the extension gave the time back.
+/// True when a tool refused a command for time after `since`, whether or not a smaller
+/// command was on offer: in the core (`worker` None), only the core's own refusals (a worker's
+/// never count); in a worker (`worker` is its name), that worker's own. A refusal made before
+/// the latest `dla run extend` no longer counts: the extension gave the time back. The ledger
+/// and the final gate use [`nothing_fits_since`] instead: a refusal that names a smaller
+/// command leaves the measurement possible, so it does not justify `time_budget`.
 pub fn time_refused_since(
     run_dir: &Path,
     worker: Option<&str>,
@@ -117,7 +119,7 @@ fn refused_since(
         }
         let by = v.get("worker").and_then(Value::as_str);
         // A refusal at the very instant of the extension predates it.
-        ts >= since && (extended.is_none_or(|at| ts > at)) && (worker.is_none() || by == worker)
+        ts >= since && (extended.is_none_or(|at| ts > at)) && by == worker
     })
 }
 
@@ -430,10 +432,11 @@ impl ToolCtx {
 
     /// Notes that a command was refused for time, in the one place every time-budget refusal
     /// of a tool passes through ([`Self::require_time`] and [`Self::time_budget_refusal`]).
-    /// `dla ledger resolve --reason time_budget` accepts the reason while time is left only
-    /// when a note is newer than the finding ([`time_refused_since`]). A failure to write the
-    /// note is ignored: the refusal itself is what the caller returns.
-    /// `none_fits` records that nothing smaller would have fit ([`nothing_fits_since`]).
+    /// `none_fits` records that nothing smaller would have fit. `dla ledger resolve --reason
+    /// time_budget` accepts the reason while time is left only when a note with `none_fits`
+    /// true is newer than the finding ([`nothing_fits_since`]); a note that named a smaller
+    /// command does not count. A failure to write the note is ignored: the refusal itself is
+    /// what the caller returns.
     fn note_time_refusal(&self, none_fits: bool) {
         let line = serde_json::json!({
             "ts": now_utc().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -1183,17 +1186,28 @@ mod tests {
         let (_d, mut ctx) = run(None);
         assert!(!time_refused_since(&ctx.run_dir, None, before));
         // A command refused for lack of time notes it, whatever the deadline.
-        let _ = ctx.time_budget_refusal("sample", 10, 5, "run deadline", "");
+        let _ = ctx.time_budget_refusal("sample", 10, 5, "run deadline", "a smaller run");
         assert!(time_refused_since(&ctx.run_dir, None, before));
-        // The core sees a worker's too; a worker sees only its own.
+        // A suggestion of a smaller run means something smaller fits.
+        assert!(!nothing_fits_since(&ctx.run_dir, None, before));
+        let _ = ctx.time_budget_refusal("sample", 10, 5, "run deadline", "");
+        assert!(nothing_fits_since(&ctx.run_dir, None, before));
+        // Each side sees only its own: the core never a worker's, a worker never the core's.
         assert!(!time_refused_since(&ctx.run_dir, Some("jvm"), before));
         ctx.worker = Some("jvm".into());
         let _ = ctx.time_budget_refusal("sample", 10, 5, "worker deadline", "");
         assert!(time_refused_since(&ctx.run_dir, Some("jvm"), before));
         assert!(!time_refused_since(&ctx.run_dir, Some("go"), before));
-        // A note older than the finding does not count.
+        // A note older than the finding does not count (this run holds core lines).
         let later = now_utc() + chrono::TimeDelta::try_seconds(60).unwrap();
         assert!(!time_refused_since(&ctx.run_dir, None, later));
+        assert!(!time_refused_since(&ctx.run_dir, Some("jvm"), later));
+        // A run holding only a worker's line: the core sees nothing.
+        let (_d, mut ctx) = run(None);
+        ctx.worker = Some("jvm".into());
+        let _ = ctx.time_budget_refusal("sample", 10, 5, "worker deadline", "");
+        assert!(!time_refused_since(&ctx.run_dir, None, before));
+        assert!(!nothing_fits_since(&ctx.run_dir, None, before));
 
         // `require_time` on a spent deadline is a refusal too.
         let (_d, ctx) = run(None);
@@ -1205,6 +1219,7 @@ mod tests {
         assert!(!time_refused_since(&ctx.run_dir, None, before));
         ctx.require_time("sampling").unwrap_err();
         assert!(time_refused_since(&ctx.run_dir, None, before));
+        assert!(nothing_fits_since(&ctx.run_dir, None, before));
         // A passing check notes nothing.
         let (_d, ctx) = run(None);
         ctx.require_time("sampling").unwrap();

@@ -857,6 +857,11 @@ public final class DlaDump {
         if (c != null) {
             return c;
         }
+        if (inst != null) {
+            // A class that is not loaded holds nothing, and loading it here would make the probe
+            // itself put the class into the coverage section as if the workload had reached it.
+            return null;
+        }
         ClassLoader[] loaders = {Thread.currentThread().getContextClassLoader(), ClassLoader.getSystemClassLoader()};
         for (ClassLoader l : loaders) {
             try {

@@ -822,6 +822,85 @@ fn stop_hook_after_a_refusal_with_nothing_smaller_that_fits_counts_as_the_floor(
 }
 
 #[test]
+fn a_workers_refusal_never_puts_the_core_at_the_floor() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    st["consent"]["given_by"] = json!("user");
+    fs::write(&path, st.to_string()).unwrap();
+    let line = format!(
+        "{}\n",
+        json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+               "worker": "go", "none_fits": true})
+    );
+    fs::write(p.run_dir().join("time_refusals.jsonl"), line).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("measure what is open instead of stopping"),
+        "{reason}"
+    );
+    assert!(!reason.contains("ask the user once"), "{reason}");
+}
+
+#[test]
+fn the_reason_after_a_refusal_with_most_of_the_budget_left_says_what_happened() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    st["consent"]["given_by"] = json!("user");
+    fs::write(&path, st.to_string()).unwrap();
+    let line = format!(
+        "{}\n",
+        json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+               "worker": null, "none_fits": true})
+    );
+    fs::write(p.run_dir().join("time_refusals.jsonl"), line).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains("a command was refused with nothing smaller that fits: ask the user once"),
+        "{reason}"
+    );
+    assert!(!reason.contains("too few"), "{reason}");
+}
+
+#[test]
+fn an_unattended_core_after_a_refusal_with_nothing_smaller_that_fits_is_told_to_close() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    // The consent stays the runner's: the run is unattended and never extends.
+    assert_eq!(st["consent"]["given_by"], json!("runner"));
+    fs::write(&path, st.to_string()).unwrap();
+    let line = format!(
+        "{}\n",
+        json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+               "worker": null, "none_fits": true})
+    );
+    fs::write(p.run_dir().join("time_refusals.jsonl"), line).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains(
+            "a command was refused with nothing smaller that fits: close what is open with a reason and a remedy"
+        ),
+        "{reason}"
+    );
+    assert!(!reason.contains("ask the user"), "{reason}");
+    assert!(!reason.contains("too few"), "{reason}");
+}
+
+#[test]
 fn stop_hook_at_a_spent_budget_asks_an_interactive_core_to_extend_first() {
     let p = project("symptom");
     let path = p.run_dir().join("state.json");
@@ -1026,6 +1105,51 @@ fn a_siblings_slice_writes_do_not_reset_a_stuck_workers_counter() {
     let third = stop(&p);
     assert!(third.allowed(), "{third:?}");
     assert!(third.stderr.contains("stalled"), "{third:?}");
+}
+
+#[test]
+fn a_worker_stop_obeys_its_own_refusal_and_not_the_cores_or_a_siblings() {
+    let p = project("repository");
+    p.ok(&["run", "dispatch", "--workers", "jvm,go"]);
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    for w in st["workers"].as_array_mut().unwrap() {
+        w["deadline"] = json!(far);
+    }
+    fs::write(&path, st.to_string()).unwrap();
+    let refusals = p.run_dir().join("time_refusals.jsonl");
+    let line = |worker: Value| {
+        format!(
+            "{}\n",
+            json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                   "worker": worker, "none_fits": true})
+        )
+    };
+    let t = tempfile::tempdir().unwrap();
+    let tr = transcript(t.path(), &["dla --worker jvm ledger add --origin census"]);
+    let reason = |p: &P| {
+        let out = p.hook(&["stop-hook", "--subagent"], &subagent_json(p.path(), &tr));
+        out.json()["reason"].as_str().unwrap().to_owned()
+    };
+    // The core's and a sibling's refusals do not move worker jvm to the floor.
+    fs::write(&refusals, line(Value::Null) + &line(json!("go"))).unwrap();
+    let r = reason(&p);
+    assert!(
+        r.contains("measure what is open instead of stopping"),
+        "{r}"
+    );
+    assert!(!r.contains("nothing smaller that fits"), "{r}");
+    // Its own does, and it is told to close what is open (a worker never asks the user).
+    fs::write(&refusals, line(json!("jvm"))).unwrap();
+    let r = reason(&p);
+    assert!(
+        r.contains("nothing smaller that fits: close what is open"),
+        "{r}"
+    );
+    assert!(!r.contains("ask the user"), "{r}");
 }
 
 #[test]

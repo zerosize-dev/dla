@@ -55,7 +55,7 @@ impl Run {
             .append(true)
             .open(self.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE))
             .unwrap();
-        writeln!(f, "{{\"ts\":\"{ts}\",\"worker\":null}}").unwrap();
+        writeln!(f, "{{\"ts\":\"{ts}\",\"worker\":null,\"none_fits\":true}}").unwrap();
     }
     fn run_dir(&self) -> std::path::PathBuf {
         self.path().join(".dla").join(&self.run_id)

@@ -776,12 +776,17 @@ fn budget_note(state: &RunState, worker: Option<&str>, run_dir: &Path) -> String
         format!(
             "This worker's time is spent ({run_left} of {total} run budget minutes remain): {close}."
         )
-    } else if gate::budget_over_floor(state, worker).is_some()
-        && !dla_core::toolctx::nothing_fits_since(run_dir, worker, state.budget.started_at)
-    {
-        format!(
-            "{left} of {total} budget minutes remain: measure what is open instead of stopping."
-        )
+    } else if gate::budget_over_floor(state, worker).is_some() {
+        if dla_core::toolctx::nothing_fits_since(run_dir, worker, state.budget.started_at) {
+            let next = if asks_first { extend_first } else { close };
+            format!(
+                "{left} of {total} budget minutes remain, but a command was refused with nothing smaller that fits: {next}."
+            )
+        } else {
+            format!(
+                "{left} of {total} budget minutes remain: measure what is open instead of stopping."
+            )
+        }
     } else if asks_first {
         format!(
             "{left} of {total} budget minutes remain, too few to start another measurement: {extend_first}."
@@ -812,15 +817,25 @@ fn block_reason(
         s.push('\n');
         s.push_str(&budget_note(st, worker, run_dir));
     }
+    let tail = format!("\nThe full list: {full}");
+    // The budget line (above) and the pointer to the full list always survive: the item
+    // texts are clipped first, to what is left of the limit.
+    let mut items = String::new();
     for m in missing.iter().take(3) {
-        s.push_str(&format!(
+        items.push_str(&format!(
             "\n- {}: {} Fix: {}",
             m.id,
             m.description.trim_end(),
             m.fix
         ));
     }
-    s.push_str(&format!("\nThe full list: {full}"));
+    let room = MAX_REASON.saturating_sub(s.len() + tail.len());
+    if items.len() > room {
+        items = clip(items, room.saturating_sub(3));
+        items.push_str("...");
+    }
+    s.push_str(&items);
+    s.push_str(&tail);
     clip(s, MAX_REASON)
 }
 
@@ -1073,5 +1088,30 @@ mod tests {
         assert!(editable_rest("r1/harness/h1/driver/dlaharness.java"));
         assert!(!editable_rest("r1/harness/h1/out/x.json"));
         assert!(!editable_rest("r1/harness/hx/driver/a.py"));
+    }
+
+    #[test]
+    fn a_long_item_text_is_clipped_before_the_budget_line_and_the_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        let long = |id: &str| Missing {
+            kind: "finding".into(),
+            id: id.into(),
+            description: "d".repeat(600),
+            fix: "f".repeat(600),
+        };
+        let missing = [long("F1"), long("F2"), long("F3")];
+        let r = block_reason(&missing, None, None, dir.path());
+        assert!(r.len() <= MAX_REASON, "{}", r.len());
+        assert!(r.ends_with("The full list: dla gate check --final"), "{r}");
+        assert!(r.contains("- F1: "), "{r}");
+        assert!(r.contains("..."), "{r}");
+        let short = [Missing {
+            kind: "finding".into(),
+            id: "F1".into(),
+            description: "d.".into(),
+            fix: "f".into(),
+        }];
+        let r = block_reason(&short, None, None, dir.path());
+        assert!(r.contains("- F1: d. Fix: f\nThe full list"), "{r}");
     }
 }

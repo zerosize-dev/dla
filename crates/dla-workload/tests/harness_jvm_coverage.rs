@@ -179,12 +179,16 @@ public final class Main {
 
 const HOLDER: &str = "package zz.shop;\n\nclass Other {}\n";
 
+/// A project class nothing reaches: only a probe names it.
+const NEVER: &str = "package zz.shop;\n\npublic final class Never {\n    static final java.util.List<Object> CACHE = new java.util.ArrayList<>();\n}\n";
+
 /// A compiled `zz.shop` project: `dir/proj/classes/zz/shop/{Main,Other,Main$Helper}.class`.
 fn build_project(dir: &Path, agent_classes: &Path) -> PathBuf {
     let src = dir.join("proj/src/zz/shop");
     fs::create_dir_all(&src).unwrap();
     fs::write(src.join("Main.java"), MAIN).unwrap();
     fs::write(src.join("Holder.java"), HOLDER).unwrap();
+    fs::write(src.join("Never.java"), NEVER).unwrap();
     let classes = dir.join("proj/classes");
     fs::create_dir_all(&classes).unwrap();
     run_ok(
@@ -194,7 +198,8 @@ fn build_project(dir: &Path, agent_classes: &Path) -> PathBuf {
             .arg("-d")
             .arg(&classes)
             .arg(src.join("Main.java"))
-            .arg(src.join("Holder.java")),
+            .arg(src.join("Holder.java"))
+            .arg(src.join("Never.java")),
     );
     classes
 }
@@ -259,7 +264,7 @@ fn coverage_records(dump: &Path) -> Vec<(String, Value)> {
 }
 
 fn run_driver(dir: &Path, project_env: &Path, packages: Option<&str>) -> Vec<(String, Value)> {
-    run_driver_cut(dir, project_env, packages, false)
+    run_driver_cut(dir, project_env, packages, false, None)
 }
 
 /// `cut`: the driver halts after its third checkpoint, as a timeout would end it.
@@ -268,6 +273,7 @@ fn run_driver_cut(
     project_env: &Path,
     packages: Option<&str>,
     cut: bool,
+    probes: Option<&Path>,
 ) -> Vec<(String, Value)> {
     let (agent_classes, jar) = build_agent(dir);
     let classes = build_project(dir, &agent_classes);
@@ -286,7 +292,11 @@ fn run_driver_cut(
         .env("DLA_HARNESS_OUT", &dump)
         .env("DLA_PROJECT", project_env)
         .env_remove("DLA_PROJECT_PACKAGES")
-        .env_remove("ZZ_CUT");
+        .env_remove("ZZ_CUT")
+        .env_remove("DLA_HARNESS_PROBES");
+    if let Some(p) = probes {
+        cmd.env("DLA_HARNESS_PROBES", p);
+    }
     if cut {
         cmd.env("ZZ_CUT", "1");
     }
@@ -373,7 +383,7 @@ fn a_driver_cut_off_before_its_last_checkpoint_has_still_written_the_coverage() 
     }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
-    let recs = run_driver_cut(dir.path(), &root, None, true);
+    let recs = run_driver_cut(dir.path(), &root, None, true, None);
     // Three checkpoints, no last one and (halt) no exit record.
     assert_eq!(recs.len(), 3, "{recs:?}");
     let cov = recs
@@ -381,4 +391,32 @@ fn a_driver_cut_off_before_its_last_checkpoint_has_still_written_the_coverage() 
         .find_map(|(_, r)| r.get("coverage"))
         .expect("an earlier checkpoint carries the section");
     assert_eq!(cov["project"], 2);
+}
+
+#[test]
+fn a_probe_never_loads_a_class_into_the_coverage() {
+    if !have_jdk() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let probes = dir.path().join("probes.json");
+    fs::write(
+        &probes,
+        r#"{"probes":[{"id":"P1","target":{"kind":"jvm_static","class":"zz.shop.Never","field":"CACHE"}}]}"#,
+    )
+    .unwrap();
+    let recs = run_driver_cut(dir.path(), &root, None, false, Some(&probes));
+    let last = &recs[3].1;
+    let items: Vec<&str> = last["coverage"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(!items.contains(&"zz.shop.Never"), "{items:?}");
+    assert_eq!(last["coverage"]["project"], 2);
+    // The probe says the class was not loaded rather than reading it.
+    let text = last["probes"].to_string();
+    assert!(text.contains("class not loaded: zz.shop.Never"), "{text}");
 }
