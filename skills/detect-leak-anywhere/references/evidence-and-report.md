@@ -131,7 +131,10 @@ no command to add one by hand. Its `result` carries:
 defaults to the iteration count) and a purge applied at the last point, then tests each chosen
 column. The column is `--column`, else the one tied to `--finding`, else (a finding with a region
 and no tied column) the region's primary column, else every column that passed the gate in the
-latest trend of the harness plus `os.rss`. For a JVM non-heap finding the primary is
+latest trend of the harness plus `os.rss`; a peak or a size no purge can give back (`os.vm_hwm`,
+`native.peak_bytes`, `os.vm_data`) and the file-backed pages `os.rss_file` are tested and
+reported, and vote only when nothing else can (a growth of file-backed memory shows in `os.rss`,
+which always votes). For a JVM non-heap finding the primary is
 `jvm.nonheap_used`, which must plateau together with every `jvm.nmt.*` category that passed the gate
 in the latest trend and with `jvm.threads` and `os.threads` (when those passed the gate, or when the
 harness has no trend yet); `jvm.classes_loaded`, `jvm.classes_unloaded` and `jvm.jit_seconds` are reported
@@ -145,7 +148,9 @@ and never decide.
   that reaches its high-water mark, end up here. Anything else is inconclusive.
 - **Purge test** (process and off-heap columns, and gauges). `drop` is the value before the purge
   minus the value after; `growth` is the value before the purge minus the value at the end of
-  warm-up. A drop of at least half the growth favors `non-leak` and supports N-ALLOC for a trim,
+  warm-up. A growth that is no more than the column's smallest rise (32 KiB for a byte column,
+  the same minimum the plateau test uses; none for other columns) is `no-growth`: live objects
+  a purge cannot return are not retained memory. A drop of at least half the growth favors `non-leak` and supports N-ALLOC for a trim,
   free-os-memory, trim-native-heap or jemalloc purge, or N-HEADROOM for a gc purge. A drop of at
   most a fifth of the growth favors `leak`. In between is inconclusive. `--purge auto` picks the
   runtime's own purge (JVM `trim-native-heap`, Go `free-os-memory`, Python `trim` and `gc`, Node

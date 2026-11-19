@@ -1,49 +1,50 @@
-# Where the work stands (resumed 2026-11-18)
+# Where the work stands (2026-11-19, evening)
 
 ## Code state
-- `d1fca56` on `main` (and `dev/wonderful-mccarthy-algc5s`) holds the whole round as work in
-  progress; the round's base is `c65e617`, so `git diff c65e617 d1fca56` is the round.
-- The round, from three real runs on Kotlin Spring Boot services:
-  - auto time budget sized from runtimes and candidates, `dla run extend`, the `budget`
-    object in `dla run status`, the report's Time line;
-  - `time_budget` refused while more than max(10 min, 20%) is left, `inconclusive`, fix texts
-    that follow the run state, the Findings line split into leaks and explanations;
-  - JVM exercised-entry coverage, the coverage warning, the harness step, two final-gate items
-    (coverage contradiction, budget left with runnable revisits);
-  - JVM non-heap columns (NMT, threads), warm-up, the alloc-test drift rule;
-  - Kotlin/Gradle build logic out of scope, CodeQL traced build for Kotlin, Sonar, the driver
-    class path;
-  - skill text: keep measuring while time is left, say first what was not tested, contents
-    lists, a recovery table;
-  - Windows verbatim paths; the Windows integration job verified;
-  - 34 new dynamic fixtures, 8 of which failed the last full run (see `bench-baseline.md`).
-- All of it went through build, independent checks and up to two fix rounds per part. The
-  items still open are in `open-items.md` (14: 6 budget/time, 4 coverage steps, 4 JVM non-heap).
-- CI on `d1fca56` is expected to be red in places: the new fixtures that fail, and a flaky JVM
-  end-to-end test (`alloc_test_jvm::a_driver_that_keeps_daemon_threads_is_not_blamed_on_the_agents_drift`).
+- `main` (and `dev/wonderful-mccarthy-algc5s`) is at `9781542` "Version 0.9.0-preview.2", on top of
+  `4498323` (the CI repair: Ubuntu 26.04 with JDK 25, Rust 1.100, macOS linked temp dirs; eight
+  fixtures that do not pass yet moved unchanged to `bench/fixtures-open/`), `63a30f2` (the 14 open
+  items of the budget, coverage-step and JVM non-heap work) and `d1fca56` (that work itself).
+- CI was green on the tree of `4498323` (all 15 jobs, run 44576504271 of snapshot `ca43359` on this
+  branch). The run on `main` at `9781542` was started; check it with
+  `gh run list --repo zerosize-dev/dla --workflow ci.yml --branch main`.
+- Release 0.9.0-preview.2: when CI on `main` is green, dispatch `release.yml` on `main` with
+  `publish=true` (it tags `v0.9.0-preview.2` itself), then check the release's assets. If the tag
+  `v0.9.0-preview.2` exists, this is done.
 
-## In flight (2026-11-19)
-- The 14 open items are closed and on `main` as `63a30f2` (independent checks, an integration
-  check with no problems, full local acceptance with no regression). `open-items.md` is history.
-- CI is red for reasons the Linux work machine did not show; a repair is running. Causes found:
-  - the `ubuntu-latest` runner is now Ubuntu 26.04: its `sleep` is a multi-call binary, so tests
-    that start a copy of `sleep` named `java` get a process that exits at once; its default JDK
-    (25) prints `GC.heap_info` in a layout `parse_heap_info` rejects (a product defect); one
-    Gradle Kotlin plugin test cannot resolve its plugin there;
-  - stable Rust is 1.100: clippy fails on Windows in `crates/dla-probe/src/registry.rs`;
-  - macOS: three `harness_jvm_coverage` tests count 0 project classes (likely `/var` against
-    `/private/var`), one JVM harness exits 1, the warm-up test's relation does not hold, one
-    deadline test is too tight for the runner;
-  - the benchmark jobs: eight new fixtures do not pass yet (to be moved to `bench/fixtures-open/`
-    until they do), and `uv` cannot install CPython 3.14.4 on the runner.
-- The repair's brief is `ci-repair-brief.md`, its orchestration `ci-repair-workflow.js`; it pushes
-  snapshots to this branch (every push runs CI) and reads the result with `ci-wait.sh`. Paths in
-  them point at a scratch directory a recycled container no longer has.
-- The work machine now has Rust 1.100 and JDK 25 at `/usr/lib/jvm/java-25-openjdk-amd64` (the
-  default `java` stays 21); a recycled container needs `rustup update stable` and
+## In flight: the last fix pass (brief `fix-pass-9-brief.md`, items `fix-pass-9-open-items.json`)
+- Two non-leak fixtures fail now and then with "no rule-out on a non-leak fixture"
+  (go-gc-tuned-batch once on the CI runner, python-graph-churn once in a full local run). Cause:
+  a column that passes the first trend by chance votes in the unbound alloc-test and reads
+  plateau + purge retained = inconclusive. Decisions: the purge test uses the plateau test's
+  minimum rise (growth at or below it is `no-growth`); `os.rss_file` joins the columns a purge
+  cannot release in `crates/dla-cli/src/alloc/pick.rs`. `judge::combine` does not change.
+- 14 items the package checks left open: the JVM warm-up test's assertions fail about 1 in 12
+  under load, the JNI test's guard on JDK 25, the flight recorder's `JFR Recording Scheduler`
+  thread, a link case of the JVM coverage agent, VERIFY rows (a stale count, titles, plan names).
+- Known and not handled: under heavy load on the work machine, single failures of
+  `sample::node_inspect_backend_reads_memory_and_active_resources`,
+  `session::tests::a_backend_that_never_works_is_blocked_and_sampling_continues` (dla-sample) and
+  one Go analyzer test of `dla-backends` `real_tools`; none failed in CI.
+- Steps: fix, independent check, snapshot to this branch, CI green on the snapshot, local
+  acceptance, then commit to `main` and push.
+
+## Next, in order
+1. Finish the fix pass above and commit it to `main` (CI green first).
+2. The eight fixtures in `bench/fixtures-open/` (move each back when it passes, and restore the
+   `pair` line of its partner: go-ticker-modern, node-signal-compose-22, python-zstd-options-3145).
+3. The benchmark work in `bench-todo.md`.
+4. The remaining M7 phases (calibration, rightsize suite, model baseline); `1.0.0-rc.1` and
+   `1.0.0`, each only with the owner's go-ahead.
+
+## How to commit and release
+- Author Mykyta Hriaznov <17167893+ngriaznov@users.noreply.github.com>, no trailers, no attribution.
+  Push `main` and `main:dev/wonderful-mccarthy-algc5s`.
+- A version bump touches `Cargo.toml` (workspace version and nine path dependencies), `Cargo.lock`
+  (`cargo update -w --offline`), `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`.
+- The work machine has Rust 1.100 and JDK 25 at `/usr/lib/jvm/java-25-openjdk-amd64` (default
+  `java` 21); a recycled container needs `rustup update stable` and
   `apt-get update && apt-get install openjdk-25-jdk-headless`, then the default set back to 21.
-- When a snapshot's CI run is green: commit the tree (without `.wip/`) to `main`, push `main`
-  and `main:dev/wonderful-mccarthy-algc5s`, then the release steps below.
 
 ## Decisions that the open items must keep
 1. Budget settling in a dispatched run: each worker's first passing gate at sweep or later
@@ -67,26 +68,6 @@
    points at the capture that decides it (threads for thread columns, NMT for `jvm.nmt.*`), never
    `--extra` for a thread leak. The drift line scales with the extra window (2x margin over the
    measured idle drift). Command-mode harnesses get no override; a JUnit harness keeps `--junit`.
-
-## Next, in order
-1. (done) Fix the items in `open-items.md`.
-2. Integration check across all changes: shared files hold every part's change; the texts agree
-   (one instruction between floor and deadline across SKILL.md, stages.md, recovery.md, the
-   Stop hook and the fixes; one harness step in gate fix, Stop hook, report warning and docs).
-3. Full acceptance: `cargo test -j 2 --no-fail-fast --workspace` (all test binaries),
-   `cargo clippy --workspace --all-targets -j 2 -- -D warnings`, the same for
-   `--target x86_64-pc-windows-gnu -p dla-core -p dla-probe -p dla-report`, `cargo fmt --all --check`,
-   `target/debug/dla schema --check`, `python3 bench/runner/test_grade.py`, `skill_text`,
-   `dla-bench static` with archetypes on and off, `dla-bench dynamic --parallel 2` on all fixtures
-   compared with `bench-baseline.md`.
-4. Commit to `main` (author Mykyta Hriaznov <17167893+ngriaznov@users.noreply.github.com>, no
-   trailers, no attribution), push `main` and `main:dev/wonderful-mccarthy-algc5s`; CI green.
-5. Bump to `0.9.0-preview.2` (Cargo.toml and its path dependencies, Cargo.lock,
-   `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`), then dispatch `release.yml` on
-   `main` with `publish=true`.
-6. Later: the 8 failing new fixtures; the benchmark work in `bench-todo.md`; the remaining M7
-   phases (calibration, rightsize suite, model baseline); `1.0.0-rc.1` and `1.0.0`, each only
-   with the owner's go-ahead.
 
 ## Working rules on this machine
 - Cargo with `-j 2`, the shared `target/` only; if `df --output=avail -B1M /` is below 3000, run

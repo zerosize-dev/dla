@@ -23,13 +23,16 @@ pub const SOURCE: &str = "jvm-thread-dump";
 /// Groups kept per kind; the rest are counted in the `groups_dropped` metric.
 const MAX_GROUPS_PER_KIND: usize = 100;
 
-/// Threads the JDK's flight recorder starts and stops by itself (DLA's own capture turns it
-/// on). They come and go between two dumps of one JVM, so counting them would make the
-/// thread total of a short series wander by the recorder's lifetime and not by the program.
-const FLIGHT_RECORDER_THREADS: [&str; 3] = [
+/// Threads the JDK's flight recorder starts and stops by itself (DLA's own capture and
+/// `dla attach` turn it on; a timed recording, `JFR.start ... duration=Ns`, also starts
+/// `JFR Recording Scheduler`, which stays after the recording ends). They come and go between
+/// two dumps of one JVM, so counting them would make the thread total of a short series
+/// wander by the recorder's lifetime and not by the program.
+const FLIGHT_RECORDER_THREADS: [&str; 4] = [
     "JFR Recorder Thread",
     "JFR Shutdown Hook",
     "JFR Periodic Tasks",
+    "JFR Recording Scheduler",
 ];
 
 /// Replaces every run of digits in a thread name with `*`.
@@ -271,7 +274,7 @@ mod tests {
         };
         let plain = parse(&with("")).unwrap();
         let recording = parse(&with(
-            r#",{"name":"JFR Recorder Thread","stack":[]},{"name":"JFR Shutdown Hook","stack":[]},{"name":"JFR Periodic Tasks","stack":[]}"#,
+            r#",{"name":"JFR Recorder Thread","stack":[]},{"name":"JFR Shutdown Hook","stack":[]},{"name":"JFR Periodic Tasks","stack":[]},{"name":"JFR Recording Scheduler","stack":[]}"#,
         ))
         .unwrap();
         assert_eq!(plain.metrics[0].value, 2);

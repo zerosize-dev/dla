@@ -1,0 +1,86 @@
+[
+ {
+  "from": "Ubuntu 26.04 and JDK 25",
+  "severity": "minor",
+  "where": "/home/user/dla/docs/VERIFY.md:513; /home/user/dla/crates/dla-workload/tests/harness_driver_build.rs:27; /home/user/dla/crates/dla-workload/tests/harness_junit.rs:31",
+  "text": "The row and both comments state as fact that the Java/Kotlin 17 pin removes the JVM-target mismatch on JDK 22 to 24. No JDK 22 to 24 is installed here and no runner uses one, so nothing ran. No test fails without the pin on an installed JDK: on JDK 21 the three tests pass with and without it (the macOS runner passed without it), on JDK 25 they skip. The inference is sound (the runner log shows compileJava 25 against compileKotlin 21), but the row should say it was judged by reading."
+ },
+ {
+  "from": "Ubuntu 26.04 and JDK 25",
+  "severity": "minor",
+  "where": "/home/user/dla/crates/dla-cli/tests/harness_capture.rs:387",
+  "text": "a_jni_library_gets_the_shim_and_its_native_stack_resolves_to_the_rust_line fails instead of skipping when the only Kotlin compiler is the cached 2.0.21 one and the JDK is 25. Seen here in two JDK 25 runs: `IllegalArgumentException: 25.0.5.1` from the fixture's build.sh. The guard at lines 387-394 checks only that a compiler exists. It is the same cause the three Kotlin Gradle tests now skip for, so a JDK 25 machine without kotlinc stays red on this test. The Ubuntu runner passed it, and row 512 says so honestly. The new ok_run printed the exception line as intended."
+ },
+ {
+  "from": "Ubuntu 26.04 and JDK 25",
+  "severity": "minor",
+  "where": "/home/user/dla/crates/dla-cli/tests/attach.rs:189; /home/user/dla/crates/dla-sample/tests/attach_tools.rs:62",
+  "text": "Stale comments. attach.rs:189-190 says java_sleeper runs \"the helper test below\", but fake_java_target_sleeps is above it at line 182; the fixer report says this was corrected, and it was not. attach_tools.rs:62 still describes Sleeper::start as \"A `sleep` whose executable is called `java`\"; it is now the test binary."
+ },
+ {
+  "from": "Ubuntu 26.04 and JDK 25",
+  "severity": "minor",
+  "where": "/home/user/dla/crates/dla-sample/src/attach/jcmd.rs:415",
+  "text": "The edited comment line is now 125 columns; it was already over 100 at HEAD. `cargo fmt --check` passes because rustfmt does not wrap comments, but it is the kind of over-long line the lint package was asked to remove."
+ },
+ {
+  "from": "Ubuntu 26.04 and JDK 25",
+  "severity": "minor",
+  "where": "/home/user/dla/docs/VERIFY.md:511",
+  "text": "The row says 8 attach_tools tests failed here with the stand-in but names only the 6 that failed on the runner. The two that failed only here are not named, against the rule to name every test. (With my shell-script stand-in the HEAD helper failed 13 of 14, so the local count depends on the stand-in.)"
+ },
+ {
+  "from": "macOS",
+  "severity": "problem",
+  "where": "crates/dla-cli/tests/alloc_test_jvm.rs:447-476 (the row at docs/VERIFY.md:509 calls these assertions \"true on every build\")",
+  "text": "The new warm-up assertions depend on how much CPU the JVM gets, so they can fail with the warm-up working. The test itself passed in all 8 whole-binary runs here (4 on JDK 21, 4 on JDK 25). I replayed its measurement with the same dla commands (idle driver, 20 checkpoints, DLA_WARM_ROUNDS=0 against the default) and applied the test's assertions to each cold/warm pair. Quiet machine: 12 of 12 pairs pass. Four harness runs at once, which is what the test binary's own threads do on a 4-core runner: 2 of 24 pairs fail. On JDK 21 the cold first step was 36 KB, under the 50 KB line at line 472; on JDK 25 the warm run started at 9.84 MB, below the cold run's 10.51 MB, failing line 448. Four busy loops: 2 of 5 pairs fail on JDK 21 (cold first step 32 KB; first-step ratio 0.77 against the 0.7 line). The warm-up stops after 3 s (harness/jvm/DlaDump.java:179), so a loaded machine warms less and the start value and first step move. Two relations held in all 41 Linux pairs, loaded ones included: the early rise (point 1 to 15) warm under 0.75 of cold (largest 0.69), and the rise from the first reading (point 0 to 15) warm at most 0.58 of cold. The second also holds in both macOS logs (0.66 and 0.74), and two cold runs against each other gave 0.72 to 1.38. Direction: assert one relation on the rise from the first reading (for example warm under 0.85 of cold) in place of the start value and first-step checks, or measure a second time before failing. Then correct the row's \"true on every build\"."
+ },
+ {
+  "from": "macOS",
+  "severity": "minor",
+  "where": "crates/dla-cli/tests/alloc_test_jvm.rs:480",
+  "text": "The 500 KB line switches the early-rise comparison off on Linux with JDK 25, the default JDK of the Ubuntu runner, although the relation holds there. The cold rise was 355 to 472 KB in all 22 JDK 25 runs I measured, so the comparison never ran. Warm was under 0.75 of cold in all 18 JDK 25 pairs (largest 0.69, so the margin is thin). On JDK 21 it is also skipped at times (cold rises of 474 and 499 KB seen), which the row's \"JDK 21 on Linux\" does not say. Only macOS needed the comparison dropped (cold rise about 340 KB, warm the same)."
+ },
+ {
+  "from": "macOS",
+  "severity": "minor",
+  "where": "docs/VERIFY.md:509 and crates/dla-cli/tests/alloc_test_jvm.rs:459-462",
+  "text": "The measured figures are not what a rerun shows. The row says the first-step ratio was \"0.17 to 0.4 with the warm-up and 0.8 to 1.0 without it\". I measured 0.08 to 0.53 in quiet pairs, 0.25 to 0.42 in the whole-binary runs and up to 0.69 with four harness runs at once. Without the warm-up, two cold runs against each other gave 0.54 to 1.85 on JDK 21, so the 0.7 line lies inside that range. The test still fails without the warm-up in 29 of 30 cold-against-cold pairs on each JDK, because the start value and rise checks catch what the first step lets through. The test comment says the warm first step was \"at most a third\" of the cold one; the fixer's own run measured 0.41. The row also gives the JDK 25 cold rise as about 0.35 MB; I saw 0.36 to 0.47 MB."
+ },
+ {
+  "from": "macOS",
+  "severity": "minor",
+  "where": "harness/jvm/DlaDump.java:676-677 (isTestLocation, the whole-location fallback; it runs before the package check at line 642)",
+  "text": "A project spelled through a link is still read as test output when a directory above it is named like one. When the location is under the project only after links are resolved, the whole location is checked for test parts, not only the part below the project. Run by hand with the new agent: real path .../ws/java/test/proj, DLA_PROJECT given by a link to it, classes loaded by the JVM's own loader: coverage project=0, also with DLA_PROJECT_PACKAGES=zz.shop; with the real root it is 2. The same happens for a location spelled through a link named out/test against a real root. The old agent gives the same result, so this is not a regression, and dla harness run with the JVM's own loader does not reach it (both sides are canonical). It is a remaining case of the same defect, and no test covers it. Direction: when the names differ, relativize the written location against the resolved root and the resolved location against the written root, and drop the whole-location check for a location that is under the project by resolution."
+ },
+ {
+  "from": "lints and doc leftovers",
+  "severity": "problem",
+  "where": "/home/user/dla/docs/VERIFY.md:466 (row \"A generated harness must be run or its blocker recorded...\"); /home/user/dla/crates/dla-cli/tests/gate_harness.rs:446 and :631",
+  "text": "The row still says that with the rule made to never apply (`harness_not_run` returning `None`) eleven tests of `gate_harness.rs` fail. Thirteen fail. I ran it on a scratch copy of the workspace: 20 pass unchanged; with an early `return None` in `harness_not_run`, 13 fail and 7 pass. The two the row does not list are `a_workers_nearer_deadline_lifts_the_rule_for_its_findings` (assertion at line 631, `None` against `Some(\"harness-not-run\")`) and `an_attempt_that_ran_or_failed_the_workload_clears_the_rule_and_a_failed_build_keeps_it` (line 446, same values). The row contradicts itself here: one sentence earlier it says the second of these fails when only the failed-build branch returns nothing. The refix dropped \"of the nineteen\", as the brief asked, but the count and the list it kept are stale too. Fix: say thirteen and add the two names, or give the list without a count. The \"Tests in\" list of the same row also omits `a_workers_nearer_deadline_lifts_the_rule_for_its_findings`."
+ },
+ {
+  "from": "lints and doc leftovers",
+  "severity": "minor",
+  "where": "/home/user/dla/docs/VERIFY.md:467",
+  "text": "The new title \"Skill text for the dynamic budget and the entry-point coverage\" does not describe the row. The row is about the skill text for running a generated harness before closing with `no_harness`, `not_exercised` or `time_budget`, and for saying first that nothing was measured. The old \"U2\" was the same item as the two rows above it (their old tags were \"(U2, attempt marker)\" and \"(U2, rule)\"). The budget skill text is row 478, \"Skill text for the extendable budget\". Fix: for example \"Skill text for running a generated harness before closing\"."
+ },
+ {
+  "from": "lints and doc leftovers",
+  "severity": "minor",
+  "where": "/home/user/dla/docs/VERIFY.md:461",
+  "text": "The body says \"see the last U4 row\" twice. The titles no longer carry \"(U4)\", so the reference now points at nothing. Name the row by its title."
+ },
+ {
+  "from": "lints and doc leftovers",
+  "severity": "minor",
+  "where": "/home/user/dla/docs/VERIFY.md:454, :455 (and :447, :514)",
+  "text": "Two plan names are left where the brief asked for none. Row 454's title is itself a plan name, \"B0 minor items\" (row 447 points at it as \"(B0, see below)\"). Row 455's status cell still reads \"brought in line with P3/P4 (E2, P8')\"; the fixer reported this one and left it because the brief named only titles. Row 514 says the planning tags in the titles of this table were removed, which row 454 makes slightly too wide."
+ },
+ {
+  "from": "benchmark jobs",
+  "severity": "minor",
+  "where": "/home/user/dla/crates/dla-parsers/src/jvm/thread_dump.rs:29-33 (list), /home/user/dla/crates/dla-cli/src/summarize/jvm_nonheap.rs:172 (limitation line), /home/user/dla/crates/dla-parsers/src/jvm/thread_dump.rs:263 (test)",
+  "text": "The list misses the flight recorder's fourth thread, `JFR Recording Scheduler`. A timed recording starts it, and `dla attach` starts exactly such a recording (`JFR.start ... duration=Ns`, /home/user/dla/crates/dla-sample/src/attach/jcmd.rs:487-490). I took real dumps on JDK 21.0.12 and JDK 25.0.5 before, during and after `JFR.start name=.. settings=profile duration=4s filename=..`: 7 threads before, 10 after, and the Scheduler thread stays after the recording ends and after `JFR.stop`. With the fixed binary `dla summarize non-heap` on those dumps still reports `metric:threads/total` 7 -> 8 and `group:thread/name:JFR Recording Scheduler` d=1; with the recording started between dump 2 and 3 `dla trend` reads the total as `stair` (rise 1.25). So a thread series that spans DLA's own attach recording still moves by the recorder, which is what the constant's comment and the limitation line say does not happen. It is not the jvm-audit-window failure (the harness capture uses no duration). Suggested: add the name to the list, to the unit test and to the limitation line."
+ }
+]

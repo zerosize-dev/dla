@@ -264,13 +264,23 @@ pub struct Purge {
 }
 
 /// The purge test: `drop` against `growth` (`before` minus the end-of-warm-up value).
-pub fn purge(kind: &str, before: Option<f64>, after: Option<f64>, warm_end: Option<f64>) -> Purge {
+/// `min_rise` is the column's smallest rise that is growth at all (the same minimum the
+/// plateau test uses: [`MIN_BYTE_RISE`] for a byte column, zero otherwise); a growth at or
+/// below it is `NoGrowth`, because a purge cannot give back what the program still holds
+/// (a few KB of live objects) and the plateau test already calls that rise a plateau.
+pub fn purge(
+    kind: &str,
+    before: Option<f64>,
+    after: Option<f64>,
+    warm_end: Option<f64>,
+    min_rise: f64,
+) -> Purge {
     let growth = before.zip(warm_end).map(|(b, w)| b - w);
     let drop = before.zip(after).map(|(b, a)| b - a);
     let verdict = match (growth, drop) {
         (Some(g), Some(d)) => {
             let scale = before.unwrap_or(0.0).abs().max(1.0);
-            if g <= 1e-9 * scale {
+            if g <= (1e-9 * scale).max(min_rise) {
                 PurgeVerdict::NoGrowth
             } else if d >= RELEASED * g {
                 PurgeVerdict::Released
@@ -591,34 +601,98 @@ mod tests {
     #[test]
     fn the_purge_test_compares_the_drop_with_the_growth() {
         assert_eq!(
-            purge("trim", Some(100.0), Some(40.0), Some(20.0)).verdict,
+            purge("trim", Some(100.0), Some(40.0), Some(20.0), 0.0).verdict,
             PurgeVerdict::Released
         );
         assert_eq!(
-            purge("trim", Some(100.0), Some(98.0), Some(20.0)).verdict,
+            purge("trim", Some(100.0), Some(98.0), Some(20.0), 0.0).verdict,
             PurgeVerdict::Retained
         );
         assert_eq!(
-            purge("trim", Some(100.0), Some(75.0), Some(20.0)).verdict,
+            purge("trim", Some(100.0), Some(75.0), Some(20.0), 0.0).verdict,
             PurgeVerdict::Partial
         );
         assert_eq!(
-            purge("trim", Some(10.0), Some(8.0), Some(20.0)).verdict,
+            purge("trim", Some(10.0), Some(8.0), Some(20.0), 0.0).verdict,
             PurgeVerdict::NoGrowth
         );
         assert_eq!(
-            purge("trim", None, Some(8.0), Some(20.0)).verdict,
+            purge("trim", None, Some(8.0), Some(20.0), 0.0).verdict,
             PurgeVerdict::NotRun
         );
     }
 
     #[test]
+    fn a_growth_at_or_below_the_columns_minimum_rise_is_no_growth_for_the_purge() {
+        let min = MIN_BYTE_RISE;
+        let warm = 1.0e6;
+        // The Go shape: a few KB of live objects since the warm-up, the purge gives none back.
+        for rise in [0.5 * min, min - 1.0, min] {
+            let p = purge(
+                "free-os-memory",
+                Some(warm + rise),
+                Some(warm + rise + 100.0),
+                Some(warm),
+                min,
+            );
+            assert_eq!(p.verdict, PurgeVerdict::NoGrowth, "rise {rise}");
+        }
+        // Above the minimum the verdicts are the old ones.
+        let above = min + 1.0;
+        assert_eq!(
+            purge(
+                "free-os-memory",
+                Some(warm + above),
+                Some(warm + above + 100.0),
+                Some(warm),
+                min
+            )
+            .verdict,
+            PurgeVerdict::Retained
+        );
+        assert_eq!(
+            purge(
+                "free-os-memory",
+                Some(warm + above),
+                Some(warm),
+                Some(warm),
+                min
+            )
+            .verdict,
+            PurgeVerdict::Released
+        );
+        assert_eq!(
+            purge(
+                "free-os-memory",
+                Some(warm + above),
+                Some(warm + above * 0.65),
+                Some(warm),
+                min
+            )
+            .verdict,
+            PurgeVerdict::Partial
+        );
+        // A column with no minimum keeps the old rule: any growth counts.
+        assert_eq!(
+            purge(
+                "trim",
+                Some(warm + 17_000.0),
+                Some(warm + 17_100.0),
+                Some(warm),
+                0.0
+            )
+            .verdict,
+            PurgeVerdict::Retained
+        );
+    }
+
+    #[test]
     fn a_released_purge_beats_continuing_growth() {
-        let p = purge("trim", Some(100.0), Some(30.0), Some(20.0));
+        let p = purge("trim", Some(100.0), Some(30.0), Some(20.0), 0.0);
         let (f, s) = combine(PlateauVerdict::Continues, Some(&p), None);
         assert_eq!(f, Favors::NonLeak);
         assert_eq!(s, ["N-ALLOC"]);
-        let g = purge("gc", Some(100.0), Some(30.0), Some(20.0));
+        let g = purge("gc", Some(100.0), Some(30.0), Some(20.0), 0.0);
         assert_eq!(
             combine(PlateauVerdict::Plateau, Some(&g), None).1,
             ["N-HEADROOM", "N-WARM", "N-HWM"]
@@ -627,7 +701,7 @@ mod tests {
 
     #[test]
     fn plateau_and_retained_growth_decide_the_rest() {
-        let kept = purge("trim", Some(100.0), Some(99.0), Some(20.0));
+        let kept = purge("trim", Some(100.0), Some(99.0), Some(20.0), 0.0);
         // A plateau never overrides a purge that kept the growth: they disagree.
         assert_eq!(
             combine(PlateauVerdict::Plateau, Some(&kept), None),

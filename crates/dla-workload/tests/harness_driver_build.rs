@@ -26,8 +26,10 @@ const CACHE_KT: &str = "package leak\n\nobject Cache {\n    val items = mutableL
 const MAIN_KT: &str = "package leak\n\nfun main() {\n    Cache.touch()\n}\n";
 // The Kotlin Gradle plugin of these tests knows no JVM newer than 21, and Gradle defaults both
 // compilers to the JDK it runs on: without a pin, a build on JDK 22 to 24 would stop with
-// "Inconsistent JVM-target compatibility detected for tasks compileJava and compileKotlin".
-// On JDK 25 the Kotlin compiler itself cannot run; those tests skip (`kotlin_compiler_runs`).
+// "Inconsistent JVM-target compatibility detected for tasks compileJava and compileKotlin"
+// (inferred from the log of a JDK 25 runner, which printed it for compileJava 25 against
+// compileKotlin 21; no JDK 22 to 24 was available to run it, and the tests pass with and
+// without the pin on JDK 21). On JDK 25 the Kotlin compiler itself cannot run; those tests skip (`kotlin_compiler_runs`).
 const GRADLE_KTS_BUILD: &str = "plugins { kotlin(\"jvm\") version \"1.9.24\" }\nrepositories { mavenCentral() }\njava {\n    sourceCompatibility = JavaVersion.VERSION_17\n    targetCompatibility = JavaVersion.VERSION_17\n}\ntasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions { jvmTarget = \"17\" } }\n";
 const BUILD_LOGIC_KTS: &str = "import java.util.Properties\n\nval dockerProperties = Properties()\n\nfun loadDockerProps() {}\n";
 const CACHE_JAVA: &str = "package leak;\n\nimport java.util.ArrayList;\nimport java.util.List;\n\npublic final class Cache {\n    static final List<byte[]> ITEMS = new ArrayList<>();\n\n    private Cache() {}\n\n    public static void touch() {\n        ITEMS.add(new byte[1024]);\n    }\n}\n";

@@ -379,17 +379,88 @@ fn jvm_command_mode_dumps_at_exit_of_the_selected_points_only() {
     assert_eq!(pids.len(), 1, "one process per point is kept: {pids:?}");
 }
 
+/// Whether the Kotlin compiler that `jni-order-codec/project/build.sh` will pick (`kotlinc` on
+/// PATH, else the embeddable 2.0.21 compiler of the local Maven cache, run by `java`) compiles a
+/// one-line file on the JDK in use. The compiler 2.0.21 cannot start on JDK 25
+/// (`IllegalArgumentException: 25.0.5.1`), so that machine skips instead of failing. `Err` says
+/// why not, in a line.
+fn kotlin_compiler_runs() -> Result<(), String> {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Probe.kt"), "fun probe(): Int = 1\n").unwrap();
+    let out = dir.path().join("out");
+    let m2 = std::env::var_os("M2")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".m2/repository")))
+        .unwrap_or_default();
+    let k = m2.join("org/jetbrains/kotlin");
+    let mut cmd = if on_path("kotlinc") {
+        let mut c = std::process::Command::new("kotlinc");
+        c.arg("-d").arg(&out).arg("Probe.kt");
+        c
+    } else {
+        let embeddable = k.join("kotlin-compiler-embeddable/2.0.21");
+        if !embeddable.is_dir() {
+            return Err(
+                "no Kotlin compiler (kotlinc, or the embeddable compiler in ~/.m2)".to_owned(),
+            );
+        }
+        let std_jar = k.join("kotlin-stdlib/2.0.21/kotlin-stdlib-2.0.21.jar");
+        let cp: Vec<PathBuf> = [
+            "kotlin-compiler-embeddable/2.0.21/kotlin-compiler-embeddable-2.0.21.jar",
+            "kotlin-stdlib/2.0.21/kotlin-stdlib-2.0.21.jar",
+            "kotlin-script-runtime/2.0.21/kotlin-script-runtime-2.0.21.jar",
+            "kotlin-reflect/1.6.10/kotlin-reflect-1.6.10.jar",
+            "kotlin-daemon-embeddable/2.0.21/kotlin-daemon-embeddable-2.0.21.jar",
+        ]
+        .iter()
+        .map(|p| k.join(p))
+        .chain([
+            m2.join("org/jetbrains/intellij/deps/trove4j/1.0.20200330/trove4j-1.0.20200330.jar"),
+            m2.join("org/jetbrains/annotations/13.0/annotations-13.0.jar"),
+            m2.join("org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.6.4/kotlinx-coroutines-core-jvm-1.6.4.jar"),
+        ])
+        .collect();
+        let cp = std::env::join_paths(cp).unwrap();
+        let mut c = std::process::Command::new("java");
+        c.arg("-cp")
+            .arg(cp)
+            .arg("org.jetbrains.kotlin.cli.jvm.K2JVMCompiler")
+            .arg("-no-stdlib")
+            .arg("-cp")
+            .arg(std_jar)
+            .arg("-d")
+            .arg(&out)
+            .arg("Probe.kt");
+        c
+    };
+    let o = cmd
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("the Kotlin compiler did not start: {e}"))?;
+    if o.status.success() {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(&o.stderr);
+    // The first line that names an exception or an error; the JVM prints a notice line first.
+    let line = text
+        .lines()
+        .find(|l| l.contains("Exception") || l.contains("error:") || l.contains("Error"))
+        .or_else(|| text.lines().next())
+        .unwrap_or("no output")
+        .trim();
+    Err(format!(
+        "the Kotlin compiler that build.sh would use does not run on this JDK ({line})"
+    ))
+}
+
 #[test]
 fn a_jni_library_gets_the_shim_and_its_native_stack_resolves_to_the_rust_line() {
     if skip_without(&["java", "javac", "jar", "cargo", "cc", "addr2line", "sh"]) {
         return;
     }
-    let m2 = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
-        .join(".m2/repository/org/jetbrains/kotlin/kotlin-compiler-embeddable");
-    if !m2.is_dir() && !on_path("kotlinc") {
-        eprintln!("skipping: no Kotlin compiler (kotlinc, or the embeddable compiler in ~/.m2)");
+    if let Err(why) = kotlin_compiler_runs() {
+        eprintln!("skipping: {why}");
         return;
     }
     let (_d, project, run_dir) = prepared("jni-order-codec", "jvm");

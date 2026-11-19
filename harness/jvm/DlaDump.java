@@ -664,7 +664,10 @@ public final class DlaDump {
     /** True for the output directory of a build's tests (`build/classes/kotlin/test`, `target/test-classes`). */
     static boolean isTestLocation(String location, Path project) {
         // Only the part below the project counts: a project may itself live in a directory named `test`.
-        // A location under it by both names (a link inside the project) is a test location by either.
+        // The location and the project each have two spellings, as written and with every link resolved;
+        // the part below the project is taken for each pair of spellings that nests, and the location is
+        // a test location when any of them is. A location under the project by one pair is never judged
+        // by its whole path, so a directory above a project given through a link does not matter.
         List<String> spellings = new ArrayList<>();
         try {
             Path file = locationFile(location);
@@ -673,18 +676,21 @@ public final class DlaDump {
                 String tail = bang < 0 ? "" : location.substring(bang);
                 Path abs = file.toAbsolutePath().normalize();
                 Path root = project.toAbsolutePath().normalize();
-                // Not under the project by this name: the whole location is checked, as before.
-                spellings.add(abs.startsWith(root) ? root.relativize(abs) + tail : location);
                 Path r = real(abs);
                 Path rr = real(root);
-                if (r.startsWith(rr)) {
-                    spellings.add(rr.relativize(r) + tail);
+                for (Path l : List.of(abs, r)) {
+                    for (Path p : List.of(root, rr)) {
+                        if (l.startsWith(p)) {
+                            spellings.add(p.relativize(l) + tail);
+                        }
+                    }
                 }
             }
         } catch (Throwable ignored) {
             // the whole location is checked
         }
         if (spellings.isEmpty()) {
+            // Not under the project by any spelling (or not a path): the whole location, as before.
             spellings.add(location);
         }
         for (String below : spellings) {

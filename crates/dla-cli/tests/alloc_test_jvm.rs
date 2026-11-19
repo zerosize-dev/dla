@@ -421,72 +421,73 @@ fn harness_log_tails(project: &Path) -> String {
     out
 }
 
-#[test]
-fn the_agents_warm_up_takes_most_of_its_own_early_non_heap_growth_off_an_idle_driver() {
-    if skip() {
-        return;
-    }
+/// Both runs of one measurement: the non-heap bytes of an idle driver with the agent's warm-up
+/// switched off (cold) and on (warm), 20 checkpoints each. The class count of both is flat after
+/// the first point: the workload loads nothing.
+fn warm_up_pair() -> (Vec<f64>, Vec<f64>) {
     let (cold, cold_classes) = idle_driver(Some("0"), "20");
     let (warm, warm_classes) = idle_driver(None, "20");
-    // Nothing is loaded by the workload: the class count is flat after the first point.
     for classes in [&cold_classes, &warm_classes] {
         assert!(
             classes.windows(2).skip(1).all(|w| w[1] - w[0] <= 4.0),
             "{classes:?}"
         );
     }
-    // The checkpoints compile and load their own code over the first points; run before
-    // the first one, that no longer lands in the series.
-    let rise = |v: &[f64]| v[15] - v[1];
-    let shown = format!("cold {cold:?} warm {warm:?}");
-    // What holds on every JVM build and OS: the warm-up's code and metadata are already there at
-    // the first reading, so the warm series starts higher, and it never adds early growth of its
-    // own. (Measured on macOS: the cold run rose 336 to 347 KB over those points, the warm run
-    // 327 to 364 KB: there the early rise is the steady drift of about 25 KB per point and a
-    // small first step, and the warm-up has little to take off it.)
-    assert!(
-        warm[0] > cold[0],
-        "the warm run starts at {} bytes, not above the cold run's {}: {shown}",
-        warm[0],
-        cold[0]
-    );
-    assert!(
-        rise(&warm) < rise(&cold) + 1.0e5,
-        "warm rise {} against cold rise {}: {shown}",
-        rise(&warm),
-        rise(&cold)
-    );
-    // What the warm-up does everywhere: the code the first checkpoint would load is loaded before
-    // it, so the first step of the series (point 0 to point 1) is mostly gone. Measured: the warm
-    // first step was at most a third of the cold one on macOS and on Linux with JDK 21 and 25, and
-    // the same size as the cold one when the warm-up is switched off.
-    let first = |v: &[f64]| v[1] - v[0];
-    eprintln!(
-        "first step: cold {} warm {}; early rise: cold {} warm {}",
-        first(&cold),
-        first(&warm),
-        rise(&cold),
-        rise(&warm)
-    );
-    assert!(
-        first(&cold) > 5.0e4 && first(&warm) < 0.7 * first(&cold),
-        "first step: warm {} against cold {}: {shown}",
-        first(&warm),
-        first(&cold)
-    );
-    // Only where the cold run has a rise well above the steady drift of the later points is there
-    // more to take off: there the warm-up takes most of it. Not claimed where the cold rise is the
-    // drift alone (a JVM told it has many processors compiles the checkpoint code early too).
-    if rise(&cold) < 5.0e5 {
-        eprintln!("not compared further: the cold rise is the steady drift alone: {shown}");
+    (cold, warm)
+}
+
+/// Whether the warm-up shows in these pairs, taken together (the values are summed over the
+/// pairs). Two relations, both on the rise of the non-heap bytes over the first checkpoints:
+///
+/// * From the first reading to point 15 the warm run rises by less than 0.85 of the cold run:
+///   the warm-up has loaded and compiled the checkpoints' own code before the first reading, so
+///   the first step and the early growth are mostly gone. Measured here, with four harness runs
+///   at once, on JDK 21 and JDK 25: warm over cold 0.28 to 0.54 in 88 pairs, two cold runs
+///   against each other 0.88 to 1.15 in 64 pairs. Measured elsewhere: up to 0.58 on Linux and
+///   0.66 and 0.74 on the macOS runner, and 0.72 to 1.38 for two cold runs, so the line lies
+///   between the two ranges and the test measures a second pair before it fails.
+/// * On Linux, where the cold run rises by about 0.3 MB or more from point 1 to point 15, the
+///   warm run rises by less than 0.75 of that (measured 0.29 to 0.64). Not claimed on macOS,
+///   where that rise is the steady drift of about 25 KB per point and the warm run rises as much
+///   (cold 336 to 347 KB, warm 327 to 364 KB), nor where it is under 250 KB (a JVM told it has
+///   many processors compiles the checkpoints' code early too).
+fn warm_up_shows(pairs: &[(Vec<f64>, Vec<f64>)]) -> Result<(), String> {
+    let total = |pick: fn(&(Vec<f64>, Vec<f64>)) -> f64| -> f64 { pairs.iter().map(pick).sum() };
+    let (cold, warm) = (total(|p| p.0[15] - p.0[0]), total(|p| p.1[15] - p.1[0]));
+    if warm >= 0.85 * cold {
+        return Err(format!(
+            "the rise from the first reading to point 15 is {warm} bytes with the warm-up and \
+             {cold} without it (sums over {} pair(s)): not under 0.85 of the cold rise",
+            pairs.len()
+        ));
+    }
+    let (cold, warm) = (total(|p| p.0[15] - p.0[1]), total(|p| p.1[15] - p.1[1]));
+    if cfg!(target_os = "linux") && cold >= 2.5e5 * pairs.len() as f64 && warm >= 0.75 * cold {
+        return Err(format!(
+            "the rise from point 1 to point 15 is {warm} bytes with the warm-up and {cold} \
+             without it (sums over {} pair(s)): not under 0.75 of the cold rise",
+            pairs.len()
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn the_agents_warm_up_takes_most_of_its_own_early_non_heap_growth_off_an_idle_driver() {
+    if skip() {
         return;
     }
-    assert!(
-        rise(&warm) < 0.75 * rise(&cold),
-        "warm {} against cold {}: {shown}",
-        rise(&warm),
-        rise(&cold)
-    );
+    // How much CPU the JVM gets moves the readings (the warm-up stops after 3 s), so a pair that
+    // does not show the warm-up is measured again, and the two are judged together.
+    let mut pairs = vec![warm_up_pair()];
+    let Err(first) = warm_up_shows(&pairs) else {
+        return;
+    };
+    eprintln!("the first pair does not show the warm-up, measuring a second: {first}");
+    pairs.push(warm_up_pair());
+    if let Err(both) = warm_up_shows(&pairs) {
+        panic!("{first}; with a second pair: {both}; cold and warm series: {pairs:?}");
+    }
 }
 
 const GARBAGE: &str = r#"package zz;

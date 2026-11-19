@@ -74,7 +74,7 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   first and are not cut by the 4000 cap (their own limit is 20000); up to 4000 of the other
   non-JDK classes of the application and library loaders follow. Test output directories
   (`build/classes/kotlin/test`, `target/test-classes`) and DLA's own drivers (`DlaLoop`,
-  `DlaJUnitLoop`) are not the project's. A class is the project's when its code source is a
+  `DlaJUnitLoop`) are not the project's; only the part below the project decides that, so a project below a directory named `test` still counts, also when it is given through a link. A class is the project's when its code source is a
   file, directory or jar under `DLA_PROJECT`, compared by the names as written and with symlinks
   resolved (the outer jar of `jar:file:/x.jar!/...` and of a
   Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`; a library nested in the jar, Spring

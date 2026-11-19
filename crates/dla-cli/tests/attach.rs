@@ -187,7 +187,7 @@ fn fake_java_target_sleeps() {
 
 /// A process whose executable is called `java`, standing in for a JVM that a fake `jcmd`
 /// answers for. It is this test binary, linked under that name and running only the helper
-/// test below, which sleeps: a copy of the system `sleep` would not do, because on a
+/// test above, which sleeps: a copy of the system `sleep` would not do, because on a
 /// distribution whose coreutils is one multi-call binary (Ubuntu 26.04) a `sleep` started as
 /// `java` is an unknown tool and exits at once.
 fn java_sleeper() -> Guard {

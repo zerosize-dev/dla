@@ -248,7 +248,7 @@ fn test_column(
     let plateau = judge::plateau(main, extra, counter, reference, min_rise);
     let purge = event.map(|e| {
         if counter {
-            return judge::purge(&e.kind, None, None, None);
+            return judge::purge(&e.kind, None, None, None, min_rise);
         }
         let read = |m: &Map<String, Value>| m.get(name).and_then(Value::as_f64);
         judge::purge(
@@ -256,6 +256,7 @@ fn test_column(
             read(&e.before),
             read(&e.after),
             warm_end(series, idx),
+            min_rise,
         )
     });
     let gc = (!counter)
@@ -2542,6 +2543,116 @@ mod tests {
         let mut lim = Vec::new();
         let r = test_column(s, name, true, 6, Some(&ev), &mut lim).unwrap();
         r.purge.unwrap().verdict
+    }
+
+    /// The Go shape of a flat run that happened to pass the first trend: `go.heap_objects`
+    /// 164520 B at the end of the warm-up, 17 KB more at the last point (live objects), a
+    /// purge that gives nothing back (`after` is `after_rise` above the last point).
+    fn go_flat(after_rise: f64) -> SeriesFile {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("go.heap_objects")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            // 164520 at the end of the warm-up (point 1), a slow climb of 17312, then flat
+            let v = 164_520.0 + (17_312.0 * i.saturating_sub(1) as f64 / 12.0).min(17_312.0);
+            p.values = vec![Some(500e6), Some(v)];
+        }
+        let last = s.points.last().unwrap().values[1].unwrap();
+        s.events.push(dla_core::series::SeriesEvent {
+            after_point: 13,
+            kind: "purge:free-os-memory".to_owned(),
+            detail: Some(format!(
+                r#"{{"kind":"free-os-memory","columns":true,"before":{{"go.heap_objects":{last}}},"after":{{"go.heap_objects":{}}}}}"#,
+                last + after_rise
+            )),
+        });
+        s
+    }
+
+    #[test]
+    fn a_flat_go_column_with_a_few_kb_of_live_growth_reads_non_leak_not_retained() {
+        let s = go_flat(200.0);
+        let ev = purge_event(&s).unwrap();
+        let mut lim = Vec::new();
+        let r = test_column(&s, "go.heap_objects", true, 6, Some(&ev), &mut lim).unwrap();
+        assert_eq!(
+            r.plateau.verdict,
+            PlateauVerdict::Plateau,
+            "{:?}",
+            r.plateau
+        );
+        let purge = r.purge.unwrap();
+        assert!(purge.growth.unwrap() > 10_000.0 && purge.growth.unwrap() < 32.0 * 1024.0);
+        assert_eq!(purge.verdict, PurgeVerdict::NoGrowth, "{purge:?}");
+        assert_eq!(r.favors, Favors::NonLeak, "{:?}", r.supports);
+    }
+
+    #[test]
+    fn growing_file_backed_memory_beside_growing_rss_still_reads_leak_and_names_both() {
+        // os.rss_file does not vote, but a leak that maps files grows os.rss too: the verdict
+        // is os.rss's, and the result lists both columns.
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("os.rss_file")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![
+                Some(500e6 + 2e6 * i as f64),
+                Some(10e6 + 300_000.0 * i as f64),
+            ];
+        }
+        let last = s.points.last().unwrap().values.clone();
+        s.events.push(dla_core::series::SeriesEvent {
+            after_point: 13,
+            kind: "purge:trim".to_owned(),
+            detail: Some(format!(
+                r#"{{"kind":"trim","columns":true,"before":{{"os.rss":{},"os.rss_file":{}}},"after":{{"os.rss":{},"os.rss_file":{}}}}}"#,
+                last[0].unwrap(),
+                last[1].unwrap(),
+                last[0].unwrap(),
+                last[1].unwrap() + 1000.0,
+            )),
+        });
+        let passed = |name: &str| ColumnTrend {
+            name: name.to_owned(),
+            unit: Unit::Bytes,
+            kind: ColumnKind::Gauge,
+            region: SeriesRegion::Process,
+            site: None,
+            finding: None,
+            candidates: vec![],
+            n: 12,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 1.0,
+            rise: 1e5,
+            shape: dla_stats::TrendShape::Steady,
+            gate: GateVerdict::Pass,
+            gate_failed: vec![],
+        };
+        let trend = TrendReport {
+            schema_version: TREND_SCHEMA_VERSION,
+            id: "T1".to_owned(),
+            series: "S1".to_owned(),
+            thresholds: GateThresholds::default(),
+            columns: vec![passed("os.rss"), passed("os.rss_file")],
+        };
+        let ledger = Ledger::from_text("").unwrap();
+        let picked = pick::pick(&s, &ledger, None, &[], Some(&trend), "H1").unwrap();
+        assert_eq!(picked.voting, ["os.rss"], "{}", picked.basis);
+        assert!(picked.tested.iter().any(|c| c == "os.rss_file"));
+        let ev = purge_event(&s).unwrap();
+        let mut lim = Vec::new();
+        let results: Vec<ColumnResult> = picked
+            .tested
+            .iter()
+            .filter_map(|n| test_column(&s, n, picked.voting.contains(n), 6, Some(&ev), &mut lim))
+            .collect();
+        let (favors, _, _) = decide(&results, &picked);
+        assert_eq!(favors, Favors::Leak);
+        for name in ["os.rss", "os.rss_file"] {
+            let r = results.iter().find(|r| r.name == name).unwrap();
+            assert_eq!(r.favors, Favors::Leak, "{name}: {:?}", r.plateau);
+        }
     }
 
     #[test]

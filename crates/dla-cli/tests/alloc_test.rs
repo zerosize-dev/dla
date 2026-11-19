@@ -347,6 +347,50 @@ fn the_bounded_twin_favors_non_leak_and_the_candidate_is_refuted() {
     assert_eq!(state_of(&p.run_dir, &format!("{f}.n1")), "confirmed");
 }
 
+/// A flat run whose first trend passed `os.rss_file` by chance (a stair on a noisy flat series):
+/// the unbound alloc-test reports it and does not let it vote. The trend file is edited to
+/// the shape a runner showed (only `os.rss_file` passing); its purge reading is retained on a
+/// real run, because the trim step maps files itself and no purge gives file pages back.
+#[test]
+fn a_flat_file_backed_column_that_passed_the_gate_does_not_decide_a_flat_run() {
+    if skip_without_python() {
+        return;
+    }
+    if !cfg!(target_os = "linux") {
+        eprintln!("skipping: os.rss_file is sampled on Linux only");
+        return;
+    }
+    let p = prepared("python-report-memo-bounded");
+    let trend_file = p.run_dir.join("trend").join("T1.json");
+    let mut trend: Value = serde_json::from_str(&fs::read_to_string(&trend_file).unwrap()).unwrap();
+    for c in trend["columns"].as_array_mut().unwrap() {
+        let file = c["name"] == "os.rss_file";
+        c["gate"] = Value::from(if file { "pass" } else { "fail" });
+        c["gate_failed"] = Value::Array(if file {
+            vec![]
+        } else {
+            vec![Value::from("p >= 0.05")]
+        });
+    }
+    fs::write(&trend_file, serde_json::to_string(&trend).unwrap()).unwrap();
+    let a = ok(&p.project, &["alloc-test", "H1"]);
+    assert_eq!(a["favors"], "non-leak", "{a}");
+    let full: Value =
+        serde_json::from_str(&fs::read_to_string(p.run_dir.join("alloc").join("A1.json")).unwrap())
+            .unwrap();
+    let column = |name: &str| {
+        full["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("no column {name}: {full}"))
+            .clone()
+    };
+    assert_eq!(column("os.rss_file")["voting"], false, "{full}");
+    assert_eq!(column("py.traced")["voting"], true, "{full}");
+}
+
 #[test]
 fn refusals_name_the_missing_item_and_the_fixing_command() {
     let dir = tempfile::tempdir().unwrap();
