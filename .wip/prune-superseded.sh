@@ -1,21 +1,33 @@
 #!/bin/bash
-# Delete test executables in target/debug/deps that have the same name as a newer one
-# (older hash). Never touches .rlib/.rmeta/.so/.d/.o or hard-linked files.
-cd /home/user/dla/target/debug/deps || exit 1
-find . -maxdepth 1 -type f -links 1 -perm -u+x -regextype posix-extended -regex '\./[A-Za-z0-9_]+-[0-9a-f]{16}' -printf '%T@ %s %f\n' \
- | awk '{n=$3; sub(/-[0-9a-f]{16}$/,"",n); print n, $1, $2, $3}' | sort -k1,1 -k2,2nr \
- | awk '{if($1==prev){print $4} prev=$1}' | xargs -r rm -f -v -- | wc -l
-# Old copies of the workspace crates' libraries (libdla_*.rlib/.rmeta): keep the 3 newest per
-# name and anything written in the last hour; a removed copy is rebuilt when needed.
-python3 - <<'PY' >/dev/null
-import os,re,time,collections
-now=time.time(); g=collections.defaultdict(list)
-for f in os.listdir('.'):
-    m=re.match(r'(libdla_[a-z_]+)-([0-9a-f]{16})\.(rlib|rmeta)$', f)
-    if m and os.path.isfile(f) and os.stat(f).st_nlink==1:
-        g[(m.group(1),m.group(3))].append((os.stat(f).st_mtime,f))
-for v in g.values():
-    v.sort(reverse=True)
-    for mt,f in v[3:]:
-        if now-mt>3600: os.remove(f)
+# Frees disk in /home/user/dla/target/debug/build (cargo's per-package layout:
+# build/<package>/<hash>/{fingerprint,out}). Units of one package that produce the same set of
+# output names (hash stripped) are versions of one build unit: keep the 2 newest of each set and
+# anything written in the last hour; a removed unit is rebuilt when needed.
+python3 - <<'PY'
+import os, re, time, shutil, collections
+root = '/home/user/dla/target/debug/build'
+now = time.time(); freed = 0; removed = 0
+if not os.path.isdir(root):
+    print('nothing to prune'); raise SystemExit(0)
+for pkg in os.listdir(root):
+    pdir = os.path.join(root, pkg)
+    if not os.path.isdir(pdir) or not pkg.startswith('dla'):
+        continue
+    groups = collections.defaultdict(list)
+    for h in os.listdir(pdir):
+        d = os.path.join(pdir, h); out = os.path.join(d, 'out')
+        if not re.fullmatch(r'[0-9a-f]{16}', h) or not os.path.isdir(out):
+            continue
+        names = tuple(sorted(re.sub(r'-[0-9a-f]{16}', '', f) for f in os.listdir(out)))
+        if not names:
+            continue
+        mt = max(os.stat(os.path.join(out, f)).st_mtime for f in os.listdir(out))
+        groups[names].append((mt, d))
+    for v in groups.values():
+        v.sort(reverse=True)
+        for mt, d in v[2:]:
+            if now - mt > 3600:
+                size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(d) for f in fs)
+                shutil.rmtree(d); freed += size; removed += 1
+print(f'pruned {removed} units, {freed // (1 << 20)} MB')
 PY
