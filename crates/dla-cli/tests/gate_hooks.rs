@@ -872,6 +872,35 @@ fn the_reason_after_a_refusal_with_most_of_the_budget_left_says_what_happened() 
 }
 
 #[test]
+fn an_unattended_core_after_a_refusal_with_nothing_smaller_that_fits_is_told_to_close() {
+    let p = project("symptom");
+    let path = p.run_dir().join("state.json");
+    let mut st = p.state();
+    let far = (chrono::Utc::now() + chrono::Duration::minutes(50))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    st["budget"]["deadline"] = json!(far);
+    // The consent stays the runner's: the run is unattended and never extends.
+    assert_eq!(st["consent"]["given_by"], json!("runner"));
+    fs::write(&path, st.to_string()).unwrap();
+    let line = format!(
+        "{}\n",
+        json!({"ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+               "worker": null, "none_fits": true})
+    );
+    fs::write(p.run_dir().join("time_refusals.jsonl"), line).unwrap();
+    let out = p.hook(&["stop-hook"], &stop_json(p.path()));
+    let reason = out.json()["reason"].as_str().unwrap().to_owned();
+    assert!(
+        reason.contains(
+            "a command was refused with nothing smaller that fits: close what is open with a reason and a remedy"
+        ),
+        "{reason}"
+    );
+    assert!(!reason.contains("ask the user"), "{reason}");
+    assert!(!reason.contains("too few"), "{reason}");
+}
+
+#[test]
 fn stop_hook_at_a_spent_budget_asks_an_interactive_core_to_extend_first() {
     let p = project("symptom");
     let path = p.run_dir().join("state.json");

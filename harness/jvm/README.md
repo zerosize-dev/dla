@@ -51,8 +51,10 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   leak verdict with a class count that is not rising and an extra rise under the drift line (the
   larger of 1 MiB and 2x the measured drift of every extra checkpoint, so it grows with `--extra`)
   into an inconclusive one with a caution, unless a required column rises (then that column is
-  named instead: a thread count when its plateau reads continues or its net rise over the extra
-  window is more than 2 threads, whatever its plateau reads; a `jvm.nmt.*` category when its
+  named instead: `jvm.threads` when its plateau reads continues or its net rise over the extra
+  window is more than 2 threads, whatever its plateau reads; `os.threads` only when its plateau
+  reads continues (and with `jvm.threads` flat the result stays inconclusive, since the JVM's own
+  GC worker threads move it by a few); a `jvm.nmt.*` category when its
   plateau reads continues; `jvm.nmt.thread` also with a thread count that itself rises) or the
   harness is in command mode (no checkpoint drift). A class count that reads inconclusive with a
   net rise of more than 8 classes is not flat and is named too (a class leak that adds fewer

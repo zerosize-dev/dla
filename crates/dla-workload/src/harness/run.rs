@@ -922,11 +922,30 @@ fn build_once(
         return Err(failed(
             format!("harness {} did not build: {why}", manifest.id),
             format!("{BUILD_MISSING}; see {}", ctx.pointer(&log_rel)),
-            format!(
-                "fix the build in {}, then dla harness run {}",
-                ctx.pointer(&manifest.scratch),
-                manifest.id
-            ),
+            // A hook driver's own hook body is what does not compile (the build log names the
+            // file), not the work copy of the project; a JUnit repeat has no hooks.
+            if manifest.mode == HarnessMode::Driver
+                && !manifest
+                    .tools
+                    .iter()
+                    .any(|t| t == "junit-platform-launcher")
+            {
+                format!(
+                    "fix the build error in {} (the build log names the file), then dla harness run {}",
+                    ctx.pointer(&format!(
+                        "{}/{}/driver",
+                        dla_core::harness::HARNESS_DIR,
+                        manifest.id
+                    )),
+                    manifest.id
+                )
+            } else {
+                format!(
+                    "fix the build in {}, then dla harness run {}",
+                    ctx.pointer(&manifest.scratch),
+                    manifest.id
+                )
+            },
         ));
     }
     fs::write(&marker, fingerprint).map_err(|e| io_refusal(&marker, e))?;
@@ -2373,7 +2392,7 @@ fn write_attempt(
             let reason = if dla_core::harness::hooks_unfilled(&ctx.run_dir, id) {
                 dla_core::harness::ATTEMPT_HOOKS_UNFILLED.to_owned()
             } else if r.code == dla_core::error::codes::TIME_BUDGET {
-                "time_budget".to_owned()
+                dla_core::harness::ATTEMPT_TIME_BUDGET.to_owned()
             } else if r.code == "harness-failed" && r.missing.starts_with(BUILD_MISSING) {
                 crate::BUILD_FAILS.to_owned()
             } else if r.code == "harness-failed" {

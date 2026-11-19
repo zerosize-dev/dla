@@ -147,6 +147,67 @@ pub fn clone_harness(tc: &ToolCtx, src: &HarnessManifest) -> Result<Cloned, Refu
 mod tests {
     use super::*;
 
+    fn manifest(id: &str) -> HarnessManifest {
+        use dla_core::{
+            harness::{AgentKind, CommandSpec, HarnessMode},
+            runtime::Runtime,
+            series::KeyMode,
+        };
+        HarnessManifest {
+            schema_version: 1,
+            id: id.into(),
+            runtime: Runtime::Jvm,
+            mode: HarnessMode::Driver,
+            workload: Some("W1".into()),
+            scratch: format!("harness/{id}/work"),
+            build: None,
+            run: CommandSpec {
+                argv: vec!["true".into()],
+                cwd: ".".into(),
+                env: vec![],
+            },
+            iter_arg: None,
+            warmup: 1,
+            iterations: 8,
+            step: 2,
+            key_modes: vec![KeyMode::Fresh],
+            probes: vec![],
+            agent: AgentKind::DriverJvm,
+            detectors: vec![],
+            tools: vec![],
+            gaps: vec![],
+            timeout_secs: 300,
+            ffi: None,
+            captures: vec![],
+        }
+    }
+
+    #[test]
+    fn the_clone_is_marked_the_moment_it_is_made_with_the_id_it_came_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_dir = dir.path().join(".dla").join("r1");
+        let src = manifest("H1");
+        let from = harness_dir(&run_dir, "H1");
+        fs::create_dir_all(from.join(WORK)).unwrap();
+        fs::create_dir_all(from.join(DRIVER)).unwrap();
+        fs::write(from.join(DRIVER).join("DlaLoop.java"), "class DlaLoop {}").unwrap();
+        src.save(&run_dir).unwrap();
+        let tc = ToolCtx {
+            project: dir.path().to_path_buf(),
+            run_dir: run_dir.clone(),
+            run_id: "r1".into(),
+            source_commit: "abc".into(),
+            data_flag: None,
+            worker: None,
+        };
+        let cloned = clone_harness(&tc, &src).unwrap();
+        assert_eq!(cloned.manifest.id, "H2");
+        let marker = harness_dir(&run_dir, "H2").join(dla_core::harness::CLONE_MARKER);
+        assert_eq!(fs::read_to_string(marker).unwrap(), "H1");
+        // The source is not marked: it is a harness of the run, not an edited copy.
+        assert!(!from.join(dla_core::harness::CLONE_MARKER).exists());
+    }
+
     #[test]
     fn repoint_changes_the_harness_path_and_not_a_longer_id() {
         let t = "/r/harness/H1/work /r/harness/H12/work harness/H1 harness\\H1\\agent";

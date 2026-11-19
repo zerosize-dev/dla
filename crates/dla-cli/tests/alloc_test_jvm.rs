@@ -697,7 +697,7 @@ fn a_driver_that_starts_a_daemon_thread_every_tenth_unit_keeps_the_leak_reading_
         // The limitation (in the full result, not on stdout) names the thread count as rising.
         let limitations = full["limitations"].to_string();
         assert!(
-            limitations.contains("keep rising over the extra window")
+            limitations.contains("rising over the extra window")
                 && (limitations.contains("jvm.threads") || limitations.contains("os.threads")),
             "the thread count is named: {limitations}"
         );

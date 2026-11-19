@@ -222,7 +222,7 @@ pub struct ResolveArgs {
     disposition: Option<ResolveAs>,
     /// not_exercised | inconclusive (measured, undecided) | no_harness | env_unavailable |
     /// build_fails | privilege_declined | tool_missing | time_budget (only when the deadline
-    /// is near, or a command was refused for time)
+    /// is near, or a command was refused for time with nothing smaller that fits)
     #[arg(long, value_parser = parse_enum::<UnresolvedReason>)]
     reason: Option<UnresolvedReason>,
     /// What would resolve it (required with a reason).
@@ -650,8 +650,9 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
 
 /// Refuses `--reason time_budget` while more time is left than the shared floor,
 /// `max(10 min, 20 % of the budget)` (the worker's own deadline in a worker), unless a tool
-/// refused a command for time after `added` (see
-/// [`dla_core::toolctx::time_refused_since`]). The reason says the budget ran out; with an
+/// refused a command with nothing smaller that fits after `added` (see
+/// [`dla_core::toolctx::nothing_fits_since`]); a refusal whose fix names a smaller command does
+/// not count, since the smaller command can still be run. The reason says the budget ran out; with an
 /// hour left it is not true, and the finding is told the reason the evidence supports.
 fn refuse_time_left(
     ctx: &Ctx,
@@ -666,7 +667,7 @@ fn refuse_time_left(
         return Ok(());
     };
     let since = added.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC);
-    if dla_core::toolctx::time_refused_since(&ctx.run_dir, ctx.worker.as_deref(), since) {
+    if dla_core::toolctx::nothing_fits_since(&ctx.run_dir, ctx.worker.as_deref(), since) {
         return Ok(());
     }
     let floor =
@@ -679,9 +680,11 @@ fn refuse_time_left(
     Err(Failure::refuse(
         core_codes::TIME_LEFT,
         format!(
-            "{what} cannot be closed with time_budget: {left} of {total} budget minutes remain (the reason holds below {floor}) and no command {whose} was refused for time since it was added."
+            "{what} cannot be closed with time_budget: {left} of {total} budget minutes remain (the reason holds below {floor}) and no command {whose} was refused with nothing smaller that fits since it was added."
         ),
-        format!("less than {floor} minutes left, or a command refused for time"),
+        format!(
+            "less than {floor} minutes left, or a command refused with nothing smaller that fits"
+        ),
         if static_only {
             format!(
                 "a finding that rests on static evidence was never exercised: dla ledger resolve {what} --as suspected_static_only --reason not_exercised --remedy \"<text>\" --evidence <static-hit or census-holder id>; or measure it: the run has time"
@@ -730,7 +733,15 @@ fn refuse_unrun_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> 
             u.minutes_left,
             u.minutes_total
         ),
-        format!("{} run, or its blocker recorded on intake.workload", u.id),
+        format!(
+            "{} {}, or its blocker recorded on intake.workload",
+            u.id,
+            if u.build_failed {
+                "built and run"
+            } else {
+                "run"
+            }
+        ),
         u.fix(&view.state.run_id),
     ))
 }

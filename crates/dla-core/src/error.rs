@@ -126,7 +126,7 @@ pub mod codes {
     /// `inconclusive` was given for a finding with no measurement tied to its family.
     pub const MEASUREMENT_REQUIRED: &str = "measurement-required";
     /// `time_budget` was given while more than the shared floor of the budget is left and
-    /// no command was refused for time.
+    /// no command was refused with nothing smaller that fits.
     pub const TIME_LEFT: &str = "time-left";
 }
 

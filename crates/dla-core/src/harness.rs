@@ -44,6 +44,11 @@ pub const ATTEMPT_HOOKS_UNFILLED: &str = "hooks_unfilled";
 /// The `reason` of an attempt that SIGINT or SIGTERM ended. Like [`ATTEMPT_HOOKS_UNFILLED`]
 /// it does not count as a run of the harness: nothing was measured.
 pub const ATTEMPT_INTERRUPTED: &str = "interrupted";
+/// The `reason` of an attempt `dla harness run` refused for time (`time-budget`: the deadline
+/// passed, or the plan would end after it). Nothing was measured and nothing was tried, so it
+/// is no more a run of the harness than the two above, whether or not the budget was extended
+/// afterwards.
+pub const ATTEMPT_TIME_BUDGET: &str = "time_budget";
 /// Version written in `dla_harness` by agents.
 pub const DUMP_VERSION: u32 = 1;
 
@@ -407,7 +412,7 @@ pub struct HarnessAttempt {
     pub finished_at: String,
     /// How it ended.
     pub outcome: AttemptOutcome,
-    /// Why it failed: `no_harness`, `build_fails`, `time_budget`, [`ATTEMPT_HOOKS_UNFILLED`],
+    /// Why it failed: `no_harness`, `build_fails`, [`ATTEMPT_TIME_BUDGET`], [`ATTEMPT_HOOKS_UNFILLED`],
     /// `interrupted` (SIGINT or SIGTERM) or the refusal code. Absent when it ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

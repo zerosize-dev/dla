@@ -22,6 +22,7 @@ Coverage: jvm 750 iterations, 0 of 225 entry points exercised, 37 project classe
 
 ## Open items
 
+- **jvm**: jvm: 750 iteration(s) ran and 0 of 225 entry points were exercised, 37 project classes loaded: the driver did not call the code under test, so the run says nothing about the entry points. Fix: `dla harness gen --lang jvm --driver, fill the DLA-HOOK bodies of the harness it prints so the driver calls the entry points, then dla harness run <the harness it prints>. If the driver cannot reach them, record why: dla ledger resolve intake.workload --status unresolved --reason not_exercised --remedy "<why no entry point can be called>"`
 - **intake.target**: checklist item intake.target is unanswered: Is the target a repository, a local process, an artifact, or only a symptom? Fix: `dla ledger resolve intake.target --status answered --evidence E1`
 - **intake.scope**: checklist item intake.scope is unanswered: Does the investigation cover the whole repository, one module or one service, and what is excluded? Fix: `dla ledger resolve intake.scope --status answered --evidence E1`
 - **intake.symptom**: checklist item intake.symptom is unanswered: What growth was observed, where, and over what time? Fix: `dla ledger resolve intake.symptom --status answered --evidence E1`
@@ -34,7 +35,6 @@ Coverage: jvm 750 iterations, 0 of 225 entry points exercised, 37 project classe
 - **20260101-000000-abcd**: no probe evidence is recorded. Fix: `dla probe`
 - **jvm/census**: no census has run for runtime jvm. Fix: `dla census --lang jvm`
 - **jvm/sweep**: no sweep has run for runtime jvm. Fix: `dla sweep --lang jvm`
-- **jvm**: jvm: 750 iteration(s) ran and 0 of 225 entry points were exercised, 37 project classes loaded: the driver did not call the code under test, so the run says nothing about the entry points. Fix: `dla harness gen --lang jvm --driver, fill the DLA-HOOK bodies of the harness it prints so the driver calls the entry points, then dla harness run <the harness it prints>. If the driver cannot reach them, record why: dla ledger resolve intake.workload --status unresolved --reason not_exercised --remedy "<why no entry point can be called>"`
 
 ## Findings
 

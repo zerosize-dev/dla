@@ -101,13 +101,17 @@ impl Run {
     }
     /// What a tool leaves when it refuses a command for time (`worker` null for the core).
     fn note_time_refusal(&self, worker: Option<&str>) {
+        self.note_time_refusal_with(worker, true);
+    }
+    /// The same, saying whether nothing smaller than the refused command would have fit.
+    fn note_time_refusal_with(&self, worker: Option<&str>, none_fits: bool) {
         use std::io::Write;
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE))
             .unwrap();
-        let line = json!({"ts": rfc3339_in(60), "worker": worker, "none_fits": true});
+        let line = json!({"ts": rfc3339_in(60), "worker": worker, "none_fits": none_fits});
         writeln!(f, "{line}").unwrap();
     }
     fn workload_blocker(&self, reason: &str) {
@@ -1258,4 +1262,171 @@ fn the_refusal_of_a_close_for_lack_of_a_harness_gives_the_same_step_as_the_warni
             && !text.contains("--driver"),
         "{e}"
     );
+}
+
+#[test]
+fn a_harness_refused_for_time_is_no_try_after_the_budget_was_extended() {
+    // `dla harness run H1` refused at a spent deadline wrote a `time_budget` attempt; the
+    // user then extended the budget. Nothing was measured: H1 is still the step, and the
+    // closes that say nothing ran are refused with `dla harness run H1`.
+    let r = scene();
+    coverage(&r, 225, 0, None, 0);
+    harness_manifest(&r, "H1");
+    generation_evidence(&r, "H1");
+    failed_attempt(&r, "H1", "time_budget");
+    let e = r
+        .close("F1", "not_exercised")
+        .expect("the close is refused");
+    assert_eq!(e["code"], "harness-not-run", "{e}");
+    let text = e.to_string();
+    assert!(
+        text.contains("dla harness run H1") && text.contains("was refused for time"),
+        "{text}"
+    );
+    // The final gate and the report name the same step, not a new driver.
+    let (_, _, _, fix) = r
+        .missing()
+        .into_iter()
+        .find(|m| m.1 == "F1")
+        .expect("F1 is listed");
+    assert!(fix.contains("dla harness run H1"), "{fix}");
+    // Under the floor the rule is off, as for any unrun harness.
+    r.set_state(|st| st["budget"]["deadline"] = json!(rfc3339_in(60)));
+    assert!(r.close("F1", "not_exercised").is_none());
+    let w = warning(&r);
+    assert!(w.contains("dla harness run H1"), "{w}");
+}
+
+#[test]
+fn a_harness_that_never_built_refuses_the_closes_and_names_the_build_step() {
+    let r = scene();
+    coverage(&r, 225, 0, None, 0);
+    harness_manifest(&r, "H1");
+    generation_evidence(&r, "H1");
+    failed_attempt(&r, "H1", "build_fails");
+    for reason in ["not_exercised", "no_harness", "time_budget"] {
+        let e = r.close("F1", reason).expect("the close is refused");
+        let text = e.to_string();
+        assert!(
+            text.contains("did not build")
+                && text.contains("fix the build error that `dla harness run H1` prints")
+                && text.contains(
+                    "--reason <env_unavailable|tool_missing|build_fails|privilege_declined>"
+                ),
+            "{reason}: {text}"
+        );
+    }
+    // The open finding's fix in the final gate is that step, not a close.
+    let (_, _, _, fix) = r
+        .missing()
+        .into_iter()
+        .find(|m| m.1 == "F1")
+        .expect("F1 is listed");
+    assert!(
+        fix.contains("fix the build error") && !fix.contains("dla ledger resolve F1"),
+        "{fix}"
+    );
+    // The escapes: the blocker reason on the finding, or the blocker on the workload item.
+    let (code, v) = r.run(&[
+        "ledger",
+        "resolve",
+        "F1",
+        "--as",
+        "unresolved",
+        "--reason",
+        "build_fails",
+        "--remedy",
+        "the build needs a private registry",
+    ]);
+    assert_eq!(code, 0, "{v}");
+    // A harness of the runtime that ran lifts the rule: the build failure is no longer all there is.
+    let c = scene();
+    coverage(&c, 225, 0, Some(750), 37);
+    harness_manifest(&c, "H1");
+    generation_evidence(&c, "H1");
+    failed_attempt(&c, "H1", "build_fails");
+    harness_manifest_in(&c, "H2", HarnessMode::Command);
+    generation_evidence(&c, "H2");
+    ran_attempt(&c, "H2");
+    assert!(c.close("F1", "not_exercised").is_none());
+    // The blocker recorded on the workload item clears it.
+    let d = scene();
+    coverage(&d, 225, 0, None, 0);
+    harness_manifest(&d, "H1");
+    generation_evidence(&d, "H1");
+    failed_attempt(&d, "H1", "build_fails");
+    d.workload_blocker("build_fails");
+    assert!(d.close("F1", "not_exercised").is_none());
+}
+
+#[test]
+fn a_refusal_that_names_a_smaller_command_does_not_make_time_budget_honest() {
+    let r = scene();
+    // 38 of 60 minutes left, a command refused with a smaller one on offer: it can still run.
+    r.set_state(|st| st["budget"]["deadline"] = json!(rfc3339_in(38 * 60)));
+    r.note_time_refusal_with(None, false);
+    let e = r.close("F1", "time_budget").expect("refused");
+    assert_eq!(e["code"], "time-left", "{e}");
+    assert!(e.to_string().contains("nothing smaller that fits"), "{e}");
+    // The same refusal with nothing smaller that fits makes the reason honest.
+    r.note_time_refusal_with(None, true);
+    assert!(r.close("F1", "time_budget").is_none());
+    // And the final gate lists a close made after only a refusal that named a smaller command.
+    let c = scene();
+    c.set_state(|st| st["budget"]["deadline"] = json!(rfc3339_in(5 * 60)));
+    assert!(c.close("F1", "time_budget").is_none());
+    c.set_state(|st| st["budget"]["deadline"] = json!(rfc3339_in(50 * 60)));
+    c.note_time_refusal_with(None, false);
+    assert_eq!(c.items("budget_left_unrevisited").len(), 1);
+}
+
+#[test]
+fn an_open_finding_names_the_harness_step_where_its_close_would_be_refused() {
+    // No harness, entry points discovered, no workload to repeat: the step is a driver.
+    let r = scene();
+    coverage(&r, 225, 0, None, 0);
+    let fix_of = |r: &Run| {
+        r.missing()
+            .into_iter()
+            .find(|m| m.1 == "F1")
+            .map(|m| m.3)
+            .expect("F1 is listed")
+    };
+    let fix = fix_of(&r);
+    assert!(
+        fix.contains("dla harness gen --lang jvm --driver")
+            && !fix.contains("dla ledger resolve F1"),
+        "{fix}"
+    );
+    // A generated harness that never ran: run it.
+    harness_manifest(&r, "H1");
+    generation_evidence(&r, "H1");
+    let fix = fix_of(&r);
+    assert!(fix.contains("dla harness run H1"), "{fix}");
+    // `dla run status` carries the same fix.
+    let st = r.ok(&["run", "status"]);
+    assert!(
+        st["blocking"][0]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("dla harness run H1"),
+        "{st}"
+    );
+    // Once a harness ran the close is accepted and the fix is the close.
+    ran_attempt(&r, "H1");
+    let fix = fix_of(&r);
+    assert!(fix.contains("dla ledger resolve F1"), "{fix}");
+}
+
+#[test]
+fn the_coverage_contradiction_is_listed_before_the_open_findings() {
+    let r = scene();
+    coverage(&r, 225, 0, Some(750), 37);
+    harness_manifest(&r, "H1");
+    ran_attempt(&r, "H1");
+    let missing = r.missing();
+    let pos = |kind: &str| missing.iter().position(|m| m.0 == kind);
+    let (c, f) = (pos("coverage_contradiction"), pos("finding"));
+    assert!(c.is_some() && f.is_some(), "{missing:?}");
+    assert!(c < f, "{missing:?}");
 }

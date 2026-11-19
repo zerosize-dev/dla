@@ -65,11 +65,12 @@ pub const DEADLINE_FIX_CLOSE: &str = "dla ledger resolve <F> --as unresolved --r
 /// true when nothing smaller would have fit).
 pub const TIME_REFUSALS_FILE: &str = "time_refusals.jsonl";
 
-/// True when a tool refused a command for time after `since`: in the core (`worker` None),
-/// only the core's own refusals (a worker's never count); in a worker (`worker` is its
-/// name), that worker's own. The reason `time_budget` is honest for a finding added before
-/// such a refusal even when time is left, because the measurement it needed was refused for lack of it. A refusal made
-/// before the latest `dla run extend` no longer counts: the extension gave the time back.
+/// True when a tool refused a command for time after `since`, whether or not a smaller
+/// command was on offer: in the core (`worker` None), only the core's own refusals (a worker's
+/// never count); in a worker (`worker` is its name), that worker's own. A refusal made before
+/// the latest `dla run extend` no longer counts: the extension gave the time back. The ledger
+/// and the final gate use [`nothing_fits_since`] instead: a refusal that names a smaller
+/// command leaves the measurement possible, so it does not justify `time_budget`.
 pub fn time_refused_since(
     run_dir: &Path,
     worker: Option<&str>,

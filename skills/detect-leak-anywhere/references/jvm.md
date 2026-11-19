@@ -103,11 +103,16 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `--junit` for a JUnit repeat), decides. A command-mode harness (a fresh JVM per point) has no
   checkpoint drift and gets no such override. A required column rises by its kind (the `jvm.nmt.*`
   categories and thread counts are required when they passed the gate in the latest trend, and the
-  thread counts also when the harness has no trend yet). A thread count rises when its plateau
+  thread counts also when the harness has no trend yet). `jvm.threads` rises when its plateau
   reads continues or its net rise over the extra window is more than 2 threads, whatever its
   plateau reads (threads added in bursts near the end of a window read plateau; the JVM starts and
   stops compiler threads by itself, and drivers that start no thread, in 59 runs many of them under
-  load, rose 0 on `jvm.threads` and at most 1 on `os.threads`; the slow leaks seen rose 6 and 10).
+  load, rose 0 on `jvm.threads`; the slow leaks seen rose 6 and 10). `os.threads` rises only when
+  its plateau reads continues: HotSpot's own GC worker threads moved it by 4 on a driver that
+  starts no thread (the JVM told 32 processors), so a net rise of a few threads there is no
+  growth. When `os.threads` rises alone, with `jvm.threads` and the NMT thread category not
+  rising, the limitation names it and `next` gives the thread capture, but the result is
+  inconclusive.
   A `jvm.nmt.*` byte category rises only when its plateau reads continues, as bytes jitter, and
   `jvm.nmt.thread` also rises with a thread count that itself rises (not with one that is not a
   required column or whose net rise is within the jitter). Every rising column is collected first,
@@ -117,7 +122,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   over the extra window cannot be told from that by the count, so it reads inconclusive, never a
   leak). When a thread count or an NMT category rises, that is not the
   agent's drift and is never blamed on it: the limitation names every column that rises (the class
-  count too when it is not flat), a rising thread count keeps the leak verdict, a rising NMT
+  count too when it is not flat), a rising `jvm.threads` keeps the leak verdict, a rising NMT
   category makes it inconclusive (unless the class count is not flat too: a class leak keeps its
   verdict, and the ledger commands stay beside the capture), and `next` points at the capture that decides it (`dla harness
   run H1 --capture nonheap`: `threads.json` for threads, `nmt-diff.txt` for the category), never at
@@ -129,8 +134,9 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `jvm.classes_loaded` column is read with the class count unknown: if nothing rises it gets the
   agent-drift reading with a caution that the class count was not recorded or could not be judged.
   Do not call a small slope "the service's JIT" without the plateau test. When a required
-  `jvm.nmt.*` category or thread count rises while the pools plateau, the pools' plateau is held
-  back as inconclusive and the limitation names the column. A sample (`dla sample --counters jcmd`) shows the shape live but
+  `jvm.nmt.*` category or thread count rises (for `jvm.threads` also a plateau with a net rise of
+  more than 2 threads) while the pools plateau, the pools' plateau is held back as inconclusive
+  and the limitation names the column. A sample (`dla sample --counters jcmd`) shows the shape live but
   cannot refute: `jvm.classes_loaded` there is the classes loaded now (the cumulative counter minus
   the unloads), as in the harness.
 - Purges: `trim-native-heap` (DiagnosticCommand) and `gc`.

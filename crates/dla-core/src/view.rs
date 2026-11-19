@@ -303,6 +303,9 @@ fn incomplete_fix(view: &RunView) -> String {
 pub fn status(view: &RunView) -> ReportStatus {
     let mut blocking = Vec::new();
     let mut counts = StatusCounts::default();
+    // The harness step per runtime, computed once for the pass (see `open_finding_step`).
+    let mut step_cache = std::collections::BTreeMap::new();
+    let mut only_runtime = None;
 
     for f in view.ledger.findings() {
         // A duplicate merged into another worker's finding is counted there.
@@ -317,15 +320,19 @@ pub fn status(view: &RunView) -> ReportStatus {
         if f.state.is_dispositioned() {
             counts.dispositioned += 1;
         } else {
+            let reason = view.ledger.supported_reason(&f.id);
+            // Where the ledger would refuse that close for an unrun, unbuilt or missing
+            // harness, the fix is the step that clears the rule.
+            let fix =
+                crate::gate::open_finding_step(view, f, reason, &mut step_cache, &mut only_runtime)
+                    .unwrap_or_else(|| {
+                        format!("dla ledger resolve {} {}", f.id, resolve_args(reason))
+                    });
             blocking.push(BlockingItem {
                 kind: BlockingKind::Finding,
                 id: f.id.to_string(),
                 description: format!("finding {} is {} and has no disposition", f.id, f.state),
-                fix: format!(
-                    "dla ledger resolve {} {}",
-                    f.id,
-                    resolve_args(view.ledger.supported_reason(&f.id))
-                ),
+                fix,
             });
         }
     }

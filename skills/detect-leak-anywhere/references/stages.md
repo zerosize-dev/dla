@@ -444,9 +444,10 @@ measurement tied to the finding: a discriminator or intervention for it, a growt
 non-heap or capture record it already cites, else it refuses with `measurement-required`; a
 harness run alone does not count); `no_harness`, `env_unavailable`, `build_fails`,
 `privilege_declined`, `tool_missing` (what stopped the run); `time_budget` only when the deadline
-is near or a command was refused for time (`dla ledger resolve` refuses it with `time-left` while
-more than the larger of 10 minutes and 20% of the budget remains, unless a tool refused a command
-for time after the finding was added). A non-heap residual is decided before any close: add a
+is near or a command was refused for time with nothing smaller that fits (`dla ledger resolve`
+refuses it with `time-left` while more than the larger of 10 minutes and 20% of the budget remains,
+unless a command of the core was refused with nothing smaller that fits after the finding was added;
+a worker's refusal counts only for that worker). A non-heap residual is decided before any close: add a
 finding for it (`--origin residual --region non-heap`), an `N-WARM` sibling, then
 `dla alloc-test H --finding F`; the plateau of the extra window tells warm-up from a leak. With workers: `dla ledger merge` first, then
 verification, then this stage. A harness that was generated, never run (a run you stopped, or one that failed on unfilled DLA-HOOK bodies, does not count) and has findings closed without exercise is a missing item of kind `harness_not_run` while budget remains. After `dla ledger merge` the core judges every worker's harness against the run's deadline only, so a worker that stopped at its own, nearer deadline can leave its harness listed: run it from the core or record its blocker on `intake.workload`. `dla run status` shows the same open items in short.
@@ -474,8 +475,8 @@ at or under the floor), `budget_left_unrevisited` only a blocker reason (`env_un
   whatever failed to build around it, older or newer, driver or command harness; the `build_fails`
   blocker is not offered beside it. The edited clone `dla intervene` makes is never that driver: it is marked when it is made, even if the intervention stops before it records anything.
 - `budget_left_unrevisited` (id: a finding, or the runtime): more than the larger of 10 minutes and
-  20% of the budget is left and either findings are closed `time_budget` with no command refused for
-  time since they were added (put one back under test with `dla ledger test F --evidence E`), or findings
+  20% of the budget is left and either findings are closed `time_budget` with no command of the core
+  refused with nothing smaller that fits since they were added (put one back under test with `dla ledger test F --evidence E`), or findings
   are closed without exercise in a runtime with discovered entry points and no harness
   (`dla harness gen --lang <rt>`, or its `--driver` step when gen would refuse for lack of a workload; entry points that discovery marked `no_harness` count, since a
   harness is what reaches them). A blocker reason on `intake.workload` clears both.

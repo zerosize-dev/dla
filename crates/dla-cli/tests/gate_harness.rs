@@ -410,15 +410,19 @@ fn no_finding_closed_means_no_missing_item() {
 }
 
 #[test]
-fn an_attempt_of_any_outcome_clears_the_rule() {
-    for outcome in [AttemptOutcome::Ran, AttemptOutcome::Failed] {
+fn an_attempt_that_ran_or_failed_the_workload_clears_the_rule_and_a_failed_build_keeps_it() {
+    // A run, or a failure of the workload itself, is a try.
+    for (outcome, reason) in [
+        (AttemptOutcome::Ran, None),
+        (AttemptOutcome::Failed, Some("no_harness")),
+    ] {
         let r = scene(Runtime::Jvm, None);
         HarnessAttempt {
             harness: "H1".into(),
             started_at: HarnessAttempt::now(),
             finished_at: HarnessAttempt::now(),
             outcome,
-            reason: (outcome == AttemptOutcome::Failed).then(|| "build_fails".to_owned()),
+            reason: reason.map(str::to_owned),
             message: None,
         }
         .save(&r.run_dir())
@@ -426,6 +430,23 @@ fn an_attempt_of_any_outcome_clears_the_rule() {
         assert_eq!(r.close(None, "no_harness"), None, "{outcome:?}");
         assert!(r.not_run(None).is_empty(), "{outcome:?}");
     }
+    // A harness that never built and nothing else ran: the build is the step, so the close is
+    // refused while the budget has room (`build_fails` on the workload item is the way out).
+    let r = scene(Runtime::Jvm, None);
+    HarnessAttempt {
+        harness: "H1".into(),
+        started_at: HarnessAttempt::now(),
+        finished_at: HarnessAttempt::now(),
+        outcome: AttemptOutcome::Failed,
+        reason: Some("build_fails".to_owned()),
+        message: None,
+    }
+    .save(&r.run_dir())
+    .unwrap();
+    assert_eq!(
+        r.close(None, "no_harness").as_deref(),
+        Some("harness-not-run")
+    );
 }
 
 #[test]

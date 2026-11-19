@@ -133,7 +133,7 @@ the worker's or the run's deadline; the refusal's fix names a smaller plan (`--i
   at the first passing gate check from `sweep` on (in a dispatched run by each worker's first one, raising
   it only), so a run that stalls before the sweep still has the 60 minutes it started with.
 - Record: `dla ledger resolve <F> --as unresolved --reason time_budget --remedy "<what to run next
-  and how long it needs>"` for each unresolved item that the budget cut off (the ledger refuses `time_budget` while more than the larger of 10 minutes and 20% of the budget remains, unless a command was refused for time after the finding was added; a finding that was measured and left undecided is `inconclusive`, one nothing reached `not_exercised`) (a candidate with only static evidence may be
+  and how long it needs>"` for each unresolved item that the budget cut off (the ledger refuses `time_budget` while more than the larger of 10 minutes and 20% of the budget remains, unless a command of the core (of the worker, in a worker) was refused with nothing smaller that fits after the finding was added; a finding that was measured and left undecided is `inconclusive`, one nothing reached `not_exercised`) (a candidate with only static evidence may be
   `suspected_static_only` with the same reason), then `dla ledger done` in a worker, or
   `dla ledger merge`, `dla report` in the core. Report the run as INCOMPLETE with the list. The
   report's `Time:` line says how many findings were closed for lack of time and how many minutes

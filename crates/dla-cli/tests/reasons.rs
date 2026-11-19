@@ -110,7 +110,7 @@ impl Run {
             .append(true)
             .open(self.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE))
             .unwrap();
-        let line = json!({"ts": rfc3339_in(1), "worker": worker});
+        let line = json!({"ts": rfc3339_in(1), "worker": worker, "none_fits": true});
         writeln!(f, "{line}").unwrap();
     }
 }
@@ -268,7 +268,10 @@ fn a_refusal_from_before_the_finding_does_not_count() {
     let path = r.run_dir().join(dla_core::toolctx::TIME_REFUSALS_FILE);
     fs::write(
         &path,
-        format!("{}\n", json!({"ts": rfc3339_in(-600), "worker": null})),
+        format!(
+            "{}\n",
+            json!({"ts": rfc3339_in(-600), "worker": null, "none_fits": true})
+        ),
     )
     .unwrap();
     let mut l = Ledger::load_for(&r.run_dir(), None).unwrap();
