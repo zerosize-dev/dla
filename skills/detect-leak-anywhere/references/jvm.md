@@ -45,7 +45,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   is not running, also in `@BeforeAll`) show as `aborted=n`, `@Disabled` or conditionally disabled
   ones as `skipped=n`, and a class that fails before its tests (`@BeforeAll` throwing
   `ConnectException`, Testcontainers without Docker) is named by the cause line and `first_failure=`.
-  Record `env_unavailable` for the service cases: the code under test never ran. A Kotlin backtick test is selected with its spaces: `--tests 'pkg.GetTest#publishes to the broker'`.
+  Record `env_unavailable` for the service cases: the code under test never ran. A Kotlin
+  backtick test is selected with its spaces: `--tests 'pkg.GetTest#publishes to the broker'`.
   The run measures `java` from `PATH`, not the Gradle `test` task's JVM: `jvmArgs`, `systemProperty`
   and `environment` of the task are not applied (set the profile or property the test needs before
   `dla harness run`). Select a `@ParameterizedTest` as `pkg.Class#method(java.lang.String,int)`.
@@ -68,9 +69,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   counts when its file's class is loaded: by path (Java layout), by the class file's `SourceFile`
   (a Kotlin file holding a class of another name, or a package that does not mirror its
   directory) or, for a top-level function, when the file's facade class (`UtilKt`, or its
-  `@file:JvmName`) is loaded. A driver and a JUnit repeat write the list in their first, second, fourth... and last
-  checkpoint, so a repeat cut off by its timeout or the run deadline still reports the classes it
-  loaded. A loaded class is not a called method: the count says which files ran, not which
+  `@file:JvmName`) is loaded. A driver and a JUnit repeat write the list in their first, second,
+  fourth... and last checkpoint, so a repeat cut off by its timeout or the run deadline still
+  reports the classes it loaded. A loaded class is not a called method: the count says which files
+  ran, not which
   functions. `Coverage: jvm 750 iterations, 0 of 225 entry points exercised, 37 project classes
   loaded` means project code ran but no listed entry point sits in a loaded class: the harness
   drove other classes, so it measures those, not the entry points named (entry points in
@@ -83,9 +85,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   then refute F and confirm the sibling with the commands it prints, and `dla ledger resolve O
   --by F.n1`; when the alloc-test favours leak instead (a real Metaspace or class leak), confirm F
   with the commands it prints and resolve the item `--by F`. The test judges `jvm.nonheap_used` and
-  every `jvm.nmt.*` category that passed the gate: all must plateau over the extra window for `non-leak`; `jvm.classes_loaded`,
-  `jvm.classes_unloaded` and `jvm.jit_seconds` are reported next to it and do not vote. Reading
-  it: JIT warm-up is a plateau of non-heap and of Code and Compiler with a flat class count and
+  every `jvm.nmt.*` category that passed the gate: all must plateau over the extra window for
+  `non-leak`; `jvm.classes_loaded`, `jvm.classes_unloaded` and `jvm.jit_seconds` are reported next
+  to it and do not vote. Reading it: JIT warm-up is a plateau of non-heap and of Code and Compiler
+  with a flat class count and
   compile time levelling off. Symbol growth, or Metaspace growth with rising unloads or a rising
   class count, is not JIT: capture `--capture nonheap` and read `nmt-diff.txt` for Symbol and
   `classloader-stats.txt` for Metaspace. A driver or JUnit run's own checkpoint work (class
@@ -98,7 +101,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   rise of more than 8 classes is rising), an extra rise under the drift line and no required column
   rising is reported as inconclusive (the result carries a `caution`, and its `next` prints no
   refute or confirm). The drift line is the larger of 1 MiB and 2x the measured drift (20 KB, the
-  highest measured; so 1 MiB up to extra 25) of every extra checkpoint, so it grows with `--extra`; a rise over it, or a
+  highest measured; so 1 MiB up to extra 25) of every extra checkpoint, so it grows with
+  `--extra`; a rise over it, or a
   harness that does more work per checkpoint (a larger `--step` at `harness gen`, also with
   `--junit` for a JUnit repeat), decides. A command-mode harness (a fresh JVM per point) has no
   checkpoint drift and gets no such override. A required column rises by its kind (the `jvm.nmt.*`
@@ -118,18 +122,19 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   required column or whose net rise is within the jitter). Every rising column is collected first,
   and the class count is not flat when its plateau reads continues or reads inconclusive with a net
   rise of more than 8 classes (the JVM loads a few classes by itself: idle drivers rose 0 to 2 when
-  fast and 4 to 6 when the unit sleeps and the run is slow; a class leak that adds 8 or fewer
-  over the extra window cannot be told from that by the count, so it reads inconclusive, never a
-  leak). When a thread count or an NMT category rises, that is not the
-  agent's drift and is never blamed on it: the limitation names every column that rises (the class
-  count too when it is not flat), a rising `jvm.threads` keeps the leak verdict, a rising NMT
-  category makes it inconclusive (unless the class count is not flat too: a class leak keeps its
-  verdict, and the ledger commands stay beside the capture), and `next` points at the capture that decides it (`dla harness
-  run H1 --capture nonheap`: `threads.json` for threads, `nmt-diff.txt` for the category), never at
-  a longer `--extra`, and keeps the thread capture whenever a thread count rises; on a partial run,
-  whose verdict is capped at inconclusive, `next` holds only that capture, with no refute, confirm
-  or longer `--extra`. Only when no
-  required column rises and the class count is not flat is the class count named alone (the leak
+  fast and 4 to 6 when the unit sleeps and the run is slow; a class leak that adds 8 or fewer over
+  the extra window cannot be told from that by the count, so unless the count reads continues it
+  reads inconclusive, never a leak, and when the count reads continues it is a rising column
+  whatever the net rise). When a thread count or an NMT category rises, that is not the agent's
+  drift and is never blamed on it: the limitation names every column that rises (the class count too
+  when it is not flat), a rising `jvm.threads` keeps the leak verdict, a rising NMT category makes
+  it inconclusive (unless the class count is not flat too: a class leak keeps its verdict, and the
+  ledger commands stay beside the capture), and `next` points at the capture that decides it (`dla
+  harness run H1 --capture nonheap`: `threads.json` for threads, `nmt-diff.txt` for the category),
+  never at a longer `--extra`, and keeps the thread capture whenever a thread count rises; on a
+  partial run, whose verdict is capped at inconclusive, `next` holds only that capture, with no
+  refute, confirm or longer `--extra`. Only when no required column rises and the class count is not
+  flat is the class count named alone (the leak
   verdict stands, except on a partial run, which is inconclusive). A result with no
   `jvm.classes_loaded` column is read with the class count unknown: if nothing rises it gets the
   agent-drift reading with a caution that the class count was not recorded or could not be judged.
@@ -139,13 +144,16 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   and the limitation names the column. A sample (`dla sample --counters jcmd`) shows the shape live but
   cannot refute: `jvm.classes_loaded` there is the classes loaded now (the cumulative counter minus
   the unloads), as in the harness.
+  The jcmd backend reads `GC.heap_info` of JDK 21 and of JDK 25: `jvm.heap_committed` is the heap's
+  committed size in both (`total` up to JDK 21, `committed` on JDK 25), and where JDK 25 prints no
+  Metaspace line `jvm.nonheap_used` comes from `VM.metaspace basic`.
 - Purges: `trim-native-heap` (DiagnosticCommand) and `gc`.
 - The harness never attaches: it reads NMT and the histogram in-process.
 
 ## Attach backends (`dla attach jcmd --pid <P> --op <op>`)
 | Op | Tier | Notes |
 |---|---|---|
-| histogram, thread-dump, nmt | 2 | `Thread.dump_to_file -format=json` is verified on JDK 21 (19 and 20 untested); older JVMs fall back to `Thread.print -l` |
+| histogram, thread-dump, nmt | 2 | `Thread.dump_to_file -format=json` is verified on JDK 21 and JDK 25 (19, 20 and 22 to 24 untested); older JVMs fall back to `Thread.print -l` |
 | jfr | 2 | recording holds JVM arguments and environment variables: may contain secrets |
 | heap-dump | 4 | forces a full GC; size predicted from `GC.heap_info` used (within 0.4% in one test); the target must be able to write under the run directory |
 
@@ -189,7 +197,7 @@ artifact run the files come from `dla attach jcmd` or the user.
 - Kotlin: a coroutine's captured locals are fields `L$0`, `L$1` of the compiled continuation (class-file
   census with `DebugMetadata`). The ledger keeps one finding per suspension point, so two captures at
   one line become one finding.
-- A thread dump from `Thread.dump_to_file` is verified on JDK 21 (19 and 20 untested; otherwise `Thread.print -l`, no JSON).
+- A thread dump from `Thread.dump_to_file` is verified on JDK 21 and JDK 25 (19, 20 and 22 to 24 untested; otherwise `Thread.print -l`, no JSON).
 
 ## Static scope, CodeQL and Sonar
 - Build logic is not part of the measured process: `*.gradle.kts`, `*.gradle` and everything under

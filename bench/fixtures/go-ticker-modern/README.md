@@ -3,6 +3,10 @@
 Category `decoy-control` (partner `go-ticker-legacy`), cause `N-WARM`.
 `schema_version = 2`: the fixture names its toolchain, `go = "1.23.12"`.
 
+The partner `go-ticker-legacy` is in `bench/fixtures-open/` (DLA does not pass it yet), so this
+fixture's `expected.toml` has no `pair` line until the partner moves back; see
+`bench/fixtures-open/README.md`.
+
 ## Mechanism
 
 The code is the same as the partner's. `awaitConfirm` creates a `time.NewTicker` before its

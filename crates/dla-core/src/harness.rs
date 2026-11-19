@@ -399,8 +399,9 @@ pub enum AttemptOutcome {
 /// `harness/H<n>/attempt.json`: the record that someone tried to run the harness, written
 /// by `dla harness run` on every path once the manifest has loaded (success, partial run,
 /// build failure, no usable point, time-budget refusal, timeout, SIGINT or SIGTERM; a panic
-/// writes nothing). It is not sealed and not in the ledger: the final gate reads its presence to tell a harness that was generated
-/// and tried from one that was generated and never run ([`crate::gate::harness_not_run`]).
+/// writes nothing). It is not sealed and not in the ledger: the final gate reads its presence
+/// to tell a harness that was generated and tried from one that was generated and never run
+/// ([`crate::gate::harness_not_run`]).
 /// A later attempt replaces the file.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct HarnessAttempt {
@@ -412,8 +413,9 @@ pub struct HarnessAttempt {
     pub finished_at: String,
     /// How it ended.
     pub outcome: AttemptOutcome,
-    /// Why it failed: `no_harness`, `build_fails`, [`ATTEMPT_TIME_BUDGET`], [`ATTEMPT_HOOKS_UNFILLED`],
-    /// `interrupted` (SIGINT or SIGTERM) or the refusal code. Absent when it ran.
+    /// Why it failed: `no_harness`, `build_fails`, [`ATTEMPT_TIME_BUDGET`],
+    /// [`ATTEMPT_HOOKS_UNFILLED`], `interrupted` (SIGINT or SIGTERM) or the refusal code. Absent
+    /// when it ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The refusal message, or a note on a partial run.

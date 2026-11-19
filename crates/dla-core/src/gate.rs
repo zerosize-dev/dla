@@ -585,9 +585,10 @@ pub fn is_whole_process(name: &str) -> bool {
 }
 
 /// True for a per-type instance count of a JVM heap (`jvm.class:<name>.count`). It belongs to
-/// the heap, but the tie rule ties a type to a finding only through its accumulation class or its field's element type, and never for the
-/// generic types (`byte[]`, `String`, collection nodes), so most of these columns have no
-/// finding to tie to. The heap residual rows account for them, as they do for a total.
+/// the heap, but the tie rule ties a type to a finding only through its accumulation class or
+/// its field's element type, and never for the generic types (`byte[]`, `String`, collection
+/// nodes), so most of these columns have no finding to tie to. The heap residual rows account
+/// for them, as they do for a total.
 pub fn is_type_count(name: &str) -> bool {
     let base = name.strip_suffix(".pre_gc").unwrap_or(name);
     !base.contains('@') && base.starts_with("jvm.class:")
@@ -2159,8 +2160,9 @@ fn coverage_contradiction_items(view: &RunView, out: &mut Out) {
 /// findings are closed in a way the remaining time could still change. Two shapes:
 /// findings closed `time_budget` although no command of the core was refused with nothing
 /// smaller that fits since they were added, and findings closed without exercise in a runtime
-/// that has discovered entry points and no harness at all. Cleared by measuring (the fix names the command) or by the
-/// blocker on `intake.workload` (a closed finding cannot be closed again, only tested).
+/// that has discovered entry points and no harness at all. Cleared by measuring (the fix names
+/// the command) or by the blocker on `intake.workload` (a closed finding cannot be closed
+/// again, only tested).
 fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
     let Some(run_dir) = view.run_dir.as_deref() else {
         return;

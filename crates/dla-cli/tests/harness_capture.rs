@@ -119,6 +119,45 @@ fn ok(project: &Path, args: &[&str]) -> Value {
     o.json
 }
 
+/// Like [`ok`] for a harness run: when it fails, the tail of every harness log is printed too,
+/// because the command's own answer only names the logs.
+fn ok_run(project: &Path, run_dir: &Path, args: &[&str]) -> Value {
+    let o = dla(project, args);
+    if o.code != 0 || o.json["ok"] != true {
+        let mut tails = String::new();
+        if let Ok(rd) = fs::read_dir(run_dir.join("harness/H1/logs")) {
+            let mut files: Vec<_> = rd.filter_map(Result::ok).map(|e| e.path()).collect();
+            files.sort();
+            for f in files {
+                let text = fs::read_to_string(&f).unwrap_or_default();
+                let tail: Vec<&str> = text.lines().rev().take(25).collect();
+                let tail: Vec<&str> = tail.into_iter().rev().collect();
+                // A stack trace fills the tail with frames: the lines that name the
+                // exception or the error come first.
+                let named: Vec<&str> = text
+                    .lines()
+                    .filter(|l| {
+                        let l = l.trim_start();
+                        !l.starts_with("at ")
+                            && (l.contains("Exception")
+                                || l.contains("error:")
+                                || l.contains("Error:"))
+                    })
+                    .take(10)
+                    .collect();
+                tails += &format!(
+                    "--- {}\nfirst lines naming an error:\n{}\nlast lines:\n{}\n",
+                    f.display(),
+                    named.join("\n"),
+                    tail.join("\n")
+                );
+            }
+        }
+        panic!("{args:?}: {}\n{tails}", o.text);
+    }
+    o.json
+}
+
 /// A project copy of `fixture` with a run, consent for tiers 1 and 2, and discovery for
 /// `lang` done.
 fn prepared(fixture: &str, lang: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -370,7 +409,11 @@ fn a_jni_library_gets_the_shim_and_its_native_stack_resolves_to_the_rust_line() 
     assert_eq!(env("DLA_SHIM_ONLY"), Some("java"));
     assert!(env("LD_PRELOAD").unwrap().ends_with("libdlashim.so"));
     assert_eq!(env("CARGO_PROFILE_RELEASE_DEBUG"), Some("line-tables-only"));
-    let run = ok(&project, &["harness", "run", "H1", "--capture", "all"]);
+    let run = ok_run(
+        &project,
+        &run_dir,
+        &["harness", "run", "H1", "--capture", "all"],
+    );
     // The shim's exit records have their own type-histogram-diff command.
     let listed: Value = serde_json::from_str(
         &fs::read_to_string(run_dir.join("harness/H1/captures.json")).unwrap(),

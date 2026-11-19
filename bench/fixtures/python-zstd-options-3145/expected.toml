@@ -2,7 +2,6 @@ schema_version = 2
 id = "python-zstd-options-3145"
 runtime = "python"
 category = "decoy-control"
-pair = "python-zstd-options-3144"
 dynamic_confirmation = true
 
 [toolchain]

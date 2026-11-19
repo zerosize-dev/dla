@@ -2095,24 +2095,76 @@ impl Drop for Child {
 }
 
 #[cfg(unix)]
-/// A `sleep` process whose executable is called `java`, so a fake `jcmd` can answer for it.
+/// A process whose executable is called `java`, so a fake `jcmd` can answer for it. It is this
+/// test binary, linked under that name and running only the helper test below, which sleeps:
+/// a copy of the system `sleep` would not do, because on a distribution whose coreutils is one
+/// multi-call binary (Ubuntu 26.04) a `sleep` started as `java` is an unknown tool and exits
+/// at once.
 fn java_sleeper() -> Child {
-    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let exe = dir.path().join("java");
-    let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|d| d.join("sleep"))
-        .find(|p| p.is_file())
-        .expect("sleep on PATH");
-    fs::copy(sleep, &exe).unwrap();
-    fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
-    let child = std::process::Command::new(&exe)
-        .arg("300")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+    let me = std::env::current_exe().expect("this test binary's path");
+    // Linux reads the executable name from /proc/<pid>/exe: a hard link (or, across file
+    // systems, a copy) carries the name. Elsewhere it comes from argv[0], and a symlink works.
+    #[cfg(target_os = "linux")]
+    if fs::hard_link(&me, &exe).is_err() {
+        fs::copy(&me, &exe).unwrap();
+    }
+    #[cfg(not(target_os = "linux"))]
+    std::os::unix::fs::symlink(&me, &exe).unwrap();
+    // A fork in another test thread can still hold a copy's write handle for a moment, and
+    // exec then fails with ETXTBSY ("text file busy"): retry briefly.
+    let mut tries = 0;
+    let child = loop {
+        match std::process::Command::new(&exe)
+            .args([
+                "--ignored",
+                "--exact",
+                "fake_java_target_sleeps",
+                "--nocapture",
+            ])
+            .env(FAKE_JAVA_ENV, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(c) => break c,
+            Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => panic!("spawn {}: {e}", exe.display()),
+        }
+    };
+    // The attach backends inspect the target's executable: wait until the child runs as
+    // `java`, not as the forked copy of this test binary it is for a moment after spawn.
+    #[cfg(target_os = "linux")]
+    for _ in 0..250 {
+        let named = fs::read_link(format!("/proc/{}/exe", child.id()))
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n == "java"))
+            .unwrap_or(false);
+        if named {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     Child(child, dir)
+}
+
+#[cfg(unix)]
+/// Set only by [`java_sleeper`]: it makes the helper test below sleep.
+const FAKE_JAVA_ENV: &str = "DLA_TEST_FAKE_JAVA_TARGET";
+
+#[cfg(unix)]
+/// Not a test of anything: the body of the fake `java` target that `java_sleeper` starts. Run
+/// on its own it returns at once.
+#[test]
+#[ignore = "the body of the fake java target; started by the tests that need one"]
+fn fake_java_target_sleeps() {
+    if std::env::var_os(FAKE_JAVA_ENV).is_some() {
+        std::thread::sleep(std::time::Duration::from_secs(300));
+    }
 }
 
 #[cfg(unix)]

@@ -524,9 +524,10 @@ const AGENT_DRIFT_PER_CHECKPOINT: f64 = 20.0 * 1024.0;
 /// define no class), also under load: 24 fast runs rose 0 or 2 classes; of 15 runs whose unit only
 /// sleeps (4 to 25 ms per unit, so the run is slow) 13 rose 4 to 6, and the largest rise that
 /// read inconclusive was 5 and the largest that read plateau 6. The constant is the largest rise
-/// seen (6) plus a margin of 2. A class leak that adds fewer classes than this over the extra
-/// window cannot be told from the jitter by the count alone: it reads as flat, and the result
-/// is then inconclusive, never a leak.
+/// seen (6) plus a margin of 2. A class leak that adds this many classes or fewer over the extra
+/// window cannot be told from the jitter by the count alone: while the count does not read
+/// continues it reads as flat, and the result is then inconclusive, never a leak. A count that
+/// reads continues is a rising column whatever its net rise.
 const AGENT_DRIFT_CLASS_JITTER: f64 = 8.0;
 
 /// The most `jvm.threads` may have risen over the extra window with no leak (the JVM starts and

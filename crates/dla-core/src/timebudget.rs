@@ -303,8 +303,8 @@ fn plural(n: u64, one: &str, many: &str) -> String {
 }
 
 /// The `Time:` line of the report (without the label): the budget, how it was sized, the
-/// extensions, the time used (to the newest ledger line), and, when findings were closed `time_budget`, what measuring
-/// them would take.
+/// extensions, the time used (to the newest ledger line), and, when findings were closed
+/// `time_budget`, what measuring them would take.
 pub fn report_line(view: &RunView) -> String {
     let b = &view.state.budget;
     let total = b.seconds;

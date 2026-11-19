@@ -57,11 +57,11 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   GC worker threads move it by a few); a `jvm.nmt.*` category when its
   plateau reads continues; `jvm.nmt.thread` also with a thread count that itself rises) or the
   harness is in command mode (no checkpoint drift). A class count that reads inconclusive with a
-  net rise of more than 8 classes is not flat and is named too (a class leak that adds fewer
-  reads inconclusive, never a leak); a class leak beside a rising NMT category keeps its verdict.
-  The
-  warm-up runs at a checkpoint only, after the pre-GC readings (a command-mode exit record keeps
-  its `values_pre_gc` above `values`).
+  net rise of more than 8 classes is not flat and is named too (a class leak that adds 8 or
+  fewer reads inconclusive, never a leak, only while the count does not read continues; one that
+  reads continues is not flat whatever its net rise); a class leak beside a rising NMT category
+  keeps its verdict. The warm-up runs at a checkpoint only, after the pre-GC readings (a
+  command-mode exit record keeps its `values_pre_gc` above `values`).
   And `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`,
   `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.threads` read from `/proc/self/status`.
 - `values_pre_gc`: `jvm.heap_used`, `jvm.heap_committed`, `os.rss` just before the collections.
@@ -75,7 +75,8 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   non-JDK classes of the application and library loaders follow. Test output directories
   (`build/classes/kotlin/test`, `target/test-classes`) and DLA's own drivers (`DlaLoop`,
   `DlaJUnitLoop`) are not the project's. A class is the project's when its code source is a
-  file, directory or jar under `DLA_PROJECT` (the outer jar of `jar:file:/x.jar!/...` and of a
+  file, directory or jar under `DLA_PROJECT`, compared by the names as written and with symlinks
+  resolved (the outer jar of `jar:file:/x.jar!/...` and of a
   Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`; a library nested in the jar, Spring
   Boot's loader and, once packages are known, the root of a jar are not) or when it is in a
   package named by `DLA_PROJECT_PACKAGES` (comma separated: the packages the project's own
@@ -116,7 +117,7 @@ processes, such as the unit-test JVM a build script starts, are deleted after th
 | `histogram-<n>.txt` | every checkpoint (driver) or at exit (command mode) | `DiagnosticCommand` `gcClassHistogram`, the text `jcmd GC.class_histogram` prints (live objects only: it forces a collection) |
 | `heap-<n>.hprof` | the selected checkpoints (driver: `DLA_CAPTURE_DUMPS`, default 4, from the end of the warm-up to the last round) or at exit (command mode, for the points `dla harness run` selects) | `HotSpotDiagnosticMXBean.dumpHeap(file, true)` (live objects, mode 0600) |
 | `recording.jfr` | at JVM exit | a recording started in `premain` before the workload (`settings=profile`, `path-to-gc-roots=true`, `dumponexit=true`): `jdk.OldObjectSample` only covers objects allocated while it runs |
-| `threads.json` | last checkpoint or exit | `Thread.dump_to_file -format=json` (`threadDumpToFile`); verified on JDK 21 (19 and 20 untested), other JDKs record an error and write no file |
+| `threads.json` | last checkpoint or exit | `Thread.dump_to_file -format=json` (`threadDumpToFile`); verified on JDK 21 and JDK 25 (19, 20 and 22 to 24 untested), other JDKs record an error and write no file |
 | `classloader-stats.txt` | same | `VM.classloader_stats` |
 | `nmt-summary.txt`, `nmt-diff.txt` | same | `VM.native_memory summary` and `summary.diff` against a baseline taken at the end of the warm-up (driver) or at `premain` (command mode); needs `-XX:NativeMemoryTracking=summary`, which the injection always adds |
 

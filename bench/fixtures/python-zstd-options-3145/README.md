@@ -4,6 +4,10 @@ Category: `decoy-control` (the control half of a version pair). Pair: `python-zs
 Look-alike cause: `N-WARM`. Toolchain: `[toolchain] python = "3.14.5"`;
 `project/.python-version` says `3.14.5`.
 
+The partner `python-zstd-options-3144` is in `bench/fixtures-open/` (DLA does not pass it yet), so this
+fixture's `expected.toml` has no `pair` line until the partner moves back; see
+`bench/fixtures-open/README.md`.
+
 ## Mechanism (for authors)
 
 Same code, prompt and site as `python-zstd-options-3144`; the only difference is the Python

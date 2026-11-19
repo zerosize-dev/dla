@@ -2441,34 +2441,52 @@ fn a_point_that_outlasts_the_deadline_is_cut_and_the_partial_series_says_so() {
     if !have(&["sh"]) {
         return;
     }
+    let argv = [
+        "sh",
+        "-c",
+        "if [ {n} -ge 400 ]; then sleep 60; else sleep 0.05; fi",
+    ];
+    // What a point costs on this machine, measured by a dry run of the same command on a fixture
+    // of its own (a series of this harness would give the run a known pace): the dry run is the
+    // warm-up point and one more, so its time is divided by two. A deadline in constant seconds is
+    // over before the fast points have run on a slow runner, or refuses the run for its estimate.
+    let dry = fixture("", &[], &[1]);
+    let mut dm = manifest(Runtime::Native, &argv, vec![], 100);
+    dm.iterations = 1;
+    write_manifest(&dry, &dm);
+    let t = std::time::Instant::now();
+    run_points(&dry.ctx, &dm, &RunOptions::default()).unwrap();
+    let cost = t.elapsed().as_secs_f64() / 2.0;
+    // Three fast points and a fourth that starts. After the second point the run estimates the two
+    // that remain from those two measurements, and a second point that took several times the
+    // first stretches that estimate (the slope is extrapolated): twelve point costs and a margin
+    // cover it. The deadline stays short enough that the slow point cannot end by itself.
+    let deadline = ((12.0 * cost).ceil() as i64 + 3).clamp(8, 30);
     let fx = fixture("", &[], &[1]);
-    // Fast points until n = 500, then a point that would take 30 s.
-    let mut m = manifest(
-        Runtime::Native,
-        &[
-            "sh",
-            "-c",
-            "if [ {n} -ge 500 ]; then sleep 30; else sleep 0.05; fi",
-        ],
-        vec![],
-        100,
-    );
-    m.iterations = 8;
+    // Fast points until n = 400, then a point that would take 60 s.
+    let mut m = manifest(Runtime::Native, &argv, vec![], 100);
+    m.iterations = 3;
     m.timeout_secs = 120;
     write_manifest(&fx, &m);
-    deadline_in(&fx, 4);
+    deadline_in(&fx, deadline);
     let started = std::time::Instant::now();
-    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap_or_else(|e| {
+        panic!("a point took {cost:.2} s, the deadline was set {deadline} s ahead: {e:?}")
+    });
     assert!(
-        started.elapsed().as_secs_f64() < 12.0,
-        "{:?}",
+        started.elapsed().as_secs_f64() < deadline as f64 + 8.0,
+        "{:?} against a deadline {deadline} s ahead (a point took {cost:.2} s)",
         started.elapsed()
     );
-    assert!(!out.partial.is_empty(), "{:?}", out.limitations);
+    assert!(
+        !out.partial.is_empty(),
+        "{:?} (a point took {cost:.2} s, the deadline {deadline} s)",
+        out.limitations
+    );
     assert!(out.partial[0].contains("run deadline"), "{:?}", out.partial);
     let series = load(&fx, &out, 0);
     let xs: Vec<f64> = series.points.iter().map(|p| p.x).collect();
-    assert_eq!(xs, [100.0, 200.0, 300.0, 400.0]);
+    assert_eq!(xs, [100.0, 200.0, 300.0]);
     assert!(
         series
             .limitations

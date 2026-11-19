@@ -172,22 +172,45 @@ fn sleeper() -> Guard {
     )
 }
 
-/// A `sleep` process whose executable is called `java`, standing in for a JVM that a fake
-/// `jcmd` answers for.
+/// Set only by [`java_sleeper`]: it makes the helper test below sleep.
+const FAKE_JAVA_ENV: &str = "DLA_TEST_FAKE_JAVA_TARGET";
+
+/// Not a test of anything: the body of the fake `java` target that `java_sleeper` starts. Run
+/// on its own it returns at once.
+#[test]
+#[ignore = "the body of the fake java target; started by the tests that need one"]
+fn fake_java_target_sleeps() {
+    if std::env::var_os(FAKE_JAVA_ENV).is_some() {
+        std::thread::sleep(Duration::from_secs(300));
+    }
+}
+
+/// A process whose executable is called `java`, standing in for a JVM that a fake `jcmd`
+/// answers for. It is this test binary, linked under that name and running only the helper
+/// test below, which sleeps: a copy of the system `sleep` would not do, because on a
+/// distribution whose coreutils is one multi-call binary (Ubuntu 26.04) a `sleep` started as
+/// `java` is an unknown tool and exits at once.
 fn java_sleeper() -> Guard {
     let dir = tempfile::tempdir().unwrap();
     let exe = dir.path().join("java");
-    let sleep = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|d| d.join("sleep"))
-        .find(|p| p.is_file())
-        .expect("sleep on PATH");
-    fs::copy(sleep, &exe).unwrap();
+    let me = std::env::current_exe().expect("this test binary's path");
+    // The name is read from /proc/<pid>/exe: a hard link (or, across file systems, a copy)
+    // carries it, a symlink would resolve to the test binary.
+    if fs::hard_link(&me, &exe).is_err() {
+        fs::copy(&me, &exe).unwrap();
+    }
     // A fork in another test thread can still hold the copy's write handle for a moment,
     // and exec then fails with ETXTBSY ("text file busy"): retry briefly.
     let mut tries = 0;
     let child = loop {
         match Proc::new(&exe)
-            .arg("300")
+            .args([
+                "--ignored",
+                "--exact",
+                "fake_java_target_sleeps",
+                "--nocapture",
+            ])
+            .env(FAKE_JAVA_ENV, "1")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
