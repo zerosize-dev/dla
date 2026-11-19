@@ -26,6 +26,13 @@
   `sample::node_inspect_backend_reads_memory_and_active_resources`,
   `session::tests::a_backend_that_never_works_is_blocked_and_sampling_continues` (dla-sample) and
   one Go analyzer test of `dla-backends` `real_tools`; none failed in CI.
+- A third fixture fails by chance and is NOT in this pass: `jni-order-codec` on the CI runner
+  (run 44608346577 on `main`, attempt 1; also once before preview.1): both native shim summaries
+  fail their gate because the leak's stack is absent from the first capture ("holder absent from
+  dump 1"), so the L-HANDLE label has no evidence. Never reproduced on the work machine. Next
+  pass: find why the first capture can miss the stack, fix it in the product, and make
+  `dla-bench dynamic` print the failed gate's per-capture values (CI artifacts cannot be
+  downloaded from the work machine).
 - Steps: fix, independent check, snapshot to this branch, CI green on the snapshot, local
   acceptance, then commit to `main` and push.
 

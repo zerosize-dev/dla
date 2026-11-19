@@ -154,3 +154,24 @@ proposed). Handle every one; where an item is wrong, say why with evidence. Note
    9781542 confirmed it, naming the job (for example `clippy and test (macos-latest)`), and keep
    as open what one green run cannot show (how often a rare failure happens). If it prints
    PENDING or another conclusion, leave those rows as they are and say so in the report.
+
+## For the agents of the CI phase: a third fixture that fails by chance (not in N1 or N2)
+
+`jni-order-codec` failed the dynamic job of the CI run on main (commit 9781542; job log
+<sp>/u8/ci-main/dynamic_acceptance_on_the_fixtures.log) and passed in the run before it on the
+same code: `leak L1 (L-HANDLE) label refused label-evidence-missing`, because both summaries of
+the native shim failed their gate (`type-histogram-diff via shim-stack-groups`,
+`alloc-stack-diff via shim-alloc-stacks`: "nothing grows strictly across all 17 captures;
+stack:Java_shop_codec_Native_open (native/src/lib.rs:40): holder absent from dump 1"). The same
+happened once on an earlier CI run and never here. So the stack of the leak is missing from the
+first native capture on a slow or loaded runner; the gate in
+crates/dla-cli/src/summarize/rule.rs needs the holder in every dump. If a CI attempt of this
+pass fails on this fixture, this is the starting point: find why the first capture can miss the
+stack (when the first capture is taken against the first allocation of that site, what the shim
+records before the library is loaded, how the capture and the workload are ordered in
+harness/jvm and the shim), try to reproduce it under CPU load with
+`dla-bench dynamic --parallel 1 --only jni-order-codec` while other work runs, and fix the cause
+in the product. Do not loosen the gate to hide it, and do not touch the fixture. Whether or not
+you can reproduce it, make `dla-bench dynamic` print what a reader needs when a fixture fails
+(the reasons and the per-capture values of the gate that failed), because the per-fixture logs
+of a CI run cannot be downloaded here.
