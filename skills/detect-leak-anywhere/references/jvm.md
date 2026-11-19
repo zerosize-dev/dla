@@ -70,8 +70,9 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   (a Kotlin file holding a class of another name, or a package that does not mirror its
   directory) or, for a top-level function, when the file's facade class (`UtilKt`, or its
   `@file:JvmName`) is loaded. A driver and a JUnit repeat write the list in their first, second,
-  fourth... and last checkpoint, so a repeat cut off by its timeout or the run deadline still reports the classes it
-  loaded. A loaded class is not a called method: the count says which files ran, not which
+  fourth... and last checkpoint, so a repeat cut off by its timeout or the run deadline still
+  reports the classes it loaded. A loaded class is not a called method: the count says which files
+  ran, not which
   functions. `Coverage: jvm 750 iterations, 0 of 225 entry points exercised, 37 project classes
   loaded` means project code ran but no listed entry point sits in a loaded class: the harness
   drove other classes, so it measures those, not the entry points named (entry points in
@@ -85,8 +86,9 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   --by F.n1`; when the alloc-test favours leak instead (a real Metaspace or class leak), confirm F
   with the commands it prints and resolve the item `--by F`. The test judges `jvm.nonheap_used` and
   every `jvm.nmt.*` category that passed the gate: all must plateau over the extra window for
-  `non-leak`; `jvm.classes_loaded`, `jvm.classes_unloaded` and `jvm.jit_seconds` are reported next to it and do not vote. Reading
-  it: JIT warm-up is a plateau of non-heap and of Code and Compiler with a flat class count and
+  `non-leak`; `jvm.classes_loaded`, `jvm.classes_unloaded` and `jvm.jit_seconds` are reported next
+  to it and do not vote. Reading it: JIT warm-up is a plateau of non-heap and of Code and Compiler
+  with a flat class count and
   compile time levelling off. Symbol growth, or Metaspace growth with rising unloads or a rising
   class count, is not JIT: capture `--capture nonheap` and read `nmt-diff.txt` for Symbol and
   `classloader-stats.txt` for Metaspace. A driver or JUnit run's own checkpoint work (class
@@ -120,19 +122,19 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   required column or whose net rise is within the jitter). Every rising column is collected first,
   and the class count is not flat when its plateau reads continues or reads inconclusive with a net
   rise of more than 8 classes (the JVM loads a few classes by itself: idle drivers rose 0 to 2 when
-  fast and 4 to 6 when the unit sleeps and the run is slow; a class leak that adds 8 or fewer
-  over the extra window cannot be told from that by the count, so unless the count reads
-  continues it reads inconclusive, never a leak, and when the count reads continues it is a
-  rising column whatever the net rise). When a thread count or an NMT category rises, that is not the
-  agent's drift and is never blamed on it: the limitation names every column that rises (the class
-  count too when it is not flat), a rising `jvm.threads` keeps the leak verdict, a rising NMT
-  category makes it inconclusive (unless the class count is not flat too: a class leak keeps its
-  verdict, and the ledger commands stay beside the capture), and `next` points at the capture
-  that decides it (`dla harness run H1 --capture nonheap`: `threads.json` for threads,
-  `nmt-diff.txt` for the category), never at a longer `--extra`, and keeps the thread capture whenever a thread count rises; on a partial run,
-  whose verdict is capped at inconclusive, `next` holds only that capture, with no refute, confirm
-  or longer `--extra`. Only when no
-  required column rises and the class count is not flat is the class count named alone (the leak
+  fast and 4 to 6 when the unit sleeps and the run is slow; a class leak that adds 8 or fewer over
+  the extra window cannot be told from that by the count, so unless the count reads continues it
+  reads inconclusive, never a leak, and when the count reads continues it is a rising column
+  whatever the net rise). When a thread count or an NMT category rises, that is not the agent's
+  drift and is never blamed on it: the limitation names every column that rises (the class count too
+  when it is not flat), a rising `jvm.threads` keeps the leak verdict, a rising NMT category makes
+  it inconclusive (unless the class count is not flat too: a class leak keeps its verdict, and the
+  ledger commands stay beside the capture), and `next` points at the capture that decides it (`dla
+  harness run H1 --capture nonheap`: `threads.json` for threads, `nmt-diff.txt` for the category),
+  never at a longer `--extra`, and keeps the thread capture whenever a thread count rises; on a
+  partial run, whose verdict is capped at inconclusive, `next` holds only that capture, with no
+  refute, confirm or longer `--extra`. Only when no required column rises and the class count is not
+  flat is the class count named alone (the leak
   verdict stands, except on a partial run, which is inconclusive). A result with no
   `jvm.classes_loaded` column is read with the class count unknown: if nothing rises it gets the
   agent-drift reading with a caution that the class count was not recorded or could not be judged.

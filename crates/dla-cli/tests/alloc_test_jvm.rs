@@ -64,8 +64,9 @@ fn dla_env(project: &Path, args: &[&str], env: &[(&str, &str)]) -> (i32, Value, 
 
 fn ok(project: &Path, args: &[&str]) -> Value {
     let (code, json, text) = dla(project, args);
-    assert_eq!(code, 0, "{args:?}: {text}");
-    assert_eq!(json["ok"], true, "{text}");
+    // A failed command explains itself with the tails of the harness logs, whichever step it was.
+    assert_eq!(code, 0, "{args:?}: {text}\n{}", harness_log_tails(project));
+    assert_eq!(json["ok"], true, "{text}\n{}", harness_log_tails(project));
     json
 }
 
@@ -455,8 +456,26 @@ fn the_agents_warm_up_takes_most_of_its_own_early_non_heap_growth_off_an_idle_dr
         rise(&warm),
         rise(&cold)
     );
-    // Only where the cold run has a first step well above that steady drift is there something
-    // to take off: there the warm-up takes most of it. Not claimed where the cold rise is the
+    // What the warm-up does everywhere: the code the first checkpoint would load is loaded before
+    // it, so the first step of the series (point 0 to point 1) is mostly gone. Measured: the warm
+    // first step was at most a third of the cold one on macOS and on Linux with JDK 21 and 25, and
+    // the same size as the cold one when the warm-up is switched off.
+    let first = |v: &[f64]| v[1] - v[0];
+    eprintln!(
+        "first step: cold {} warm {}; early rise: cold {} warm {}",
+        first(&cold),
+        first(&warm),
+        rise(&cold),
+        rise(&warm)
+    );
+    assert!(
+        first(&cold) > 5.0e4 && first(&warm) < 0.7 * first(&cold),
+        "first step: warm {} against cold {}: {shown}",
+        first(&warm),
+        first(&cold)
+    );
+    // Only where the cold run has a rise well above the steady drift of the later points is there
+    // more to take off: there the warm-up takes most of it. Not claimed where the cold rise is the
     // drift alone (a JVM told it has many processors compiles the checkpoint code early too).
     if rise(&cold) < 5.0e5 {
         eprintln!("not compared further: the cold rise is the steady drift alone: {shown}");

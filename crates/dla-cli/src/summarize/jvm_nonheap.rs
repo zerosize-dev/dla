@@ -168,7 +168,7 @@ impl Adapter for JvmThreadDump {
             self.name(),
             snaps,
             vec![
-                "the JDK 21 thread dump has no creation site and no state: groups never tie to a finding by site".into(),
+                "a JVM thread dump has no creation site (the JDK 21 one has no state either): groups never tie to a finding by site".into(),
                 "thread names are shown only as a plain normalized pattern; any other name is a shape".into(),
             ],
         )

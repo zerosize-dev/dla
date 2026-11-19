@@ -115,6 +115,26 @@ public final class CheckCoverage {
         for (String[] c : cases) {
             is(c[0], String.valueOf(DlaDump.locationUnder(c[0], project)), c[1]);
         }
+        // One directory with two names: the project is given by one, a loader may report the other,
+        // and a link inside the project (`build`, `out/test`) keeps its own name.
+        Path tmp = java.nio.file.Files.createTempDirectory("dla-links").toRealPath();
+        java.nio.file.Files.createDirectories(tmp.resolve("real/proj/classes"));
+        java.nio.file.Files.createDirectories(tmp.resolve("outside/classes/java/main"));
+        java.nio.file.Files.createDirectories(tmp.resolve("real/proj/.cache/t1"));
+        java.nio.file.Files.createDirectories(tmp.resolve("real/proj/out"));
+        java.nio.file.Files.createSymbolicLink(tmp.resolve("link"), tmp.resolve("real"));
+        java.nio.file.Files.createSymbolicLink(tmp.resolve("real/proj/build"), tmp.resolve("outside"));
+        java.nio.file.Files.createSymbolicLink(tmp.resolve("real/proj/out/test"), tmp.resolve("real/proj/.cache/t1"));
+        Path realProj = tmp.resolve("real/proj");
+        Path linkProj = tmp.resolve("link/proj");
+        is("link location, real project", DlaDump.locationUnder("file:" + linkProj + "/classes/", realProj), true);
+        is("real location, link project", DlaDump.locationUnder("file:" + realProj + "/classes/", linkProj), true);
+        is("a link inside the project to outside", DlaDump.locationUnder("file:" + realProj + "/build/classes/java/main/", realProj), true);
+        is("a sibling of the link project", DlaDump.locationUnder("file:" + tmp + "/link/proj2/classes/", linkProj), false);
+        is("a test location by its link name", DlaDump.isTestLocation("file:" + realProj + "/out/test/", realProj), true);
+        is("a test location by its link name, link project", DlaDump.isTestLocation("file:" + realProj + "/out/test/", linkProj), true);
+        is("link location of tests, real project", DlaDump.isTestLocation("file:" + linkProj + "/target/test-classes/", realProj), true);
+        is("link location of main code, real project", DlaDump.isTestLocation("file:" + linkProj + "/classes/", realProj), false);
         is("a jar root", DlaDump.isJarRoot("file:/w/app.jar") + "/" + DlaDump.isJarRoot("jar:file:/w/app.jar!/"), "true/true");
         is("a directory in a jar", DlaDump.isJarRoot("jar:nested:/w/app.jar/!BOOT-INF/classes/!/"), false);
         is("a directory", DlaDump.isJarRoot("file:/w/build/classes/"), false);

@@ -15,7 +15,7 @@
 //! size of the heap in both: the `total` figure up to JDK 21 (which is the committed size, not
 //! the reserved one) and the `committed` figure on JDK 25. When the heap output carries no
 //! `Metaspace` line, `jvm.nonheap_used` comes from the first line of `VM.metaspace basic`, which
-//! has the same form.
+//! has the same form (JDK 21 prints only its `Both:  79.16 KB used.` line, which is read then).
 
 use std::{collections::BTreeMap, path::PathBuf, process::Command, thread, time::Duration};
 
@@ -106,13 +106,36 @@ fn keyword_sizes(line: &str) -> BTreeMap<&'static str, u64> {
     out
 }
 
-/// The Metaspace bytes in use from a `Metaspace  used 115K, committed 320K, reserved ...` line,
-/// as `GC.heap_info` prints it up to JDK 21 and `VM.metaspace basic` prints it on every JDK.
+/// The Metaspace bytes in use, from the `Metaspace  used 115K, committed 320K, reserved ...`
+/// line that `GC.heap_info` prints up to JDK 21 and `VM.metaspace basic` prints on JDK 25. The
+/// JDK 21 output of `VM.metaspace basic` has no such line; its `Usage:` block ends in
+/// `Both:  79.16 KB used.`, which is the same figure (non-class plus class space) and is read
+/// when the line is missing.
 pub fn parse_metaspace_used(text: &str) -> Option<u64> {
-    text.lines()
+    let lines: Vec<String> = text
+        .lines()
         .map(|l| l.trim().to_ascii_lowercase())
+        .collect();
+    lines
+        .iter()
         .find(|l| l.starts_with("metaspace"))
-        .and_then(|l| keyword_sizes(&l).get("used").copied())
+        .and_then(|l| keyword_sizes(l).get("used").copied())
+        .or_else(|| lines.iter().find_map(|l| both_used(l)))
+}
+
+/// `both:     79.16 KB used.` as bytes.
+fn both_used(line: &str) -> Option<u64> {
+    let rest = line.strip_prefix("both:")?.trim().strip_suffix("used.")?;
+    let (n, unit) = rest.trim().split_once(' ')?;
+    let n: f64 = n.parse().ok()?;
+    let mult: f64 = match unit.trim() {
+        "bytes" | "byte" | "b" => 1.0,
+        "kb" => 1024.0,
+        "mb" => 1_048_576.0,
+        "gb" => 1_073_741_824.0,
+        _ => return None,
+    };
+    Some((n * mult).round() as u64)
 }
 
 /// Parses `GC.heap_info` for the G1, Parallel, Serial, ZGC and Shenandoah layouts of JDK 21 and
@@ -346,6 +369,7 @@ impl Backend for Jcmd {
             .values
             .insert("jvm.heap_committed".into(), info.committed as f64);
         let mut metaspace_used = info.metaspace_used;
+        let mut metaspace_failed = false;
         if metaspace_used.is_none() {
             // JDK 25 left the Metaspace lines out of GC.heap_info.
             self.metaspace_apart = true;
@@ -355,11 +379,22 @@ impl Backend for Jcmd {
             };
             match text {
                 Ok(t) => metaspace_used = parse_metaspace_used(&t),
-                Err(e) => reading.notes.push(e),
+                Err(e) => {
+                    metaspace_failed = true;
+                    reading.notes.push(e);
+                }
             }
         }
-        if let Some(m) = metaspace_used {
-            reading.values.insert("jvm.nonheap_used".into(), m as f64);
+        match metaspace_used {
+            Some(m) => {
+                reading.values.insert("jvm.nonheap_used".into(), m as f64);
+            }
+            // A failed command has its own note.
+            None if !metaspace_failed => reading.notes.push(
+                "jcmd VM.metaspace basic: no Metaspace figure in its output, so jvm.nonheap_used is not read"
+                    .into(),
+            ),
+            None => {}
         }
         match perf {
             Ok(text) => reading.values.extend(parse_perf_counters(&text)),
@@ -419,6 +454,9 @@ mod tests {
     // The head of `jcmd <pid> VM.metaspace basic` (JDK 25).
     const METASPACE_25: &str = "1985:\nMetaspace        used 115K, committed 320K, reserved 1114112K\n class space     used 9K, committed 128K, reserved 1048576K\n\nUsage:\n  Non-class:    106.13 KB used.\n";
 
+    // The head of `jcmd <pid> VM.metaspace basic` (JDK 21).
+    const METASPACE_21: &str = "6568:\n\nUsage:\n  Non-class:     73.24 KB used.\n      Class:      5.91 KB used.\n       Both:     79.16 KB used.\n\nVirtual space:\n  Non-class space:       64.00 MB reserved,     192.00 KB ( <1%) committed,  1 nodes.\n             Both:        1.06 GB reserved,     320.00 KB ( <1%) committed. \n";
+
     #[test]
     fn heap_info_of_jdk_25_reads_committed_not_reserved() {
         // `total` is followed by `reserved 262144K` there: the committed heap is 221184K.
@@ -452,6 +490,69 @@ mod tests {
         assert_eq!(parse_metaspace_used(METASPACE_25), Some(115 * 1024));
         assert_eq!(parse_metaspace_used(G1), Some(78 * 1024));
         assert_eq!(parse_metaspace_used(G1_25), None);
+        // JDK 21's `VM.metaspace basic` has no Metaspace line: its `Both:` usage line is read.
+        assert_eq!(
+            parse_metaspace_used(METASPACE_21),
+            Some((79.16_f64 * 1024.0).round() as u64)
+        );
+        assert_eq!(parse_metaspace_used("1:\nnothing here\n"), None);
+    }
+
+    /// A stand-in `jcmd` that answers each command with the file of that name.
+    #[cfg(unix)]
+    fn stand_in(dir: &std::path::Path, files: &[(&str, &str)]) -> Jcmd {
+        use std::os::unix::fs::PermissionsExt;
+        for (name, text) in files {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        let script = dir.join("jcmd");
+        let body = format!(
+            "#!/bin/sh\ncase \"$2\" in\n  GC.heap_info) cat {d}/heap ;;\n  PerfCounter.print) printf 'java.threads.live=3\\n' ;;\n  'VM.metaspace basic') cat {d}/meta || exit 1 ;;\n  *) exit 1 ;;\nesac\n",
+            d = dir.display()
+        );
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Jcmd {
+            exe: script,
+            pid: 1,
+            nmt: NmtState::Off,
+            metaspace_apart: false,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_reads_the_metaspace_of_a_jdk_25_heap_info_from_the_second_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = stand_in(dir.path(), &[("heap", G1_25), ("meta", METASPACE_25)]);
+        for _ in 0..2 {
+            // The second poll asks both commands side by side.
+            let r = j.poll().unwrap();
+            assert_eq!(r.values["jvm.nonheap_used"], 115.0 * 1024.0, "{r:?}");
+            assert_eq!(r.values["jvm.heap_committed"], 221_184.0 * 1024.0);
+            assert!(r.notes.iter().all(|n| n.contains("native memory")), "{r:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_says_so_when_no_command_gives_the_metaspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = stand_in(dir.path(), &[("heap", G1_25), ("meta", "1:\nUsage:\n")]);
+        let r = j.poll().unwrap();
+        assert!(!r.values.contains_key("jvm.nonheap_used"), "{r:?}");
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("VM.metaspace basic: no Metaspace figure")),
+            "{r:?}"
+        );
+        // A failing command has its own note and no second one.
+        let mut j = stand_in(dir.path(), &[("heap", G1_25)]);
+        std::fs::remove_file(dir.path().join("meta")).unwrap();
+        let r = j.poll().unwrap();
+        assert_eq!(r.notes.len(), 1, "{r:?}");
+        assert!(r.notes[0].starts_with("jcmd VM.metaspace basic:"), "{r:?}");
     }
 
     #[test]

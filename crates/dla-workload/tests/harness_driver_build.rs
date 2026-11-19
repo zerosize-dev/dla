@@ -25,8 +25,9 @@ use tempfile::TempDir;
 const CACHE_KT: &str = "package leak\n\nobject Cache {\n    val items = mutableListOf<ByteArray>()\n\n    fun touch() {\n        items.add(ByteArray(1024))\n    }\n}\n";
 const MAIN_KT: &str = "package leak\n\nfun main() {\n    Cache.touch()\n}\n";
 // The Kotlin Gradle plugin of these tests knows no JVM newer than 21, and Gradle defaults both
-// compilers to the JDK it runs on: without a pin, a JDK 25 build stops with "Inconsistent
-// JVM-target compatibility detected for tasks compileJava (25) and compileKotlin (21)".
+// compilers to the JDK it runs on: without a pin, a build on JDK 22 to 24 would stop with
+// "Inconsistent JVM-target compatibility detected for tasks compileJava and compileKotlin".
+// On JDK 25 the Kotlin compiler itself cannot run; those tests skip (`kotlin_compiler_runs`).
 const GRADLE_KTS_BUILD: &str = "plugins { kotlin(\"jvm\") version \"1.9.24\" }\nrepositories { mavenCentral() }\njava {\n    sourceCompatibility = JavaVersion.VERSION_17\n    targetCompatibility = JavaVersion.VERSION_17\n}\ntasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions { jvmTarget = \"17\" } }\n";
 const BUILD_LOGIC_KTS: &str = "import java.util.Properties\n\nval dockerProperties = Properties()\n\nfun loadDockerProps() {}\n";
 const CACHE_JAVA: &str = "package leak;\n\nimport java.util.ArrayList;\nimport java.util.List;\n\npublic final class Cache {\n    static final List<byte[]> ITEMS = new ArrayList<>();\n\n    private Cache() {}\n\n    public static void touch() {\n        ITEMS.add(new byte[1024]);\n    }\n}\n";
@@ -119,6 +120,45 @@ fn tool_ready(tool: &str) -> bool {
         eprintln!("skipped: java, javac or {tool} is not available");
     }
     ok
+}
+
+/// The major version of the JDK Gradle runs on: `JAVA_HOME` when it is set, else `java` on
+/// the path.
+fn gradle_java_major() -> Option<u32> {
+    let java = std::env::var_os("JAVA_HOME")
+        .map(|h| std::path::Path::new(&h).join("bin/java"))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| "java".into());
+    let out = Command::new(java)
+        .arg("-version")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stderr).into_owned();
+    let v = text.lines().find_map(|l| l.split_once("version \""))?.1;
+    let mut parts = v.split(['.', '"', '-', '+', '_']);
+    let first: u32 = parts.next()?.parse().ok()?;
+    // `1.8.0_402` is JDK 8.
+    if first == 1 {
+        parts.next()?.parse().ok()
+    } else {
+        Some(first)
+    }
+}
+
+/// Whether the Kotlin compiler of the Kotlin Gradle plugin used here can run. Its 1.9 and 2.0
+/// releases fail `JavaVersion.parse` (`IllegalArgumentException: 25.0.x`) on JDK 25 and
+/// newer, so a Kotlin project cannot be built there, whatever the JVM target is pinned to.
+fn kotlin_compiler_runs() -> bool {
+    match gradle_java_major() {
+        Some(n) if n >= 25 => {
+            eprintln!(
+                "skipped: the Kotlin compiler of this test's Kotlin Gradle plugin cannot run on JDK {n} (JDK 24 or older needed)"
+            );
+            false
+        }
+        _ => true,
+    }
 }
 
 fn kotlin_gradle() -> Vec<(&'static str, &'static str)> {
@@ -288,7 +328,7 @@ const OFFLINE_MARKERS: [&str; 6] = [
 /// compiles against it and runs.
 #[test]
 fn a_gradle_kotlin_driver_runs_on_the_resolved_runtime_class_path() {
-    if !tool_ready("gradle") {
+    if !tool_ready("gradle") || !kotlin_compiler_runs() {
         return;
     }
     let fx = project(&kotlin_gradle());

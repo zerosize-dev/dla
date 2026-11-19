@@ -660,6 +660,7 @@ fn jcmd_backend_reads_heap_threads_and_nmt() {
     for c in [
         "jvm.heap_used",
         "jvm.heap_committed",
+        "jvm.nonheap_used",
         "jvm.threads",
         "jvm.nmt_committed",
         "os.rss",

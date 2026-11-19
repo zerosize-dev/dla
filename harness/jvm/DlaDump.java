@@ -560,8 +560,11 @@ public final class DlaDump {
 
     private static Path projectRoot() {
         String p = env("DLA_PROJECT");
-        return p == null ? null : real(Path.of(p));
+        return p == null ? null : Path.of(p).toAbsolutePath().normalize();
     }
+
+    /** Results of {@link #real} for paths that exist in full; a class's location is asked for again and again. */
+    private static final java.util.concurrent.ConcurrentHashMap<Path, Path> REAL = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * The path with every symlink resolved, so two names of one directory compare equal (macOS keeps
@@ -570,17 +573,42 @@ public final class DlaDump {
      */
     static Path real(Path p) {
         Path abs = p.toAbsolutePath().normalize();
+        Path known = REAL.get(abs);
+        if (known != null) {
+            return known;
+        }
         Path rest = null;
         for (Path cur = abs; cur != null; cur = cur.getParent()) {
             try {
                 Path r = cur.toRealPath();
-                return rest == null ? r : r.resolve(rest).normalize();
+                if (rest == null) {
+                    REAL.put(abs, r);
+                    return r;
+                }
+                return r.resolve(rest).normalize();
             } catch (Exception e) {
                 Path name = cur.getFileName();
                 rest = rest == null ? name : (name == null ? rest : name.resolve(rest));
             }
         }
         return abs;
+    }
+
+    /**
+     * The path below the project, if it lies under it: judged by the names as written first (a
+     * project may keep a link such as `build` or `out/test` inside it), then with every link resolved
+     * (the project is given by one name of a directory and the JVM reports another). Null when it lies
+     * under the project by neither.
+     */
+    private static Path below(Path file, Path project) {
+        Path abs = file.toAbsolutePath().normalize();
+        Path root = project.toAbsolutePath().normalize();
+        if (abs.startsWith(root)) {
+            return root.relativize(abs);
+        }
+        Path r = real(abs);
+        Path rr = real(root);
+        return r.startsWith(rr) ? rr.relativize(r) : null;
     }
 
     /** The packages the project's own sources declare (DLA_PROJECT_PACKAGES, comma separated). */
@@ -636,18 +664,38 @@ public final class DlaDump {
     /** True for the output directory of a build's tests (`build/classes/kotlin/test`, `target/test-classes`). */
     static boolean isTestLocation(String location, Path project) {
         // Only the part below the project counts: a project may itself live in a directory named `test`.
-        String below = location;
+        // A location under it by both names (a link inside the project) is a test location by either.
+        List<String> spellings = new ArrayList<>();
         try {
             Path file = locationFile(location);
-            Path where = file == null ? null : real(file);
-            if (where != null && project != null && where.startsWith(real(project))) {
+            if (file != null && project != null) {
                 int bang = location.indexOf('!');
-                below = real(project).relativize(where)
-                    + (bang < 0 ? "" : location.substring(bang));
+                String tail = bang < 0 ? "" : location.substring(bang);
+                Path abs = file.toAbsolutePath().normalize();
+                Path root = project.toAbsolutePath().normalize();
+                // Not under the project by this name: the whole location is checked, as before.
+                spellings.add(abs.startsWith(root) ? root.relativize(abs) + tail : location);
+                Path r = real(abs);
+                Path rr = real(root);
+                if (r.startsWith(rr)) {
+                    spellings.add(rr.relativize(r) + tail);
+                }
             }
         } catch (Throwable ignored) {
             // the whole location is checked
         }
+        if (spellings.isEmpty()) {
+            spellings.add(location);
+        }
+        for (String below : spellings) {
+            if (hasTestPart(below)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasTestPart(String below) {
         // A relativized path has backslashes on Windows.
         String[] parts = below.replace('\\', '/').split("[/!]");
         for (int i = 0; i < parts.length; i++) {
@@ -675,7 +723,7 @@ public final class DlaDump {
     static boolean locationUnder(String location, Path project) {
         try {
             Path p = locationFile(location);
-            return p != null && real(p).startsWith(real(project));
+            return p != null && below(p, project) != null;
         } catch (Throwable t) {
             return false;
         }

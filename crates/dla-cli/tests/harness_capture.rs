@@ -132,7 +132,25 @@ fn ok_run(project: &Path, run_dir: &Path, args: &[&str]) -> Value {
                 let text = fs::read_to_string(&f).unwrap_or_default();
                 let tail: Vec<&str> = text.lines().rev().take(25).collect();
                 let tail: Vec<&str> = tail.into_iter().rev().collect();
-                tails += &format!("--- {} (last lines)\n{}\n", f.display(), tail.join("\n"));
+                // A stack trace fills the tail with frames: the lines that name the
+                // exception or the error come first.
+                let named: Vec<&str> = text
+                    .lines()
+                    .filter(|l| {
+                        let l = l.trim_start();
+                        !l.starts_with("at ")
+                            && (l.contains("Exception")
+                                || l.contains("error:")
+                                || l.contains("Error:"))
+                    })
+                    .take(10)
+                    .collect();
+                tails += &format!(
+                    "--- {}\nfirst lines naming an error:\n{}\nlast lines:\n{}\n",
+                    f.display(),
+                    named.join("\n"),
+                    tail.join("\n")
+                );
             }
         }
         panic!("{args:?}: {}\n{tails}", o.text);

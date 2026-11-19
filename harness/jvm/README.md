@@ -60,8 +60,8 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   net rise of more than 8 classes is not flat and is named too (a class leak that adds 8 or
   fewer reads inconclusive, never a leak, only while the count does not read continues; one that
   reads continues is not flat whatever its net rise); a class leak beside a rising NMT category
-  keeps its verdict. The warm-up runs at a checkpoint only, after the pre-GC readings (a command-mode exit record keeps
-  its `values_pre_gc` above `values`).
+  keeps its verdict. The warm-up runs at a checkpoint only, after the pre-GC readings (a
+  command-mode exit record keeps its `values_pre_gc` above `values`).
   And `os.rss`, `os.rss_anon`, `os.rss_file`, `os.rss_shmem`,
   `os.swap`, `os.vm_data`, `os.vm_hwm`, `os.threads` read from `/proc/self/status`.
 - `values_pre_gc`: `jvm.heap_used`, `jvm.heap_committed`, `os.rss` just before the collections.
@@ -75,7 +75,8 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   non-JDK classes of the application and library loaders follow. Test output directories
   (`build/classes/kotlin/test`, `target/test-classes`) and DLA's own drivers (`DlaLoop`,
   `DlaJUnitLoop`) are not the project's. A class is the project's when its code source is a
-  file, directory or jar under `DLA_PROJECT` (the outer jar of `jar:file:/x.jar!/...` and of a
+  file, directory or jar under `DLA_PROJECT`, compared by the names as written and with symlinks
+  resolved (the outer jar of `jar:file:/x.jar!/...` and of a
   Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`; a library nested in the jar, Spring
   Boot's loader and, once packages are known, the root of a jar are not) or when it is in a
   package named by `DLA_PROJECT_PACKAGES` (comma separated: the packages the project's own

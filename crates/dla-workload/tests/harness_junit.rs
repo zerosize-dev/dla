@@ -29,8 +29,9 @@ const CACHE_KT: &str = "package leak\n\nobject Cache {\n    val items = mutableL
 const CACHE_TEST_KT: &str = "package leak\n\nimport org.junit.jupiter.api.Test\n\nclass CacheTest {\n    @Test\n    fun touches() {\n        Cache.touch()\n    }\n}\n";
 const GRADLE_BUILD: &str = "plugins { id 'java' }\nrepositories { mavenCentral() }\ndependencies {\n    testImplementation platform('org.junit:junit-bom:5.10.2')\n    testImplementation 'org.junit.jupiter:junit-jupiter'\n}\ntest { useJUnitPlatform() }\n";
 // The Kotlin Gradle plugin of these tests knows no JVM newer than 21, and Gradle defaults both
-// compilers to the JDK it runs on: without a pin, a JDK 25 build stops with "Inconsistent
-// JVM-target compatibility detected for tasks compileJava (25) and compileKotlin (21)".
+// compilers to the JDK it runs on: without a pin, a build on JDK 22 to 24 would stop with
+// "Inconsistent JVM-target compatibility detected for tasks compileJava and compileKotlin".
+// On JDK 25 the Kotlin compiler itself cannot run; those tests skip (`kotlin_compiler_runs`).
 const GRADLE_KTS_BUILD: &str = "plugins { kotlin(\"jvm\") version \"1.9.24\" }\nrepositories { mavenCentral() }\ndependencies {\n    testImplementation(platform(\"org.junit:junit-bom:5.10.2\"))\n    testImplementation(\"org.junit.jupiter:junit-jupiter\")\n}\ntasks.test { useJUnitPlatform() }\njava {\n    sourceCompatibility = JavaVersion.VERSION_17\n    targetCompatibility = JavaVersion.VERSION_17\n}\ntasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach { kotlinOptions { jvmTarget = \"17\" } }\n";
 const POM: &str = "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>leak</groupId>\n  <artifactId>leak</artifactId>\n  <version>1</version>\n  <properties>\n    <maven.compiler.source>17</maven.compiler.source>\n    <maven.compiler.target>17</maven.compiler.target>\n    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>\n  </properties>\n  <dependencies>\n    <dependency>\n      <groupId>org.junit.jupiter</groupId>\n      <artifactId>junit-jupiter</artifactId>\n      <version>5.10.2</version>\n      <scope>test</scope>\n    </dependency>\n  </dependencies>\n  <build>\n    <plugins>\n      <plugin>\n        <artifactId>maven-surefire-plugin</artifactId>\n        <version>3.2.5</version>\n      </plugin>\n    </plugins>\n  </build>\n</project>\n";
 
@@ -643,6 +644,45 @@ fn tool_ready(tool: &str) -> bool {
     have_jdk() && have_tool(tool)
 }
 
+/// The major version of the JDK Gradle runs on: `JAVA_HOME` when it is set, else `java` on
+/// the path.
+fn gradle_java_major() -> Option<u32> {
+    let java = std::env::var_os("JAVA_HOME")
+        .map(|h| std::path::Path::new(&h).join("bin/java"))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| "java".into());
+    let out = Command::new(java)
+        .arg("-version")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stderr).into_owned();
+    let v = text.lines().find_map(|l| l.split_once("version \""))?.1;
+    let mut parts = v.split(['.', '"', '-', '+', '_']);
+    let first: u32 = parts.next()?.parse().ok()?;
+    // `1.8.0_402` is JDK 8.
+    if first == 1 {
+        parts.next()?.parse().ok()
+    } else {
+        Some(first)
+    }
+}
+
+/// Whether the Kotlin compiler of the Kotlin Gradle plugin used here can run. Its 1.9 and 2.0
+/// releases fail `JavaVersion.parse` (`IllegalArgumentException: 25.0.x`) on JDK 25 and
+/// newer, so a Kotlin project cannot be built there, whatever the JVM target is pinned to.
+fn kotlin_compiler_runs() -> bool {
+    match gradle_java_major() {
+        Some(n) if n >= 25 => {
+            eprintln!(
+                "skipped: the Kotlin compiler of this test's Kotlin Gradle plugin cannot run on JDK {n} (JDK 24 or older needed)"
+            );
+            false
+        }
+        _ => true,
+    }
+}
+
 #[test]
 fn gradle_project_series_grows_with_the_repeated_tests() {
     if !tool_ready("gradle") {
@@ -697,7 +737,7 @@ fn mode_both_on_a_junit_repeat_runs_the_one_supported_mode_with_a_note() {
 
 #[test]
 fn kotlin_gradle_project_series_grows_with_the_repeated_tests() {
-    if !tool_ready("gradle") {
+    if !tool_ready("gradle") || !kotlin_compiler_runs() {
         return;
     }
     let fx = project(&[
@@ -715,7 +755,7 @@ fn kotlin_gradle_project_series_grows_with_the_repeated_tests() {
 
 #[test]
 fn a_kotlin_spring_boot_test_run_exercises_the_entry_points_of_the_classes_it_loads() {
-    if !tool_ready("gradle") {
+    if !tool_ready("gradle") || !kotlin_compiler_runs() {
         return;
     }
     let fx = project(&[
