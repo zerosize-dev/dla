@@ -285,6 +285,9 @@ pub struct SummarizeStep {
     pub tied: String,
     /// Why the gate failed (`reasons`), else the `needed` text.
     pub reasons: Vec<String>,
+    /// For a failed gate: the limitation lines of its growth evidence and, for the holder
+    /// the gate names, its figures per capture and the process each capture was read from.
+    pub detail: Vec<String>,
 }
 
 /// The result for one fixture.

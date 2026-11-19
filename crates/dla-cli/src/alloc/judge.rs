@@ -227,7 +227,8 @@ pub enum PurgeVerdict {
     Retained,
     /// In between.
     Partial,
-    /// The column did not grow above its warm-up value, so there is nothing to release.
+    /// The column did not grow above its warm-up value by more than the purge floor
+    /// ([`purge_floor`]), so there is nothing to release.
     NoGrowth,
     /// No reading of the column before and after the purge.
     NotRun,

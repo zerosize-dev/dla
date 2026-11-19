@@ -334,6 +334,9 @@ fn label_all(fx: &mut Fx, ts: &[Target], off: bool, row: &mut PolicyRow) {
                         refusal(&o),
                         missing_evidence_steps(fx, &o)
                     ));
+                    for line in missing_evidence_detail(fx, &o) {
+                        fx.step(line);
+                    }
                     fx.row.errors.push(format!(
                         "dla ledger label {id} --as {cause}: {}",
                         o.message()
@@ -522,6 +525,38 @@ fn missing_evidence_steps(fx: &Fx, o: &Out) -> String {
     } else {
         format!(" [{}]", parts.join(" | "))
     }
+}
+
+/// For a label refused for missing evidence: the detail lines of each summarize step whose
+/// gate failed (limitations, the holder's figures per capture and the process each capture
+/// was read from), so the CI log shows what the gate saw. Empty for any other refusal.
+fn missing_evidence_detail(fx: &Fx, o: &Out) -> Vec<String> {
+    if o.code() != "label-evidence-missing" {
+        return Vec::new();
+    }
+    let fix = o.json["error"]["fix"].as_str().unwrap_or("");
+    failed_summary_detail(&fx.row.summarize_log, Some(&summarize_ops_in(fix)))
+}
+
+/// The most detail lines a refused call adds to the steps.
+const MAX_DETAIL_LINES: usize = 8;
+
+/// The detail lines of the summarize steps whose gate failed: of the operations given, or of
+/// every operation (a refused confirmation does not name them). At most
+/// [`MAX_DETAIL_LINES`] lines.
+fn failed_summary_detail(
+    log: &[crate::dynamic_cmd::SummarizeStep],
+    ops: Option<&[String]>,
+) -> Vec<String> {
+    log.iter()
+        .filter(|s| ops.is_none_or(|ops| ops.contains(&s.op)))
+        .flat_map(|s| {
+            s.detail
+                .iter()
+                .map(move |d| format!("{} via {}: {d}", s.op, s.backend))
+        })
+        .take(MAX_DETAIL_LINES)
+        .collect()
 }
 
 /// The note the policy gives when the expected cause has no row in the finding's runtime
@@ -1678,6 +1713,11 @@ cause = "{cause}"
                 gate: gate.to_owned(),
                 tied: "none".to_owned(),
                 reasons: reasons.iter().map(|r| (*r).to_owned()).collect(),
+                detail: if gate == "fail" {
+                    vec!["holder X bytes/blocks per capture: 1:- 2:5B/1".to_owned()]
+                } else {
+                    Vec::new()
+                },
             }
         };
         let (row, _) = drive_fake_full(
@@ -1712,6 +1752,34 @@ cause = "{cause}"
         assert!(f.contains("summarize non-heap: did not run"), "{f}");
         // A step of an operation the fix does not name is left out.
         assert!(!f.contains("heap-graph"), "{f}");
+        // What the failed gate saw is printed with the decisions.
+        assert!(
+            row.steps.iter().any(|l| l
+                == "alloc-stack-diff via shim-alloc-stacks: holder X bytes/blocks per capture: 1:- 2:5B/1"),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[test]
+    fn a_refused_confirmation_prints_every_failed_summary_up_to_a_cap() {
+        let step = |op: &str, lines: usize| crate::dynamic_cmd::SummarizeStep {
+            op: op.to_owned(),
+            backend: "b".to_owned(),
+            gate: "fail".to_owned(),
+            tied: "none".to_owned(),
+            reasons: Vec::new(),
+            detail: (0..lines).map(|i| format!("line {i}")).collect(),
+        };
+        let log = [step("a", 2), step("b", 10)];
+        // A label names its operations; a confirmation does not.
+        assert_eq!(
+            failed_summary_detail(&log, Some(&["a".to_owned()])),
+            ["a via b: line 0", "a via b: line 1"]
+        );
+        let all = failed_summary_detail(&log, None);
+        assert_eq!(all.len(), MAX_DETAIL_LINES);
+        assert_eq!(all[2], "b via b: line 0");
     }
 
     #[test]

@@ -374,7 +374,7 @@ pub fn pick(
         if trend.is_some() && !any_passed && heap_present {
             add(&mut p.voting, heap);
             p.basis = format!(
-                "no column passed the gate in the latest trend of the harness: the runtime heap ({heap}) decides, os.rss is reported"
+                "no column of memory in use passed the gate in the latest trend of the harness (peaks and sizes that cannot be given back do not count): the runtime heap ({heap}) decides, os.rss is reported"
             );
         } else {
             if series.column_index("os.rss").is_some() {

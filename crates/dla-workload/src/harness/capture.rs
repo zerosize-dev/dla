@@ -664,12 +664,85 @@ pub fn summarize_commands(
 /// File name of the allocator shim's exit records, split out of a JVM process's dump.
 pub const SHIM_DUMP: &str = "shim-dump.jsonl";
 
-/// Splits the allocator shim's exit records (with allocation stacks) out of each
-/// `<out_dir>/<label>/dump.jsonl` that also holds a managed runtime's records, and returns
-/// the `dla summarize type-histogram-diff` commands that read them (one per series: fresh
-/// keys first, then the repeated control). The `shim-stack-groups` adapter refuses a dump
-/// whose head carries the runtime's `types` rows, so it reads the split file. A harness
-/// without a shim, or a native one whose dump already is the shim's, gets no command.
+/// What [`split_shim_dump`] did for one point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShimSplit {
+    /// The dump holds no record of a managed runtime (it is the shim's own, or empty):
+    /// there is nothing to split.
+    NotApplicable,
+    /// The measured process's shim record was written to [`SHIM_DUMP`].
+    Written,
+    /// The dump has a managed runtime's records but no shim record with stacks for the
+    /// measured process; nothing was written. `others` counts the shim records with stacks
+    /// of other processes, which are never used instead.
+    Missing {
+        /// Shim records with stacks that belong to other processes.
+        others: usize,
+    },
+}
+
+/// Splits the allocator shim's exit record (with allocation stacks) of the measured process
+/// out of `<label_dir>/dump.jsonl`, which also holds a managed runtime's records, into
+/// `<label_dir>/shim-dump.jsonl`. The `shim-stack-groups` adapter refuses a dump whose head
+/// carries the runtime's `types` rows, so it reads the split file.
+///
+/// The record is chosen by identity: the shim record of process `measured` (the process the
+/// harness measured for this point, the same one whose shim figures the series carries),
+/// never by size and never another process's. Without a shim record with stacks for that
+/// process nothing is written and the file of an earlier run is removed. A dump of a native
+/// harness (already the shim's own) is left alone.
+pub fn split_shim_dump(label_dir: &Path, measured: Option<u32>) -> ShimSplit {
+    let file = label_dir.join(SHIM_DUMP);
+    let _ = fs::remove_file(&file);
+    let Ok(text) = fs::read_to_string(label_dir.join("dump.jsonl")) else {
+        return ShimSplit::NotApplicable;
+    };
+    let mut mine: Vec<&str> = Vec::new();
+    let mut others = 0;
+    let mut managed = false;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("dla_harness").is_none() {
+            continue;
+        }
+        let native = v
+            .get("runtime")
+            .and_then(|r| r.as_str())
+            .is_some_and(|r| r.eq_ignore_ascii_case("native"));
+        if !native {
+            managed = true;
+        } else if v.get("phase").and_then(|p| p.as_str()) == Some("exit")
+            && v.get("raw_sites")
+                .and_then(|r| r.as_object())
+                .is_some_and(|o| !o.is_empty())
+        {
+            let pid = v.get("pid").and_then(serde_json::Value::as_u64);
+            if pid.is_some() && pid == measured.map(u64::from) {
+                mine.push(line);
+            } else {
+                others += 1;
+            }
+        }
+    }
+    if !managed {
+        return ShimSplit::NotApplicable;
+    }
+    // A process writes one exit record; if it somehow wrote several, the last is its final one.
+    let Some(last) = mine.last() else {
+        return ShimSplit::Missing { others };
+    };
+    if fs::write(&file, format!("{last}\n")).is_err() {
+        return ShimSplit::Missing { others };
+    }
+    ShimSplit::Written
+}
+
+/// The `dla summarize type-histogram-diff` commands that read the shim records split out by
+/// [`split_shim_dump`] into `<out_dir>/<label>/shim-dump.jsonl` (one per series: fresh
+/// keys first, then the repeated control). A harness without a shim, or a native one whose
+/// dump already is the shim's, has no such files and gets no command.
 pub fn shim_dump_commands(
     out_dir: &Path,
     harness_id: &str,
@@ -682,37 +755,7 @@ pub fn shim_dump_commands(
     let mut found: Vec<(String, u64, String)> = Vec::new();
     for e in rd.flatten() {
         let label = e.file_name().to_string_lossy().into_owned();
-        let Ok(text) = fs::read_to_string(e.path().join("dump.jsonl")) else {
-            continue;
-        };
-        let mut shim_lines: Vec<&str> = Vec::new();
-        let mut managed = false;
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            if v.get("dla_harness").is_none() {
-                continue;
-            }
-            let native = v
-                .get("runtime")
-                .and_then(|r| r.as_str())
-                .is_some_and(|r| r.eq_ignore_ascii_case("native"));
-            if !native {
-                managed = true;
-            } else if v.get("phase").and_then(|p| p.as_str()) == Some("exit")
-                && v.get("raw_sites")
-                    .and_then(|r| r.as_object())
-                    .is_some_and(|o| !o.is_empty())
-            {
-                shim_lines.push(line);
-            }
-        }
-        if !managed || shim_lines.is_empty() {
-            continue;
-        }
-        let file = e.path().join(SHIM_DUMP);
-        if fs::write(&file, shim_lines.join("\n") + "\n").is_err() {
+        if !e.path().join(SHIM_DUMP).is_file() {
             continue;
         }
         let rest = label.strip_prefix('p').unwrap_or(&label);
@@ -1159,6 +1202,11 @@ mod tests {
             r#"{"dla_harness":1,"phase":"exit","runtime":"native","raw_sites":{"0x1":{"bytes":8}}}"#,
         )
         .unwrap();
+        for k in [1u32, 10, 2] {
+            let dir = d.join(format!("p{k}-native"));
+            assert_eq!(split_shim_dump(&dir, Some(7)), ShimSplit::Written);
+        }
+        assert_eq!(split_shim_dump(&nat, None), ShimSplit::NotApplicable);
         let cmds = shim_dump_commands(&d, "H1", &|p| format!("r/{p}"));
         assert_eq!(cmds.len(), 2, "{cmds:?}");
         assert!(
@@ -1182,6 +1230,63 @@ mod tests {
         let split = fs::read_to_string(d.join("p1-native").join(SHIM_DUMP)).unwrap();
         assert_eq!(split.lines().count(), 1);
         assert!(!split.contains("\"types\""));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A command of two JVMs (the project's tests, then the program) with the shim preloaded:
+    /// each writes a shim exit record, and the test JVM's is the larger one.
+    fn two_process_dump(dir: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        let text = concat!(
+            r#"{"dla_harness":1,"phase":"exit","runtime":"jvm","pid":10,"argv":["java","T"],"types":[{"name":"A"}]}"#,
+            "\n",
+            r#"{"dla_harness":1,"phase":"exit","runtime":"native","pid":10,"argv":["java","T"],"raw_sites":{"0x1":{"live_bytes":90000000}}}"#,
+            "\n",
+            r#"{"dla_harness":1,"phase":"exit","runtime":"jvm","pid":20,"argv":["java","Main","500"],"types":[{"name":"A"}]}"#,
+            "\n",
+            r#"{"dla_harness":1,"phase":"exit","runtime":"native","pid":20,"argv":["java","Main","500"],"raw_sites":{"0x2":{"live_bytes":10}}}"#,
+            "\n"
+        );
+        fs::write(dir.join("dump.jsonl"), text).unwrap();
+    }
+
+    #[test]
+    fn the_split_keeps_the_measured_process_record_not_the_larger_one() {
+        let d = std::env::temp_dir().join(format!("dla-shimpid-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        two_process_dump(&d);
+        assert_eq!(split_shim_dump(&d, Some(20)), ShimSplit::Written);
+        let split = fs::read_to_string(d.join(SHIM_DUMP)).unwrap();
+        assert_eq!(split.lines().count(), 1, "{split}");
+        assert!(
+            split.contains("\"pid\":20") && split.contains("Main"),
+            "{split}"
+        );
+        assert!(!split.contains("90000000"), "{split}");
+        // Identity, not position: the first process's record when that one is measured.
+        assert_eq!(split_shim_dump(&d, Some(10)), ShimSplit::Written);
+        let split = fs::read_to_string(d.join(SHIM_DUMP)).unwrap();
+        assert!(
+            split.contains("\"pid\":10") && !split.contains("Main"),
+            "{split}"
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_measured_process_without_a_shim_record_gets_no_file_and_never_another_one() {
+        let d = std::env::temp_dir().join(format!("dla-shimnone-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        two_process_dump(&d);
+        fs::write(d.join(SHIM_DUMP), "stale\n").unwrap();
+        // The measured process (pid 30) wrote none; the two others did.
+        assert_eq!(
+            split_shim_dump(&d, Some(30)),
+            ShimSplit::Missing { others: 2 }
+        );
+        assert!(!d.join(SHIM_DUMP).exists(), "an earlier file must not stay");
+        assert_eq!(split_shim_dump(&d, None), ShimSplit::Missing { others: 2 });
+        assert!(!d.join(SHIM_DUMP).exists());
         let _ = fs::remove_dir_all(&d);
     }
 

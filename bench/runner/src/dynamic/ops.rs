@@ -810,6 +810,7 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
             reasons.push(n.chars().take(200).collect());
         }
         fx.step(format!("{op} via {backend}: gate {gate}, tied {tied_text}"));
+        let detail = gate_detail(&out.json, &run_dir);
         fx.row
             .summarize_log
             .push(crate::dynamic_cmd::SummarizeStep {
@@ -818,6 +819,7 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
                 gate,
                 tied: tied_text,
                 reasons,
+                detail,
             });
         t
     } else {
@@ -841,7 +843,154 @@ fn log_failed_summarize(fx: &mut Fx, op: &str, backend: &str, gate: &str, why: S
             gate: gate.to_owned(),
             tied: "none".to_owned(),
             reasons: vec![why],
+            detail: Vec::new(),
         });
+}
+
+/// Longest line of [`gate_detail`].
+const DETAIL_LINE: usize = 260;
+/// Most captures a detail line names the record of.
+const DETAIL_CAPTURES: usize = 4;
+/// Most limitation lines shown per failed summary.
+const DETAIL_LIMITATIONS: usize = 3;
+
+fn cut(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n).collect();
+        t.push_str("...");
+        t
+    }
+}
+
+/// What a reader of a CI log needs to see why a summary's gate failed, when the per-fixture
+/// files cannot be downloaded: the limitation lines of the growth evidence the summary
+/// wrote and, for each holder its reasons name (`stack:<name>: ...`), the bytes and count at
+/// each capture (`-` where the holder is absent) with the process (pid and last argv words)
+/// the first capture and, of those it is absent from, the first few were read from. At most
+/// [`DETAIL_LIMITATIONS`] limitation lines. Empty for a gate that passed or a summary whose
+/// raw file does not list captures with processes.
+pub(super) fn gate_detail(json: &Value, run_dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if json["gate"].as_str() != Some("fail") {
+        return out;
+    }
+    // The limitation lines of the growth evidence (the first line is the same everywhere).
+    if let Some(id) = json["growth_evidence"].as_str()
+        && let Ok(rd) = fs::read_dir(run_dir)
+    {
+        let mut files: Vec<_> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("ledger") && n.ends_with(".jsonl"))
+            })
+            .collect();
+        files.sort();
+        'found: for f in files {
+            let Ok(text) = fs::read_to_string(&f) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Ok(rec) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if rec["type"] == "evidence" && rec["evidence_id"].as_str() == Some(id) {
+                    // The two lines every summary of this kind carries say nothing about this run.
+                    let lines = strings(&rec["limitations"]).into_iter().filter(|l| {
+                        !l.starts_with("stacks are keyed by")
+                            && !l.starts_with("capture-series rule")
+                    });
+                    for l in lines.take(DETAIL_LIMITATIONS) {
+                        out.push(format!("limitation: {}", cut(&l, DETAIL_LINE)));
+                    }
+                    break 'found;
+                }
+            }
+        }
+    }
+    let raw: Option<Value> = json["raw"]["path"]
+        .as_str()
+        .and_then(|p| fs::read_to_string(run_dir.join(p)).ok())
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let Some(raw) = raw else { return out };
+    let (Some(caps), Some(stacks)) = (raw["captures"].as_array(), raw["stacks"].as_array()) else {
+        return out;
+    };
+    let reasons = strings(&json["reasons"]);
+    let mut shown = 0;
+    for r in reasons.iter().filter_map(|r| r.strip_prefix("stack:")) {
+        // `name (site): why`, or `name: why`.
+        let name = r.split(": ").next().unwrap_or(r);
+        let name = name
+            .split(" (")
+            .next()
+            .unwrap_or(name)
+            .trim_end_matches("...");
+        // The exact label first: a longer name with the same prefix is another stack.
+        let Some(st) = stacks
+            .iter()
+            .find(|s| s["label"].as_str() == Some(name))
+            .or_else(|| {
+                stacks
+                    .iter()
+                    .find(|s| s["label"].as_str().is_some_and(|l| l.starts_with(name)))
+            })
+        else {
+            continue;
+        };
+        if shown == 2 {
+            break;
+        }
+        shown += 1;
+        let (bytes, blocks) = (st["bytes"].as_array(), st["blocks"].as_array());
+        let at = |a: Option<&Vec<Value>>, k: usize| -> String {
+            a.and_then(|a| a.get(k))
+                .and_then(Value::as_u64)
+                .map_or_else(|| "-".to_owned(), |v| v.to_string())
+        };
+        let figures: Vec<String> = (0..caps.len())
+            .map(|k| match at(bytes, k).as_str() {
+                "-" => format!("{}:-", k + 1),
+                b => format!("{}:{b}B/{}", k + 1, at(blocks, k)),
+            })
+            .collect();
+        out.push(cut(
+            &format!(
+                "holder {name} bytes/blocks per capture: {}",
+                figures.join(" ")
+            ),
+            DETAIL_LINE * 2,
+        ));
+        // The first capture and those the holder is absent from, with their processes.
+        let mut who: Vec<usize> = vec![0];
+        who.extend(
+            (1..caps.len()).filter(|k| bytes.and_then(|a| a.get(*k)).is_none_or(Value::is_null)),
+        );
+        who.truncate(DETAIL_CAPTURES);
+        let from: Vec<String> = who
+            .iter()
+            .map(|k| {
+                let c = &caps[*k];
+                format!(
+                    "{}:pid {} `{}`",
+                    k + 1,
+                    c["pid"]
+                        .as_u64()
+                        .map_or_else(|| "?".to_owned(), |p| p.to_string()),
+                    c["argv_tail"].as_str().unwrap_or("?")
+                )
+            })
+            .collect();
+        out.push(cut(
+            &format!("records read from: {}", from.join("; ")),
+            DETAIL_LINE * 2,
+        ));
+    }
+    out
 }
 
 /// A holder annotation a summarize call asks for: finding, holder, and the growth evidence
@@ -1315,6 +1464,52 @@ esac
         // The held-back confirmation cites the trend evidence and the tied call's evidence.
         assert_eq!(lines[3], "ledger confirm F1 --evidence E0,E1,E2");
         assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn a_failed_gate_shows_its_limitations_and_the_holder_per_capture_with_its_processes() {
+        let dir = std::env::temp_dir().join(format!("dla-gate-detail-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("histograms")).unwrap();
+        fs::write(
+            dir.join("ledger.jsonl"),
+            concat!(
+                r#"{"type":"evidence","evidence_id":"E2","limitations":["other"]}"#,
+                "\n",
+                r#"{"type":"evidence","evidence_id":"E3","limitations":["stacks are keyed by their first eight resolved frames; x","capture-series rule: y","boilerplate","H1/p1: 2 processes wrote shim records with stacks; kept pid 10920","c","d","e"]}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("histograms/H1.json"),
+            r#"{"captures":[{"pid":10920,"argv_tail":"shop.codec.CodecTestKt"},{"pid":10994,"argv_tail":"shop.codec.MainKt 4440"},{"pid":11103,"argv_tail":"shop.codec.MainKt 6660"}],
+               "stacks":[{"label":"Java_shop_codec_Native_open_longer","bytes":[1,1,1],"blocks":[1,1,1]},{"label":"Java_shop_codec_Native_open","bytes":[null,100,200],"blocks":[null,3,6]}]}"#,
+        )
+        .unwrap();
+        let json = serde_json::json!({
+            "gate": "fail", "growth_evidence": "E3", "raw": {"path": "histograms/H1.json"},
+            "reasons": ["nothing grows strictly across all 3 captures",
+                        "stack:Java_shop_codec_Native_open (native/src/lib.rs:40): holder absent from dump 1"],
+        });
+        let d = gate_detail(&json, &dir);
+        // The two fixed lines are left out and the limitations are capped.
+        assert_eq!(d.len(), 5, "{d:#?}");
+        assert_eq!(d[0], "limitation: boilerplate");
+        assert!(d[1].contains("kept pid 10920"), "{d:?}");
+        assert_eq!(d[2], "limitation: c");
+        assert_eq!(
+            d[3],
+            "holder Java_shop_codec_Native_open bytes/blocks per capture: 1:- 2:100B/3 3:200B/6"
+        );
+        assert_eq!(
+            d[4],
+            "records read from: 1:pid 10920 `shop.codec.CodecTestKt`"
+        );
+        // A passed gate has nothing to explain.
+        let pass = serde_json::json!({"gate": "pass", "growth_evidence": "E3"});
+        assert!(gate_detail(&pass, &dir).is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

@@ -185,12 +185,32 @@ fn basename(program: &str) -> String {
     name.strip_suffix(".exe").unwrap_or(name).to_lowercase()
 }
 
+/// Whether a process whose first argv word (or executable) is `program` is a build or
+/// package tool, never the measured program.
+pub fn is_tool_program(program: &str) -> bool {
+    TOOL_PROCESSES.contains(&basename(program).as_str())
+}
+
 /// Whether the record comes from a build or package tool process.
 fn is_tool(rec: &Rec) -> bool {
-    let Some(p) = rec.program() else {
-        return false;
-    };
-    TOOL_PROCESSES.contains(&basename(p).as_str())
+    rec.program().is_some_and(is_tool_program)
+}
+
+/// The identity step of the choice among several processes: when any of `items` carries the
+/// iteration count in its argv (`has_n`), only those stay. Returns whether the choice was
+/// made by identity (some item carried it).
+pub fn keep_with_n<T>(items: &mut Vec<T>, has_n: impl Fn(&T) -> bool) -> bool {
+    let any = items.iter().any(&has_n);
+    if any {
+        items.retain(has_n);
+    }
+    any
+}
+
+/// The size step, used only when identity left several processes: the item with the
+/// largest `size`, the later one on a tie.
+pub fn largest_by<T>(items: &[T], size: impl Fn(&T) -> f64) -> Option<&T> {
+    items.iter().max_by(|a, b| size(a).total_cmp(&size(b)))
 }
 
 /// Whether the record's `runtime` field fits the manifest's runtime (an absent field fits).
@@ -297,17 +317,11 @@ pub fn select_measured(file: &DumpFile, runtime: Runtime, n: Option<u64>) -> Opt
         })
         .collect();
     let multiple = cands.len() > 1;
-    if cands.iter().any(|c| c.3) {
-        cands.retain(|c| c.3);
-    }
+    keep_with_n(&mut cands, |c| c.3);
     if cands.iter().any(|c| c.2) {
         cands.retain(|c| c.2);
     }
-    let best = cands.iter().max_by(|a, b| {
-        let ka = a.1.primary_heap().unwrap_or(-1.0);
-        let kb = b.1.primary_heap().unwrap_or(-1.0);
-        ka.total_cmp(&kb)
-    })?;
+    let best = largest_by(&cands, |c| c.1.primary_heap().unwrap_or(-1.0))?;
     let (pid, rec, has_exit, has_n) = (best.0, best.1, best.2, best.3);
     if multiple && !has_n && n.is_some() {
         limitations.push(format!(
