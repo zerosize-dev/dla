@@ -10,7 +10,7 @@ never the fixture's answer key.
 |---|---|
 | `go-feed-merge` | Static: leak L2 (`internal/indexer/indexer.go:24`) is not flagged by any candidate. Dynamic: L2 is not confirmed. |
 | `go-header-index` | Static: leak L1 (`internal/edge/index.go:36`) is not flagged by any candidate. Dynamic: L1 is not confirmed. |
-| `go-ticker-legacy` | Dynamic: L1 is flagged (the Go detector `go-ticker-no-stop` finds the ticker) but its label is refused with `label-evidence-missing`: Go command mode has no timer evidence, the goroutine growth column does not grow across all snapshots, and the goroutineleak profile is empty. |
+| `go-ticker-legacy` | Dynamic: L1 is confirmed (the Go detector `go-ticker-no-stop` finds the ticker) but its label is refused with `label-evidence-missing`: Go command mode has no timer evidence, the goroutine growth column does not grow across all snapshots, and the goroutineleak profile is empty. |
 | `go-trace-context` | Dynamic: leak L1 (`internal/rates/poller.go:32`) is not confirmed. Static passes where `golangci-lint` and `staticcheck` are installed; see below. |
 | `node-signal-compose-24` | Dynamic: leak L1 (`src/handler.js:12`) is not confirmed. |
 | `python-frozen-gc` | Static: leak L1 (`journeys/worker.py:25`) is not flagged by any candidate. Dynamic: L1 is not confirmed. |
@@ -20,12 +20,15 @@ never the fixture's answer key.
 ## Why two machines disagreed on `go-trace-context`
 
 The static job on the CI runner reported L1 as missed; the static run on the development
-machine flagged it. The leak is found only by the `golangci-lint` detectors `containedctx`
-and `fatcontext`. The development machine had `golangci-lint` and `staticcheck`; the CI
-runner had neither (the job lists both as missing for every Go fixture), so only the census
-candidates (six) existed there and none sits at `internal/rates/poller.go:32`. The fixture
-is therefore not proven either way until the static job installs `golangci-lint`; with the
-tools present it passes static and still fails dynamic.
+machine flagged it. The leak is named only by the `golangci-lint` detector `containedctx`
+(at the struct field `internal/rates/poller.go:20`, an alternative site of L1); the other
+enabled detector, `fatcontext`, fires once, in `internal/trace/trace_test.go`, not at the
+leak. The development machine had `golangci-lint` and `staticcheck`; the CI runner had
+neither (the job lists both as missing for every Go fixture), so only the census candidates
+(six) existed there and none sits at `internal/rates/poller.go:32`. The static job's rule is
+that the census and the DLA rules alone must flag every confirmable leak, so with the
+runner's tools this fixture fails static as well as dynamic: whoever fixes dynamic and moves
+it back must also make static flag L1 without `golangci-lint`, or the static job turns red.
 
 ## Pairs
 

@@ -23,6 +23,15 @@ pub const SOURCE: &str = "jvm-thread-dump";
 /// Groups kept per kind; the rest are counted in the `groups_dropped` metric.
 const MAX_GROUPS_PER_KIND: usize = 100;
 
+/// Threads the JDK's flight recorder starts and stops by itself (DLA's own capture turns it
+/// on). They come and go between two dumps of one JVM, so counting them would make the
+/// thread total of a short series wander by the recorder's lifetime and not by the program.
+const FLIGHT_RECORDER_THREADS: [&str; 3] = [
+    "JFR Recorder Thread",
+    "JFR Shutdown Hook",
+    "JFR Periodic Tasks",
+];
+
 /// Replaces every run of digits in a thread name with `*`.
 pub fn normalize_thread_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -65,8 +74,11 @@ pub fn parse(text: &str) -> Result<NonHeapSnapshot, ParseError> {
             continue;
         };
         for t in threads {
-            total += 1;
             let name = t.get("name").and_then(Value::as_str).unwrap_or("");
+            if FLIGHT_RECORDER_THREADS.contains(&name) {
+                continue;
+            }
+            total += 1;
             let stack: Vec<Frame> = t
                 .get("stack")
                 .and_then(Value::as_array)
@@ -245,6 +257,29 @@ mod tests {
             "no creation site"
         );
         assert!(!s.groups.iter().any(|g| g.key.starts_with("site:")));
+    }
+
+    #[test]
+    fn the_flight_recorders_own_threads_are_not_counted() {
+        let with = |extra: &str| {
+            format!(
+                r#"{{"threadDump":{{"threadContainers":[{{"threads":[
+              {{"name":"main","stack":["com.acme.Main.main(Main.java:24)"]}},
+              {{"name":"Signal Dispatcher","stack":[]}}{extra}
+            ]}}]}}}}"#
+            )
+        };
+        let plain = parse(&with("")).unwrap();
+        let recording = parse(&with(
+            r#",{"name":"JFR Recorder Thread","stack":[]},{"name":"JFR Shutdown Hook","stack":[]},{"name":"JFR Periodic Tasks","stack":[]}"#,
+        ))
+        .unwrap();
+        assert_eq!(plain.metrics[0].value, 2);
+        assert_eq!(recording.metrics[0].value, 2, "total");
+        assert_eq!(plain.groups, recording.groups, "every group");
+        // A thread of the program is still counted.
+        let app = parse(&with(r#",{"name":"JFR-uploader","stack":[]}"#)).unwrap();
+        assert_eq!(app.metrics[0].value, 3);
     }
 
     #[test]

@@ -4,6 +4,10 @@ Category `decoy-control` (control half of a version pair, partner
 `node-signal-compose-24`). Cause `N-WARM`. Expected answer: no confirmed leak; the
 heap after a forced collection is flat.
 
+The partner `node-signal-compose-24` is in `bench/fixtures-open/` (DLA does not pass it yet), so this
+fixture's `expected.toml` has no `pair` line until the partner moves back; see
+`bench/fixtures-open/README.md`.
+
 The source, the tests and the prompt are the same as in `node-signal-compose-24`.
 Only the Node release differs: `[toolchain] node = "22.12.0"` here, `.nvmrc` and
 `engines.node` in `package.json` pin the same release. The partner runs on 24.13.1,

@@ -395,8 +395,9 @@ The policy, per fixture (repository entry, one runtime):
      other than `favors leak` leaves it alone as well. With archetypes on this
      confirms `go-ticker-legacy` F1 (registration-table, from the row
      `go-timer-unstopped-before-1.23`); with archetypes off the row is absent and F1 is
-     left alone. (`go-ticker-legacy` still fails afterwards: the label is refused with
-     `label-evidence-missing`, since Go command mode has no timer evidence for it.)
+     left alone. (`go-ticker-legacy` is not run: it lives in `bench/fixtures-open/` because the
+     label is refused afterwards with `label-evidence-missing`, since Go command mode has no
+     timer evidence for it.)
    - Each held-back `ledger confirm` cites the trend evidence and, when a
      summarize call's passing growth column is tied (with a reason) to the
      finding, that call's evidence (its histogram, allocation or retention

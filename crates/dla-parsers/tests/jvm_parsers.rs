@@ -104,7 +104,9 @@ fn jfr_malformed() {
 fn thread_dump_real() {
     let s = thread_dump::parse(&fixture("thread_dump.json")).unwrap();
     assert_eq!(s.source, "jvm-thread-dump");
-    assert_eq!(s.metrics[0].value, 25);
+    // 25 threads in the file; the two the flight recorder started (`JFR Recorder Thread`,
+    // `JFR Periodic Tasks`) are not counted: they come and go between two dumps.
+    assert_eq!(s.metrics[0].value, 23);
     let g = |k: &str| {
         s.groups
             .iter()
