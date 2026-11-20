@@ -1,41 +1,29 @@
-Find four more kinds of leak; move four parked fixtures back
+Leave vendored and generated code out of scope; probes never import; one site, one finding
 
-Labels
-- L-REGISTER accepts growth-series + alloc-stack, as L-HANDLE and L-COLLECT do. A
-  registration the runtime holds out of sight (a Go timer before 1.23) has no retention
-  path and no count column, only its growing allocation stack.
+Found by running DLA on real libraries at versions with a documented leak.
 
-Python
-- The census lists a gc.freeze() call inside a function, and the agent attributes the
-  permanent generation to the calling site as the count group py.gc_frozen. Garbage frozen
-  after every batch was invisible: it is in no gc generation and no type count.
-- The census lists native codec contexts (zlib, bz2, lzma and zstd compressor and
-  decompressor objects) as native handles.
+Scope
+- Vendored directories (vendor, third_party, node_modules, a git submodule, a virtual
+  environment and the like) and generated source files (by the marker in their first
+  lines) are not analysed by default: they do not count as a runtime of the project, are
+  not swept, not in the census, not in workload discovery, not in the entry-point totals
+  and not in the figures the time budget is sized from. On one Python library this takes
+  the candidates from 922 to 187, the runtimes from three to one and the static stage from
+  about five minutes to under one. A leak in such code that the project's workload
+  triggers still shows as measured growth.
+- The probe and the report name what was left out; `dla run init --include <path>` brings
+  a path back.
 
-Node
-- A probe whose root cannot be measured (a function, an opaque value, an object of a class
-  with only private fields) says so and writes no column. It read a constant 1, and a true
-  finding was refuted on it.
-- FinalizationRegistry cells with a live target are a registration holder, owned by the
-  one module variable that holds the target. When only Node's own modules grow, heap-graph
-  says that and no longer asks for another snapshot.
+Python harness
+- A module probe reads a module only if the workload has loaded it and never imports one.
+  A driver whose probes imported an example script that starts a server hung until its
+  timeout; it now finishes, and the probe says the module was not loaded.
+- A point killed at its timeout says what the agent was doing (start-up, a hook, a named
+  probe).
 
-Go
-- New rule go-slice-view-retained: a slice parameter stored un-copied into receiver or
-  package state while a caller passes a view of a larger buffer, which pins the buffer.
-  Callers are paired with a method through the receiver's declared type.
-- Go joins the chain-head-growth rule: a field reassigned from a call on its own value.
-  The census lists such a field with the write as its writer.
-- A static hit can carry holder, owner and region, and the candidate takes them.
-- Command mode reads the heap while the workload runs. The exit record is written after
-  main returned, when state owned by a local is already dead, so such a leak read flat. A
-  sampler takes go.heap_live.in_run and go.heap_objects.in_run (the floor of the last third
-  of the run, after a collection) and a heap profile in the run. Existing columns and driver
-  mode are unchanged; the in-run column is the primary heap column only when the trend
-  passed it.
-
-Benchmark
-- go-ticker-legacy, python-frozen-gc, node-signal-compose-24 and go-header-index pass and
-  move from bench/fixtures-open/ to bench/fixtures/ (64 fixtures), with the pair lines of
-  go-ticker-modern and node-signal-compose-22 restored. Four stay parked: their README says
-  what each still needs.
+Ledger
+- A rule or analyzer hit and a census entry at the same site are one finding that carries
+  both origins, the holder, owner, writers and removers of the census entry and the
+  rule's message. For Python a decorator stack and its def line are one site.
+- `dla harness gen --probe F<n>` for a finding without a probe target of its own answers
+  with the reason and the finding to use; it no longer drops the request.

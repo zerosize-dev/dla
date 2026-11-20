@@ -4,7 +4,10 @@
 use std::collections::{HashMap, HashSet};
 
 use dla_census::parse::tree_sitter::Node;
-use dla_core::static_hit::StaticHit;
+use dla_core::{
+    finding::{Holder, Region},
+    static_hit::StaticHit,
+};
 
 use super::ast::{
     CallSite, UseIndex, ancestor, calls, child_of_kind, find_all, last_token, line, named_children,
@@ -299,12 +302,17 @@ fn timers(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<StaticH
                 "re-arming setTimeout"
             };
             if let Some(why) = leak_reason(files, calls_by_file, &cleared, i, c.node, 0) {
-                out.push(hit(
+                // The leaked object is the timer: until it is cleared the runtime keeps it in its
+                // timer lists, whatever the census reads at the same call.
+                let mut h = hit(
                     TIMER,
                     f,
                     line(c.node),
                     format!("{what} inside a function: {why}"),
-                ));
+                );
+                h.holder = Some(Holder::RegistrationTable);
+                h.region = Some(Region::Heap);
+                out.push(h);
             }
         }
     }
@@ -725,6 +733,15 @@ mod tests {
             run(&[("hb.js", hb)]).is_empty(),
             "no callers: nothing to say"
         );
+    }
+
+    #[test]
+    fn a_timer_hit_declares_the_registered_timer_as_holder_in_the_heap() {
+        let leak = "function poll() {\n  fetchIt();\n  setTimeout(poll, 1000);\n}\n";
+        let hits = run(&[("a.js", leak)]);
+        let h = hits.iter().find(|h| h.rule == TIMER).unwrap();
+        assert_eq!(h.holder, Some(Holder::RegistrationTable));
+        assert_eq!(h.region, Some(Region::Heap));
     }
 
     #[test]

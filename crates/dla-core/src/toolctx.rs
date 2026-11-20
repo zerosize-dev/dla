@@ -944,21 +944,45 @@ impl CandidateWriter {
         a.also_origin = Some(origin.clone());
         a.also_supports = c.evidence.clone();
         let mut said: Vec<String> = Vec::new();
-        // An annotation only fills what the finding lacks; a different value is said in the
-        // note instead of refused.
+        // What a rule's hit declares wins; the census entry only fills what the rule left
+        // empty. Whichever value loses is said in the note, never refused. When the census
+        // entry arrived first, the rule's declared value replaces the census one on replay.
+        let declared_wins =
+            f.origin.as_str() == "census" && origin.as_str().starts_with("detector:dla/");
         match (f.holder, c.holder) {
             (None, h) => a.holder = h,
-            (Some(have), Some(want)) if have != want => said.push(format!("holder {want}")),
+            (Some(have), Some(want)) if have != want => {
+                if declared_wins {
+                    a.holder = Some(want);
+                    said.push(format!("holder {have}"));
+                } else {
+                    said.push(format!("holder {want}"));
+                }
+            }
             _ => {}
         }
         match (&f.owner, &c.owner) {
             (None, o) => a.owner.clone_from(o),
-            (Some(have), Some(want)) if have != want => said.push(format!("owner {want}")),
+            (Some(have), Some(want)) if have != want => {
+                if declared_wins {
+                    a.owner = Some(want.clone());
+                    said.push(format!("owner {have}"));
+                } else {
+                    said.push(format!("owner {want}"));
+                }
+            }
             _ => {}
         }
         match (f.region, c.region) {
             (None, r) => a.region = r,
-            (Some(have), Some(want)) if have != want => said.push(format!("region {want}")),
+            (Some(have), Some(want)) if have != want => {
+                if declared_wins {
+                    a.region = Some(want);
+                    said.push(format!("region {have}"));
+                } else {
+                    said.push(format!("region {want}"));
+                }
+            }
             _ => {}
         }
         let mut note = format!("also raised by {origin} at {}", c.site);
@@ -970,7 +994,12 @@ impl CandidateWriter {
             note.push_str(&format!("; suggests {arch}"));
         }
         if !said.is_empty() {
-            note.push_str(&format!("; it names {}", said.join(", ")));
+            let who = if declared_wins {
+                "the census entry"
+            } else {
+                "it"
+            };
+            note.push_str(&format!("; {who} names {}", said.join(", ")));
         }
         a.note = Some(note);
         ledger.annotate_record(a).map_err(|e| e.to_refusal())?;
@@ -1652,6 +1681,83 @@ mod tests {
         assert_eq!(f.owner.as_deref(), Some("m.A.x"));
         let notes = &ledger.annotation(&id).unwrap().notes;
         assert!(notes.iter().any(|n| n.contains("owner m.B.y")), "{notes:?}");
+    }
+
+    #[test]
+    fn what_a_rule_declares_wins_over_the_census_in_either_order_and_the_census_is_in_the_note() {
+        for rule_first in [true, false] {
+            let (_d, ctx) = run(None);
+            let mut ledger = ctx.ledger().unwrap();
+            let e = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+            let rule = Candidate {
+                holder: Some(Holder::RegistrationTable),
+                region: Some(Region::Heap),
+                ..static_cand("detector:dla/go-ticker-no-stop", &e, "w.go:11")
+            };
+            let census = Candidate {
+                holder: Some(Holder::BlockedStack),
+                region: Some(Region::NonHeap),
+                ..static_cand("census", &e, "w.go:11")
+            };
+            let (first, second) = if rule_first {
+                (rule, census)
+            } else {
+                (census, rule)
+            };
+            let mut w = CandidateWriter::new(&ledger);
+            let Added::New(id) = w.add_outcome(&mut ledger, first).unwrap() else {
+                panic!("the first candidate is a new finding");
+            };
+            assert!(matches!(
+                w.add_outcome(&mut ledger, second).unwrap(),
+                Added::Joined(_)
+            ));
+            // After a replay from the file.
+            {
+                let ledger = ctx.ledger().unwrap();
+                let f = ledger.finding(&id).unwrap();
+                assert_eq!(f.holder, Some(Holder::RegistrationTable), "{rule_first}");
+                assert_eq!(f.region, Some(Region::Heap), "{rule_first}");
+                let notes = &ledger.annotation(&id).unwrap().notes;
+                assert!(
+                    notes.iter().any(
+                        |n| n.contains("holder blocked-stack") && n.contains("region non-heap")
+                    ),
+                    "{rule_first}: {notes:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_declared_owner_wins_over_the_census_owner_in_either_order() {
+        for rule_first in [true, false] {
+            let (_d, ctx) = run(None);
+            let mut ledger = ctx.ledger().unwrap();
+            let e = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+            let rule = Candidate {
+                owner: Some("m.A.x".into()),
+                ..static_cand("detector:dla/r", &e, "a.py:3")
+            };
+            let census = Candidate {
+                owner: Some("m.B.y".into()),
+                ..static_cand("census", &e, "a.py:3")
+            };
+            let (first, second) = if rule_first {
+                (rule, census)
+            } else {
+                (census, rule)
+            };
+            let mut w = CandidateWriter::new(&ledger);
+            let Added::New(id) = w.add_outcome(&mut ledger, first).unwrap() else {
+                panic!()
+            };
+            w.add_outcome(&mut ledger, second).unwrap();
+            let ledger = ctx.ledger().unwrap();
+            assert_eq!(ledger.finding(&id).unwrap().owner.as_deref(), Some("m.A.x"));
+            let notes = &ledger.annotation(&id).unwrap().notes;
+            assert!(notes.iter().any(|n| n.contains("owner m.B.y")), "{notes:?}");
+        }
     }
 
     #[test]

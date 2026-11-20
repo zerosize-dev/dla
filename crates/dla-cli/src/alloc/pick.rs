@@ -437,7 +437,7 @@ mod tests {
     use super::*;
     use dla_core::{
         Origin,
-        finding::Region,
+        finding::{Holder, Region},
         series::{Axis, Column, ColumnKind, ColumnScope, Point, SeriesSource, Unit, column_meta},
         trend::{ColumnTrend, TREND_SCHEMA_VERSION},
     };
@@ -642,6 +642,23 @@ mod tests {
             region_primary(&s, Some(SeriesRegion::NonHeap), None),
             "os.threads"
         );
+    }
+
+    #[test]
+    fn a_timer_finding_reads_the_heap_column_not_the_goroutines_of_the_census_region() {
+        // An unstopped ticker is a timer the runtime keeps registered: the rule declares
+        // registration-table and heap, which the join keeps over the census blocked-stack and
+        // non-heap. The column follows the finding's region.
+        let s = series_of(&["go.heap_live", "go.goroutines", "os.rss"]);
+        let ledger = Ledger::from_text("").unwrap();
+        let mut ticker = heap_finding();
+        ticker.holder = Some(Holder::RegistrationTable);
+        let p = pick(&s, &ledger, Some(&ticker), &[], None, "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"), "{}", p.basis);
+        let mut census_read = non_heap_finding();
+        census_read.holder = Some(Holder::BlockedStack);
+        let p = pick(&s, &ledger, Some(&census_read), &[], None, "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.goroutines"));
     }
 
     #[test]

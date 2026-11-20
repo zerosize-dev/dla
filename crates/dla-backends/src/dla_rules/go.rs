@@ -380,6 +380,15 @@ fn goroutines(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<Sta
     out
 }
 
+/// What the two ticker rules found is the timer itself: until it is stopped the runtime keeps it
+/// registered in its timer heap (before Go 1.23), which is heap growth with no goroutine of
+/// the program involved. The hit says so, whatever the census reads at the same call.
+fn timer_hit(mut h: StaticHit) -> StaticHit {
+    h.holder = Some(Holder::RegistrationTable);
+    h.region = Some(Region::Heap);
+    h
+}
+
 fn tickers(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<StaticHit> {
     let mut out = Vec::new();
     for (i, f) in files.iter().enumerate() {
@@ -391,12 +400,12 @@ fn tickers(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<Static
             .collect();
         for c in &calls_by_file[i] {
             if c.recv == "time" && c.name == "Tick" {
-                out.push(hit(
+                out.push(timer_hit(hit(
                     TICK,
                     f,
                     line(c.node),
                     "time.Tick cannot be stopped, so its ticker is never released; use time.NewTicker and Stop",
-                ));
+                )));
             }
             if c.recv == "time" && c.name == "NewTicker" {
                 let Some(p) = c.node.parent() else { continue };
@@ -419,12 +428,12 @@ fn tickers(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<Static
                 if name.is_empty() || name == "_" || stopped.contains(&name) {
                     continue;
                 }
-                out.push(hit(
+                out.push(timer_hit(hit(
                     TICKER,
                     f,
                     line(c.node),
                     format!("ticker `{name}` is created here and `{name}.Stop()` is never called in this file"),
-                ));
+                )));
             }
         }
     }
@@ -1668,6 +1677,24 @@ mod tests {
         let ok =
             "package p\n\nfunc f() {\n\tt := time.NewTicker(time.Second)\n\tdefer t.Stop()\n}\n";
         assert!(sites(&run(&[("a.go", ok)]), TICKER).is_empty());
+    }
+
+    #[test]
+    fn the_ticker_rules_declare_the_registered_timer_as_holder_in_the_heap() {
+        let tick =
+            "package p\n\nfunc f() {\n\tfor range time.Tick(time.Second) {\n\t\twork()\n\t}\n}\n";
+        let leak = "package p\n\nfunc f() {\n\tt := time.NewTicker(time.Second)\n\t_ = t\n}\n";
+        for (src, rule) in [(tick, TICK), (leak, TICKER)] {
+            let hits = run(&[("a.go", src)]);
+            let h = hits.iter().find(|h| h.rule == rule).unwrap();
+            assert_eq!(h.holder, Some(Holder::RegistrationTable), "{rule}");
+            assert_eq!(h.region, Some(Region::Heap), "{rule}");
+        }
+        // A goroutine that never ends is a goroutine: the rule declares nothing.
+        let g = "package p\n\nfunc start(in chan int) {\n\tgo func() {\n\t\tfor {\n\t\t\t<-in\n\t\t}\n\t}()\n}\n";
+        let hits = run(&[("a.go", g)]);
+        let h = hits.iter().find(|h| h.rule == GOROUTINE).unwrap();
+        assert_eq!((h.holder, h.region), (None, None));
     }
 
     #[test]

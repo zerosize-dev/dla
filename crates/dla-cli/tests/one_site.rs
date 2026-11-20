@@ -258,3 +258,44 @@ fn probe_of_a_finding_no_probe_can_read_is_refused_with_the_reason() {
         o.text
     );
 }
+
+#[test]
+fn a_ticker_hit_and_the_census_timer_of_one_call_are_one_finding_the_rule_describes() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path();
+    write(dir, "go.mod", "module example.com/wait\n\ngo 1.22\n");
+    write(
+        dir,
+        "wait.go",
+        "package main\n\nimport \"time\"\n\nfunc Wait() {\n\tt := time.NewTicker(time.Second)\n\t_ = t\n}\n\nfunc main() { Wait() }\n",
+    );
+    let init = ok(dir, &["run", "init", "--session-id", "t"]);
+    let run_dir = dir.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(dir, &["sweep", "--lang", "go"]);
+    ok(dir, &["census", "--lang", "go"]);
+    let lines = ledger(&run_dir);
+    let at = findings_at(&lines, "wait.go:6");
+    assert_eq!(at.len(), 1, "one finding at the call: {at:?}");
+    let f = &at[0];
+    assert_eq!(f["origin"], "detector:dla/go-ticker-no-stop", "{f}");
+    // The rule says what it found: the timer registered with the runtime, in the heap. The
+    // census reads the same call as a blocked stack in non-heap; that goes to the note only.
+    assert_eq!(f["holder"], "registration-table", "{f}");
+    assert_eq!(f["region"], "heap", "{f}");
+    let joined: Vec<&Value> = lines
+        .iter()
+        .filter(|l| {
+            l["type"] == "finding_annotated"
+                && l["also_origin"] == "census"
+                && l["finding"] == f["id"]
+        })
+        .collect();
+    assert_eq!(joined.len(), 1, "{joined:?}");
+    assert!(joined[0]["holder"].is_null(), "{:?}", joined[0]);
+    assert!(joined[0]["region"].is_null(), "{:?}", joined[0]);
+    let note = joined[0]["note"].as_str().unwrap();
+    assert!(
+        note.contains("holder blocked-stack") && note.contains("region non-heap"),
+        "{note}"
+    );
+}
