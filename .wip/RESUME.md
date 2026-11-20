@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 15:15 UTC)
+# Where the work stands (2026-11-20, 16:15 UTC)
 
 ## Working rule from the owner (2026-11-20, 09:25 UTC), above every other habit
 "You should be using sonnet 5.5 subagents for tasks and verify yourself, since my limits are
@@ -8,21 +8,40 @@ The orchestrator verifies each agent's report itself: read the diff of its files
 tests and bench commands, keep the output short. A second agent on the same question only when
 the orchestrator cannot settle it.
 
+## Top priority from the owner (2026-11-20, 15:40 UTC)
+"I'm not seeing improvements. Skill cannot find leaks in any popular projects you listed. I
+don't think this is statistically possible." The owner ran the skill on the popular projects
+proposed on 2026-11-19 (known leaks at pinned versions: aiohttp 3.10.10, grpc-go v1.84.0, axios
+1.15.1, tokio-util 0.7.1, spring-data-commons 4.1.1, Jetty 12.0.31, Pillow 10.1.0; whether the
+pinned versions were used was asked twice and not answered) and it found nothing. Benchmark
+fixture work stops after the commit of fix pass 1. The work now:
+1. Running: one Sonnet agent measures, on those seven leaking versions (sources from the
+   package registries, under the scratch dir `u18/`), whether DLA's static stage lists a
+   candidate at the leak's site, and why not.
+2. Next: on one or two targets where the site is flagged, one Sonnet agent runs the whole skill
+   as a user would; read its ledger and report to find where the chain to a confirmed finding
+   breaks (workload never reaches the leaking path, harness, growth, tie, budget, the wording
+   of the report).
+3. Fix the causes in the product, the most general first, and rerun.
+
 ## Code state
-- `main` (and `dev/wonderful-mccarthy-algc5s`) is at `4aae86f` "Remove three chance failures of
-  the dynamic acceptance; close the open check items", on top of `9781542` "Version
-  0.9.0-preview.2" (published as a pre-release: tag `v0.9.0-preview.2`, five archives with
-  `.sha256` files and `SHA256SUMS`).
-- `4aae86f` holds both fix passes: the alloc-test purge minimum and the Python trim purge, the
-  capture record chosen by identity in the native summaries, the benchmark's failure detail, and
-  the open check items. Its tree is the snapshot `ba20457` of this branch, which was green on all
-  15 CI jobs (run 44682379249); the local acceptance was clean (static 60/60, dynamic 59 pass and
-  1 expected failure, 2744 tests pass; reports `cont-c3-accept-*.md`).
-- CI on `main` at `4aae86f` is green on all 15 jobs (run 44689034328). If a later dynamic job
-  fails on a fixture, read its failure text first: it now names the reasons, the limitation
-  lines and the per-capture values.
-- The working tree is clean. The container restarts about every three hours; files on disk
-  survived both restarts so far, running agents did not.
+- `main` (and `dev/wonderful-mccarthy-algc5s`) is at `fbcd6b2` "Find four more kinds of leak;
+  move four parked fixtures back", on top of `4aae86f` (the chance failures of the dynamic
+  acceptance and the open check items) and `9781542` "Version 0.9.0-preview.2" (published as a
+  pre-release; the two later commits are not in it).
+- `fbcd6b2`: L-REGISTER accepts growth-series + alloc-stack; Python `gc.freeze` census entry,
+  agent group `py.gc_frozen`, native codec vocabulary; Node unmeasurable probe roots and the
+  FinalizationRegistry registration holder; Go rules `go-slice-view-retained` and
+  `go-chain-head-growth`, holder/owner/region on a static hit; Go command mode reads the heap
+  while the workload runs (`go.heap_live.in_run`). Four fixtures moved back (64 in
+  `bench/fixtures/`); four stay in `bench/fixtures-open/` (its README says what each needs).
+  Its tree is snapshot `41c3bca` of this branch, green on all 15 CI jobs (run 44760385093);
+  local: workspace tests 2794 passed, static 64/64 in both modes, dynamic 63 pass and 1
+  expected failure.
+- CI on `main` at `fbcd6b2` was started by the push at 16:10 UTC on 2026-11-20
+  (`gh run list --workflow ci.yml --branch main`).
+- The working tree is clean. The container restarts now and then; files on disk survived so
+  far, running agents did not.
 
 ## Residual chance paths (seen in the last acceptance run, not handled)
 - A heap column passes the first trend by chance on a flat Go run; `os.rss` then votes and reads
@@ -77,19 +96,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
      (`open-fixtures-report-F-e.md`). The fixer reports go-header-index passing static and
      dynamic; go-trace-context and go-feed-merge stop at the tie rule. Not yet rerun by the
      orchestrator.
-   State at 15:15 UTC on 2026-11-20: go-ticker-legacy, python-frozen-gc,
-   node-signal-compose-24 and go-header-index are moved back to `bench/fixtures/` (64
-   fixtures), pair lines restored, READMEs updated. Verified by the orchestrator on the final
-   tree: workspace tests 2794 passed, 0 failed; clippy (host and Windows target), fmt, schema
-   check, grader tests, skill_text pass; static 64 of 64 in both modes; the full dynamic run 63
-   pass and 1 expected failure, the four new fixtures pass, no fixture of the last full run is
-   worse (results in the scratch dir `u17/`); the added lines hold no model name, scratch path
-   or plan name. A snapshot without `[skip ci]` was pushed for CI. When it is green: one commit
-   on `main` with the message in `commit-message.txt` (the working tree as it is, without
-   `.wip/`; renames kept), push `main` and `main:dev/wonderful-mccarthy-algc5s`, confirm CI on
-   `main`. Do not touch the README of node-signal-compose-22 (one sentence there is stale now;
-   the owner was told). Still parked: go-feed-merge, go-trace-context,
-   python-zstd-options-3144, rust-slot-arena (each waits for an answer of the owner, below).
+   Fix pass 1 is committed as `fbcd6b2`. Fixture work is stopped here by the owner's priority
+   (top of this note).
    Waiting for the owner (asked on 2026-11-20): (1) rust-slot-arena: add `src/arena.rs:24` to
    the key's alt_sites? (2) the tie rule: may an allocation stack tie through the nearest caller
    frame that has a finding (python-zstd-options-3144, go-trace-context), or stay strict with
