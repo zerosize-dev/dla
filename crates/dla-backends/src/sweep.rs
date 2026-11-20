@@ -254,6 +254,9 @@ fn record_ran(
             evidence: vec![ev.clone()],
             site: h.site(),
             suggested_archetype: arch,
+            holder: h.holder,
+            owner: h.owner.clone(),
+            region: h.region,
             ..Candidate::default()
         };
         match sink.writer.add(sink.ledger, c)? {

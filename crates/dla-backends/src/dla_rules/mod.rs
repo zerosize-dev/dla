@@ -92,6 +92,9 @@ pub(crate) fn hit(rule: &str, file: &SrcFile, line: u32, message: impl Into<Stri
         file: file.rel.clone(),
         line,
         message: message.into(),
+        holder: None,
+        owner: None,
+        region: None,
     }
 }
 

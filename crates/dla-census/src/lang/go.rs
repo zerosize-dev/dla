@@ -62,6 +62,14 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
             if ty.kind() == "struct_type" {
                 info.note_fields(text(name, src), text(ty, src));
             }
+            if ty.kind() == "interface_type" {
+                info.go_interfaces.insert(text(name, src).to_owned());
+            }
+        }
+        "assignment_statement" => {
+            if let Some(field) = self_wrapped_field(n, src) {
+                info.go_self_wrapped.insert(field);
+            }
         }
         "var_spec"
             if !ast::ancestors(n).any(|a| {
@@ -87,6 +95,54 @@ pub fn collect(src: &str, info: &mut ProjectInfo) {
         }
         _ => {}
     });
+}
+
+fn named_kids<'t>(n: Node<'t>) -> Vec<Node<'t>> {
+    let mut c = n.walk();
+    n.named_children(&mut c).collect()
+}
+
+/// The field name of `x.f = call(.., x.f, ..)` (a call that takes the field's own value and
+/// is not a call on the field itself), else `None`.
+fn self_wrapped_field(n: Node<'_>, src: &str) -> Option<String> {
+    let (l, r) = (
+        n.child_by_field_name("left")?,
+        n.child_by_field_name("right")?,
+    );
+    let (ls, rs) = (named_kids(l), named_kids(r));
+    let ([l], [r]) = (ls.as_slice(), rs.as_slice()) else {
+        return None;
+    };
+    if l.kind() != "selector_expression" || r.kind() != "call_expression" {
+        return None;
+    }
+    let lt = text(*l, src).trim();
+    let callee = text(r.child_by_field_name("function")?, src);
+    if callee.starts_with(&format!("{lt}."))
+        || matches!(
+            callee,
+            "append" | "len" | "cap" | "make" | "min" | "max" | "string"
+        )
+    {
+        return None;
+    }
+    let args = r.child_by_field_name("arguments")?;
+    let own = named_kids(args).iter().any(|a| text(*a, src).trim() == lt);
+    if !own {
+        return None;
+    }
+    Some(text(l.child_by_field_name("field")?, src).to_owned())
+}
+
+/// True for a field type that can hold the value it replaces: an interface, a func or a
+/// pointer to a self-referencing type (the cases the DLA chain rule reports).
+fn can_hold_predecessor(ty: &str, info: &ProjectInfo) -> bool {
+    let t = ty.trim();
+    t.starts_with("interface")
+        || matches!(t, "context.Context" | "any")
+        || info.go_interfaces.contains(t)
+        || t.strip_prefix('*')
+            .is_some_and(|b| info.selfref.contains(b.trim()))
 }
 
 fn container_type() -> &'static Regex {
@@ -212,6 +268,11 @@ pub fn holders(cx: &mut Cx<'_>, root: Node<'_>) {
                         )
                     } else if ty.contains("time.Ticker") || ty.contains("time.Timer") {
                         ("timer-field", Holder::BlockedStack, Region::NonHeap)
+                    } else if cx.info.go_self_wrapped.contains(name)
+                        && can_hold_predecessor(ty, cx.info)
+                    {
+                        // Written only by wrapping its own value: a chain that can grow.
+                        ("container-field", Holder::ContainerField, Region::Heap)
                     } else {
                         continue;
                     };
@@ -391,5 +452,24 @@ mod tests {
         let built = "package p\ntype Hub struct {\n\tsubs []int\n}\ntype Inner struct {\n\titems map[string]int\n}\ntype App struct {\n\tin *Inner\n}\nfunc main() {\n\t_ = &App{}\n}\n";
         let owners: Vec<String> = run(built).iter().map(|h| h.owner.clone()).collect();
         assert_eq!(owners, ["p.a.Hub.subs", "p.a.Inner.items"]);
+    }
+
+    #[test]
+    fn a_field_wrapped_around_its_own_value_is_listed() {
+        let wrapped = "package p\ntype Poller struct {\n\tctx context.Context\n\tpath string\n}\nfunc (p *Poller) Lookup(s string) {\n\tp.ctx = trace.Start(p.ctx, \"lookup\")\n\tp.path = filepath.Join(p.path, s)\n}\n";
+        let r = run(wrapped);
+        let got: Vec<(u32, &str, &str)> = r
+            .iter()
+            .map(|h| (h.line, h.kind.as_str(), h.holder.as_str()))
+            .collect();
+        assert_eq!(got, [(3, "container-field", "container-field")]);
+        assert_eq!(r[0].region.as_str(), "heap");
+        assert_eq!(r[0].owner, "p.a.Poller.ctx");
+        // Only assigned a fresh value, or taken from a call on the field itself: not listed.
+        let fresh = "package p\ntype Poller struct {\n\tctx context.Context\n}\nfunc (p *Poller) Reset() {\n\tp.ctx = context.Background()\n\tp.ctx = p.ctx.Parent()\n}\n";
+        assert!(run(fresh).is_empty());
+        // A project interface counts as a type that can hold the value it replaces.
+        let iface = "package p\ntype Stage interface{ Next() }\ntype Pipe struct {\n\tcur Stage\n}\nfunc (p *Pipe) Add() {\n\tp.cur = wrap(p.cur)\n}\n";
+        assert_eq!(run(iface).len(), 1);
     }
 }

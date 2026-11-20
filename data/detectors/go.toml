@@ -201,3 +201,23 @@ verified = true
 precision_prior = 0.5
 default_enabled = true
 note = "time.NewTicker result never has Stop called in the file."
+
+[[detector]]
+id = "dla/go-slice-view-retained"
+backend = "dla"
+rule = "go-slice-view-retained"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.3
+default_enabled = true
+note = "A slice parameter is stored un-copied into accumulating receiver or package state (an indexed store, an append, or an insert call on a field), and a call site in the project passes a view of a larger buffer (a sub-slice, or the result of bytes.Cut, bytes.SplitN, bytes.Fields and the like), so every stored entry keeps its whole source buffer alive."
+
+[[detector]]
+id = "dla/go-chain-head-growth"
+backend = "dla"
+rule = "go-chain-head-growth"
+suggested_archetype = ""
+verified = true
+precision_prior = 0.3
+default_enabled = true
+note = "A field of a long-lived struct (or a package variable) is reassigned from a call that takes the field's own value (p.ctx = start(p.ctx, ...)), its type can hold what it replaces (an interface such as context.Context, a func, or a pointer to a self-referencing type; an error wrapped around itself is left out), and nothing in the project resets or unwraps it (retention chain)."

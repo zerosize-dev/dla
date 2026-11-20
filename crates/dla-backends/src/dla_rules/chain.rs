@@ -2,12 +2,17 @@
 //! keeps the previous head (`rec.previous = latest; latest = rec`, or
 //! `latest = new Context(..., latest)`), with nothing in the project that unlinks old
 //! entries. The head can be a module global, a static field or a member of a long-lived
-//! object. Shared by the JVM, Node and Python rule sets.
+//! object. Shared by the JVM, Node and Python rule sets; Go has its own entry point
+//! ([`go_chain_growth`]) because its heads are fields of a receiver or package variables
+//! and a wrapping object is built by an ordinary call, not a constructor.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use dla_census::parse::{Lang, tree_sitter::Node};
-use dla_core::static_hit::StaticHit;
+use dla_core::{
+    finding::{Holder, Region},
+    static_hit::StaticHit,
+};
 
 use super::ast::{
     UseIndex, ancestor, find_all, last_token, line, local_names, named_children, removal_is_live,
@@ -250,6 +255,242 @@ pub fn chain_growth(files: &[SrcFile], uses: &UseIndex, rule: &str) -> Vec<Stati
         .collect()
 }
 
+/// Calls that never wrap their argument in a new object that keeps it.
+const GO_PLAIN_CALLS: [&str; 14] = [
+    "append", "len", "cap", "make", "new", "copy", "min", "max", "string", "int", "int64",
+    "float64", "uint64", "bool",
+];
+
+/// True for a type text that can hold the value it replaces: an interface (`context.Context`,
+/// `any`, one declared in the project), a func, or a pointer to a type with a field of its
+/// own type. Scalars, strings, slices, maps and time types cannot. `error` is left out: an
+/// error wrapped around itself (`err = fmt.Errorf("%w", err)`) is nearly always a one-off on
+/// a failure path, not a chain that grows with the work.
+fn go_can_hold_predecessor(
+    ty: &str,
+    interfaces: &HashSet<String>,
+    selfref: &HashSet<String>,
+) -> bool {
+    let t = ty.trim();
+    if t.starts_with("func(") || t.starts_with("interface") {
+        return true;
+    }
+    if let Some(base) = t.strip_prefix('*') {
+        return selfref.contains(base.trim());
+    }
+    matches!(t, "context.Context" | "any") || interfaces.contains(t)
+}
+
+/// The Go retention-chain check: a field of a receiver (or a package variable) is
+/// reassigned from a call that takes the field's own value as an argument
+/// (`p.ctx = start(p.ctx, ...)`), the field's type can hold what it replaces, and nothing in
+/// the project resets or unwraps the field. Reported at the assignment.
+pub fn go_chain_growth(files: &[SrcFile], rule: &str) -> Vec<StaticHit> {
+    let mut field_types: HashMap<(String, String), String> = HashMap::new();
+    let mut var_types: HashMap<String, String> = HashMap::new();
+    let mut interfaces: HashSet<String> = HashSet::new();
+    let mut selfref: HashSet<String> = HashSet::new();
+    let mut type_file: HashMap<String, usize> = HashMap::new();
+    for (fi, f) in files.iter().enumerate() {
+        let src = f.text.as_str();
+        walk(f.tree.root_node(), &mut |n| match n.kind() {
+            "type_spec" => {
+                let (Some(name), Some(ty)) =
+                    (n.child_by_field_name("name"), n.child_by_field_name("type"))
+                else {
+                    return;
+                };
+                let name = txt(name, src).to_owned();
+                match ty.kind() {
+                    "interface_type" => {
+                        interfaces.insert(name);
+                    }
+                    "struct_type" => {
+                        type_file.entry(name.clone()).or_insert(fi);
+                        for fd in find_all(ty, &["field_declaration"]) {
+                            let Some(t) = fd.child_by_field_name("type") else {
+                                continue;
+                            };
+                            let tt = txt(t, src).trim().to_owned();
+                            if tt.trim_start_matches(['*', '[', ']']) == name {
+                                selfref.insert(name.clone());
+                            }
+                            let mut c = fd.walk();
+                            for id in fd.children_by_field_name("name", &mut c) {
+                                field_types
+                                    .insert((name.clone(), txt(id, src).to_owned()), tt.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "var_spec"
+                if ancestor(
+                    n,
+                    &["function_declaration", "method_declaration", "func_literal"],
+                )
+                .is_none() =>
+            {
+                if let Some(t) = n.child_by_field_name("type") {
+                    let mut c = n.walk();
+                    for id in n.children_by_field_name("name", &mut c) {
+                        var_types.insert(txt(id, src).to_owned(), txt(t, src).trim().to_owned());
+                    }
+                }
+            }
+            _ => {}
+        });
+    }
+
+    struct GoAdvance {
+        file: usize,
+        line: u32,
+        key: String,
+        field: String,
+        owner: String,
+        holder: Holder,
+    }
+    let mut advances: Vec<GoAdvance> = Vec::new();
+    let mut unlinked: HashSet<String> = HashSet::new();
+    for (fi, f) in files.iter().enumerate() {
+        let src = f.text.as_str();
+        for func in find_all(
+            f.tree.root_node(),
+            &["function_declaration", "method_declaration"],
+        ) {
+            let Some(body) = func.child_by_field_name("body") else {
+                continue;
+            };
+            let recv = func.child_by_field_name("receiver").and_then(|r| {
+                let p = named_children(r).into_iter().next()?;
+                let name = p
+                    .child_by_field_name("name")
+                    .map(|n| txt(n, src).to_owned())?;
+                let ty = txt(p.child_by_field_name("type")?, src)
+                    .trim_start_matches('*')
+                    .split('[')
+                    .next()?
+                    .to_owned();
+                Some((name, ty))
+            });
+            let params = params_of(func, src);
+            let locals = local_names(body, src, f.lang);
+            for a in find_all(body, &["assignment_statement"]) {
+                let (Some(l), Some(r)) = (
+                    a.child_by_field_name("left"),
+                    a.child_by_field_name("right"),
+                ) else {
+                    continue;
+                };
+                let (ls, rs) = (named_children(l), named_children(r));
+                let (&[l], &[r]) = (ls.as_slice(), rs.as_slice()) else {
+                    continue;
+                };
+                let lt = txt(l, src).trim();
+                // The head: a field of the receiver, or a package variable.
+                let (key, field, ty, owner, holder) = match l.kind() {
+                    "selector_expression" => {
+                        let (Some((rn, rt)), Some(op), Some(fld)) = (
+                            recv.as_ref(),
+                            l.child_by_field_name("operand"),
+                            l.child_by_field_name("field"),
+                        ) else {
+                            continue;
+                        };
+                        if txt(op, src) != rn {
+                            continue;
+                        }
+                        let fld = txt(fld, src).to_owned();
+                        let at = type_file.get(rt).copied().unwrap_or(fi);
+                        (
+                            format!("{rt}.{fld}"),
+                            fld.clone(),
+                            field_types.get(&(rt.clone(), fld.clone())).cloned(),
+                            format!(
+                                "{}.{rt}.{fld}",
+                                dla_census::model::module_path(&files[at].rel)
+                            ),
+                            Holder::ContainerField,
+                        )
+                    }
+                    "identifier" => {
+                        let name = lt.to_owned();
+                        if params.contains(&name) || locals.contains(&name) {
+                            continue;
+                        }
+                        let Some(t) = var_types.get(&name) else {
+                            continue;
+                        };
+                        (
+                            format!("var {name}"),
+                            name.clone(),
+                            Some(t.clone()),
+                            format!("{}.{name}", dla_census::model::module_path(&f.rel)),
+                            Holder::StaticGlobal,
+                        )
+                    }
+                    _ => continue,
+                };
+                let rt_text = txt(r, src).trim();
+                let advance = r.kind() == "call_expression" && {
+                    let callee = r.child_by_field_name("function");
+                    let callee_text = callee.map_or("", |c| txt(c, src));
+                    let plain = GO_PLAIN_CALLS.contains(&callee_text);
+                    let args = r
+                        .child_by_field_name("arguments")
+                        .map(named_children)
+                        .unwrap_or_default();
+                    // `p.ctx.Parent()` is a step back, not a wrap: the head is the receiver.
+                    let on_head = callee_text.starts_with(&format!("{lt}."));
+                    !plain && !on_head && args.iter().any(|x| txt(*x, src).trim() == lt)
+                };
+                if advance {
+                    let holds = ty
+                        .as_deref()
+                        .is_some_and(|t| go_can_hold_predecessor(t, &interfaces, &selfref));
+                    if holds {
+                        advances.push(GoAdvance {
+                            file: fi,
+                            line: line(a),
+                            key,
+                            field,
+                            owner,
+                            holder,
+                        });
+                    }
+                } else if rt_text == "nil"
+                    || rt_text.starts_with("context.Background(")
+                    || rt_text.starts_with("context.TODO(")
+                    || tokens(rt_text).contains(&lt.rsplit('.').next().unwrap_or(lt))
+                {
+                    // A reset, or a step back (`p.ctx = p.ctx.Parent()`): the chain is bounded.
+                    unlinked.insert(key);
+                }
+            }
+        }
+    }
+    advances
+        .into_iter()
+        .filter(|a| !unlinked.contains(&a.key))
+        .map(|a| {
+            let mut h = hit(
+                rule,
+                &files[a.file],
+                a.line,
+                format!(
+                    "`{}` is reassigned from a call that wraps its own previous value, and nothing in the project resets or unwraps it, so the chain behind it only grows",
+                    a.field
+                ),
+            );
+            h.holder = Some(a.holder);
+            h.owner = Some(a.owner);
+            h.region = Some(Region::Heap);
+            h
+        })
+        .collect()
+}
+
 fn top_names(f: &SrcFile) -> HashSet<String> {
     let src = f.text.as_str();
     let mut out = HashSet::new();
@@ -330,5 +571,47 @@ mod tests {
         assert!(hits(Runtime::Node, &[("h.js", local)]).is_empty());
         let unlinked = format!("{leak}\nfunction trim(s) {{ s.latest = s.latest.previous; }}\n");
         assert!(hits(Runtime::Node, &[("s.js", &unlinked)]).is_empty());
+    }
+
+    #[test]
+    fn go_field_wrapped_around_its_own_value() {
+        let leak = "package rates\n\ntype P struct {\n\tctx context.Context\n}\n\nfunc (p *P) Lookup(pair string) {\n\tp.ctx = trace.Start(p.ctx, \"lookup\")\n}\n";
+        let h = hits(Runtime::Go, &[("rates/p.go", leak)]);
+        assert_eq!(sites(&h, "go-chain-head-growth"), ["rates/p.go:8"]);
+        assert_eq!(h[0].holder, Some(dla_core::finding::Holder::ContainerField));
+        assert_eq!(h[0].region, Some(dla_core::finding::Region::Heap));
+        assert_eq!(h[0].owner.as_deref(), Some("rates.p.P.ctx"));
+        // A package variable is a head as well.
+        let global = "package p\n\nvar current context.Context\n\nfunc step() {\n\tcurrent = trace.Start(current, \"x\")\n}\n";
+        assert_eq!(
+            sites(
+                &hits(Runtime::Go, &[("p/g.go", global)]),
+                "go-chain-head-growth"
+            ),
+            ["p/g.go:6"]
+        );
+    }
+
+    #[test]
+    fn go_chain_is_quiet_for_locals_resets_and_other_types() {
+        let local = "package p\n\nfunc f(ctx context.Context) context.Context {\n\tctx = trace.Start(ctx, \"x\")\n\treturn ctx\n}\n";
+        assert!(hits(Runtime::Go, &[("p/a.go", local)]).is_empty());
+        let fresh = "package p\n\ntype P struct{ ctx context.Context }\n\nfunc (p *P) Reset() {\n\tp.ctx = context.Background()\n}\n";
+        assert!(hits(Runtime::Go, &[("p/a.go", fresh)]).is_empty());
+        let scalars = "package p\n\ntype P struct {\n\tn     int\n\titems []int\n\tpath  string\n}\n\nfunc (p *P) f(x int, s string) {\n\tp.n = max(p.n, x)\n\tp.items = append(p.items, x)\n\tp.path = filepath.Join(p.path, s)\n}\n";
+        assert!(hits(Runtime::Go, &[("p/a.go", scalars)]).is_empty());
+        // An error wrapped around itself is a one-off on a failure path, not a chain.
+        let err = "package p\n\ntype R struct{ err error }\n\nfunc (r *R) fail() {\n\tr.err = fmt.Errorf(\"retry: %w\", r.err)\n}\n";
+        assert!(hits(Runtime::Go, &[("p/r.go", err)]).is_empty());
+        // The same wrap, undone somewhere in the project, is bounded.
+        let wrapped = "package p\n\ntype P struct{ ctx context.Context }\n\nfunc (p *P) Lookup() {\n\tp.ctx = trace.Start(p.ctx, \"x\")\n}\n";
+        let undone =
+            format!("{wrapped}\nfunc (p *P) Done() {{\n\tp.ctx = context.Background()\n}}\n");
+        assert!(hits(Runtime::Go, &[("p/a.go", &undone)]).is_empty());
+        let popped = format!("{wrapped}\nfunc (p *P) Back() {{\n\tp.ctx = p.ctx.Parent()\n}}\n");
+        assert!(hits(Runtime::Go, &[("p/a.go", &popped)]).is_empty());
+        // A struct value or a field of another receiver is not a head.
+        let other = "package p\n\ntype Cfg struct{ a int }\ntype P struct{ cfg Cfg }\n\nfunc (p *P) f(q *P) {\n\tp.cfg = merge(p.cfg, 1)\n\tq.cfg = merge(q.cfg, 2)\n}\n";
+        assert!(hits(Runtime::Go, &[("p/a.go", other)]).is_empty());
     }
 }

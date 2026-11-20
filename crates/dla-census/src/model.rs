@@ -117,6 +117,11 @@ pub struct ProjectInfo {
     pub longlived: std::collections::HashSet<String>,
     /// For each owner type, the type names mentioned by its fields.
     pub holds: std::collections::HashMap<String, Vec<String>>,
+    /// Go: names of interface types declared in the project.
+    pub go_interfaces: std::collections::HashSet<String>,
+    /// Go: names of fields reassigned from a call that takes their own value
+    /// (`p.ctx = start(p.ctx, ..)`), the shape of a retention chain.
+    pub go_self_wrapped: std::collections::HashSet<String>,
 }
 
 impl ProjectInfo {

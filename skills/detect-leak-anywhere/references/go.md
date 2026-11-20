@@ -28,6 +28,29 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `dla install go-toolchain-1.27` (tier 1; it downloads the toolchain into the Go module cache, outside the
   project). Record the candidate `unresolved` (`tool_missing`) if you cannot install it.
 
+## Static rules
+`dla sweep --lang go` runs five DLA rules of its own beside the Go linters; the candidate of each rule
+is an open question for the dynamic stages, not a verdict.
+- `dla/go-goroutine-no-stop-path`, `dla/go-time-tick`, `dla/go-ticker-no-stop`: see `references/go-archetypes.md`, row L-WORKER.
+- `dla/go-slice-view-retained` (no archetype, prior 0.3): a slice parameter is stored without a copy into
+  state that accumulates (`x.f[k] = p`, `x.f = append(x.f, p)`, or an insert call on a field whose argument is
+  `p` or a literal holding `p`), and a call site in the project passes a view of a larger buffer (a
+  sub-slice, or the result of `bytes.Cut`, `bytes.SplitN`, `bytes.Fields` and the like, also through a
+  struct field set from one). The hit is at the store line and its message names the parameter, the
+  container, the feeding call and the origin of the view. Each stored entry then keeps its whole source
+  buffer alive, which a heap profile blames on the allocation site, not on the store. The rule is quiet for
+  `bytes.Clone`, `slices.Clone`, `append([]byte(nil), p...)`, `string(p)`, a copy into a fresh slice, a
+  `string` parameter and a pool `Put` fed only by buffers from `Get` or `make`. The candidate carries its
+  holder (`container-field`, or `static/global` for a package variable), its owner and region `heap`.
+- `dla/go-chain-head-growth` (no archetype, prior 0.3): a field of a receiver (or a package variable) is
+  reassigned from a call that takes the field's own value, `p.ctx = trace.Start(p.ctx, ...)`, the field's type
+  can hold what it replaces (an interface such as `context.Context`, a func, or a pointer to a
+  type that points to itself; an `error` wrapped around itself is left out, it is a one-off on a failure
+  path), and nothing in the project resets it (`= nil`, `context.Background()`) or
+  steps it back (`p.ctx = p.ctx.Parent()`). The hit is at the assignment. `dla census --lang go` lists
+  such a field as `container-field` (region `heap`) with the assignment as its writer, so a heap
+  allocation stack that ends in the wrapping call ties to the finding.
+
 ## Attach backends
 | Backend | Tier | Notes |
 |---|---|---|
@@ -53,7 +76,9 @@ There is no jcmd-style attach for Go. Prefer the harness.
 - debug=2 goroutine text carries no pprof label values.
 - Known leak: timers before Go 1.23 (see `references/backends.md`, known leaks): `dla probe` reports it when
   the `go` line is older and the source makes timers or tickers.
-- Heap profiles blame the allocation site, not the holder (a subslice pinning a large buffer).
+- Heap profiles blame the allocation site, not the holder (a subslice pinning a large buffer): the
+  stacks that tie to the store of `dla/go-slice-view-retained` carry only the small stored objects, and the
+  buffers they pin are allocated elsewhere.
 - Maps and pools keep peak capacity: a flat entry count with high memory is a high-water mark,
   not necessarily a leak.
 - Memory held by cgo or by the runtime outside the Go heap is not in a heap profile.
