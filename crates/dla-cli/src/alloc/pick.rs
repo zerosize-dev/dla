@@ -110,9 +110,11 @@ pub fn latest_trend(run_dir: &Path, harness: &str) -> Option<TrendReport> {
 const GO_IN_RUN: &str = "go.heap_live.in_run";
 
 /// The column a region is summarized by in `series`. Of the heap columns, `go.heap_live.in_run`
-/// leads only when `trend` passed it through the gate: on a series where it is flat the exit
-/// column decides exactly as before, on one where it grows the exit column is flat for a reason
-/// that has nothing to do with the finding.
+/// leads only when `trend` passed it through the gate and did not pass the exit column
+/// `go.heap_live`: where the exit column passed too, the state survives the exit and the exact
+/// exit reading decides (the in-run one is a floor over a few samples, the noisier of the two);
+/// where only the in-run column grows, the exit column is flat for a reason that has nothing to
+/// do with the finding.
 fn region_primary(
     series: &SeriesFile,
     region: Option<SeriesRegion>,
@@ -121,9 +123,12 @@ fn region_primary(
     if region == Some(SeriesRegion::Heap)
         && series.column_index(GO_IN_RUN).is_some()
         && trend.is_some_and(|t| {
-            t.columns
-                .iter()
-                .any(|c| c.name == GO_IN_RUN && c.gate == GateVerdict::Pass)
+            let passed = |n: &str| {
+                t.columns
+                    .iter()
+                    .any(|c| c.name == n && c.gate == GateVerdict::Pass)
+            };
+            passed(GO_IN_RUN) && !passed("go.heap_live")
         })
     {
         return GO_IN_RUN;
@@ -567,6 +572,35 @@ mod tests {
         let t = trend(&["go.heap_live.in_run"]);
         let p = pick(&s, &ledger, Some(&non_heap_finding()), &[], Some(&t), "H1").unwrap();
         assert_eq!(p.primary.as_deref(), Some("go.goroutines"));
+    }
+
+    #[test]
+    fn the_exit_heap_column_leads_when_it_passed_the_trend_beside_the_in_run_one() {
+        let s = series_of(&[
+            "go.heap_live",
+            "go.heap_live.in_run",
+            "go.goroutines",
+            "os.rss",
+        ]);
+        let ledger = Ledger::from_text("").unwrap();
+        let both = trend(&["go.heap_live", "go.heap_live.in_run"]);
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&both), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"), "{}", p.basis);
+        assert!(!p.basis.contains("in-run"), "{}", p.basis);
+        let only = trend(&["go.heap_live.in_run"]);
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&only), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live.in_run"));
+        let neither = trend(&["os.rss"]);
+        let p = pick(
+            &s,
+            &ledger,
+            Some(&heap_finding()),
+            &[],
+            Some(&neither),
+            "H1",
+        )
+        .unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"));
     }
 
     #[test]

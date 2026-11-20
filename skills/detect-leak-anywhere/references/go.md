@@ -27,7 +27,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   workload ran; on the leaks measured it was 65 to 87 % of the true growth. The base `go.*` columns keep
   their meaning (read after `main`, after two collections), and driver mode has no in-run column.
   `dla alloc-test --finding` on a heap finding takes `go.heap_live.in_run` as its heap column only when
-  the latest trend passed it through the gate; otherwise `go.heap_live` decides as before. The in-run
+  the latest trend passed it through the gate and did not pass `go.heap_live`; otherwise `go.heap_live` decides. The in-run
   columns have no purge reading and no pre-GC twin, and `dla gap --residual` still reads `go.heap_live`.
   With `--capture alloc` the heap profile of a point is the one of the last sample (role "taken in the
   run at <ms> ms"), in place of the exit profile; goroutine captures stay at exit. Limitation lines say
