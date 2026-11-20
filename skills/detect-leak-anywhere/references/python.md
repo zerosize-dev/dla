@@ -15,6 +15,15 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `sys.getsizeof`, and probes of module-level containers, `lru_cache` wrappers (`currsize`) and
   class attributes (`PyModule`, `PyGlobal`, `PyAttr`). `values_pre_gc` shows cyclic garbage waiting
   for the collector.
+- Frozen garbage: after a `gc.freeze()` call the record has `py.gc_frozen@<file:line>` (objects in the
+  permanent generation, per call site; the shares sum to `gc.get_freeze_count()`), and a limitation line
+  says that `py.gc_objects` and the type counts leave those objects out. Signature of the leak: `py.traced`
+  keeps growing after the forced collection while `py.gc_objects` and the type counts stay flat or tiny,
+  and `py.gc_frozen@site` grows with the work. The census lists a `gc.freeze()` inside a function
+  (kind `gc-freeze`, holder cycle-only); a module-level call is the documented use before a fork and is
+  not listed. The label is `UNCLASSIFIED` (no Python row names it). The fix: freeze once in the parent
+  before the fork, or `gc.unfreeze()` and `gc.collect()` after the batch; deleting the per-batch call also
+  works. The frozen count is a count, so the bytes growth is tied to the site through the group column.
 - Purges: `trim` (glibc `malloc_trim` through ctypes) and `gc`.
 - Raw captures: `dla harness run H1 --capture histogram,alloc,nonheap`. `histogram` writes
   `py-<n>.types.json` (300 types by instance count), `alloc` writes `py-<n>.alloc.json` (tracemalloc live
@@ -23,6 +32,14 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `py-<n>.nonheap.json` (threads by name pattern and creation site, pending asyncio tasks, ResourceWarning
   sites). Run the `dla summarize` commands the harness prints. A run with `alloc` is for attribution, not
   for the trend: tracemalloc with several frames and memray slow the points that take them.
+
+## Census
+- Native codec contexts are listed as kind `handle`, holder `native-handle/global-ref`, off-heap, like
+  `mmap.mmap` and `sqlite3.connect`: constructors named `compressobj`, `decompressobj`, `BZ2Compressor`,
+  `BZ2Decompressor`, `LZMACompressor`, `LZMADecompressor`, `ZstdCompressor`, `ZstdDecompressor` and `ZstdDict`
+  (the name must end the callee; `zlib.crc32`, `zstd.compress` and `zstd.decompress` are not listed). The
+  entry is where a native object is made, so it names the holder of a value a C extension fails to release
+  on an error path (a rejected option, a bad dictionary); it does not say the leak exists.
 
 ## Attach backends
 | Backend | Tier | Notes |

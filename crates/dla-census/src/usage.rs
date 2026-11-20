@@ -322,4 +322,18 @@ mod tests {
         assert_eq!(u[1].writers, ["p/B.java:8"]);
         assert_eq!(u[1].removers, ["p/B.java:9"]);
     }
+
+    #[test]
+    fn go_field_wrapped_from_a_call_is_a_writer() {
+        let f = file(
+            "p/poller.go",
+            "func (p *P) Lookup() {\n\tp.ctx = trace.Start(p.ctx, \"x\")\n\tq, err := p.src.Fetch(p.ctx, pair)\n}\nfunc (p *P) Where() string {\n\treturn trace.Path(p.ctx, 3)\n}\n",
+        );
+        let u = find(
+            &[raw("ctx", "p/poller.go", 99, Scope::Dir("p".into()), true)],
+            &[f],
+        );
+        assert_eq!(u[0].writers, ["p/poller.go:2"], "{u:?}");
+        assert!(u[0].removers.is_empty(), "{u:?}");
+    }
 }

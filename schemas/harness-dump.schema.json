@@ -79,6 +79,17 @@
         }
       }
     },
+    "in_run": {
+      "description": "How the in-run readings were taken.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DumpInRun"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "limitations": {
       "description": "Known limits of this dump.",
       "type": [
@@ -160,6 +171,20 @@
     },
     "values": {
       "description": "Readings (after the forced collection where the runtime has one).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": [
+          "number",
+          "null"
+        ],
+        "format": "double"
+      }
+    },
+    "values_in_run": {
+      "description": "Readings taken while the workload ran (Go command mode): the floor of the\nafter-collection readings of the last third of the run. Absent when no sample ended\nbefore the exit record.",
       "type": [
         "object",
         "null"
@@ -320,6 +345,61 @@
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "DumpInRun": {
+      "description": "How the in-run readings of a record were taken (Go command mode).",
+      "type": "object",
+      "properties": {
+        "end_ms": {
+          "description": "Milliseconds since the process started when the sampler was stopped.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "reading_ms": {
+          "description": "Milliseconds since the process started at which the reported sample ended.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "samples": {
+          "description": "Samples that ended before the exit path started.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "spent_ms": {
+          "description": "Milliseconds spent inside samples (collection, reading, profile).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "statistic": {
+          "description": "The statistic the reading is: `floor-last-third`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window_samples": {
+          "description": "Samples that ended in the last third of the run (the window the reading is taken from).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         }
       }
     },

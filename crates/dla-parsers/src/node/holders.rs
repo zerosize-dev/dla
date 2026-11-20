@@ -12,6 +12,11 @@
 //!   (registration-table);
 //! * any other property of an object: `Instance` (container-field).
 //!
+//! A FinalizationRegistry keeps a cell per registration; a cell with a live weak `target` is a
+//! `Registration` holder (registry `finalization`) named by the module variable that keeps its
+//! target alive (see [`Snapshot::finalization_holders`]); cells whose target is gone are a
+//! cleanup backlog and are not counted.
+//!
 //! Holders of the same kind, script, owner and name are summed across their instances
 //! (every session's closure variable is one holder). The script of a context or a class
 //! comes from the closures that use the context and from the class constructor's
@@ -28,6 +33,14 @@ const NONE: u32 = u32::MAX;
 const PATH_HOPS: usize = 10;
 /// Longest name kept.
 const NAME_MAX: usize = 120;
+/// Own-property hops of the reverse walk from a registration target to a module variable.
+const OWNER_HOPS: usize = 2;
+/// Nodes the reverse walk of one target visits at most.
+const OWNER_VISITS: usize = 2_000;
+/// Targets (largest first) whose owner is looked up.
+const OWNER_TARGETS: usize = 512;
+/// Parameters of the CommonJS wrapper: a module variable of these names is not an owner.
+const WRAPPER_PARAMS: [&str; 5] = ["module", "exports", "require", "__filename", "__dirname"];
 
 /// What kind of reference a holder is.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -131,6 +144,19 @@ fn clip(s: &str) -> String {
         s.to_owned()
     } else {
         s.chars().take(NAME_MAX).collect()
+    }
+}
+
+/// Incoming property, element and context edges per node.
+struct RevIndex {
+    start: Vec<u32>,
+    /// `(from node, edge)`.
+    rows: Vec<(u32, u32)>,
+}
+
+impl RevIndex {
+    fn of(&self, n: usize) -> &[(u32, u32)] {
+        &self.rows[self.start[n] as usize..self.start[n + 1] as usize]
     }
 }
 
@@ -550,6 +576,12 @@ impl Snapshot {
                 root_kind,
             });
         }
+        let registrations = self.finalization_holders(opts);
+        if !registrations.is_empty() {
+            holders.extend(registrations);
+            holders.sort_by_key(|h| std::cmp::Reverse(h.retained));
+            holders.truncate(opts.max_holders);
+        }
         HolderSummary {
             nodes: self.node_count() as u64,
             edges: self.edge_count() as u64,
@@ -562,6 +594,218 @@ impl Snapshot {
                 "weak edges are skipped; string contents are never read into the summary".to_owned(),
             ],
         }
+    }
+
+    /// The holders made by FinalizationRegistry cells.
+    ///
+    /// Every `system / WeakCell` with a weak edge named `target` is one registration; cells
+    /// without one (the target is dead and the cleanup is pending) are not counted. The cells
+    /// are grouped by target; a cell's bytes are its own size plus its holdings object's. The
+    /// owner of a group is the module-scope variable that keeps the target alive, found by a
+    /// bounded reverse walk ([`Snapshot::target_owner`]). A target with exactly one owner adds
+    /// to that owner's holder; a target with none or several adds to nothing: a tie is never
+    /// forced.
+    fn finalization_holders(&self, opts: &HolderOptions) -> Vec<Holder> {
+        let (Some(weak), Some(hidden)) = (self.kinds.e_weak, self.kinds.e_hidden) else {
+            return Vec::new();
+        };
+        // target -> (cells, bytes)
+        let mut by_target: HashMap<usize, (u64, u64)> = HashMap::new();
+        for n in 0..self.node_count() {
+            if self.node_name(n) != "system / WeakCell" {
+                continue;
+            }
+            let mut target = None;
+            let mut holdings = 0u64;
+            for e in self.edges_of(n) {
+                let t = self.edge_type(e);
+                if t == weak && self.edge_name(e) == Some("target") {
+                    target = Some(self.edge_target(e));
+                } else if t == hidden && holdings == 0 {
+                    let h = self.edge_target(e);
+                    let name = self.node_name(h);
+                    if !name.starts_with("system /") && name != "FinalizationRegistry" {
+                        holdings = self.self_size(h);
+                    }
+                }
+            }
+            if let Some(target) = target {
+                let g = by_target.entry(target).or_default();
+                g.0 += 1;
+                g.1 =
+                    g.1.saturating_add(self.self_size(n))
+                        .saturating_add(holdings);
+            }
+        }
+        let mut targets: Vec<(usize, (u64, u64))> = by_target
+            .into_iter()
+            .filter(|(_, (_, bytes))| *bytes >= 1)
+            .collect();
+        targets.sort_by(|a, b| b.1.1.cmp(&a.1.1).then(a.0.cmp(&b.0)));
+        targets.truncate(OWNER_TARGETS);
+        if targets.is_empty() || targets.iter().map(|t| t.1.1).sum::<u64>() < opts.min_retained {
+            return Vec::new();
+        }
+        let ix = self.build_index();
+        let rev = self.reverse_index();
+        // (script, variable) -> (cells, bytes, targets, path of the largest target)
+        type Owner = (u64, u64, u64, u64, Vec<Hop>);
+        let mut owners: BTreeMap<(u32, String), Owner> = BTreeMap::new();
+        for (target, (cells, bytes)) in targets {
+            if let Some((script, var, path)) = self.target_owner(&ix, &rev, target) {
+                let o = owners.entry((script as u32, var)).or_default();
+                o.0 += cells;
+                o.1 = o.1.saturating_add(bytes);
+                o.2 += 1;
+                if bytes > o.3 {
+                    o.3 = bytes;
+                    o.4 = path;
+                }
+            }
+        }
+        owners
+            .into_iter()
+            .filter(|(_, o)| o.1 >= opts.min_retained)
+            .map(|((script, var), (cells, bytes, targets, _, path))| Holder {
+                kind: HolderKind::Registration,
+                registry: Some("finalization".to_owned()),
+                name: clip(&var),
+                owner: String::new(),
+                script: self.script_name(script as usize),
+                retained: bytes,
+                count: cells,
+                instances: targets,
+                path,
+                accumulation: Some(Accumulation {
+                    class: "system / WeakCell".to_owned(),
+                    count: cells,
+                    bytes,
+                }),
+                root_kind: Some(HolderKind::Registration),
+            })
+            .collect()
+    }
+
+    /// The incoming property, element and context edges of every node, as
+    /// `(from, edge)` rows grouped by target.
+    fn reverse_index(&self) -> RevIndex {
+        let n = self.node_count();
+        let wanted = |t: u32| {
+            Some(t) == self.kinds.e_property
+                || Some(t) == self.kinds.e_element
+                || Some(t) == self.kinds.e_context
+        };
+        let mut start = vec![0u32; n + 1];
+        for u in 0..n {
+            for e in self.edges_of(u) {
+                if wanted(self.edge_type(e)) {
+                    start[self.edge_target(e) + 1] += 1;
+                }
+            }
+        }
+        for i in 0..n {
+            start[i + 1] += start[i];
+        }
+        let mut fill = start.clone();
+        let mut rows = vec![(0u32, 0u32); start[n] as usize];
+        for u in 0..n {
+            for e in self.edges_of(u) {
+                if wanted(self.edge_type(e)) {
+                    let t = self.edge_target(e);
+                    rows[fill[t] as usize] = (u as u32, e as u32);
+                    fill[t] += 1;
+                }
+            }
+        }
+        RevIndex { start, rows }
+    }
+
+    /// The module-scope variable that keeps `target` alive: a reverse walk over property and
+    /// element edges of at most [`OWNER_HOPS`] hops that ends on the first context-variable
+    /// edge. An object that a `Module` references by `exports`, and the wrapper parameters
+    /// (`module`, `exports`, `require`, ...), are not walked: they name how the module is
+    /// shared, not what owns the value. Variables of node internals and of unnamed scripts
+    /// are not project-owned and do not count. Exactly one variable gives its script, name and
+    /// the path; none or several give `None`.
+    fn target_owner(
+        &self,
+        ix: &Index,
+        rev: &RevIndex,
+        target: usize,
+    ) -> Option<(usize, String, Vec<Hop>)> {
+        let mut found: Vec<(usize, String, Vec<Hop>)> = Vec::new();
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::from([target]);
+        // (node, hops taken, path below the node)
+        let mut frontier: Vec<(usize, Vec<Hop>)> = vec![(target, Vec::new())];
+        let mut visits = 0usize;
+        for hops in 0..=OWNER_HOPS {
+            let mut next: Vec<(usize, Vec<Hop>)> = Vec::new();
+            for (n, below) in &frontier {
+                for &(from, e) in rev.of(*n) {
+                    visits += 1;
+                    if visits > OWNER_VISITS {
+                        return None;
+                    }
+                    let (from, e) = (from as usize, e as usize);
+                    let t = self.edge_type(e);
+                    let ename = self.edge_name(e);
+                    if Some(t) == self.kinds.e_context {
+                        let var = ename.unwrap_or_default();
+                        if !self.is_context(from)
+                            || !self.is_top_context(from)
+                            || WRAPPER_PARAMS.contains(&var)
+                        {
+                            continue;
+                        }
+                        let Some(script) = self.script_of_context(ix, from) else {
+                            continue;
+                        };
+                        if self
+                            .script_name(script)
+                            .is_none_or(|s| s.starts_with("node:"))
+                        {
+                            continue;
+                        }
+                        let mut path = vec![Hop {
+                            node: clip(self.node_name(from)),
+                            edge: format!(".{}", clip(var)),
+                        }];
+                        path.extend(below.iter().cloned());
+                        if !found.iter().any(|(s, v, _)| *s == script && v == var) {
+                            found.push((script, var.to_owned(), path));
+                        }
+                    } else if hops < OWNER_HOPS && seen.insert(from) {
+                        let name = ename.unwrap_or_default();
+                        if matches!(name, "__proto__" | "constructor" | "prototype")
+                            || self.is_context(from)
+                            || self.node_name(from).starts_with("system /")
+                            || self.is_module_exports(rev, from)
+                        {
+                            continue;
+                        }
+                        let mut path = vec![Hop {
+                            node: clip(self.node_name(from)),
+                            edge: ename.map_or_else(
+                                || format!("[{}]", self.edge_index(e)),
+                                |s| format!(".{}", clip(s)),
+                            ),
+                        }];
+                        path.extend(below.iter().cloned());
+                        next.push((from, path));
+                    }
+                }
+            }
+            frontier = next;
+        }
+        if found.len() == 1 { found.pop() } else { None }
+    }
+
+    /// True when a `Module` node references `n` by its `exports` property.
+    fn is_module_exports(&self, rev: &RevIndex, n: usize) -> bool {
+        rev.of(n).iter().any(|&(from, e)| {
+            self.edge_name(e as usize) == Some("exports")
+                && self.node_name(from as usize) == "Module"
+        })
     }
 
     /// The most common class among the objects `v` dominates.
@@ -852,5 +1096,167 @@ mod tests {
             .expect("A.b holder");
         assert_eq!(ab.retained, 40 * (n as u64 - 1));
         assert!(ab.instances > 1);
+    }
+
+    /// A registry whose cells name `live` targets (`signal`), plus `dead` cells whose target
+    /// is gone. The signal is `#signal` of a controller held by the variable `var` of the
+    /// module context of `/work/src/lifecycle.js`; `extra` adds more scaffolding.
+    fn registry_snapshot(live: usize, dead: usize, extra: &str) -> Vec<N<'static>> {
+        let mut v: Vec<N<'static>> = vec![
+            // 0 root, 1 GC roots
+            ("synthetic", "", 0, vec![("element", "0", 1)]),
+            (
+                "synthetic",
+                "(GC roots)",
+                0,
+                vec![
+                    ("element", "0", 2),
+                    ("element", "1", 4),
+                    ("element", "2", 8),
+                ],
+            ),
+            // 2 module context of lifecycle.js
+            (
+                "object",
+                "system / Context",
+                32,
+                vec![
+                    ("context", "stop", 9),
+                    ("internal", "previous", 3),
+                    ("context", "module", 11),
+                ],
+            ),
+            ("hidden", "system / NativeContext", 100, vec![]),
+            // 4 a closure of the module, 5 its code, 6 the script
+            (
+                "closure",
+                "start",
+                24,
+                vec![("internal", "context", 2), ("internal", "shared", 5)],
+            ),
+            ("code", "start", 16, vec![("internal", "script", 6)]),
+            ("code", "/work/src/lifecycle.js", 8, vec![]),
+            ("object", "unused", 0, vec![]),
+            // 8 the registry; its cells are added below
+            ("object", "FinalizationRegistry", 80, vec![]),
+            // 9 controller with a private field, 10 signal
+            (
+                "object",
+                "AbortController",
+                24,
+                vec![("property", "#signal", 10)],
+            ),
+            ("object", "AbortSignal", 88, vec![]),
+            // 11 module object of lifecycle.js, 12 its exports object
+            ("object", "Module", 40, vec![("property", "exports", 12)]),
+            ("object", "Object", 24, vec![("property", "signal", 10)]),
+        ];
+        let mut cells = Vec::new();
+        for i in 0..live + dead {
+            let at = v.len();
+            let holdings = at + 1;
+            let mut edges = vec![("hidden", "0", 8usize), ("hidden", "2", holdings)];
+            if i < live {
+                edges.insert(0, ("weak", "target", 10));
+            }
+            v.push(("hidden", "system / WeakCell", 72, edges));
+            v.push(("object", "Object", 40, vec![]));
+            cells.push(at);
+        }
+        let reg_edges: Vec<(&'static str, &'static str, usize)> =
+            cells.iter().map(|&c| ("hidden", "0", c)).collect();
+        v[8].3 = reg_edges;
+        if extra == "second-owner" {
+            // a second module variable of the same script holds the controller too
+            v[2].3.push(("context", "again", 9));
+        }
+        if extra == "direct" {
+            // the variable holds the signal itself
+            v[2].3.retain(|e| e.1 != "stop");
+            v[2].3.push(("context", "stop", 10));
+        }
+        if extra == "too-deep" {
+            // stop -> controller -> a -> b -> c -> signal: three property hops, past the bound
+            v[9].3 = vec![("property", "a", v.len())];
+            let at = v.len();
+            v.push(("object", "A", 24, vec![("property", "b", at + 1)]));
+            v.push(("object", "B", 24, vec![("property", "c", at + 2)]));
+            v.push(("object", "C", 24, vec![("property", "signal", 10)]));
+        }
+        if extra == "function-scope" {
+            // a variable of a function context, not of the module
+            v[2].3.retain(|e| e.1 != "previous");
+        }
+        if extra == "exports-only" {
+            // nothing but the exports object and the wrapper's `module` keep the signal
+            v[2].3.retain(|e| e.1 != "stop");
+            v[2].3.push(("context", "lifecycle", 12));
+        }
+        v
+    }
+
+    #[test]
+    fn finalization_cells_with_a_live_target_are_a_registration_holder_of_the_owner() {
+        let s = load(&registry_snapshot(30, 12, ""));
+        let h = holders_of(&s);
+        let reg: Vec<&Holder> = h
+            .holders
+            .iter()
+            .filter(|x| x.registry.as_deref() == Some("finalization"))
+            .collect();
+        assert_eq!(reg.len(), 1, "{:?}", h.holders);
+        let r = reg[0];
+        assert_eq!(r.kind, HolderKind::Registration);
+        assert_eq!(r.name, "stop");
+        assert_eq!(r.script.as_deref(), Some("/work/src/lifecycle.js"));
+        // only the 30 cells with a target: cell plus holdings each, the 12 dead ones are no one's
+        assert_eq!(r.count, 30);
+        assert_eq!(r.retained, 30 * (72 + 40));
+        assert_eq!(r.root_kind, Some(HolderKind::Registration));
+        assert!(
+            r.path.iter().any(|p| p.edge == ".#signal") && r.path.iter().any(|p| p.edge == ".stop"),
+            "{:?}",
+            r.path
+        );
+    }
+
+    #[test]
+    fn cells_without_a_live_target_make_no_holder() {
+        let s = load(&registry_snapshot(0, 40, ""));
+        let h = holders_of(&s);
+        assert!(
+            h.holders
+                .iter()
+                .all(|x| x.registry.as_deref() != Some("finalization")),
+            "{:?}",
+            h.holders
+        );
+    }
+
+    #[test]
+    fn the_owner_is_found_when_the_variable_holds_the_target_itself() {
+        let s = load(&registry_snapshot(30, 0, "direct"));
+        let h = holders_of(&s);
+        let r = h
+            .holders
+            .iter()
+            .find(|x| x.registry.as_deref() == Some("finalization"))
+            .unwrap_or_else(|| panic!("{:?}", h.holders));
+        assert_eq!((r.name.as_str(), r.count), ("stop", 30));
+    }
+
+    #[test]
+    fn a_target_kept_by_two_variables_or_only_by_exports_has_no_owner() {
+        for extra in ["second-owner", "exports-only", "too-deep", "function-scope"] {
+            let s = load(&registry_snapshot(30, 0, extra));
+            let h = holders_of(&s);
+            assert!(
+                h.holders
+                    .iter()
+                    .all(|x| x.registry.as_deref() != Some("finalization")),
+                "{extra}: {:?}",
+                h.holders
+            );
+        }
     }
 }

@@ -751,3 +751,208 @@ fn a_driver_reports_the_functions_it_ran_in_its_checkpoints() {
     let first = recs.iter().find(|r| r["phase"] == "checkpoint").unwrap();
     assert_eq!(first["coverage"]["kind"], "functions", "{first}");
 }
+
+/// Runs `script` as `<project>/<name>` under the agent and returns every record it wrote. A
+/// script calls `sitecustomize.checkpoint(k)` where it wants a reading.
+fn records_of(run: &Run, name: &str, script: &str) -> Vec<Value> {
+    fs::write(run.project.join(name), script).unwrap();
+    run.python(&[name], &[]);
+    run.records()
+}
+
+fn frozen(rec: &Value) -> std::collections::BTreeMap<String, f64> {
+    rec["groups"]["py.gc_frozen"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), v.as_f64().unwrap()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn frozen_limitation(rec: &Value) -> bool {
+    rec["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l.as_str().unwrap().contains("permanent generation"))
+}
+
+const CYCLES: &str = "import gc, sitecustomize\n\
+     class Node:\n\
+     \x20   def __init__(self):\n\
+     \x20       self.me = self\n\
+     def churn(n):\n\
+     \x20   return [Node() for _ in range(n)]\n";
+
+#[test]
+fn a_freeze_in_a_loop_is_attributed_to_its_call_site_and_rises() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let recs = records_of(
+        &run,
+        "freezer.py",
+        &format!(
+            "{CYCLES}def batch(k):\n\
+             \x20   held = churn(2000)\n\
+             \x20   gc.freeze()\n\
+             \x20   del held\n\
+             \x20   sitecustomize.checkpoint(k)\n\
+             for k in range(1, 4):\n\
+             \x20   batch(k)\n"
+        ),
+    );
+    let cps: Vec<&Value> = recs.iter().filter(|r| r["phase"] == "checkpoint").collect();
+    assert_eq!(cps.len(), 3, "{recs:?}");
+    let series: Vec<f64> = cps
+        .iter()
+        .map(|r| {
+            let g = frozen(r);
+            assert_eq!(g.keys().collect::<Vec<_>>(), ["freezer.py:9"], "{g:?}");
+            g["freezer.py:9"]
+        })
+        .collect();
+    assert!(
+        series[1] - series[0] >= 1500.0 && series[2] - series[1] >= 1500.0,
+        "{series:?}"
+    );
+    assert!(cps.iter().all(|r| frozen_limitation(r)), "{cps:?}");
+}
+
+#[test]
+fn the_shares_of_several_sites_sum_to_the_current_freeze_count() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let recs = records_of(
+        &run,
+        "two.py",
+        &format!(
+            "{CYCLES}def early():\n\
+             \x20   gc.freeze()\n\
+             def temp():\n\
+             \x20   held = [[] for _ in range(4000)]\n\
+             \x20   gc.freeze()\n\
+             \x20   del held\n\
+             def later():\n\
+             \x20   held = churn(3000)\n\
+             \x20   gc.freeze()\n\
+             \x20   del held\n\
+             early()\n\
+             temp()\n\
+             later()\n\
+             later()\n\
+             sitecustomize.checkpoint(1, True)\n"
+        ),
+    );
+    let rec = recs.iter().find(|r| r["phase"] == "checkpoint").unwrap();
+    let g = frozen(rec);
+    assert_eq!(
+        g.keys().cloned().collect::<Vec<_>>(),
+        ["two.py:11", "two.py:15", "two.py:8"],
+        "{g:?}"
+    );
+    let count: f64 = rec["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|l| {
+            l.as_str()?
+                .strip_prefix("gc.freeze moved ")?
+                .split(' ')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .expect("limitation names the count");
+    assert_eq!(g.values().sum::<f64>(), count, "{g:?}");
+    assert!(g["two.py:15"] >= 1500.0, "{g:?}");
+}
+
+#[test]
+fn one_freeze_stays_flat_and_an_unfreeze_with_a_collection_empties_the_group() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let once = records_of(
+        &run,
+        "once.py",
+        &format!(
+            "{CYCLES}def setup():\n\
+             \x20   held = churn(3000)\n\
+             \x20   gc.freeze()\n\
+             \x20   del held\n\
+             setup()\n\
+             for k in range(1, 4):\n\
+             \x20   churn(3000)\n\
+             \x20   gc.collect()\n\
+             \x20   sitecustomize.checkpoint(k)\n"
+        ),
+    );
+    let series: Vec<f64> = once
+        .iter()
+        .filter(|r| r["phase"] == "checkpoint")
+        .map(|r| frozen(r)["once.py:9"])
+        .collect();
+    assert_eq!(series.len(), 3);
+    assert!(series[2] - series[0] <= 50.0, "{series:?}");
+    let _ = fs::remove_file(run.out());
+    let cycled = records_of(
+        &run,
+        "cycled.py",
+        &format!(
+            "{CYCLES}def batch(k):\n\
+             \x20   held = churn(3000)\n\
+             \x20   gc.freeze()\n\
+             \x20   del held\n\
+             \x20   gc.unfreeze()\n\
+             \x20   gc.collect()\n\
+             \x20   sitecustomize.checkpoint(k)\n\
+             for k in range(1, 4):\n\
+             \x20   batch(k)\n"
+        ),
+    );
+    for r in cycled.iter().filter(|r| r["phase"] == "checkpoint") {
+        assert_eq!(frozen(r).get("cycled.py:9"), Some(&0.0), "{r}");
+        assert!(!frozen_limitation(r), "{r}");
+    }
+}
+
+#[test]
+fn without_a_freeze_there_is_no_group_and_a_failing_freeze_reaches_the_target() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    let none = records_of(
+        &run,
+        "plain.py",
+        &format!("{CYCLES}churn(500)\ngc.collect()\nsitecustomize.checkpoint(1)\n"),
+    );
+    assert!(
+        none.iter()
+            .all(|r| r.get("groups").is_none() && !frozen_limitation(r)),
+        "{none:?}"
+    );
+    let _ = fs::remove_file(run.out());
+    // A bad call fails with the interpreter's own error, and the agent writes nothing about it.
+    let bad = records_of(
+        &run,
+        "bad.py",
+        "import gc, sitecustomize\n\
+         def f():\n\
+         \x20   try:\n\
+         \x20       gc.freeze(1)\n\
+         \x20   except TypeError:\n\
+         \x20       print('typeerror')\n\
+         f()\n\
+         sitecustomize.checkpoint(1)\n",
+    );
+    let rec = bad.iter().find(|r| r["phase"] == "checkpoint").unwrap();
+    assert_eq!(frozen(rec).values().sum::<f64>(), 0.0, "{rec}");
+}

@@ -2593,6 +2593,52 @@ mod tests {
         assert_eq!(r.favors, Favors::NonLeak, "{:?}", r.supports);
     }
 
+    /// A Go series whose exit-time heap is flat and whose in-run heap column (no purge entry, no
+    /// `.pre_gc` twin) rises by `step` per point.
+    fn go_in_run(step: f64) -> SeriesFile {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("go.heap_live.in_run")];
+        s.columns[1].region = SeriesRegion::Heap;
+        s.columns[1].after_gc = true;
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![Some(500e6), Some(8e6 + step * i as f64)];
+        }
+        s
+    }
+
+    #[test]
+    fn an_in_run_column_has_no_purge_and_no_gc_reading_and_is_judged_by_its_own_shape() {
+        let mut lim = Vec::new();
+        let r = test_column(
+            &go_in_run(120_000.0),
+            "go.heap_live.in_run",
+            true,
+            6,
+            None,
+            &mut lim,
+        )
+        .unwrap();
+        assert!(r.purge.is_none() && r.gc.is_none(), "{r:?}");
+        assert_eq!(r.favors, Favors::Leak, "{:?} {:?}", r.plateau, r.supports);
+        let r = test_column(
+            &go_in_run(0.0),
+            "go.heap_live.in_run",
+            true,
+            6,
+            None,
+            &mut lim,
+        )
+        .unwrap();
+        assert!(r.purge.is_none() && r.gc.is_none(), "{r:?}");
+        assert_eq!(
+            r.favors,
+            Favors::NonLeak,
+            "{:?} {:?}",
+            r.plateau,
+            r.supports
+        );
+    }
+
     fn gate_passed(name: &str) -> ColumnTrend {
         ColumnTrend {
             name: name.to_owned(),

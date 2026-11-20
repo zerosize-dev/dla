@@ -93,7 +93,7 @@ pub fn parse_record(line: &str) -> Option<Rec> {
     let obj = doc.as_object_mut()?;
     let raw_sites = obj.remove("raw_sites").filter(|v| !v.is_null());
     let modules = obj.remove("modules").filter(|v| !v.is_null());
-    for key in ["values", "values_pre_gc"] {
+    for key in ["values", "values_pre_gc", "values_in_run"] {
         if let Some(v) = obj.get_mut(key) {
             numeric_only(v);
         }
@@ -144,6 +144,8 @@ pub fn parse_record(line: &str) -> Option<Rec> {
                 "purge",
                 "groups",
                 "values_pre_gc",
+                "values_in_run",
+                "in_run",
                 "values",
             ] {
                 doc.as_object_mut()?.remove(key);
@@ -473,6 +475,31 @@ mod tests {
         assert!(r.dump.values.as_ref().unwrap().get("bad").is_none());
         assert!(r.raw_sites.is_some() && r.modules.is_some());
         assert!(r.dump.raw_sites.is_none());
+    }
+
+    #[test]
+    fn in_run_readings_keep_numbers_and_a_malformed_section_does_not_lose_the_measurement() {
+        let l = line(json!({
+            "dla_harness":1,"phase":"exit","pid":5,"runtime":"go","x":1000,
+            "values":{"go.heap_live":10},
+            "values_in_run":{"go.heap_live":9000000,"go.heap_objects":null,"bad":"str"},
+            "in_run":{"samples":4,"window_samples":2,"reading_ms":50.5,"end_ms":60.0,
+                "spent_ms":9.0,"statistic":"floor-last-third"}
+        }));
+        let r = parse_record(&l).unwrap();
+        let in_run = r.dump.values_in_run.as_ref().unwrap();
+        assert_eq!(in_run["go.heap_live"], Some(9_000_000.0));
+        assert!(in_run.get("bad").is_none(), "{in_run:?}");
+        assert_eq!(r.dump.in_run.as_ref().unwrap().samples, Some(4));
+        // A string where the section is an object: the base readings survive.
+        let l = line(json!({
+            "dla_harness":1,"phase":"exit","pid":5,"runtime":"go","x":1000,
+            "values":{"go.heap_live":10},
+            "in_run":{"samples":"many","reading_ms":[1]}
+        }));
+        let r = parse_record(&l).unwrap();
+        assert_eq!(r.value("go.heap_live"), Some(10.0));
+        assert!(r.dump.in_run.is_none());
     }
 
     #[test]

@@ -242,6 +242,11 @@ pub fn build_series(
                     t.set(&format!("{name}.pre_gc"), i, *v, src);
                 }
             }
+            for (name, v) in d.values_in_run.iter().flatten() {
+                if let (Some(v), false) = (v, name.starts_with("os.")) {
+                    t.set(&format!("{name}.in_run"), i, *v, src);
+                }
+            }
             for (base, sites) in d.groups.iter().flatten() {
                 present_bases[i].insert(base.clone());
                 for (site, v) in sites {
@@ -628,6 +633,62 @@ mod tests {
             s.values(g),
             [Some(100.0), Some(200.0), Some(300.0), Some(400.0)]
         );
+    }
+
+    #[test]
+    fn in_run_readings_become_catalog_columns_and_only_where_a_point_has_them() {
+        let pts: Vec<PointInput> = (1..=4)
+            .map(|k| {
+                let n = 100.0 * f64::from(k);
+                let mut rec = json!({"dla_harness":1,"phase":"exit","pid":1,"runtime":"go",
+                    "values":{"go.heap_live": 180e3, "go.heap_objects": 190e3, "os.rss": 5e6}});
+                if k != 2 {
+                    rec["values_in_run"] = json!({"go.heap_live": 1e6*n, "go.heap_objects": 2e6*n,
+                        "os.rss": 9e9});
+                }
+                pt(n, rec)
+            })
+            .collect();
+        let s = build_series(&ctx(), &manifest(Runtime::Go), &params(), &pts);
+        s.validate().unwrap();
+        let names: Vec<_> = s.columns.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"go.heap_live.in_run"), "{names:?}");
+        assert!(names.contains(&"go.heap_objects.in_run"));
+        assert!(
+            !names.iter().any(|n| n.starts_with("os.rss.")),
+            "an os. key gives no in-run column: {names:?}"
+        );
+        let i = s.column_index("go.heap_live.in_run").unwrap();
+        let c = &s.columns[i];
+        assert_eq!(
+            (c.unit, c.region, c.after_gc, c.baseline),
+            (
+                dla_core::series::Unit::Bytes,
+                SeriesRegion::Heap,
+                true,
+                false
+            )
+        );
+        assert_eq!(
+            s.values(i),
+            [Some(100e6), None, Some(300e6), Some(400e6)],
+            "a point without a reading has none"
+        );
+        // The base column keeps the exit-time figures.
+        let b = s.column_index("go.heap_live").unwrap();
+        assert_eq!(s.values(b), [Some(180e3); 4]);
+        // A series of points with no in-run reading has no in-run column.
+        let plain: Vec<PointInput> = (1..=4)
+            .map(|k| {
+                pt(
+                    100.0 * f64::from(k),
+                    json!({"dla_harness":1,"phase":"exit","pid":1,"runtime":"go",
+                        "values":{"go.heap_live": 180e3}}),
+                )
+            })
+            .collect();
+        let s = build_series(&ctx(), &manifest(Runtime::Go), &params(), &plain);
+        assert!(s.column_index("go.heap_live.in_run").is_none());
     }
 
     #[test]

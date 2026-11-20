@@ -16,6 +16,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `node.heap_used`, `node.heap_total`, `node.external`, `node.array_buffers`, native contexts,
   `node.malloced_memory`, `node.active.<Type>`, `node.timers`, `node.listeners` (grouped by
   `file:line`), the `os.*` set, and module-binding probes (`NodeModule`, `NodeBinding`; CommonJS only).
+  A probe whose root the agent cannot enter (a function, a leaf or opaque value, or an instance of a class
+  with no own keys, as a class with only `#private` fields has) writes no `probe:` column and says so in a
+  limitation; it never reads as a flat line. Such a finding is ruled on by the whole-process columns and a
+  holder column, not refuted by a probe.
 - Purge: `gc`.
 - Raw captures: `dla harness run H1 --capture heap,alloc,nonheap` (`histogram` and `jfr` are JVM kinds and
   become a limitation). `alloc` writes sampling heap profiles (`alloc-<n>.heapprofile`), `nonheap` a
@@ -57,6 +61,17 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   the ledger changes a holder already set only with that growth evidence, when one of its passing columns
   is tied to F and observed that kind. Any other change of a set holder is refused.
   New candidates come from project holders only (at most 3 per run), without a site and with the root kind.
+- Runtime bookkeeping that the project feeds shows as a registration holder. The cells of a
+  `FinalizationRegistry` whose weak target is still alive are grouped by that target and named by the
+  module variable that keeps the target alive (a reverse walk of at most two property hops, not through a
+  `Module`'s `exports` object or the wrapper parameters `module`, `exports`, `require`, `__filename`,
+  `__dirname`): the view is `registry:finalization:<module>.<variable>`, kind registration-table, and it ties
+  to the census finding of that variable by owner. Cells without a target (the object is gone, the cleanup is
+  pending) are a backlog and are not counted; a target with no owner or with two owners gives no holder. When
+  the same owner also has a plain `static:` holder, the registry one is the bound holder.
+  Holders inside `node:` modules are not tracked; when the only holders that grow strictly are those, the
+  result says so in `reasons` and `needed` points at the project's own registration or at a probe or
+  allocation stack, not at another snapshot.
 - `alloc-<n>.heapprofile`: `dla summarize alloc-stack-diff`. Frames of `dla-preload.js` and builtins are
   skipped. A `<script>.map` next to a bundled script is applied.
 - `resources.json`: `dla summarize non-heap`. A group `Timeout@src/heartbeat.js:15` ties to the finding

@@ -473,6 +473,97 @@ fn node_timers_are_counted_by_site_and_the_cleared_control_has_none() {
     assert!(ratio(ctl, "node.heap_used") < 1.3);
 }
 
+/// A probe whose root the walk cannot enter writes no column and says so: before, a controller whose
+/// state sits in `#private` fields (own keys: none), a function and a leaf each read a constant 1, and a
+/// flat line like that refuted a true finding. Roots that can be measured keep their column.
+#[test]
+fn node_probe_of_an_unenterable_root_writes_no_column_and_a_limitation() {
+    if !have(&["node"]) {
+        return;
+    }
+    let fx = fixture("", &["node"], &[1]);
+    fs::write(
+        fx.work.join("state.js"),
+        "'use strict';\n\
+         const stop = new AbortController();\n\
+         class Vault { #m = new Map(); put(k) { this.#m.set(k, k); } }\n\
+         const vault = new Vault();\n\
+         class Box { constructor() { this.items = []; } }\n\
+         const box = new Box();\n\
+         const plain = {};\n\
+         const bare = Object.create(null);\n\
+         const registry = new Map();\n\
+         const list = [];\n\
+         const handler = () => registry.size;\n\
+         const pending = new Promise(() => {});\n\
+         class Cache extends Map {}\n\
+         const cache = new Cache();\n\
+         function grow(i) { vault.put(i); box.items.push(i); plain['k' + i] = i; bare['k' + i] = i; registry.set(i, i); list.push(i); cache.set(i, i); }\n\
+         module.exports = { grow };\n",
+    )
+    .unwrap();
+    fs::write(
+        fx.work.join("run.js"),
+        "'use strict';\nconst { grow } = require('./state');\n\
+         const n = Number.parseInt(process.argv[2], 10);\n\
+         for (let i = 0; i < n; i++) grow(i);\n",
+    )
+    .unwrap();
+    let preload = fx.agent.join("dla-preload.js");
+    let mut m = manifest(
+        Runtime::Node,
+        &["node", "run.js", "{n}"],
+        vec![(
+            s("NODE_OPTIONS"),
+            format!("--require {}", preload.display()),
+        )],
+        500,
+    );
+    m.agent = AgentKind::NodePreload;
+    m.probes = [
+        "stop", "vault", "box", "plain", "bare", "registry", "list", "handler", "pending", "cache",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, name)| ProbeSpec {
+        id: format!("P{}", i + 1),
+        finding: None,
+        target: ProbeTarget::NodeBinding {
+            file: s("state.js"),
+            name: (*name).to_owned(),
+        },
+        site: None,
+    })
+    .collect();
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let series = load(&fx, &out, 0);
+    let cols: Vec<&str> = series.columns.iter().map(|c| c.name.as_str()).collect();
+    for name in ["stop", "vault", "handler", "pending"] {
+        let col = format!("probe:state.js:{name}");
+        assert!(
+            !cols.iter().any(|c| c.starts_with(&col)),
+            "{name} must have no column: {cols:?}"
+        );
+        assert!(
+            out.limitations
+                .iter()
+                .any(|l| l.contains(&format!("probe state.js:{name}:"))
+                    && l.contains("cannot measure")),
+            "{name}: {:?}",
+            out.limitations
+        );
+    }
+    for name in ["box", "plain", "bare", "registry", "list", "cache"] {
+        let col = format!("probe:state.js:{name}");
+        assert!(
+            cols.iter().any(|c| c.starts_with(&col)),
+            "{name} keeps its column: {cols:?}"
+        );
+    }
+    assert!(passes(&series, "probe:state.js:registry.size"), "{cols:?}");
+}
+
 /// The purge record's `before` is the reading the column's series holds at the last point
 /// (after that point's forced collections), so per-step garbage collected by the purge is
 /// not counted as released memory: a small retained growth plus large per-step garbage is
@@ -622,6 +713,314 @@ fn go_goroutines_are_counted_by_creation_site() {
     let ctl = &results[1];
     assert!(ctl.column_index(name).is_none());
     assert!(ratio(ctl, "go.heap_live") < 1.5);
+}
+
+/// A Go program whose state lives in locals of the workload: `fill` allocates `-n` buffers of
+/// 8 KB, `main` keeps them while it sleeps 250 ms and returns, so they are dead at exit.
+const GO_LOCALS_MAIN: &str = r#"package main
+
+import (
+	"flag"
+	"runtime"
+	"time"
+)
+
+//go:noinline
+func fill(n int) [][]byte {
+	held := make([][]byte, 0, 16)
+	for i := 0; i < n; i++ {
+		b := make([]byte, 8192)
+		b[0] = byte(i)
+		held = append(held, b)
+	}
+	return held
+}
+
+func main() {
+	n := flag.Int("n", 0, "buffers to allocate")
+	flag.Parse()
+	held := fill(*n)
+	time.Sleep(250 * time.Millisecond)
+	runtime.KeepAlive(held)
+}
+"#;
+
+/// A Go program that returns at once.
+const GO_NOTHING_MAIN: &str = r#"package main
+
+import "flag"
+
+func main() {
+	flag.Int("n", 0, "ignored")
+	flag.Parse()
+}
+"#;
+
+/// Runs a command-mode Go harness over an inline project (`main_src` in the root package),
+/// five points at step 1000, with `env` added and the captures of `capture`.
+fn go_inline(
+    main_src: &str,
+    env: &[(&str, &str)],
+    capture: dla_workload::harness::capture::CaptureSet,
+) -> (Fx, RunOutput, SeriesFile) {
+    let fx = fixture("", &["go"], &[1]);
+    fs::write(
+        fx.work.join("go.mod"),
+        "module example.com/inrun\n\ngo 1.21\n",
+    )
+    .unwrap();
+    fs::write(fx.work.join("main.go"), main_src).unwrap();
+    let tmpl = fs::read_to_string(fx.agent.join("zz_dla_harness_test.go.tmpl")).unwrap();
+    fs::write(
+        fx.work.join("zz_dla_harness_test.go"),
+        tmpl.replace("@@DLA_PACKAGE@@", "main"),
+    )
+    .unwrap();
+    let mut vars = vec![
+        (s("DLA_ARGS"), s(r#"["-n","{n}"]"#)),
+        (s("GOFLAGS"), s("-mod=mod")),
+        (s("GOPROXY"), s("off")),
+    ];
+    vars.extend(env.iter().map(|(k, v)| (s(k), s(v))));
+    let mut m = manifest(
+        Runtime::Go,
+        &[
+            "go",
+            "test",
+            "-vet=off",
+            "-count=1",
+            "-run",
+            "^TestDLAHarness$",
+            "-coverprofile",
+            "{cov}/{label}.out",
+            "-coverpkg=./...",
+            ".",
+        ],
+        vars,
+        1000,
+    );
+    m.agent = AgentKind::GoTestWrapper;
+    m.iterations = 4;
+    write_manifest(&fx, &m);
+    let opts = RunOptions {
+        capture,
+        ..RunOptions::default()
+    };
+    let out = run_points(&fx.ctx, &m, &opts).unwrap();
+    let series = load(&fx, &out, 0);
+    (fx, out, series)
+}
+
+#[test]
+fn go_command_mode_reads_state_owned_by_locals_while_the_workload_runs() {
+    if !have(&["go"]) {
+        return;
+    }
+    let (_fx, _out, series) = go_inline(GO_LOCALS_MAIN, &[], Default::default());
+    // The exit reading is of a finished program: the buffers are dead, whatever n was.
+    let base = series.column_index("go.heap_live").unwrap();
+    for p in &series.points {
+        assert!(
+            p.values[base].unwrap() < 1e6,
+            "exit go.heap_live at n={}: {:?}",
+            p.x,
+            p.values[base]
+        );
+    }
+    // The reading taken in the run holds the buffers: above half of what was allocated at the
+    // last point, and rising over the points.
+    let col = post(&series, "go.heap_live.in_run");
+    let (last_x, last) = *col.last().unwrap();
+    assert!(
+        last > 0.5 * last_x * 8192.0,
+        "in-run reading {last} at n={last_x}: {col:?}"
+    );
+    assert!(last > col.first().unwrap().1 * 1.5, "{col:?}");
+    assert!(series.column_index("go.heap_objects.in_run").is_some());
+    let i = series.column_index("go.heap_live.in_run").unwrap();
+    let m = &series.columns[i];
+    assert_eq!(
+        (m.region, m.after_gc, m.baseline),
+        (SeriesRegion::Heap, true, false)
+    );
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("go.*.in_run: the lowest after-collection reading")),
+        "{:?}",
+        series.limitations
+    );
+}
+
+#[test]
+fn go_command_mode_writes_the_heap_profile_taken_in_the_run_with_the_allocating_stack() {
+    if !have(&["go"]) {
+        return;
+    }
+    let capture = dla_workload::harness::capture::CaptureSet {
+        alloc: true,
+        ..Default::default()
+    };
+    let (fx, out, _series) = go_inline(GO_LOCALS_MAIN, &[], capture);
+    let heaps: Vec<_> = out
+        .captures
+        .iter()
+        .filter(|c| c.path.ends_with(".heap.pb.gz"))
+        .collect();
+    // Points that take heavy captures (the default is four of the five) get one heap profile
+    // each, and none of them is the exit-time profile.
+    assert!(heaps.len() >= 3, "{:?}", out.captures);
+    let mut labels: Vec<_> = heaps.iter().map(|c| c.label.as_str()).collect();
+    labels.dedup();
+    assert_eq!(labels.len(), heaps.len(), "one heap profile per point");
+    for c in &heaps {
+        let role = c.role.as_deref().unwrap_or_default();
+        assert!(role.contains("taken in the run"), "{role}");
+    }
+    let last = heaps.last().unwrap();
+    let bytes = fs::read(fx.ctx.run_dir.join(&last.path)).unwrap();
+    let profile =
+        dla_parsers::go::heap::to_alloc_profile(&dla_parsers::go::pprof::read(&bytes).unwrap())
+            .unwrap();
+    let held: u64 = profile
+        .groups
+        .iter()
+        .filter(|g| g.frames.iter().any(|f| f.function.ends_with("inrun.fill")))
+        .map(|g| g.live_bytes)
+        .sum();
+    // How much of it the last sample saw depends on how many collections the time budget
+    // allowed on a loaded machine; the exit-time profile has no stack through `fill` at all.
+    assert!(
+        held > 1_000_000,
+        "inrun.fill holds {held} B at n={:?}: {:?}",
+        last.x,
+        profile
+            .groups
+            .iter()
+            .map(|g| &g.frames[0].function)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn go_command_mode_says_when_no_sample_ended_and_keeps_the_base_columns() {
+    if !have(&["go"]) {
+        return;
+    }
+    for (env, line) in [
+        (
+            vec![],
+            "the workload ended before the first sample finished",
+        ),
+        (
+            vec![("DLA_INRUN", "off")],
+            "the sampler was switched off with DLA_INRUN=off",
+        ),
+    ] {
+        let (_fx, _out, series) = go_inline(GO_NOTHING_MAIN, &env, Default::default());
+        assert!(
+            series.column_index("go.heap_live.in_run").is_none(),
+            "{:?}",
+            series.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        assert!(series.column_index("go.heap_live").is_some());
+        assert!(series.column_index("go.heap_live.pre_gc").is_none());
+        assert!(
+            series.limitations.iter().any(|l| l.contains(line)),
+            "{line}: {:?}",
+            series.limitations
+        );
+    }
+}
+
+#[test]
+fn go_command_mode_without_an_in_run_heap_profile_keeps_the_exit_profile_and_says_so() {
+    if !have(&["go"]) {
+        return;
+    }
+    let capture = dla_workload::harness::capture::CaptureSet {
+        alloc: true,
+        ..Default::default()
+    };
+    let (_fx, out, series) = go_inline(GO_LOCALS_MAIN, &[("DLA_INRUN", "off")], capture);
+    let heaps: Vec<_> = out
+        .captures
+        .iter()
+        .filter(|c| c.path.ends_with(".heap.pb.gz"))
+        .collect();
+    assert!(!heaps.is_empty(), "{:?}", out.captures);
+    for c in &heaps {
+        let role = c.role.as_deref().unwrap_or_default();
+        assert!(!role.contains("taken in the run"), "{role}");
+    }
+    assert!(
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("no heap profile was taken in the run")),
+        "{:?}",
+        series.limitations
+    );
+}
+
+#[test]
+fn go_driver_mode_records_carry_no_in_run_readings() {
+    if !have(&["go"]) {
+        return;
+    }
+    let fx = fixture("", &["go"], &[1]);
+    fs::write(
+        fx.work.join("go.mod"),
+        "module example.com/drv\n\ngo 1.21\n",
+    )
+    .unwrap();
+    fs::write(fx.work.join("main.go"), "package main\n\nfunc main() {}\n").unwrap();
+    let tmpl = fs::read_to_string(fx.agent.join("zz_dla_driver_test.go.tmpl")).unwrap();
+    let filled = tmpl
+        .replace("@@DLA_PACKAGE@@", "main")
+        .replace("@@DLA_STEP@@", "10")
+        .replace("@@DLA_WARMUP@@", "1")
+        .replace("@@DLA_ROUNDS@@", "2")
+        .replace("@@DLA_REPEAT@@", "5")
+        .replace(r#"panic("DLA-HOOK setup has not been filled in")"#, "_ = 0")
+        .replace(
+            r#"panic("DLA-HOOK unit has not been filled in")"#,
+            "_ = make([]byte, 1024)",
+        );
+    fs::write(fx.work.join("zz_dla_driver_test.go"), filled).unwrap();
+    let out_file = fx.work.join("driver.jsonl");
+    let status = Command::new("go")
+        .args([
+            "test",
+            "-vet=off",
+            "-count=1",
+            "-run",
+            "^TestDLADriver$",
+            ".",
+        ])
+        .current_dir(&fx.work)
+        .env("DLA_HARNESS_OUT", &out_file)
+        .env("GOFLAGS", "-mod=mod")
+        .env("GOPROXY", "off")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let text = fs::read_to_string(&out_file).unwrap();
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(records.len() >= 3, "{text}");
+    for r in &records {
+        assert!(
+            r.get("values_in_run").is_none() && r.get("in_run").is_none(),
+            "{r}"
+        );
+        assert!(r["values"]["go.heap_live"].is_number(), "{r}");
+    }
 }
 
 // The shim is preloaded with `LD_PRELOAD` and symbolized with GNU `addr2line`: Linux only.

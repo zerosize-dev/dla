@@ -40,6 +40,8 @@ prints the workload's stdout; keep it in the harness log.
   (`/memory/classes/heap/stacks:bytes`), `go.goroutines` (`/sched/goroutines:goroutines`; includes the
   test runner and the workload's main goroutine); and the `os.*` figures from `/proc/self/status`.
   `values_pre_gc`: `go.heap_objects`, `go.total`, `go.goroutines`, `os.rss` before the collections.
+- `values_in_run` and `in_run` (command mode only, on the `exit` record): the reading taken while
+  `main` ran, see "The in-run sampler" below. Absent in driver mode and when no sample ended.
 - `groups["go.goroutines"]`: the goroutine profile (`pprof.Lookup("goroutine").WriteTo(w, 2)`)
   parsed in-process and counted by the `created by` file:line, relative to `DLA_PROJECT`
   (standard-library sites as `$GOROOT/src/...`, other paths unchanged; a path with spaces is kept whole, the site being the line up to the last ` +0x<pc>`). Goroutines created by
@@ -53,6 +55,36 @@ prints the workload's stdout; keep it in the harness log.
 - `detectors`: goleak output (driver mode, tag `dlagoleak`).
 - Coverage comes from `go test -coverprofile` with `-coverpkg=./...`; the dump carries none.
 
+## The in-run sampler
+
+The `exit` record is written after `main` returned, so state owned by locals of the workload is
+dead when the base columns are read: a program that fills a local index per request reads flat and
+its heap profile is empty although the heap grew while it ran. In command mode `TestDLAHarness`
+therefore starts a sampler goroutine (`dlaStartSampler`) right after the ticker and stops it first in
+the deferred function.
+
+- Schedule: the first sample at 2 ms after process start; after a sample that ended at `t` with `spent`
+  ms spent inside samples in total, the next starts at `max(1.15 * t, spent / 0.25)`. The ratio keeps a
+  short point supplied with samples and makes the number of samples grow with the logarithm of the
+  run; the budget keeps the samples to a quarter of the elapsed time at the moment one starts (a sample
+  in progress can overshoot once). The constants are named in the template with their measurements.
+- A sample: `runtime.GC()` once, `runtime/metrics`, and with alloc capture the heap profile into memory
+  (newest kept). A sample that ends after the exit path started is dropped: it would read a dead heap.
+  The sampler never panics into the workload.
+- The reading: the sample with the lowest `go.heap_live` among those that ended at or after two thirds
+  of the run time (the later one on a tie; the last sample when the window is empty). Not the maximum
+  (it rises with the number of samples) and not the last sample (it carries the transient of batches in
+  flight): the floor is flat on a flat workload and rises with a leak, at 65 to 87 % of its true slope.
+- Record fields: `values_in_run` (`go.heap_live`, `go.heap_objects` of that sample) and `in_run`
+  (`samples`, `window_samples`, `reading_ms`, `end_ms`, `spent_ms`, `statistic`). The series gets
+  `go.heap_live.in_run` and `go.heap_objects.in_run` (bytes, gauge, heap, after GC, no baseline).
+  Existing columns are unchanged.
+- `limitations`: no sample ended before exit; the reading is from the first half of the run; a runtime
+  metric is unavailable; alloc capture without an in-run profile (the exit profile is written); and,
+  whenever a reading exists, that it is a floor and a lower bound.
+- `DLA_INRUN=off` switches the sampler off. Driver mode has no sampler: its checkpoints are taken
+  while the loop runs.
+
 ## Raw captures (`--capture alloc,nonheap`)
 
 `dla harness run <H> --capture alloc,nonheap` sets `DLA_CAPTURE` and `DLA_CAPTURE_DIR`. The engine
@@ -61,14 +93,14 @@ lists each file in the record's `captures` array (`kind`, `file`, `role`, `bytes
 
 | Kind | File | What |
 |---|---|---|
-| `alloc` | `go-<n>.heap.pb.gz` | `pprof.Lookup("heap").WriteTo(f, 0)`: in-use bytes and objects by stack, as of the last collection |
+| `alloc` | `go-<n>.heap.pb.gz` | `pprof.Lookup("heap").WriteTo(f, 0)`: in-use bytes and objects by stack, as of the last collection. Command mode writes the profile of the last in-run sample (role "taken in the run at <ms> ms") instead of an exit-time one, so one heap profile per point; with no in-run sample the exit profile is written and a limitation says so |
 | `nonheap` | `go-<n>.goroutine.pb.gz` | the goroutine profile, protobuf (stacks the goroutines are blocked in; no creation site) |
 | `nonheap` | `go-<n>.goroutine.txt` | the same profile at `debug=2`, with the `created by` frame of every goroutine |
 | `nonheap` | `go-<n>.goroutineleak.txt` | `pprof.Lookup("goroutineleak").WriteTo(f, 2)`: goroutines the runtime proved blocked forever |
 
 Driver mode captures at the checkpoints `dumpHere` picks (`DLA_CAPTURE_DUMPS`, default 4: the end of
 the warm-up, the last round and evenly spaced rounds between), so a series of 3 or more files comes from
-one process. Command mode captures at exit, one process per point. `tick` records capture nothing.
+one process. Command mode captures at exit, one process per point (the heap profile is the in-run one, above). `tick` records capture nothing.
 
 - `alloc` sets `runtime.MemProfileRate` (`DLA_MEMPROFILE_RATE`, default 4096) from a package variable
   initializer, before the test or the workload runs. The profile is a sample: sizes are estimates.

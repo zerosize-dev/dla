@@ -1521,7 +1521,12 @@ fn the_shipped_go_ticker_row_makes_l_register_acceptable_on_a_go_finding_without
     let e = env();
     let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/known-leaks.toml");
     fs::copy(&shipped, e.data.path().join("known-leaks.toml")).unwrap();
-    // The test table lacks L-REGISTER; the go reference has no such row either.
+    // What this shows: the known-leaks route lets a Go finding take L-REGISTER without a
+    // note. What it does not show: that the shipped L-REGISTER row can be met on Go. The
+    // synthetic row appended here needs growth-series + retention-path, which the vgdb
+    // record of this env supplies and no Go backend can write; that hid the gap the test
+    // below (`the_shipped_l_register_row_labels_a_go_finding...`) closes against the
+    // shipped row.
     let table = e.data.path().join("archetypes.toml");
     let mut text = fs::read_to_string(&table).unwrap();
     text.push_str("\n[L-REGISTER]\nholders = [\"registration-table\", \"static/global\"]\nregions = [\"heap\"]\nrequires = [[\"growth-series\", \"retention-path\"]]\ndisconfirm = []\nrepair = [\"deregister\"]\nsummary = \"A timer is added to a table and never removed.\"\n");
@@ -1544,6 +1549,56 @@ fn the_shipped_go_ticker_row_makes_l_register_acceptable_on_a_go_finding_without
         ],
     );
     assert_eq!(l["label"], "L-REGISTER");
+}
+
+#[test]
+fn the_shipped_l_register_row_labels_a_go_finding_on_growth_series_and_alloc_stack() {
+    let e = env();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in ["known-leaks.toml", "archetypes.toml"] {
+        fs::copy(root.join("data").join(f), e.data.path().join(f)).unwrap();
+    }
+    add_alloc_stack(&e);
+    // E4 is the growth series; E6 is the allocation stack. Named explicitly, because
+    // without the names the vgdb retention record E5 would meet the retention-path
+    // alternative first.
+    let l = ok(
+        &e,
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-REGISTER",
+            "--evidence",
+            "E4,E6",
+        ],
+    );
+    assert_eq!(l["label"], "L-REGISTER", "{l}");
+    assert_eq!(l["kinds"], json!(["growth-series", "alloc-stack"]), "{l}");
+}
+
+#[test]
+fn growth_alone_does_not_label_a_go_finding_l_register() {
+    let e = env();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in ["known-leaks.toml", "archetypes.toml"] {
+        fs::copy(root.join("data").join(f), e.data.path().join(f)).unwrap();
+    }
+    let err = refused(
+        &e,
+        &[],
+        &[
+            "ledger",
+            "label",
+            "F1",
+            "--as",
+            "L-REGISTER",
+            "--evidence",
+            "E4",
+        ],
+    );
+    assert_eq!(err["code"], "label-evidence-missing", "{err}");
 }
 
 #[test]

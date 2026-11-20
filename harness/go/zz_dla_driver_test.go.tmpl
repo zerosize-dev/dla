@@ -51,6 +51,10 @@ var (
 	dlaDetectors    []map[string]any
 	dlaProbeHook    func() []map[string]any // driver mode: GoVar probes read by the hook
 	dlaNotes        []string
+	// Command mode only (nil in driver mode, which leaves the records unchanged): the reading
+	// taken while the workload ran, and the heap profile of the sample that gave it.
+	dlaInRunHook    func(notes *[]string) (map[string]float64, map[string]any)
+	dlaInRunProfile func() ([]byte, float64)
 )
 
 func dlaEnv(name string) string { return dlaos.Getenv(name) }
@@ -153,8 +157,8 @@ func dlaSite(file, line string) string {
 }
 
 // dlaGoroutines parses the goroutine profile (debug=2) into counts per "created by" site. The
-// harness's own ticker goroutine and those created by the testing package or the runtime are
-// left out; goroutines without a creator (main) are not grouped.
+// harness's own ticker and sampler goroutines and those created by the testing package or the
+// runtime are left out; goroutines without a creator (main) are not grouped.
 func dlaGoroutines() map[string]float64 {
 	groups := map[string]float64{}
 	profile := dlapprof.Lookup("goroutine")
@@ -177,7 +181,7 @@ func dlaGoroutines() map[string]float64 {
 			continue
 		}
 		fn, _, _ := dlastrings.Cut(dlastrings.TrimPrefix(lines[creator], "created by "), " in goroutine ")
-		if dlastrings.HasPrefix(fn, "testing.") || dlastrings.HasPrefix(fn, "runtime.") || dlastrings.Contains(fn, ".dlaStartTicker") {
+		if dlastrings.HasPrefix(fn, "testing.") || dlastrings.HasPrefix(fn, "runtime.") || dlastrings.Contains(fn, ".dlaStartTicker") || dlastrings.Contains(fn, ".dlaStartSampler") {
 			continue
 		}
 		loc := dlastrings.TrimSpace(lines[creator+1])
@@ -244,6 +248,15 @@ func dlaBuild(phase string, x *int, last bool) map[string]any {
 	if pre != nil {
 		rec["values_pre_gc"] = pre
 	}
+	if dlaInRunHook != nil && !tick {
+		inRun, info := dlaInRunHook(&notes)
+		if len(inRun) > 0 {
+			rec["values_in_run"] = inRun
+		}
+		if info != nil {
+			rec["in_run"] = info
+		}
+	}
 	rec["groups"] = map[string]any{"go.goroutines": dlaGoroutines()}
 	if purge := dlaEnv("DLA_PURGE"); last && !tick && purge != "" && purge != "none" {
 		switch purge {
@@ -270,7 +283,7 @@ func dlaBuild(phase string, x *int, last bool) map[string]any {
 		notes = append(notes, "tick record: no forced collection")
 	}
 	if !tick {
-		if caps := dlaCapture(phase); len(caps) > 0 {
+		if caps := dlaCapture(phase, &notes); len(caps) > 0 {
 			rec["captures"] = caps
 		}
 	}
@@ -345,6 +358,8 @@ func dlaStartTicker() func() {
 // nonheap (heap, histogram and jfr are JVM and Node captures):
 //
 //	alloc    go-<n>.heap.pb.gz          pprof.Lookup("heap") after runtime.GC(): in-use bytes by stack
+//	                                    (command mode: the profile of the last in-run sample, taken
+//	                                    while the workload ran, when there is one)
 //	nonheap  go-<n>.goroutine.pb.gz     pprof.Lookup("goroutine") protobuf
 //	         go-<n>.goroutine.txt       the same profile at debug=2 (the "created by" frames)
 //	         go-<n>.goroutineleak.txt   pprof.Lookup("goroutineleak") at debug=2: goroutines the
@@ -476,9 +491,31 @@ func dlaWriteProfile(dir, file, kind, role, name string, debug int) map[string]a
 	return entry
 }
 
+// dlaWriteBytes writes profile bytes taken earlier to dir/file and returns their capture entry.
+func dlaWriteBytes(dir, file, kind, role string, b []byte) map[string]any {
+	entry := map[string]any{"kind": kind, "role": role}
+	t0 := dlatime.Now()
+	tmp := dlafilepath.Join(dir, file+".tmp")
+	werr := dlaos.WriteFile(tmp, b, 0o644)
+	if werr == nil {
+		werr = dlaos.Rename(tmp, dlafilepath.Join(dir, file))
+	}
+	if werr != nil {
+		_ = dlaos.Remove(tmp)
+		entry["error"] = werr.Error()
+		return entry
+	}
+	entry["file"] = file
+	entry["bytes"] = len(b)
+	entry["ms"] = dlatime.Since(t0).Milliseconds()
+	return entry
+}
+
 // dlaCapture writes the profiles asked for at this record and returns its "captures" entries.
-// The caller has just run runtime.GC() twice, so the heap profile is current.
-func dlaCapture(phase string) []map[string]any {
+// The caller has just run runtime.GC() twice, so the heap profile is current. In command mode the
+// heap profile of the last in-run sample is written instead when there is one (one heap profile
+// per point: the exit-time profile of a finished workload holds only runtime stacks).
+func dlaCapture(phase string, notes *[]string) []map[string]any {
 	root := dlaEnv("DLA_CAPTURE_DIR")
 	if root == "" || len(dlaCaptureKinds) == 0 || !dlaCaptureHere(phase) {
 		return nil
@@ -492,7 +529,21 @@ func dlaCapture(phase string) []map[string]any {
 	leakOnly := dlaEnv("DLA_GO_LEAK_ONLY") != ""
 	var out []map[string]any
 	if dlaCaptureKinds["alloc"] && !leakOnly {
-		out = append(out, dlaWriteProfile(dir, "go-"+n+".heap.pb.gz", "alloc", "heap profile (in-use bytes by stack, after GC)", "heap", 0))
+		file := "go-" + n + ".heap.pb.gz"
+		var inRun []byte
+		var inRunMs float64
+		if dlaInRunProfile != nil {
+			inRun, inRunMs = dlaInRunProfile()
+		}
+		if len(inRun) > 0 {
+			role := "heap profile (in-use bytes by stack, taken in the run at " + dlastrconv.FormatFloat(inRunMs, 'f', 1, 64) + " ms, after GC)"
+			out = append(out, dlaWriteBytes(dir, file, "alloc", role, inRun))
+		} else {
+			if dlaInRunProfile != nil {
+				*notes = append(*notes, "go command mode: no heap profile was taken in the run; the exit profile is written (state owned by locals of the workload is not in it)")
+			}
+			out = append(out, dlaWriteProfile(dir, file, "alloc", "heap profile (in-use bytes by stack, after GC)", "heap", 0))
+		}
 	}
 	if dlaCaptureKinds["nonheap"] {
 		if !leakOnly {

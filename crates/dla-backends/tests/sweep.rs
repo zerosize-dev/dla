@@ -832,3 +832,40 @@ fn shipped_detector_tables_are_valid_and_complete() {
         assert!(ids.contains(want), "missing detector row {want}");
     }
 }
+
+/// A static hit that names its holder, owner and region gives a candidate that carries them
+/// (the Go view rule does); a hit of an external backend carries none.
+#[test]
+fn a_dla_rule_hit_gives_the_candidate_its_holder_owner_and_region() {
+    let index = "package edge\n\ntype Index struct {\n\torder []*seen\n}\n\ntype seen struct{ token []byte }\n\nfunc (x *Index) Note(token []byte) {\n\tx.order = append(x.order, &seen{token: token})\n}\n";
+    let router = "package edge\n\ntype Router struct{ seen *Index }\n\nfunc (r *Router) Handle(data []byte) {\n\tr.seen.Note(data[4:])\n}\n";
+    let f = fixture(
+        TABLE,
+        &[("edge/index.go", index), ("edge/router.go", router)],
+    );
+    fs::write(
+        f.data.join("detectors/go.toml"),
+        include_str!("../../../data/detectors/go.toml"),
+    )
+    .unwrap();
+    sweep_with(&f.ctx, Runtime::Go, &env(&f)).unwrap();
+    let ledger = f.ctx.ledger().unwrap();
+    let hits: Vec<_> = ledger
+        .findings()
+        .filter(|x| x.origin.to_string() == "detector:dla/go-slice-view-retained")
+        .collect();
+    assert_eq!(hits.len(), 1, "{:?}", ledger.findings().collect::<Vec<_>>());
+    let h = hits[0];
+    assert_eq!(h.site.as_deref(), Some("edge/index.go:10"));
+    assert_eq!(h.holder.map(|x| x.as_str()), Some("container-field"));
+    assert_eq!(h.region.map(|x| x.as_str()), Some("heap"));
+    assert_eq!(h.owner.as_deref(), Some("edge.index.Index.order"));
+    // Every other go finding (the `time.Tick` style rules, census) is not affected: none of
+    // the detector findings without a holder gained one.
+    assert!(
+        ledger
+            .findings()
+            .filter(|x| x.origin.to_string().starts_with("detector:") && x.id != h.id)
+            .all(|x| x.holder.is_none() && x.owner.is_none() && x.region.is_none())
+    );
+}

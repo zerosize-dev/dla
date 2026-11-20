@@ -277,6 +277,9 @@ pub fn hit(backend: &str, rule: &str, file: &str, line: u32, message: &str) -> S
         file: file.to_owned(),
         line: line.max(1),
         message: msg,
+        holder: None,
+        owner: None,
+        region: None,
     }
 }
 

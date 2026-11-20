@@ -12,6 +12,17 @@
       "description": "Project-relative file with `/` separators.",
       "type": "string"
     },
+    "holder": {
+      "description": "What holds the memory, when the backend knows (the DLA rules that name a container;\nnone for external backends). The candidate takes it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Holder"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "line": {
       "description": "1-based line.",
       "type": "integer",
@@ -21,6 +32,24 @@
     "message": {
       "description": "The backend's message, trimmed.",
       "type": "string"
+    },
+    "owner": {
+      "description": "The owner of the holder (`<module>.<Type>.<field>`), when the backend knows.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "region": {
+      "description": "The region that grows, when the backend knows.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Region"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "rule": {
       "description": "The backend's rule identifier.",
@@ -33,5 +62,72 @@
     "file",
     "line",
     "message"
-  ]
+  ],
+  "$defs": {
+    "Holder": {
+      "description": "What holds the leaked memory.",
+      "oneOf": [
+        {
+          "description": "A static or global variable.",
+          "type": "string",
+          "const": "static/global"
+        },
+        {
+          "description": "A registration table (listeners, callbacks).",
+          "type": "string",
+          "const": "registration-table"
+        },
+        {
+          "description": "A field of a container object.",
+          "type": "string",
+          "const": "container-field"
+        },
+        {
+          "description": "Thread-local storage.",
+          "type": "string",
+          "const": "thread-local"
+        },
+        {
+          "description": "A blocked stack.",
+          "type": "string",
+          "const": "blocked-stack"
+        },
+        {
+          "description": "A closure or continuation.",
+          "type": "string",
+          "const": "closure/continuation"
+        },
+        {
+          "description": "A native handle or global reference.",
+          "type": "string",
+          "const": "native-handle/global-ref"
+        },
+        {
+          "description": "A reference cycle only.",
+          "type": "string",
+          "const": "cycle-only"
+        }
+      ]
+    },
+    "Region": {
+      "description": "Which memory region grows.",
+      "oneOf": [
+        {
+          "description": "The managed heap.",
+          "type": "string",
+          "const": "heap"
+        },
+        {
+          "description": "Native memory outside the managed heap.",
+          "type": "string",
+          "const": "off-heap"
+        },
+        {
+          "description": "Runtime-internal non-heap memory.",
+          "type": "string",
+          "const": "non-heap"
+        }
+      ]
+    }
+  }
 }

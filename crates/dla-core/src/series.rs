@@ -632,6 +632,10 @@ pub struct ColumnMeta {
 ///
 /// * `<base>.pre_gc` is the same figure read before the forced collection
 ///   (`after_gc = false`); otherwise managed-runtime heap figures are after GC.
+/// * `<base>.in_run` (a Go column) is the figure read while the workload ran, after a forced
+///   collection (`after_gc` kept, `baseline = false`): it has no purge reading and no
+///   `.pre_gc` twin. The region is the base column's, which the final gate's residual rows
+///   are taken from.
 /// * `<base>@<file:line>` is a grouped counter of `<base>` tied to that site.
 /// * `probe:<target>` counts entries or reachable objects (counter, heap);
 ///   `probe:<target>.bytes` is a byte estimate (gauge, heap);
@@ -663,6 +667,15 @@ pub fn column_meta(name: &str) -> ColumnMeta {
             after_gc: false,
             baseline: false,
             ..m
+        };
+    }
+    if let Some(base) = name
+        .strip_suffix(".in_run")
+        .filter(|b| b.starts_with("go."))
+    {
+        return ColumnMeta {
+            baseline: false,
+            ..column_meta(base)
         };
     }
     if let Some((base, _site)) = name.split_once('@') {
@@ -728,6 +741,9 @@ pub fn column_meta(name: &str) -> ColumnMeta {
         // Python.
         "py.traced" | "py.traced_peak" => meta(Bytes, Gauge, Heap, true, true),
         "py.gc_objects" => meta(Count, Counter, Heap, true, true),
+        // Objects `gc.freeze()` moved into the permanent generation, by the site that froze them
+        // (a count, not bytes: the bound alloc-test must not apply its byte minimum to it).
+        "py.gc_frozen" => meta(Count, Counter, Heap, false, true),
         // Allocator (Rust, native, shim).
         "native.live_bytes" | "native.peak_bytes" | "native.free_bytes" | "native.arena_bytes" => {
             meta(Bytes, Gauge, Heap, true, false)
@@ -754,11 +770,32 @@ mod catalog_tests {
             (m.kind, m.region, m.baseline),
             (ColumnKind::Counter, SeriesRegion::NonHeap, false)
         );
+        let m = column_meta("py.gc_frozen@journeys/worker.py:25");
+        assert_eq!(
+            (m.unit, m.kind, m.region),
+            (Unit::Count, ColumnKind::Counter, SeriesRegion::Heap)
+        );
         let m = column_meta("fd.socket");
         assert_eq!(
             (m.unit, m.kind, m.region),
             (Unit::Count, ColumnKind::Counter, SeriesRegion::NonHeap)
         );
+        let m = column_meta("go.heap_live.in_run");
+        assert_eq!(
+            (m.unit, m.kind, m.region, m.after_gc, m.baseline),
+            (
+                Unit::Bytes,
+                ColumnKind::Gauge,
+                SeriesRegion::Heap,
+                true,
+                false
+            )
+        );
+        let m = column_meta("go.heap_objects.in_run");
+        assert_eq!((m.region, m.after_gc), (SeriesRegion::Heap, true));
+        // Only Go columns: the suffix means nothing elsewhere.
+        assert_eq!(column_meta("py.foo.in_run").region, SeriesRegion::Process);
+        assert!(!column_meta("py.foo.in_run").after_gc);
         let m = column_meta("py.traced.pre_gc");
         assert_eq!((m.unit, m.after_gc), (Unit::Bytes, false));
         assert!(column_meta("py.traced").after_gc);

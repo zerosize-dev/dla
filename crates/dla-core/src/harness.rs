@@ -622,6 +622,14 @@ pub struct HarnessDump {
     /// Readings taken just before the forced collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_pre_gc: Option<BTreeMap<String, Option<f64>>>,
+    /// Readings taken while the workload ran (Go command mode): the floor of the
+    /// after-collection readings of the last third of the run. Absent when no sample ended
+    /// before the exit record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values_in_run: Option<BTreeMap<String, Option<f64>>>,
+    /// How the in-run readings were taken.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_run: Option<DumpInRun>,
     /// The purge applied, when `DLA_PURGE` was set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purge: Option<DumpPurge>,
@@ -657,6 +665,29 @@ pub struct HarnessDump {
     /// Files the agent wrote for `DLA_CAPTURE` at this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub captures: Option<Vec<DumpCapture>>,
+}
+
+/// How the in-run readings of a record were taken (Go command mode).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+pub struct DumpInRun {
+    /// Samples that ended before the exit path started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples: Option<u32>,
+    /// Samples that ended in the last third of the run (the window the reading is taken from).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_samples: Option<u32>,
+    /// Milliseconds since the process started at which the reported sample ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reading_ms: Option<f64>,
+    /// Milliseconds since the process started when the sampler was stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<f64>,
+    /// Milliseconds spent inside samples (collection, reading, profile).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent_ms: Option<f64>,
+    /// The statistic the reading is: `floor-last-third`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statistic: Option<String>,
 }
 
 /// One file an agent wrote next to a dump record (`DLA_CAPTURE`).
@@ -772,6 +803,8 @@ mod tests {
             "x":2000,"t_ms":1234,"gc_forced":true,
             "values":{"jvm.heap_used":123456,"jvm.threads":null},
             "values_pre_gc":{"jvm.heap_used":456789},
+            "values_in_run":{"go.heap_live":7000000,"go.heap_objects":null},
+            "in_run":{"samples":9,"window_samples":3,"reading_ms":812.5,"end_ms":900.2,"spent_ms":120.4,"statistic":"floor-last-third"},
             "purge":{"kind":"trim","before":{"os.rss":10},"after":{"os.rss":5}},
             "groups":{"go.goroutines":{"a.go:3":8001}},
             "raw_sites":{"native.live_bytes":{"0x55":81920}},
@@ -790,6 +823,21 @@ mod tests {
         );
         assert_eq!(d.probes.as_ref().unwrap()[0].size, Some(1750.0));
         assert_eq!(d.purge.as_ref().unwrap().after["os.rss"], Some(5.0));
+        assert_eq!(
+            d.values_in_run.as_ref().unwrap()["go.heap_live"],
+            Some(7_000_000.0)
+        );
+        let in_run = d.in_run.as_ref().unwrap();
+        assert_eq!((in_run.samples, in_run.window_samples), (Some(9), Some(3)));
+        assert_eq!(in_run.reading_ms, Some(812.5));
+        assert_eq!(in_run.statistic.as_deref(), Some("floor-last-third"));
+        // The record serializes back with both fields, and a record without them has neither.
+        let back = serde_json::to_value(&d).unwrap();
+        assert_eq!(back["in_run"]["end_ms"], 900.2);
+        assert!(back["values_in_run"].is_object());
+        let plain = HarnessDump::parse_line(r#"{"dla_harness":1,"phase":"exit"}"#).unwrap();
+        let plain = serde_json::to_value(&plain).unwrap();
+        assert!(plain.get("values_in_run").is_none() && plain.get("in_run").is_none());
     }
 
     #[test]
