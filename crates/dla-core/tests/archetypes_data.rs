@@ -99,6 +99,25 @@ fn requires_use_only_produced_kinds() {
     }
 }
 
+/// `plan` records the first alternative that is met, in list order, so the alternative a
+/// runtime without a retention path or a non-heap group can meet goes last and existing
+/// labels keep their kinds.
+#[test]
+fn l_register_ends_with_the_growth_and_alloc_stack_alternative() {
+    let t = table();
+    let e = t.get("L-REGISTER").expect("L-REGISTER row");
+    assert_eq!(
+        e.requires.last().unwrap(),
+        &vec![EvidenceKind::GrowthSeries, EvidenceKind::AllocStack]
+    );
+    assert_eq!(e.requires.len(), 4, "{:?}", e.requires);
+    assert_eq!(
+        e.requires[0],
+        vec![EvidenceKind::UnitCountSeries],
+        "the first alternative keeps existing labels' kinds"
+    );
+}
+
 /// Text of the places series names are defined: the column catalog, the samplers, the
 /// harness agents and the harness generators.
 fn series_corpus() -> String {
