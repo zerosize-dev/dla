@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 13:30 UTC)
+# Where the work stands (2026-11-20, 15:15 UTC)
 
 ## Working rule from the owner (2026-11-20, 09:25 UTC), above every other habit
 "You should be using sonnet 5.5 subagents for tasks and verify yourself, since my limits are
@@ -77,14 +77,19 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
      (`open-fixtures-report-F-e.md`). The fixer reports go-header-index passing static and
      dynamic; go-trace-context and go-feed-merge stop at the tie rule. Not yet rerun by the
      orchestrator.
-   State at 13:30 UTC on 2026-11-20: a Sonnet agent moves go-ticker-legacy, python-frozen-gc,
-   node-signal-compose-24 and go-header-index back to `bench/fixtures/`, restores the two pair
-   lines and updates READMEs and counts (64 fixtures). Then the orchestrator runs: workspace
-   tests, clippy (host and Windows target), fmt, schema check, grader tests, static in both
-   modes and the full dynamic run on the 64 fixtures (compare with the scratch dir
-   `u11acc/dynamic.json`), then a snapshot without `[skip ci]` for CI, then one commit on
+   State at 15:15 UTC on 2026-11-20: go-ticker-legacy, python-frozen-gc,
+   node-signal-compose-24 and go-header-index are moved back to `bench/fixtures/` (64
+   fixtures), pair lines restored, READMEs updated. Verified by the orchestrator on the final
+   tree: workspace tests 2794 passed, 0 failed; clippy (host and Windows target), fmt, schema
+   check, grader tests, skill_text pass; static 64 of 64 in both modes; the full dynamic run 63
+   pass and 1 expected failure, the four new fixtures pass, no fixture of the last full run is
+   worse (results in the scratch dir `u17/`); the added lines hold no model name, scratch path
+   or plan name. A snapshot without `[skip ci]` was pushed for CI. When it is green: one commit
+   on `main` with the message in `commit-message.txt` (the working tree as it is, without
+   `.wip/`; renames kept), push `main` and `main:dev/wonderful-mccarthy-algc5s`, confirm CI on
    `main`. Do not touch the README of node-signal-compose-22 (one sentence there is stale now;
-   the owner was told).
+   the owner was told). Still parked: go-feed-merge, go-trace-context,
+   python-zstd-options-3144, rust-slot-arena (each waits for an answer of the owner, below).
    Waiting for the owner (asked on 2026-11-20): (1) rust-slot-arena: add `src/arena.rs:24` to
    the key's alt_sites? (2) the tie rule: may an allocation stack tie through the nearest caller
    frame that has a finding (python-zstd-options-3144, go-trace-context), or stay strict with
