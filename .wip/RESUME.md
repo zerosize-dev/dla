@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 04:40 UTC)
+# Where the work stands (2026-11-20, 05:50 UTC)
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `9781542` "Version 0.9.0-preview.2", on top of
@@ -34,23 +34,31 @@ State of the code (all edits are in the tree and in the snapshot `6e7db3b`):
   off before its report. Its 13 fixture runs passed and the tests of dla-cli, dla-workload,
   dla-parsers and dla-sample passed; `cargo fmt --all --check` and workspace clippy are clean.
 
-State at 04:40 UTC:
-- CI on snapshot `6e7db3b` (the tree with the ten leftover edits): green on all 15 jobs
-  (run 44668225560).
-- The independent check of the leftover edits (`cont-c3-check-leftovers.json`): no problem, six
-  minor items. Four are done by hand (wording in three VERIFY rows, the README bullet re-wrapped).
-  Two are left and touch source files, so they wait until the acceptance runs have finished:
-  (1) `bench/runner/src/dynamic/ops.rs`, `failed_summary_detail`: the reasons lines share the
-  eight-line cap with the detail lines, so the reasons of a later failed summary can be cut;
-  print all reasons lines first and do not count them against the cap, with a test seen failing,
-  and make the VERIFY row of the shim record fix say what the code does; (2) one comment line of
-  132 columns in `crates/dla-cli/src/summarize/shim_groups.rs` (wrap at 100).
-- Still running (workflow `fix-passes-finish`): the fixture acceptance (results under the scratch
-  dir `u11acc/`) and the test, lint and schema acceptance (`u11acc-t/`).
-Then: the two small items above (fix, check), a snapshot without `[skip ci]` for a last CI run,
-`cargo test -p dla-bench`, clippy, fmt. When CI is green on that tree and the acceptance is
-clean: one commit on `main` (without `.wip/`), push `main` and
-`main:dev/wonderful-mccarthy-algc5s`, confirm CI on `main`.
+State at 05:50 UTC:
+- CI on snapshot `6e7db3b` (the tree with the ten leftover edits): green on all 15 jobs.
+- Independent check of the leftover edits (`cont-c3-check-leftovers.json`): no problem, six
+  minor items. Five are done by hand (wording in VERIFY rows, the README bullet and one comment
+  re-wrapped; "the checker" reworded to "an independent check" in three rows).
+- Acceptance on the tree of `6e7db3b` (reports `cont-c3-accept-fixtures.md` and
+  `cont-c3-accept-tests.md`): static 60/60 in both modes; dynamic 59 pass and 1 expected failure,
+  no failure (python-graph-churn passes; jni-order-codec reads the program's record at all
+  nine captures); workspace tests 2744 passed, 0 failed on JDK 21; the JVM-dependent tests pass
+  on JDK 25 (four Kotlin tests skip there with the reason printed); clippy (host and Windows
+  target), fmt, schema check, grader tests and skill_text pass; the scan of the added lines for
+  names that must not be in the repository is clean.
+- Running: the sixth item (workflow `last-item-reasons-cap`): in
+  `bench/runner/src/dynamic/ops.rs`, `failed_summary_detail` prints all reasons lines first and
+  does not count them against the eight-line cap; a test seen failing; the VERIFY row of the
+  shim record fix says what the code does; then an independent check.
+Then: `cargo test -p dla-bench`, clippy, fmt; a snapshot without `[skip ci]` for a last CI run;
+when it is green, one commit on `main` with the message in `commit-message.txt` (without
+`.wip/`; author as below, no trailers), push `main` and `main:dev/wonderful-mccarthy-algc5s`,
+confirm CI on `main`.
+Residual chance paths seen in the acceptance run, not handled (they cost nothing on the
+fixtures where they showed): a heap column passes the first trend by chance on a flat Go run,
+`os.rss` then votes and reads retained on a growth inside its own noise (go-ticker-modern, a
+decoy-control); under heavy load `os.rss` of jvm-invoice-render-trimmed passed the first trend
+and both unbound tests read leak (decoy-control, no claim made).
 
 Snapshots: `snapshot.sh "<label>"` (copy here). A label with `[skip ci]` saves notes without a
 CI run; a later snapshot without it always gets a commit, so a CI run exists for it.

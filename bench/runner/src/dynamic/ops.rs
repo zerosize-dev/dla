@@ -847,38 +847,41 @@ fn log_failed_summarize(fx: &mut Fx, op: &str, backend: &str, gate: &str, why: S
         });
 }
 
-/// The most detail lines a refused call adds to the steps.
+/// The most detail lines a refused call adds to the steps (the reasons lines are not counted).
 const MAX_DETAIL_LINES: usize = 8;
 
-/// The detail lines of the summarize steps whose gate failed: of the operations given, or of
-/// every operation (a refused confirmation does not name them). With `reasons`, each failed
-/// step first gets one line with the reasons of its gate (a refused label prints them already
-/// in its own failure line; a refused confirmation does not). At most [`MAX_DETAIL_LINES`]
-/// lines.
+/// The lines about the summarize steps whose gate failed: of the operations given, or of every
+/// operation (a refused confirmation does not name them). With `reasons`, one line with the
+/// reasons of each failed gate comes first, in step order, and is never cut (a refused label
+/// prints them already in its own failure line; a refused confirmation does not). The detail
+/// lines of the steps follow in step order, at most [`MAX_DETAIL_LINES`] of them.
 pub(super) fn failed_summary_detail(
     log: &[crate::dynamic_cmd::SummarizeStep],
     ops: Option<&[String]>,
     reasons: bool,
 ) -> Vec<String> {
-    log.iter()
-        .filter(|s| ops.is_none_or(|ops| ops.contains(&s.op)))
-        .flat_map(|s| {
-            let why = (reasons && s.gate == "fail" && !s.reasons.is_empty()).then(|| {
-                format!(
-                    "{} via {}: reasons: {}",
-                    s.op,
-                    s.backend,
-                    s.reasons.join("; ")
-                )
-            });
-            why.into_iter().chain(
-                s.detail
-                    .iter()
-                    .map(move |d| format!("{} via {}: {d}", s.op, s.backend)),
+    let steps = || {
+        log.iter()
+            .filter(|s| ops.is_none_or(|ops| ops.contains(&s.op)))
+    };
+    let why = steps()
+        .filter(|s| reasons && s.gate == "fail" && !s.reasons.is_empty())
+        .map(|s| {
+            format!(
+                "{} via {}: reasons: {}",
+                s.op,
+                s.backend,
+                s.reasons.join("; ")
             )
+        });
+    let detail = steps()
+        .flat_map(|s| {
+            s.detail
+                .iter()
+                .map(move |d| format!("{} via {}: {d}", s.op, s.backend))
         })
-        .take(MAX_DETAIL_LINES)
-        .collect()
+        .take(MAX_DETAIL_LINES);
+    why.chain(detail).collect()
 }
 
 /// Longest line of [`gate_detail`].
@@ -1620,11 +1623,42 @@ esac
         let all = failed_summary_detail(&log, None, false);
         assert_eq!(all.len(), MAX_DETAIL_LINES);
         assert_eq!(all[2], "b via b: line 0");
-        // With the reasons, each failed step gets one line before its detail.
+        // With the reasons, every failed step gets one line, all before the detail lines.
         let all = failed_summary_detail(&log, None, true);
-        assert_eq!(all.len(), MAX_DETAIL_LINES);
+        assert_eq!(all.len(), 2 + MAX_DETAIL_LINES);
         assert_eq!(all[0], "a via b: reasons: why");
-        assert_eq!(all[3], "b via b: reasons: why");
+        assert_eq!(all[1], "b via b: reasons: why");
+        assert_eq!(all[2], "a via b: line 0");
+    }
+
+    #[test]
+    fn the_reasons_of_every_failed_summary_come_first_and_are_not_cut() {
+        let step = |op: &str| crate::dynamic_cmd::SummarizeStep {
+            op: op.to_owned(),
+            backend: "b".to_owned(),
+            gate: "fail".to_owned(),
+            tied: "none".to_owned(),
+            reasons: vec![format!("why {op}")],
+            detail: (0..3).map(|i| format!("{op} line {i}")).collect(),
+        };
+        let log = [step("a"), step("b"), step("c")];
+        let detail: Vec<String> = ["a", "b", "c"]
+            .iter()
+            .flat_map(|op| (0..3).map(move |i| format!("{op} via b: {op} line {i}")))
+            .take(MAX_DETAIL_LINES)
+            .collect();
+        assert_eq!(detail.len(), MAX_DETAIL_LINES);
+        let with = failed_summary_detail(&log, None, true);
+        assert_eq!(
+            with[..3],
+            [
+                "a via b: reasons: why a",
+                "b via b: reasons: why b",
+                "c via b: reasons: why c"
+            ]
+        );
+        assert_eq!(with[3..], detail[..]);
+        assert_eq!(failed_summary_detail(&log, None, false), detail);
     }
 
     #[cfg(unix)]

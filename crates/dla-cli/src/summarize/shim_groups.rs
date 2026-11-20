@@ -344,7 +344,8 @@ fn choose_process<'a>(
     });
     if procs.len() == 1 {
         if several && by_identity {
-            // One line per capture file's choice, merged into one text by the set: the choice rests on the number being in an argv.
+            // One line per capture file's choice, merged into one text by the set: the choice
+            // rests on the number being in an argv.
             limits.insert(
                 "several processes wrote shim records with stacks in a capture; the one whose argv carries the capture's iteration count was read (the same number in another process's argv would have chosen that one)"
                     .to_owned(),
