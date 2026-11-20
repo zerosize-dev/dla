@@ -36,8 +36,8 @@ Pass B (`jni-order-codec` fails by chance on the runner):
   check found five problems (a false limitation on harnesses without a shim, a run without
   `--capture` deleting capture files, unredacted argv words in a limitation line, the VERIFY row
   in the wrong table, decision 4 only for labels); refix done; its second check is running.
-CI: snapshot `47991b4` (N2 refix, N1 first fix) was green on all 15 jobs; the run of `91fb4a0`
-(both refixes; the tree at the restart) was in progress at 00:30 UTC (run 44641789200).
+CI: snapshots `47991b4` (N2 refix, N1 first fix) and `91fb4a0` (both refixes; the tree at the
+restart; run 44641789200) were green on all 15 jobs.
 Then, by the workflow: leftovers, a snapshot with a CI run (fix loop, at most 4 attempts), the
 full local acceptance (logs under the scratch dir `u11acc/`, compared with the run before these
 passes). When CI is green on the final tree and the acceptance is clean: one commit on `main`
