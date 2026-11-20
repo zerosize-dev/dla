@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 16:15 UTC)
+# Where the work stands (2026-11-20, 17:45 UTC)
 
 ## Working rule from the owner (2026-11-20, 09:25 UTC), above every other habit
 "You should be using sonnet 5.5 subagents for tasks and verify yourself, since my limits are
@@ -15,14 +15,32 @@ proposed on 2026-11-19 (known leaks at pinned versions: aiohttp 3.10.10, grpc-go
 1.15.1, tokio-util 0.7.1, spring-data-commons 4.1.1, Jetty 12.0.31, Pillow 10.1.0; whether the
 pinned versions were used was asked twice and not answered) and it found nothing. Benchmark
 fixture work stops after the commit of fix pass 1. The work now:
-1. Running: one Sonnet agent measures, on those seven leaking versions (sources from the
-   package registries, under the scratch dir `u18/`), whether DLA's static stage lists a
-   candidate at the leak's site, and why not.
-2. Next: on one or two targets where the site is flagged, one Sonnet agent runs the whole skill
-   as a user would; read its ledger and report to find where the chain to a confirmed finding
-   breaks (workload never reaches the leaking path, harness, growth, tie, budget, the wording
-   of the report).
-3. Fix the causes in the product, the most general first, and rerun.
+Measured so far (2026-11-20, 17:45 UTC):
+- Static stage on the seven leaking versions (trees and logs under the scratch dir `u18/`):
+  the leak's site is among the candidates in 6 of 7 (not Pillow: a C reference-count leak, no
+  rule), but real projects give 600 to 1000 candidates in discovery order, so the site sits at
+  position 170 to 300 (aiohttp 8 of 922 with the right message; grpc-go 300 of 997;
+  spring-data-commons 171 of 623; Jetty 170 of 199; axios 26 of 57; tokio-util 4 of 16).
+- A full run of the skill on aiohttp 3.10.10 by a Sonnet agent with the binary of `main`
+  (no hooks, no worker dispatch; log `real-run-aiohttp-log.md`, report
+  `real-run-aiohttp-report.md`): it FOUND the documented leak (`_build_middlewares`
+  `lru_cache(None)`, `aiohttp/web_app.py:82`, confirmed and strong by intervention) in 69
+  minutes, plus two more unbounded caches. So the skill can find a real leak; why the owner's
+  runs find nothing is still open (asked again which tag was checked out and what the report's
+  Status and Findings lines said).
+- Defects that run exposed: vendored `vendor/llhttp` and Cython-generated C gave 733 of 916
+  candidates, made the probe report three runtimes and sized the budget to 3 h; the driver's
+  module probes imported an example script that starts a server and the run hung 580 s without
+  a message; one site became two findings (rule and census); no command lists the ledger; each
+  follow-up measurement re-opens gate columns (about 10 minutes of busywork); hundreds of
+  untested static candidates need one `ledger resolve` call each; the flow never separates "a
+  cache unbounded in its key space" from a leak.
+Running: workflow `real-project-pass-1` (two Sonnet fixers, brief `real-project-brief.md`):
+X1 vendored and generated code out of scope by default; X2 Python module probes never import,
+a stalled harness run says where, one site is one finding. The orchestrator verifies both
+(rerun the static stage on the measured trees, tests, static and dynamic acceptance).
+Next: ordering of candidates, a ledger listing, bulk dispositions, the gate treadmill, the
+keys discriminator in the flow; then release 0.9.0-preview.3 so the owner tests the same build.
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `fbcd6b2` "Find four more kinds of leak;

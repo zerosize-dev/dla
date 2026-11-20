@@ -1,0 +1,70 @@
+# run log (start epoch 1795191177)
+- run init --entry repository --budget auto: 0s, run 20261120-161320-44e4, budget 3600s, E1
+- DECISION: consent tier 1 only (build/run locally, no attach/dumps) per user answers
+- resolved intake.* 8 items answered (E1/E2); symptom general; budget auto accepted
+- gate intake
+- probe: 0s, runtimes node(13 src, vendor/llhttp), python(126), native(11); tools ruff,pylint,eslint; codeql missing. DECISION: 3 runtimes => skill says dispatch workers, but I have no Agent/subagent tool; I will run all stages in core myself, dynamic testing on python (the library's own code); node/native are vendored llhttp.
+- probe --build: 4s, builds python ok, native failed, node failed (E4). venv created at scratchpad/u19/venv with aiohttp runtime deps + pytest (8s); aiohttp 3.10.10 imports
+- install codeql: error no-data-dir (fix: export DLA_DATA_DIR) -> using scratch/u19/dladata
+- install codeql: 58s ok v2.27.0
+- probe --build again: 3s (tools_missing still lists codeql although installed); sweep python 42s: 9 candidates (ruff 7, dla 2, pylint 0, codeql 0 ran w/ 1 limitation)
+- census --lang python: 25s {"artifacts":[".dla/20261120-161320-44e4/census/python.json"],"candidates":180,"command":"census","evidence":["E10"],"lang":"python","ok":true,"skipped_duplicates":0,"summary":{"annotated":103,"by_holder":{"blocked-stack":42,"container-field":27,"native-handle/global-ref":3,"registration-table":40,"
+- sweep --lang node: 3s {"artifacts":[".dla/20261120-161320-44e4/sweep/node-eslint.json",".dla/20261120-161320-44e4/sweep/node-dla.json"],"candidates":0,"command":"sweep","evidence":["E11","E12"],"lang":"node","ok":true,"skipped_duplicates":0,"summary":{"dla":{"added":0,"enumerated":0,"limitations":0,"status":"ran"},"eslin
+- census --lang node: 0s {"artifacts":[".dla/20261120-161320-44e4/census/node.json"],"candidates":0,"command":"census","evidence":["E13"],"lang":"node","ok":true,"skipped_duplicates":0,"summary":{"annotated":0,"by_holder":{},"class_files":0,"files":0,"holders":0,"lang":"node","source":"tree-sitter"}}
+- sweep --lang native: 3s {"artifacts":[".dla/20261120-161320-44e4/sweep/native-dla.json"],"candidates":4,"command":"sweep","evidence":["E14"],"lang":"native","ok":true,"skipped_duplicates":0,"summary":{"dla":{"added":4,"enumerated":4,"limitations":0,"status":"ran"}}}
+- census --lang native: 238s {"artifacts":[".dla/20261120-161320-44e4/census/native.json"],"candidates":729,"command":"census","evidence":["E15"],"lang":"native","ok":true,"skipped_duplicates":0,"summary":{"annotated":173,"by_holder":{"closure/continuation":10,"container-field":639,"native-handle/global-ref":5,"static/global":7
+- census python 180 cand; sweep node 0; census node 0; sweep native 4; census native 729 (~2.5min, E15); workload discover 6s: 69 workloads, 902 entry points (python 64 tests); gate sweep PASS: budget auto sized to 3h (916 candidates, 2 runtimes) [my hard limit stays 100min]
+- read candidates from ledger.jsonl (no ledger list command). F1-9 detectors, F10-189 python census (named, annotated writer/remover leads), F190+ native census. Interesting by reading: F8 web_app.py:82 lru_cache(None) _build_middlewares keyed on (handler, apps); F9/F117 AccessLogger._FORMAT_CACHE; F36/F35 TCPConnector DNS sets; F40-43 CookieJar; F135 Server._connections; F21 ClientResponse._cache
+- harness gen --lang python --driver --probe F8 --probe F9: 0s, H1 (E17), 108 probes, step 440 x 8 rounds, driver mode; F8 lru_cache not among probes (only F9 attr). DECISION: filled DLA-HOOKs with one workload exercising: client GET w/ per-key cookie (CookieJar F40-43), multipart POST, websocket echo (F147-152), DNS cache via _resolve_host(h{key}.test) (F35/F36), per-key web.Application with middleware dispatched via app._handle (F8/F102 lru_cache), AccessLogger with per-key format (F9/F117). Chosen because they are candidate holders keyed by unbounded inputs; fresh vs repeated keys separates leak from bounded.
+- harness run H1 --mode both: 580s WASTED, killed by my timeout, no output; attempt.json failed/interrupted; both modes hang ~10s in (dump ticks stop). Debugging driver by hand
+- DIAG (manual smoke run, not a dla command): hang is in agent probe loader: py-module probe imports examples/server_simple.py which calls web.run_app at import => driver blocks forever at first checkpoint. Fix: regenerate harness with --probes none and explicit --probe F.. only for aiohttp/ package findings
+- harness gen H2 (--driver --probes none + 14 explicit --probe): 0s, E18, 7 probes (F117 attr, modules web_log/web_app/connector/cookiejar/web_server/web_urldispatcher). Copied filled hooks from H1 driver into H2 driver (same workload). Elapsed ~1318s
+- harness run H2 --mode both: 171s, S1 (fresh), S2 (repeated), 9 points, E19
+- trend S1 (fresh): 48s, T1 E20/E21, 63 columns, 8+25 passed; passed probe columns: _build_middlewares (F102,F8) slope 45/pt, AccessLogger._FORMAT_CACHE (F117,F9) slope 5/pt, os.private_dirty/pss, + 25 more (passed_more)
+- trend S2 (repeated keys): 46s, T2 E22/E23, only py.gc_collections passed (whole-process) => growth is key-dependent (fresh grows, repeated flat). Elapsed ~27min
+- DECISION: candidates picked for dynamic confirmation = F102 (lru_cache _build_middlewares, web_app.py:82; dup F8) and F117 (AccessLogger._FORMAT_CACHE web_log.py:61; dup F9): they are the only candidates whose probe columns passed the trend gate on fresh keys and are flat on repeated keys. Gate classify lists 17 py.type:* columns to tie to findings.
+- ledger: duplicate F8->F102, F9->F117; siblings F102.n1, F117.n1 (N-WARM); growth-series F923 (E21 py.type columns) duplicated into F102 which cleared 16 of 17 classify items
+- gate classify PASS (elapsed 1642s); F924 growth-series for T2 FrameSummary (stair), no site
+- ledger test F102, F117 (E19) -> under_test; elapsed 1649s
+- alloc-test H2 --finding F102: 233s, E24, favors LEAK (probe columns growth-continues, trim purge: retained), trend T3/S3. tool next suggested confirm with E22 (odd: E22 is repeated-key trend)
+- ledger refute F102.n1 (E24) ok; confirm F102 --evidence E21,E24 ok (31min)
+- alloc-test H2 --finding F117: 224s, E25, favors LEAK (probe cols growth-continues), T4/S4
+- ledger confirm F117 --evidence E21,E25 ok (elapsed 2129s); label --suggest F102: L-COLLECT met
+- label F102 L-COLLECT ok; F117 L-COLLECT refused label-evidence-missing (census-holder) first with E21,E25; ok after adding E10
+- explain --evidence E21,E24 refused: usage (single evidence id only, help text says nothing about comma)
+- explain refused explain-removal-text (text must contain 'never'/'nothing removes'); retrying
+- explain F102, F117 ok (observed, E21). elapsed 2152s
+- trend S3 44s (T5 E26/E27), trend S4 44s (T6 E28/E29): alloc-test trends replaced gate columns; 32 new type columns need findings again
+- added F925 (E27), F926 (E29) growth-series at F102 owner, duplicated into F102; gate confirm PASS; elapsed 2257s
+- gate attribute PASS, rule_out PASS (elapsed 2263s)
+- gate --final: 970 missing (919 candidate findings w/o disposition, 51 trend_column). No bulk resolve command exists. budget now 3h per tool (deadline 19:13Z) but my own cap is 100 min (elapsed ~37 min)
+- dla report (interim, before dispositions): 1s
+- report interim: Measured 1 harness run; coverage warnings native 0/68, node 0/49, python 226/785 entry points. DECISION (elapsed 38min): build second driver H3 covering the rest of client/server surface (sessions per unit, static file, compression, streaming, form post, redirects, errors, sub-apps, cookie jar with many domains, timeouts) with probes for container-field candidates F34,F35,F36,F40-43,F61,F69-72,F94,F104,F105,F107,F125,F132,F135,F139-142,F152
+- harness gen H3 (E30, 12 probes py-module) and filled hooks: static file, gzip, stream, form post, redirect, 404/500, new ClientSession+CookieJar per unit, sub-app, websocket w/ heartbeat. smoke ok. elapsed 38min
+- harness run H3 --mode both: 153s, S5 fresh, S6 repeated, E31
+- trend S5 (H3 fresh) 29s T7 E32/E33: only whole-process os.* columns passed (rss slope ~253/pt, no candidate-tied column); trend S6 (repeated) 28s T8: nothing passed
+- gap S5 --residual: 0s E36, heap residual 9.4 bytes/iter under threshold 46.7, no open item
+- final gate trend_column items (51): whole-process columns of T1,T2,T5,T6,T8 want dla gap S<n> --residual rows (S1,S2,S3,S4,S6)
+- gap --residual S1 E37: heap residual 6132 B/iter over threshold 1533 -> open item O1 (same for S3 E39, S4 E40; S2 E38, S6 E41 under threshold). DECISION (elapsed 42min): run H2 fresh with --capture alloc,histogram to attribute the residual (tracemalloc stacks) before dispositioning
+- harness run H2 --mode fresh --capture alloc,histogram: 301s, S7, E42, 6 capture files
+- summarize alloc-stack-diff (py-1..3.alloc.json): 0s, E43/E44 gate pass, series S8; top growth stacks web_app.py:89 & :587 (retained Application/CleanupContext = downstream of F102), web_middlewares.py:112, connector.py:1002 (DNS cache entries, untied to any finding). tool 'needed' wants confirm of F107 (CleanupContext._exits) - NOT doing: its growth is consequence of F102 retaining apps. DECISION: add new finding for DNS cache _DNSCacheTable._addrs_rr at connector.py:1002 (elapsed 48min)
+- F927 added (connector.py:1002 stack, owner _DNSCacheTable._addrs_rr); annotated writer connector.py:1007 remover 884 (explicit clear_dns_cache only); sibling F927.n1 N-SCALE; test F927 --evidence E42
+- alloc-test H2 --finding F927: 203s, E45 favors LEAK, basis = primary column of region (py.traced, whole-process heap), not a probe column of F927; S9/T9. elapsed 51min
+- refute F927.n1 (E45) ok; confirm F927 --evidence E44,E45 REFUSED growth-not-tied (passing stack columns are web_app, none at connector.py:1002). Fix named: probe on holder or heap-graph. retrying summarize with --finding F927
+- summarize alloc-stack-diff --finding F927: E46/E47, passing stack:aiohttp.connector tied to F927; confirm F927 --evidence E47,E45 attempted
+- confirm F927 ok; label L-COLLECT; explain F927 (conditional, remover 884). elapsed 52min
+- explain F927 first try refused explain-removal-text (conditional needs words 'only when'/'unless'/'if'); second try ok
+- gate --final now 1005 missing: series S7,S8,S10 without trend, T9 (alloc-test of F927) type/whole-process columns, O1 residual; each alloc-test makes a new trend that re-opens columns (treadmill). running trend S7 S8 S9 S10; elapsed 52min
+- trend S7 43s T10 E48/49 (nothing passed), S8 88s T11 E50/51 (nothing passed), S9 44s T12 E52/53 (probe cols of F102/F117 pass; 27 more), S10 10s T13 E54/55. elapsed 55min
+- gap S9 --residual E56 O1 kept; ledger resolve O1 --by F102 ok (heap residual covered by retained Application graph of F102). elapsed 55min
+- resolve F924 unresolved/inconclusive ok. DECISION: bulk-disposition remaining candidates with a script that calls 'dla ledger resolve' per finding (no bulk command): python aiohttp/ -> suspected_static_only not_exercised; tests/docs/examples -> not_exercised; native/vendor -> unresolved build_fails (probe --build native failed); will log refusal codes
+- bulk resolve script: 916 'dla ledger resolve' calls all accepted (no refusals), ~2.5 min. elapsed 63min
+- added growth-series F929-F933 (E49,E50,E51,E54,E55) at F102 owner, duplicated into F102: gate final missing 140 -> 18; gap S7 --residual E57 opened O2 (6052 B/iter, same as O1 cause); resolve O2 --by F102. elapsed 63min
+- gate check --final: PASS (missing 0) at elapsed 63min. No Agent tool available => dla:verifier cannot be started; will write 'not independently verified: no verifier agent'
+- intervene H2 --finding F102 --stub-writer aiohttp/web_app.py:548: 141s, E58 effect growth-removed (treated H4/S11/T14 flat; control T12 slope 45). elapsed 66min
+- ledger strong F102 --evidence E58 ok; intervene F117 --stub-writer aiohttp/web_log.py:75: 85s E59 growth-removed
+- strong F117 ok. gate final reopened 52 items from intervention series S11/S12 (whole-process cols, need gap residual / trend S12 / S11)
+- added F934/F935 growth-series (E63,E65) duplicated into F117/F102; resolve O3 --by F102; gate final PASS again at 69min
+- dla bundle F102/F117/F927 written; no dla:verifier subagent available (I have no Agent tool) => not independently verified
+- dla report (final): 0s
+- STOP: gate final passed, report COMPLETE at 70min; stopping before my 100-min cap; remaining 917 static candidates need driver extension (each alloc-test/intervene re-opens whole-process trend columns); verifier unavailable
