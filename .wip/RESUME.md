@@ -46,14 +46,17 @@ State at 05:50 UTC:
   on JDK 25 (four Kotlin tests skip there with the reason printed); clippy (host and Windows
   target), fmt, schema check, grader tests and skill_text pass; the scan of the added lines for
   names that must not be in the repository is clean.
-- Running: the sixth item (workflow `last-item-reasons-cap`): in
-  `bench/runner/src/dynamic/ops.rs`, `failed_summary_detail` prints all reasons lines first and
-  does not count them against the eight-line cap; a test seen failing; the VERIFY row of the
-  shim record fix says what the code does; then an independent check.
-Then: `cargo test -p dla-bench`, clippy, fmt; a snapshot without `[skip ci]` for a last CI run;
-when it is green, one commit on `main` with the message in `commit-message.txt` (without
-`.wip/`; author as below, no trailers), push `main` and `main:dev/wonderful-mccarthy-algc5s`,
-confirm CI on `main`.
+- The sixth item is done and independently checked (no problem): in
+  `bench/runner/src/dynamic/ops.rs`, `failed_summary_detail` prints the reasons lines of every
+  failed summary first and does not count them against the eight-line cap; the new test fails
+  on the old function body. On the final tree `cargo test -p dla-bench`, workspace clippy,
+  `cargo fmt --all --check` and `dla schema --check` pass.
+- The tree is final. A snapshot without `[skip ci]` was pushed for the last CI run (find it with
+  `gh run list --workflow ci.yml --branch wip/progress`).
+When that run is green: one commit on `main` with the message in `commit-message.txt` (the
+working tree as it is, without `.wip/`; author as below, no trailers), push `main` and
+`main:dev/wonderful-mccarthy-algc5s`, confirm CI on `main`. If the working tree was lost, take
+the tree of the snapshot: `git checkout <snapshot> -- .` on `main`, then remove `.wip/`.
 Residual chance paths seen in the acceptance run, not handled (they cost nothing on the
 fixtures where they showed): a heap column passes the first trend by chance on a flat Go run,
 `os.rss` then votes and reads retained on a growth inside its own noise (go-ticker-modern, a
