@@ -37,6 +37,13 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
    the owner asks; the fixes go out with the next version.
 2. The eight fixtures in `bench/fixtures-open/` (move each back when it passes, and restore the
    `pair` line of its partner: go-ticker-modern, node-signal-compose-22, python-zstd-options-3145).
+   Started 06:50 UTC on 2026-11-20: a diagnosis workflow (`open-fixtures-diagnose-workflow.js`,
+   brief `open-fixtures-brief.md`): per fixture one diagnosis (why static does not flag it,
+   where the dynamic chain breaks, a product change that is right beyond the fixture) and one
+   independent verification. Each diagnosis is also written to the scratch dir
+   `u13/<fixture>/diagnosis.md`. Nothing in the repository is edited in this step. Next: read
+   the eight results, group the changes by product area, decide what is worth doing (a rule
+   keyed to one fixture is not), then a fix workflow per group with independent checks.
 3. The benchmark work in `bench-todo.md`.
 4. The remaining M7 phases (calibration, rightsize suite, model baseline); `1.0.0-rc.1` and
    `1.0.0`, each only with the owner's go-ahead.
