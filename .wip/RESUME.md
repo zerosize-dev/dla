@@ -1,4 +1,12 @@
-# Where the work stands (2026-11-20, 08:45 UTC)
+# Where the work stands (2026-11-20, 09:35 UTC)
+
+## Working rule from the owner (2026-11-20, 09:25 UTC), above every other habit
+"You should be using sonnet 5.5 subagents for tasks and verify yourself, since my limits are
+going up too fast." So: every subagent runs on Sonnet (`model: 'sonnet'` in workflow scripts),
+no checker, reviewer or design agent on the session model, and as few agents as the work needs.
+The orchestrator verifies each agent's report itself: read the diff of its files, rerun its
+tests and bench commands, keep the output short. A second agent on the same question only when
+the orchestrator cannot settle it.
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `4aae86f` "Remove three chance failures of
@@ -52,13 +60,13 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
      lands one frame below the leak's site, so nothing ties.
    - rust-slot-arena: DLA confirms the leak at the holder's declaration `src/arena.rs:24`, which
      the answer key does not list.
-   Fix pass 1 runs (workflow `open-fixtures-fix-workflow.js`, brief
-   `open-fixtures-fix-brief.md`): five packages, each fix, independent check, refix; chain 1:
-   F-a label evidence, F-b Python census and agent, F-c Node; chain 2: F-d Go static rules,
-   F-e Go in-run measurement (design, design review, then build). Reports are written to the
-   scratch dir `u14/<package>/report-*.md`. To resume after a restart: read the workflow's
-   `journal.jsonl`, pass the finished results by label as `args.results` (the script skips
-   those), and relaunch the same script.
+   Fix pass 1 (brief `open-fixtures-fix-brief.md`): five packages. F-a (label evidence) is
+   fixed (report in the scratch dir `u14/F-a/report-fix.md`), to be verified by the
+   orchestrator. Running since 09:30 UTC as workflow `open-fixtures-fix-1b` (Sonnet only, no
+   checker agents): chain 1: F-b Python census and agent, then F-c Node; chain 2: F-d Go static
+   rules (continues the partial edits of a stopped agent), then the design of F-e (Go in-run
+   measurement; written to `u14/F-e/design.md`, the orchestrator reviews it before the build).
+   Each fixer writes `u14/<package>/report-fix.md`.
    Waiting for the owner (asked on 2026-11-20): (1) rust-slot-arena: add `src/arena.rs:24` to
    the key's alt_sites? (2) the tie rule: may an allocation stack tie through the nearest caller
    frame that has a finding (python-zstd-options-3144, go-trace-context), or stay strict with
