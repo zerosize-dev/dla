@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 06:40 UTC)
+# Where the work stands (2026-11-20, 08:45 UTC)
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `4aae86f` "Remove three chance failures of
@@ -10,9 +10,9 @@
   the open check items. Its tree is the snapshot `ba20457` of this branch, which was green on all
   15 CI jobs (run 44682379249); the local acceptance was clean (static 60/60, dynamic 59 pass and
   1 expected failure, 2744 tests pass; reports `cont-c3-accept-*.md`).
-- CI on `main` at `4aae86f` was started by the push at 06:38 UTC on 2026-11-20; check it with
-  `gh run list --workflow ci.yml --branch main`. If the dynamic job fails on a fixture, read its
-  failure text first: it now names the reasons, the limitation lines and the per-capture values.
+- CI on `main` at `4aae86f` is green on all 15 jobs (run 44689034328). If a later dynamic job
+  fails on a fixture, read its failure text first: it now names the reasons, the limitation
+  lines and the per-capture values.
 - The working tree is clean. The container restarts about every three hours; files on disk
   survived both restarts so far, running agents did not.
 
@@ -37,13 +37,36 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
    the owner asks; the fixes go out with the next version.
 2. The eight fixtures in `bench/fixtures-open/` (move each back when it passes, and restore the
    `pair` line of its partner: go-ticker-modern, node-signal-compose-22, python-zstd-options-3145).
-   Started 06:50 UTC on 2026-11-20: a diagnosis workflow (`open-fixtures-diagnose-workflow.js`,
-   brief `open-fixtures-brief.md`): per fixture one diagnosis (why static does not flag it,
-   where the dynamic chain breaks, a product change that is right beyond the fixture) and one
-   independent verification. Each diagnosis is also written to the scratch dir
-   `u13/<fixture>/diagnosis.md`. Nothing in the repository is edited in this step. Next: read
-   the eight results, group the changes by product area, decide what is worth doing (a rule
-   keyed to one fixture is not), then a fix workflow per group with independent checks.
+   Diagnosis done (08:30 UTC on 2026-11-20): `open-fixtures-diagnosis.json` holds, per fixture,
+   the diagnosis and its independent verification. In short:
+   - go-ticker-legacy: only the label is refused; L-REGISTER needs the alternative
+     growth-series + alloc-stack in `data/archetypes.toml` (checked end to end on a scratch copy).
+   - python-frozen-gc: census entry for `gc.freeze()` in a function, an agent group
+     `py.gc_frozen@site`, its catalog entry.
+   - node-signal-compose-24: a probe on a class with only private fields reads a constant 1 and
+     refutes the true finding; FinalizationRegistry cells need a registration holder.
+   - go-header-index, go-feed-merge (second leak), go-trace-context: no static rule for a
+     retained slice view or (Go) a chain head; and in command mode the Go agent measures after
+     `main` returned, when the state is dead, so nothing grows.
+   - python-zstd-options-3144: census has no native codec contexts; and the allocation stack
+     lands one frame below the leak's site, so nothing ties.
+   - rust-slot-arena: DLA confirms the leak at the holder's declaration `src/arena.rs:24`, which
+     the answer key does not list.
+   Fix pass 1 runs (workflow `open-fixtures-fix-workflow.js`, brief
+   `open-fixtures-fix-brief.md`): five packages, each fix, independent check, refix; chain 1:
+   F-a label evidence, F-b Python census and agent, F-c Node; chain 2: F-d Go static rules,
+   F-e Go in-run measurement (design, design review, then build). Reports are written to the
+   scratch dir `u14/<package>/report-*.md`. To resume after a restart: read the workflow's
+   `journal.jsonl`, pass the finished results by label as `args.results` (the script skips
+   those), and relaunch the same script.
+   Waiting for the owner (asked on 2026-11-20): (1) rust-slot-arena: add `src/arena.rs:24` to
+   the key's alt_sites? (2) the tie rule: may an allocation stack tie through the nearest caller
+   frame that has a finding (python-zstd-options-3144, go-trace-context), or stay strict with
+   an explicit `ledger annotate --writer`? (3) go-feed-merge's second leak needs a new kind of
+   tie (an intervention: stub the statement, the growth drops): build it, or leave the fixture
+   parked? (4) go-trace-context's key names `trace.go:35` where the call is at `trace.go:43`.
+   After the packages: move the fixtures that pass back (`git mv`), restore the pair lines,
+   update the READMEs and counts, full acceptance, CI on a snapshot, commit.
 3. The benchmark work in `bench-todo.md`.
 4. The remaining M7 phases (calibration, rightsize suite, model baseline); `1.0.0-rc.1` and
    `1.0.0`, each only with the owner's go-ahead.

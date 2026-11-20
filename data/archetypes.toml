@@ -45,7 +45,7 @@ summary = "A long-lived collection gains an entry per unit of work and nothing r
 [L-REGISTER]
 holders = ["registration-table", "static/global"]
 regions = ["heap", "non-heap"]
-requires = [["unit-count-series"], ["growth-series", "retention-path"], ["growth-series", "non-heap"]]
+requires = [["unit-count-series"], ["growth-series", "retention-path"], ["growth-series", "non-heap"], ["growth-series", "alloc-stack"]]
 disconfirm = ["N-SCALE", "N-WARM", "N-INTENT"]
 signals = ["node.listeners", "node.timers", "node.active.", "os.threads"]
 repair = ["deregister"]
