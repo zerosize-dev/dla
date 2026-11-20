@@ -847,6 +847,27 @@ fn log_failed_summarize(fx: &mut Fx, op: &str, backend: &str, gate: &str, why: S
         });
 }
 
+/// The most detail lines a refused call adds to the steps.
+const MAX_DETAIL_LINES: usize = 8;
+
+/// The detail lines of the summarize steps whose gate failed: of the operations given, or of
+/// every operation (a refused confirmation does not name them). At most
+/// [`MAX_DETAIL_LINES`] lines.
+pub(super) fn failed_summary_detail(
+    log: &[crate::dynamic_cmd::SummarizeStep],
+    ops: Option<&[String]>,
+) -> Vec<String> {
+    log.iter()
+        .filter(|s| ops.is_none_or(|ops| ops.contains(&s.op)))
+        .flat_map(|s| {
+            s.detail
+                .iter()
+                .map(move |d| format!("{} via {}: {d}", s.op, s.backend))
+        })
+        .take(MAX_DETAIL_LINES)
+        .collect()
+}
+
 /// Longest line of [`gate_detail`].
 const DETAIL_LINE: usize = 260;
 /// Most captures a detail line names the record of.
@@ -1134,6 +1155,10 @@ fn confirm(fx: &mut Fx, p: &Pending, tied: &[(BTreeSet<String>, Vec<String>)]) {
             .errors
             .push(format!("dla ledger confirm {}: {}", p.finding, c.message()));
         fx.step(format!("{} confirm refused ({})", p.finding, c.code()));
+        // The gates that failed say why the confirmation had nothing to stand on.
+        for line in failed_summary_detail(&fx.row.summarize_log, None) {
+            fx.step(line);
+        }
     }
 }
 
@@ -1355,8 +1380,8 @@ case "$1 $2" in
   tie='"tie":{"rule":"type","key":"X"},'
   [ -n "$FAKE_NO_TIE" ] && tie=''
   echo '{"type":"evidence","evidence_id":"E1","kind":"histogram-diff","authority":"live","result":{}}' >> $R/ledger.jsonl
-  echo '{"type":"evidence","evidence_id":"E2","kind":"growth-series","authority":"live","result":{"gate":"pass","passed":[{"column":"type:X",'"$tie"'"finding":"F1"}]}}' >> $R/ledger.jsonl
-  echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"pass","growth_evidence":"E2","raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
+  echo '{"type":"evidence","evidence_id":"E2","kind":"growth-series","authority":"live","limitations":["a limitation of the failed gate"],"result":{"gate":"pass","passed":[{"column":"type:X",'"$tie"'"finding":"F1"}]}}' >> $R/ledger.jsonl
+  echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"'"${FAKE_GATE:-pass}"'","growth_evidence":"E2","raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
 "ledger add")
   echo '{"ok":true,"id":"F2.n1"}';;
 "ledger refute")
@@ -1371,6 +1396,7 @@ case "$1 $2" in
   echo '{"ok":true}';;
 "ledger confirm")
   if [ -n "$FAKE_CRASH_CONFIRM" ]; then echo "thread main panicked" >&2; exit 101; fi
+  if [ -n "$FAKE_REFUSE_CONFIRM" ]; then echo '{"ok":false,"error":{"code":"confirm-untied","message":"m"}}'; exit 2; fi
   echo '{"ok":true}';;
 *) echo '{"ok":true}';;
 esac
@@ -1510,6 +1536,65 @@ esac
         let pass = serde_json::json!({"gate": "pass", "growth_evidence": "E3"});
         assert!(gate_detail(&pass, &dir).is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_confirmation_prints_the_detail_of_the_failed_summaries() {
+        let (row, calls) = drive_fake(&[("FAKE_GATE", "fail"), ("FAKE_REFUSE_CONFIRM", "1")]);
+        // The call with the summarize evidence is refused, then the retry with the trend alone.
+        assert!(
+            calls.contains("ledger confirm F1 --evidence E0,E1,E2\n"),
+            "{calls}"
+        );
+        assert!(
+            calls.contains("ledger confirm F1 --evidence E0\n"),
+            "{calls}"
+        );
+        let at = row
+            .steps
+            .iter()
+            .position(|s| s == "F1 confirm refused (confirm-untied)")
+            .unwrap_or_else(|| panic!("{:?}", row.steps));
+        assert_eq!(
+            row.steps[at + 1],
+            "type-histogram-diff via b: limitation: a limitation of the failed gate",
+            "{:?}",
+            row.steps
+        );
+        // A summary whose gate passed adds nothing, nor does a confirmation that went through.
+        let (row, _) = drive_fake(&[("FAKE_REFUSE_CONFIRM", "1")]);
+        assert!(
+            row.steps.iter().all(|s| !s.contains("limitation:")),
+            "{:?}",
+            row.steps
+        );
+        let (row, _) = drive_fake(&[("FAKE_GATE", "fail")]);
+        assert!(
+            row.steps.iter().all(|s| !s.contains("limitation:")),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[test]
+    fn the_detail_of_failed_summaries_is_filtered_by_operation_and_capped() {
+        let step = |op: &str, lines: usize| crate::dynamic_cmd::SummarizeStep {
+            op: op.to_owned(),
+            backend: "b".to_owned(),
+            gate: "fail".to_owned(),
+            tied: "none".to_owned(),
+            reasons: Vec::new(),
+            detail: (0..lines).map(|i| format!("line {i}")).collect(),
+        };
+        let log = [step("a", 2), step("b", 10)];
+        assert_eq!(
+            failed_summary_detail(&log, Some(&["a".to_owned()])),
+            ["a via b: line 0", "a via b: line 1"]
+        );
+        let all = failed_summary_detail(&log, None);
+        assert_eq!(all.len(), MAX_DETAIL_LINES);
+        assert_eq!(all[2], "b via b: line 0");
     }
 
     #[cfg(unix)]

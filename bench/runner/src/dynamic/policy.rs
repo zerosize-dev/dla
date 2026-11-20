@@ -527,36 +527,16 @@ fn missing_evidence_steps(fx: &Fx, o: &Out) -> String {
     }
 }
 
-/// For a label refused for missing evidence: the detail lines of each summarize step whose
-/// gate failed (limitations, the holder's figures per capture and the process each capture
-/// was read from), so the CI log shows what the gate saw. Empty for any other refusal.
+/// For a label refused for missing evidence: the detail lines of each summarize step of the
+/// fix's operations whose gate failed (limitations, the holder's figures per capture and, for
+/// the first capture and the first few the holder is absent from, the process each was read
+/// from), so the CI log shows what the gate saw. Empty for any other refusal.
 fn missing_evidence_detail(fx: &Fx, o: &Out) -> Vec<String> {
     if o.code() != "label-evidence-missing" {
         return Vec::new();
     }
     let fix = o.json["error"]["fix"].as_str().unwrap_or("");
-    failed_summary_detail(&fx.row.summarize_log, Some(&summarize_ops_in(fix)))
-}
-
-/// The most detail lines a refused call adds to the steps.
-const MAX_DETAIL_LINES: usize = 8;
-
-/// The detail lines of the summarize steps whose gate failed: of the operations given, or of
-/// every operation (a refused confirmation does not name them). At most
-/// [`MAX_DETAIL_LINES`] lines.
-fn failed_summary_detail(
-    log: &[crate::dynamic_cmd::SummarizeStep],
-    ops: Option<&[String]>,
-) -> Vec<String> {
-    log.iter()
-        .filter(|s| ops.is_none_or(|ops| ops.contains(&s.op)))
-        .flat_map(|s| {
-            s.detail
-                .iter()
-                .map(move |d| format!("{} via {}: {d}", s.op, s.backend))
-        })
-        .take(MAX_DETAIL_LINES)
-        .collect()
+    ops::failed_summary_detail(&fx.row.summarize_log, Some(&summarize_ops_in(fix)))
 }
 
 /// The note the policy gives when the expected cause has no row in the finding's runtime
@@ -1759,27 +1739,6 @@ cause = "{cause}"
             "{:?}",
             row.steps
         );
-    }
-
-    #[test]
-    fn a_refused_confirmation_prints_every_failed_summary_up_to_a_cap() {
-        let step = |op: &str, lines: usize| crate::dynamic_cmd::SummarizeStep {
-            op: op.to_owned(),
-            backend: "b".to_owned(),
-            gate: "fail".to_owned(),
-            tied: "none".to_owned(),
-            reasons: Vec::new(),
-            detail: (0..lines).map(|i| format!("line {i}")).collect(),
-        };
-        let log = [step("a", 2), step("b", 10)];
-        // A label names its operations; a confirmation does not.
-        assert_eq!(
-            failed_summary_detail(&log, Some(&["a".to_owned()])),
-            ["a via b: line 0", "a via b: line 1"]
-        );
-        let all = failed_summary_detail(&log, None);
-        assert_eq!(all.len(), MAX_DETAIL_LINES);
-        assert_eq!(all[2], "b via b: line 0");
     }
 
     #[test]

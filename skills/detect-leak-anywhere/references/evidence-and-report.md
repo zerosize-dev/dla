@@ -135,10 +135,10 @@ latest trend of the harness plus `os.rss`; a peak or a size no purge can give ba
 `native.peak_bytes`, `os.vm_data`) is tested and reported, and votes only when nothing else
 can. The file-backed pages `os.rss_file` vote on their plateau test, but a retained purge reading
 of that column never contradicts a plateau (no purge gives file-backed pages back). For a JVM
-non-heap finding the primary is `jvm.nonheap_used`, which must plateau together with every `jvm.nmt.*` category that passed the gate
-in the latest trend and with `jvm.threads` and `os.threads` (when those passed the gate, or when the
-harness has no trend yet); `jvm.classes_loaded`, `jvm.classes_unloaded` and `jvm.jit_seconds` are reported
-and never decide.
+non-heap finding the primary is `jvm.nonheap_used`, which must plateau together with every
+`jvm.nmt.*` category that passed the gate in the latest trend and with `jvm.threads` and
+`os.threads` (when those passed the gate, or when the harness has no trend yet);
+`jvm.classes_loaded`, `jvm.classes_unloaded` and `jvm.jit_seconds` are reported and never decide.
 
 - **Plateau test.** Main window = the first `iterations` post-warm-up points, extra window = the
   rest. If the extra slope is at least half the main slope and the extra rise exceeds 3 noise
@@ -149,9 +149,9 @@ and never decide.
 - **Purge test** (process and off-heap columns, and gauges). `drop` is the value before the purge
   minus the value after; `growth` is the value before the purge minus the value at the end of
   warm-up. A growth that is no more than the column's smallest rise (32 KiB for a byte column,
-  the same minimum the plateau test uses; none for other columns), or no more than the noise
-  limit of its plateau test (3 noise units) when that is larger, is `no-growth`: live objects
-  and the scatter of a flat column are not retained memory a purge could have returned.
+  the same minimum the plateau test uses; none for other columns) is `no-growth`: a few KB of
+  live objects are not retained memory a purge could have returned. A larger growth is judged
+  as below even when it lies inside the scatter of a noisy column.
   A drop of at least half the growth favors `non-leak` and supports N-ALLOC for a trim,
   free-os-memory, trim-native-heap or jemalloc purge, or N-HEADROOM for a gc purge. A drop of
   at most a fifth of the growth favors `leak`. In between is inconclusive. `--purge auto` picks the

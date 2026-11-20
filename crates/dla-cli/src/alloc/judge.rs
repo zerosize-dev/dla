@@ -227,8 +227,8 @@ pub enum PurgeVerdict {
     Retained,
     /// In between.
     Partial,
-    /// The column did not grow above its warm-up value by more than the purge floor
-    /// ([`purge_floor`]), so there is nothing to release.
+    /// The column did not grow above its warm-up value by more than its minimum rise, so
+    /// there is nothing to release.
     NoGrowth,
     /// No reading of the column before and after the purge.
     NotRun,
@@ -264,21 +264,13 @@ pub struct Purge {
     pub verdict: PurgeVerdict,
 }
 
-/// The smallest growth the purge test calls growth for a column: its minimum rise, or the
-/// noise limit its plateau test uses when that is larger. A purge cannot give back a
-/// difference between two readings that the column's own scatter produces (resident memory
-/// of a flat program moves by a few page-sized steps from one reading to the next), and the
-/// plateau test of the same column already reads that scatter as no rise.
-pub fn purge_floor(plateau: &Plateau, min_rise: f64) -> f64 {
-    min_rise.max(NOISE_MULTIPLE * plateau.noise.unwrap_or(0.0))
-}
-
 /// The purge test: `drop` against `growth` (`before` minus the end-of-warm-up value).
-/// `min_rise` is the column's smallest growth that is growth at all ([`purge_floor`]: the
-/// minimum rise the plateau test uses, [`MIN_BYTE_RISE`] for a byte column, or the column's
-/// noise limit when larger); a growth at or below it is `NoGrowth`, because a purge cannot
-/// give back what the program still holds (a few KB of live objects) or the column's own
-/// scatter, and the plateau test already calls that a plateau.
+/// `min_rise` is the column's smallest growth that is growth at all (the minimum rise the
+/// plateau test uses: [`MIN_BYTE_RISE`] for a byte column, zero otherwise); a growth at or
+/// below it is `NoGrowth`, because a purge cannot give back what the program still holds (a
+/// few KB of live objects) and the plateau test already calls that a plateau. A growth above
+/// it is read as before, whatever the scatter of the column: a slow real leak under the
+/// scatter must not read as nothing to release.
 pub fn purge(
     kind: &str,
     before: Option<f64>,
@@ -695,22 +687,6 @@ mod tests {
             .verdict,
             PurgeVerdict::Retained
         );
-    }
-
-    #[test]
-    fn the_purge_floor_is_the_larger_of_the_minimum_rise_and_the_noise_limit() {
-        let plateau = |noise: Option<f64>| Plateau {
-            main_slope: None,
-            extra_slope: None,
-            extra_rise: None,
-            noise,
-            verdict: PlateauVerdict::Plateau,
-        };
-        let min = MIN_BYTE_RISE;
-        assert_eq!(purge_floor(&plateau(None), min), min);
-        assert_eq!(purge_floor(&plateau(Some(1000.0)), min), min);
-        assert_eq!(purge_floor(&plateau(Some(40_000.0)), min), 120_000.0);
-        assert_eq!(purge_floor(&plateau(Some(40_000.0)), 0.0), 120_000.0);
     }
 
     #[test]

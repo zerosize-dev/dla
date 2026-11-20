@@ -348,11 +348,16 @@ fn the_bounded_twin_favors_non_leak_and_the_candidate_is_refuted() {
 }
 
 /// A flat run whose first trend passed `os.rss_file` by chance (a stair on a noisy flat series):
-/// the unbound alloc-test lets it vote, and a retained purge reading of file pages (no purge
-/// gives them back) does not turn its plateau into a contradiction. The trend file is edited
-/// to the shape a runner showed (only `os.rss_file` passing). The overall verdict is not
-/// asserted: `os.rss` votes too, and a real run of Python grows it by about a hundred KB over
-/// the first points (the allocator warming up), which its purge can read as retained.
+/// the unbound alloc-test lets it vote and the column reads non-leak, whatever its purge reads.
+/// The trend file is edited to the shape a runner showed (only `os.rss_file` passing). The
+/// purge reading of the column in a real run reads `no-growth` in the runs made (the Python agent no
+/// longer maps files between its two readings), so this test does not reach the retained
+/// path: the rule that a retained purge of `os.rss_file` does not contradict its plateau is
+/// pinned by `a_flat_file_backed_column_with_a_retained_purge_reads_non_leak_and_keeps_the_reading`
+/// in the unit tests of `alloc_cmd`. The overall verdict is not asserted: `os.rss` votes too,
+/// its warm-up point sits below the later readings of a real run (the allocator warming up) and
+/// its own purge can then read as retained, so a flat run reads inconclusive through it in
+/// some runs.
 #[test]
 fn a_flat_file_backed_column_that_passed_the_gate_reads_non_leak_on_a_flat_run() {
     if skip_without_python() {

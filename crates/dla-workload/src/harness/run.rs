@@ -1421,6 +1421,17 @@ fn shim_missing_note(
 /// (see [`capture::split_shim_dump`]) and notes a point whose measured process left none. A
 /// run without `--capture` leaves the file of an earlier capturing run alone: the commands in
 /// `captures.json` still read it.
+/// Removes the shim file and the capture directory an earlier run left at a point, at the
+/// start of a capturing run only: a run without `--capture` leaves them, since `captures.json`
+/// still lists them.
+fn clear_stale_capture_files(paths: &Paths, label: &str, capturing: bool) {
+    if capturing {
+        let dir = paths.out.join(label);
+        let _ = fs::remove_file(dir.join(capture::SHIM_DUMP));
+        let _ = fs::remove_dir_all(dir.join(capture::DIR));
+    }
+}
+
 fn split_shim(
     manifest: &HarnessManifest,
     paths: &Paths,
@@ -1520,10 +1531,7 @@ fn run_command_mode(
             fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
         }
         let _ = fs::remove_file(&dump);
-        if capturing {
-            let _ = fs::remove_file(paths.out.join(&label).join(capture::SHIM_DUMP));
-            let _ = fs::remove_dir_all(pe.capture_dir());
-        }
+        clear_stale_capture_files(paths, &label, capturing);
         let command = subst(
             &manifest.run.argv.join(" "),
             &[("n", n.to_string()), ("label", label.clone())],
@@ -1736,10 +1744,7 @@ fn run_driver_mode(
         fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
     }
     let _ = fs::remove_file(&dump);
-    if capturing {
-        let _ = fs::remove_file(paths.out.join(&label).join(capture::SHIM_DUMP));
-        let _ = fs::remove_dir_all(pe.capture_dir());
-    }
+    clear_stale_capture_files(paths, &label, capturing);
     let command = manifest.run.argv.join(" ");
     let spec = pe.exec_spec(timeout, &command, &[]);
     let res = exec(ctx, &spec)?;
@@ -3151,6 +3156,25 @@ mod tests {
             &mut run,
         );
         assert!(kept.is_file());
+    }
+
+    #[test]
+    fn stale_capture_files_are_removed_at_the_start_of_a_capturing_run_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let label_dir = paths.out.join("p1-native");
+        let shim = label_dir.join(capture::SHIM_DUMP);
+        let cap = label_dir.join(capture::DIR);
+        let put = || {
+            fs::create_dir_all(&cap).unwrap();
+            fs::write(&shim, "{}\n").unwrap();
+            fs::write(cap.join("c1"), "x").unwrap();
+        };
+        put();
+        clear_stale_capture_files(&paths, "p1-native", false);
+        assert!(shim.is_file() && cap.join("c1").is_file());
+        clear_stale_capture_files(&paths, "p1-native", true);
+        assert!(!shim.exists() && !cap.exists());
     }
 }
 

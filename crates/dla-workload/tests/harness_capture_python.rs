@@ -240,20 +240,22 @@ fn the_trim_purge_reads_before_from_the_checkpoints_own_reading() {
     };
     let purge = &rec["purge"];
     assert_eq!(purge["kind"], "trim", "{rec}");
-    // Loading ctypes and libc for the trim maps files and anonymous memory (about 2 MB and
-    // 0.3 MB of them file-backed in a bare interpreter). Done at the purge, `before` sat that far
-    // above the checkpoint's own reading and the purge read "retained" on a flat run.
-    for (key, slack) in [("os.rss", 512.0 * 1024.0), ("os.rss_file", 128.0 * 1024.0)] {
+    // `before` is the checkpoint's own reading, not a new one. Between the two readings the
+    // purge runs `malloc_trim` only: a module imported there (`platform` adds about 160 KB of
+    // anonymous memory in a bare interpreter, ctypes about 2 MB, a part of it file-backed) shows
+    // as memory the purge failed to return, and a trim that gave back up to that much would
+    // read as retained.
+    for key in ["os.rss", "os.rss_file"] {
         let own = read(&rec["values"], key);
         let before = read(&purge["before"], key);
         let after = read(&purge["after"], key);
-        assert!(
-            (before - own).abs() <= slack,
-            "{key}: before {before} against the checkpoint's {own}"
+        assert_eq!(
+            before, own,
+            "{key}: before against the checkpoint's reading"
         );
         assert!(
-            (after - before).abs() <= slack,
-            "{key}: after {after} against before {before}"
+            after - before <= 32.0 * 1024.0,
+            "{key}: after {after} stands above before {before}: the purge step loaded something"
         );
     }
 }

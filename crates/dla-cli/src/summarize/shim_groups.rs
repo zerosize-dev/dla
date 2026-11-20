@@ -281,19 +281,22 @@ struct ShimProc<'a> {
 }
 
 /// The last words of a command line, enough to tell the project's tests from the program.
-fn argv_tail(argv: Option<&[String]>) -> String {
+/// Each word passes the redactor before it is cut, so a `key=value` word keeps its `key=`
+/// for the redactor to see, however long the value is.
+fn argv_tail(argv: Option<&[String]>, red: &Redactor) -> String {
     let words = argv.unwrap_or_default();
     let from = words.len().saturating_sub(ARGV_TAIL);
     words[from..]
         .iter()
         .map(|w| {
+            let w = red.name(w);
             // A long word (a class path) keeps its end, where the file name is.
             let n = w.chars().count();
             if n > ARGV_WORD {
                 let end: String = w.chars().skip(n - ARGV_WORD).collect();
                 format!("...{end}")
             } else {
-                w.clone()
+                w
             }
         })
         .collect::<Vec<_>>()
@@ -332,12 +335,20 @@ fn choose_process<'a>(
         procs.retain(|p| !tool(p));
     }
     let n = procs.iter().find_map(|p| count_of(p.d.x));
+    let several = procs.len() > 1;
     let by_identity = n.is_some_and(|n| {
         dumps::keep_with_n(&mut procs, |p| {
             p.d.argv.as_deref().is_some_and(|a| dumps::argv_has_n(a, n))
         })
     });
     if procs.len() == 1 {
+        if several && by_identity {
+            // One line for the whole file: the choice rests on the number being in an argv.
+            limits.insert(
+                "several processes wrote shim records with stacks in a capture; the one whose argv carries the capture's iteration count was read (the same number in another process's argv would have chosen that one)"
+                    .to_owned(),
+            );
+        }
         return procs.pop();
     }
     let sizes: Vec<u64> = procs.iter().map(|p| p.total).collect();
@@ -348,7 +359,7 @@ fn choose_process<'a>(
     let kept = procs.swap_remove(at);
     // Command-line words pass the redactor, as in the raw file: a limitation reaches the
     // ledger and the CI log.
-    let words = red.name(&argv_tail(kept.d.argv.as_deref()));
+    let words = argv_tail(kept.d.argv.as_deref(), red);
     let words = if words.is_empty() {
         String::new()
     } else {
@@ -594,7 +605,7 @@ fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<Adapter
             captures.push(ShimCapture {
                 label: i.shown().to_owned(),
                 pid: d.pid,
-                argv_tail: argv_tail(d.argv.as_deref()),
+                argv_tail: argv_tail(d.argv.as_deref(), &ctx.redactor),
                 x: d.x,
                 sha256: i.sha256.clone(),
                 stacks,
@@ -753,7 +764,7 @@ fn run_diff(
             "label": c.label,
             "x": c.x,
             "pid": c.pid,
-            "argv_tail": red.name(&c.argv_tail),
+            "argv_tail": c.argv_tail,
             "stacks": c.stacks.len(),
             "unattributed_bytes": c.unattributed,
             "sha256": c.sha256,
@@ -1086,7 +1097,16 @@ mod tests {
             (3, &["java", "MainKt", "500"], 10),
         ]);
         assert_eq!(kept, Some(3));
-        assert!(limits.is_empty(), "{limits:?}");
+        // Identity chose among two programs: one line says so (the same for every capture).
+        assert_eq!(limits.len(), 1, "{limits:?}");
+        assert!(
+            limits[0].starts_with("several processes wrote shim records")
+                && limits[0].contains("iteration count"),
+            "{limits:?}"
+        );
+        // Only a tool next to the program: nothing was chosen between programs.
+        let (kept, limits) = choose(&[(1, &["sh", "run", "500"], 900), (3, &["java", "500"], 1)]);
+        assert_eq!((kept, limits.len()), (Some(3), 0));
         // A tool process is dropped even when it carries the count and nothing else does.
         let (kept, _) = choose(&[(1, &["sh", "run", "500"], 900), (2, &["java", "A"], 5)]);
         assert_eq!(kept, Some(2));
@@ -1132,6 +1152,12 @@ mod tests {
         // With raw consent the words are shown, like the raw file's.
         let (_, raw) = choose_with(spec, &Redactor::new(b"s", true));
         assert!(raw[0].contains("hunter2hunter2"), "{raw:?}");
+        // A value longer than the cut of a word is shaped as well: the redactor sees the
+        // word before it is cut.
+        let long = "password=abcdefghijklmnopqrstuvwxyzABCDEFGH";
+        let spec: &[(u32, &[&str], u64)] = &[(7, &["java", long], 50), (8, &["java", "x"], 40)];
+        let (_, limits) = choose_with(spec, &Redactor::new(b"s", false));
+        assert!(!limits[0].contains("mnopqrstuvwxyz"), "{limits:?}");
         // A kept record without argv has no empty brackets.
         let (_, limits) = choose(&[(7, &[], 50), (8, &[], 40)]);
         assert!(
@@ -1151,12 +1177,15 @@ mod tests {
     #[test]
     fn a_long_argv_word_keeps_its_end() {
         let long = format!("out:{}/kotlin-stdlib.jar", "d/".repeat(40));
-        let tail = argv_tail(Some(&[
-            "java".to_owned(),
-            long,
-            "shop.codec.MainKt".to_owned(),
-            "2220".to_owned(),
-        ]));
+        let tail = argv_tail(
+            Some(&[
+                "java".to_owned(),
+                long,
+                "shop.codec.MainKt".to_owned(),
+                "2220".to_owned(),
+            ]),
+            &Redactor::new(b"s", false),
+        );
         assert!(
             tail.starts_with("...") && tail.contains("kotlin-stdlib.jar"),
             "{tail}"

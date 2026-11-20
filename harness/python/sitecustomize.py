@@ -459,6 +459,7 @@ def _probes(limitations):
 
 
 _libc = None
+_trim_unavailable = None  # the reason malloc_trim cannot be used, found at start-up
 
 
 def _malloc_trim():
@@ -478,11 +479,19 @@ def _preload_trim():
     resident memory (RSS and file-backed pages) that the purge reading "failed" to return.
     The purge is asked only of the process of the last point (`DLA_PURGE` is set for that
     one), so every process loads them: the points of a series then carry the same load and the
-    last one does not stand above the others by it.
+    last one does not stand above the others by it. `platform` is imported (and the C library
+    looked up) here too: importing it between the two readings of the purge would show as the
+    memory the purge failed to return.
     """
+    global _trim_unavailable
     try:
         if sys.platform.startswith("linux"):
-            _malloc_trim()
+            import platform
+
+            if platform.libc_ver()[0] != "glibc":
+                _trim_unavailable = "malloc_trim needs glibc"
+            else:
+                _malloc_trim()
     except BaseException:
         pass
 
@@ -498,9 +507,9 @@ def _purge(kind, before_gc_os, own_os, limitations):
         # done at start-up (`_preload_trim`).
         purge["before"] = dict(own_os)
         try:
-            import platform
-
-            if platform.libc_ver()[0] != "glibc" and not sys.platform.startswith("linux"):
+            if _trim_unavailable:
+                raise OSError(_trim_unavailable)
+            if not sys.platform.startswith("linux"):
                 raise OSError("malloc_trim needs glibc")
             purge["detail"] = f"malloc_trim(0) -> {_malloc_trim()}"
         except BaseException as exc:

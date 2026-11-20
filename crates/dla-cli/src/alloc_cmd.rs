@@ -247,10 +247,9 @@ fn test_column(
         0.0
     };
     let plateau = judge::plateau(main, extra, counter, reference, min_rise);
-    let floor = judge::purge_floor(&plateau, min_rise);
     let purge = event.map(|e| {
         if counter {
-            return judge::purge(&e.kind, None, None, None, floor);
+            return judge::purge(&e.kind, None, None, None, min_rise);
         }
         let read = |m: &Map<String, Value>| m.get(name).and_then(Value::as_f64);
         judge::purge(
@@ -258,7 +257,7 @@ fn test_column(
             read(&e.before),
             read(&e.after),
             warm_end(series, idx),
-            floor,
+            min_rise,
         )
     });
     let gc = (!counter)
@@ -2731,16 +2730,19 @@ mod tests {
     }
 
     #[test]
-    fn a_growth_within_the_columns_own_scatter_is_no_growth_for_the_purge() {
-        // Resident memory of a flat program: the last reading is 80 KB above the warm-up
-        // point, above the 32 KiB minimum but inside the scatter the plateau test reads.
+    fn a_growth_inside_the_columns_own_scatter_but_above_its_minimum_is_still_growth_for_the_purge()
+    {
+        // A slow real leak under the scatter of a noisy column: the last reading is 80 KB above
+        // the warm-up point, above the 32 KiB minimum and inside the scatter the plateau test
+        // reads. The purge gave nothing back, so the reading is retained and, against the
+        // plateau, inconclusive. It must never read non-leak (a bound non-leak refutes).
         let r = scattered_run(80_000.0);
         assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
         let purge = r.purge.as_ref().unwrap();
         assert!(purge.growth.unwrap() > judge::MIN_BYTE_RISE, "{purge:?}");
-        assert_eq!(purge.verdict, PurgeVerdict::NoGrowth, "{r:?}");
-        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
-        // A step far above the scatter is still retained.
+        assert_eq!(purge.verdict, PurgeVerdict::Retained, "{r:?}");
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        // A step far above the scatter reads the same.
         let mut s = series(&[]);
         s.columns = vec![col("os.rss"), col("os.rss_anon")];
         for (i, p) in s.points.iter_mut().enumerate() {
