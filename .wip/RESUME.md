@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-19, 23:10 UTC)
+# Where the work stands (2026-11-20, 00:45 UTC)
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `9781542` "Version 0.9.0-preview.2", on top of
@@ -10,45 +10,46 @@
 - Release 0.9.0-preview.2 is published (tag `v0.9.0-preview.2` on `9781542`, pre-release, five
   archives with `.sha256` files and `SHA256SUMS`; release run 44631010965). Nothing to do here.
 
-## In flight: the last fix pass (brief `fix-pass-9-brief.md`, items `fix-pass-9-open-items.json`)
-- Two non-leak fixtures fail now and then with "no rule-out on a non-leak fixture"
-  (go-gc-tuned-batch once on the CI runner, python-graph-churn once in a full local run). Cause:
-  a column that passes the first trend by chance votes in the unbound alloc-test and reads
-  plateau + purge retained = inconclusive. Decisions: the purge test uses the plateau test's
-  minimum rise (growth at or below it is `no-growth`); `os.rss_file` joins the columns a purge
-  cannot release in `crates/dla-cli/src/alloc/pick.rs`. `judge::combine` does not change.
-- 14 items the package checks left open: the JVM warm-up test's assertions fail about 1 in 12
-  under load, the JNI test's guard on JDK 25, the flight recorder's `JFR Recording Scheduler`
-  thread, a link case of the JVM coverage agent, VERIFY rows (a stale count, titles, plan names).
-- Known and not handled: under heavy load on the work machine, single failures of
-  `sample::node_inspect_backend_reads_memory_and_active_resources`,
-  `session::tests::a_backend_that_never_works_is_blocked_and_sampling_continues` (dla-sample) and
-  one Go analyzer test of `dla-backends` `real_tools`; none failed in CI.
-- State at 23:10 UTC: N2 fixed, checked (7 minor), refixed, second check running. N1 fixed and
-  checked: 3 problems (with `os.rss_file` never voting, a real file-backed leak can read
-  non-leak: keep its plateau vote and drop only its purge reading; the Python trim step reads
-  `before` after its own `import ctypes`, which adds about 2 MB to `os.rss`, so a flat Python run
-  still reads inconclusive through `os.rss`: fix in `harness/python/sitecustomize.py`; one false
-  sentence in a VERIFY row) and 3 minor; its refix is running. Then the workflow goes on by
-  itself: CI on a snapshot of this branch, full local acceptance.
-- Steps: fix, independent check, snapshot to this branch, CI green on the snapshot, local
-  acceptance, then commit to `main` and push.
+## In flight: two fix passes in one tree, one commit at the end
+The container restarted at 00:17 UTC on 2026-11-20 and stopped both workflows during read-only
+checks; the edits were intact. One continuation workflow now runs them to the end
+(`fix-passes-continue-workflow.js`; the finished agents' reports and checks are the `cont-*` files
+here, the briefs are `fix-pass-9-brief.md` and `fix-pass-10-brief.md`).
 
-## In flight beside it: the `jni-order-codec` chance failure (brief `fix-pass-10-brief.md`)
-- Cause, measured on capture files a local run left behind: the fixture's `build.sh run {n}`
-  starts the project's test JVM and then the program; both write a shim exit record with stacks
-  into `harness/H1/out/p<k>-native/shim-dump.jsonl`, and the reader (`shim_run` in
-  `crates/dla-cli/src/summarize/shim_groups.rs`) keeps "the one with most live bytes". At the
-  first point the two totals were 41.9 MB (test JVM) and 47.8 MB (program); the test JVM's total
-  moves by tens of MB between runs. When it is the larger, capture 1 is the wrong process and
-  the leak's stack is "absent from dump 1".
-- Decision: choose by identity, not size. The harness writes only the measured process's shim
-  record (`shim_dump_commands` in `crates/dla-workload/src/harness/capture.rs`); the reader uses
-  the rule of `select_measured` (`dumps.rs`) for other files and uses size only as a named
-  fallback; `dla-bench dynamic` prints the failed gate's per-capture values. The gate in
-  `summarize/rule.rs` and the fixture do not change.
-- Runs as its own small workflow (fix, check, refix, check) in the same tree as the pass above;
-  its changes go into the same commit when both are checked.
+Pass A, package N1 (flaky non-leak verdicts in the unbound alloc-test):
+- Cause: a column that passes the first trend by chance votes and reads plateau + purge retained
+  = inconclusive (go-gc-tuned-batch on the runner, python-graph-churn locally).
+- Done: the purge test uses the plateau test's minimum rise; after the first check also: the
+  file-backed column keeps its plateau vote and only its purge reading is dropped, and the Python
+  trim purge no longer reads `before` after its own `import ctypes`
+  (`harness/python/sitecustomize.py`). Refix done; its second check is running.
+Pass A, package N2 (14 items earlier checks left open): fixed, checked twice; four wording items
+left (a test comment, two VERIFY rows with stale counts, one over-long README line). They are in
+the leftovers step of the continuation workflow.
+Pass B (`jni-order-codec` fails by chance on the runner):
+- Cause, measured: the fixture's `build.sh run {n}` starts the project's test JVM and then the
+  program; both wrote a shim exit record with stacks into `p<k>-native/shim-dump.jsonl`, and the
+  reader kept "the one with most live bytes" (41.9 MB against 47.8 MB at the first point).
+- Done: the harness writes the measured process's shim record only; the reader chooses by
+  identity (the rule of `select_measured`) and uses size only as a named fallback;
+  `dla-bench dynamic` prints the failed gate's limitation lines and per-capture values. The first
+  check found five problems (a false limitation on harnesses without a shim, a run without
+  `--capture` deleting capture files, unredacted argv words in a limitation line, the VERIFY row
+  in the wrong table, decision 4 only for labels); refix done; its second check is running.
+CI: snapshot `47991b4` (N2 refix, N1 first fix) was green on all 15 jobs; the run of `91fb4a0`
+(both refixes; the tree at the restart) was in progress at 00:30 UTC (run 44641789200).
+Then, by the workflow: leftovers, a snapshot with a CI run (fix loop, at most 4 attempts), the
+full local acceptance (logs under the scratch dir `u11acc/`, compared with the run before these
+passes). When CI is green on the final tree and the acceptance is clean: one commit on `main`
+(without `.wip/`), push `main` and `main:dev/wonderful-mccarthy-algc5s`, confirm CI on `main`.
+
+Snapshots: `snapshot.sh "<label>"` (copy here). A label with `[skip ci]` saves notes without a
+CI run; a later snapshot without it always gets a commit, so a CI run exists for it.
+
+Known and not handled: under heavy load on the work machine, single failures of
+`sample::node_inspect_backend_reads_memory_and_active_resources`,
+`session::tests::a_backend_that_never_works_is_blocked_and_sampling_continues` (dla-sample) and
+one Go analyzer test of `dla-backends` `real_tools`; none failed in CI.
 
 ## Next, in order
 1. Finish the two fix passes above and commit them to `main` together (CI green on a snapshot

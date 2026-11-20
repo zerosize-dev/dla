@@ -1,0 +1,76 @@
+{
+ "problems": [
+  {
+   "severity": "problem",
+   "where": "crates/dla-workload/src/harness/capture.rs:729-735 and crates/dla-workload/src/harness/run.rs:1392-1401",
+   "text": "A capturing run of a harness that has no allocator shim now gets a false limitation on every point. `split_shim_dump` returns `Missing { others: 0 }` for any dump that holds a managed runtime's records and no shim record, and `split_shim` pushes its line for every `Missing`. Seen: `dla harness run H1 --capture histogram,alloc,nonheap --iterations 2` on a copy of the `python-report-memo-bounded` run wrote `p1-native: pid 30560 wrote no allocator shim record with stacks, so this point has no shim-dump.jsonl` for each of the 3 points, in run-S4.json, the series and ledger evidence E15, where it takes one of the three `limitations.first` places. JVM dumps without JNI and Node dumps hold no shim record either (checked `jvm-order-cache`, `jvm-rule-compiler`, `node-native-addon`), so every `--capture` run of those gets one line per point. HEAD wrote none. No test covers a managed dump without any shim record. A dump with no native record cannot tell 'no shim' from 'killed before its exit record', so the decision has to come from the manifest (shim preloaded or not)."
+  },
+  {
+   "severity": "problem",
+   "where": "crates/dla-workload/src/harness/run.rs:1484, 1699 and 1388-1391",
+   "text": "A run without `--capture` now deletes the `shim-dump.jsonl` of every point it runs, while `captures.json` still lists the commands that read them. Seen in the work copy of my bench run: after the capture run, `dla harness run H1 --iterations 1` removed `shim-dump.jsonl` of p1-native and p2-native (their `capture/` directories stayed, p3 was untouched), and the `type-histogram-diff` command from `captures.json` then failed with `artifact-not-found: ...p1-native/shim-dump.jsonl is not a file`. At HEAD run.rs never touched the file, so this order worked. `dla alloc-test` runs the same points through `run_points` (alloc_cmd.rs:946; it wrote p10 to p17 of the same out directory in my run), so capture, then alloc-test, then a second summarize (the `needed` text asks for one after `dla census`) loses its input the same way; that part is by reading. The other capture files are only removed in a capturing run (run.rs:1485); the shim file should follow the same rule, or be written in every run."
+  },
+  {
+   "severity": "problem",
+   "where": "crates/dla-cli/src/summarize/shim_groups.rs:347-358 (argv at 356), against 746",
+   "text": "The new limitation line writes argv words unshaped into the ledger. The raw file passes `argv_tail` through the redactor (line 746); the limitation line does not. Seen with redaction `shapes` (no raw-values consent): the raw file shows `shop.Main ...sk_live_<20:...> password=<14:...>`, and the limitation of both evidence records shows `kept pid 11103 (shop.Main ...sk_live_4f9a8b7c6d5e4f3a2b1c password=hunter2hunter2)`. `gate_detail` prints these limitation lines into the CI log (bench/runner/src/dynamic/ops.rs:900). The words need the same redactor before they enter `limits`."
+  },
+  {
+   "severity": "problem",
+   "where": "docs/VERIFY.md:600",
+   "text": "The new row is not in the `## M7` table. It is the last line of the file, in the table under `### Round R2 fixes (intervene, bundle, census, native labels)` of `## Verification backlog`; the M7 table ends at line 521. The report says it is 'at the end of the `## M7` table'. The row's form is fine: 4 cells, balanced backticks, no pipe inside a code span, no plan names, no line numbers."
+  },
+  {
+   "severity": "problem",
+   "where": "bench/runner/src/dynamic/policy.rs:533-536 and bench/runner/src/dynamic/ops.rs:1118-1123",
+   "text": "Decision 4 is done for a refused label only. The brief names 'a label or confirmation refused for missing evidence'. `missing_evidence_detail` returns nothing unless the code is `label-evidence-missing`, and a refused confirmation prints only `<F> confirm refused (<code>)`. The reasons, limitation lines and per-capture values of the failed summaries stay in `summarize_log`, which is not serialized and not printed. The report says 'Done' and does not mention the confirmation case."
+  },
+  {
+   "severity": "minor",
+   "where": "docs/VERIFY.md:600 (wording), bench/runner/src/dynamic_cmd.rs:288-289, bench/runner/src/dynamic/policy.rs:530-532",
+   "text": "The row lists ten tests and then says 'the reader and split tests failed with the old choice restored'. By the report, only the two integration tests and the two split tests were seen failing; the four unit tests of `choose_process` and `argv_tail` and `a_failed_gate_shows_its_limitations_and_the_holder_per_capture_with_its_processes` were not run against old code. The row should say that. The row and two doc comments also say the pid and argv words are printed for 'each record read'; `gate_detail` names the first capture and at most three captures where the holder is absent (ops.rs:954-959). The adapted test `shim_records_of_a_jvm_dump_are_split_out_for_the_command` is not named."
+  },
+  {
+   "severity": "minor",
+   "where": "bench/runner/src/dynamic/ops.rs:885-905 and 927",
+   "text": "`gate_detail` does not cap its limitation lines. Every failed summary prints the two fixed lines of its growth evidence ('stacks are keyed by...', 'capture-series rule...'), and when size decided at every capture it prints one line per capture, which is against 'a few lines per failed fixture'. The holder is found with `starts_with(name)` (line 927), so a longer stack name with the same prefix can be printed in its place; an exact match should win."
+  },
+  {
+   "severity": "minor",
+   "where": "crates/dla-cli/src/summarize/shim_groups.rs:745-746, bench/runner/src/dynamic/ops.rs:1456-1497, crates/dla-workload/src/harness/run.rs:1386-1403",
+   "text": "Two test gaps. No test ties the raw file's `captures[].pid` and `argv_tail` to what `gate_detail` reads: the bench test uses a hand-written raw file and the summarize tests do not assert the two fields, so a renamed field would empty the CI detail with all tests passing. And `split_shim` in run.rs (the limitation text, the pid it passes, the removal) has no test, as the report says; one would have caught the false limitation above."
+  },
+  {
+   "severity": "minor",
+   "where": "crates/dla-cli/src/summarize/shim_groups.rs:327-333; crates/dla-workload/src/harness/run.rs:1016 and 1688",
+   "text": "The reader applies the command-mode identity rule to any file. In driver mode `x` is `DLA_ITER`, the step times all rounds, and the driver's argv does not hold it, so identity can only match by chance. In my crafted case a small helper whose argv held that number was read in place of the larger driver, which HEAD read. Files the new harness writes hold one record, so this needs a hand-given or older driver file with several processes. The brief asked to check `x` and argv in driver mode on real dump files; the report shows command mode only, and no driver-mode dump was at hand here either."
+  },
+  {
+   "severity": "minor",
+   "where": "crates/dla-cli/src/summarize/shim_groups.rs:347-358",
+   "text": "A kept record without argv prints empty brackets: `kept pid 10920 () as the one with most live bytes`."
+  },
+  {
+   "severity": "note",
+   "where": "crates/dla-workload/src/harness/capture.rs:746-760",
+   "text": "A change the report does not mention: the shim summaries of `jni-order-codec` now read 9 captures, not 17. At HEAD `shim_dump_commands` also split the stale `dump.jsonl` of p10 to p17 that the last alloc-test run left behind. Now only the points of the capturing run get a file: in my run p1 to p9 hold one record each, the program's, and p10 to p17 hold none. Both summaries still pass and tie jvm/F19."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/target/release/dla",
+   "text": "An older binary was at hand, built 2026-11-12 (before HEAD; it has the same 'most live bytes' rule by reading). On the doctored copy it fails both summaries with 'nothing grows strictly across all 17 captures' and 'stack:Java_shop_codec_Native_open: holder absent from dump 1'; the new binary passes both. The VERIFY row can say the old behaviour was run, not only derived."
+  },
+  {
+   "severity": "note",
+   "where": "/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u10chk/dyn/dynamic.json",
+   "text": "My bench run of `jni-order-codec` passes with the same outcome as u8acc: no failures, 1 confirmed, 5 refuted, leaks 2/2, same operations and summarize evidence. `passed_columns` is 12 against 14: `os.rss`, `os.rss_anon` and `native.live_blocks` did not pass and `jvm.heap_committed` did, on the plain series, while the other pass's bench ran on the machine. This pass does not change how the series is built, so I read it as load, not as an effect of the change."
+  },
+  {
+   "severity": "note",
+   "where": "bench/runner/src/dynamic_cmd.rs:2389; crates/dla-cli/src/summarize/proc_fd.rs, harness_types.rs",
+   "text": "The report's two side notes are outside this pass and stand as reported: `accept_hidden_tool_gaps` tests `ends_with` on a failure line that can end with a bracket, and two other readers take every process's records in file order (I did not check that one). The new summarize tests return early without gcc, nm and addr2line, like the older tests of that file; all three are present here and the tests ran."
+  }
+ ],
+ "confirmed": "The cause and the main fix hold, but the pass leaves five problems (listed above). I edited no repository file.\n\nCause, on the files of /tmp/dla-bench-dynamic-2919: totals are 41858379 (test JVM) and 47769802 (program) at p1, 18908890 and 48416586 at p2, 19407935 and 144893809 at p17. Every record carries `x` equal to the point's count and only the program's argv carries it. `jvm-order-cache` and `jvm-rule-compiler` dumps have the same two JVMs; native and node dumps carry `--iterations N`.\n\nReplay, on my own copy with a fresh run and the test JVM's figures in p1 doubled to 83716758:\n- The new binary passes `type-histogram-diff` and `alloc-stack-diff`; capture 1 is read from pid 10872 (`shop.codec.MainKt 2220`).\n- With only the test JVM's record in p1, the new binary fails with the two reasons of the CI log.\n- An older binary (target/release/dla, 2026-11-12) fails the doctored copy with the same text.\n\nDecisions:\n- **1 (harness split):** the code is as reported, and the pid is the one `merge_shim` uses in both modes. A real run wrote one record per `shim-dump.jsonl`, the program's, for p1 to p9.\n- **2 (reader):** as reported; `select_measured` uses the same exported helpers and is unchanged in effect. Twenty crafted cases from the real records all read the expected record. They cover one process, the test JVM alone, no count in any argv, a listed and an unlisted tool that is larger, no pid, no argv, the same pid twice, the count in both, no `x`, and a `=N` suffix. Where size decides, the record is the one HEAD read and the limitation text is as reported. Only the contrived driver case reads a different, wrong record.\n- **3 (other readers):** a search of the readers found no other largest-among-processes choice. No doc states the old rule.\n- **4 (bench text):** the label path is right by reading and by its two unit tests. A real failed gate has the fields `gate_detail` reads (bytes null at capture 1, pid 10920, the argv tail).\n\nChecks I ran, all passing:\n- `summarize_native` 27 and `summarize_robust` 6\n- `shim_groups` unit tests 5 (4 new), run with `--bin dla` because dla-cli has no lib target\n- `dla-workload --lib harness::` 143\n- `dla-bench --lib` 146\n- `dla schema --check`\n- clippy on the workspace with `-D warnings`\n- `rustfmt --check` on the 8 files of this pass\n- `test_grade.py` 190\n- `dla-bench dynamic --only jni-order-codec`: pass\n\nThe fixer's four result files show no failures and the same key numbers as u8acc.\n\nEvidence is in /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u10chk/ ; the large copies were removed. The files behind the problems:\n- /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u10chk/replay/cases.out\n- /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u10chk/replay/secret-ledger-lines.txt\n- /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u10chk/py/false-limitation-lines.txt\n- /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u10chk/dyn/after-plain-rerun-ls.txt",
+ "unverified": "- That the fixer saw each test fail. By reading, the two integration tests and the two split tests fail under HEAD's rule; the unit tests of the new functions have no old counterpart.\n- `harness_capture` (11 tests, the other pass's file) and the dla-bench integration tests: not run.\n- `native-vendor-codec`, `rust-private-registry` and `node-native-addon`: not rerun by me; I only read the fixer's result files.\n- That the CI flake is gone: it does not reproduce locally. The replay and the tests show the choice is now by identity.\n- Driver mode on real dump files: no driver-mode dump was at hand. What `x` holds there is from reading run.rs.\n- That `dla alloc-test` deletes the shim files: by reading only. The deletion by a plain `dla harness run` was run.\n- The older binary is from 2026-11-12, not from HEAD; that its rule equals HEAD's is by reading.\n- `cargo fmt --all --check`: I ran rustfmt on this pass's files only.\n- The cause of `passed_columns` 12 against 14 in my bench run: read as load, not traced."
+}

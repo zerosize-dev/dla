@@ -1,0 +1,61 @@
+{
+ "problems": [
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/crates/dla-cli/tests/alloc_test_jvm.rs:465 (the 0.75 relation) and :457; /home/user/dla/docs/VERIFY.md:509",
+   "text": "The new assertions still fail with the warm-up working once the machine is loaded well beyond the level the brief set. They meet the brief's bar: with four runs at once nothing failed (9 of 9 real test runs, 0 of 27 measured pairs), and with eight at once 0 of 48 pairs. With sixteen copies of the real test at once, 4 of 16 failed on JDK 21 and 4 of 16 on JDK 25, and 10 of 16 needed their second pair on each. All eight failures were the 0.75 early-rise relation summed over two pairs; the 0.85 relation never failed a two-pair sum. In 32 measured pairs at that load, 18 failed singly (17 on the 0.75 relation, 1 on the 0.85 one). The cause is the one the open item named, the 3-second cap of the warm-up: 30 rounds take about 0.6 s alone, and a harness run took 18 to 27 s at this load against 5 to 7 s with four at once. With the rounds cut by hand (DLA_WARM_ROUNDS on the warm side, four at once, JDK 21) the 0.75 ratio was 0.51 to 0.63 at 15 rounds, 0.57 to 0.79 at 8 and 0.76 to 0.89 at 3. The second pair does not help while the load lasts. On JDK 25 the HEAD assertions failed 0 of 16 pairs at this load, because the 500 KB line kept the comparison off there. The row gives the 0.75 ratio as 0.29 to 0.64 and does not say at what load the relation stops holding. Direction: state the limit in the row, or drop or loosen the 0.75 relation."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:518",
+   "text": "The row says the unit test was seen failing 'with the skip off: total 5 where 2 is expected'. The test now feeds four recorder threads, so the skip off gives 6. I ran it on a scratch copy of the crate: total 6. The other figure in the row is right: with only `JFR Recording Scheduler` left out the total is 3."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:488",
+   "text": "This row still describes the warm-up test as asserting 'rise over 14 checkpoints with the warm-up under 0.75 of the rise without'. After this pass the test asserts the rise from the first reading under 0.85 of the cold run's, and the 0.75 comparison only on Linux with a cold rise of 250 KB or more. The sentence was already inexact at HEAD and was not updated when the test changed."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/crates/dla-workload/tests/harness_jvm_coverage.rs:144 (and the third part of the new test at :419)",
+   "text": "The second case of the open item, a class location spelled through a link named `out/test` against a real root, has no test that fails without the change. Run by hand: the old agent reads it as test output, the new one does not, so the fix covers it. The unit case 'location by a link' uses a link named `pl` and passes with the old agent. Of the five new unit cases only the first fails with the old agent (the row says so), and the third part of the new driver test (classes through `above-link`) also passes with it. The first part of the driver test does fail without the change: project 0 with the old agent and 2 with the new, with and without packages."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/crates/dla-workload/tests/harness_driver_build.rs:32; /home/user/dla/crates/dla-workload/tests/harness_junit.rs:36",
+   "text": "The reworded comment ends in a new line of 122 columns in both files. It is the same kind of over-long comment line that the jcmd.rs item was about, and that one was wrapped in this pass."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/crates/dla-cli/tests/alloc_test_jvm.rs:447-449; /home/user/dla/docs/VERIFY.md:509",
+   "text": "Wording. The comment and the row say the 0.85 line 'lies between the ranges' straight after quoting 0.72 to 1.38 for two cold runs; 0.85 is inside that range. It lies between the ranges measured in this pass only (at most 0.54 against at least 0.88; mine were 0.53 and 0.90 with four at once). The row's last sentence does admit the 0.72. The comment also says the early-rise relation applies where the cold rise is 'about 0.3 MB or more', and the code uses 250 KB."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:519",
+   "text": "Wording. The row ends 'The macOS runner confirms the link spellings there', which reads as done, while the status says 'to be confirmed in CI' and the CI run of 9781542 did not finish green. The rest of the row is true: by hand the old agent gives project 0, and 0 with `DLA_PROJECT_PACKAGES=zz.shop`, and 2 with the real root."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/docs/VERIFY.md:511",
+   "text": "The row now names the six `attach_tools` tests that failed on the runner and gives no local count, saying the number depends on the stand-in. The tests that failed only here stay unnamed. The claim is true as written; the open item's wish to name them is met only by dropping the count."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/harness/jvm/DlaDump.java:603 (`below`, used by `locationUnder`)",
+   "text": "The location check does not try the mixed spellings that `isTestLocation` now tries. A project given by a link, with a class location that goes through a link inside the project to a directory outside it, is not counted as the project's. The old and the new agent behave the same (both false in my hand run), so this is not a regression and not part of the open item."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/docs/VERIFY.md:438, 441, 442, 445, 450, 451, 452, 453, 469, 471, and the backlog row at :597",
+   "text": "Plan names remain in M7 rows that the open items did not name: 'round 1', 'round-1', 'round 2', 'P3', 'P4', 'E3', 'U3'. The fixer's report lists only 438, 450, 451 and 469. Row 450 still points at 'the P4 row', the same kind of pointer as 'the last U4 row'. The row that the new pointer in row 447 names still has 'B0' in its own title, outside the M7 table. None of the twelve rows changed in this pass holds a plan name."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/crates/dla-cli/tests/alloc_test_jvm.rs:465",
+   "text": "The early-rise relation is switched off by operating system. The macOS logs give 0.94 and 1.09 for it, with a cold rise of 336 to 347 KB that is above the 250 KB line, so only the Linux condition keeps it off there. Every Linux measurement is x86-64 and the macOS runner is arm64, so whether the difference comes from the OS or the CPU is not known. It matters only if the tests ever run on Linux arm64."
+  }
+ ],
+ "confirmed": "Package N2 holds up: no problem-level defect, seven minor items and four notes. I did not edit the repository; `git diff HEAD` still shows the same 18 files. My runs took about 50 minutes of machine time, with the other package's fixture run loading one core throughout.\n\n**Warm-up test (alloc_test_jvm.rs)**\n- The cause is right: the warm-up stops after 3 s, so the readings move with CPU share. In my 75 loaded pairs the HEAD assertions never failed but came close (first-step ratio up to 0.70 against the 0.7 line, cold first step down to 67 KB against 50 KB).\n- The change is test only and follows the decision: the 0.85 relation, a second pair judged by sums, and the 0.75 early-rise relation on Linux from 250 KB, which runs on JDK 25 (cold rise 322 to 433 KB here).\n- Real test with three copies of the measurement beside it, warm-up on: 6 of 6 passed on JDK 21 and 3 of 3 on JDK 25. None needed a second pair.\n- With `DLA_WARM_ROUNDS=0` on both sides: 5 of 5 failed on JDK 21 and 3 of 3 on JDK 25.\n- Measured pairs:\n\n| Load | Pairs | 0.85 relation | 0.75 relation | Pairs that fail singly |\n|---|---|---|---|---|\n| Four at once | 27 | 0.36 to 0.53 | 0.36 to 0.60 | 0 |\n| Eight at once | 48 | 0.33 to 0.61 | 0.36 to 0.69 | 0 |\n| Sixteen at once | 32 | 0.51 to 0.89 | 0.59 to 1.16 | 18 |\n| Two cold runs, four at once | 24 | 0.90 to 1.16 | 0.85 to 1.22 | 24 |\n\n- So the test still catches a missing warm-up, and on Linux it does not fail with the product working at the brief's load.\n- macOS logs: the 0.85 relation reads 0.66 and 0.74 (358376/543624 and 399488/538888), so the margin there is thin and only the runner can confirm it, as the row says.\n- The whole `alloc_test_jvm` binary passed 9 of 9 on JDK 21 (in the suite) and 9 of 9 on JDK 25.\n\n**JNI test guard (harness_capture.rs)**\n- On JDK 21 it ran, did not skip, and passed in 126 s.\n- With JDK 25 first on PATH, with and without JAVA_HOME, it skips in about 1 s and prints `IllegalArgumentException: 25.0.5.1` as the reason.\n- The guard picks the compiler the same way the fixture's `build.sh` does.\n\n**Flight recorder's fourth thread**\n- Real dumps on JDK 21.0.12 and 25.0.5 show 7 threads before a timed recording and 10 after. `JFR Recording Scheduler` is there under that exact name and stays.\n- `dla summarize non-heap` with the new binary over those dumps reports nothing growing.\n- The unit test fails without the name: total 3 where 2 is expected. No other reader of the limitation line exists.\n\n**Coverage agent (DlaDump.java)**\n- Old agent: project 0, with and without packages. New agent: 2 in every spelling I tried.\n- `real()` cannot return null, so the new loop cannot fall back to the whole path by accident.\n- The README sentence is true.\n\n**VERIFY rows**\n- All twelve changed rows have 4 cells, and so do all 102 rows of the M7 table.\n- Every named test exists, backticks are balanced, and no changed row holds a plan name.\n- The rows named by title exist and hold the referenced facts.\n- Row 466: on a scratch copy `gate_harness` passes 20 of 20. With `harness_not_run` returning nothing, 13 fail and 7 pass, with exactly the names in the row.\n- The row 467 title, the row 454 title and the row 455 status describe their rows. The row 447 pointer names the right row.\n\n**Comments, CI and checks**\n- The `attach.rs` and `attach_tools.rs` comments are right, and the `jcmd.rs` line is wrapped.\n- CI: the log shows `jni-order-codec` failing with 58/60 passing and 1 expected failure, so leaving the \"to be confirmed in CI\" rows unchanged was right.\n- No test was ignored or disabled; the only new skip is the JNI guard.\n- Suites of dla-parsers, dla-sample, dla-workload and dla-cli: 71 \"test result: ok\" lines, none failed, on JDK 21.\n- Workspace clippy with all targets is clean, and so is the Windows clippy on dla-core, dla-probe and dla-report; I also ran it on dla-parsers and dla-sample.\n- macOS-target clippy is clean on dla-parsers and dla-sample.\n- `cargo fmt --all --check`, `dla schema --check` and `test_grade.py` (190 tests) pass.\n\nMy logs and scripts are in /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u9chk-N2/res and /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u9chk-N2/scripts.",
+ "unverified": "- The fixer's measurement logs could not be read: their scratch directory is gone. The figures quoted in row 509 and in the test comment (88 and 64 pairs, 2 of 88 failing the old assertions, 20 of 20 and 12 of 12) rest on the fixer's word. My own sample agrees with them in range.\n- The macOS runner: whether the 0.85 line holds there beyond the two logs, and the link spellings of the coverage agent.\n- macOS-target clippy for dla-cli and dla-workload cannot run here, because their tree-sitter C code needs an Apple compiler. The changed test code there is judged by reading. The one target-dependent expression, `cfg!(target_os = \"linux\") && ...`, has the same shape as summarize_native.rs:400, which passes the macOS job.\n- The `kotlinc` branch of the new JNI guard: no `kotlinc` is installed here, so only the Maven-cache branch ran.\n- The old JNI test failing on JDK 25 was not rerun with the HEAD test binary. The guard's own probe shows the same exception from the same compiler command.\n- The Kotlin Gradle pin on JDK 22 to 24: no such JDK is installed, and the row now says it is judged by reading.\n- How often two cold runs fall under 0.85: none of my 24 pairs did, and the earlier check saw 0.72 once."
+}

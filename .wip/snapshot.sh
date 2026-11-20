@@ -19,7 +19,14 @@ for f in /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scrat
   git update-index --add --cacheinfo "100644,$blob,.wip/$(basename "$f")"
 done
 tree=$(git write-tree)
-if [ "$tree" = "$(git rev-parse "$parent^{tree}")" ]; then echo "no change since $parent"; exit 0; fi
+if [ "$tree" = "$(git rev-parse "$parent^{tree}")" ]; then
+  # An unchanged tree needs no new commit, unless the parent was pushed with CI skipped and
+  # this snapshot wants a CI run: then a commit with the same tree is made so a run exists.
+  case "$(git log -1 --format=%s "$parent")" in
+    *"[skip ci]"*) case "$label" in *"[skip ci]"*) echo "no change since $parent"; exit 0;; esac;;
+    *) echo "no change since $parent"; exit 0;;
+  esac
+fi
 commit=$(GIT_AUTHOR_NAME="Mykyta Hriaznov" GIT_AUTHOR_EMAIL="17167893+ngriaznov@users.noreply.github.com" \
          GIT_COMMITTER_NAME="Mykyta Hriaznov" GIT_COMMITTER_EMAIL="17167893+ngriaznov@users.noreply.github.com" \
          git commit-tree "$tree" -p "$parent" -m "Snapshot: $label")

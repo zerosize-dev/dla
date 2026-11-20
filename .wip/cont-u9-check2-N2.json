@@ -1,0 +1,66 @@
+{
+ "problems": [
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/crates/dla-cli/tests/alloc_test_jvm.rs:447-449 (same sentence in /home/user/dla/docs/VERIFY.md:509, Resolution cell)",
+   "text": "The comment gives the wrong reason for the second pair. It says the 0.85 line lies inside the range measured elsewhere for two cold runs (0.72 once), \"so the test measures a second pair before it fails\". The second pair only re-measures a pair that failed. A first pair that passes ends the test (lines 486-489), so one cold pair under 0.85 (and under 0.75 on the early rise on Linux) passes with no warm-up, and nothing re-measures it. The retry guards the other side: a working warm-up that reads near the line (0.74 in one macOS log). Row 509 states the open rate at its end, so this is wording only. Fix: say the second pair is for a working warm-up near the line, and that a pass is not measured again."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:514 against /home/user/dla/docs/VERIFY.md:466",
+   "text": "Row 514 says of the row about a harness that must be run that \"the count of failing tests no longer quotes a total\". Row 466 now reads \"thirteen of the twenty tests of `gate_harness.rs` fail\", so it quotes a total again. The count itself is right (20 tests in the file, 13 fail with `harness_not_run` returning `None`, the 13 and 7 names match the mutation log of the previous check). Fix: drop \"of the twenty\" in row 466, or reword the clause in row 514."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:467 and /home/user/dla/docs/VERIFY.md:454",
+   "text": "Two rows this pass retitled still give a test count that a run no longer shows. Row 467 says \"the eight tests of `crates/dla-cli/tests/skill_text.rs` pass\" and row 454 says \"`skill_text` (8)\"; the file has 13 tests and my run showed 13 passed. Both cells are unchanged from HEAD, so this pass did not introduce it. Fix: drop the counts or name the tests."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/harness/jvm/README.md:77",
+   "text": "The sentence added about a project below a directory named `test` was put on one line of 233 columns inside a paragraph wrapped at about 100. The text is true. Fix: re-wrap the bullet."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/crates/dla-cli/tests/alloc_test_jvm.rs:458-477; /home/user/dla/docs/VERIFY.md:509",
+   "text": "My sample agrees with the new assertions in both directions. With three other copies of the measurement beside each run: JDK 21, 6 of 6 test runs passed and 18 replayed pairs read 0.36 to 0.52 on the 0.85 relation and 0.38 to 0.64 on the 0.75 one; JDK 25, 3 of 3 passed, 9 pairs 0.37 to 0.51 and 0.43 to 0.60. With `DLA_WARM_ROUNDS=0` on both sides: 5 of 5 failed on JDK 21 and 3 of 3 on JDK 25, each after its second pair; 24 cold pairs read 0.87 to 1.22. No run with the warm-up on needed a second pair. The whole binary also passed 9 of 9 on JDK 21 and on JDK 25. A few of my values fall just outside the ranges the row and the comment give as \"measured here\": two cold pairs at 0.872 and 1.217 (row: 0.88 to 1.15), cold early rise 0.48 to 0.70 MB on JDK 21 (row: 0.50 to 0.69) and 0.32 MB once on JDK 25 (row: 0.33). They are sample ranges, so no change is needed."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/crates/dla-cli/tests/alloc_test_jvm.rs:462 (the 0.85 line) against the macOS logs u7/ci/j-clippyandtestmacoslatest.log:2044 and u7/ci/mac.log:2027",
+   "text": "macOS is the thin side and only the runner can show it. From the two logs I computed 0.659 and 0.741 for the asserted relation, so both pass, with 0.11 to spare in the worse one. There the warm-up only removes the first step (about 32 to 35 KB against 197 to 203 KB); the later drift of about 340 KB is the same in both runs and dilutes the ratio. The two cold rises in the logs differ by 1% (543,624 and 538,888 bytes), so a missing warm-up should read near 1.0 there. Two samples cannot give a failure rate; the row says this."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/docs/VERIFY.md:509; /home/user/dla/crates/dla-cli/tests/alloc_test_jvm.rs:452-454",
+   "text": "\"While the 0.85 relation held\" at sixteen copies is true of the two-pair sums only. In the logs of that run (u9chk-N2/res/t21x16.test.*.log, t25x16.test.*.log) all 8 final failures are the 0.75 relation, as stated, but 4 of 32 first pairs failed the 0.85 relation alone (0.89 and 0.90 on JDK 21). The stated cause fits the data: at sixteen copies the warm run took a median 3.9 s longer than the cold run on JDK 21 (about 0.7 s at four copies), which is the 3 s cap being reached, and fewer warm rounds raised the ratio (up to 0.86 with 3 to 15 rounds)."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/harness/jvm/DlaDump.java:679-687; /home/user/dla/crates/dla-workload/tests/harness_jvm_coverage.rs:149-155",
+   "text": "The fixer's report says a link named `out/test` \"did not reproduce as a failing case\". It does: replaying the calls against the HEAD agent, a location spelled through a link `o2/out/test` above a project given by its real root reads as test output, and reads correctly with the new agent. No file is wrong (row 519 names `java/test`). In the same replay the HEAD agent failed the two cases the row calls seen failing (\"below a directory named test, project by a link\" and \"location spelled through a link named test above the project\") and passed \"the project by its link name too\"; the new agent passed all 26 cases on JDK 21 and JDK 25, including test output below such a project still read as test output."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/crates/dla-cli/tests/harness_capture.rs:387-455 and :462-465",
+   "text": "The JNI test ran and passed on JDK 21 (92 s, no skip line). On JDK 25, with JAVA_HOME set and with PATH only, it skipped in under a second with `skipping: the Kotlin compiler that build.sh would use does not run on this JDK (exception: java.lang.IllegalArgumentException: 25.0.5.1)`. The helper picks the compiler the way `bench/fixtures/jni-order-codec/project/build.sh` does. On the Ubuntu runner a green log cannot show whether the test ran or skipped; the fixture itself builds there, so a working `kotlinc` is expected."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/docs/VERIFY.md:438, :450, :451, :469 (also \"round-1\" to \"round-3\" in :441, :442, :450-:453, :471; \"the checker\" in :509, :518, :519)",
+   "text": "Plan names remain in M7 rows the items did not name and this pass did not touch: \"Measured by P3\" (438), \"package E3\" and \"E3's reasons\" (450), \"the P3 revert\" (451), \"before U3\" (469). The two the brief named are gone (454 title, 455 status, 447 pointer), and no M7 title carries one. The rows this pass wrote say \"the checker\" four times, which is a role and not on the brief's list."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/crates/dla-workload/tests/harness_jvm_coverage.rs:120",
+   "text": "The Java check creates a temp directory `dla-links*` and never removes it; 26 of them lay in /tmp here. The line is unchanged from HEAD; this pass only adds a few directories and links inside it."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/crates/dla-cli/tests/alloc_test.rs:378 (the other package's test)",
+   "text": "In my one run of the four touched crates' suites, 1446 tests passed and 1 failed: `alloc_test::a_flat_file_backed_column_that_passed_the_gate_reads_non_leak_on_a_flat_run` (`os.rss` read plateau with purge retained, overall inconclusive). It belongs to the other package, whose files were being edited at that time (`judge.rs`, `alloc_cmd.rs`, `alloc_test.rs`, `harness/python/sitecustomize.py`). Rerun alone after those edits, the binary passed 4 of 4. Nothing of this package failed."
+  }
+ ],
+ "confirmed": "No problem found in package N2; four minors (wording, two stale counts, one unwrapped line) and notes. Nothing of the package was skipped, ignored or weakened without proof.\n\nAll 14 open items, checked against `git diff HEAD` and by running:\n1. Row 513 and the comments in `harness_driver_build.rs:27-33` and `harness_junit.rs:31-37` now say the JDK 22 to 24 claim is judged by reading. Lines wrapped.\n2. JNI guard (`harness_capture.rs:387-465`): runs and passes on JDK 21 (92 s), skips with the exception line on JDK 25. The test body is unchanged.\n3. Stale comments fixed (`attach.rs:190`, `attach_tools.rs:62-64`; `fake_java_command` exists).\n4. `jcmd.rs:415-416` wrapped under 100 columns.\n5. Row 511 no longer gives the count that depended on the stand-in.\n6. Warm-up assertions replaced (`alloc_test_jvm.rs:427-494`). My sample: 9 of 9 runs passed with the warm-up on beside three other copies (6 on JDK 21, 3 on JDK 25), 8 of 8 failed with it off (5 and 3). Whole binary 9 of 9 on both JDKs.\n7. The early-rise relation now runs on JDK 25: the cold rise was 321 to 422 KB in all 18 JDK 25 pairs, above the 250 KB line.\n8. Row 509 and the test comment state ranges; \"true on every build\" is gone. The macOS figures 0.66 and 0.74 are what the two logs give (0.659, 0.741).\n9. `DlaDump.isTestLocation` (`DlaDump.java:665-701`) takes the part below the project for each nesting pair of spellings. Replayed against the HEAD agent, both cases the row calls seen failing fail; the new agent passes 26 cases. `harness_jvm_coverage` passes 7 of 7 on JDK 21 and JDK 25.\n10. Row 466: thirteen of twenty, the 13 and 7 names match the mutation log; every named test exists.\n11. Row 467 title describes its row.\n12. Row 461 points to \"Fixes after the second independent check of the JUnit driver\"; that row's items (2) and (6) are what is referenced.\n13. Rows 454, 455, 447 reworded; the rows they point to exist.\n14. `JFR Recording Scheduler` is in the list (`thread_dump.rs:31-36`), the unit test (`:277`) and the limitation line (`jvm_nonheap.rs:172`); no other doc lists the threads.\n\nVERIFY: all 13 changed rows of the package (447, 454, 455, 461, 466, 467, 488, 509, 511, 512, 513, 518, 519) have 4 cells, every test name in them exists, no line numbers or scratch names. No \"to be confirmed in CI\" status was changed; the CI log of 9781542 does show the failure on `jni-order-codec`.\n\nChecks on the tree as it stood (other work was editing files outside this package meanwhile): suites of dla-cli, dla-parsers, dla-sample, dla-workload 1446 passed, 1 failed (the other package's test, passes on rerun), 5 ignored; `cargo clippy --workspace --all-targets -- -D warnings` clean; Windows-gnu clippy clean for dla-core, dla-probe, dla-report, dla-parsers, dla-sample; macOS-target clippy clean for dla-parsers and dla-sample; `cargo fmt --all --check` clean; `dla schema --check` ok; `test_grade.py` 190 tests OK. No file under bench/fixtures changed. About 30 minutes of machine time. Logs: /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u9chk-N2/r2/ and /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u9chk-N2/res/ (files r2j21on, r2j21off, r2j25on, r2j25off).",
+ "unverified": "- The fixer's measurement logs: its scratch directory (u9-N2) no longer exists, so the figures in row 509 and the test comment that rest on them (20 of 20 passing per JDK, 12 of 12 failing per JDK, 88 warm pairs at 0.28 to 0.54, 64 cold pairs at 0.88 to 1.15) could not be read. My smaller sample agrees in kind and differs only at the edges of the cold ranges.\n- macOS: how often the 0.85 relation fails with the warm-up working, or passes without it, and the link spellings of the coverage agent there. Only the macOS runner can show these; the rows say so.\n- Whether the JNI test runs or skips on the Ubuntu runner with JDK 25 (a green log does not show it).\n- JDK 22 to 24: none installed; row 513 now says this is judged by reading.\n- Not re-run by me this time: the `gate_harness` mutation (I compared row 466 with the previous check's log in my scratch directory) and the thread-dump unit test with the name left out of the list (judged by reading: the total would be 3, not 2).\n- The Rust coverage tests were not run against the HEAD agent; I replayed the same `isTestLocation` calls in Java against the HEAD and the new agent sources instead.\n- macOS-target clippy for the test targets of dla-cli and dla-workload: not run, since the native shim needs a foreign C compiler here. The changed code there is `#![cfg(unix)]` and uses only std calls, and the Linux clippy is clean.\n- The tree was being edited by other work during my runs (alloc files, `harness/python`, `crates/dla-workload/src/harness`, `bench/runner/src/dynamic`). The files of this package did not change after 22:18, but the suite and clippy results are of that moving tree."
+}
