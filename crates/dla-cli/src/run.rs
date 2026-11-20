@@ -85,8 +85,7 @@ fn run_config_result(
     session: &str,
     seconds: u64,
     auto: bool,
-    scope: &Option<Scope>,
-    include: &[String],
+    (scope, include): (&Option<Scope>, &[String]),
     entry: EntryPath,
     artifacts: &[String],
 ) -> Res<Value> {
@@ -317,8 +316,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         &session_text,
         seconds,
         auto,
-        &scope,
-        &include,
+        (&scope, &include),
         entry,
         &artifacts,
     )?;

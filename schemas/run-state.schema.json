@@ -40,6 +40,13 @@
       "$ref": "#/$defs/EntryPath",
       "default": "repository"
     },
+    "include": {
+      "description": "Paths brought back into the static stages although they are vendored or generated\ncode, which is left out by default (`dla run init --include`).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "incomplete_reason": {
       "description": "Why the run is incomplete or aborted.",
       "type": [

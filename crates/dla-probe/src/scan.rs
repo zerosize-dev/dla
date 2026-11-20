@@ -13,7 +13,7 @@ use dla_core::{
 };
 use regex::Regex;
 
-use dla_core::vendored::{Defaults, DirReason, EmptiedRuntime, LeftOut, LeftOutDir};
+use dla_core::vendored::{Defaults, DirReason, EmptiedRuntime, Excluded, LeftOut, LeftOutDir};
 
 /// Directory names never entered.
 pub const SKIP_DIRS: &[&str] = &[
@@ -81,6 +81,7 @@ impl Tree {
         let mut generated = 0u64;
         let mut generated_by: BTreeSet<String> = BTreeSet::new();
         let mut left_files: BTreeMap<Runtime, LeftCount> = BTreeMap::new();
+        let mut prebuilt: Vec<String> = Vec::new();
         let mut stack = vec![(root.to_path_buf(), String::new())];
         'outer: while let Some((dir, rel)) = stack.pop() {
             let Ok(rd) = fs::read_dir(&dir) else { continue };
@@ -99,6 +100,12 @@ impl Tree {
                         let mut n = 0u64;
                         count_files(&e.path(), &child_rel, &mut |f| {
                             n += 1;
+                            // A prebuilt addon the project loads from a vendored directory
+                            // is a boundary of the project, not code to analyse: keep it
+                            // visible to the boundary detection.
+                            if f.ends_with(".node") {
+                                prebuilt.push(f.to_owned());
+                            }
                             if let Some((rt, role)) = classify(f) {
                                 let c = left_files.entry(rt).or_default();
                                 match role {
@@ -118,24 +125,35 @@ impl Tree {
                         truncated = true;
                         break 'outer;
                     }
-                    match classify(&child_rel) {
-                        Some((rt, Role::Source)) => {
-                            if let Some(marker) = defaults.generated(&child_rel) {
+                    if let Some(left) = defaults.walk_file(&child_rel) {
+                        let cls = classify(&child_rel);
+                        let under = match left {
+                            Excluded::Generated(marker) => {
+                                // Only source files are read for a marker, and counted.
                                 generated += 1;
                                 generated_by.insert(marker.to_owned());
-                                let c = left_files.entry(rt).or_default();
-                                c.sources += 1;
-                                c.under.insert("generated files".to_owned());
-                                continue;
+                                "generated files".to_owned()
                             }
+                            Excluded::Dir { path, reason } => {
+                                dirs.entry(path.clone()).or_insert((reason, 0)).1 += 1;
+                                path
+                            }
+                        };
+                        if let Some((rt, role)) = cls {
+                            let c = left_files.entry(rt).or_default();
+                            match role {
+                                Role::Source => c.sources += 1,
+                                Role::Build => c.builds += 1,
+                            }
+                            c.under.insert(under);
                         }
-                        // A generated file is never a build file.
-                        _ => {}
+                        continue;
                     }
                     files.push(child_rel);
                 }
             }
         }
+        files.extend(prebuilt);
         files.sort();
         let left_out = LeftOut {
             directories: dirs
@@ -780,7 +798,10 @@ mod tests {
         let rts: Vec<_> = d.iter().map(|d| d.probe.runtime).collect();
         assert_eq!(rts, [Runtime::Python], "{rts:?}");
         assert_eq!(d[0].probe.source_files, 1);
-        assert_eq!(t.files.iter().filter(|f| f.starts_with("vendor")).count(), 0);
+        assert_eq!(
+            t.files.iter().filter(|f| f.starts_with("vendor")).count(),
+            0
+        );
         let l = t.left_out_for(&d);
         let dirs: Vec<(&str, u64)> = l
             .directories
@@ -792,10 +813,21 @@ mod tests {
             [("node_modules", 1), ("third_party", 1), ("vendor", 3)],
             "{l:?}"
         );
-        assert_eq!(l.generated_files, 3, "the C file, its header and the .pb.go");
-        let emptied: Vec<&str> = l.emptied_runtimes.iter().map(|r| r.runtime.as_str()).collect();
+        assert_eq!(
+            l.generated_files, 3,
+            "the C file, its header and the .pb.go"
+        );
+        let emptied: Vec<&str> = l
+            .emptied_runtimes
+            .iter()
+            .map(|r| r.runtime.as_str())
+            .collect();
         assert_eq!(emptied, ["go", "node", "native"], "{l:?}");
-        assert!(l.lines().iter().any(|x| x.starts_with("vendor: vendored directory, 3 files")));
+        assert!(
+            l.lines()
+                .iter()
+                .any(|x| x.starts_with("vendor: vendored directory, 3 files"))
+        );
     }
 
     #[test]

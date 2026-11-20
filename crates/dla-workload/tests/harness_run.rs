@@ -3024,7 +3024,7 @@ fn a_python_point_killed_at_its_timeout_says_what_it_was_doing() {
     };
     assert!(said.contains("did not finish in 3 s"), "{said}");
     assert!(
-        said.contains("it was killed in: start-up: the imports of the driver or the workload"),
+        said.contains("it was killed in: start-up: the program's own code before its first hook or checkpoint"),
         "{said}"
     );
 }

@@ -444,7 +444,8 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
         0
     };
     dla_census::record_out_of_scope(ctx, lang, out_of_scope)?;
-    let build_logic = dla_census::walk::count_build_logic(&ctx.project, lang, &static_scope.defaults);
+    let build_logic =
+        dla_census::walk::count_build_logic(&ctx.project, lang, &static_scope.defaults);
     dla_census::record_build_logic(ctx, lang, build_logic)?;
     if build_logic > 0 {
         summary.insert("build_logic".into(), json!(build_logic));

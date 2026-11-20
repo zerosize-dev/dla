@@ -1470,7 +1470,14 @@ fn clear_phase(dump: &Path) {
 fn phase_note(dump: &Path) -> String {
     match fs::read_to_string(phase_path(dump)) {
         Ok(text) if !text.trim().is_empty() => {
-            let line: String = text.trim().lines().next().unwrap_or("").chars().take(300).collect();
+            let line: String = text
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(300)
+                .collect();
             format!("; it was killed in: {line}")
         }
         _ => "; the agent recorded no phase, so where it was stuck is not known".to_owned(),
@@ -2782,6 +2789,26 @@ mod test_hooks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phase_note_keeps_the_first_line_and_bounds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let dump = dir.path().join("p1.jsonl");
+        // No phase file: the note says nothing is known.
+        assert!(phase_note(&dump).contains("recorded no phase"));
+        fs::write(phase_path(&dump), "   \n").unwrap();
+        assert!(phase_note(&dump).contains("recorded no phase"), "blank");
+        fs::write(phase_path(&dump), "hook setup (the imports)\nsecond line\n").unwrap();
+        assert_eq!(
+            phase_note(&dump),
+            "; it was killed in: hook setup (the imports)"
+        );
+        fs::write(phase_path(&dump), format!("{}\n", "x".repeat(900))).unwrap();
+        assert_eq!(phase_note(&dump).len(), "; it was killed in: ".len() + 300);
+        // A phase of an earlier process is gone before the next one starts.
+        clear_phase(&dump);
+        assert!(phase_note(&dump).contains("recorded no phase"));
+    }
 
     #[cfg(unix)]
     use dla_core::state::RunState;

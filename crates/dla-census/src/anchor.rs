@@ -80,7 +80,11 @@ mod tests {
         for l in [3, 4, 5] {
             assert_eq!(anchor_in(&spans, l), 5, "line {l}");
         }
-        assert_eq!(anchor_in(&spans, 6), 6, "an argument line is not the header");
+        assert_eq!(
+            anchor_in(&spans, 6),
+            6,
+            "an argument line is not the header"
+        );
         assert_eq!(anchor_in(&spans, 8), 8);
         assert_eq!(anchor_in(&spans, 10), 10);
     }

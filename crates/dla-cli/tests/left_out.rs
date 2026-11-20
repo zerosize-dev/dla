@@ -94,8 +94,8 @@ fn lines(probe: &Value) -> Vec<String> {
 /// The `file:line` sites of every finding in the run's ledger.
 fn sites(project: &Path) -> Vec<String> {
     let run = fs::read_to_string(project.join(".dla/current")).unwrap();
-    let ledger = fs::read_to_string(project.join(".dla").join(run.trim()).join("ledger.jsonl"))
-        .unwrap();
+    let ledger =
+        fs::read_to_string(project.join(".dla").join(run.trim()).join("ledger.jsonl")).unwrap();
     ledger
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -142,7 +142,10 @@ fn vendored_and_generated_code_is_left_out_by_default() {
 
     // The census has no entry there, for the runtime the probe reports and for the others.
     let py = ok(p, &["census", "--lang", "python"]);
-    assert_eq!(py["summary"]["files"], 2, "app/__init__.py and app/main.py: {py}");
+    assert_eq!(
+        py["summary"]["files"], 2,
+        "app/__init__.py and app/main.py: {py}"
+    );
     for lang in ["native", "node"] {
         let c = ok(p, &["census", "--lang", lang]);
         assert_eq!(c["candidates"], 0, "{lang}: {c}");
@@ -169,7 +172,14 @@ fn include_brings_a_left_out_path_back() {
     project(p);
     ok(
         p,
-        &["run", "init", "--session-id", "t", "--include", "vendor/llhttp"],
+        &[
+            "run",
+            "init",
+            "--session-id",
+            "t",
+            "--include",
+            "vendor/llhttp",
+        ],
     );
     let probe = ok(p, &["probe"]);
     let rts = runtimes(&probe);
@@ -245,22 +255,30 @@ fn a_project_whose_root_is_named_vendor_is_analysed() {
 fn a_project_made_of_a_vendor_tree_says_so_and_still_works() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path();
-    write(p, "vendor/lib/core.py", "CACHE = {}\n\n\ndef put(k):\n    CACHE[k] = 1\n");
+    write(
+        p,
+        "vendor/lib/core.py",
+        "CACHE = {}\n\n\ndef put(k):\n    CACHE[k] = 1\n",
+    );
     write(p, "README.md", "a project whose code lives in vendor/\n");
     ok(p, &["run", "init", "--session-id", "t"]);
     let probe = ok(p, &["probe"]);
     assert!(runtimes(&probe).is_empty(), "{probe}");
     let l = lines(&probe);
     assert!(
-        l.iter()
-            .any(|x| x.starts_with("python: none of its 1 file is analysed") && x.contains("vendor")),
+        l.iter().any(
+            |x| x.starts_with("python: none of its 1 file is analysed") && x.contains("vendor")
+        ),
         "{l:?}"
     );
     let c = ok(p, &["census", "--lang", "python"]);
     assert_eq!(c["candidates"], 0, "{c}");
     // And the way back works.
     fs::remove_dir_all(p.join(".dla")).unwrap();
-    ok(p, &["run", "init", "--session-id", "t", "--include", "vendor"]);
+    ok(
+        p,
+        &["run", "init", "--session-id", "t", "--include", "vendor"],
+    );
     let probe = ok(p, &["probe"]);
     assert_eq!(runtimes(&probe), ["python"], "{probe}");
     assert_eq!(ok(p, &["census", "--lang", "python"])["candidates"], 1);
@@ -271,7 +289,11 @@ fn packages_that_happen_to_be_called_external_are_kept() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path();
     write(p, "app/external/__init__.py", "");
-    write(p, "app/external/api.py", "CLIENTS = {}\n\n\ndef add(k):\n    CLIENTS[k] = 1\n");
+    write(
+        p,
+        "app/external/api.py",
+        "CLIENTS = {}\n\n\ndef add(k):\n    CLIENTS[k] = 1\n",
+    );
     write(
         p,
         "src/main/java/org/acme/external/Client.java",
@@ -281,6 +303,12 @@ fn packages_that_happen_to_be_called_external_are_kept() {
     let probe = ok(p, &["probe"]);
     assert!(lines(&probe).is_empty(), "{probe}");
     let rts = runtimes(&probe);
-    assert!(rts.iter().any(|r| r == "python") && rts.iter().any(|r| r == "jvm"), "{rts:?}");
-    assert_eq!(ok(p, &["census", "--lang", "python"])["summary"]["files"], 2);
+    assert!(
+        rts.iter().any(|r| r == "python") && rts.iter().any(|r| r == "jvm"),
+        "{rts:?}"
+    );
+    assert_eq!(
+        ok(p, &["census", "--lang", "python"])["summary"]["files"],
+        2
+    );
 }

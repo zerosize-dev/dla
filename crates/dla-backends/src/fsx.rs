@@ -207,9 +207,7 @@ pub fn walk_defaults(
                 if !skip(&name) && defaults.is_none_or(|d| d.prune_dir(&r).is_none()) {
                     stack.push((e.path(), r));
                 }
-            } else if ft.is_file()
-                && keep(&r)
-                && defaults.is_none_or(|d| d.generated(&r).is_none())
+            } else if ft.is_file() && keep(&r) && defaults.is_none_or(|d| d.walk_file(&r).is_none())
             {
                 out.push(r);
                 if out.len() >= limit {

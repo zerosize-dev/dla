@@ -318,10 +318,7 @@ pub fn census_entries(ctx: &ToolCtx, rt: Runtime) -> Vec<CensusEntry> {
 /// its `def` line are one site). A finding that a rule raised first and the census joined
 /// (`also_origins`) counts as the census finding of its site; a finding merged into another
 /// does not.
-fn census_findings(
-    ctx: &ToolCtx,
-    ledger: &Ledger,
-) -> impl Fn(&str) -> Option<FindingId> + use<> {
+fn census_findings(ctx: &ToolCtx, ledger: &Ledger) -> impl Fn(&str) -> Option<FindingId> + use<> {
     let anchor = dla_census::anchor::site_anchor(&ctx.project);
     let key = move |site: &str| -> Option<(String, u32)> {
         let (file, line) = site.rsplit_once(':')?;
@@ -331,8 +328,8 @@ fn census_findings(
     let mut by_site: std::collections::HashMap<(String, u32), FindingId> =
         std::collections::HashMap::new();
     for f in ledger.findings() {
-        let census = f.origin.as_str() == "census"
-            || f.also_origins.iter().any(|o| o.as_str() == "census");
+        let census =
+            f.origin.as_str() == "census" || f.also_origins.iter().any(|o| o.as_str() == "census");
         if census
             && f.parent.is_none()
             && ledger.merged_into(&f.id).is_none()
@@ -413,7 +410,7 @@ fn targets_for(
             match c.kind.as_str() {
                 // A cached module-level function is read as a global: the wrapper's size is
                 // its `currsize`.
-                "module-global" | "module-pointer" if !rest.contains('.') => {
+                "module-global" | "module-pointer" | "cache-decorator" if !rest.contains('.') => {
                     specific.push(ProbeTarget::PyGlobal {
                         module: m.clone(),
                         name: rest,
@@ -492,7 +489,7 @@ pub fn derive(
     };
     let mut asked: Vec<FindingId> = Vec::new();
     for id in extra {
-        if let Some(canonical) = ledger.merged_into(id).filter(|_| false) {
+        if let Some(canonical) = ledger.merged_into(id) {
             return Err(Refusal::new(
                 codes::INVALID_VALUE,
                 format!(
@@ -575,7 +572,7 @@ pub fn derive(
         }
     }
     // A finding asked for with --probe that gets no target of its own is said, never dropped.
-    for id in asked.iter().filter(|_| false) {
+    for id in &asked {
         let Some(c) = cands.iter().find(|c| c.finding.as_ref() == Some(id)) else {
             continue;
         };
@@ -592,8 +589,16 @@ pub fn derive(
                 Runtime::Go => (
                     format!(
                         "its holder {} ({}) is not a package variable",
-                        if c.owner.is_empty() { "<none>" } else { &c.owner },
-                        if c.kind.is_empty() { "no census entry" } else { &c.kind }
+                        if c.owner.is_empty() {
+                            "<none>"
+                        } else {
+                            &c.owner
+                        },
+                        if c.kind.is_empty() {
+                            "no census entry"
+                        } else {
+                            &c.kind
+                        }
                     ),
                     "dla harness gen --lang go --driver --probes auto".to_owned(),
                 ),

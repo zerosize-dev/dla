@@ -956,3 +956,70 @@ fn without_a_freeze_there_is_no_group_and_a_failing_freeze_reaches_the_target() 
     let rec = bad.iter().find(|r| r["phase"] == "checkpoint").unwrap();
     assert_eq!(frozen(rec).values().sum::<f64>(), 0.0, "{rec}");
 }
+
+#[test]
+fn a_probe_never_imports_and_says_so_for_shapes_a_project_really_has() {
+    if !have_python() {
+        return;
+    }
+    let run = Run::new();
+    // A module that would leave a mark if it were imported, a package whose parent alone is
+    // loaded, and specs that name no module at all.
+    fs::write(
+        run.project.join("sidecar.py"),
+        "open('imported-sidecar', 'w').close()\n",
+    )
+    .unwrap();
+    fs::create_dir_all(run.project.join("pkg")).unwrap();
+    fs::write(run.project.join("pkg/__init__.py"), "LOADED = [1, 2, 3]\n").unwrap();
+    fs::write(
+        run.project.join("pkg/sub.py"),
+        "open('imported-sub', 'w').close()\nHIDDEN = {}\n",
+    )
+    .unwrap();
+    let probes = run.dir.path().join("probes.json");
+    fs::write(
+        &probes,
+        r#"{"probes": [
+            {"id": "P1", "target": {"kind": "py-module", "module": "sidecar"}},
+            {"id": "P2", "target": {"kind": "py-module", "module": "pkg.sub"}},
+            {"id": "P3", "target": {"kind": "py-global", "module": "pkg", "name": "LOADED"}},
+            {"id": "P4", "target": {"kind": "py-module"}},
+            {"id": "P5", "target": {"kind": "py-global", "module": "sidecar", "name": "X"}}
+        ]}"#,
+    )
+    .unwrap();
+    run.python(
+        &["-c", "import pkg"],
+        &[("DLA_HARNESS_PROBES", probes.to_str().unwrap())],
+    );
+    assert!(!run.project.join("imported-sidecar").exists());
+    assert!(!run.project.join("imported-sub").exists());
+    let rec = run.records().pop().unwrap();
+    let probes = rec["probes"].as_array().unwrap();
+    let error_of = |id: &str| {
+        probes
+            .iter()
+            .find(|p| p["id"] == id)
+            .map(|p| p["error"].as_str().unwrap_or("").to_owned())
+            .unwrap_or_else(|| panic!("no record for {id}: {probes:?}"))
+    };
+    for id in ["P1", "P2", "P4", "P5"] {
+        assert!(
+            error_of(id).contains("not loaded"),
+            "{id}: {}",
+            error_of(id)
+        );
+    }
+    let loaded = probes.iter().find(|p| p["id"] == "P3").unwrap();
+    assert_eq!(loaded["size"], 3, "a module the workload imported is read");
+    let limits = rec["limitations"].as_array().unwrap();
+    assert!(
+        limits.iter().any(|l| l
+            .as_str()
+            .unwrap()
+            .contains("were not loaded by the workload and were not imported")
+            && l.as_str().unwrap().contains("pkg.sub")),
+        "{limits:?}"
+    );
+}

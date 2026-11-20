@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 17:45 UTC)
+# Where the work stands (2026-11-20, 19:50 UTC)
 
 ## Working rule from the owner (2026-11-20, 09:25 UTC), above every other habit
 "You should be using sonnet 5.5 subagents for tasks and verify yourself, since my limits are
@@ -35,12 +35,23 @@ Measured so far (2026-11-20, 17:45 UTC):
   follow-up measurement re-opens gate columns (about 10 minutes of busywork); hundreds of
   untested static candidates need one `ledger resolve` call each; the flow never separates "a
   cache unbounded in its key space" from a leak.
-Running: workflow `real-project-pass-1` (two Sonnet fixers, brief `real-project-brief.md`):
-X1 vendored and generated code out of scope by default; X2 Python module probes never import,
-a stalled harness run says where, one site is one finding. The orchestrator verifies both
-(rerun the static stage on the measured trees, tests, static and dynamic acceptance).
-Next: ordering of candidates, a ledger listing, bulk dispositions, the gate treadmill, the
-keys discriminator in the flow; then release 0.9.0-preview.3 so the owner tests the same build.
+State at 19:50 UTC on 2026-11-20: both fixers of pass 1 are done (`real-project-report-X1.md`,
+`real-project-report-X2.md`): vendored directories and generated files are out of scope by
+default (`dla run init --include <path>` brings a path back; the probe and the report name what
+was left out); Python module probes never import; a stalled Python harness run names the phase
+it was killed in; a rule hit and a census entry at one site are one finding. Verified by the
+orchestrator on a fresh copy of aiohttp 3.10.10: runtimes python only, 187 candidates (922
+before), static stage 38 s, `aiohttp/web_app.py:82` one finding with both origins. Running:
+workspace tests and lints, static in both modes and the full dynamic run on the 64 fixtures
+(results under the scratch dir `u21/`). When clean: a snapshot without `[skip ci]`, CI, one
+commit on `main`, then release 0.9.0-preview.3 (version bump as described below, then
+`release.yml` with `publish=true`), so the owner tests the same build.
+CI on `main` at `fbcd6b2` is green after a re-run: its first attempt failed by chance in the
+macOS test job (`a_wrapper_script_that_runs_javac_and_tests_still_yields_the_main_jvm_record`,
+`ratio(os.rss) < 4.0`, no values printed); the cause is not found yet (task list).
+Next after the release: ordering of candidates and a command that lists them, bulk
+dispositions for untested static candidates, the gate treadmill after follow-up measurements,
+the keys discriminator in the flow, the macOS test.
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `fbcd6b2` "Find four more kinds of leak;

@@ -455,8 +455,8 @@ def _probes(limitations):
             mark_phase(f"checkpoint: probe {probe_id} ({kind} {modname})")
             mod = _find_module(modname)
             if mod is None:
-                if modname not in not_loaded:
-                    not_loaded.append(modname)
+                if str(modname) not in not_loaded:
+                    not_loaded.append(str(modname))
                 out.append(_record(probe_id, modname, modname, None, "module not loaded by the workload at this checkpoint (a probe never imports it)"))
                 continue
             if kind == "pymodule":
@@ -1328,7 +1328,7 @@ def _ticker(interval):
 def _init():
     if not _ACTIVE:
         return
-    mark_phase("start-up: the imports of the driver or the workload, before its first hook or checkpoint")
+    mark_phase("start-up: the program's own code before its first hook or checkpoint (the imports of a driver, or the workload of a command)")
     _preload_trim()
     _start_tracemalloc()
     if _CAPTURE_ON and "nonheap" in _CAPTURE_KINDS:

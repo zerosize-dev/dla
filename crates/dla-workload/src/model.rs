@@ -7,9 +7,7 @@ use std::{
 };
 
 use dla_census::parse::{Lang, parse, tree_sitter::Node};
-use dla_core::{
-    runtime::Runtime, state::Scope, vendored::Defaults, workload::WorkloadKind,
-};
+use dla_core::{runtime::Runtime, state::Scope, vendored::Defaults, workload::WorkloadKind};
 
 /// Directories that never hold project sources.
 pub const SKIP_DIRS: &[&str] = &[
@@ -153,7 +151,7 @@ impl Scan {
                 } else if ft.is_file()
                     && all.len() < MAX_FILES
                     && let Some(r) = dla_core::paths::rel_slash(project, &e.path())
-                    && defaults.generated(&r).is_none()
+                    && defaults.walk_file(&r).is_none()
                 {
                     all.insert(r);
                 }
