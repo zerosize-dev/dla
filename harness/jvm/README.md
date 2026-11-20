@@ -79,13 +79,13 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   class is the project's when its code source is a file, directory or jar under `DLA_PROJECT`,
   compared by the names as written and with symlinks resolved (the outer jar of
   `jar:file:/x.jar!/...` and of a Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`; a
-  library nested in the jar, Spring Boot's loader and, once packages are known, the root of a jar are not) or when it is in a
-  package named by `DLA_PROJECT_PACKAGES` (comma separated: the packages the project's own
-  sources declare, set by `dla harness run`). `project` is the number of distinct top-level project
-  classes; `sources` lists `package/path/File.kt` for the project classes, from each class file's
-  `SourceFile` attribute (the class file is read for project classes only), so a Kotlin class in
-  a file of another name, a facade class (`UtilKt`) and a package that does not mirror its
-  directory still name their source file.
+  library nested in the jar, Spring Boot's loader and, once packages are known, the root of a jar
+  are not) or when it is in a package named by `DLA_PROJECT_PACKAGES` (comma separated: the
+  packages the project's own sources declare, set by `dla harness run`). `project` is the number of
+  distinct top-level project classes; `sources` lists `package/path/File.kt` for the project
+  classes, from each class file's `SourceFile` attribute (the class file is read for project
+  classes only), so a Kotlin class in a file of another name, a facade class (`UtilKt`) and a
+  package that does not mirror its directory still name their source file.
 - `probes`: `JvmClass` yields one record per static field of reference type (primitives, strings,
   numbers, enums and `Class` constants are skipped); `JvmStatic` yields one record. `size` is the
   size of a Collection/Map/array, `reachable` the objects reached by a bounded iterative walk

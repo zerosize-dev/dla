@@ -1,0 +1,56 @@
+{
+ "problems": [
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:521 (the clause \"`node-price-board-flat` and `node-template-cache` in some runs, where `os.rss` passed the gate by chance\")",
+   "text": "Not what the runs show. In the earlier acceptance run (scratchpad u8acc/dynamic.logs) and in the fixer's final-binary runs, `os.rss` did not pass the first trend in either fixture. It voted because another column passed (`os.pss`, `os.pss_anon`, `os.private_dirty`; `node.heap_total.pre_gc`) and then read retained (1.9 to 2.3 MB; 17.6 to 19.3 MB). In none of the 17 kept runs of the two fixtures did `os.rss` pass the first trend. This is the misstatement the open item corrected in row 520 only. Direction: \"where another column passed the first trend by chance, so `os.rss` voted\"."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:521 (\"is above the floor and no mechanism was found\"; \"stood above the last point of the series by that much for `os.rss`\")",
+   "text": "Two wording leftovers of the same open item. (1) \"the floor\" was replaced by \"the minimum\" in row 520 but not here. (2) The two measured sizes were deleted from the sentence before, so \"by that much\" now refers to an amount the row no longer gives. Direction: \"above the minimum\"; drop \"by that much\"."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/bench/runner/src/dynamic/ops.rs:863-881; /home/user/dla/docs/VERIFY.md:522 (\"also prints the reasons of each failed summary ... and shows at most eight lines in all\")",
+   "text": "The new reasons lines share the eight-line cap with the detail lines, in step order, so the reasons of a later failed summary can be cut. One failed summary can take 1 + 7 lines (three limitation lines, two holders with two lines each). With three failed summaries of three limitation lines each (the Python fixtures have three failing summaries per run), the lines are reasons + 3, reasons + 3, and the third summary's reasons are not printed. By reading; the two tests pin only the first two steps. Direction: print all reasons lines first, or do not count them against the cap."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/harness/jvm/README.md:82",
+   "text": "The re-wrap is incomplete: this line of the bullet is still 125 columns (\"library nested in the jar, ... are not) or when it is in a\"). The other lines of the bullet are 99 or fewer, and the words are unchanged."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/crates/dla-cli/src/summarize/shim_groups.rs:347",
+   "text": "The rewritten comment is one line of 132 columns in a file whose comments wrap at 100 (rustfmt does not flag comments; `cargo fmt --all --check` is clean). Its text is true: each capture file's choice inserts the same line and the set keeps one."
+  },
+  {
+   "severity": "minor",
+   "where": "/home/user/dla/docs/VERIFY.md:509 (\"...and the ranges are close on the macOS side, a first pair that passes ends the test...\"); /home/user/dla/docs/VERIFY.md:520 (\"(built after the last code change of this row, together with `jni-order-codec`, which also passed)\")",
+   "text": "Wording, two places; the content of both is true. Row 509: the edit removed \"so\" and left a run-on sentence. Start a new sentence at \"A first pair that passes\". Row 520: the parenthesis reads as if the binaries were built together with a fixture. Say the binaries were built after the last code change, and that `jni-order-codec` was run with them and also passed."
+  },
+  {
+   "severity": "note",
+   "where": "the requested command `cargo test -j 2 -p dla-cli --lib summarize::shim_groups`",
+   "text": "It cannot run as given: `error: no library targets found in package dla-cli` (exit 101). The tests live in the binary target. `cargo test -j 2 -p dla-cli --bin dla summarize::shim_groups` ran instead: 6 passed, 0 failed."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/crates/dla-cli/src/alloc_cmd.rs:2732-2745 (series at 2714-2730)",
+   "text": "Replay of the leak-side test on its own series (transcription of `judge::plateau` and `judge::purge`; it reproduces the earlier check's figures for the old series). Noise unit 26,687 bytes, purge growth 40,000, plateau rise 20,000 (plateau). A scatter-scaled limit of 2 units (53,374) or 3 units (80,060) reads `no-growth` and non-leak, so the test fails with either. It fails from 1.5 units up (40,030); a limit of 1.4 units (37,362) would still pass. No action needed."
+  },
+  {
+   "severity": "note",
+   "where": "/home/user/dla/docs/VERIFY.md:520 (\"the refuted and passed-column counts differ from the earlier acceptance run only where a different set of columns passed the first trend by chance\")",
+   "text": "Holds fixture by fixture against the fixer's runs: counts differ in go-buffer-pool, node-price-board-flat, node-template-cache, python-graph-churn and python-report-memo-bounded, and each had a different passing set. In python-report-memo-bounded (2 passed columns in both runs, refuted 1 then 4) part of the difference is the corrected Python trim, not chance: `os.rss` read retained with 1.7 MB growth before and `no-growth` now."
+  },
+  {
+   "severity": "note",
+   "where": "disk",
+   "text": "Free space fell to 2850 MB during the checks. I ran the prune script once (230 units, 2775 MB); 5582 MB free afterwards."
+  }
+ ],
+ "confirmed": "Eight of the ten items are fully fixed and two are fixed in part; no problem remains, six minor items do. No test was skipped, ignored or weakened, and the edits touch nothing beyond the ten items. I edited no repository file.\n\n**The ten items**\n1. Second-pair reason (crates/dla-cli/tests/alloc_test_jvm.rs:448-451, VERIFY row 509): fixed. The text matches the test body: a first pair that passes returns, only a failing pair is measured again, and the sums are judged.\n2. \"thirteen of the twenty\" (VERIFY row 466): fixed, total dropped. The file has 20 tests and the row names 13 and 7.\n3. skill_text counts (VERIFY rows 454, 467): fixed, both counts dropped. The file has 13 tests; the two named tests exist.\n4. README re-wrap (harness/jvm/README.md:77-82): partly. Words unchanged, one line still 125 columns.\n5. Row 520 title and fixture sentence, row 521 last sentence: fixed and true of the fixer's runs (below).\n6. Leak-side test (crates/dla-cli/src/alloc_cmd.rs:2714-2745): fixed as directed, growth now 40 KB under the same scatter. A limit of 2 or 3 noise units now fails it (see note). The second half is unchanged.\n7. Open-case wording: row 520 and the comment in crates/dla-cli/tests/alloc_test.rs:350-358 are fixed (all lines 100 columns or fewer, \"4 of 8\" and the sizes gone). Row 521 is fixed except \"the floor\" and the `os.rss` clause (first two minors).\n8. Reasons on a refused confirmation (bench/runner/src/dynamic/ops.rs:858-882, call at 1172): fixed. The label path passes `false`, so nothing prints twice. The stand-in now returns reasons, and the test asserts the reasons line directly after the refusal and none for a passed gate.\n9. Doc comments (crates/dla-workload/src/harness/run.rs:1420-1435): fixed; each function has its own.\n10. Shim limitation wording (crates/dla-cli/src/summarize/shim_groups.rs:326, 369-381; VERIFY row 522): fixed. The line names the processes that wrote a record and those left after the tool and identity steps, and a new three-program case pins it. The identity note is one line per evidence record, as the row now says.\n\n**VERIFY and scope**\n- The fixer changed seven rows (454, 466, 467, 509, 520, 521, 522). Each has 4 cells, an even backtick count, no pipe in a code span, no plan or package names and no line numbers.\n- The diff against 83314f3 outside .wip is exactly the nine files, and every hunk maps to an item. No `#[ignore]`, skip or removed assertion.\n\n**Fixture runs (scratchpad u11-left)**\n- All twelve fixtures of row 520 and `jni-order-codec` read `pass`, exit 0, with empty `errors` and `failures`; each was one `--parallel 1 --only` run.\n- The binaries were copied at 02:24:11; the last source edit was 02:23:32, and only docs/VERIFY.md changed afterwards. The copies contain the new limitation text and the new reasons line.\n- `go-gc-tuned-batch`: `go.heap_objects` reads purge `no-growth` (growth about 2 to 3 KB) and non-leak. `python-graph-churn` reads non-leak.\n\n**Tests run here**\n- `cargo test -j 2 -p dla-bench`: exit 0, 383 passed in 16 binaries, 0 failed, 0 ignored.\n- shim_groups unit tests through `--bin dla`: 6 passed.\n- `cargo test -j 2 -p dla-cli --bin dla alloc`: 76 passed, the leak-side test among them.\n- `cargo test -j 2 -p dla-cli --test alloc_test`: 4 passed in 72 s; python3 is present, so nothing skipped.\n- Extra: `--test summarize_native` (reads the changed limitation text) 27 passed; `cargo clippy -j 2 -p dla-bench -p dla-cli -p dla-workload --all-targets -- -D warnings` clean; `cargo fmt --all --check` clean.\n\nAbout 20 minutes of machine time. Logs are in /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u11chk-left/.",
+ "unverified": "- That the fixer saw the leak-side test fail with a limit put back. crates/dla-cli/src/alloc/judge.rs has an mtime of 02:21:46 and equals the snapshot, which fits a temporary edit; I replayed the series by transcription, not by changing the source.\n- That the u11-left binaries are byte for byte a build of the final tree: inferred from the times and the strings in them. I did not rerun any fixture.\n- The reasons-line cap case: by reading only. No kept bench run has a refused confirmation; the printing is covered by the stand-in test.\n- The measured figures in row 509 and the JVM warm-up test itself (`alloc_test_jvm` was not run).\n- How often the open case of row 520 occurs; I ran the command-level test once (it passed).\n- Not run: workspace-wide and Windows clippy, `dla schema --check`, `python3 bench/runner/test_grade.py`, and the dla-workload suite (its only change is a moved comment). The fixer's own tests.log shows the dla-cli, dla-workload, dla-parsers and dla-sample suites passing before the restart and stops at the dla-bench header; I ran dla-bench.\n- Older sentences of rows 520 to 522 that this fix did not touch, except the two I checked against the runs (the count comparison and the `os.rss` clause)."
+}

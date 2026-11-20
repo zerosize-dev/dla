@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 03:45 UTC)
+# Where the work stands (2026-11-20, 04:40 UTC)
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `9781542` "Version 0.9.0-preview.2", on top of
@@ -34,15 +34,22 @@ State of the code (all edits are in the tree and in the snapshot `6e7db3b`):
   off before its report. Its 13 fixture runs passed and the tests of dla-cli, dla-workload,
   dla-parsers and dla-sample passed; `cargo fmt --all --check` and workspace clippy are clean.
 
-Running now (workflow `fix-passes-finish`, and a CI run):
-- an independent check of those ten leftover edits (`git diff 83314f3 -- . ':(exclude).wip'`);
-- the fixture acceptance (static both modes, the full dynamic run; results under the scratch dir
-  `u11acc/`, compared with the run before these passes) and the test, lint and schema acceptance;
-- CI on snapshot `6e7db3b` (check with `gh run list --workflow ci.yml --branch wip/progress`).
-  Earlier snapshots `47991b4` and `91fb4a0` were green on all 15 jobs.
-If the leftover check finds something: fix it, snapshot (without `[skip ci]`) for a new CI run,
-and rerun the acceptance parts the change touches. When CI is green on the final tree and the
-acceptance is clean: one commit on `main` (without `.wip/`), push `main` and
+State at 04:40 UTC:
+- CI on snapshot `6e7db3b` (the tree with the ten leftover edits): green on all 15 jobs
+  (run 44668225560).
+- The independent check of the leftover edits (`cont-c3-check-leftovers.json`): no problem, six
+  minor items. Four are done by hand (wording in three VERIFY rows, the README bullet re-wrapped).
+  Two are left and touch source files, so they wait until the acceptance runs have finished:
+  (1) `bench/runner/src/dynamic/ops.rs`, `failed_summary_detail`: the reasons lines share the
+  eight-line cap with the detail lines, so the reasons of a later failed summary can be cut;
+  print all reasons lines first and do not count them against the cap, with a test seen failing,
+  and make the VERIFY row of the shim record fix say what the code does; (2) one comment line of
+  132 columns in `crates/dla-cli/src/summarize/shim_groups.rs` (wrap at 100).
+- Still running (workflow `fix-passes-finish`): the fixture acceptance (results under the scratch
+  dir `u11acc/`) and the test, lint and schema acceptance (`u11acc-t/`).
+Then: the two small items above (fix, check), a snapshot without `[skip ci]` for a last CI run,
+`cargo test -p dla-bench`, clippy, fmt. When CI is green on that tree and the acceptance is
+clean: one commit on `main` (without `.wip/`), push `main` and
 `main:dev/wonderful-mccarthy-algc5s`, confirm CI on `main`.
 
 Snapshots: `snapshot.sh "<label>"` (copy here). A label with `[skip ci]` saves notes without a
