@@ -1,0 +1,67 @@
+[
+ {
+  "key": "N2 (pass A)",
+  "open": [
+   {
+    "severity": "minor",
+    "where": "crates/dla-cli/tests/alloc_test_jvm.rs (the comment above the 0.85 relation) and the same sentence in the docs/VERIFY.md row on the JVM warm-up test",
+    "text": "The comment gives the wrong reason for the second pair: it only re-measures a pair that failed (it guards a working warm-up that reads near the line); a first pair that passes ends the test. Say that, and that a pass is not measured twice."
+   },
+   {
+    "severity": "minor",
+    "where": "docs/VERIFY.md: the row about a harness that must be run (\"thirteen of the twenty tests of gate_harness.rs fail\") against the row that says the count no longer quotes a total",
+    "text": "Drop \"of the twenty\" in the first row, or reword the clause in the second."
+   },
+   {
+    "severity": "minor",
+    "where": "docs/VERIFY.md: two rows that say \"the eight tests of crates/dla-cli/tests/skill_text.rs pass\" and \"skill_text (8)\"",
+    "text": "The file has 13 tests and a run shows 13 passed. Drop the counts or name the tests."
+   },
+   {
+    "severity": "minor",
+    "where": "harness/jvm/README.md: the sentence added about a project below a directory named test",
+    "text": "One line of 233 columns inside a paragraph wrapped at about 100. Re-wrap the bullet."
+   }
+  ]
+ },
+ {
+  "key": "N1 (pass A)",
+  "open": [
+   {
+    "severity": "problem",
+    "where": "docs/VERIFY.md:520 (title and the fixture sentence); docs/VERIFY.md:521 (last sentence)",
+    "text": "Two statements in row 520 are not true of the final tree.\n\n- \"passed all twelve with the final binaries\": only five of the twelve fixtures were run after the noise limit was taken out, as the second refix report says itself. The other seven (go-buffer-pool, go-ticker-modern, node-price-board-flat, rust-tree-parent-links-weak, rust-batch-buffers, native-arena-reuse, jvm-order-cache-bounded) last ran on binaries that still had the limit. Row 521 repeats \"passed all twelve\".\n- The title still says the purge test read \"the scatter of a flat column\" as retained, with status `corrected`. The body of the same row says that limit was tried and left out, and that the case is open.\n\nDirection: drop \"or the scatter of a flat column\" from the title. Write the fixture sentence from the final full dynamic run, or say now which five ran on the final tree. The three fixtures I ran on the final tree pass."
+   },
+   {
+    "severity": "minor",
+    "where": "crates/dla-cli/src/alloc_cmd.rs:2733-2745 (series at 2713-2731)",
+    "text": "The leak-side test pins only the exact limit that was removed. Its growth is 80,000 against 3 noise units of about 80,070.\n\nReplayed on the test's own series:\n- With the 3-unit limit put back it reads `no-growth` and non-leak, so the test fails, as the report says.\n- With a limit of 2.9 noise units it still reads retained and inconclusive, so the test passes.\n\nThe second half of the test (a 2 MB step) reads retained in every variant, HEAD included. Direction: put the growth just above the minimum (about 40 KB under the same scatter), so that any scatter-scaled limit fails the test."
+   },
+   {
+    "severity": "minor",
+    "where": "docs/VERIFY.md:520 (the \"Open:\" sentence); docs/VERIFY.md:521; crates/dla-cli/tests/alloc_test.rs:353-355",
+    "text": "Inexact statements about the open case and the command-level test.\n\n- \"a flat Python run whose `os.rss` passes the first trend\": os.rss votes whenever any column of memory in use passed the first trend (crates/dla-cli/src/alloc/pick.rs:375-379), not only when it passed itself. In my python-report-memo-bounded run only py.traced_peak and py.traced.pre_gc passed, and both unbound alloc-tests read inconclusive through os.rss (growth 176.1 and 73.7 KB, drop 12.3 KB). The earlier acceptance run read the same.\n- \"That test does not reach the retained path\" (row 521 and the test comment): in 1 of my 8 command-level runs os.rss_file read purge retained (growth 77.8 KB, drop 0) and read non-leak through the exemption. So the test does exercise the exemption in some runs, and would fail there without it.\n- \"4 of 8 here\" (both rows): 1 of 8 read inconclusive in my runs.\n- Wording: \"the floor\" remains in both rows though the floor is gone. Row 521 now carries a measured size (\"about 160 KB\"), against the brief's rule of no byte counts. alloc_test.rs:353 is 101 characters long."
+   }
+  ]
+ },
+ {
+  "key": "pass B",
+  "open": [
+   {
+    "severity": "minor",
+    "where": "/home/user/dla/bench/runner/src/dynamic/ops.rs:1153-1162 and 812; /home/user/dla/bench/runner/src/dynamic/policy.rs:512-515",
+    "text": "A refused confirmation still does not print the reasons of the failed gates. The summarize step line is `<op> via <backend>: gate fail, tied none`. The reasons live in `summarize_log`, which is not serialized, and only the label path writes them (into its failure line). The new detail lines carry limitation lines and, for a `stack:` holder, the per-capture figures. So the shim case explains itself, but a failed gate whose reasons name no `stack:` holder (a JVM or Python histogram gate, for example) and whose evidence has only fixed limitation lines adds nothing after `confirm refused`. Decision 4 lists the reasons as 'already printed', which is true for a label only. By reading; the stand-in of the test returns no reasons, so no test covers it. Fix: add one line per failed summary with its reasons when the call is for a confirmation."
+   },
+   {
+    "severity": "minor",
+    "where": "/home/user/dla/crates/dla-workload/src/harness/run.rs:1420-1435",
+    "text": "The new helper was inserted between `split_shim` and its doc comment. `clear_stale_capture_files` now carries both comments (its first four lines describe `split_shim`), and `split_shim` has none."
+   },
+   {
+    "severity": "minor",
+    "where": "/home/user/dla/crates/dla-cli/src/summarize/shim_groups.rs:369-370 and 346; /home/user/dla/docs/VERIFY.md:522",
+    "text": "Wording, two places. (1) The size limitation says `N processes wrote shim records with stacks`, but N counts the processes left after the tool and identity steps. Seen: a file with three programs, two of them with the count, gives `2 processes wrote shim records with stacks and 2220 (the iteration count) is in the argv of several`. Present since the first fix. (2) The code comment and the VERIFY row say the identity note is 'one line for the whole file'. It is one line per evidence record, for all capture files of the summary (seen: one line each on the four evidence records of the 17-file replay)."
+   }
+  ]
+ }
+]

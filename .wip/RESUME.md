@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 00:45 UTC)
+# Where the work stands (2026-11-20, 03:45 UTC)
 
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `9781542` "Version 0.9.0-preview.2", on top of
@@ -11,37 +11,39 @@
   archives with `.sha256` files and `SHA256SUMS`; release run 44631010965). Nothing to do here.
 
 ## In flight: two fix passes in one tree, one commit at the end
-The container restarted at 00:17 UTC on 2026-11-20 and stopped both workflows during read-only
-checks; the edits were intact. One continuation workflow now runs them to the end
-(`fix-passes-continue-workflow.js`; the finished agents' reports and checks are the `cont-*` files
-here, the briefs are `fix-pass-9-brief.md` and `fix-pass-10-brief.md`).
+The container restarts about every three hours (00:17 and 03:25 UTC on 2026-11-20); files on disk
+survive, running agents do not. Reports and checks of every finished agent are the `cont-*` files
+here; the briefs are `fix-pass-9-brief.md` and `fix-pass-10-brief.md`.
 
-Pass A, package N1 (flaky non-leak verdicts in the unbound alloc-test):
-- Cause: a column that passes the first trend by chance votes and reads plateau + purge retained
-  = inconclusive (go-gc-tuned-batch on the runner, python-graph-churn locally).
-- Done: the purge test uses the plateau test's minimum rise; after the first check also: the
-  file-backed column keeps its plateau vote and only its purge reading is dropped, and the Python
-  trim purge no longer reads `before` after its own `import ctypes`
-  (`harness/python/sitecustomize.py`). Refix done; its second check is running.
-Pass A, package N2 (14 items earlier checks left open): fixed, checked twice; four wording items
-left (a test comment, two VERIFY rows with stale counts, one over-long README line). They are in
-the leftovers step of the continuation workflow.
-Pass B (`jni-order-codec` fails by chance on the runner):
-- Cause, measured: the fixture's `build.sh run {n}` starts the project's test JVM and then the
-  program; both wrote a shim exit record with stacks into `p<k>-native/shim-dump.jsonl`, and the
-  reader kept "the one with most live bytes" (41.9 MB against 47.8 MB at the first point).
-- Done: the harness writes the measured process's shim record only; the reader chooses by
-  identity (the rule of `select_measured`) and uses size only as a named fallback;
-  `dla-bench dynamic` prints the failed gate's limitation lines and per-capture values. The first
-  check found five problems (a false limitation on harnesses without a shim, a run without
-  `--capture` deleting capture files, unredacted argv words in a limitation line, the VERIFY row
-  in the wrong table, decision 4 only for labels); refix done; its second check is running.
-CI: snapshots `47991b4` (N2 refix, N1 first fix) and `91fb4a0` (both refixes; the tree at the
-restart; run 44641789200) were green on all 15 jobs.
-Then, by the workflow: leftovers, a snapshot with a CI run (fix loop, at most 4 attempts), the
-full local acceptance (logs under the scratch dir `u11acc/`, compared with the run before these
-passes). When CI is green on the final tree and the acceptance is clean: one commit on `main`
-(without `.wip/`), push `main` and `main:dev/wonderful-mccarthy-algc5s`, confirm CI on `main`.
+State of the code (all edits are in the tree and in the snapshot `6e7db3b`):
+- Pass A, package N1 (flaky non-leak verdicts in the unbound alloc-test): fixed, checked three
+  times, refixed twice. The purge test uses the plateau test's minimum rise; a scatter-scaled
+  limit was tried and left out (a slow real leak read non-leak with it); the file-backed column
+  keeps its plateau vote and only its purge reading is exempt; the Python trim purge no longer
+  reads `before` after its own `import ctypes`. Open by decision and written in the VERIFY rows:
+  a flat Python run can still read inconclusive through `os.rss` now and then.
+- Pass A, package N2 (14 items earlier checks left open): fixed, checked twice.
+- Pass B (`jni-order-codec` failed by chance on the runner because the shim summary read the
+  record of the process with the most live bytes, and the fixture's test JVM can hold more than
+  the program at the first point): the harness writes the measured process's shim record only,
+  the reader chooses by identity and uses size only as a named fallback, `dla-bench dynamic`
+  prints the failed gate's limitation lines and per-capture values. Fixed, checked three times,
+  refixed twice.
+- Ten leftover items of the last checks (`cont-leftover-items.json`; one problem: a VERIFY row of
+  N1 claimed more fixture runs than were made) were edited by a fixer that the 03:25 restart cut
+  off before its report. Its 13 fixture runs passed and the tests of dla-cli, dla-workload,
+  dla-parsers and dla-sample passed; `cargo fmt --all --check` and workspace clippy are clean.
+
+Running now (workflow `fix-passes-finish`, and a CI run):
+- an independent check of those ten leftover edits (`git diff 83314f3 -- . ':(exclude).wip'`);
+- the fixture acceptance (static both modes, the full dynamic run; results under the scratch dir
+  `u11acc/`, compared with the run before these passes) and the test, lint and schema acceptance;
+- CI on snapshot `6e7db3b` (check with `gh run list --workflow ci.yml --branch wip/progress`).
+  Earlier snapshots `47991b4` and `91fb4a0` were green on all 15 jobs.
+If the leftover check finds something: fix it, snapshot (without `[skip ci]`) for a new CI run,
+and rerun the acceptance parts the change touches. When CI is green on the final tree and the
+acceptance is clean: one commit on `main` (without `.wip/`), push `main` and
+`main:dev/wonderful-mccarthy-algc5s`, confirm CI on `main`.
 
 Snapshots: `snapshot.sh "<label>"` (copy here). A label with `[skip ci]` saves notes without a
 CI run; a later snapshot without it always gets a commit, so a CI run exists for it.
