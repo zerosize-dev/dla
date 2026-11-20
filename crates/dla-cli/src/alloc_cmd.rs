@@ -2709,8 +2709,9 @@ mod tests {
     }
 
     /// A flat column that scatters by about 70 KB from reading to reading; the point at the
-    /// end of the warm-up is one of the low ones and the purge gives nothing back.
-    fn scattered_run(scatter: f64) -> ColumnResult {
+    /// end of the warm-up is one of the low ones, the last reading stands `growth` above it and
+    /// the purge gives nothing back.
+    fn scattered_run(scatter: f64, growth: f64) -> ColumnResult {
         let mut s = series(&[]);
         s.columns = vec![col("os.rss"), col("os.rss_anon")];
         let pattern = [
@@ -2719,8 +2720,7 @@ mod tests {
         for (i, p) in s.points.iter_mut().enumerate() {
             p.values = vec![Some(500e6), Some(23e6 + scatter * pattern[i])];
         }
-        // The last reading sits at the top of the scatter.
-        s.points.last_mut().unwrap().values[1] = Some(23e6 + scatter);
+        s.points.last_mut().unwrap().values[1] = Some(23e6 + growth);
         let (_, mut results, _) = unbound_run(s, &["os.rss_anon"]);
         let at = results
             .iter()
@@ -2732,11 +2732,12 @@ mod tests {
     #[test]
     fn a_growth_inside_the_columns_own_scatter_but_above_its_minimum_is_still_growth_for_the_purge()
     {
-        // A slow real leak under the scatter of a noisy column: the last reading is 80 KB above
-        // the warm-up point, above the 32 KiB minimum and inside the scatter the plateau test
-        // reads. The purge gave nothing back, so the reading is retained and, against the
-        // plateau, inconclusive. It must never read non-leak (a bound non-leak refutes).
-        let r = scattered_run(80_000.0);
+        // A slow real leak under the scatter of a noisy column (about 80 KB): the last reading
+        // is 40 KB above the warm-up point, just above the 32 KiB minimum and well inside the
+        // scatter the plateau test reads, so a limit that scales with the scatter would read it
+        // as no growth. The purge gave nothing back, so the reading is retained and, against
+        // the plateau, inconclusive. It must never read non-leak (a bound non-leak refutes).
+        let r = scattered_run(80_000.0, 40_000.0);
         assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
         let purge = r.purge.as_ref().unwrap();
         assert!(purge.growth.unwrap() > judge::MIN_BYTE_RISE, "{purge:?}");

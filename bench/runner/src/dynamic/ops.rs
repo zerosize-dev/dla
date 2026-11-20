@@ -851,18 +851,31 @@ fn log_failed_summarize(fx: &mut Fx, op: &str, backend: &str, gate: &str, why: S
 const MAX_DETAIL_LINES: usize = 8;
 
 /// The detail lines of the summarize steps whose gate failed: of the operations given, or of
-/// every operation (a refused confirmation does not name them). At most
-/// [`MAX_DETAIL_LINES`] lines.
+/// every operation (a refused confirmation does not name them). With `reasons`, each failed
+/// step first gets one line with the reasons of its gate (a refused label prints them already
+/// in its own failure line; a refused confirmation does not). At most [`MAX_DETAIL_LINES`]
+/// lines.
 pub(super) fn failed_summary_detail(
     log: &[crate::dynamic_cmd::SummarizeStep],
     ops: Option<&[String]>,
+    reasons: bool,
 ) -> Vec<String> {
     log.iter()
         .filter(|s| ops.is_none_or(|ops| ops.contains(&s.op)))
         .flat_map(|s| {
-            s.detail
-                .iter()
-                .map(move |d| format!("{} via {}: {d}", s.op, s.backend))
+            let why = (reasons && s.gate == "fail" && !s.reasons.is_empty()).then(|| {
+                format!(
+                    "{} via {}: reasons: {}",
+                    s.op,
+                    s.backend,
+                    s.reasons.join("; ")
+                )
+            });
+            why.into_iter().chain(
+                s.detail
+                    .iter()
+                    .map(move |d| format!("{} via {}: {d}", s.op, s.backend)),
+            )
         })
         .take(MAX_DETAIL_LINES)
         .collect()
@@ -1156,7 +1169,7 @@ fn confirm(fx: &mut Fx, p: &Pending, tied: &[(BTreeSet<String>, Vec<String>)]) {
             .push(format!("dla ledger confirm {}: {}", p.finding, c.message()));
         fx.step(format!("{} confirm refused ({})", p.finding, c.code()));
         // The gates that failed say why the confirmation had nothing to stand on.
-        for line in failed_summary_detail(&fx.row.summarize_log, None) {
+        for line in failed_summary_detail(&fx.row.summarize_log, None, true) {
             fx.step(line);
         }
     }
@@ -1381,7 +1394,7 @@ case "$1 $2" in
   [ -n "$FAKE_NO_TIE" ] && tie=''
   echo '{"type":"evidence","evidence_id":"E1","kind":"histogram-diff","authority":"live","result":{}}' >> $R/ledger.jsonl
   echo '{"type":"evidence","evidence_id":"E2","kind":"growth-series","authority":"live","limitations":["a limitation of the failed gate"],"result":{"gate":"pass","passed":[{"column":"type:X",'"$tie"'"finding":"F1"}]}}' >> $R/ledger.jsonl
-  echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"'"${FAKE_GATE:-pass}"'","growth_evidence":"E2","raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
+  echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"'"${FAKE_GATE:-pass}"'","growth_evidence":"E2","reasons":["a reason of the failed gate"],"raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
 "ledger add")
   echo '{"ok":true,"id":"F2.n1"}';;
 "ledger refute")
@@ -1556,8 +1569,16 @@ esac
             .iter()
             .position(|s| s == "F1 confirm refused (confirm-untied)")
             .unwrap_or_else(|| panic!("{:?}", row.steps));
+        // The reasons of the failed gate come first (a refused confirmation does not print
+        // them elsewhere), then its detail.
         assert_eq!(
             row.steps[at + 1],
+            "type-histogram-diff via b: reasons: a reason of the failed gate",
+            "{:?}",
+            row.steps
+        );
+        assert_eq!(
+            row.steps[at + 2],
             "type-histogram-diff via b: limitation: a limitation of the failed gate",
             "{:?}",
             row.steps
@@ -1565,13 +1586,17 @@ esac
         // A summary whose gate passed adds nothing, nor does a confirmation that went through.
         let (row, _) = drive_fake(&[("FAKE_REFUSE_CONFIRM", "1")]);
         assert!(
-            row.steps.iter().all(|s| !s.contains("limitation:")),
+            row.steps
+                .iter()
+                .all(|s| !s.contains("limitation:") && !s.contains("reasons:")),
             "{:?}",
             row.steps
         );
         let (row, _) = drive_fake(&[("FAKE_GATE", "fail")]);
         assert!(
-            row.steps.iter().all(|s| !s.contains("limitation:")),
+            row.steps
+                .iter()
+                .all(|s| !s.contains("limitation:") && !s.contains("reasons:")),
             "{:?}",
             row.steps
         );
@@ -1584,17 +1609,22 @@ esac
             backend: "b".to_owned(),
             gate: "fail".to_owned(),
             tied: "none".to_owned(),
-            reasons: Vec::new(),
+            reasons: vec!["why".to_owned()],
             detail: (0..lines).map(|i| format!("line {i}")).collect(),
         };
         let log = [step("a", 2), step("b", 10)];
         assert_eq!(
-            failed_summary_detail(&log, Some(&["a".to_owned()])),
+            failed_summary_detail(&log, Some(&["a".to_owned()]), false),
             ["a via b: line 0", "a via b: line 1"]
         );
-        let all = failed_summary_detail(&log, None);
+        let all = failed_summary_detail(&log, None, false);
         assert_eq!(all.len(), MAX_DETAIL_LINES);
         assert_eq!(all[2], "b via b: line 0");
+        // With the reasons, each failed step gets one line before its detail.
+        let all = failed_summary_detail(&log, None, true);
+        assert_eq!(all.len(), MAX_DETAIL_LINES);
+        assert_eq!(all[0], "a via b: reasons: why");
+        assert_eq!(all[3], "b via b: reasons: why");
     }
 
     #[cfg(unix)]

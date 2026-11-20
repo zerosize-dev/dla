@@ -445,8 +445,10 @@ fn warm_up_pair() -> (Vec<f64>, Vec<f64>) {
 ///   at once, on JDK 21 and JDK 25: warm over cold 0.28 to 0.54 in 88 pairs, two cold runs
 ///   against each other 0.88 to 1.15 in 64 pairs. Measured elsewhere: up to 0.58 on Linux and
 ///   0.66 and 0.74 on the macOS runner, and 0.72 to 1.38 for two cold runs. The line lies between
-///   the two ranges measured here but inside the one measured elsewhere, so the test measures a
-///   second pair before it fails.
+///   the two ranges measured here but inside the one measured elsewhere. A first pair that
+///   passes ends the test (a pass is not measured twice); only a first pair that fails is
+///   measured again, which guards a working warm-up that reads near the line, and the two are
+///   judged together.
 /// * On Linux, where the cold run rises by 250 KB or more from point 1 to point 15, the warm run
 ///   rises by less than 0.75 of that (measured 0.29 to 0.64 with four runs at once). This one
 ///   gives way first when the machine is loaded far beyond that: with sixteen copies at once

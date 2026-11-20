@@ -536,7 +536,7 @@ fn missing_evidence_detail(fx: &Fx, o: &Out) -> Vec<String> {
         return Vec::new();
     }
     let fix = o.json["error"]["fix"].as_str().unwrap_or("");
-    ops::failed_summary_detail(&fx.row.summarize_log, Some(&summarize_ops_in(fix)))
+    ops::failed_summary_detail(&fx.row.summarize_log, Some(&summarize_ops_in(fix)), false)
 }
 
 /// The note the policy gives when the expected cause has no row in the finding's runtime

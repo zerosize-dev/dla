@@ -323,6 +323,7 @@ fn choose_process<'a>(
     if procs.is_empty() {
         return None;
     }
+    let wrote = procs.len();
     let tool = |p: &ShimProc<'_>| {
         p.d.argv
             .as_deref()
@@ -343,7 +344,7 @@ fn choose_process<'a>(
     });
     if procs.len() == 1 {
         if several && by_identity {
-            // One line for the whole file: the choice rests on the number being in an argv.
+            // One line per capture file's choice, merged into one text by the set: the choice rests on the number being in an argv.
             limits.insert(
                 "several processes wrote shim records with stacks in a capture; the one whose argv carries the capture's iteration count was read (the same number in another process's argv would have chosen that one)"
                     .to_owned(),
@@ -366,7 +367,7 @@ fn choose_process<'a>(
         format!(" ({words})")
     };
     limits.insert(format!(
-        "{shown}: {} processes wrote shim records with stacks and {}; kept pid {}{} as the one with most live bytes ({} of {})",
+        "{shown}: {wrote} processes wrote shim records with stacks, {} were left after the tool and identity steps and {}; kept pid {}{} as the one with most live bytes ({} of {})",
         sizes.len(),
         match (by_identity, n) {
             (true, Some(n)) => format!("{n} (the iteration count) is in the argv of several"),
@@ -1122,8 +1123,9 @@ mod tests {
         assert_eq!(kept, Some(8));
         assert_eq!(limits.len(), 1, "{limits:?}");
         assert!(
-            limits[0].contains("2 processes wrote shim records with stacks")
-                && limits[0].contains("none had 500 (the iteration count) in its argv")
+            limits[0].contains(
+                "3 processes wrote shim records with stacks, 2 were left after the tool and identity steps"
+            ) && limits[0].contains("none had 500 (the iteration count) in its argv")
                 && limits[0].contains("kept pid 8 (java B)")
                 && limits[0].contains("(70 of 50, 70)"),
             "{limits:?}"
@@ -1133,6 +1135,20 @@ mod tests {
         assert_eq!(kept, Some(2));
         assert!(
             limits[0].contains("is in the argv of several"),
+            "{limits:?}"
+        );
+        // Three programs, two of them with the count: the number written is the three, not
+        // the two left to choose between.
+        let (kept, limits) = choose(&[
+            (1, &["java", "Test"], 90),
+            (2, &["java", "500"], 5),
+            (3, &["java", "a=500"], 6),
+        ]);
+        assert_eq!(kept, Some(3));
+        assert!(
+            limits[0].contains(
+                "3 processes wrote shim records with stacks, 2 were left after the tool and identity steps and 500 (the iteration count) is in the argv of several"
+            ),
             "{limits:?}"
         );
     }

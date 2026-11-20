@@ -1417,10 +1417,6 @@ fn shim_missing_note(
     ))
 }
 
-/// Writes the measured process's allocator shim record of a capturing point next to its dump
-/// (see [`capture::split_shim_dump`]) and notes a point whose measured process left none. A
-/// run without `--capture` leaves the file of an earlier capturing run alone: the commands in
-/// `captures.json` still read it.
 /// Removes the shim file and the capture directory an earlier run left at a point, at the
 /// start of a capturing run only: a run without `--capture` leaves them, since `captures.json`
 /// still lists them.
@@ -1432,6 +1428,10 @@ fn clear_stale_capture_files(paths: &Paths, label: &str, capturing: bool) {
     }
 }
 
+/// Writes the measured process's allocator shim record of a capturing point next to its dump
+/// (see [`capture::split_shim_dump`]) and notes a point whose measured process left none. A
+/// run without `--capture` leaves the file of an earlier capturing run alone: the commands in
+/// `captures.json` still read it.
 fn split_shim(
     manifest: &HarnessManifest,
     paths: &Paths,
