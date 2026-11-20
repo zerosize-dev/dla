@@ -1,79 +1,40 @@
-# Where the work stands (2026-11-20, 05:50 UTC)
+# Where the work stands (2026-11-20, 06:40 UTC)
 
 ## Code state
-- `main` (and `dev/wonderful-mccarthy-algc5s`) is at `9781542` "Version 0.9.0-preview.2", on top of
-  `4498323` (the CI repair: Ubuntu 26.04 with JDK 25, Rust 1.100, macOS linked temp dirs; eight
-  fixtures that do not pass yet moved unchanged to `bench/fixtures-open/`), `63a30f2` (the 14 open
-  items of the budget, coverage-step and JVM non-heap work) and `d1fca56` (that work itself).
-- CI is green on `main` at `9781542` (run 44608346577; its first attempt failed by chance on
-  `jni-order-codec`, the re-run of that job passed).
-- Release 0.9.0-preview.2 is published (tag `v0.9.0-preview.2` on `9781542`, pre-release, five
-  archives with `.sha256` files and `SHA256SUMS`; release run 44631010965). Nothing to do here.
+- `main` (and `dev/wonderful-mccarthy-algc5s`) is at `4aae86f` "Remove three chance failures of
+  the dynamic acceptance; close the open check items", on top of `9781542` "Version
+  0.9.0-preview.2" (published as a pre-release: tag `v0.9.0-preview.2`, five archives with
+  `.sha256` files and `SHA256SUMS`).
+- `4aae86f` holds both fix passes: the alloc-test purge minimum and the Python trim purge, the
+  capture record chosen by identity in the native summaries, the benchmark's failure detail, and
+  the open check items. Its tree is the snapshot `ba20457` of this branch, which was green on all
+  15 CI jobs (run 44682379249); the local acceptance was clean (static 60/60, dynamic 59 pass and
+  1 expected failure, 2744 tests pass; reports `cont-c3-accept-*.md`).
+- CI on `main` at `4aae86f` was started by the push at 06:38 UTC on 2026-11-20; check it with
+  `gh run list --workflow ci.yml --branch main`. If the dynamic job fails on a fixture, read its
+  failure text first: it now names the reasons, the limitation lines and the per-capture values.
+- The working tree is clean. The container restarts about every three hours; files on disk
+  survived both restarts so far, running agents did not.
 
-## In flight: two fix passes in one tree, one commit at the end
-The container restarts about every three hours (00:17 and 03:25 UTC on 2026-11-20); files on disk
-survive, running agents do not. Reports and checks of every finished agent are the `cont-*` files
-here; the briefs are `fix-pass-9-brief.md` and `fix-pass-10-brief.md`.
+## Residual chance paths (seen in the last acceptance run, not handled)
+- A heap column passes the first trend by chance on a flat Go run; `os.rss` then votes and reads
+  retained on a growth inside its own noise (go-ticker-modern, a decoy-control: no cost there).
+- Under heavy load `os.rss` of jvm-invoice-render-trimmed passed the first trend and both
+  unbound tests read leak (a decoy-control, no claim made).
+- A flat Python run can still read inconclusive through `os.rss` now and then (written in the
+  VERIFY rows of the alloc-test fix): the purge measures growth against the single point at the
+  end of the warm-up.
+- Known and not handled: under heavy load on the work machine, single failures of
+  `sample::node_inspect_backend_reads_memory_and_active_resources`,
+  `session::tests::a_backend_that_never_works_is_blocked_and_sampling_continues` (dla-sample) and
+  one Go analyzer test of `dla-backends` `real_tools`; none failed in CI.
 
-State of the code (all edits are in the tree and in the snapshot `6e7db3b`):
-- Pass A, package N1 (flaky non-leak verdicts in the unbound alloc-test): fixed, checked three
-  times, refixed twice. The purge test uses the plateau test's minimum rise; a scatter-scaled
-  limit was tried and left out (a slow real leak read non-leak with it); the file-backed column
-  keeps its plateau vote and only its purge reading is exempt; the Python trim purge no longer
-  reads `before` after its own `import ctypes`. Open by decision and written in the VERIFY rows:
-  a flat Python run can still read inconclusive through `os.rss` now and then.
-- Pass A, package N2 (14 items earlier checks left open): fixed, checked twice.
-- Pass B (`jni-order-codec` failed by chance on the runner because the shim summary read the
-  record of the process with the most live bytes, and the fixture's test JVM can hold more than
-  the program at the first point): the harness writes the measured process's shim record only,
-  the reader chooses by identity and uses size only as a named fallback, `dla-bench dynamic`
-  prints the failed gate's limitation lines and per-capture values. Fixed, checked three times,
-  refixed twice.
-- Ten leftover items of the last checks (`cont-leftover-items.json`; one problem: a VERIFY row of
-  N1 claimed more fixture runs than were made) were edited by a fixer that the 03:25 restart cut
-  off before its report. Its 13 fixture runs passed and the tests of dla-cli, dla-workload,
-  dla-parsers and dla-sample passed; `cargo fmt --all --check` and workspace clippy are clean.
-
-State at 05:50 UTC:
-- CI on snapshot `6e7db3b` (the tree with the ten leftover edits): green on all 15 jobs.
-- Independent check of the leftover edits (`cont-c3-check-leftovers.json`): no problem, six
-  minor items. Five are done by hand (wording in VERIFY rows, the README bullet and one comment
-  re-wrapped; "the checker" reworded to "an independent check" in three rows).
-- Acceptance on the tree of `6e7db3b` (reports `cont-c3-accept-fixtures.md` and
-  `cont-c3-accept-tests.md`): static 60/60 in both modes; dynamic 59 pass and 1 expected failure,
-  no failure (python-graph-churn passes; jni-order-codec reads the program's record at all
-  nine captures); workspace tests 2744 passed, 0 failed on JDK 21; the JVM-dependent tests pass
-  on JDK 25 (four Kotlin tests skip there with the reason printed); clippy (host and Windows
-  target), fmt, schema check, grader tests and skill_text pass; the scan of the added lines for
-  names that must not be in the repository is clean.
-- The sixth item is done and independently checked (no problem): in
-  `bench/runner/src/dynamic/ops.rs`, `failed_summary_detail` prints the reasons lines of every
-  failed summary first and does not count them against the eight-line cap; the new test fails
-  on the old function body. On the final tree `cargo test -p dla-bench`, workspace clippy,
-  `cargo fmt --all --check` and `dla schema --check` pass.
-- The tree is final. A snapshot without `[skip ci]` was pushed for the last CI run (find it with
-  `gh run list --workflow ci.yml --branch wip/progress`).
-When that run is green: one commit on `main` with the message in `commit-message.txt` (the
-working tree as it is, without `.wip/`; author as below, no trailers), push `main` and
-`main:dev/wonderful-mccarthy-algc5s`, confirm CI on `main`. If the working tree was lost, take
-the tree of the snapshot: `git checkout <snapshot> -- .` on `main`, then remove `.wip/`.
-Residual chance paths seen in the acceptance run, not handled (they cost nothing on the
-fixtures where they showed): a heap column passes the first trend by chance on a flat Go run,
-`os.rss` then votes and reads retained on a growth inside its own noise (go-ticker-modern, a
-decoy-control); under heavy load `os.rss` of jvm-invoice-render-trimmed passed the first trend
-and both unbound tests read leak (decoy-control, no claim made).
-
-Snapshots: `snapshot.sh "<label>"` (copy here). A label with `[skip ci]` saves notes without a
-CI run; a later snapshot without it always gets a commit, so a CI run exists for it.
-
-Known and not handled: under heavy load on the work machine, single failures of
-`sample::node_inspect_backend_reads_memory_and_active_resources`,
-`session::tests::a_backend_that_never_works_is_blocked_and_sampling_continues` (dla-sample) and
-one Go analyzer test of `dla-backends` `real_tools`; none failed in CI.
+Snapshots of this branch: `snapshot.sh "<label>"` (copy here). A label with `[skip ci]` saves
+notes without a CI run; a later snapshot without it always gets a commit, so a CI run exists.
 
 ## Next, in order
-1. Finish the two fix passes above and commit them to `main` together (CI green on a snapshot
-   first, then the full local acceptance).
+1. Confirm CI on `main` at `4aae86f`. A further preview (0.9.0-preview.3) is not planned unless
+   the owner asks; the fixes go out with the next version.
 2. The eight fixtures in `bench/fixtures-open/` (move each back when it passes, and restore the
    `pair` line of its partner: go-ticker-modern, node-signal-compose-22, python-zstd-options-3145).
 3. The benchmark work in `bench-todo.md`.
