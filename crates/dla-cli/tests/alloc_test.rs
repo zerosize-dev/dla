@@ -415,3 +415,141 @@ fn refusals_name_the_missing_item_and_the_fixing_command() {
     let o = dla(project, &["alloc-test", "H1", "--purge", "shake"]);
     assert_ne!(o.code, 0);
 }
+
+/// A batch worker that freezes the collector's heap after every batch, written for this test
+/// (the bench fixtures are not touched).
+fn frozen_project(dir: &Path) {
+    fs::create_dir_all(dir.join("batcher")).unwrap();
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(dir.join("batcher/__init__.py"), "").unwrap();
+    fs::write(
+        dir.join("batcher/worker.py"),
+        "import gc\n\
+         \n\
+         \n\
+         class Step:\n\
+         \x20   def __init__(self, parent, n):\n\
+         \x20       self.parent = parent\n\
+         \x20       self.n = n\n\
+         \n\
+         \n\
+         class Job:\n\
+         \x20   def __init__(self, n):\n\
+         \x20       self.steps = [Step(self, k) for k in range(n)]\n\
+         \n\
+         \n\
+         class Worker:\n\
+         \x20   def run_batch(self, size):\n\
+         \x20       jobs = [Job(8) for _ in range(size)]\n\
+         \x20       total = sum(len(j.steps) for j in jobs)\n\
+         \x20       self.after_batch()\n\
+         \x20       return total\n\
+         \n\
+         \x20   def after_batch(self):\n\
+         \x20       gc.freeze()\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("batcher/load.py"),
+        "\"\"\"Replays batches.\n\n    python3 -m batcher.load --iterations 5000\n\"\"\"\n\
+         import argparse\n\
+         \n\
+         from .worker import Worker\n\
+         \n\
+         \n\
+         def run(iterations):\n\
+         \x20   worker = Worker()\n\
+         \x20   total = 0\n\
+         \x20   for _ in range(iterations // 25):\n\
+         \x20       total += worker.run_batch(25)\n\
+         \x20   return total\n\
+         \n\
+         \n\
+         def main():\n\
+         \x20   parser = argparse.ArgumentParser()\n\
+         \x20   parser.add_argument('--iterations', type=int, default=2000)\n\
+         \x20   print(run(parser.parse_args().iterations))\n\
+         \n\
+         \n\
+         if __name__ == '__main__':\n\
+         \x20   main()\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("tests/test_worker.py"),
+        "import unittest\n\
+         from batcher.worker import Worker\n\
+         \n\
+         \n\
+         class T(unittest.TestCase):\n\
+         \x20   def test_batch(self):\n\
+         \x20       self.assertEqual(Worker().run_batch(2), 16)\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn frozen_garbage_is_tied_to_the_freeze_site_by_a_count_column_and_reads_growth() {
+    if skip_without_python() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    frozen_project(&project);
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    ok(&project, &["consent", "--tiers", "1-2"]);
+    ok(&project, &["census", "--lang", "python"]);
+    // The census lists the call inside the function, with the holder the garbage has.
+    let ledger = fs::read_to_string(run_dir.join("ledger.jsonl")).unwrap();
+    assert!(
+        ledger.contains("\"site\":\"batcher/worker.py:23\"") && ledger.contains("cycle-only"),
+        "{ledger}"
+    );
+    ok(&project, &["workload", "discover"]);
+    ok(
+        &project,
+        &["harness", "gen", "--lang", "python", "--step", "150"],
+    );
+    let run = ok(&project, &["harness", "run", "H1"]);
+    let workload = run["evidence"][0].as_str().unwrap().to_owned();
+    let t = ok(&project, &["trend", "S1"]);
+    let f = finding_at(&run_dir, "batcher/worker.py:23");
+    let column = "py.gc_frozen@batcher/worker.py:23";
+    let tied = t["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["column"] == column)
+        .unwrap_or_else(|| panic!("{column} did not pass the gate: {t}"));
+    assert_eq!(tied["candidates"], serde_json::json!([f]), "{t}");
+
+    ok(
+        &project,
+        &[
+            "ledger",
+            "add",
+            "--sibling-of",
+            &f,
+            "--origin",
+            "hypothesis",
+            "--hypothesis",
+            "N-WARM",
+            "--refute-if",
+            "growth continues over the extra cycles",
+            "--evidence",
+            &workload,
+        ],
+    );
+    // A count that rises by far fewer than the byte minimum is still growth: without the
+    // catalog entry the column is typed as bytes and the plateau test reads it as flat.
+    let a = ok(&project, &["alloc-test", "H1", "--finding", &f]);
+    assert_eq!(a["favors"], "leak", "{a}");
+    let c = a["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == column)
+        .unwrap_or_else(|| panic!("{a}"));
+    assert_eq!(c["plateau"], "growth-continues", "{c}");
+}

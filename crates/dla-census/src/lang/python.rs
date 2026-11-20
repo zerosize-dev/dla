@@ -22,7 +22,7 @@ fn call_table() -> &'static [CallRule] {
             (r"(?:^|\.)(?:Thread|Timer|Process|ThreadPoolExecutor|ProcessPoolExecutor|Pool|Popen)$", "spawn", BlockedStack, NonHeap, true),
             (r"(?:^|\.)(?:create_task|ensure_future|run_in_executor|start_new_thread|call_later|call_at|call_soon|call_soon_threadsafe|run_coroutine_threadsafe)$", "async-task", BlockedStack, NonHeap, true),
             (r"^(?:signal\.signal|atexit\.register|weakref\.finalize)$|\.(?:addHandler|add_done_callback|add_signal_handler|add_listener|add_handler|add_observer|subscribe|register|register_\w+|on)$", "registration", RegistrationTable, Heap, false),
-            (r"^(?:socket\.socket|sqlite3\.connect|urllib\.request\.urlopen|urlopen|mmap\.mmap|tempfile\.\w+|ctypes\.\w*CDLL|ctypes\.cdll\.LoadLibrary|psycopg2\.connect|zipfile\.ZipFile|tarfile\.open|asyncio\.open_connection|aiohttp\.ClientSession|requests\.Session|open|io\.open|os\.open|os\.popen)$", "handle", NativeHandleGlobalRef, OffHeap, true),
+            (r"^(?:socket\.socket|sqlite3\.connect|urllib\.request\.urlopen|urlopen|mmap\.mmap|tempfile\.\w+|ctypes\.\w*CDLL|ctypes\.cdll\.LoadLibrary|psycopg2\.connect|zipfile\.ZipFile|tarfile\.open|asyncio\.open_connection|aiohttp\.ClientSession|requests\.Session|open|io\.open|os\.open|os\.popen)$|(?:^|\.)(?:compressobj|decompressobj|BZ2Compressor|BZ2Decompressor|LZMACompressor|LZMADecompressor|ZstdCompressor|ZstdDecompressor|ZstdDict)$", "handle", NativeHandleGlobalRef, OffHeap, true),
             (r"(?:^|\.)(?:local|ContextVar)$", "thread-local", ThreadLocal, Heap, true),
         ])
     })
@@ -327,6 +327,22 @@ pub fn holders(cx: &mut Cx<'_>, root: Node<'_>) {
                 return;
             }
             let callee = text(f, src);
+            // `gc.freeze()` inside a function moves every live object into the permanent
+            // generation, which no later collection looks at: cyclic garbage frozen
+            // that way is never freed. At module level it runs once per process, the
+            // documented use before a fork, and is not listed.
+            if callee == "gc.freeze" && ancestors(n).any(|a| a.kind() == "function_definition") {
+                let (path, _) = describe(n, src, Lang::Python);
+                found.push(Raw::new(
+                    "gc-freeze",
+                    Holder::CycleOnly,
+                    Region::Heap,
+                    &cx.file.rel,
+                    line(n),
+                    join_owner(&prefix, &path),
+                ));
+                return;
+            }
             let recv = (f.kind() == "attribute")
                 .then(|| field_text(f, "object", src))
                 .flatten();
@@ -409,5 +425,72 @@ mod tests {
         let src = "class Entry:\n    def __init__(self):\n        self.tags = []\n\nclass Registry:\n    def __init__(self):\n        self.e = Entry()\n";
         let r = run(src);
         assert!(r.iter().any(|h| h.owner == "pkg.reg.Entry.tags"), "{r:?}");
+    }
+
+    fn listed(src: &str) -> Vec<(u32, String, String, String)> {
+        run(src)
+            .iter()
+            .map(|h| {
+                (
+                    h.line,
+                    h.kind.clone(),
+                    h.holder.as_str().into(),
+                    h.owner.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn gc_freeze_in_a_function_is_listed_and_other_gc_calls_are_not() {
+        let r = listed("import gc\ndef f():\n    gc.freeze()\n");
+        assert_eq!(
+            r,
+            [(
+                3,
+                "gc-freeze".into(),
+                "cycle-only".into(),
+                "pkg.reg.f".into()
+            )]
+        );
+        // A method, and a call whose result is used.
+        let r = listed("import gc\nclass W:\n    def run(self):\n        n = gc.freeze()\n");
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert_eq!(r[0].3, "pkg.reg.W.run");
+        // Module level (the documented use before a fork) and the other gc calls.
+        let none = "import gc\ngc.freeze()\ndef f():\n    gc.collect()\n    gc.set_threshold(700, 10, 10)\n    gc.unfreeze()\n    gc.disable()\n";
+        assert!(listed(none).is_empty(), "{:?}", listed(none));
+        // An async function, a nested one and a branch inside a function are all inside one;
+        // a branch at module level (`if __name__ == "__main__"`) is not.
+        let r = listed(
+            "import gc\nasync def a():\n    gc.freeze()\ndef b():\n    def c():\n        gc.freeze()\n    if x:\n        gc.freeze()\nif __name__ == '__main__':\n    gc.freeze()\n",
+        );
+        assert_eq!(
+            r.iter().map(|t| t.0).collect::<Vec<_>>(),
+            [3, 6, 8],
+            "{r:?}"
+        );
+        // A method named freeze on another object is not the gc call.
+        assert!(listed("def f(o):\n    o.freeze()\n    gc_freeze()\n").is_empty());
+    }
+
+    #[test]
+    fn native_codec_contexts_are_handles_and_one_shot_functions_are_not() {
+        let src = "import zlib, bz2, lzma\nfrom compression import zstd\nclass R:\n    def a(self):\n        try:\n            return zstd.ZstdDecompressor(opts)\n        except ValueError:\n            return zstd.ZstdDecompressor()\n    def b(self):\n        x = zlib.compressobj(6)\n        y = zlib.decompressobj()\n        z = bz2.BZ2Compressor()\n        w = bz2.BZ2Decompressor()\n        u = lzma.LZMACompressor()\n        v = lzma.LZMADecompressor()\n        c = zstd.ZstdCompressor()\n        d = zstd.ZstdDict(data)\n";
+        let r = listed(src);
+        let lines: Vec<u32> = r.iter().map(|t| t.0).collect();
+        assert_eq!(lines, [6, 8, 10, 11, 12, 13, 14, 15, 16, 17], "{r:?}");
+        assert!(
+            r.iter()
+                .all(|t| t.1 == "handle" && t.2 == "native-handle/global-ref")
+        );
+        let quiet = "import zlib, bz2, lzma\nfrom compression import zstd\ndef f(b):\n    zlib.crc32(b)\n    zstd.compress(b)\n    zstd.decompress(b)\n    zlib.compress(b)\n    lzma.decompress(b)\n    bz2.compress(b)\n    MyZstdDecompressorFactory(b)\n    codec.ZstdDecompressorPool(b)\n";
+        assert!(listed(quiet).is_empty(), "{:?}", listed(quiet));
+        // A mention that is not a construction: a type test, an annotation, an import.
+        let mention = "from compression.zstd import ZstdDecompressor\ndef f(x: ZstdDecompressor, o):\n    return isinstance(o, ZstdDecompressor)\n";
+        assert!(listed(mention).is_empty(), "{:?}", listed(mention));
+        // The same constructors reached through an alias of the module are still listed.
+        let r = listed("import zstandard as zs\ndef f():\n    return zs.ZstdCompressor(level=3)\n");
+        assert_eq!(r.len(), 1, "{r:?}");
     }
 }

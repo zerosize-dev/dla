@@ -688,11 +688,38 @@ function sizeOf(value) {
   return null;
 }
 
+/**
+ * Why the walk cannot enter `value`, or null when it can. A root that is a function, a leaf, an opaque
+ * runtime object, or a class instance with no own keys (a class that keeps its state in `#private`
+ * fields looks like this) would read a constant: the record then carries no number, so the harness
+ * writes no column and a limitation instead of a flat line that refutes a true finding.
+ */
+function unmeasurableReason(value) {
+  try {
+    if (typeof value === 'function') return 'the root is a function (closure variables cannot be inspected)';
+    if (isLeaf(value)) return 'the root is a leaf value (its contents cannot be walked)';
+    if (isOpaque(value)) return 'the root is an opaque runtime object';
+    if (Array.isArray(value) || util.types.isMap(value) || util.types.isSet(value)) return null;
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== null && proto !== Object.prototype && Reflect.ownKeys(value).length === 0) {
+      return 'the root is a class instance with no own properties (its state is in private fields)';
+    }
+  } catch (_) {
+    return 'the root cannot be inspected';
+  }
+  return null;
+}
+
 function probeRecord(id, name, pathName, value, deadline) {
   const rec = { id, name, path: pathName, size: null, reachable: null, bytes: null, error: null };
   if ((typeof value !== 'object' || value === null) && typeof value !== 'function') {
     rec.reachable = 0;
     if (typeof value === 'number' && Number.isFinite(value)) rec.size = value; // a counter variable
+    return rec;
+  }
+  const blind = unmeasurableReason(value);
+  if (blind !== null) {
+    rec.error = `the probe cannot measure this binding: ${blind}`;
     return rec;
   }
   rec.size = sizeOf(value);

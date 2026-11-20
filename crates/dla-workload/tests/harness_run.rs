@@ -473,6 +473,97 @@ fn node_timers_are_counted_by_site_and_the_cleared_control_has_none() {
     assert!(ratio(ctl, "node.heap_used") < 1.3);
 }
 
+/// A probe whose root the walk cannot enter writes no column and says so: before, a controller whose
+/// state sits in `#private` fields (own keys: none), a function and a leaf each read a constant 1, and a
+/// flat line like that refuted a true finding. Roots that can be measured keep their column.
+#[test]
+fn node_probe_of_an_unenterable_root_writes_no_column_and_a_limitation() {
+    if !have(&["node"]) {
+        return;
+    }
+    let fx = fixture("", &["node"], &[1]);
+    fs::write(
+        fx.work.join("state.js"),
+        "'use strict';\n\
+         const stop = new AbortController();\n\
+         class Vault { #m = new Map(); put(k) { this.#m.set(k, k); } }\n\
+         const vault = new Vault();\n\
+         class Box { constructor() { this.items = []; } }\n\
+         const box = new Box();\n\
+         const plain = {};\n\
+         const bare = Object.create(null);\n\
+         const registry = new Map();\n\
+         const list = [];\n\
+         const handler = () => registry.size;\n\
+         const pending = new Promise(() => {});\n\
+         class Cache extends Map {}\n\
+         const cache = new Cache();\n\
+         function grow(i) { vault.put(i); box.items.push(i); plain['k' + i] = i; bare['k' + i] = i; registry.set(i, i); list.push(i); cache.set(i, i); }\n\
+         module.exports = { grow };\n",
+    )
+    .unwrap();
+    fs::write(
+        fx.work.join("run.js"),
+        "'use strict';\nconst { grow } = require('./state');\n\
+         const n = Number.parseInt(process.argv[2], 10);\n\
+         for (let i = 0; i < n; i++) grow(i);\n",
+    )
+    .unwrap();
+    let preload = fx.agent.join("dla-preload.js");
+    let mut m = manifest(
+        Runtime::Node,
+        &["node", "run.js", "{n}"],
+        vec![(
+            s("NODE_OPTIONS"),
+            format!("--require {}", preload.display()),
+        )],
+        500,
+    );
+    m.agent = AgentKind::NodePreload;
+    m.probes = [
+        "stop", "vault", "box", "plain", "bare", "registry", "list", "handler", "pending", "cache",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, name)| ProbeSpec {
+        id: format!("P{}", i + 1),
+        finding: None,
+        target: ProbeTarget::NodeBinding {
+            file: s("state.js"),
+            name: (*name).to_owned(),
+        },
+        site: None,
+    })
+    .collect();
+    write_manifest(&fx, &m);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    let series = load(&fx, &out, 0);
+    let cols: Vec<&str> = series.columns.iter().map(|c| c.name.as_str()).collect();
+    for name in ["stop", "vault", "handler", "pending"] {
+        let col = format!("probe:state.js:{name}");
+        assert!(
+            !cols.iter().any(|c| c.starts_with(&col)),
+            "{name} must have no column: {cols:?}"
+        );
+        assert!(
+            out.limitations
+                .iter()
+                .any(|l| l.contains(&format!("probe state.js:{name}:"))
+                    && l.contains("cannot measure")),
+            "{name}: {:?}",
+            out.limitations
+        );
+    }
+    for name in ["box", "plain", "bare", "registry", "list", "cache"] {
+        let col = format!("probe:state.js:{name}");
+        assert!(
+            cols.iter().any(|c| c.starts_with(&col)),
+            "{name} keeps its column: {cols:?}"
+        );
+    }
+    assert!(passes(&series, "probe:state.js:registry.size"), "{cols:?}");
+}
+
 /// The purge record's `before` is the reading the column's series holds at the last point
 /// (after that point's forced collections), so per-step garbage collected by the purge is
 /// not counted as released memory: a small retained growth plus large per-step garbage is

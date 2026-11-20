@@ -1407,6 +1407,21 @@ mod tests {
     }
 
     #[test]
+    fn scanner_windows_fire_and_other_shapes_a_real_project_writes_stay_quiet() {
+        let log = "package a\n\ntype Log struct{ lines [][]byte }\n\nfunc (l *Log) Record(line []byte) { l.lines = append(l.lines, line) }\n\nfunc pump(sc *bufio.Scanner, l *Log) {\n\tfor sc.Scan() {\n\t\tl.Record(sc.Bytes())\n\t}\n}\n";
+        let hits = view_hits(&[("a/log.go", log)]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0].message.contains("`sc.Bytes()`"),
+            "{}",
+            hits[0].message
+        );
+        // Each of these is fed a view and none retains it in accumulating state.
+        let quiet = "package a\n\ntype S struct {\n\tlast []byte\n\tout  [][]byte\n}\n\n// An overwrite keeps one buffer, not one per call.\nfunc (s *S) SetLast(p []byte) { s.last = p }\n\n// The map belongs to the caller.\nfunc fill(m map[string][]byte, p []byte) { m[\"a\"] = p }\n\n// The slice is local to the call.\nfunc local(p []byte) [][]byte {\n\tvar acc [][]byte\n\tacc = append(acc, p)\n\treturn acc\n}\n\nfunc (s *S) Keep(p []byte) {\n\tdst := make([]byte, len(p))\n\tcopy(dst, p)\n\ts.out = append(s.out, dst)\n}\n\nfunc use(s *S, data []byte, m map[string][]byte) {\n\ts.SetLast(data[2:])\n\tfill(m, data[3:])\n\t_ = local(data[1:])\n\ts.Keep(data[2:])\n}\n";
+        assert!(view_hits(&[("a/s.go", quiet)]).is_empty());
+    }
+
+    #[test]
     fn calls_of_another_shape_do_not_count_as_the_feeding_call() {
         // Calls are matched by name: a call with another argument count, or a bare call of a
         // method, is some other function of that name.

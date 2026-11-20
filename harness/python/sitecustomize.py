@@ -1063,6 +1063,100 @@ def _capture_now(phase, x, last, types_full, objs, limitations):
 
 
 # ---------------------------------------------------------------------------------------------
+# gc.freeze: objects moved to the permanent generation are never collected
+# ---------------------------------------------------------------------------------------------
+
+_freeze_lock = threading.Lock()  # not _lock: a dump holds that one for as long as a probe walk
+_freeze = {"on": False, "called": False, "sites": {}}  # sites: call site -> objects it froze
+
+
+def _freeze_count():
+    try:
+        return gc.get_freeze_count()
+    except BaseException:
+        return None
+
+
+def _split_freeze(current):
+    """`{site: share}` summing to `current`, each site in proportion to what it froze.
+    Objects frozen earlier and since freed by reference counting leave the count, so a plain
+    cumulative sum per site would exceed it."""
+    sites = _freeze["sites"]
+    total = sum(sites.values())
+    if current is None or current <= 0 or total <= 0:
+        return {site: 0 for site in sites}
+    shares = {site: current * n // total for site, n in sites.items()}
+    left = current - sum(shares.values())
+    for site in sorted(sites, key=lambda k: (-(current * sites[k] % total), k))[:left]:
+        shares[site] += 1
+    return shares
+
+
+def _install_gc_freeze():
+    """Wraps gc.freeze and gc.unfreeze to attribute the frozen objects to the calling project
+    frame. The bookkeeping never raises; the real call's own result and errors are the target's."""
+    freeze = getattr(gc, "freeze", None)
+    unfreeze = getattr(gc, "unfreeze", None)
+    if freeze is None or _freeze_count() is None:
+        return
+
+    def dla_freeze(*args, **kwargs):
+        before = None
+        try:
+            with _freeze_lock:
+                before = _freeze_count()
+                if before is not None:
+                    # Rebase on what is still frozen, so the earlier sites keep their true share.
+                    _freeze["sites"] = _split_freeze(before)
+        except BaseException:
+            pass
+        result = freeze(*args, **kwargs)
+        try:
+            with _freeze_lock:
+                after = _freeze_count()
+                _freeze["called"] = True
+                if before is not None and after is not None:
+                    site = _creation_site(2) or "<non-project>"
+                    sites = _freeze["sites"]
+                    sites[site] = sites.get(site, 0) + max(after - before, 0)
+        except BaseException:
+            pass
+        return result
+
+    def dla_unfreeze(*args, **kwargs):
+        result = unfreeze(*args, **kwargs)
+        try:
+            with _freeze_lock:
+                # Keep the sites so the group reads zero afterwards instead of vanishing.
+                _freeze["sites"] = {site: 0 for site in _freeze["sites"]}
+        except BaseException:
+            pass
+        return result
+
+    dla_freeze.__name__ = "freeze"
+    dla_unfreeze.__name__ = "unfreeze"
+    gc.freeze = dla_freeze
+    if unfreeze is not None:
+        gc.unfreeze = dla_unfreeze
+    _freeze["on"] = True
+
+
+def _freeze_record(rec, limitations):
+    """Adds the `py.gc_frozen` group (after any freeze call) and the limitation line (whenever
+    the permanent generation holds objects, whoever put them there)."""
+    count = _freeze_count()
+    if _freeze["on"] and _freeze["called"]:
+        with _freeze_lock:
+            shares = _split_freeze(count)
+        if shares:
+            rec.setdefault("groups", {})["py.gc_frozen"] = shares
+    if count:
+        limitations.append(
+            f"gc.freeze moved {count} objects into the permanent generation: py.gc_objects and the type counts exclude them"
+        )
+
+
+# ---------------------------------------------------------------------------------------------
 # dumping
 # ---------------------------------------------------------------------------------------------
 
@@ -1135,6 +1229,10 @@ def _build(phase, x, last):
                     limitations.append(f"coverage capped at {_COVERAGE_CAP} functions")
             else:
                 limitations.append("function coverage unavailable (sys.monitoring needs Python 3.12+)")
+    try:
+        _freeze_record(rec, limitations)
+    except BaseException:
+        pass
     if _chain_error:
         limitations.append(_chain_error)
     limitations.extend(_cap_notes)
@@ -1208,6 +1306,7 @@ def _init():
         _install_resource_warnings()
     _start_memray()
     _start_coverage()
+    _install_gc_freeze()
     atexit.register(_exit_dump)
     tick = _env("DLA_TICK_MS")
     if tick and tick.isdigit() and int(tick) > 0:

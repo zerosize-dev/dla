@@ -257,7 +257,6 @@ fn record_ran(
             holder: h.holder,
             owner: h.owner.clone(),
             region: h.region,
-            ..Candidate::default()
         };
         match sink.writer.add(sink.ledger, c)? {
             Some(_) => added += 1,

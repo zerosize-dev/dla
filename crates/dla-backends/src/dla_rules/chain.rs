@@ -610,6 +610,9 @@ mod tests {
         assert!(hits(Runtime::Go, &[("p/a.go", &undone)]).is_empty());
         let popped = format!("{wrapped}\nfunc (p *P) Back() {{\n\tp.ctx = p.ctx.Parent()\n}}\n");
         assert!(hits(Runtime::Go, &[("p/a.go", &popped)]).is_empty());
+        // A context and its cancel function assigned together is a one-time derivation.
+        let pair = "package p\n\ntype P struct {\n\tctx    context.Context\n\tcancel context.CancelFunc\n}\n\nfunc (p *P) Start() {\n\tp.ctx, p.cancel = context.WithCancel(p.ctx)\n}\n";
+        assert!(hits(Runtime::Go, &[("p/a.go", pair)]).is_empty());
         // A struct value or a field of another receiver is not a head.
         let other = "package p\n\ntype Cfg struct{ a int }\ntype P struct{ cfg Cfg }\n\nfunc (p *P) f(q *P) {\n\tp.cfg = merge(p.cfg, 1)\n\tq.cfg = merge(q.cfg, 2)\n}\n";
         assert!(hits(Runtime::Go, &[("p/a.go", other)]).is_empty());

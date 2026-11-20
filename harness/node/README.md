@@ -68,6 +68,13 @@ missing. Without any `gc` the dump says so in `limitations` and `gc_forced` is f
     array elements and `Map`/`Set` contents. Functions (closure variables cannot be inspected),
     typed arrays, buffers, `WeakMap`, promises, `Timeout`/`Socket`-like handles, `process` and
     `globalThis` are counted but not followed. `bytes` is always null (no cheap estimate).
+  - A root the walk cannot enter is not measured: a function, a leaf or opaque value (typed arrays,
+    buffers, `WeakMap`, promises, `Timeout`/`Socket`-like handles, `process`, `globalThis`), or an
+    object of a class (prototype neither `Object.prototype` nor null; not an array, `Map` or `Set`)
+    with no own keys, which is what a class that keeps all its state in `#private` fields looks like
+    (`new AbortController()`). Its record has `size`, `reachable` and `bytes` null and an `error`
+    saying why, so the harness writes no `probe:` column and a limitation line instead of a constant
+    1 that would read as a flat line.
   - The breakdown reports each own object-valued property of the binding (not of arrays, maps, sets),
     capped at 64, each walked on its own; a truncated walk sets `error`.
 - `purge`: `DLA_PURGE=gc` records `node.heap_used`, `node.heap_total`, `node.external`,

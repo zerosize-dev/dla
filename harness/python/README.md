@@ -29,6 +29,17 @@ and cover only files under `DLA_PROJECT`.
   `/proc/self/status`. `values_pre_gc` holds `py.traced`, `py.gc_objects`, `os.rss` read before
   the collection (this is how cyclic garbage waiting for the collector shows up).
 - `types`: top 20 types by instance count with summed `sys.getsizeof`.
+- `groups`, only after the target has called `gc.freeze()`: `py.gc_frozen`, objects in the
+  permanent generation by the project call site that froze them (`{"journeys/worker.py:25": 26000}`).
+  The agent wraps `gc.freeze` and `gc.unfreeze` (the real call and its errors are the target's; the
+  bookkeeping never raises), attributes the rise of `gc.get_freeze_count()` to the innermost project
+  frame of the caller (`<non-project>` when none), and writes each site's share of the current count
+  in proportion to what it froze, so the shares sum to `gc.get_freeze_count()` (frozen objects freed
+  by reference counting leave the count, so a cumulative sum would exceed it). `gc.unfreeze()` sets
+  every share to zero; the sites stay in the record. Nothing is written when `freeze` was never
+  called. Whenever the freeze count is above zero (whoever froze), a limitation line says that
+  `py.gc_objects` and the type counts exclude those objects: the permanent generation is not in
+  `gc.get_objects()`. An interpreter without `gc.freeze` or `gc.get_freeze_count` (before 3.7) is left alone.
 - `probes`:
   - `PyModule`: every module-level name that is a container (list, dict, set, deque, mutable
     mapping/sequence/set), an `lru_cache`/`cache` wrapper (`size` = `cache_info().currsize`), or an

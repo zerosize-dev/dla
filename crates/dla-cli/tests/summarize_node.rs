@@ -1535,3 +1535,283 @@ fn a_timer_group_listing_the_finding_among_its_candidates_corrects_the_holder() 
         );
     }
 }
+
+// ---- FinalizationRegistry cells, and holders inside Node's own modules ----------------------
+
+/// The text of a small V8 snapshot: `(type, name, self_size, [(edge type, name or index, to)])`.
+type Node = (
+    &'static str,
+    String,
+    u32,
+    Vec<(&'static str, String, usize)>,
+);
+
+fn snapshot_text(nodes: &[Node]) -> String {
+    const NT: [&str; 15] = [
+        "hidden",
+        "array",
+        "string",
+        "object",
+        "code",
+        "closure",
+        "regexp",
+        "number",
+        "native",
+        "synthetic",
+        "concatenated string",
+        "sliced string",
+        "symbol",
+        "bigint",
+        "object shape",
+    ];
+    const ET: [&str; 7] = [
+        "context", "element", "property", "internal", "hidden", "shortcut", "weak",
+    ];
+    let mut strings: Vec<String> = vec![String::new()];
+    let mut intern = |s: &str| -> u32 {
+        if let Some(i) = strings.iter().position(|x| x == s) {
+            return i as u32;
+        }
+        strings.push(s.to_owned());
+        (strings.len() - 1) as u32
+    };
+    let (mut nv, mut ev) = (Vec::<u32>::new(), Vec::<u32>::new());
+    for (i, (t, name, size, edges)) in nodes.iter().enumerate() {
+        let ti = NT.iter().position(|x| x == t).unwrap() as u32;
+        nv.extend([
+            ti,
+            intern(name),
+            (i as u32) * 2 + 1,
+            *size,
+            edges.len() as u32,
+            0,
+            0,
+        ]);
+        for (et, en, to) in edges {
+            let eti = ET.iter().position(|x| x == et).unwrap() as u32;
+            let nm = if *et == "element" || *et == "hidden" {
+                en.parse::<u32>().unwrap_or(0)
+            } else {
+                intern(en)
+            };
+            ev.extend([eti, nm, (*to as u32) * 7]);
+        }
+    }
+    json!({
+        "snapshot": {"meta": {
+            "node_fields": ["type","name","id","self_size","edge_count","trace_node_id","detachedness"],
+            "node_types": [NT, "string","number","number","number","number","number"],
+            "edge_fields": ["type","name_or_index","to_node"],
+            "edge_types": [ET, "string_or_number", "node"],
+            "location_fields": ["object_index","script_id","line","column"],
+        }, "node_count": nodes.len(), "edge_count": ev.len() / 3},
+        "nodes": nv, "edges": ev, "trace_function_infos": [], "trace_tree": [],
+        "samples": [], "locations": [], "strings": strings,
+    })
+    .to_string()
+}
+
+fn nd(t: &'static str, name: &str, size: u32, edges: &[(&'static str, &str, usize)]) -> Node {
+    (
+        t,
+        name.to_owned(),
+        size,
+        edges
+            .iter()
+            .map(|(a, b, c)| (*a, (*b).to_owned(), *c))
+            .collect(),
+    )
+}
+
+/// A module context of `script` with the variable `var` holding node 9, a closure that tells
+/// the script, and what `tail` adds after them (so earlier object ids survive).
+fn module_snapshot(script: &str, var: &str, tail: impl FnOnce(&mut Vec<Node>)) -> String {
+    let mut v = vec![
+        nd("synthetic", "", 0, &[("element", "0", 1)]),
+        nd(
+            "synthetic",
+            "(GC roots)",
+            0,
+            &[
+                ("element", "0", 2),
+                ("element", "1", 4),
+                ("element", "2", 8),
+            ],
+        ),
+        nd(
+            "object",
+            "system / Context",
+            32,
+            &[("context", var, 9), ("internal", "previous", 3)],
+        ),
+        nd("hidden", "system / NativeContext", 100, &[]),
+        nd(
+            "closure",
+            "start",
+            24,
+            &[("internal", "context", 2), ("internal", "shared", 5)],
+        ),
+        nd("code", "start", 16, &[("internal", "script", 6)]),
+        nd("code", script, 8, &[]),
+        nd("object", "unused", 0, &[]),
+        nd("object", "FinalizationRegistry", 80, &[]),
+        nd(
+            "object",
+            "AbortController",
+            24,
+            &[("property", "#signal", 10)],
+        ),
+        nd("object", "AbortSignal", 88, &[]),
+    ];
+    tail(&mut v);
+    snapshot_text(&v)
+}
+
+/// A snapshot whose registry has `live` cells on the signal and `dead` cells without a target.
+fn registry_text(live: usize, dead: usize) -> String {
+    module_snapshot("/work/src/lifecycle.js", "stop", |v| {
+        let mut cells = Vec::new();
+        for i in 0..live + dead {
+            let at = v.len();
+            let mut edges = vec![("hidden", "0", 8usize), ("hidden", "2", at + 1)];
+            if i < live {
+                edges.insert(0, ("weak", "target", 10));
+            }
+            v.push((
+                "hidden",
+                "system / WeakCell".to_owned(),
+                72,
+                edges
+                    .iter()
+                    .map(|(a, b, c)| (*a, (*b).to_owned(), *c))
+                    .collect(),
+            ));
+            v.push(nd("object", "Object", 40, &[]));
+            cells.push(at);
+        }
+        v[8].3 = cells
+            .iter()
+            .map(|&c| ("hidden", "0".to_owned(), c))
+            .collect();
+    })
+}
+
+fn lifecycle_project() -> Project {
+    let p = Project::new();
+    p.put(
+        "src/lifecycle.js",
+        b"'use strict';\nconst stop = new AbortController();\nfunction onTerminate(r) { if (!stop.signal.aborted) stop.abort(new Error(r)); }\nmodule.exports = { signal: stop.signal, onTerminate };\n",
+    );
+    ok(p.path(), &["census", "--lang", "node"]);
+    p
+}
+
+fn put_snapshots(p: &Project, texts: &[String]) -> Vec<String> {
+    texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| p.put(&format!("in/reg/heap-{}.heapsnapshot", i + 1), t.as_bytes()))
+        .collect()
+}
+
+#[test]
+fn registry_cells_with_a_live_target_are_the_registration_holder_that_ties_to_the_owner() {
+    let p = lifecycle_project();
+    let f = p.finding_with_owner("src.lifecycle.stop");
+    let id = f["id"].as_str().unwrap().to_owned();
+    let files = put_snapshots(
+        &p,
+        &[
+            registry_text(10, 100),
+            registry_text(20, 95),
+            registry_text(30, 110),
+        ],
+    );
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert_eq!(
+        v["passed"][0], "registry:finalization:src.lifecycle.stop",
+        "{v}"
+    );
+    assert!(
+        v["tied"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| *t == id.as_str()),
+        "{v}"
+    );
+    assert_eq!(v["observed_holder"][&id], "registration-table", "{v}");
+    // The counts are the cells with a target: the backlog (non-monotone here) is not in them.
+    let s: Value = serde_json::from_str(
+        &fs::read_to_string(
+            p.run_dir
+                .join(format!("series/{}.json", v["series"].as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let i = s["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|c| c["name"] == "holder:registry:finalization:src.lifecycle.stop.count")
+        .unwrap();
+    let counts: Vec<f64> = s["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["values"][i].as_f64().unwrap())
+        .collect();
+    assert_eq!(counts, [10.0, 20.0, 30.0]);
+}
+
+#[test]
+fn a_growing_backlog_of_cells_without_a_target_is_no_holder() {
+    let p = lifecycle_project();
+    let files = put_snapshots(
+        &p,
+        &[
+            registry_text(5, 100),
+            registry_text(5, 200),
+            registry_text(5, 300),
+        ],
+    );
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "fail", "{v}");
+    assert!(v["tied"].as_array().unwrap().is_empty(), "{v}");
+}
+
+#[test]
+fn growth_only_inside_node_modules_is_said_so_and_is_not_a_call_for_more_snapshots() {
+    let p = lifecycle_project();
+    let texts: Vec<String> = [40usize, 80, 120]
+        .iter()
+        .map(|&k| {
+            module_snapshot(
+                "node:internal/abort_controller",
+                "sourceSignalsCleanupRegistry",
+                |v| {
+                    // node 9 is the head of a chain of k records
+                    let first = v.len();
+                    v[9] = nd("object", "Object", 40, &[("property", "next", first)]);
+                    for i in 0..k {
+                        let edges: &[(&'static str, &str, usize)] = &[];
+                        let mut n = nd("object", "Object", 40, edges);
+                        if i + 1 < k {
+                            n.3 = vec![("property", "next".to_owned(), first + i + 1)];
+                        }
+                        v.push(n);
+                    }
+                },
+            )
+        })
+        .collect();
+    let files = put_snapshots(&p, &texts);
+    let v = heap_graph(&p, &files, &[]);
+    assert_eq!(v["gate"], "fail", "{v}");
+    let reasons = v["reasons"].to_string();
+    assert!(reasons.contains("Node's own modules"), "{reasons}");
+    let needed = v["needed"].as_str().unwrap();
+    assert!(!needed.contains("take another snapshot"), "{needed}");
+}

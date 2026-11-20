@@ -728,6 +728,9 @@ pub fn column_meta(name: &str) -> ColumnMeta {
         // Python.
         "py.traced" | "py.traced_peak" => meta(Bytes, Gauge, Heap, true, true),
         "py.gc_objects" => meta(Count, Counter, Heap, true, true),
+        // Objects `gc.freeze()` moved into the permanent generation, by the site that froze them
+        // (a count, not bytes: the bound alloc-test must not apply its byte minimum to it).
+        "py.gc_frozen" => meta(Count, Counter, Heap, false, true),
         // Allocator (Rust, native, shim).
         "native.live_bytes" | "native.peak_bytes" | "native.free_bytes" | "native.arena_bytes" => {
             meta(Bytes, Gauge, Heap, true, false)
@@ -753,6 +756,11 @@ mod catalog_tests {
         assert_eq!(
             (m.kind, m.region, m.baseline),
             (ColumnKind::Counter, SeriesRegion::NonHeap, false)
+        );
+        let m = column_meta("py.gc_frozen@journeys/worker.py:25");
+        assert_eq!(
+            (m.unit, m.kind, m.region),
+            (Unit::Count, ColumnKind::Counter, SeriesRegion::Heap)
         );
         let m = column_meta("fd.socket");
         assert_eq!(

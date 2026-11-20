@@ -12,6 +12,11 @@
 //! evidence that applies the dump-series rule, a `dump-plateau` discriminator per holder
 //! of interest, and a candidate finding for a passing holder that no finding owns.
 //!
+//! A registration the runtime keeps for the project (the cells of a `FinalizationRegistry` whose
+//! weak target a module variable keeps alive) is the holder `registry:finalization:<owner>`; it
+//! is preferred over a plain `static:` holder of the same owner. Holders inside `node:` modules
+//! are not tracked, but when only they grow the result says so.
+//!
 //! A column is tied by the tie rule's rule 1 only: the holder's owner (`src.scheduler.shared`,
 //! module path plus name, the form the census uses) equals the finding's owner. The module
 //! comes from the snapshot itself: the `script` of the closures that use a context, or of
@@ -317,6 +322,16 @@ fn view_of(h: &dla_parsers::node::Holder, project: &Path) -> View {
                 FindingHolder::RegistrationTable,
             )
         }
+        (HolderKind::Registration, Some("finalization")) => {
+            // FinalizationRegistry cells on a target the module variable keeps alive: the
+            // owner is the variable, the form the census uses for a registration table.
+            let o = join(&[&module, &name]);
+            (
+                format!("registry:finalization:{o}"),
+                o,
+                FindingHolder::RegistrationTable,
+            )
+        }
         (HolderKind::Registration, _) => {
             let o = join(&[&module, &h.owner, &name]);
             (
@@ -468,6 +483,8 @@ struct Dump {
     sha256: String,
     summary: HolderSummary,
     views: Vec<View>,
+    /// Holders inside Node's own modules: not tracked, kept to say why nothing grows.
+    internal: Vec<View>,
     summary_file: String,
     /// The iteration count `n` of the point, for a per-point series (separate processes).
     x: Option<f64>,
@@ -532,6 +549,18 @@ fn bound_holder<'a>(views: &'a [View], owner: &str) -> Option<&'a str> {
         let mut keys: Vec<&str> = tier.iter().map(|v| v.key.as_str()).collect();
         keys.sort_unstable();
         keys.dedup();
+        // A registration holder of FinalizationRegistry cells names the owner more exactly
+        // than the plain variable that keeps the same object alive: it wins.
+        if keys.len() > 1 {
+            let reg: Vec<&str> = keys
+                .iter()
+                .copied()
+                .filter(|k| k.starts_with("registry:finalization:"))
+                .collect();
+            if let [only] = reg.as_slice() {
+                keys = vec![only];
+            }
+        }
         match keys.as_slice() {
             [k] => Some(Some(*k)),
             [] => None,
@@ -598,12 +627,11 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             ids: snap.sorted_ids(),
         });
         drop((dom, bfs, snap));
-        let views: Vec<View> = summary
+        let (internal, views): (Vec<View>, Vec<View>) = summary
             .holders
             .iter()
             .map(|h| view_of(h, &tc.project))
-            .filter(|v| !v.internal)
-            .collect();
+            .partition(|v| v.internal);
         // The stored summary names the module, never the path of the machine.
         for h in &mut summary.holders {
             h.script = h.script.take().map(|s| module_of(&s, &tc.project).0);
@@ -614,6 +642,7 @@ fn heap_graph(ctx: &Ctx<'_>, inputs: &[Input], a: &Opts) -> Res<AdapterOut> {
             summary_file: format!("summaries/{}", summary_name(&i.rel, &i.sha256)),
             summary,
             views,
+            internal,
             x: per_point.as_ref().map(|xs| xs[k]),
         });
         tc.require_time("dla summarize heap-graph")?;
@@ -823,6 +852,34 @@ fn series_part(
     }
     passed.sort_by_key(|(k, _)| std::cmp::Reverse(latest(k).map_or(0, |v| v.retained)));
 
+    // Holders of Node's own modules are not tracked; when nothing else grows, say if they do.
+    let mut internal_growing: Vec<String> = Vec::new();
+    if passed.is_empty() && n >= rule::MIN_DUMPS {
+        let mut ikeys: Vec<String> = Vec::new();
+        for d in dumps {
+            for v in &d.internal {
+                if !ikeys.contains(&v.key) {
+                    ikeys.push(v.key.clone());
+                }
+            }
+        }
+        for key in ikeys {
+            let at = |f: fn(&View) -> u64| -> Vec<Option<u64>> {
+                dumps
+                    .iter()
+                    .map(|d| d.internal.iter().find(|v| v.key == key).map(f))
+                    .collect()
+            };
+            let o = Observed {
+                bytes: at(|v| v.retained),
+                counts: at(|v| v.count),
+            };
+            if rule::gate(&o).is_ok() {
+                internal_growing.push(key);
+            }
+        }
+    }
+
     // ---- ties: a passing holder belongs to the finding whose owner it is
     let latest_retention = retention[retention.len() - 1].clone();
     let who = tie::Who::new(tc.worker.as_deref(), Some(Runtime::Node));
@@ -985,6 +1042,17 @@ fn series_part(
         reasons.push(format!("snapshots < {}", rule::MIN_DUMPS));
     } else if !gate_pass {
         reasons.push("no holder grows strictly in bytes and count across all snapshots".into());
+        if !internal_growing.is_empty() {
+            reasons.push(format!(
+                "the only holders that grow strictly are inside Node's own modules ({}): the growth is in the runtime, not in a variable of the project",
+                internal_growing
+                    .iter()
+                    .take(3)
+                    .map(|k| clip(k, 60))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         if let Some((k, why, _)) = &best_failure {
             reasons.push(format!("largest: {}: {}", clip(k, 60), why.join("; ")));
         }
@@ -1196,6 +1264,8 @@ fn series_part(
     }
     let needed_text = if n < rule::MIN_DUMPS {
         needed(n)
+    } else if !gate_pass && !internal_growing.is_empty() {
+        "the growth is held inside Node's own modules (see reasons): name the registration or API of the project that feeds it (a heap-graph holder column needs a variable of the project that keeps it), or measure it with a probe or an allocation-stack capture".to_owned()
     } else if !gate_pass {
         "growth over every interval: take another snapshot after more traffic, rerun with all snapshots".to_owned()
     } else if let Some(f) = tied_ids.first() {
@@ -1529,6 +1599,28 @@ mod tests {
             bound_holder(&both, "src.board.previous"),
             Some("closure:src.board.previous")
         );
+    }
+
+    #[test]
+    fn a_finalization_holder_wins_over_the_variable_of_the_same_owner() {
+        let views = vec![
+            view("static:src.lifecycle.stop", "src.lifecycle.stop", 900),
+            view(
+                "registry:finalization:src.lifecycle.stop",
+                "src.lifecycle.stop",
+                400,
+            ),
+        ];
+        assert_eq!(
+            bound_holder(&views, "src.lifecycle.stop"),
+            Some("registry:finalization:src.lifecycle.stop")
+        );
+        // Two holders that are not a registry pair stay ambiguous.
+        let two = vec![
+            view("static:src.lifecycle.stop", "src.lifecycle.stop", 900),
+            view("field:src.lifecycle.stop", "src.lifecycle.stop", 400),
+        ];
+        assert_eq!(bound_holder(&two, "src.lifecycle.stop"), None);
     }
 
     #[test]
