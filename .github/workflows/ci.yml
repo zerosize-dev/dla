@@ -122,7 +122,7 @@ jobs:
   dynamic:
     name: dynamic acceptance on the fixtures
     runs-on: ubuntu-latest
-    # The 60 fixtures at --parallel 4 take about 70 minutes on four cores (the last run that
+    # The 64 fixtures at --parallel 4 take about 70 minutes on four cores (the last run that
     # got past the setup steps ran 34 fixtures in 44 minutes); the limit leaves room.
     timeout-minutes: 120
     steps:

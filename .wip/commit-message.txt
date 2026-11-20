@@ -1,36 +1,41 @@
-Remove three chance failures of the dynamic acceptance; close the open check items
+Find four more kinds of leak; move four parked fixtures back
 
-alloc-test
-- The purge test uses the plateau test's minimum rise (32 KiB for a byte column): a growth
-  at or below it since the warm-up reads no-growth, not retained. A few KB of live growth
-  on a column that passed the first trend by chance no longer contradicts its plateau.
-- The file-backed resident column still votes; only its purge reading is exempt when its
-  plateau reads plateau (the purge step maps files itself). A leak of mapped files still
-  reads leak.
-- Python harness: on Linux every process loads ctypes and libc at start-up, and the trim
-  purge reads its "before" value from the checkpoint's own reading. A flat run no longer
-  reads "growth, retained" on resident memory because of the purge step's own imports.
+Labels
+- L-REGISTER accepts growth-series + alloc-stack, as L-HANDLE and L-COLLECT do. A
+  registration the runtime holds out of sight (a Go timer before 1.23) has no retention
+  path and no count column, only its growing allocation stack.
 
-Native summaries
-- A capture's allocator shim record is chosen by identity, not by size. The harness
-  writes the measured process's shim record only; the reader drops tool processes,
-  prefers the process whose argv carries the iteration count, and falls back to size
-  only with a limitation line that names the choice. Before, the record with the most
-  live bytes won, and a project's test JVM that ran before the program could be read in
-  its place at the first point, so the leak's stack was missing from capture 1.
-- A run without --capture leaves the capture files of an earlier capturing run in place.
-- dla-bench dynamic prints, for a refused label or confirmation, the reasons and
-  limitation lines of each failed summary and the per-capture values of the holder its
-  gate names, with the pid and last argv words of the record read.
+Python
+- The census lists a gc.freeze() call inside a function, and the agent attributes the
+  permanent generation to the calling site as the count group py.gc_frozen. Garbage frozen
+  after every batch was invisible: it is in no gc generation and no type count.
+- The census lists native codec contexts (zlib, bz2, lzma and zstd compressor and
+  decompressor objects) as native handles.
 
-Open check items
-- JVM warm-up test: it compares the rise of the warm run with the cold run's and measures
-  a second pair when the first reads near the line, in place of two assertions that
-  depended on the CPU share of the run.
-- The JNI capture test skips, with the reason printed, when the Kotlin compiler that the
-  fixture's build script would use cannot run on the JDK in use.
-- Thread totals also skip the flight recorder's "JFR Recording Scheduler" thread.
-- JVM coverage agent: a project below a directory named "test", given through a link,
-  counts its classes; only the part below the project decides what is test output.
-- docs/VERIFY.md: rows of these items updated; stale counts, internal names and two
-  false sentences removed.
+Node
+- A probe whose root cannot be measured (a function, an opaque value, an object of a class
+  with only private fields) says so and writes no column. It read a constant 1, and a true
+  finding was refuted on it.
+- FinalizationRegistry cells with a live target are a registration holder, owned by the
+  one module variable that holds the target. When only Node's own modules grow, heap-graph
+  says that and no longer asks for another snapshot.
+
+Go
+- New rule go-slice-view-retained: a slice parameter stored un-copied into receiver or
+  package state while a caller passes a view of a larger buffer, which pins the buffer.
+  Callers are paired with a method through the receiver's declared type.
+- Go joins the chain-head-growth rule: a field reassigned from a call on its own value.
+  The census lists such a field with the write as its writer.
+- A static hit can carry holder, owner and region, and the candidate takes them.
+- Command mode reads the heap while the workload runs. The exit record is written after
+  main returned, when state owned by a local is already dead, so such a leak read flat. A
+  sampler takes go.heap_live.in_run and go.heap_objects.in_run (the floor of the last third
+  of the run, after a collection) and a heap profile in the run. Existing columns and driver
+  mode are unchanged; the in-run column is the primary heap column only when the trend
+  passed it.
+
+Benchmark
+- go-ticker-legacy, python-frozen-gc, node-signal-compose-24 and go-header-index pass and
+  move from bench/fixtures-open/ to bench/fixtures/ (64 fixtures), with the pair lines of
+  go-ticker-modern and node-signal-compose-22 restored. Four stay parked: their README says
+  what each still needs.
