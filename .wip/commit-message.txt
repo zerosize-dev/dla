@@ -8,8 +8,8 @@ alloc-test
   plateau reads plateau (the purge step maps files itself). A leak of mapped files still
   reads leak.
 - Python harness: on Linux every process loads ctypes and libc at start-up, and the trim
-  purge reads its "before" value from the checkpoint's own reading. A flat run no longer reads
-  "growth, retained" on resident memory because of the purge step's own imports.
+  purge reads its "before" value from the checkpoint's own reading. A flat run no longer
+  reads "growth, retained" on resident memory because of the purge step's own imports.
 
 Native summaries
 - A capture's allocator shim record is chosen by identity, not by size. The harness
