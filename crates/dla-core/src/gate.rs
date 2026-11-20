@@ -2315,3 +2315,61 @@ fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
     }
     out.0
 }
+
+#[cfg(test)]
+mod in_run_column_tests {
+    use super::*;
+    use crate::{
+        coverage::{CoverageManifest, ResidualRow},
+        finding::Region,
+        series::{ColumnKind, Unit},
+    };
+
+    fn trend_of(name: &str) -> ColumnTrend {
+        ColumnTrend {
+            name: name.to_owned(),
+            unit: Unit::Bytes,
+            kind: ColumnKind::Gauge,
+            region: crate::series::column_meta(name).region,
+            site: None,
+            finding: None,
+            candidates: vec![],
+            n: 8,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 1.0,
+            rise: 1e5,
+            shape: TrendShape::Steady,
+            gate: GateVerdict::Pass,
+            gate_failed: vec![],
+        }
+    }
+
+    fn row(region: Region, residual: f64) -> ResidualRow {
+        ResidualRow {
+            series: Some("S1".to_owned()),
+            region,
+            total_slope: 10.0,
+            attributed_slope: 10.0 - residual,
+            residual,
+            unit: "bytes/n".into(),
+            threshold: 2.5,
+            open_item: None,
+        }
+    }
+
+    #[test]
+    fn a_go_in_run_column_is_a_whole_process_heap_column_judged_by_the_heap_residual_row() {
+        assert!(is_whole_process("go.heap_live.in_run"));
+        assert!(is_whole_process("go.heap_objects.in_run"));
+        let mut cov = CoverageManifest::new(None);
+        cov.residual = vec![row(Region::Heap, 1.0), row(Region::NonHeap, 9.0)];
+        let rows = column_rows(&cov, "S1", &trend_of("go.heap_live.in_run"));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].region, Region::Heap);
+        // A column of no known region (the default arm) would be judged against every row.
+        assert_eq!(column_rows(&cov, "S1", &trend_of("zz.unknown")).len(), 2);
+    }
+}

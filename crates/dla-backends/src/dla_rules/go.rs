@@ -494,6 +494,50 @@ struct Func<'t> {
     recv: Option<(String, String)>,
     /// Parameter names (empty for an unnamed one) and type texts, in order.
     params: Vec<(String, String)>,
+    /// Declared result types, reduced to a type name (`None` where there is none to name).
+    results: Vec<Option<String>>,
+}
+
+/// The name of a type as written (`*pkg.Cache[K]` is `Cache`), or `None` for a type that has
+/// no name to compare (a slice, map, channel, func or struct literal).
+fn type_name(text: &str) -> Option<String> {
+    let t = text.trim().trim_start_matches('*').trim();
+    let t = t.split('[').next().unwrap_or(t);
+    let t = t.rsplit('.').next().unwrap_or(t);
+    let ok = !t.is_empty()
+        && t.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && !matches!(t, "map" | "chan" | "func" | "struct" | "interface");
+    ok.then(|| t.to_owned())
+}
+
+fn results_of(func: Node<'_>, src: &str) -> Vec<Option<String>> {
+    let Some(r) = func.child_by_field_name("result") else {
+        return Vec::new();
+    };
+    if r.kind() != "parameter_list" {
+        return vec![type_name(txt(r, src))];
+    }
+    let mut out = Vec::new();
+    for p in named_children(r) {
+        let ty = p
+            .child_by_field_name("type")
+            .and_then(|t| type_name(txt(t, src)));
+        let mut c = p.walk();
+        let n = p.children_by_field_name("name", &mut c).count().max(1);
+        out.extend(std::iter::repeat_n(ty, n));
+    }
+    out
+}
+
+/// The name in the `package` clause.
+fn package_name(text: &str) -> &str {
+    text.lines()
+        .find_map(|l| l.strip_prefix("package "))
+        .map_or("", |n| n.split_whitespace().next().unwrap_or(""))
+}
+
+fn dir_of(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or("", |(d, _)| d)
 }
 
 fn typed_params(func: Node<'_>, src: &str) -> Vec<(String, String)> {
@@ -753,6 +797,33 @@ struct ViewIndex<'t> {
     locals: Vec<HashMap<String, String>>,
     /// Callee name to `(file, index into that file's calls)`.
     callers: HashMap<String, Vec<(usize, usize)>>,
+    /// Types declared as interfaces: a value of one can be any implementer.
+    ifaces: HashSet<String>,
+    /// `(struct type, field)` to the field's type name (`None` when it has none).
+    field_types: HashMap<(String, String), Option<String>>,
+    /// Struct type to the types it embeds (their methods are its own).
+    embeds: HashMap<String, Vec<String>>,
+    /// Package-level variable to its declared or constructed type name.
+    var_types: HashMap<String, Option<String>>,
+    /// Per file: import name and path.
+    imports: Vec<Vec<(String, String)>>,
+}
+
+/// How a call site was paired with the function it feeds.
+#[derive(Clone, Copy, PartialEq)]
+enum Pairing {
+    /// The receiver's type (or the package) was resolved and is the function's.
+    Resolved,
+    /// It could not be resolved from the source: paired by name alone.
+    Unresolved(&'static str),
+}
+
+/// What `feed` found.
+struct Fed {
+    site: String,
+    call: String,
+    origin: String,
+    pairing: Pairing,
 }
 
 fn is_top_level(n: Node<'_>) -> bool {
@@ -768,8 +839,26 @@ impl<'t> ViewIndex<'t> {
         let mut funcs = Vec::new();
         let mut type_file = HashMap::new();
         let mut pkg_vars = HashSet::new();
+        let mut ifaces = HashSet::new();
+        let mut field_types = HashMap::new();
+        let mut embeds: HashMap<String, Vec<String>> = HashMap::new();
+        let mut var_specs = Vec::new();
+        let mut imports = Vec::new();
         for (i, f) in files.iter().enumerate() {
             let src = f.text.as_str();
+            let mut imps = Vec::new();
+            for sp in find_all(f.tree.root_node(), &["import_spec"]) {
+                let Some(path) = sp.child_by_field_name("path") else {
+                    continue;
+                };
+                let path = txt(path, src).trim_matches(['"', '`']).to_owned();
+                let name = sp.child_by_field_name("name").map_or_else(
+                    || path.rsplit('/').next().unwrap_or(&path).to_owned(),
+                    |n| txt(n, src).to_owned(),
+                );
+                imps.push((name, path));
+            }
+            imports.push(imps);
             walk(f.tree.root_node(), &mut |n| match n.kind() {
                 "function_declaration" | "method_declaration" => {
                     if let (Some(name), Some(body)) =
@@ -781,15 +870,37 @@ impl<'t> ViewIndex<'t> {
                             body,
                             recv: receiver_of(n, src),
                             params: typed_params(n, src),
+                            results: results_of(n, src),
                         });
                     }
                 }
                 "type_spec" => {
                     if let (Some(name), Some(ty)) =
                         (n.child_by_field_name("name"), n.child_by_field_name("type"))
-                        && ty.kind() == "struct_type"
                     {
-                        type_file.entry(txt(name, src).to_owned()).or_insert(i);
+                        let tname = txt(name, src).to_owned();
+                        if ty.kind() == "interface_type" {
+                            ifaces.insert(tname);
+                        } else if ty.kind() == "struct_type" {
+                            type_file.entry(tname.clone()).or_insert(i);
+                            for fd in find_all(ty, &["field_declaration"]) {
+                                let fty = fd.child_by_field_name("type");
+                                let mut c = fd.walk();
+                                let names: Vec<_> =
+                                    fd.children_by_field_name("name", &mut c).collect();
+                                if names.is_empty()
+                                    && let Some(e) = fty.and_then(|t| type_name(txt(t, src)))
+                                {
+                                    embeds.entry(tname.clone()).or_default().push(e);
+                                }
+                                for fname in names {
+                                    field_types.insert(
+                                        (tname.clone(), txt(fname, src).to_owned()),
+                                        fty.and_then(|t| type_name(txt(t, src))),
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 "var_spec" if is_top_level(n) => {
@@ -797,6 +908,7 @@ impl<'t> ViewIndex<'t> {
                     for id in n.children_by_field_name("name", &mut c) {
                         pkg_vars.insert(txt(id, src).to_owned());
                     }
+                    var_specs.push((i, n));
                 }
                 _ => {}
             });
@@ -815,7 +927,40 @@ impl<'t> ViewIndex<'t> {
             fields: HashMap::new(),
             locals: Vec::new(),
             callers,
+            ifaces,
+            field_types,
+            embeds,
+            var_types: HashMap::new(),
+            imports,
         };
+        let mut var_types = HashMap::new();
+        for (i, spec) in var_specs {
+            let src = ix.files[i].text.as_str();
+            let mut c = spec.walk();
+            let names: Vec<_> = spec.children_by_field_name("name", &mut c).collect();
+            let declared = spec.child_by_field_name("type");
+            let values = spec
+                .child_by_field_name("value")
+                .map(exprs)
+                .unwrap_or_default();
+            for (k, id) in names.iter().enumerate() {
+                let ty = match declared {
+                    Some(t) => type_name(txt(t, src)),
+                    None if values.len() == names.len() => ix.value_type(i, values[k]),
+                    None => None,
+                };
+                // The same name in two packages with two types is not told apart.
+                var_types
+                    .entry(txt(*id, src).to_owned())
+                    .and_modify(|old: &mut Option<String>| {
+                        if *old != ty {
+                            *old = None;
+                        }
+                    })
+                    .or_insert(ty);
+            }
+        }
+        ix.var_types = var_types;
         ix.settle_views();
         ix
     }
@@ -900,10 +1045,287 @@ impl<'t> ViewIndex<'t> {
             .position(|g| g.file == file && g.body.id() == body.id())
     }
 
+    /// The type name of a constructed value: `T{..}`, `&T{..}`, `new(T)`, `NewT(..)` of a
+    /// project function with a declared result.
+    fn value_type(&self, file: usize, e: Node<'_>) -> Option<String> {
+        let src = self.files[file].text.as_str();
+        match e.kind() {
+            "parenthesized_expression" => {
+                self.value_type(file, named_children(e).into_iter().next()?)
+            }
+            "unary_expression" => self.value_type(file, e.child_by_field_name("operand")?),
+            "composite_literal" => type_name(txt(e.child_by_field_name("type")?, src)),
+            "call_expression" => self.call_result_type(file, e, 0),
+            _ => None,
+        }
+    }
+
+    /// Declared type of result `i` of a call: `new(T)`, or a plain project function (called
+    /// bare or through an import) whose declarations agree.
+    fn call_result_type(&self, file: usize, call: Node<'_>, i: usize) -> Option<String> {
+        let src = self.files[file].text.as_str();
+        let f = call.child_by_field_name("function")?;
+        let name = match f.kind() {
+            "identifier" => {
+                if txt(f, src) == "new" && i == 0 {
+                    let arg = named_children(call.child_by_field_name("arguments")?)
+                        .into_iter()
+                        .next()?;
+                    return type_name(txt(arg, src));
+                }
+                txt(f, src)
+            }
+            "selector_expression" => {
+                let q = f.child_by_field_name("operand")?;
+                if q.kind() != "identifier"
+                    || !self.imports[file].iter().any(|(n, _)| n == txt(q, src))
+                {
+                    return None;
+                }
+                txt(f.child_by_field_name("field")?, src)
+            }
+            _ => return None,
+        };
+        let mut found: Option<Option<String>> = None;
+        for g in self
+            .funcs
+            .iter()
+            .filter(|g| g.recv.is_none() && g.name == name)
+        {
+            let r = g.results.get(i).cloned().flatten();
+            match &found {
+                None => found = Some(r),
+                Some(prev) if *prev != r => return None,
+                _ => {}
+            }
+        }
+        found.flatten()
+    }
+
+    /// The type name of a local `x` of function `g`: the one type all its declarations
+    /// agree on, `Some(None)` when they disagree or a declaration states none, `None` when
+    /// the function declares no such local.
+    fn local_type(&self, g: &Func<'_>, x: &str) -> Option<Option<String>> {
+        let file = g.file;
+        let src = self.files[file].text.as_str();
+        let mut decls: Vec<Option<String>> = Vec::new();
+        for vs in find_all(g.body, &["var_spec"]) {
+            let mut c = vs.walk();
+            let names: Vec<_> = vs.children_by_field_name("name", &mut c).collect();
+            let Some(k) = names.iter().position(|n| txt(*n, src) == x) else {
+                continue;
+            };
+            let values = vs
+                .child_by_field_name("value")
+                .map(exprs)
+                .unwrap_or_default();
+            decls.push(match vs.child_by_field_name("type") {
+                Some(t) => type_name(txt(t, src)),
+                None if values.len() == names.len() => self.value_type(file, values[k]),
+                None if values.len() == 1 => self.call_result_type(file, values[0], k),
+                None => None,
+            });
+        }
+        for st in find_all(g.body, &["short_var_declaration", "range_clause"]) {
+            let (Some(l), Some(r)) = (
+                st.child_by_field_name("left"),
+                st.child_by_field_name("right"),
+            ) else {
+                continue;
+            };
+            let (ls, rs) = (exprs(l), exprs(r));
+            let Some(k) = ls
+                .iter()
+                .position(|n| n.kind() == "identifier" && txt(*n, src) == x)
+            else {
+                continue;
+            };
+            decls.push(if st.kind() == "range_clause" {
+                None
+            } else if rs.len() == ls.len() {
+                self.value_type(file, rs[k])
+            } else if rs.len() == 1 && rs[0].kind() == "call_expression" {
+                self.call_result_type(file, rs[0], k)
+            } else {
+                None
+            });
+        }
+        for pd in find_all(g.body, &["parameter_declaration"]) {
+            let mut c = pd.walk();
+            if pd
+                .children_by_field_name("name", &mut c)
+                .any(|n| txt(n, src) == x)
+            {
+                decls.push(
+                    pd.child_by_field_name("type")
+                        .and_then(|t| type_name(txt(t, src))),
+                );
+            }
+        }
+        let first = decls.first()?.clone();
+        Some(if decls.iter().all(|d| *d == first) {
+            first
+        } else {
+            None
+        })
+    }
+
+    /// The type name of the expression `e` inside function `g` (none for a top-level
+    /// initialiser), where the source states it.
+    fn expr_type(
+        &self,
+        g: Option<&Func<'_>>,
+        file: usize,
+        e: Node<'_>,
+        depth: u8,
+    ) -> Option<String> {
+        if depth == 0 {
+            return None;
+        }
+        let src = self.files[file].text.as_str();
+        match e.kind() {
+            "parenthesized_expression" => {
+                self.expr_type(g, file, named_children(e).into_iter().next()?, depth - 1)
+            }
+            "unary_expression" => {
+                self.expr_type(g, file, e.child_by_field_name("operand")?, depth - 1)
+            }
+            "composite_literal" | "call_expression" => self.value_type(file, e),
+            "identifier" => {
+                let x = txt(e, src);
+                if let Some(g) = g {
+                    if g.recv.as_ref().is_some_and(|(r, _)| r == x) {
+                        return g.recv.as_ref().map(|(_, t)| t.clone());
+                    }
+                    if let Some((_, t)) = g.params.iter().find(|(n, _)| n == x) {
+                        return type_name(t);
+                    }
+                    if let Some(t) = self.local_type(g, x) {
+                        return t;
+                    }
+                }
+                self.var_types.get(x).cloned().flatten()
+            }
+            "selector_expression" => {
+                let t = self.expr_type(g, file, e.child_by_field_name("operand")?, depth - 1)?;
+                self.field_type(&t, txt(e.child_by_field_name("field")?, src), 3)
+            }
+            _ => None,
+        }
+    }
+
+    /// The type of field `f` of struct `t`, or of a struct `t` embeds.
+    fn field_type(&self, t: &str, f: &str, depth: u8) -> Option<String> {
+        if let Some(ty) = self.field_types.get(&(t.to_owned(), f.to_owned())) {
+            return ty.clone();
+        }
+        if depth == 0 {
+            return None;
+        }
+        self.embeds
+            .get(t)?
+            .iter()
+            .find_map(|e| self.field_type(e, f, depth - 1))
+    }
+
+    /// True when `t` is `want` or embeds it, so that `want`'s methods are `t`'s.
+    fn is_or_embeds(&self, t: &str, want: &str, depth: u8) -> bool {
+        t == want
+            || (depth > 0
+                && self
+                    .embeds
+                    .get(t)
+                    .is_some_and(|es| es.iter().any(|e| self.is_or_embeds(e, want, depth - 1))))
+    }
+
+    /// Whether call `c` (made in file `cfile`, inside function `enc`) can be a call of the
+    /// function `target`: `None` when it cannot, else how sure the pairing is.
+    fn pair(
+        &self,
+        cfile: usize,
+        c: &CallSite<'_>,
+        enc: Option<usize>,
+        target: &Func<'_>,
+    ) -> Option<Pairing> {
+        let src = self.files[cfile].text.as_str();
+        let operand = c
+            .node
+            .child_by_field_name("function")
+            .filter(|f| f.kind() == "selector_expression")
+            .and_then(|f| f.child_by_field_name("operand"));
+        let imported = |name: &str| {
+            self.imports[cfile]
+                .iter()
+                .filter(|(n, _)| n == name)
+                .collect::<Vec<_>>()
+        };
+        match &target.recv {
+            Some((_, want)) => {
+                let operand = operand?;
+                if operand.kind() == "identifier" {
+                    let x = txt(operand, src);
+                    let declared = enc.is_some_and(|g| {
+                        let g = &self.funcs[g];
+                        g.recv.as_ref().is_some_and(|(r, _)| r == x)
+                            || g.params.iter().any(|(n, _)| n == x)
+                            || self.local_type(g, x).is_some()
+                    }) || self.var_types.contains_key(x);
+                    // `pkg.Name(..)` is a function of another package, not a method call.
+                    if !declared && !imported(x).is_empty() {
+                        return None;
+                    }
+                }
+                let g = enc.map(|g| &self.funcs[g]);
+                match self.expr_type(g, cfile, operand, 6) {
+                    Some(t) if self.ifaces.contains(&t) => {
+                        Some(Pairing::Unresolved("the receiver's type was not resolved"))
+                    }
+                    Some(t) if self.is_or_embeds(&t, want, 3) => Some(Pairing::Resolved),
+                    Some(_) => None,
+                    None => Some(Pairing::Unresolved("the receiver's type was not resolved")),
+                }
+            }
+            None => {
+                let tdir = dir_of(&self.files[target.file].rel);
+                let cdir = dir_of(&self.files[cfile].rel);
+                match operand {
+                    None if !c.recv.is_empty() => None,
+                    None if cdir == tdir => Some(Pairing::Resolved),
+                    // A bare call of a name the calling package does not define can only
+                    // come from a dot import: the package is not known.
+                    None => (!self.funcs.iter().any(|g| {
+                        g.recv.is_none()
+                            && g.name == target.name
+                            && dir_of(&self.files[g.file].rel) == cdir
+                    }))
+                    .then_some(Pairing::Unresolved(
+                        "the package of the call was not resolved",
+                    )),
+                    Some(q) if q.kind() == "identifier" => {
+                        let pkg_name = package_name(self.files[target.file].text.as_str());
+                        imported(txt(q, src))
+                            .iter()
+                            .any(|(_, path)| {
+                                if tdir.is_empty() {
+                                    path.rsplit('/').next() == Some(pkg_name)
+                                } else {
+                                    path == tdir || path.ends_with(&format!("/{tdir}"))
+                                }
+                            })
+                            .then_some(Pairing::Resolved)
+                    }
+                    Some(_) => None,
+                }
+            }
+        }
+    }
+
     /// A call site that passes a view of a larger buffer as argument `pos` of the function
-    /// `fi`, directly or through a parameter of its own function (a couple of hops). Calls
-    /// are matched by name, so a call must also agree with the function in the number of
-    /// arguments, and a method is only reached by a call with a receiver (`x.Note(..)`).
+    /// `fi`, directly or through a parameter of its own function (a couple of hops). A call
+    /// feeds a method only when its receiver can be the method's receiver type, and a plain
+    /// function only when it is called in its package or through that package's qualifier;
+    /// where the source does not state the type, the name decides and the result says so. A
+    /// call must also agree with the function in the number of arguments.
     fn feed(
         &self,
         calls_by_file: &[Vec<CallSite<'_>>],
@@ -911,11 +1333,12 @@ impl<'t> ViewIndex<'t> {
         pos: usize,
         depth: u8,
         seen: &mut HashSet<(usize, usize)>,
-    ) -> Option<(String, String, String)> {
+    ) -> Option<Fed> {
         if !seen.insert((fi, pos)) {
             return None;
         }
         let target = &self.funcs[fi];
+        let mut fallback: Option<Fed> = None;
         for (cfile, ci) in self.callers.get(&target.name)? {
             let c = &calls_by_file[*cfile][*ci];
             if c.args.len() != target.params.len() || (target.recv.is_some() && c.recv.is_empty()) {
@@ -925,27 +1348,43 @@ impl<'t> ViewIndex<'t> {
             let file = &self.files[*cfile];
             let src = file.text.as_str();
             let enc = self.enclosing(*cfile, c.node);
+            let Some(pairing) = self.pair(*cfile, c, enc, target) else {
+                continue;
+            };
             let none = HashMap::new();
             let locals = enc.map_or(&none, |g| &self.locals[g]);
+            let mut found = None;
             if let Some(o) = view_origin(*arg, src, &file.rel, locals, &self.fields, &self.pkg_vars)
             {
-                let site = format!("{}:{}", file.rel, line(c.node));
-                let call = format!("{}({})", target.name, short_text(txt(*arg, src)));
-                return Some((site, call, o));
-            }
-            if depth > 0
+                found = Some(Fed {
+                    site: format!("{}:{}", file.rel, line(c.node)),
+                    call: format!("{}({})", target.name, short_text(txt(*arg, src))),
+                    origin: o,
+                    pairing,
+                });
+            } else if depth > 0
                 && arg.kind() == "identifier"
                 && let Some(g) = enc
                 && let Some(j) = self.funcs[g]
                     .params
                     .iter()
                     .position(|(n, _)| n == txt(*arg, src))
-                && let Some(found) = self.feed(calls_by_file, g, j, depth - 1, seen)
+                && let Some(mut deeper) = self.feed(calls_by_file, g, j, depth - 1, seen)
             {
-                return Some(found);
+                if pairing != Pairing::Resolved && deeper.pairing == Pairing::Resolved {
+                    deeper.pairing = pairing;
+                }
+                found = Some(deeper);
+            }
+            match found {
+                Some(f) if f.pairing == Pairing::Resolved => return Some(f),
+                Some(f) => {
+                    fallback.get_or_insert(f);
+                }
+                None => {}
             }
         }
-        None
+        fallback
     }
 
     /// Stores of slice parameters of `f`, un-copied, into receiver or package state.
@@ -1104,9 +1543,18 @@ fn slice_views(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<St
     for (fi, f) in ix.funcs.iter().enumerate() {
         for s in ix.stores(fi) {
             let mut seen = HashSet::new();
-            let Some((site, call, origin)) = ix.feed(calls_by_file, fi, s.param, 2, &mut seen)
+            let Some(Fed {
+                site,
+                call,
+                origin,
+                pairing,
+            }) = ix.feed(calls_by_file, fi, s.param, 2, &mut seen)
             else {
                 continue;
+            };
+            let note = match pairing {
+                Pairing::Resolved => String::new(),
+                Pairing::Unresolved(why) => format!("; {why}, the call is paired by name"),
             };
             let param = &f.params[s.param].0;
             let mut h = hit(
@@ -1114,7 +1562,7 @@ fn slice_views(files: &[SrcFile], calls_by_file: &[Vec<CallSite<'_>>]) -> Vec<St
                 &files[f.file],
                 s.line,
                 format!(
-                    "slice parameter `{param}` of `{}` is stored without a copy in `{}`, and a caller passes a view of a larger buffer ({call} at {site}, from {origin}), so each stored entry keeps its whole source buffer alive",
+                    "slice parameter `{param}` of `{}` is stored without a copy in `{}`, and a caller passes a view of a larger buffer ({call} at {site}, from {origin}{note}), so each stored entry keeps its whole source buffer alive",
                     f.name, s.container
                 ),
             );
@@ -1427,5 +1875,144 @@ mod tests {
         // method, is some other function of that name.
         let other = "package edge\n\nfunc Handle(data []byte) {\n\tseen.Note(\"x\", data[2:])\n\tNote(data[2:])\n}\n";
         assert!(view_hits(&[("edge/index.go", INDEX_GO), ("edge/other.go", other)]).is_empty());
+    }
+
+    #[test]
+    fn two_types_with_one_method_name_are_not_mixed_up() {
+        let src = "package svc\n\nimport \"bytes\"\n\ntype Sessions struct{ byID map[string][]byte }\n\nfunc (s *Sessions) Remember(id string, tok []byte) { s.byID[id] = tok }\n\ntype Safe struct{ byID map[string][]byte }\n\nfunc (s *Safe) Remember(id string, tok []byte) { s.byID[id] = tok }\n\nfunc NewSafe() *Safe { return &Safe{byID: map[string][]byte{}} }\n\nfunc Handle(line []byte) {\n\tvar s Sessions\n\tsafe := NewSafe()\n\ttok, _, _ := bytes.Cut(line, []byte(\":\"))\n\ts.Remember(\"a\", tok)\n\tsafe.Remember(\"b\", bytes.Clone(tok))\n}\n";
+        let hits = view_hits(&[("svc/svc.go", src)]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].line, 7, "{hits:?}");
+        assert!(
+            hits[0].message.contains("Remember(tok) at svc/svc.go:19")
+                && !hits[0].message.contains("not resolved"),
+            "{}",
+            hits[0].message
+        );
+        // Each way the source states a type: parameter, `x := T{}`, `&T{}`, `new(T)`.
+        for decl in [
+            "var s Sessions",
+            "s := Sessions{}",
+            "s := &Sessions{}",
+            "s := new(Sessions)",
+        ] {
+            let again = src.replace("var s Sessions", decl);
+            let hits = view_hits(&[("svc/svc.go", &again)]);
+            assert_eq!(hits.len(), 1, "{decl}: {hits:?}");
+            assert_eq!(hits[0].line, 7, "{decl}: {hits:?}");
+        }
+        let param = src.replace(
+            "func Handle(line []byte) {\n\tvar s Sessions",
+            "func Handle(s *Sessions, line []byte) {",
+        );
+        assert_eq!(view_hits(&[("svc/svc.go", &param)]).len(), 1);
+    }
+
+    #[test]
+    fn a_field_of_the_receiver_is_resolved_through_its_declared_type() {
+        let other = "package edge\n\ntype Audit struct{ n int }\n\nfunc (a *Audit) Note(token []byte) {\n\ta.n += len(token)\n}\n";
+        let handler = "package edge\n\ntype Handler struct {\n\tidx   *Index\n\taudit *Audit\n}\n\nfunc (h *Handler) Handle(data []byte) {\n\th.audit.Note(data[1:])\n\th.idx.Note(data[2:])\n}\n";
+        let hits = view_hits(&[
+            ("edge/index.go", INDEX_GO),
+            ("edge/audit.go", other),
+            ("edge/handler.go", handler),
+        ]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0]
+                .message
+                .contains("Note(data[2:]) at edge/handler.go:10")
+                && !hits[0].message.contains("not resolved"),
+            "{}",
+            hits[0].message
+        );
+        // Only the call on the other type: no feeding call for `Index.Note`.
+        let only_audit = handler.replace("\th.idx.Note(data[2:])\n", "");
+        assert!(
+            view_hits(&[
+                ("edge/index.go", INDEX_GO),
+                ("edge/audit.go", other),
+                ("edge/handler.go", &only_audit),
+            ])
+            .is_empty()
+        );
+        // A struct that embeds the type has its methods.
+        let embedded = "package edge\n\ntype Wrapped struct{ *Index }\n\nfunc feed(w *Wrapped, data []byte) {\n\tw.Note(data[2:])\n}\n";
+        let hits = view_hits(&[("edge/index.go", INDEX_GO), ("edge/w.go", embedded)]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            !hits[0].message.contains("not resolved"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    #[test]
+    fn an_unresolved_receiver_keeps_the_name_match_and_says_so() {
+        let iface = "package edge\n\ntype Noter interface{ Note(token []byte) }\n\nfunc feed(n Noter, data []byte) {\n\tn.Note(data[2:])\n}\n";
+        let hits = view_hits(&[("edge/index.go", INDEX_GO), ("edge/n.go", iface)]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0]
+                .message
+                .contains("the receiver's type was not resolved"),
+            "{}",
+            hits[0].message
+        );
+        // A call result of unknown type is unresolved too.
+        let unknown = "package edge\n\nfunc feed(data []byte) {\n\tlookup().Note(data[2:])\n}\n";
+        let hits = view_hits(&[("edge/index.go", INDEX_GO), ("edge/n.go", unknown)]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0].message.contains("not resolved"),
+            "{}",
+            hits[0].message
+        );
+        // A resolved feeding call is preferred over an unresolved one.
+        let both =
+            format!("{iface}\nfunc again(i *Index, data []byte) {{\n\ti.Note(data[3:])\n}}\n");
+        let hits = view_hits(&[("edge/index.go", INDEX_GO), ("edge/n.go", &both)]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0].message.contains("Note(data[3:])") && !hits[0].message.contains("not resolved"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    #[test]
+    fn a_function_of_the_same_name_in_another_package_is_not_mixed_up() {
+        let store = |pkg: &str| {
+            format!(
+                "package {pkg}\n\nvar recent [][]byte\n\nfunc Remember(p []byte) {{\n\trecent = append(recent, p)\n}}\n"
+            )
+        };
+        let main = "package main\n\nimport (\n\t\"bytes\"\n\n\t\"example.com/m/a\"\n\tb \"example.com/m/b\"\n)\n\nfunc main() {\n\tx := make([]byte, 64)\n\ta.Remember(bytes.Clone(x))\n\tb.Remember(x[1:])\n}\n";
+        let a_only = "package a\n\nimport \"bytes\"\n\nfunc init() {\n\tRemember(bytes.Clone(make([]byte, 8)))\n}\n";
+        let hits = view_hits(&[
+            ("a/a.go", &store("a")),
+            ("a/init.go", a_only),
+            ("b/b.go", &store("b")),
+            ("cmd/main.go", main),
+        ]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].site(), "b/b.go:6");
+        assert!(
+            hits[0]
+                .message
+                .contains("Remember(x[1:]) at cmd/main.go:13")
+                && !hits[0].message.contains("not resolved"),
+            "{}",
+            hits[0].message
+        );
+        // A bare call inside its own package is the package's function, not another one's.
+        let bare = "package a\n\nfunc init() {\n\tRemember(make([]byte, 8)[1:])\n}\n";
+        let hits = view_hits(&[
+            ("a/a.go", &store("a")),
+            ("a/init.go", bare),
+            ("b/b.go", &store("b")),
+        ]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].site(), "a/a.go:6");
     }
 }

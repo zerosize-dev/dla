@@ -4,7 +4,14 @@
 // with:  go test -vet=off -count=1 -run '^TestDLAHarness$' [-coverprofile ... -coverpkg=./...] ./cmd/x
 // TestDLAHarness sets os.Args from DLA_ARGS (a JSON array of strings), runs the workload's main(),
 // then writes one `exit` record to DLA_HARNESS_OUT. Environment: DLA_HARNESS_OUT, DLA_ARGS,
-// DLA_PURGE (free-os-memory|gc|none), DLA_PROJECT, DLA_TICK_MS, DLA_ITER.
+// DLA_PURGE (free-os-memory|gc|none), DLA_PROJECT, DLA_TICK_MS, DLA_ITER, DLA_INRUN (off: no sampler).
+//
+// The exit record is written after main() returned, when state owned by locals of the workload is
+// already dead. While main() runs a sampler goroutine (dlaStartSampler) forces a collection on a
+// geometric schedule and reads the heap; the record then also carries `values_in_run` (the floor
+// of the readings of the last third of the run: go.heap_live, go.heap_objects) and `in_run` (how
+// the reading was taken), and with alloc capture the heap profile of the last sample takes the
+// place of the exit-time heap profile. The base columns are unchanged.
 
 package @@DLA_PACKAGE@@
 
@@ -46,6 +53,10 @@ var (
 	dlaDetectors    []map[string]any
 	dlaProbeHook    func() []map[string]any // driver mode: GoVar probes read by the hook
 	dlaNotes        []string
+	// Command mode only (nil in driver mode, which leaves the records unchanged): the reading
+	// taken while the workload ran, and the heap profile of the sample that gave it.
+	dlaInRunHook    func(notes *[]string) (map[string]float64, map[string]any)
+	dlaInRunProfile func() ([]byte, float64)
 )
 
 func dlaEnv(name string) string { return dlaos.Getenv(name) }
@@ -148,8 +159,8 @@ func dlaSite(file, line string) string {
 }
 
 // dlaGoroutines parses the goroutine profile (debug=2) into counts per "created by" site. The
-// harness's own ticker goroutine and those created by the testing package or the runtime are
-// left out; goroutines without a creator (main) are not grouped.
+// harness's own ticker and sampler goroutines and those created by the testing package or the
+// runtime are left out; goroutines without a creator (main) are not grouped.
 func dlaGoroutines() map[string]float64 {
 	groups := map[string]float64{}
 	profile := dlapprof.Lookup("goroutine")
@@ -172,7 +183,7 @@ func dlaGoroutines() map[string]float64 {
 			continue
 		}
 		fn, _, _ := dlastrings.Cut(dlastrings.TrimPrefix(lines[creator], "created by "), " in goroutine ")
-		if dlastrings.HasPrefix(fn, "testing.") || dlastrings.HasPrefix(fn, "runtime.") || dlastrings.Contains(fn, ".dlaStartTicker") {
+		if dlastrings.HasPrefix(fn, "testing.") || dlastrings.HasPrefix(fn, "runtime.") || dlastrings.Contains(fn, ".dlaStartTicker") || dlastrings.Contains(fn, ".dlaStartSampler") {
 			continue
 		}
 		loc := dlastrings.TrimSpace(lines[creator+1])
@@ -239,6 +250,15 @@ func dlaBuild(phase string, x *int, last bool) map[string]any {
 	if pre != nil {
 		rec["values_pre_gc"] = pre
 	}
+	if dlaInRunHook != nil && !tick {
+		inRun, info := dlaInRunHook(&notes)
+		if len(inRun) > 0 {
+			rec["values_in_run"] = inRun
+		}
+		if info != nil {
+			rec["in_run"] = info
+		}
+	}
 	rec["groups"] = map[string]any{"go.goroutines": dlaGoroutines()}
 	if purge := dlaEnv("DLA_PURGE"); last && !tick && purge != "" && purge != "none" {
 		switch purge {
@@ -265,7 +285,7 @@ func dlaBuild(phase string, x *int, last bool) map[string]any {
 		notes = append(notes, "tick record: no forced collection")
 	}
 	if !tick {
-		if caps := dlaCapture(phase); len(caps) > 0 {
+		if caps := dlaCapture(phase, &notes); len(caps) > 0 {
 			rec["captures"] = caps
 		}
 	}
@@ -340,6 +360,8 @@ func dlaStartTicker() func() {
 // nonheap (heap, histogram and jfr are JVM and Node captures):
 //
 //	alloc    go-<n>.heap.pb.gz          pprof.Lookup("heap") after runtime.GC(): in-use bytes by stack
+//	                                    (command mode: the profile of the last in-run sample, taken
+//	                                    while the workload ran, when there is one)
 //	nonheap  go-<n>.goroutine.pb.gz     pprof.Lookup("goroutine") protobuf
 //	         go-<n>.goroutine.txt       the same profile at debug=2 (the "created by" frames)
 //	         go-<n>.goroutineleak.txt   pprof.Lookup("goroutineleak") at debug=2: goroutines the
@@ -471,9 +493,31 @@ func dlaWriteProfile(dir, file, kind, role, name string, debug int) map[string]a
 	return entry
 }
 
+// dlaWriteBytes writes profile bytes taken earlier to dir/file and returns their capture entry.
+func dlaWriteBytes(dir, file, kind, role string, b []byte) map[string]any {
+	entry := map[string]any{"kind": kind, "role": role}
+	t0 := dlatime.Now()
+	tmp := dlafilepath.Join(dir, file+".tmp")
+	werr := dlaos.WriteFile(tmp, b, 0o644)
+	if werr == nil {
+		werr = dlaos.Rename(tmp, dlafilepath.Join(dir, file))
+	}
+	if werr != nil {
+		_ = dlaos.Remove(tmp)
+		entry["error"] = werr.Error()
+		return entry
+	}
+	entry["file"] = file
+	entry["bytes"] = len(b)
+	entry["ms"] = dlatime.Since(t0).Milliseconds()
+	return entry
+}
+
 // dlaCapture writes the profiles asked for at this record and returns its "captures" entries.
-// The caller has just run runtime.GC() twice, so the heap profile is current.
-func dlaCapture(phase string) []map[string]any {
+// The caller has just run runtime.GC() twice, so the heap profile is current. In command mode the
+// heap profile of the last in-run sample is written instead when there is one (one heap profile
+// per point: the exit-time profile of a finished workload holds only runtime stacks).
+func dlaCapture(phase string, notes *[]string) []map[string]any {
 	root := dlaEnv("DLA_CAPTURE_DIR")
 	if root == "" || len(dlaCaptureKinds) == 0 || !dlaCaptureHere(phase) {
 		return nil
@@ -487,7 +531,21 @@ func dlaCapture(phase string) []map[string]any {
 	leakOnly := dlaEnv("DLA_GO_LEAK_ONLY") != ""
 	var out []map[string]any
 	if dlaCaptureKinds["alloc"] && !leakOnly {
-		out = append(out, dlaWriteProfile(dir, "go-"+n+".heap.pb.gz", "alloc", "heap profile (in-use bytes by stack, after GC)", "heap", 0))
+		file := "go-" + n + ".heap.pb.gz"
+		var inRun []byte
+		var inRunMs float64
+		if dlaInRunProfile != nil {
+			inRun, inRunMs = dlaInRunProfile()
+		}
+		if len(inRun) > 0 {
+			role := "heap profile (in-use bytes by stack, taken in the run at " + dlastrconv.FormatFloat(inRunMs, 'f', 1, 64) + " ms, after GC)"
+			out = append(out, dlaWriteBytes(dir, file, "alloc", role, inRun))
+		} else {
+			if dlaInRunProfile != nil {
+				*notes = append(*notes, "go command mode: no heap profile was taken in the run; the exit profile is written (state owned by locals of the workload is not in it)")
+			}
+			out = append(out, dlaWriteProfile(dir, file, "alloc", "heap profile (in-use bytes by stack, after GC)", "heap", 0))
+		}
 	}
 	if dlaCaptureKinds["nonheap"] {
 		if !leakOnly {
@@ -511,6 +569,176 @@ func dlaCapture(phase string) []map[string]any {
 
 // DLA-ENGINE-END
 
+// ---- the sampler: readings taken while main() runs (command mode only)
+//
+// The base columns are read after main() returned, when whatever the workload kept in locals is
+// dead; a program whose state lives in a function of main (a request loop filling a local index)
+// reads flat there although its heap grew while it ran. The sampler forces one runtime.GC() per
+// sample on a geometric schedule, reads the heap, and the exit record reports the FLOOR of the
+// readings of the last third of the run as go.heap_live.in_run / go.heap_objects.in_run.
+//
+//   - Geometric schedule: a short point still gets samples (2 ms, then each one 15 % later than
+//     the end of the last), and the number of samples grows with the logarithm of the run, so a
+//     longer run does not read higher by taking more samples.
+//   - Time budget: a sample starts only when the time spent inside samples so far is at most a
+//     quarter of the elapsed time. Measured cost: +2 to +3 % of the run time on runs of 8 to 100
+//     seconds, +16 % on a one-second run of a pointer-heavy heap (60 MB of small objects).
+//   - Statistic: the lowest after-collection reading of the last third of the run. The maximum of
+//     noisy readings grows with their number and the last reading carries the whole transient of
+//     a workload with batches in flight; the floor does not rise on a flat workload, reads 65 to
+//     87 % of the true growth of a leak, and is a lower bound of the live heap while it ran.
+//   - A sample that ends after main() returned is dropped (it would read a dead heap): the exit
+//     path sets the finished flag under the mutex, then waits for the goroutine.
+//   - DLA_INRUN=off switches the sampler off.
+const (
+	dlaInRunFirstMs = 2.0       // first sample, ms since process start
+	dlaInRunRatio   = 1.15      // next sample at ratio x the end of the last
+	dlaInRunBudget  = 0.25      // share of the elapsed time samples may take
+	dlaInRunWindow  = 2.0 / 3.0 // the reading comes from samples ended at or after this share of the run
+)
+
+type dlaSample struct{ endMs, live, objects float64 }
+
+var (
+	dlaSampleMu      dlasync.Mutex
+	dlaSamples       []dlaSample
+	dlaSampleProf    []byte
+	dlaSampleProfMs  float64
+	dlaSampleSpent   float64
+	dlaSampleEndMs   float64
+	dlaSampleNotes   []string
+	dlaSamplerOff    bool
+	dlaSampleStopped bool
+)
+
+func dlaSinceMs() float64 { return float64(dlatime.Since(dlaStart).Microseconds()) / 1000 }
+
+// dlaStartSampler starts the sampler goroutine and returns a stop function that ends it and waits
+// for it. Nothing a sample does may fail the workload.
+func dlaStartSampler() func() {
+	if dlaEnv("DLA_INRUN") == "off" {
+		dlaSamplerOff = true
+		return func() {}
+	}
+	withProfile := dlaMemRateSet
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		defer func() { _ = recover() }()
+		next := dlaInRunFirstMs
+		for {
+			if wait := next - dlaSinceMs(); wait > 0 {
+				timer := dlatime.NewTimer(dlatime.Duration(wait * float64(dlatime.Millisecond)))
+				select {
+				case <-done:
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+			select {
+			case <-done:
+				return
+			default:
+			}
+			began := dlaSinceMs()
+			dlaruntime.GC()
+			var notes []string
+			m := dlaReadMetrics(&notes)
+			var prof []byte
+			if withProfile {
+				if p := dlapprof.Lookup("heap"); p != nil {
+					var buf dlabytes.Buffer
+					if err := p.WriteTo(&buf, 0); err == nil {
+						prof = buf.Bytes()
+					}
+				}
+			}
+			end := dlaSinceMs()
+			dlaSampleMu.Lock()
+			if dlaSampleStopped {
+				dlaSampleMu.Unlock()
+				return
+			}
+			dlaSampleSpent += end - began
+			live, ok := m["go.heap_live"]
+			if !ok {
+				dlaSampleNotes = append(dlaSampleNotes, notes...)
+				dlaSampleMu.Unlock()
+				return
+			}
+			dlaSamples = append(dlaSamples, dlaSample{endMs: end, live: live, objects: m["go.heap_objects"]})
+			if prof != nil {
+				dlaSampleProf, dlaSampleProfMs = prof, end
+			}
+			spent := dlaSampleSpent
+			dlaSampleMu.Unlock()
+			next = end * dlaInRunRatio
+			if floor := spent / dlaInRunBudget; floor > next {
+				next = floor
+			}
+		}
+	}()
+	var once dlasync.Once
+	return func() {
+		once.Do(func() {
+			dlaSampleMu.Lock()
+			dlaSampleStopped = true
+			dlaSampleEndMs = dlaSinceMs()
+			dlaSampleMu.Unlock()
+			close(done)
+			<-stopped
+		})
+	}
+}
+
+// dlaInRunReading is the reading of the exit record: the sample with the lowest go.heap_live among
+// those that ended in the last third of the run (the later one on a tie; the last sample when the
+// window holds none), with the figures that say how it was taken.
+func dlaInRunReading(notes *[]string) (map[string]float64, map[string]any) {
+	dlaSampleMu.Lock()
+	defer dlaSampleMu.Unlock()
+	*notes = append(*notes, dlaSampleNotes...)
+	if len(dlaSamples) == 0 {
+		if dlaSamplerOff {
+			*notes = append(*notes, "go command mode: no in-run reading (the sampler was switched off with DLA_INRUN=off); the in-run columns have no value at this point")
+		} else {
+			*notes = append(*notes, "go command mode: no in-run reading (the workload ended before the first sample finished, 2 ms; or the sampler was off); the in-run columns have no value at this point")
+		}
+		return nil, nil
+	}
+	end := dlaSampleEndMs
+	pick, window := len(dlaSamples)-1, 0
+	first := true
+	for i, s := range dlaSamples {
+		if s.endMs < dlaInRunWindow*end {
+			continue
+		}
+		window++
+		if first || s.live <= dlaSamples[pick].live {
+			pick, first = i, false
+		}
+	}
+	chosen := dlaSamples[pick]
+	vals := map[string]float64{"go.heap_live": chosen.live, "go.heap_objects": chosen.objects}
+	info := map[string]any{
+		"samples": len(dlaSamples), "window_samples": window, "reading_ms": chosen.endMs,
+		"end_ms": end, "spent_ms": dlaSampleSpent, "statistic": "floor-last-third",
+	}
+	if end-chosen.endMs > end/2 {
+		*notes = append(*notes, "go command mode: the in-run reading is from "+dlastrconv.FormatFloat(chosen.endMs, 'f', 0, 64)+" ms of a "+dlastrconv.FormatFloat(end, 'f', 0, 64)+" ms run ("+dlastrconv.Itoa(len(dlaSamples))+" samples; the time budget of the sampler allows few collections of a heap this size); it understates the state at the end")
+	}
+	*notes = append(*notes, "go.*.in_run: the lowest after-collection reading of the last third of the run (floor), a lower bound of the live heap while the workload ran; the base go.* columns are read after main returned")
+	return vals, info
+}
+
+// dlaInRunProfileBytes is the heap profile of the newest sample and the time it was taken.
+func dlaInRunProfileBytes() ([]byte, float64) {
+	dlaSampleMu.Lock()
+	defer dlaSampleMu.Unlock()
+	return dlaSampleProf, dlaSampleProfMs
+}
+
 // TestDLAHarness runs main() with the workload's arguments and dumps the measurements.
 func TestDLAHarness(t *dlatesting.T) {
 	var args []string
@@ -520,9 +748,12 @@ func TestDLAHarness(t *dlatesting.T) {
 		}
 	}
 	stop := dlaStartTicker()
+	stopSampler := dlaStartSampler()
+	dlaInRunHook, dlaInRunProfile = dlaInRunReading, dlaInRunProfileBytes
 	dlaos.Args = append([]string{dlaArgv[0]}, args...)
 	defer func() {
 		rec := recover()
+		stopSampler()
 		stop()
 		if s, ok := rec.(string); ok && dlastrings.Contains(s, "os.Exit(0)") {
 			// main ended with os.Exit(0), which the testing package turns into a panic

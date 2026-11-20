@@ -16,6 +16,27 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - What the dump measures (after two `runtime.GC()`): `go.heap_live`, `go.heap_objects`, `go.total`,
   `go.released`, `go.stacks`, `go.goroutines`, the `os.*` set, and the goroutine profile grouped by
   `created by` file:line (`go.goroutines@file:line`). Coverage comes from `go test -coverprofile`.
+- Command mode also measures while the workload runs. The record above is written after `main`
+  returned, when state owned by locals of the workload (a request loop filling an index, a slice
+  built in `run()`) is already dead: that series reads flat and the heap profile is empty although
+  the heap grew by megabytes. A sampler goroutine forces one collection per sample (the first at 2 ms,
+  each next one 15 % later than the last ended, never more than a quarter of the elapsed time spent
+  in samples) and the exit record adds `go.heap_live.in_run` and `go.heap_objects.in_run`: the lowest
+  after-collection reading among the samples of the last third of the run (a floor, not a maximum: the
+  maximum of noisy readings rises with their number). Read it as a lower bound of the live heap while the
+  workload ran; on the leaks measured it was 65 to 87 % of the true growth. The base `go.*` columns keep
+  their meaning (read after `main`, after two collections), and driver mode has no in-run column.
+  `dla alloc-test --finding` on a heap finding takes `go.heap_live.in_run` as its heap column only when
+  the latest trend passed it through the gate; otherwise `go.heap_live` decides as before. The in-run
+  columns have no purge reading and no pre-GC twin, and `dla gap --residual` still reads `go.heap_live`.
+  With `--capture alloc` the heap profile of a point is the one of the last sample (role "taken in the
+  run at <ms> ms"), in place of the exit profile; goroutine captures stay at exit. Limitation lines say
+  when it did not work: no sample ended before exit (a workload shorter than 2 ms, or `DLA_INRUN=off`), the
+  reading is from the first half of the run (the time budget allowed few collections of a heap this
+  size), or no profile was taken in the run (the exit profile is then written, without state owned by
+  locals). The cost measured was +2 to +3 % of the run time on runs of 8 to 100 seconds and up to +16 %
+  on a one-second run of a pointer-heavy heap. A workload that is never idle at the sampler's instants
+  and frees nothing between batches reads its working set as the floor: flat in `n`, so no trend.
 - Purges: `free-os-memory` and `gc`.
 - Raw captures: `dla harness run H1 --capture alloc,nonheap`. `alloc` writes `go-<n>.heap.pb.gz`
   (`DLA_MEMPROFILE_RATE`, default 4096); `nonheap` writes `go-<n>.goroutine.pb.gz`, `go-<n>.goroutine.txt`
@@ -42,6 +63,11 @@ is an open question for the dynamic stages, not a verdict.
   `bytes.Clone`, `slices.Clone`, `append([]byte(nil), p...)`, `string(p)`, a copy into a fresh slice, a
   `string` parameter and a pool `Put` fed only by buffers from `Get` or `make`. The candidate carries its
   holder (`container-field`, or `static/global` for a package variable), its owner and region `heap`.
+  A call feeds a method only when its receiver can be the method's type, read from the source (a parameter,
+  `var x T`, `x := T{...}`, `new(T)`, a constructor, a field of a known struct); a call on another type with
+  a method of the same name does not count. Where the type cannot be read (an interface value, a call
+  result) the name decides and the hit's message says the receiver's type was not resolved: check that call
+  before you trust the hit. A plain function is fed by a call in its package or through its package qualifier.
 - `dla/go-chain-head-growth` (no archetype, prior 0.3): a field of a receiver (or a package variable) is
   reassigned from a call that takes the field's own value, `p.ctx = trace.Start(p.ctx, ...)`, the field's type
   can hold what it replaces (an interface such as `context.Context`, a func, or a pointer to a

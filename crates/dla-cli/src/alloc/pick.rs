@@ -105,8 +105,29 @@ pub fn latest_trend(run_dir: &Path, harness: &str) -> Option<TrendReport> {
     any
 }
 
-/// The column a region is summarized by in `series`.
-fn region_primary(series: &SeriesFile, region: Option<SeriesRegion>) -> &'static str {
+/// The Go heap column read while the workload ran (command mode). The exit-time `go.heap_live`
+/// is read after `main` returned, so state owned by locals of the workload is gone from it.
+const GO_IN_RUN: &str = "go.heap_live.in_run";
+
+/// The column a region is summarized by in `series`. Of the heap columns, `go.heap_live.in_run`
+/// leads only when `trend` passed it through the gate: on a series where it is flat the exit
+/// column decides exactly as before, on one where it grows the exit column is flat for a reason
+/// that has nothing to do with the finding.
+fn region_primary(
+    series: &SeriesFile,
+    region: Option<SeriesRegion>,
+    trend: Option<&TrendReport>,
+) -> &'static str {
+    if region == Some(SeriesRegion::Heap)
+        && series.column_index(GO_IN_RUN).is_some()
+        && trend.is_some_and(|t| {
+            t.columns
+                .iter()
+                .any(|c| c.name == GO_IN_RUN && c.gate == GateVerdict::Pass)
+        })
+    {
+        return GO_IN_RUN;
+    }
     let lists: &[&str] = match region {
         Some(SeriesRegion::Heap) => &[
             "jvm.heap_used",
@@ -282,10 +303,14 @@ pub fn pick(
                     dla_core::finding::Region::OffHeap => SeriesRegion::OffHeap,
                     dla_core::finding::Region::NonHeap => SeriesRegion::NonHeap,
                 });
-            let name = region_primary(series, region);
+            let name = region_primary(series, region, trend);
             p.primary = Some(name.to_owned());
             p.voting.push(name.to_owned());
-            p.basis = format!("the primary column of the region of {root}");
+            p.basis = if name == GO_IN_RUN {
+                format!("the primary column of the region of {root}, the in-run reading")
+            } else {
+                format!("the primary column of the region of {root}")
+            };
             if name == "jvm.nonheap_used" {
                 // JIT data, class metadata and symbols all land in non-heap: the pools'
                 // total plateaus only if every NMT category that grew plateaus too.
@@ -369,7 +394,7 @@ pub fn pick(
         // machine-dependent n (allocator and scavenger growth) and would decide a flat
         // workload by that step alone. RSS still votes when it passed the gate itself, or
         // when the runtime reports no heap column.
-        let heap = region_primary(series, Some(SeriesRegion::Heap));
+        let heap = region_primary(series, Some(SeriesRegion::Heap), None);
         let heap_present = heap != "os.rss" && series.column_index(heap).is_some();
         if trend.is_some() && !any_passed && heap_present {
             add(&mut p.voting, heap);
@@ -499,6 +524,69 @@ mod tests {
         f
     }
 
+    fn heap_finding() -> Finding {
+        let mut f = non_heap_finding();
+        f.region = Some(Region::Heap);
+        f
+    }
+
+    #[test]
+    fn the_in_run_heap_column_is_the_heap_primary_only_when_the_trend_passed_it() {
+        let s = series_of(&[
+            "go.heap_live",
+            "go.heap_live.in_run",
+            "go.goroutines",
+            "os.rss",
+        ]);
+        let ledger = Ledger::from_text("").unwrap();
+        // The trend passed the in-run column: it decides, and the basis says so.
+        let t = trend(&["go.heap_live.in_run"]);
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&t), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live.in_run"));
+        assert_eq!(p.voting, ["go.heap_live.in_run"]);
+        assert!(p.basis.contains("in-run"), "{}", p.basis);
+        // The trend ran and the in-run column did not pass: the exit column decides as before.
+        let mut failed = trend(&["go.heap_live.in_run"]);
+        failed.columns[0].gate = GateVerdict::Fail;
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&failed), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"), "{}", p.basis);
+        assert!(!p.basis.contains("in-run"), "{}", p.basis);
+        // A trend that passed only the exit column, and no trend at all.
+        let t = trend(&["go.heap_live"]);
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&t), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"));
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], None, "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"));
+        // A series without the column (driver mode, or no sample ended) keeps the exit column
+        // even when the trend names the in-run one.
+        let plain = series_of(&["go.heap_live", "go.goroutines", "os.rss"]);
+        let t = trend(&["go.heap_live.in_run"]);
+        let p = pick(&plain, &ledger, Some(&heap_finding()), &[], Some(&t), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"));
+        // Other regions are not touched by it.
+        let t = trend(&["go.heap_live.in_run"]);
+        let p = pick(&s, &ledger, Some(&non_heap_finding()), &[], Some(&t), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.goroutines"));
+    }
+
+    #[test]
+    fn a_passing_in_run_column_votes_on_an_unbound_test_and_a_flat_one_leaves_the_exit_heap() {
+        let s = series_of(&["go.heap_live", "go.heap_live.in_run", "os.rss", "os.vm_hwm"]);
+        let ledger = Ledger::from_text("").unwrap();
+        let t = trend(&["go.heap_live.in_run"]);
+        let p = pick(&s, &ledger, None, &[], Some(&t), "H1").unwrap();
+        assert!(
+            p.voting.iter().any(|c| c == "go.heap_live.in_run"),
+            "{:?} {}",
+            p.voting,
+            p.basis
+        );
+        // Nothing passed: the exit-time heap decides as it always did.
+        let t = trend(&[]);
+        let p = pick(&s, &ledger, None, &[], Some(&t), "H1").unwrap();
+        assert_eq!(p.voting, ["go.heap_live"], "{}", p.basis);
+    }
+
     const JVM: &[&str] = &[
         "jvm.heap_used",
         "jvm.nonheap_used",
@@ -517,7 +605,7 @@ mod tests {
     fn the_non_heap_primary_of_a_jvm_is_its_byte_column_not_the_thread_count() {
         let s = series_of(JVM);
         assert_eq!(
-            region_primary(&s, Some(SeriesRegion::NonHeap)),
+            region_primary(&s, Some(SeriesRegion::NonHeap), None),
             "jvm.nonheap_used"
         );
         let ledger = Ledger::from_text("").unwrap();
@@ -541,7 +629,7 @@ mod tests {
             "os.threads",
         ]);
         assert_eq!(
-            region_primary(&s, Some(SeriesRegion::NonHeap)),
+            region_primary(&s, Some(SeriesRegion::NonHeap), None),
             "go.goroutines"
         );
         let ledger = Ledger::from_text("").unwrap();
@@ -551,7 +639,7 @@ mod tests {
         // A series with only the process counters keeps the thread count.
         let s = series_of(&["os.rss", "os.threads"]);
         assert_eq!(
-            region_primary(&s, Some(SeriesRegion::NonHeap)),
+            region_primary(&s, Some(SeriesRegion::NonHeap), None),
             "os.threads"
         );
     }

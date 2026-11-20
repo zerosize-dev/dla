@@ -9,7 +9,11 @@
 //!   grows.
 //!
 //! The in-use figures are what the last completed collection found live, so write the
-//! profile right after `runtime.GC()` (the harness does). The profile is a sample taken
+//! profile right after `runtime.GC()` (the harness does). In Go command mode the harness
+//! writes the profile of its last in-run sample (taken while the workload ran, after a
+//! forced collection) in place of an exit-time one, because state owned by locals of the
+//! workload is dead by the time `main` returns; the capture's role says "taken in the run".
+//! The profile is a sample taken
 //! with `runtime.MemProfileRate`; its sizes are estimates. Profiles from one process
 //! are ordered by the time inside each file.
 
@@ -86,12 +90,13 @@ pub fn sniff_profile(input: &Input, pred: impl Fn(&pprof::Profile) -> bool) -> b
 
 const EXPECTED: &str =
     "the file pprof.Lookup(\"heap\").WriteTo(f, 0) writes (gzipped protobuf with inuse_space)";
-const FIX: &str = "write the heap profile after runtime.GC() with pprof.Lookup(\"heap\").WriteTo(f, 0) (dla harness run --capture alloc does), and pass that file";
+const FIX: &str = "write the heap profile after runtime.GC() with pprof.Lookup(\"heap\").WriteTo(f, 0) (dla harness run --capture alloc does; in Go command mode it writes the profile of a sample taken while the workload ran), and pass that file";
 
 fn limitations() -> Vec<String> {
     vec![
         "a Go heap profile is a sample (runtime.MemProfileRate): sizes are estimates, and objects smaller than the rate can be missed".into(),
         "in-use figures are as of the last completed collection: write the profile after runtime.GC()".into(),
+        "a command-mode profile written by the harness is taken while the workload ran, at the last sample before its end (role \"taken in the run\"): state freed before that sample is absent, and state allocated after it is too".into(),
         "a profile carries no holder: a stack ties to a finding only through its first project frame being the finding's site or writer".into(),
     ]
 }

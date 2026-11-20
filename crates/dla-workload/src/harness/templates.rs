@@ -156,6 +156,24 @@ mod tests {
         }
     }
 
+    /// The text between the engine markers of a Go template.
+    fn go_engine(t: &str) -> &str {
+        let a = t.find("// DLA-ENGINE-BEGIN").unwrap();
+        let b = t.find("// DLA-ENGINE-END").unwrap();
+        &t[a..b]
+    }
+
+    #[test]
+    fn the_go_templates_share_one_engine_block_and_only_command_mode_samples() {
+        assert_eq!(go_engine(GO_WRAPPER), go_engine(GO_DRIVER));
+        // The sampler and its hooks being set belong to the command-mode part alone.
+        assert!(GO_WRAPPER.contains("dlaInRunHook, dlaInRunProfile = "));
+        assert!(!GO_DRIVER.contains("func dlaStartSampler"));
+        assert!(GO_WRAPPER.contains("func dlaStartSampler"));
+        assert!(!GO_DRIVER.contains("dlaInRunHook ="));
+        assert!(!GO_DRIVER.contains("dlaInRunHook, "));
+    }
+
     #[test]
     fn drivers_carry_their_hooks() {
         assert_eq!(hooks(JVM_DRIVER), ["setup", "unit"]);

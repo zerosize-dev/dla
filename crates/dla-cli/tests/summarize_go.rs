@@ -430,6 +430,13 @@ fn a_heap_stack_ties_by_its_allocation_site_and_a_function_row_never_ties() {
     assert_eq!(v["tied"], json!([f]), "{v}");
     let g = p.evidence("growth-series").pop().unwrap();
     assert!(ties_to(&g, &f, Some("cmd/scratch/main.go:20")));
+    // The profile limitations say what a command-mode profile is: taken in the run.
+    let lims = v.to_string()
+        + &p.run_texts()
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<String>();
+    assert!(lims.contains("taken in the run"), "{lims}");
     // The same profiles as a histogram by function: rows are functions, not types.
     let q = Project::new();
     q.sources();
