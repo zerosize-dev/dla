@@ -818,6 +818,132 @@ mod shim {
         assert!(row["install_hint"].as_str().unwrap().contains("binutils"));
     }
 
+    /// The exit records of one point of a command that starts two processes with the shim
+    /// preloaded: first the project's test program (`other_bytes` live, the same on every
+    /// point), then the program, which leaks and carries the iteration count in its argv
+    /// when `program_argv_has_n` (the record's `x` is the count either way).
+    fn dump_two(
+        prog: &Path,
+        addr: u64,
+        x: u64,
+        bytes: u64,
+        other_bytes: u64,
+        program_argv_has_n: bool,
+    ) -> String {
+        let exe = prog.display();
+        let other = format!(
+            "{{\"dla_harness\":1,\"phase\":\"exit\",\"pid\":{pid},\"argv\":[\"java\",\"-ea\",\"shop.codec.CodecTestKt\"],\"exe\":\"{exe}\",\"runtime\":\"native\",\"x\":{x},\"t_ms\":10,\"values\":{{\"native.live_bytes\":{other_bytes}}},\"raw_sites\":{{\"0xcccc\":{{\"live_bytes\":{other_bytes},\"live_blocks\":20,\"allocs\":20,\"frames\":[{{\"a\":\"0x3\",\"m\":1,\"o\":\"0x10\"}}]}}}},\"modules\":[{{\"path\":\"{exe}\",\"bias\":\"0x0\"}},{{\"path\":\"/nonexistent/libc.so.6\",\"bias\":\"0x7f0000000000\"}}]}}\n",
+            pid = 9000 + x
+        );
+        let argv = if program_argv_has_n {
+            format!("[\"java\",\"shop.codec.MainKt\",\"{x}\"]")
+        } else {
+            "[\"java\",\"shop.codec.MainKt\"]".to_owned()
+        };
+        let program = dump(prog, addr, x, bytes).replacen(
+            "\"exe\":",
+            &format!("\"argv\":{argv},\"exe\":"),
+            1,
+        );
+        other + &program
+    }
+
+    /// Three points of two-process records; returns the files' paths in the project.
+    fn two_process_points(p: &Project, prog: &Path, addr: u64, has_n: bool) -> Vec<String> {
+        let mut files = Vec::new();
+        for (label, x, bytes) in [
+            ("p1-native", 1000u64, 4096u64),
+            ("p2-native", 2000, 8192),
+            ("p3-native", 3000, 12288),
+        ] {
+            // In the harness's layout, so the scratch copy's sources are found.
+            let rel = format!(
+                ".dla/{}/harness/H1/out/{label}/shim-dump.jsonl",
+                p.run_dir.file_name().unwrap().to_string_lossy()
+            );
+            // The other process holds far more than the program at every point.
+            p.put(&rel, &dump_two(prog, addr, x, bytes, 90_000_000, has_n));
+            files.push(rel);
+        }
+        files
+    }
+
+    fn all_limitations(p: &Project) -> String {
+        p.ledger()
+            .iter()
+            .filter(|l| l["type"] == "evidence")
+            .flat_map(|l| l["limitations"].as_array().cloned().unwrap_or_default())
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_record_of_the_process_with_the_iteration_count_wins_over_a_larger_one() {
+        if !(have("gcc") && have("nm") && have("addr2line")) {
+            return;
+        }
+        for op in ["type-histogram-diff", "alloc-stack-diff"] {
+            let p = Project::new();
+            let work = p.run_dir.join("harness/H1/work");
+            let Some(addr) = build(&work) else { return };
+            p.put(
+                "src/leak.c",
+                &fs::read_to_string(work.join("src/leak.c")).unwrap(),
+            );
+            let f = p.finding("src.leak.leak_site", "src/leak.c:3");
+            let files = two_process_points(&p, &work.join("prog"), addr, true);
+            let v = summarize(&p, op, &files);
+            assert_eq!(v["gate"], "pass", "{op}: {v}");
+            assert_eq!(v["tied"], serde_json::json!([f]), "{op}: {v}");
+            // Identity decided: nothing to say about a choice by size.
+            let lim = all_limitations(&p);
+            assert!(!lim.contains("most live bytes"), "{op}: {lim}");
+            // The raw file names the process each capture was read from; the bench's failure
+            // text reads these two fields.
+            if op == "type-histogram-diff" {
+                let raw: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(p.run_dir.join(v["raw"]["path"].as_str().unwrap()))
+                        .unwrap(),
+                )
+                .unwrap();
+                let caps = raw["captures"].as_array().unwrap();
+                assert_eq!(caps.len(), 3, "{raw}");
+                for (c, x) in caps.iter().zip([1000, 2000, 3000]) {
+                    assert!(c["pid"].as_u64().is_some_and(|p| p != 9000 + x), "{c}");
+                    assert_eq!(c["argv_tail"], format!("java shop.codec.MainKt {x}"), "{c}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn with_no_iteration_count_in_any_argv_the_largest_is_kept_and_the_limitation_says_so() {
+        if !(have("gcc") && have("nm") && have("addr2line")) {
+            return;
+        }
+        let p = Project::new();
+        let work = p.run_dir.join("harness/H1/work");
+        let Some(addr) = build(&work) else { return };
+        p.put(
+            "src/leak.c",
+            &fs::read_to_string(work.join("src/leak.c")).unwrap(),
+        );
+        p.finding("src.leak.leak_site", "src/leak.c:3");
+        let files = two_process_points(&p, &work.join("prog"), addr, false);
+        let v = summarize(&p, "type-histogram-diff", &files);
+        // Two processes, nothing to tell them apart by: the larger one is read.
+        assert_eq!(v["gate"], "fail", "{v}");
+        let lim = all_limitations(&p);
+        assert!(
+            lim.contains("2 processes wrote shim records with stacks")
+                && lim.contains("none had 1000 (the iteration count) in its argv")
+                && lim.contains("kept pid 10"),
+            "{lim}"
+        );
+        assert!(lim.contains("most live bytes (90000000 of "), "{lim}");
+    }
+
     #[test]
     fn two_points_make_a_diff_and_never_a_growth_column() {
         if !(have("gcc") && have("nm") && have("addr2line")) {

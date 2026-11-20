@@ -412,8 +412,8 @@ pub(crate) fn run(
                 summary.insert("containers".into(), json!(containers));
                 summary.insert("threads".into(), json!(threads));
             } else {
-                // Thread.dump_to_file is verified on JDK 21 and JDK 25 (19, 20 and 22 to 24 untested): fall back to the text
-                // thread dump.
+                // Thread.dump_to_file is verified on JDK 21 and JDK 25 (19, 20 and 22 to 24
+                // untested): fall back to the text thread dump.
                 let why = r.err().unwrap_or_else(|| "no file was written".into());
                 let text = call(
                     &p.exe,

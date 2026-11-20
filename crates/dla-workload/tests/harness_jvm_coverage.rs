@@ -125,6 +125,17 @@ public final class CheckCoverage {
         java.nio.file.Files.createSymbolicLink(tmp.resolve("link"), tmp.resolve("real"));
         java.nio.file.Files.createSymbolicLink(tmp.resolve("real/proj/build"), tmp.resolve("outside"));
         java.nio.file.Files.createSymbolicLink(tmp.resolve("real/proj/out/test"), tmp.resolve("real/proj/.cache/t1"));
+        // A project below a directory named like test output (`java/test`), reached through a link.
+        java.nio.file.Files.createDirectories(tmp.resolve("ws/java/test/proj/classes"));
+        java.nio.file.Files.createSymbolicLink(tmp.resolve("pl"), tmp.resolve("ws/java/test/proj"));
+        // A link named `test` above a project that is not below one: the location is spelled
+        // through it, the project root is the real path.
+        java.nio.file.Files.createDirectories(tmp.resolve("ws/main/proj/classes"));
+        java.nio.file.Files.createDirectories(tmp.resolve("outer/java"));
+        java.nio.file.Files.createSymbolicLink(tmp.resolve("outer/java/test"), tmp.resolve("ws/main"));
+        Path mainProj = tmp.resolve("ws/main/proj");
+        Path deepProj = tmp.resolve("ws/java/test/proj");
+        Path deepLink = tmp.resolve("pl");
         Path realProj = tmp.resolve("real/proj");
         Path linkProj = tmp.resolve("link/proj");
         is("link location, real project", DlaDump.locationUnder("file:" + linkProj + "/classes/", realProj), true);
@@ -135,6 +146,13 @@ public final class CheckCoverage {
         is("a test location by its link name, link project", DlaDump.isTestLocation("file:" + realProj + "/out/test/", linkProj), true);
         is("link location of tests, real project", DlaDump.isTestLocation("file:" + linkProj + "/target/test-classes/", realProj), true);
         is("link location of main code, real project", DlaDump.isTestLocation("file:" + linkProj + "/classes/", realProj), false);
+        is("below a directory named test, project by a link", DlaDump.isTestLocation("file:" + deepProj + "/classes/", deepLink), false);
+        is("below a directory named test, location by a link", DlaDump.isTestLocation("file:" + deepLink + "/classes/", deepProj), false);
+        is("below a directory named test, both by the link", DlaDump.isTestLocation("file:" + deepLink + "/classes/", deepLink), false);
+        is("location spelled through a link named test above the project", DlaDump.isTestLocation("file:" + tmp + "/outer/java/test/proj/classes/", mainProj), false);
+        is("the same, the project by its link name too", DlaDump.isTestLocation("file:" + tmp + "/outer/java/test/proj/classes/", tmp.resolve("outer/java/test/proj")), false);
+        is("below a directory named test, its own test classes", DlaDump.isTestLocation("file:" + deepProj + "/target/test-classes/", deepLink), true);
+        is("below a directory named test, its own out/test", DlaDump.isTestLocation("file:" + deepProj + "/out/test/", deepLink), true);
         is("a jar root", DlaDump.isJarRoot("file:/w/app.jar") + "/" + DlaDump.isJarRoot("jar:file:/w/app.jar!/"), "true/true");
         is("a directory in a jar", DlaDump.isJarRoot("jar:nested:/w/app.jar/!BOOT-INF/classes/!/"), false);
         is("a directory", DlaDump.isJarRoot("file:/w/build/classes/"), false);
@@ -401,6 +419,41 @@ fn a_project_reached_through_a_symlinked_directory_still_counts_its_classes() {
         "classes under {} with DLA_PROJECT {}: {:?}",
         link2.display(),
         real2.join("proj").display(),
+        recs[3].1["coverage"]
+    );
+}
+
+#[test]
+fn a_project_below_a_directory_named_test_and_given_by_a_link_counts_its_classes() {
+    if !have_jdk() {
+        return;
+    }
+    // The project lives below `java/test`: that is not test output. The JVM reports the classes
+    // by the real path, DLA_PROJECT is a link to the project (and the other way round).
+    let dir = tempfile::tempdir().unwrap();
+    let below = dir.path().join("ws/java/test");
+    fs::create_dir_all(&below).unwrap();
+    // The project by a link, the classes by the real path.
+    let link = dir.path().join("proj-link");
+    std::os::unix::fs::symlink(below.join("proj"), &link).unwrap();
+    for packages in [None, Some("zz.shop")] {
+        let recs = run_driver(&below, &link, packages);
+        assert_eq!(
+            recs[3].1["coverage"]["project"],
+            2,
+            "classes under {} with DLA_PROJECT {} and packages {packages:?}: {:?}",
+            below.display(),
+            link.display(),
+            recs[3].1["coverage"]
+        );
+    }
+    // The classes by a link to the directory above the project, the project by its real path.
+    let above = dir.path().join("above-link");
+    std::os::unix::fs::symlink(&below, &above).unwrap();
+    let recs = run_driver(&above, &below.join("proj"), None);
+    assert_eq!(
+        recs[3].1["coverage"]["project"], 2,
+        "{:?}",
         recs[3].1["coverage"]
     );
 }

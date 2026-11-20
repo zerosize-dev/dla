@@ -22,6 +22,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use dla_workload::harness::dumps;
+
 use dla_core::{
     FindingId, HarnessDump,
     coverage::BackendCoverage,
@@ -36,6 +38,7 @@ use super::{
     exec::run_to_file,
     growth,
     input::Input,
+    redact::Redactor,
     rule::{self, Observed},
     tie,
 };
@@ -53,6 +56,10 @@ const NAME_CLIP: usize = 72;
 const MAX_BYTES: u64 = 64 << 20;
 /// Offsets handed to one addr2line call.
 const CHUNK: usize = 512;
+/// Words of a command line shown to name a process.
+const ARGV_TAIL: usize = 3;
+/// Longest word of a command line shown whole.
+const ARGV_WORD: usize = 28;
 
 /// The shim stack group reader.
 pub struct ShimStackGroups;
@@ -257,10 +264,123 @@ struct Stack {
 
 struct ShimCapture {
     label: String,
+    /// Process the record was read from, and the last words of its command line.
+    pid: Option<u32>,
+    argv_tail: String,
     x: Option<f64>,
     sha256: String,
     stacks: Vec<Stack>,
     unattributed: u64,
+}
+
+/// One process's shim record with stacks.
+struct ShimProc<'a> {
+    d: &'a HarnessDump,
+    raw: Vec<RawStack>,
+    total: u64,
+}
+
+/// The last words of a command line, enough to tell the project's tests from the program.
+/// Each word passes the redactor before it is cut, so a `key=value` word keeps its `key=`
+/// for the redactor to see, however long the value is.
+fn argv_tail(argv: Option<&[String]>, red: &Redactor) -> String {
+    let words = argv.unwrap_or_default();
+    let from = words.len().saturating_sub(ARGV_TAIL);
+    words[from..]
+        .iter()
+        .map(|w| {
+            let w = red.name(w);
+            // A long word (a class path) keeps its end, where the file name is.
+            let n = w.chars().count();
+            if n > ARGV_WORD {
+                let end: String = w.chars().skip(n - ARGV_WORD).collect();
+                format!("...{end}")
+            } else {
+                w
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The iteration count the capture was taken at, when it is a whole number.
+fn count_of(x: Option<f64>) -> Option<u64> {
+    x.filter(|x| *x >= 1.0 && x.fract() == 0.0 && *x < 1e15)
+        .map(|x| x as u64)
+}
+
+/// Chooses the process whose record stands for one capture: tool processes are dropped
+/// (unless nothing else is left), then the processes whose argv carries the capture's
+/// iteration count are preferred (the rule of the harness's `select_measured`, whose steps
+/// are used here), and only when several processes are still left the one with most live
+/// bytes is kept, and `limits` says so.
+fn choose_process<'a>(
+    mut procs: Vec<ShimProc<'a>>,
+    shown: &str,
+    red: &Redactor,
+    limits: &mut BTreeSet<String>,
+) -> Option<ShimProc<'a>> {
+    if procs.is_empty() {
+        return None;
+    }
+    let wrote = procs.len();
+    let tool = |p: &ShimProc<'_>| {
+        p.d.argv
+            .as_deref()
+            .and_then(|a| a.first())
+            .map(String::as_str)
+            .or(p.d.exe.as_deref())
+            .is_some_and(dumps::is_tool_program)
+    };
+    if procs.iter().any(|p| !tool(p)) {
+        procs.retain(|p| !tool(p));
+    }
+    let n = procs.iter().find_map(|p| count_of(p.d.x));
+    let several = procs.len() > 1;
+    let by_identity = n.is_some_and(|n| {
+        dumps::keep_with_n(&mut procs, |p| {
+            p.d.argv.as_deref().is_some_and(|a| dumps::argv_has_n(a, n))
+        })
+    });
+    if procs.len() == 1 {
+        if several && by_identity {
+            // One line per capture file's choice, merged into one text by the set: the choice
+            // rests on the number being in an argv.
+            limits.insert(
+                "several processes wrote shim records with stacks in a capture; the one whose argv carries the capture's iteration count was read (the same number in another process's argv would have chosen that one)"
+                    .to_owned(),
+            );
+        }
+        return procs.pop();
+    }
+    let sizes: Vec<u64> = procs.iter().map(|p| p.total).collect();
+    let at = {
+        let best = dumps::largest_by(&procs, |p| p.total as f64)?;
+        procs.iter().position(|p| std::ptr::eq(p, best))?
+    };
+    let kept = procs.swap_remove(at);
+    // Command-line words pass the redactor, as in the raw file: a limitation reaches the
+    // ledger and the CI log.
+    let words = argv_tail(kept.d.argv.as_deref(), red);
+    let words = if words.is_empty() {
+        String::new()
+    } else {
+        format!(" ({words})")
+    };
+    limits.insert(format!(
+        "{shown}: {wrote} processes wrote shim records with stacks, {} were left after the tool and identity steps and {}; kept pid {}{} as the one with most live bytes ({} of {})",
+        sizes.len(),
+        match (by_identity, n) {
+            (true, Some(n)) => format!("{n} (the iteration count) is in the argv of several"),
+            (_, Some(n)) => format!("none had {n} (the iteration count) in its argv"),
+            _ => "the capture has no iteration count to tell them apart".to_owned(),
+        },
+        kept.d.pid.map_or_else(|| "?".to_owned(), |p| p.to_string()),
+        words,
+        kept.total,
+        sizes.iter().map(u64::to_string).collect::<Vec<_>>().join(", "),
+    ));
+    Some(kept)
 }
 
 fn module_name(path: &str) -> String {
@@ -441,9 +561,10 @@ fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<Adapter
             let text = i.read_text(MAX_BYTES)?;
             let (dumps, _bad) = HarnessDump::parse_lines(&text);
             let scratch = scratch_of(i);
-            // One record per process: its exit record that carries stacks; of several
-            // processes (a build tool's JVM next to the program), the one with most live bytes.
-            let mut best: Option<(u64, &HarnessDump, Vec<RawStack>)> = None;
+            // One record per process: its last record that carries stacks. Of several
+            // processes (a build tool, the project's tests, the program) the record is
+            // chosen by identity, the way the harness chooses the measured process.
+            let mut procs: Vec<ShimProc<'_>> = Vec::new();
             for d in &dumps {
                 let Some(raw_sites) = &d.raw_sites else {
                     continue;
@@ -453,11 +574,19 @@ fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<Adapter
                     continue;
                 }
                 let total: u64 = raw.iter().fold(0u64, |a, s| a.saturating_add(s.bytes));
-                if best.as_ref().is_none_or(|(t, ..)| total >= *t) {
-                    best = Some((total, d, raw));
+                let p = ShimProc { d, raw, total };
+                match d
+                    .pid
+                    .and_then(|pid| procs.iter().position(|q| q.d.pid == Some(pid)))
+                {
+                    Some(at) => procs[at] = p,
+                    None => procs.push(p),
                 }
             }
-            let Some((_, d, raw)) = best else { continue };
+            let Some(chosen) = choose_process(procs, i.shown(), &ctx.redactor, &mut limits) else {
+                continue;
+            };
+            let (d, raw) = (chosen.d, chosen.raw);
             let stacks = symbolize(
                 &raw,
                 d.modules.as_ref(),
@@ -477,6 +606,8 @@ fn shim_run(ctx: &Ctx<'_>, op: Op, inputs: &[Input], opts: &Opts) -> Res<Adapter
                 .fold(0u64, |a, s| a.saturating_add(s.bytes));
             captures.push(ShimCapture {
                 label: i.shown().to_owned(),
+                pid: d.pid,
+                argv_tail: argv_tail(d.argv.as_deref(), &ctx.redactor),
                 x: d.x,
                 sha256: i.sha256.clone(),
                 stacks,
@@ -634,6 +765,8 @@ fn run_diff(
         "captures": captures.iter().map(|c| json!({
             "label": c.label,
             "x": c.x,
+            "pid": c.pid,
+            "argv_tail": c.argv_tail,
             "stacks": c.stacks.len(),
             "unattributed_bytes": c.unattributed,
             "sha256": c.sha256,
@@ -920,6 +1053,162 @@ fn spec_limits(limits: &BTreeSet<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One shim record per `(pid, argv, bytes)`, all at iteration count 500.
+    fn records(spec: &[(u32, &[&str], u64)]) -> Vec<HarnessDump> {
+        let text: String = spec
+            .iter()
+            .map(|(pid, argv, bytes)| {
+                format!(
+                    "{{\"dla_harness\":1,\"phase\":\"exit\",\"pid\":{pid},\"argv\":{},\"runtime\":\"native\",\"x\":500,\"raw_sites\":{{\"0x1\":{{\"live_bytes\":{bytes},\"live_blocks\":1,\"frames\":[]}}}}}}\n",
+                    serde_json::to_string(argv).unwrap()
+                )
+            })
+            .collect();
+        HarnessDump::parse_lines(&text).0
+    }
+
+    fn choose(spec: &[(u32, &[&str], u64)]) -> (Option<u32>, Vec<String>) {
+        choose_with(spec, &Redactor::new(b"s", true))
+    }
+
+    fn choose_with(spec: &[(u32, &[&str], u64)], red: &Redactor) -> (Option<u32>, Vec<String>) {
+        let dumps = records(spec);
+        let procs: Vec<ShimProc<'_>> = dumps
+            .iter()
+            .map(|d| ShimProc {
+                d,
+                raw: Vec::new(),
+                total: d
+                    .raw_sites
+                    .as_ref()
+                    .map(|r| r["0x1"]["live_bytes"].as_u64().unwrap())
+                    .unwrap(),
+            })
+            .collect();
+        let mut limits = BTreeSet::new();
+        let kept = choose_process(procs, "f.jsonl", red, &mut limits).map(|p| p.d.pid.unwrap());
+        (kept, limits.into_iter().collect())
+    }
+
+    #[test]
+    fn the_process_with_the_iteration_count_wins_over_a_larger_one_and_a_tool_is_dropped() {
+        let (kept, limits) = choose(&[
+            (1, &["sh", "./build.sh", "run", "500"], 900),
+            (2, &["java", "CodecTestKt"], 800),
+            (3, &["java", "MainKt", "500"], 10),
+        ]);
+        assert_eq!(kept, Some(3));
+        // Identity chose among two programs: one line says so (the same for every capture).
+        assert_eq!(limits.len(), 1, "{limits:?}");
+        assert!(
+            limits[0].starts_with("several processes wrote shim records")
+                && limits[0].contains("iteration count"),
+            "{limits:?}"
+        );
+        // Only a tool next to the program: nothing was chosen between programs.
+        let (kept, limits) = choose(&[(1, &["sh", "run", "500"], 900), (3, &["java", "500"], 1)]);
+        assert_eq!((kept, limits.len()), (Some(3), 0));
+        // A tool process is dropped even when it carries the count and nothing else does.
+        let (kept, _) = choose(&[(1, &["sh", "run", "500"], 900), (2, &["java", "A"], 5)]);
+        assert_eq!(kept, Some(2));
+    }
+
+    #[test]
+    fn size_decides_only_among_equals_and_the_limitation_names_the_choice() {
+        let (kept, limits) = choose(&[
+            (7, &["java", "A"], 50),
+            (8, &["java", "B"], 70),
+            (9, &["sh", "x"], 1000),
+        ]);
+        assert_eq!(kept, Some(8));
+        assert_eq!(limits.len(), 1, "{limits:?}");
+        assert!(
+            limits[0].contains(
+                "3 processes wrote shim records with stacks, 2 were left after the tool and identity steps"
+            ) && limits[0].contains("none had 500 (the iteration count) in its argv")
+                && limits[0].contains("kept pid 8 (java B)")
+                && limits[0].contains("(70 of 50, 70)"),
+            "{limits:?}"
+        );
+        // Two with the count: the larger of those, and it is said.
+        let (kept, limits) = choose(&[(1, &["java", "500"], 5), (2, &["java", "a=500"], 6)]);
+        assert_eq!(kept, Some(2));
+        assert!(
+            limits[0].contains("is in the argv of several"),
+            "{limits:?}"
+        );
+        // Three programs, two of them with the count: the number written is the three, not
+        // the two left to choose between.
+        let (kept, limits) = choose(&[
+            (1, &["java", "Test"], 90),
+            (2, &["java", "500"], 5),
+            (3, &["java", "a=500"], 6),
+        ]);
+        assert_eq!(kept, Some(3));
+        assert!(
+            limits[0].contains(
+                "3 processes wrote shim records with stacks, 2 were left after the tool and identity steps and 500 (the iteration count) is in the argv of several"
+            ),
+            "{limits:?}"
+        );
+    }
+
+    #[test]
+    fn the_limitation_shapes_secret_looking_argv_words_and_omits_empty_brackets() {
+        let spec: &[(u32, &[&str], u64)] = &[
+            (7, &["java", "shop.Main", "password=hunter2hunter2"], 50),
+            (8, &["java", "shop.Main", "token=abc"], 40),
+        ];
+        let (kept, limits) = choose_with(spec, &Redactor::new(b"s", false));
+        assert_eq!(kept, Some(7));
+        assert!(
+            limits[0].contains("shop.Main") && !limits[0].contains("hunter2hunter2"),
+            "{limits:?}"
+        );
+        // With raw consent the words are shown, like the raw file's.
+        let (_, raw) = choose_with(spec, &Redactor::new(b"s", true));
+        assert!(raw[0].contains("hunter2hunter2"), "{raw:?}");
+        // A value longer than the cut of a word is shaped as well: the redactor sees the
+        // word before it is cut.
+        let long = "password=abcdefghijklmnopqrstuvwxyzABCDEFGH";
+        let spec: &[(u32, &[&str], u64)] = &[(7, &["java", long], 50), (8, &["java", "x"], 40)];
+        let (_, limits) = choose_with(spec, &Redactor::new(b"s", false));
+        assert!(!limits[0].contains("mnopqrstuvwxyz"), "{limits:?}");
+        // A kept record without argv has no empty brackets.
+        let (_, limits) = choose(&[(7, &[], 50), (8, &[], 40)]);
+        assert!(
+            limits[0].contains("kept pid 7 as the one") && !limits[0].contains("()"),
+            "{limits:?}"
+        );
+    }
+
+    #[test]
+    fn a_lone_process_and_a_lone_tool_are_read_without_a_limitation() {
+        let (kept, limits) = choose(&[(4, &["java", "A"], 5)]);
+        assert_eq!((kept, limits.len()), (Some(4), 0));
+        let (kept, limits) = choose(&[(4, &["cc", "A"], 5)]);
+        assert_eq!((kept, limits.len()), (Some(4), 0));
+    }
+
+    #[test]
+    fn a_long_argv_word_keeps_its_end() {
+        let long = format!("out:{}/kotlin-stdlib.jar", "d/".repeat(40));
+        let tail = argv_tail(
+            Some(&[
+                "java".to_owned(),
+                long,
+                "shop.codec.MainKt".to_owned(),
+                "2220".to_owned(),
+            ]),
+            &Redactor::new(b"s", false),
+        );
+        assert!(
+            tail.starts_with("...") && tail.contains("kotlin-stdlib.jar"),
+            "{tail}"
+        );
+        assert!(tail.ends_with("shop.codec.MainKt 2220"), "{tail}");
+    }
 
     #[test]
     fn a_path_holding_a_space_and_parenthesis_is_kept_and_only_a_discriminator_is_cut() {

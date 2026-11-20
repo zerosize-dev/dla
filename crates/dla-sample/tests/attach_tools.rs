@@ -59,8 +59,9 @@ fn fake_java_target_sleeps() {
 struct Sleeper(Child, #[allow(dead_code)] tempfile::TempDir);
 
 impl Sleeper {
-    /// A `sleep` whose executable is called `java`: the fake `jcmd` answers for a JVM, and the
-    /// jcmd backend only runs against something that looks like one.
+    /// A process whose executable is called `java` (this test binary, see `fake_java_command`):
+    /// the fake `jcmd` answers for a JVM, and the jcmd backend only runs against something that
+    /// looks like one.
     fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let (exe, mut cmd) = fake_java_command(dir.path());

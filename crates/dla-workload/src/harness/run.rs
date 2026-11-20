@@ -1381,6 +1381,77 @@ fn gather_captures(
     run.captures.extend(files);
 }
 
+/// Whether the harness preloads the allocator shim into the program: only then can a point
+/// be missing the shim's record. A JVM without a JNI library, Node and Python harnesses have
+/// no shim, and their dumps hold no shim record by design.
+fn shim_preloaded(manifest: &HarnessManifest) -> bool {
+    manifest
+        .run
+        .env
+        .iter()
+        .any(|(k, v)| k == super::commands::preload_var() && v.contains("libdlashim"))
+}
+
+/// The limitation for a point whose measured process left no shim record with stacks; none
+/// when the harness has no shim or the record was written.
+fn shim_missing_note(
+    label: &str,
+    preloaded: bool,
+    pid: Option<u32>,
+    split: capture::ShimSplit,
+) -> Option<String> {
+    let capture::ShimSplit::Missing { others } = split else {
+        return None;
+    };
+    if !preloaded {
+        return None;
+    }
+    let who = pid.map_or_else(|| "the measured process".to_owned(), |p| format!("pid {p}"));
+    let other = if others == 0 {
+        String::new()
+    } else {
+        format!("; the {others} shim record(s) of other processes were not used in its place")
+    };
+    Some(format!(
+        "{label}: {who} wrote no allocator shim record with stacks, so this point has no shim-dump.jsonl{other}"
+    ))
+}
+
+/// Removes the shim file and the capture directory an earlier run left at a point, at the
+/// start of a capturing run only: a run without `--capture` leaves them, since `captures.json`
+/// still lists them.
+fn clear_stale_capture_files(paths: &Paths, label: &str, capturing: bool) {
+    if capturing {
+        let dir = paths.out.join(label);
+        let _ = fs::remove_file(dir.join(capture::SHIM_DUMP));
+        let _ = fs::remove_dir_all(dir.join(capture::DIR));
+    }
+}
+
+/// Writes the measured process's allocator shim record of a capturing point next to its dump
+/// (see [`capture::split_shim_dump`]) and notes a point whose measured process left none. A
+/// run without `--capture` leaves the file of an earlier capturing run alone: the commands in
+/// `captures.json` still read it.
+fn split_shim(
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    label: &str,
+    opts: &RunOptions,
+    pid: Option<u32>,
+    run: &mut ModeRun,
+) {
+    if opts.capture.is_empty() {
+        return;
+    }
+    let split = capture::split_shim_dump(&paths.out.join(label), pid);
+    run.limitations.extend(shim_missing_note(
+        label,
+        shim_preloaded(manifest),
+        pid,
+        split,
+    ));
+}
+
 fn exit_note(label: &str, res: &ExecResult) -> Option<String> {
     match res.code {
         Some(0) => None,
@@ -1460,9 +1531,7 @@ fn run_command_mode(
             fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
         }
         let _ = fs::remove_file(&dump);
-        if capturing {
-            let _ = fs::remove_dir_all(pe.capture_dir());
-        }
+        clear_stale_capture_files(paths, &label, capturing);
         let command = subst(
             &manifest.run.argv.join(" "),
             &[("n", n.to_string()), ("label", label.clone())],
@@ -1550,6 +1619,14 @@ fn run_command_mode(
             ));
         }
         let sel = dumps::select_measured(&file, manifest.runtime, Some(n));
+        split_shim(
+            manifest,
+            paths,
+            &label,
+            opts,
+            sel.as_ref().and_then(|s| s.pid),
+            &mut run,
+        );
         let (os_last, os_peak) = os_at(res.sampler.as_ref(), None);
         if let Some(s) = &res.sampler {
             run.limitations.extend(s.limitations.iter().cloned());
@@ -1667,9 +1744,7 @@ fn run_driver_mode(
         fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
     }
     let _ = fs::remove_file(&dump);
-    if capturing {
-        let _ = fs::remove_dir_all(pe.capture_dir());
-    }
+    clear_stale_capture_files(paths, &label, capturing);
     let command = manifest.run.argv.join(" ");
     let spec = pe.exec_spec(timeout, &command, &[]);
     let res = exec(ctx, &spec)?;
@@ -1715,6 +1790,7 @@ fn run_driver_mode(
     }
     let (cps, pid, notes) = dumps::select_checkpoints(&file, manifest.runtime);
     run.limitations.extend(notes);
+    split_shim(manifest, paths, &label, opts, pid, &mut run);
     if capturing {
         gather_captures(ctx, paths, &pe, pid, &file, None, res.timed_out, &mut run);
     }
@@ -2995,6 +3071,110 @@ mod tests {
         assert_eq!(abort_detector_env(&m)[0].0, "NODE_OPTIONS");
         m.detectors.clear();
         assert!(abort_detector_env(&m).is_empty());
+    }
+
+    fn paths_in(dir: &Path) -> Paths {
+        Paths {
+            hdir: dir.to_path_buf(),
+            work: dir.join("work"),
+            out: dir.join("out"),
+            logs: dir.join("logs"),
+            cov: dir.join("cov"),
+            probes: None,
+            packages: None,
+        }
+    }
+
+    fn jvm_dump_without_shim_record() -> String {
+        format!(
+            "{}\n",
+            json!({"dla_harness": "H1", "runtime": "jvm", "phase": "exit", "pid": 7})
+        )
+    }
+
+    #[test]
+    fn a_missing_shim_record_is_noted_only_where_the_shim_is_preloaded() {
+        let missing = capture::ShimSplit::Missing { others: 2 };
+        let note = shim_missing_note("p1-native", true, Some(7), missing).unwrap();
+        assert!(
+            note.contains("pid 7 wrote no allocator shim record"),
+            "{note}"
+        );
+        assert!(
+            note.contains("2 shim record(s) of other processes"),
+            "{note}"
+        );
+        // Python, Node and a JVM without a JNI library have no shim: nothing is missing.
+        assert_eq!(
+            shim_missing_note("p1-native", false, Some(7), missing),
+            None
+        );
+        let written = capture::ShimSplit::Written;
+        assert_eq!(shim_missing_note("p1-native", true, Some(7), written), None);
+    }
+
+    #[test]
+    fn the_shim_counts_as_preloaded_only_with_the_shim_library_in_the_preload_variable() {
+        let mut m = tests_support::manifest();
+        assert!(!shim_preloaded(&m));
+        m.run.env.push((
+            crate::harness::commands::preload_var().into(),
+            "/agent/libdlashim.so".into(),
+        ));
+        assert!(shim_preloaded(&m));
+    }
+
+    #[test]
+    fn a_managed_dump_without_a_shim_harness_gets_no_limitation_and_a_run_without_capture_keeps_the_file()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let label_dir = paths.out.join("p1-native");
+        fs::create_dir_all(&label_dir).unwrap();
+        fs::write(label_dir.join("dump.jsonl"), jvm_dump_without_shim_record()).unwrap();
+        let m = tests_support::manifest();
+        let capturing = RunOptions {
+            capture: CaptureSet {
+                histogram: true,
+                ..CaptureSet::default()
+            },
+            ..RunOptions::default()
+        };
+        let mut run = ModeRun::default();
+        split_shim(&m, &paths, "p1-native", &capturing, Some(7), &mut run);
+        assert!(run.limitations.is_empty(), "{:?}", run.limitations);
+
+        // A run without --capture leaves the shim file of an earlier capturing run.
+        let kept = label_dir.join(capture::SHIM_DUMP);
+        fs::write(&kept, "{}\n").unwrap();
+        split_shim(
+            &m,
+            &paths,
+            "p1-native",
+            &RunOptions::default(),
+            Some(7),
+            &mut run,
+        );
+        assert!(kept.is_file());
+    }
+
+    #[test]
+    fn stale_capture_files_are_removed_at_the_start_of_a_capturing_run_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let label_dir = paths.out.join("p1-native");
+        let shim = label_dir.join(capture::SHIM_DUMP);
+        let cap = label_dir.join(capture::DIR);
+        let put = || {
+            fs::create_dir_all(&cap).unwrap();
+            fs::write(&shim, "{}\n").unwrap();
+            fs::write(cap.join("c1"), "x").unwrap();
+        };
+        put();
+        clear_stale_capture_files(&paths, "p1-native", false);
+        assert!(shim.is_file() && cap.join("c1").is_file());
+        clear_stale_capture_files(&paths, "p1-native", true);
+        assert!(!shim.exists() && !cap.exists());
     }
 }
 

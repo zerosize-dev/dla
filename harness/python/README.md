@@ -44,7 +44,10 @@ and cover only files under `DLA_PROJECT`.
     `socket`, `ssl` are counted but not followed.
   - A module in the probe that is the running `__main__` is found through `__main__.__spec__`.
 - `purge`: `trim` calls `malloc_trim(0)` through ctypes (glibc only) and records `os.*` before and
-  after; `gc` records the `os.*` values before the forced collection and after it.
+  after, `before` being the record's own reading; ctypes and libc are loaded and `malloc_trim`
+  called once at start-up in every process on Linux (the purge is asked only of the process of the
+  last point), so the load does not show as memory the purge failed to return; `gc` records the
+  `os.*` values before the forced collection and after it.
 - `coverage`: `{"kind":"functions","items":[...]}` on 3.12+, else a limitation.
 
 ## Raw captures (`dla harness run --capture histogram,alloc,nonheap`)

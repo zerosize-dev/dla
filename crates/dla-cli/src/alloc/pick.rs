@@ -39,6 +39,16 @@ const NMT_PREFIX: &str = "jvm.nmt.";
 /// block every non-leak verdict. They are reported and vote only when nothing else can,
 /// even after passing the gate.
 const NO_RELEASE: &[&str] = &["os.vm_hwm", "native.peak_bytes", "os.vm_data"];
+/// Columns whose retained purge reading cannot contradict a plateau: it cannot tell growth
+/// from retention, so a plateau stands (the column still votes, and the reading is still
+/// reported). `os.rss_file` (resident file-backed pages): no purge kind gives file-backed
+/// pages back, so a rise of the column is always "retained", and the step that purges can map
+/// files itself (the Python `trim` step did, inside the measurement, until the harness
+/// loaded the library at start-up; the JVM purge steps run code the program has not run
+/// before, judged by reading). The Go and Node purge records do not carry the column at
+/// all. A real growth of file-backed memory still reads as one: through its plateau test,
+/// and through a retained purge against an undecided plateau.
+pub const PURGE_CANNOT_CONTRADICT: &[&str] = &["os.rss_file"];
 /// Most tied columns tested for a bound finding.
 const MAX_TIED: usize = 6;
 /// Most gate-passing columns tested without a finding.
@@ -364,7 +374,7 @@ pub fn pick(
         if trend.is_some() && !any_passed && heap_present {
             add(&mut p.voting, heap);
             p.basis = format!(
-                "no column passed the gate in the latest trend of the harness: the runtime heap ({heap}) decides, os.rss is reported"
+                "no column of memory in use passed the gate in the latest trend of the harness (peaks and sizes that cannot be given back do not count): the runtime heap ({heap}) decides, os.rss is reported"
             );
         } else {
             if series.column_index("os.rss").is_some() {
@@ -629,6 +639,21 @@ mod tests {
         assert_eq!(p.voting, ["jvm.heap_used"], "{}", p.basis);
         assert!(p.tested.iter().any(|c| c == "jvm.nmt.arena_chunk"));
         assert!(p.tested.iter().any(|c| c == "jvm.nmt.code"));
+    }
+
+    #[test]
+    fn a_file_backed_column_that_passed_the_gate_votes_beside_os_rss() {
+        let s = series_of(&["os.rss", "os.rss_file", "go.heap_live"]);
+        let ledger = Ledger::from_text("").unwrap();
+        let t = trend(&["os.rss_file"]);
+        let p = pick(&s, &ledger, None, &[], Some(&t), "H1").unwrap();
+        assert!(
+            p.voting.iter().any(|c| c == "os.rss_file"),
+            "{:?}",
+            p.voting
+        );
+        assert!(p.voting.iter().any(|c| c == "os.rss"), "{:?}", p.voting);
+        assert_eq!(PURGE_CANNOT_CONTRADICT, ["os.rss_file"]);
     }
 
     #[test]

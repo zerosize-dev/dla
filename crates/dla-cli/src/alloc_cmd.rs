@@ -128,6 +128,7 @@ fn purge_event(series: &SeriesFile) -> Option<PurgeEvent> {
 }
 
 /// Everything the tests found for one column.
+#[cfg_attr(test, derive(Debug))]
 struct ColumnResult {
     name: String,
     voting: bool,
@@ -248,7 +249,7 @@ fn test_column(
     let plateau = judge::plateau(main, extra, counter, reference, min_rise);
     let purge = event.map(|e| {
         if counter {
-            return judge::purge(&e.kind, None, None, None);
+            return judge::purge(&e.kind, None, None, None, min_rise);
         }
         let read = |m: &Map<String, Value>| m.get(name).and_then(Value::as_f64);
         judge::purge(
@@ -256,13 +257,20 @@ fn test_column(
             read(&e.before),
             read(&e.after),
             warm_end(series, idx),
+            min_rise,
         )
     });
     let gc = (!counter)
         .then(|| series.column_index(&format!("{name}.pre_gc")))
         .flatten()
         .and_then(|pre| judge::gc(&series.post_warmup(pre), &points, reference));
-    let (favors, supports) = judge::combine(plateau.verdict, purge.as_ref(), gc);
+    // A column whose purge reading cannot tell growth from retention: a retained purge never
+    // contradicts its plateau (the reading stays in the result); against an undecided or
+    // continuing plateau it counts as for any column.
+    let contradicts = !(pick::PURGE_CANNOT_CONTRADICT.contains(&name)
+        && plateau.verdict == PlateauVerdict::Plateau);
+    let (favors, supports) =
+        judge::combine(plateau.verdict, purge.as_ref().filter(|_| contradicts), gc);
     Some(ColumnResult {
         name: name.to_owned(),
         voting,
@@ -2542,6 +2550,223 @@ mod tests {
         let mut lim = Vec::new();
         let r = test_column(s, name, true, 6, Some(&ev), &mut lim).unwrap();
         r.purge.unwrap().verdict
+    }
+
+    /// The Go shape of a flat run that happened to pass the first trend: `go.heap_objects`
+    /// 164520 B at the end of the warm-up, 17 KB more at the last point (live objects), a
+    /// purge that gives nothing back (`after` is `after_rise` above the last point).
+    fn go_flat(after_rise: f64) -> SeriesFile {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("go.heap_objects")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            // 164520 at the end of the warm-up (point 1), a slow climb of 17312, then flat
+            let v = 164_520.0 + (17_312.0 * i.saturating_sub(1) as f64 / 12.0).min(17_312.0);
+            p.values = vec![Some(500e6), Some(v)];
+        }
+        let last = s.points.last().unwrap().values[1].unwrap();
+        s.events.push(dla_core::series::SeriesEvent {
+            after_point: 13,
+            kind: "purge:free-os-memory".to_owned(),
+            detail: Some(format!(
+                r#"{{"kind":"free-os-memory","columns":true,"before":{{"go.heap_objects":{last}}},"after":{{"go.heap_objects":{}}}}}"#,
+                last + after_rise
+            )),
+        });
+        s
+    }
+
+    #[test]
+    fn a_flat_go_column_with_a_few_kb_of_live_growth_reads_non_leak_not_retained() {
+        let s = go_flat(200.0);
+        let ev = purge_event(&s).unwrap();
+        let mut lim = Vec::new();
+        let r = test_column(&s, "go.heap_objects", true, 6, Some(&ev), &mut lim).unwrap();
+        assert_eq!(
+            r.plateau.verdict,
+            PlateauVerdict::Plateau,
+            "{:?}",
+            r.plateau
+        );
+        let purge = r.purge.unwrap();
+        assert!(purge.growth.unwrap() > 10_000.0 && purge.growth.unwrap() < 32.0 * 1024.0);
+        assert_eq!(purge.verdict, PurgeVerdict::NoGrowth, "{purge:?}");
+        assert_eq!(r.favors, Favors::NonLeak, "{:?}", r.supports);
+    }
+
+    fn gate_passed(name: &str) -> ColumnTrend {
+        ColumnTrend {
+            name: name.to_owned(),
+            unit: Unit::Bytes,
+            kind: ColumnKind::Gauge,
+            region: SeriesRegion::Process,
+            site: None,
+            finding: None,
+            candidates: vec![],
+            n: 12,
+            mk: None,
+            sen: None,
+            halves: None,
+            every_delta: None,
+            noise: 1.0,
+            rise: 1e5,
+            shape: dla_stats::TrendShape::Steady,
+            gate: GateVerdict::Pass,
+            gate_failed: vec![],
+        }
+    }
+
+    /// An unbound alloc-test over `s` with a trim purge whose `after` is `before` (nothing
+    /// given back) and a first trend that passed `passed`.
+    fn unbound_run(
+        mut s: SeriesFile,
+        passed: &[&str],
+    ) -> (Favors, Vec<ColumnResult>, pick::Picked) {
+        let last = s.points.last().unwrap().values.clone();
+        let named: Vec<String> = s
+            .columns
+            .iter()
+            .zip(&last)
+            .map(|(c, v)| format!("\"{}\":{}", c.name, v.unwrap()))
+            .collect();
+        let both = format!("{{{}}}", named.join(","));
+        s.events.push(dla_core::series::SeriesEvent {
+            after_point: 13,
+            kind: "purge:trim".to_owned(),
+            detail: Some(format!(
+                r#"{{"kind":"trim","columns":true,"before":{both},"after":{both}}}"#
+            )),
+        });
+        let trend = TrendReport {
+            schema_version: TREND_SCHEMA_VERSION,
+            id: "T1".to_owned(),
+            series: "S1".to_owned(),
+            thresholds: GateThresholds::default(),
+            columns: passed.iter().map(|n| gate_passed(n)).collect(),
+        };
+        let ledger = Ledger::from_text("").unwrap();
+        let picked = pick::pick(&s, &ledger, None, &[], Some(&trend), "H1").unwrap();
+        let ev = purge_event(&s).unwrap();
+        let mut lim = Vec::new();
+        let results: Vec<ColumnResult> = picked
+            .tested
+            .iter()
+            .filter_map(|n| test_column(&s, n, picked.voting.contains(n), 6, Some(&ev), &mut lim))
+            .collect();
+        let (favors, _, _) = decide(&results, &picked);
+        (favors, results, picked)
+    }
+
+    #[test]
+    fn growing_file_backed_memory_beside_growing_rss_reads_leak_and_names_both() {
+        // Both columns vote: a leak that maps files grows os.rss_file and os.rss, and the
+        // result lists both.
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("os.rss_file")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![
+                Some(500e6 + 2e6 * i as f64),
+                Some(10e6 + 300_000.0 * i as f64),
+            ];
+        }
+        let (favors, results, picked) = unbound_run(s, &["os.rss", "os.rss_file"]);
+        assert_eq!(picked.voting, ["os.rss", "os.rss_file"], "{}", picked.basis);
+        assert_eq!(favors, Favors::Leak);
+        for name in ["os.rss", "os.rss_file"] {
+            let r = results.iter().find(|r| r.name == name).unwrap();
+            assert_eq!(r.favors, Favors::Leak, "{name}: {:?}", r.plateau);
+        }
+    }
+
+    /// A stair of 200 KB early in the window, flat after it, on `column`, with a purge that
+    /// gives nothing back.
+    fn stair_run(column: &str) -> (Favors, ColumnResult) {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col(column)];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![
+                Some(500e6),
+                Some(10e6 + if i >= 4 { 200_000.0 } else { 0.0 }),
+            ];
+        }
+        let (favors, mut results, _) = unbound_run(s, &[column]);
+        let at = results.iter().position(|r| r.name == column).unwrap();
+        (favors, results.swap_remove(at))
+    }
+
+    #[test]
+    fn a_flat_file_backed_column_with_a_retained_purge_reads_non_leak_and_keeps_the_reading() {
+        // No purge gives file pages back, so the retained reading of the purge (the step may
+        // have mapped files itself) does not contradict the plateau; the reading stays.
+        let (favors, file) = stair_run("os.rss_file");
+        assert_eq!(file.plateau.verdict, PlateauVerdict::Plateau, "{file:?}");
+        assert_eq!(
+            file.purge.as_ref().unwrap().verdict,
+            PurgeVerdict::Retained,
+            "{file:?}"
+        );
+        assert_eq!(file.favors, Favors::NonLeak, "{file:?}");
+        assert_eq!(favors, Favors::NonLeak);
+    }
+
+    /// A flat column that scatters by about 70 KB from reading to reading; the point at the
+    /// end of the warm-up is one of the low ones, the last reading stands `growth` above it and
+    /// the purge gives nothing back.
+    fn scattered_run(scatter: f64, growth: f64) -> ColumnResult {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("os.rss_anon")];
+        let pattern = [
+            0.0, 0.0, 0.3, 0.8, 0.2, 0.9, 0.4, 1.0, 0.1, 0.7, 0.5, 0.9, 0.3, 0.8,
+        ];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![Some(500e6), Some(23e6 + scatter * pattern[i])];
+        }
+        s.points.last_mut().unwrap().values[1] = Some(23e6 + growth);
+        let (_, mut results, _) = unbound_run(s, &["os.rss_anon"]);
+        let at = results
+            .iter()
+            .position(|r| r.name == "os.rss_anon")
+            .unwrap();
+        results.swap_remove(at)
+    }
+
+    #[test]
+    fn a_growth_inside_the_columns_own_scatter_but_above_its_minimum_is_still_growth_for_the_purge()
+    {
+        // A slow real leak under the scatter of a noisy column (about 80 KB): the last reading
+        // is 40 KB above the warm-up point, just above the 32 KiB minimum and well inside the
+        // scatter the plateau test reads, so a limit that scales with the scatter would read it
+        // as no growth. The purge gave nothing back, so the reading is retained and, against
+        // the plateau, inconclusive. It must never read non-leak (a bound non-leak refutes).
+        let r = scattered_run(80_000.0, 40_000.0);
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        let purge = r.purge.as_ref().unwrap();
+        assert!(purge.growth.unwrap() > judge::MIN_BYTE_RISE, "{purge:?}");
+        assert_eq!(purge.verdict, PurgeVerdict::Retained, "{r:?}");
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        // A step far above the scatter reads the same.
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("os.rss_anon")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![
+                Some(500e6),
+                Some(23e6 + if i >= 4 { 2e6 } else { 0.0 } + 1000.0 * (i % 3) as f64),
+            ];
+        }
+        let (_, results, _) = unbound_run(s, &["os.rss_anon"]);
+        let r = results.iter().find(|r| r.name == "os.rss_anon").unwrap();
+        assert_eq!(
+            r.purge.as_ref().unwrap().verdict,
+            PurgeVerdict::Retained,
+            "{r:?}"
+        );
+    }
+
+    #[test]
+    fn a_retained_purge_still_contradicts_the_plateau_of_an_ordinary_column() {
+        let (favors, anon) = stair_run("os.rss_anon");
+        assert_eq!(anon.plateau.verdict, PlateauVerdict::Plateau, "{anon:?}");
+        assert_eq!(anon.favors, Favors::Inconclusive, "{anon:?}");
+        assert_eq!(favors, Favors::Inconclusive);
     }
 
     #[test]

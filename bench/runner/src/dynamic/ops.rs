@@ -810,6 +810,7 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
             reasons.push(n.chars().take(200).collect());
         }
         fx.step(format!("{op} via {backend}: gate {gate}, tied {tied_text}"));
+        let detail = gate_detail(&out.json, &run_dir);
         fx.row
             .summarize_log
             .push(crate::dynamic_cmd::SummarizeStep {
@@ -818,6 +819,7 @@ fn summarize(fx: &mut Fx, cmd: &str) -> Option<Tied> {
                 gate,
                 tied: tied_text,
                 reasons,
+                detail,
             });
         t
     } else {
@@ -841,7 +843,191 @@ fn log_failed_summarize(fx: &mut Fx, op: &str, backend: &str, gate: &str, why: S
             gate: gate.to_owned(),
             tied: "none".to_owned(),
             reasons: vec![why],
+            detail: Vec::new(),
         });
+}
+
+/// The most detail lines a refused call adds to the steps (the reasons lines are not counted).
+const MAX_DETAIL_LINES: usize = 8;
+
+/// The lines about the summarize steps whose gate failed: of the operations given, or of every
+/// operation (a refused confirmation does not name them). With `reasons`, one line with the
+/// reasons of each failed gate comes first, in step order, and is never cut (a refused label
+/// prints them already in its own failure line; a refused confirmation does not). The detail
+/// lines of the steps follow in step order, at most [`MAX_DETAIL_LINES`] of them.
+pub(super) fn failed_summary_detail(
+    log: &[crate::dynamic_cmd::SummarizeStep],
+    ops: Option<&[String]>,
+    reasons: bool,
+) -> Vec<String> {
+    let steps = || {
+        log.iter()
+            .filter(|s| ops.is_none_or(|ops| ops.contains(&s.op)))
+    };
+    let why = steps()
+        .filter(|s| reasons && s.gate == "fail" && !s.reasons.is_empty())
+        .map(|s| {
+            format!(
+                "{} via {}: reasons: {}",
+                s.op,
+                s.backend,
+                s.reasons.join("; ")
+            )
+        });
+    let detail = steps()
+        .flat_map(|s| {
+            s.detail
+                .iter()
+                .map(move |d| format!("{} via {}: {d}", s.op, s.backend))
+        })
+        .take(MAX_DETAIL_LINES);
+    why.chain(detail).collect()
+}
+
+/// Longest line of [`gate_detail`].
+const DETAIL_LINE: usize = 260;
+/// Most captures a detail line names the record of.
+const DETAIL_CAPTURES: usize = 4;
+/// Most limitation lines shown per failed summary.
+const DETAIL_LIMITATIONS: usize = 3;
+
+fn cut(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        let mut t: String = s.chars().take(n).collect();
+        t.push_str("...");
+        t
+    }
+}
+
+/// What a reader of a CI log needs to see why a summary's gate failed, when the per-fixture
+/// files cannot be downloaded: the limitation lines of the growth evidence the summary
+/// wrote and, for each holder its reasons name (`stack:<name>: ...`), the bytes and count at
+/// each capture (`-` where the holder is absent) with the process (pid and last argv words)
+/// the first capture and, of those it is absent from, the first few were read from. At most
+/// [`DETAIL_LIMITATIONS`] limitation lines. Empty for a gate that passed or a summary whose
+/// raw file does not list captures with processes.
+pub(super) fn gate_detail(json: &Value, run_dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if json["gate"].as_str() != Some("fail") {
+        return out;
+    }
+    // The limitation lines of the growth evidence (the first line is the same everywhere).
+    if let Some(id) = json["growth_evidence"].as_str()
+        && let Ok(rd) = fs::read_dir(run_dir)
+    {
+        let mut files: Vec<_> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("ledger") && n.ends_with(".jsonl"))
+            })
+            .collect();
+        files.sort();
+        'found: for f in files {
+            let Ok(text) = fs::read_to_string(&f) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Ok(rec) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
+                if rec["type"] == "evidence" && rec["evidence_id"].as_str() == Some(id) {
+                    // The two lines every summary of this kind carries say nothing about this run.
+                    let lines = strings(&rec["limitations"]).into_iter().filter(|l| {
+                        !l.starts_with("stacks are keyed by")
+                            && !l.starts_with("capture-series rule")
+                    });
+                    for l in lines.take(DETAIL_LIMITATIONS) {
+                        out.push(format!("limitation: {}", cut(&l, DETAIL_LINE)));
+                    }
+                    break 'found;
+                }
+            }
+        }
+    }
+    let raw: Option<Value> = json["raw"]["path"]
+        .as_str()
+        .and_then(|p| fs::read_to_string(run_dir.join(p)).ok())
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let Some(raw) = raw else { return out };
+    let (Some(caps), Some(stacks)) = (raw["captures"].as_array(), raw["stacks"].as_array()) else {
+        return out;
+    };
+    let reasons = strings(&json["reasons"]);
+    let mut shown = 0;
+    for r in reasons.iter().filter_map(|r| r.strip_prefix("stack:")) {
+        // `name (site): why`, or `name: why`.
+        let name = r.split(": ").next().unwrap_or(r);
+        let name = name
+            .split(" (")
+            .next()
+            .unwrap_or(name)
+            .trim_end_matches("...");
+        // The exact label first: a longer name with the same prefix is another stack.
+        let Some(st) = stacks
+            .iter()
+            .find(|s| s["label"].as_str() == Some(name))
+            .or_else(|| {
+                stacks
+                    .iter()
+                    .find(|s| s["label"].as_str().is_some_and(|l| l.starts_with(name)))
+            })
+        else {
+            continue;
+        };
+        if shown == 2 {
+            break;
+        }
+        shown += 1;
+        let (bytes, blocks) = (st["bytes"].as_array(), st["blocks"].as_array());
+        let at = |a: Option<&Vec<Value>>, k: usize| -> String {
+            a.and_then(|a| a.get(k))
+                .and_then(Value::as_u64)
+                .map_or_else(|| "-".to_owned(), |v| v.to_string())
+        };
+        let figures: Vec<String> = (0..caps.len())
+            .map(|k| match at(bytes, k).as_str() {
+                "-" => format!("{}:-", k + 1),
+                b => format!("{}:{b}B/{}", k + 1, at(blocks, k)),
+            })
+            .collect();
+        out.push(cut(
+            &format!(
+                "holder {name} bytes/blocks per capture: {}",
+                figures.join(" ")
+            ),
+            DETAIL_LINE * 2,
+        ));
+        // The first capture and those the holder is absent from, with their processes.
+        let mut who: Vec<usize> = vec![0];
+        who.extend(
+            (1..caps.len()).filter(|k| bytes.and_then(|a| a.get(*k)).is_none_or(Value::is_null)),
+        );
+        who.truncate(DETAIL_CAPTURES);
+        let from: Vec<String> = who
+            .iter()
+            .map(|k| {
+                let c = &caps[*k];
+                format!(
+                    "{}:pid {} `{}`",
+                    k + 1,
+                    c["pid"]
+                        .as_u64()
+                        .map_or_else(|| "?".to_owned(), |p| p.to_string()),
+                    c["argv_tail"].as_str().unwrap_or("?")
+                )
+            })
+            .collect();
+        out.push(cut(
+            &format!("records read from: {}", from.join("; ")),
+            DETAIL_LINE * 2,
+        ));
+    }
+    out
 }
 
 /// A holder annotation a summarize call asks for: finding, holder, and the growth evidence
@@ -985,6 +1171,10 @@ fn confirm(fx: &mut Fx, p: &Pending, tied: &[(BTreeSet<String>, Vec<String>)]) {
             .errors
             .push(format!("dla ledger confirm {}: {}", p.finding, c.message()));
         fx.step(format!("{} confirm refused ({})", p.finding, c.code()));
+        // The gates that failed say why the confirmation had nothing to stand on.
+        for line in failed_summary_detail(&fx.row.summarize_log, None, true) {
+            fx.step(line);
+        }
     }
 }
 
@@ -1206,8 +1396,8 @@ case "$1 $2" in
   tie='"tie":{"rule":"type","key":"X"},'
   [ -n "$FAKE_NO_TIE" ] && tie=''
   echo '{"type":"evidence","evidence_id":"E1","kind":"histogram-diff","authority":"live","result":{}}' >> $R/ledger.jsonl
-  echo '{"type":"evidence","evidence_id":"E2","kind":"growth-series","authority":"live","result":{"gate":"pass","passed":[{"column":"type:X",'"$tie"'"finding":"F1"}]}}' >> $R/ledger.jsonl
-  echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"pass","growth_evidence":"E2","raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
+  echo '{"type":"evidence","evidence_id":"E2","kind":"growth-series","authority":"live","limitations":["a limitation of the failed gate"],"result":{"gate":"pass","passed":[{"column":"type:X",'"$tie"'"finding":"F1"}]}}' >> $R/ledger.jsonl
+  echo '{"ok":true,"backend":"b","command":"summarize type-histogram-diff","evidence":["E1","E2"],"gate":"'"${FAKE_GATE:-pass}"'","growth_evidence":"E2","reasons":["a reason of the failed gate"],"raw":{"path":"histograms/H1.json","sha256":"'"$FAKE_SHA"'"},"pad":"'"$FAKE_PAD"'"}';;
 "ledger add")
   echo '{"ok":true,"id":"F2.n1"}';;
 "ledger refute")
@@ -1222,6 +1412,7 @@ case "$1 $2" in
   echo '{"ok":true}';;
 "ledger confirm")
   if [ -n "$FAKE_CRASH_CONFIRM" ]; then echo "thread main panicked" >&2; exit 101; fi
+  if [ -n "$FAKE_REFUSE_CONFIRM" ]; then echo '{"ok":false,"error":{"code":"confirm-untied","message":"m"}}'; exit 2; fi
   echo '{"ok":true}';;
 *) echo '{"ok":true}';;
 esac
@@ -1315,6 +1506,159 @@ esac
         // The held-back confirmation cites the trend evidence and the tied call's evidence.
         assert_eq!(lines[3], "ledger confirm F1 --evidence E0,E1,E2");
         assert_eq!(lines.len(), 4);
+    }
+
+    #[test]
+    fn a_failed_gate_shows_its_limitations_and_the_holder_per_capture_with_its_processes() {
+        let dir = std::env::temp_dir().join(format!("dla-gate-detail-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("histograms")).unwrap();
+        fs::write(
+            dir.join("ledger.jsonl"),
+            concat!(
+                r#"{"type":"evidence","evidence_id":"E2","limitations":["other"]}"#,
+                "\n",
+                r#"{"type":"evidence","evidence_id":"E3","limitations":["stacks are keyed by their first eight resolved frames; x","capture-series rule: y","boilerplate","H1/p1: 2 processes wrote shim records with stacks; kept pid 10920","c","d","e"]}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("histograms/H1.json"),
+            r#"{"captures":[{"pid":10920,"argv_tail":"shop.codec.CodecTestKt"},{"pid":10994,"argv_tail":"shop.codec.MainKt 4440"},{"pid":11103,"argv_tail":"shop.codec.MainKt 6660"}],
+               "stacks":[{"label":"Java_shop_codec_Native_open_longer","bytes":[1,1,1],"blocks":[1,1,1]},{"label":"Java_shop_codec_Native_open","bytes":[null,100,200],"blocks":[null,3,6]}]}"#,
+        )
+        .unwrap();
+        let json = serde_json::json!({
+            "gate": "fail", "growth_evidence": "E3", "raw": {"path": "histograms/H1.json"},
+            "reasons": ["nothing grows strictly across all 3 captures",
+                        "stack:Java_shop_codec_Native_open (native/src/lib.rs:40): holder absent from dump 1"],
+        });
+        let d = gate_detail(&json, &dir);
+        // The two fixed lines are left out and the limitations are capped.
+        assert_eq!(d.len(), 5, "{d:#?}");
+        assert_eq!(d[0], "limitation: boilerplate");
+        assert!(d[1].contains("kept pid 10920"), "{d:?}");
+        assert_eq!(d[2], "limitation: c");
+        assert_eq!(
+            d[3],
+            "holder Java_shop_codec_Native_open bytes/blocks per capture: 1:- 2:100B/3 3:200B/6"
+        );
+        assert_eq!(
+            d[4],
+            "records read from: 1:pid 10920 `shop.codec.CodecTestKt`"
+        );
+        // A passed gate has nothing to explain.
+        let pass = serde_json::json!({"gate": "pass", "growth_evidence": "E3"});
+        assert!(gate_detail(&pass, &dir).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_confirmation_prints_the_detail_of_the_failed_summaries() {
+        let (row, calls) = drive_fake(&[("FAKE_GATE", "fail"), ("FAKE_REFUSE_CONFIRM", "1")]);
+        // The call with the summarize evidence is refused, then the retry with the trend alone.
+        assert!(
+            calls.contains("ledger confirm F1 --evidence E0,E1,E2\n"),
+            "{calls}"
+        );
+        assert!(
+            calls.contains("ledger confirm F1 --evidence E0\n"),
+            "{calls}"
+        );
+        let at = row
+            .steps
+            .iter()
+            .position(|s| s == "F1 confirm refused (confirm-untied)")
+            .unwrap_or_else(|| panic!("{:?}", row.steps));
+        // The reasons of the failed gate come first (a refused confirmation does not print
+        // them elsewhere), then its detail.
+        assert_eq!(
+            row.steps[at + 1],
+            "type-histogram-diff via b: reasons: a reason of the failed gate",
+            "{:?}",
+            row.steps
+        );
+        assert_eq!(
+            row.steps[at + 2],
+            "type-histogram-diff via b: limitation: a limitation of the failed gate",
+            "{:?}",
+            row.steps
+        );
+        // A summary whose gate passed adds nothing, nor does a confirmation that went through.
+        let (row, _) = drive_fake(&[("FAKE_REFUSE_CONFIRM", "1")]);
+        assert!(
+            row.steps
+                .iter()
+                .all(|s| !s.contains("limitation:") && !s.contains("reasons:")),
+            "{:?}",
+            row.steps
+        );
+        let (row, _) = drive_fake(&[("FAKE_GATE", "fail")]);
+        assert!(
+            row.steps
+                .iter()
+                .all(|s| !s.contains("limitation:") && !s.contains("reasons:")),
+            "{:?}",
+            row.steps
+        );
+    }
+
+    #[test]
+    fn the_detail_of_failed_summaries_is_filtered_by_operation_and_capped() {
+        let step = |op: &str, lines: usize| crate::dynamic_cmd::SummarizeStep {
+            op: op.to_owned(),
+            backend: "b".to_owned(),
+            gate: "fail".to_owned(),
+            tied: "none".to_owned(),
+            reasons: vec!["why".to_owned()],
+            detail: (0..lines).map(|i| format!("line {i}")).collect(),
+        };
+        let log = [step("a", 2), step("b", 10)];
+        assert_eq!(
+            failed_summary_detail(&log, Some(&["a".to_owned()]), false),
+            ["a via b: line 0", "a via b: line 1"]
+        );
+        let all = failed_summary_detail(&log, None, false);
+        assert_eq!(all.len(), MAX_DETAIL_LINES);
+        assert_eq!(all[2], "b via b: line 0");
+        // With the reasons, every failed step gets one line, all before the detail lines.
+        let all = failed_summary_detail(&log, None, true);
+        assert_eq!(all.len(), 2 + MAX_DETAIL_LINES);
+        assert_eq!(all[0], "a via b: reasons: why");
+        assert_eq!(all[1], "b via b: reasons: why");
+        assert_eq!(all[2], "a via b: line 0");
+    }
+
+    #[test]
+    fn the_reasons_of_every_failed_summary_come_first_and_are_not_cut() {
+        let step = |op: &str| crate::dynamic_cmd::SummarizeStep {
+            op: op.to_owned(),
+            backend: "b".to_owned(),
+            gate: "fail".to_owned(),
+            tied: "none".to_owned(),
+            reasons: vec![format!("why {op}")],
+            detail: (0..3).map(|i| format!("{op} line {i}")).collect(),
+        };
+        let log = [step("a"), step("b"), step("c")];
+        let detail: Vec<String> = ["a", "b", "c"]
+            .iter()
+            .flat_map(|op| (0..3).map(move |i| format!("{op} via b: {op} line {i}")))
+            .take(MAX_DETAIL_LINES)
+            .collect();
+        assert_eq!(detail.len(), MAX_DETAIL_LINES);
+        let with = failed_summary_detail(&log, None, true);
+        assert_eq!(
+            with[..3],
+            [
+                "a via b: reasons: why a",
+                "b via b: reasons: why b",
+                "c via b: reasons: why c"
+            ]
+        );
+        assert_eq!(with[3..], detail[..]);
+        assert_eq!(failed_summary_detail(&log, None, false), detail);
     }
 
     #[cfg(unix)]

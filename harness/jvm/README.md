@@ -74,17 +74,18 @@ variable. Driver mode adds `-XX:StartFlightRecording=filename=<harness>/out/<pid
   first and are not cut by the 4000 cap (their own limit is 20000); up to 4000 of the other
   non-JDK classes of the application and library loaders follow. Test output directories
   (`build/classes/kotlin/test`, `target/test-classes`) and DLA's own drivers (`DlaLoop`,
-  `DlaJUnitLoop`) are not the project's. A class is the project's when its code source is a
-  file, directory or jar under `DLA_PROJECT`, compared by the names as written and with symlinks
-  resolved (the outer jar of `jar:file:/x.jar!/...` and of a
-  Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`; a library nested in the jar, Spring
-  Boot's loader and, once packages are known, the root of a jar are not) or when it is in a
-  package named by `DLA_PROJECT_PACKAGES` (comma separated: the packages the project's own
-  sources declare, set by `dla harness run`). `project` is the number of distinct top-level project
-  classes; `sources` lists `package/path/File.kt` for the project classes, from each class file's
-  `SourceFile` attribute (the class file is read for project classes only), so a Kotlin class in
-  a file of another name, a facade class (`UtilKt`) and a package that does not mirror its
-  directory still name their source file.
+  `DlaJUnitLoop`) are not the project's; only the part below the project decides that, so a
+  project below a directory named `test` still counts, also when it is given through a link. A
+  class is the project's when its code source is a file, directory or jar under `DLA_PROJECT`,
+  compared by the names as written and with symlinks resolved (the outer jar of
+  `jar:file:/x.jar!/...` and of a Spring Boot `jar:nested:/x.jar/!BOOT-INF/classes/!/`; a
+  library nested in the jar, Spring Boot's loader and, once packages are known, the root of a jar
+  are not) or when it is in a package named by `DLA_PROJECT_PACKAGES` (comma separated: the
+  packages the project's own sources declare, set by `dla harness run`). `project` is the number of
+  distinct top-level project classes; `sources` lists `package/path/File.kt` for the project
+  classes, from each class file's `SourceFile` attribute (the class file is read for project
+  classes only), so a Kotlin class in a file of another name, a facade class (`UtilKt`) and a
+  package that does not mirror its directory still name their source file.
 - `probes`: `JvmClass` yields one record per static field of reference type (primitives, strings,
   numbers, enums and `Class` constants are skipped); `JvmStatic` yields one record. `size` is the
   size of a Collection/Map/array, `reachable` the objects reached by a bounded iterative walk

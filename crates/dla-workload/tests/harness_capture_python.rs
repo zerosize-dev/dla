@@ -224,6 +224,61 @@ fn python_keeps_histogram_alloc_and_nonheap() {
 }
 
 #[test]
+fn the_trim_purge_reads_before_from_the_checkpoints_own_reading() {
+    if !have_python() || !cfg!(target_os = "linux") {
+        eprintln!("skipped: the trim purge reads /proc/self/status on Linux");
+        return;
+    }
+    let run = Run::new();
+    run.python(&["-c", "pass"], &[("DLA_PURGE", "trim")]);
+    let recs = run.records();
+    let rec = recs.iter().find(|r| r["phase"] == "exit").unwrap();
+    let read = |section: &Value, key: &str| {
+        section[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{key} in {rec}"))
+    };
+    let purge = &rec["purge"];
+    assert_eq!(purge["kind"], "trim", "{rec}");
+    // `before` is the checkpoint's own reading, not a new one. Between the two readings the
+    // purge runs `malloc_trim` only: a module imported there (`platform` adds about 160 KB of
+    // anonymous memory in a bare interpreter, ctypes about 2 MB, a part of it file-backed) shows
+    // as memory the purge failed to return, and a trim that gave back up to that much would
+    // read as retained.
+    for key in ["os.rss", "os.rss_file"] {
+        let own = read(&rec["values"], key);
+        let before = read(&purge["before"], key);
+        let after = read(&purge["after"], key);
+        assert_eq!(
+            before, own,
+            "{key}: before against the checkpoint's reading"
+        );
+        assert!(
+            after - before <= 32.0 * 1024.0,
+            "{key}: after {after} stands above before {before}: the purge step loaded something"
+        );
+    }
+}
+
+#[test]
+fn every_process_loads_the_trim_library_at_start_up_not_only_the_purged_one() {
+    if !have_python() || !cfg!(target_os = "linux") {
+        eprintln!("skipped: the trim purge is for Linux");
+        return;
+    }
+    // The purge is asked only of the process of the last point (`DLA_PURGE` is set for that one):
+    // the others must carry the same load, or the last point stands above the series by it.
+    let run = Run::new();
+    run.python(
+        &[
+            "-c",
+            "import sys; sys.exit(0 if 'ctypes' in sys.modules else 3)",
+        ],
+        &[],
+    );
+}
+
+#[test]
 fn command_mode_writes_every_kind_at_exit_and_lists_it() {
     if !have_python() {
         return;
