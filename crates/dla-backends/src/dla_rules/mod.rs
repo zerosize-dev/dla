@@ -12,7 +12,10 @@
 use std::path::Path;
 
 use dla_census::parse::{Lang, parse, tree_sitter::Tree};
-use dla_core::{error::Refusal, runtime::Runtime, static_hit::StaticHit, toolctx::ToolCtx};
+use dla_core::{
+    error::Refusal, runtime::Runtime, static_hit::StaticHit, toolctx::ToolCtx,
+    vendored::Defaults,
+};
 
 pub mod ast;
 mod chain;
@@ -27,23 +30,19 @@ mod rust;
 pub const BACKEND: &str = "dla";
 
 /// Directories never scanned.
-const SKIP_DIRS: [&str; 17] = [
+const SKIP_DIRS: [&str; 13] = [
     ".git",
     ".dla",
     "target",
     "build",
-    "node_modules",
     "venv",
     ".venv",
     "out",
     "dist",
     "__pycache__",
-    "vendor",
-    "site-packages",
     ".gradle",
     ".idea",
     ".tox",
-    "third_party",
     "bench-results",
 ];
 
@@ -124,6 +123,7 @@ fn collect(
     root: &Path,
     langs: &[Lang],
     inside: &dyn Fn(&str) -> bool,
+    defaults: &Defaults,
     out: &mut Vec<SrcFile>,
 ) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -139,7 +139,15 @@ fn collect(
             if SKIP_DIRS.contains(&name.as_str()) {
                 continue;
             }
-            collect(&path, root, langs, inside, out);
+            // Vendored directories are left out (unless brought back).
+            if let Ok(r) = path.strip_prefix(root)
+                && defaults
+                    .prune_dir(&r.to_string_lossy().replace('\\', "/"))
+                    .is_some()
+            {
+                continue;
+            }
+            collect(&path, root, langs, inside, defaults, out);
         } else if ft.is_file() {
             let Some(lang) = Lang::from_path(&path) else {
                 continue;
@@ -181,13 +189,14 @@ fn collect(
 /// and never repeat a `(rule, file, line)`.
 pub fn run(ctx: &ToolCtx, rt: Runtime) -> Result<Vec<StaticHit>, Refusal> {
     let mut files = Vec::new();
-    let scope = ctx.scope()?;
-    let inside = |rel: &str| scope.as_ref().is_none_or(|s| s.includes(rel));
+    let scope = ctx.static_scope()?;
+    let inside = |rel: &str| scope.includes(rel);
     collect(
         &ctx.project,
         &ctx.project,
         &Lang::of_runtime(rt),
         &inside,
+        &scope.defaults,
         &mut files,
     );
     Ok(analyze(&files, rt))

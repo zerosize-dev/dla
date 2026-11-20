@@ -1452,6 +1452,31 @@ fn split_shim(
     ));
 }
 
+/// The file an agent writes the phase it is in to, next to its dump file.
+fn phase_path(dump: &Path) -> PathBuf {
+    let mut s = dump.as_os_str().to_owned();
+    s.push(".phase");
+    PathBuf::from(s)
+}
+
+/// Deletes the phase file of an earlier process, so a timeout never reports a stale phase.
+fn clear_phase(dump: &Path) {
+    let _ = fs::remove_file(phase_path(dump));
+}
+
+/// The sentence a timeout adds to say where the killed process was: what its agent wrote last
+/// (the import of the driver, a named hook, a named probe at a checkpoint), or that it wrote
+/// nothing (agents of other runtimes, or a process stuck before the agent started).
+fn phase_note(dump: &Path) -> String {
+    match fs::read_to_string(phase_path(dump)) {
+        Ok(text) if !text.trim().is_empty() => {
+            let line: String = text.trim().lines().next().unwrap_or("").chars().take(300).collect();
+            format!("; it was killed in: {line}")
+        }
+        _ => "; the agent recorded no phase, so where it was stuck is not known".to_owned(),
+    }
+}
+
 fn exit_note(label: &str, res: &ExecResult) -> Option<String> {
     match res.code {
         Some(0) => None,
@@ -1531,6 +1556,7 @@ fn run_command_mode(
             fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
         }
         let _ = fs::remove_file(&dump);
+        clear_phase(&dump);
         clear_stale_capture_files(paths, &label, capturing);
         let command = subst(
             &manifest.run.argv.join(" "),
@@ -1566,8 +1592,9 @@ fn run_command_mode(
         }
         if res.timed_out {
             let note = format!(
-                "point {label} (n={n}) did not finish in {} s and was killed (log {log_rel}); it is missing and larger points were not run",
-                timeout.as_secs()
+                "point {label} (n={n}) did not finish in {} s and was killed (log {log_rel}); it is missing and larger points were not run{}",
+                timeout.as_secs(),
+                phase_note(&dump)
             );
             if capped {
                 run.partial.push(format!(
@@ -1744,6 +1771,7 @@ fn run_driver_mode(
         fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
     }
     let _ = fs::remove_file(&dump);
+    clear_phase(&dump);
     clear_stale_capture_files(paths, &label, capturing);
     let command = manifest.run.argv.join(" ");
     let spec = pe.exec_spec(timeout, &command, &[]);
@@ -1763,8 +1791,9 @@ fn run_driver_mode(
     }
     if res.timed_out {
         let note = format!(
-            "driver {label} did not finish in {} s and was killed (log {log_rel}); the rounds written so far are kept",
-            timeout.as_secs()
+            "driver {label} did not finish in {} s and was killed (log {log_rel}); the rounds written so far are kept{}",
+            timeout.as_secs(),
+            phase_note(&dump)
         );
         if capped {
             run.partial.push(format!(
@@ -2226,6 +2255,7 @@ pub fn run_points(
             fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
         }
         let _ = fs::remove_file(&dump);
+        clear_phase(&dump);
         let extra: Vec<(&str, String)> = Vec::new();
         let command = format!("{} (detector pass)", manifest.run.argv.join(" "));
         let mut spec = pe.exec_spec(detect_time, &command, &extra);
@@ -2253,8 +2283,9 @@ pub fn run_points(
         out.logs.push(paths.rel(ctx, &spec.log));
         if res.timed_out {
             out.limitations.push(format!(
-                "the detector pass at n={n} did not finish in {} s and was killed",
-                timeout.as_secs()
+                "the detector pass at n={n} did not finish in {} s and was killed{}",
+                timeout.as_secs(),
+                phase_note(&dump)
             ));
         }
         scan_logs.push(("detect".to_owned(), spec.log.clone()));

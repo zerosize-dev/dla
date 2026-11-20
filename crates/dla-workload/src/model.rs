@@ -7,7 +7,9 @@ use std::{
 };
 
 use dla_census::parse::{Lang, parse, tree_sitter::Node};
-use dla_core::{runtime::Runtime, state::Scope, workload::WorkloadKind};
+use dla_core::{
+    runtime::Runtime, state::Scope, vendored::Defaults, workload::WorkloadKind,
+};
 
 /// Directories that never hold project sources.
 pub const SKIP_DIRS: &[&str] = &[
@@ -122,7 +124,7 @@ pub fn stem(rel: &str) -> &str {
 
 impl Scan {
     pub fn new(project: &Path) -> Scan {
-        Scan::scoped(project, None)
+        Scan::scoped(project, None, &Defaults::for_project(project, &[]))
     }
 
     /// Whether `rel` is inside the scope (everything when there is none).
@@ -130,8 +132,10 @@ impl Scan {
         self.scope.as_ref().is_none_or(|s| s.includes(rel))
     }
 
-    /// Scans `project`, parsing only the source files inside `scope`.
-    pub fn scoped(project: &Path, scope: Option<Scope>) -> Scan {
+    /// Scans `project`, parsing only the source files inside `scope`. Vendored directories
+    /// and generated files that `defaults` leaves out are not part of the scan at all: no
+    /// entry point, no workload, no count.
+    pub fn scoped(project: &Path, scope: Option<Scope>, defaults: &Defaults) -> Scan {
         let mut all = BTreeSet::new();
         let mut stack = vec![project.to_path_buf()];
         while let Some(dir) = stack.pop() {
@@ -140,12 +144,16 @@ impl Scan {
                 let Ok(ft) = e.file_type() else { continue };
                 let name = e.file_name().to_string_lossy().into_owned();
                 if ft.is_dir() {
-                    if !SKIP_DIRS.contains(&name.as_str()) {
+                    if !SKIP_DIRS.contains(&name.as_str())
+                        && dla_core::paths::rel_slash(project, &e.path())
+                            .is_none_or(|r| defaults.prune_dir(&r).is_none())
+                    {
                         stack.push(e.path());
                     }
                 } else if ft.is_file()
                     && all.len() < MAX_FILES
                     && let Some(r) = dla_core::paths::rel_slash(project, &e.path())
+                    && defaults.generated(&r).is_none()
                 {
                     all.insert(r);
                 }

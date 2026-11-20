@@ -19,7 +19,7 @@ fn no_sources(version: String) -> Outcome {
 }
 
 fn has_python(job: &Job) -> bool {
-    !fsx::walk(job.project(), 1, &|r| {
+    !job.walk(1, &|r| {
         std::path::Path::new(r)
             .extension()
             .is_some_and(|e| e == "py" || e == "pyi")

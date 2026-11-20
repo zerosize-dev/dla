@@ -192,7 +192,7 @@ pub fn run(job: &Job) -> Outcome {
         return Outcome::missing("eslint is not on PATH or in the tools directory");
     };
     let version = version_of(Cmd::new(&prog).arg("--version"));
-    if fsx::files_with_ext(job.project(), &SOURCE_EXTS).is_empty() {
+    if job.files_with_ext(&SOURCE_EXTS).is_empty() {
         return Outcome::Ran(Box::new(Ran {
             version,
             note: Some("not applicable: no JavaScript or TypeScript sources".to_owned()),

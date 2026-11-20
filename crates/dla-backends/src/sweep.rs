@@ -11,7 +11,7 @@ use dla_core::{
     evidence::{CoverageStatus, EvidenceCoverage},
     runtime::Runtime,
     static_hit::StaticHit,
-    toolctx::{Candidate, CandidateWriter, EvidenceSpec, StageOutcome, ToolCtx},
+    toolctx::{Added, Candidate, CandidateWriter, EvidenceSpec, StageOutcome, ToolCtx},
 };
 use serde_json::{Value, json};
 
@@ -100,6 +100,8 @@ struct Done {
     evidence: Option<String>,
     added: u64,
     skipped: u64,
+    /// Hits recorded on the finding that another origin raised at the same site.
+    joined: u64,
     /// Hits dropped because their file lies outside the run's scope.
     dropped: u64,
 }
@@ -136,7 +138,7 @@ struct Sink<'a> {
     ledger: &'a mut dla_core::Ledger,
     writer: &'a mut CandidateWriter,
     dir: &'a Path,
-    scope: Option<&'a dla_core::state::Scope>,
+    scope: &'a dla_core::vendored::StaticScope,
 }
 
 fn record_ran(
@@ -176,9 +178,16 @@ fn record_ran(
     let in_scope = hits.len();
     let hits: Vec<StaticHit> = hits
         .into_iter()
-        .filter(|h| sink.scope.is_none_or(|s| s.includes(&h.file)))
+        .filter(|h| sink.scope.in_user_scope(&h.file))
         .collect();
     let dropped = u64::try_from(in_scope - hits.len()).unwrap_or(u64::MAX);
+    // Vendored and generated code is left out of the static stages unless brought back.
+    let before_left_out = hits.len();
+    let hits: Vec<StaticHit> = hits
+        .into_iter()
+        .filter(|h| sink.scope.defaults.excluded(&h.file).is_none())
+        .collect();
+    let left_out_hits = before_left_out - hits.len();
     let raw_name = raw_file(lang, backend);
     let doc = json!({
         "backend": backend,
@@ -208,6 +217,7 @@ fn record_ran(
             evidence: None,
             added: 0,
             skipped: 0,
+            joined: 0,
             dropped,
         });
     }
@@ -221,6 +231,12 @@ fn record_ran(
         result["build_logic_hits"] = json!(build_logic_hits);
         limitations.push(format!(
             "{build_logic_hits} hit(s) in build logic (Gradle scripts, buildSrc) were dropped: it is not part of the measured process"
+        ));
+    }
+    if left_out_hits > 0 {
+        result["left_out_hits"] = json!(left_out_hits);
+        limitations.push(format!(
+            "{left_out_hits} hit(s) in vendored or generated code were dropped (left out by default; dla run init --include brings a path back)"
         ));
     }
     if dropped > 0 {
@@ -242,7 +258,7 @@ fn record_ran(
     };
     spec.limitations.clone_from(&limitations);
     let ev = ctx.add_evidence(sink.ledger, spec)?;
-    let (mut added, mut skipped) = (0u64, 0u64);
+    let (mut added, mut skipped, mut joined) = (0u64, 0u64, 0u64);
     for h in &hits {
         let arch = rules
             .iter()
@@ -257,15 +273,18 @@ fn record_ran(
             holder: h.holder,
             owner: h.owner.clone(),
             region: h.region,
+            note: Some(h.message.clone()),
         };
-        match sink.writer.add(sink.ledger, c)? {
-            Some(_) => added += 1,
-            None => skipped += 1,
+        match sink.writer.add_outcome(sink.ledger, c)? {
+            Added::New(_) => added += 1,
+            Added::Joined(_) => joined += 1,
+            Added::Skipped => skipped += 1,
         }
     }
-    let enumerated = added + skipped;
+    let enumerated = added + skipped + joined;
     let mut cov = BackendCoverage::ran(Some(version), enumerated);
-    cov.duplicates = skipped;
+    // A hit recorded on the finding another origin raised at its site is a duplicate of it.
+    cov.duplicates = skipped + joined;
     if !limitations.is_empty() {
         cov.reason = Some(short(&limitations.join("; ")));
     }
@@ -275,11 +294,13 @@ fn record_ran(
             "status": "ran",
             "enumerated": enumerated,
             "added": added,
+            "joined_sites": joined,
             "limitations": limitations.len(),
         }),
         evidence: Some(ev.to_string()),
         added,
         skipped,
+        joined,
         dropped,
     })
 }
@@ -308,11 +329,13 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
     ctx.require_time("sweep")?;
     let data = ctx.data_files_dir()?;
     let scope = ctx.scope()?;
+    let static_scope = ctx.static_scope()?;
     let table = load_table(&data, lang)?;
     let tmp = ctx.tmp_dir()?;
     let sweep_dir = ctx.stage_dir("sweep")?;
     let mut ledger = ctx.ledger()?;
-    let mut writer = CandidateWriter::for_ctx(ctx, &ledger)?;
+    let mut writer = CandidateWriter::for_static(ctx, &ledger)?
+        .with_anchor(dla_census::anchor::site_anchor(&ctx.project));
     let mut dropped_hits = 0u64;
 
     let mut order: Vec<String> = table
@@ -329,7 +352,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
     let mut summary = serde_json::Map::new();
     let mut evidence = Vec::new();
     let mut artifacts = Vec::new();
-    let (mut added, mut skipped) = (0u64, 0u64);
+    let (mut added, mut skipped, mut joined_total) = (0u64, 0u64, 0u64);
 
     for backend in &order {
         let rules: Vec<&Detector> = table.for_backend(backend).collect();
@@ -346,6 +369,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                 scratch,
                 timeout: timeout_for(backend, env),
                 scope: scope.clone(),
+                defaults: static_scope.defaults.clone(),
                 ran: coverage
                     .iter()
                     // A backend that ran on nothing (not applicable) did not cover anything.
@@ -369,6 +393,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                 evidence: None,
                 added: 0,
                 skipped: 0,
+                joined: 0,
                 dropped: 0,
             },
             Outcome::Blocked { reason, raw } => {
@@ -385,6 +410,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                     evidence: None,
                     added: 0,
                     skipped: 0,
+                    joined: 0,
                     dropped: 0,
                 }
             }
@@ -393,7 +419,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
                     ledger: &mut ledger,
                     writer: &mut writer,
                     dir: &sweep_dir,
-                    scope: scope.as_ref(),
+                    scope: &static_scope,
                 };
                 let d = record_ran(ctx, lang, backend, &rules, *ran, &mut sink)?;
                 artifacts.push(ctx.pointer(&format!("sweep/{}", raw_file(lang, backend))));
@@ -403,6 +429,7 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
         dropped_hits += done.dropped;
         added += done.added;
         skipped += done.skipped;
+        joined_total += done.joined;
         if let Some(e) = done.evidence {
             evidence.push(e);
         }
@@ -410,20 +437,23 @@ pub fn sweep_with(ctx: &ToolCtx, lang: Runtime, env: &ToolEnv) -> Result<StageOu
         coverage.push((backend.clone(), done.coverage));
     }
 
-    let inside = |rel: &str| scope.as_ref().is_none_or(|s| s.includes(rel));
+    let inside = |rel: &str| static_scope.in_user_scope(rel);
     let out_of_scope = if scope.is_some() {
-        dla_census::walk::count_out_of_scope(&ctx.project, lang, &inside)
+        dla_census::walk::count_out_of_scope(&ctx.project, lang, &inside, &static_scope.defaults)
     } else {
         0
     };
     dla_census::record_out_of_scope(ctx, lang, out_of_scope)?;
-    let build_logic = dla_census::walk::count_build_logic(&ctx.project, lang);
+    let build_logic = dla_census::walk::count_build_logic(&ctx.project, lang, &static_scope.defaults);
     dla_census::record_build_logic(ctx, lang, build_logic)?;
     if build_logic > 0 {
         summary.insert("build_logic".into(), json!(build_logic));
     }
     if out_of_scope > 0 {
         summary.insert("out_of_scope".into(), json!(out_of_scope));
+    }
+    if joined_total > 0 {
+        summary.insert("joined_sites".into(), json!(joined_total));
     }
     if dropped_hits > 0 {
         summary.insert("out_of_scope_hits".into(), json!(dropped_hits));

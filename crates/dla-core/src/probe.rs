@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::Runtime;
+use crate::{runtime::Runtime, vendored::LeftOut};
 
 string_enum! {
     /// Result of one build attempt.
@@ -256,4 +256,9 @@ pub struct ProbeReport {
     /// Known-leak entries checked against the project (runtimes found only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub known_leaks: Vec<KnownLeakVerdict>,
+    /// What was left out of the walk by default: vendored directories, generated files, and
+    /// the runtimes whose whole code base lies in such places (`dla run init --include`
+    /// brings a path back).
+    #[serde(default, skip_serializing_if = "LeftOut::is_empty")]
+    pub left_out: LeftOut,
 }

@@ -3,6 +3,7 @@
 
 use std::{collections::BTreeMap, path::Path};
 
+use crate::vendored::LeftOut;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -196,6 +197,10 @@ pub struct CoverageManifest {
     /// Declared blind spots.
     #[serde(default)]
     pub blind_spots: Vec<BlindSpot>,
+    /// What the default exclusions left out of the static stages (vendored directories,
+    /// generated files), as the probe saw it.
+    #[serde(default, skip_serializing_if = "LeftOut::is_empty")]
+    pub left_out: LeftOut,
 }
 
 impl WorkerCoverage {
@@ -222,6 +227,7 @@ impl CoverageManifest {
             workers: BTreeMap::new(),
             residual: Vec::new(),
             blind_spots: Vec::new(),
+            left_out: LeftOut::default(),
         }
     }
 

@@ -351,7 +351,7 @@ fn shorten(line: &str, max: usize) -> String {
 fn count_sources(job: &Job) -> (usize, usize) {
     let mut kotlin = 0;
     let mut java = 0;
-    for f in fsx::files_with_ext(job.project(), &["java", "kt"]) {
+    for f in job.files_with_ext(&["java", "kt"]) {
         if !job.in_scope(&f) || dla_core::paths::is_build_logic(&f) || is_test_path(&f) {
             continue;
         }

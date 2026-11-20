@@ -588,6 +588,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CorrelateArgs) 
             owner: Some(s.managed.clone()),
             region: Some(Region::OffHeap),
             suggested_archetype: None,
+            note: None,
         };
         match writer.add(&mut ledger, cand)? {
             Some(fid) => {

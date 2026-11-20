@@ -20,8 +20,8 @@
 //! * the same `(origin, site)` is added at most once per run ([`CandidateWriter`]).
 
 use std::{
-    collections::HashSet,
-    fs,
+    collections::{HashMap, HashSet},
+    fmt, fs,
     path::{Path, PathBuf},
 };
 
@@ -30,7 +30,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    CoverageManifest, Ledger, NewFinding, Origin, Refusal, RunState,
+    CoverageManifest, FindingAnnotation, Ledger, NewFinding, Origin, Refusal, RunState,
     consent::format_tiers,
     error::{Error, codes},
     evidence::{Authority, EvidenceCoverage, EvidenceKind, NewEvidence, Source, Tool, Unknown},
@@ -41,6 +41,7 @@ use crate::{
     paths,
     series::{SERIES_DIR, next_number},
     state::{ConsentGiver, DLA_DIR, ProcessRecord, Scope, now_utc},
+    vendored::{Defaults, StaticScope},
     trend::TREND_DIR,
 };
 
@@ -379,6 +380,19 @@ impl ToolCtx {
             .scope)
     }
 
+    /// The scope for the static stages (probe, sweep, census, workload discovery): the run's
+    /// scope plus the default exclusions of vendored and generated code, minus the paths
+    /// the user brought back (`dla run init --include`). The dynamic stages keep using
+    /// [`ToolCtx::scope`] and [`ToolCtx::in_scope`]: a leak in such code that the workload
+    /// triggers is still measured.
+    pub fn static_scope(&self) -> Result<StaticScope, Refusal> {
+        let state = RunState::load(&self.run_dir).map_err(|e| e.to_refusal())?;
+        Ok(StaticScope {
+            defaults: Defaults::for_project(&self.project, &state.include),
+            scope: state.scope,
+        })
+    }
+
     /// Whether a project-relative path (`/` separators) is inside the run's scope.
     /// A run without a scope, or one whose state cannot be read, includes everything.
     pub fn in_scope(&self, rel: &str) -> bool {
@@ -610,16 +624,98 @@ pub struct Candidate {
     pub region: Option<Region>,
     /// Archetype tag; the empty string and `None` both mean no suggestion.
     pub suggested_archetype: Option<String>,
+    /// What the origin says about the site (the rule's message); kept on the finding as a
+    /// note when the site already has a finding of another origin.
+    pub note: Option<String>,
 }
 
-/// Adds candidates to a ledger, skipping an `(origin, site)` pair already present.
+/// Maps a `(file, line)` to the line that stands for its declaration (the `def` line of a
+/// decorated function), so that a hit on a decorator and a census entry on the `def` are
+/// one site. The identity maps every line to itself.
+#[derive(Clone)]
+pub struct SiteAnchor(std::sync::Arc<dyn Fn(&str, u32) -> u32 + Send + Sync>);
+
+impl SiteAnchor {
+    /// An anchor computed by `f`.
+    pub fn new(f: impl Fn(&str, u32) -> u32 + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(f))
+    }
+
+    /// The anchor line of `line` in `file`.
+    pub fn of(&self, file: &str, line: u32) -> u32 {
+        (self.0)(file, line)
+    }
+}
+
+impl fmt::Debug for SiteAnchor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SiteAnchor")
+    }
+}
+
+/// What [`CandidateWriter::add_outcome`] did with a candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Added {
+    /// A new finding.
+    New(FindingId),
+    /// The site already had a finding of another origin: the candidate's origin, evidence,
+    /// holder, owner, region and message were recorded on it (the finding's ID).
+    Joined(FindingId),
+    /// Nothing was added: a duplicate of the same origin and site, a site outside the scope or
+    /// build logic.
+    Skipped,
+}
+
+/// Which side of a site a static origin is on: a census entry, or a rule or analyzer hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Census,
+    Detector,
+}
+
+impl Side {
+    fn of(origin: &str) -> Option<Self> {
+        if origin == "census" {
+            Some(Self::Census)
+        } else if origin.starts_with("detector:") {
+            Some(Self::Detector)
+        } else {
+            None
+        }
+    }
+}
+
+/// The findings at one site, by the side that raised them.
+#[derive(Debug, Default, Clone)]
+struct AtSite {
+    census: Option<FindingId>,
+    detector: Option<FindingId>,
+}
+
+impl AtSite {
+    fn slot(&mut self, side: Side) -> &mut Option<FindingId> {
+        match side {
+            Side::Census => &mut self.census,
+            Side::Detector => &mut self.detector,
+        }
+    }
+}
+
+/// Adds candidates to a ledger, skipping an `(origin, site)` pair already present, and
+/// recording a census entry at the site of a rule or analyzer finding (or the reverse) on that
+/// finding: one site is one finding. Two rules or analyzers at one site stay two findings.
 #[derive(Debug, Default)]
 pub struct CandidateWriter {
     seen: HashSet<(String, String)>,
+    anchor: Option<SiteAnchor>,
+    by_site: Option<HashMap<(String, u32), AtSite>>,
     added: u64,
+    joined: u64,
     skipped: u64,
     scope: Option<Scope>,
+    defaults: Option<Defaults>,
     out_of_scope: u64,
+    left_out: u64,
     build_logic: u64,
 }
 
@@ -632,10 +728,15 @@ impl CandidateWriter {
             .collect();
         Self {
             seen,
+            anchor: None,
+            by_site: None,
             added: 0,
+            joined: 0,
             skipped: 0,
             scope: None,
+            defaults: None,
             out_of_scope: 0,
+            left_out: 0,
             build_logic: 0,
         }
     }
@@ -646,6 +747,16 @@ impl CandidateWriter {
         Ok(Self::new(ledger).with_scope(ctx.scope()?))
     }
 
+    /// Like [`CandidateWriter::for_ctx`] for the static stages: a candidate in vendored or
+    /// generated code that the user did not bring back is skipped and counted in
+    /// [`Self::left_out`].
+    pub fn for_static(ctx: &ToolCtx, ledger: &Ledger) -> Result<Self, Refusal> {
+        let st = ctx.static_scope()?;
+        let mut w = Self::new(ledger).with_scope(st.scope);
+        w.defaults = Some(st.defaults);
+        Ok(w)
+    }
+
     /// Restricts the writer to `scope` (`None`: no restriction).
     #[must_use]
     pub fn with_scope(mut self, scope: Option<Scope>) -> Self {
@@ -653,10 +764,64 @@ impl CandidateWriter {
         self
     }
 
-    /// Adds `c` unless `(origin, site)` exists. Returns the new ID, or `None` when nothing
-    /// was added: a duplicate, a site outside the scope, or a build-logic site (which is
-    /// counted in [`Self::build_logic`]).
+    /// Uses `anchor` to decide which lines are one site (see [`SiteAnchor`]).
+    #[must_use]
+    pub fn with_anchor(mut self, anchor: SiteAnchor) -> Self {
+        self.anchor = Some(anchor);
+        self
+    }
+
+    /// Adds `c` unless `(origin, site)` exists. Returns the new ID, or `None` when no new
+    /// finding was added: a duplicate, a site outside the scope, a build-logic site (which
+    /// is counted in [`Self::build_logic`]) or a site that already has a finding of another
+    /// origin (see [`Self::add_outcome`]).
     pub fn add(&mut self, ledger: &mut Ledger, c: Candidate) -> Result<Option<FindingId>, Refusal> {
+        Ok(match self.add_outcome(ledger, c)? {
+            Added::New(id) => Some(id),
+            Added::Joined(_) | Added::Skipped => None,
+        })
+    }
+
+    fn site_key(&self, site: &str) -> Option<(String, u32)> {
+        let (file, line) = site.rsplit_once(':')?;
+        let line: u32 = line.parse().ok()?;
+        let line = self.anchor.as_ref().map_or(line, |a| a.of(file, line));
+        Some((file.to_owned(), line))
+    }
+
+    /// The findings of the ledger by site and side (a sibling hypothesis, a finding merged
+    /// into another and a finding of any other origin are left out). A finding that joined
+    /// the other side counts on both.
+    fn sites(&mut self, ledger: &Ledger) -> &mut HashMap<(String, u32), AtSite> {
+        if self.by_site.is_none() {
+            let mut map: HashMap<(String, u32), AtSite> = HashMap::new();
+            for f in ledger.findings() {
+                if f.parent.is_some() || ledger.merged_into(&f.id).is_some() {
+                    continue;
+                }
+                let Some(key) = f.site.as_deref().and_then(|s| self.site_key(s)) else {
+                    continue;
+                };
+                for side in std::iter::once(&f.origin)
+                    .chain(&f.also_origins)
+                    .filter_map(|o| Side::of(o.as_str()))
+                {
+                    map.entry(key.clone())
+                        .or_default()
+                        .slot(side)
+                        .get_or_insert_with(|| f.id.clone());
+                }
+            }
+            self.by_site = Some(map);
+        }
+        self.by_site.as_mut().expect("just filled")
+    }
+
+    /// Like [`Self::add`], and says what happened to a candidate whose site already has a
+    /// finding of another static origin: the candidate's origin, evidence, holder, owner,
+    /// region (those the finding lacks) and message are recorded on that finding with one
+    /// annotation, and no finding is added.
+    pub fn add_outcome(&mut self, ledger: &mut Ledger, c: Candidate) -> Result<Added, Refusal> {
         check_site(&c.site).map_err(|m| {
             Refusal::new(
                 codes::INVALID_SITE,
@@ -671,19 +836,26 @@ impl CandidateWriter {
             && paths::is_build_logic(file)
         {
             self.build_logic += 1;
-            return Ok(None);
+            return Ok(Added::Skipped);
         }
         if let Some(scope) = &self.scope
             && let Some((file, _)) = c.site.rsplit_once(':')
             && !scope.includes(file)
         {
             self.out_of_scope += 1;
-            return Ok(None);
+            return Ok(Added::Skipped);
+        }
+        if let Some(defaults) = &self.defaults
+            && let Some((file, _)) = c.site.rsplit_once(':')
+            && defaults.excluded(file).is_some()
+        {
+            self.left_out += 1;
+            return Ok(Added::Skipped);
         }
         let key = (c.origin.clone(), c.site.clone());
         if self.seen.contains(&key) {
             self.skipped += 1;
-            return Ok(None);
+            return Ok(Added::Skipped);
         }
         let origin = Origin::parse(&c.origin).map_err(|e| {
             Refusal::new(
@@ -693,6 +865,29 @@ impl CandidateWriter {
                 "report this as a dla bug",
             )
         })?;
+        let side = Side::of(&c.origin);
+        let site_key = side.and_then(|_| self.site_key(&c.site));
+        if let (Some(sk), Some(side)) = (&site_key, side) {
+            // A census entry joins a rule or analyzer finding of its site, and a rule or
+            // analyzer hit joins the census finding of its site: never two of the same side.
+            let other = match side {
+                Side::Census => Side::Detector,
+                Side::Detector => Side::Census,
+            };
+            let existing = self.sites(ledger).get_mut(sk).and_then(|a| a.slot(other).clone());
+            if let Some(existing) = existing {
+                let out = self.join(ledger, &existing, origin, c, key)?;
+                if matches!(out, Added::Joined(_)) {
+                    // The finding now stands on this side as well.
+                    self.sites(ledger)
+                        .entry(sk.clone())
+                        .or_default()
+                        .slot(side)
+                        .get_or_insert(existing);
+                }
+                return Ok(out);
+            }
+        }
         let mut nf = NewFinding::new(origin, c.evidence);
         nf.site = Some(c.site);
         nf.holder = c.holder;
@@ -703,14 +898,85 @@ impl CandidateWriter {
         self.seen.insert(key);
         self.added += 1;
         match line.record {
-            crate::Record::FindingAdded { finding } => Ok(Some(finding.id)),
-            _ => Ok(None),
+            crate::Record::FindingAdded { finding } => {
+                if let (Some(sk), Some(side)) = (site_key, side) {
+                    self.sites(ledger)
+                        .entry(sk)
+                        .or_default()
+                        .slot(side)
+                        .get_or_insert_with(|| finding.id.clone());
+                }
+                Ok(Added::New(finding.id))
+            }
+            _ => Ok(Added::Skipped),
         }
+    }
+
+    /// Records candidate `c` (of `origin`) on `existing`, the finding of the other side at its site.
+    fn join(
+        &mut self,
+        ledger: &mut Ledger,
+        existing: &FindingId,
+        origin: Origin,
+        c: Candidate,
+        key: (String, String),
+    ) -> Result<Added, Refusal> {
+        let Some(f) = ledger.finding(existing) else {
+            return Ok(Added::Skipped);
+        };
+        // The same origin again (an earlier run of the stage joined it): nothing to record.
+        if f.origin == origin || f.also_origins.contains(&origin) {
+            self.seen.insert(key);
+            self.skipped += 1;
+            return Ok(Added::Skipped);
+        }
+        let mut a = FindingAnnotation::new(existing.clone());
+        a.also_origin = Some(origin.clone());
+        a.also_supports = c.evidence.clone();
+        let mut said: Vec<String> = Vec::new();
+        // An annotation only fills what the finding lacks; a different value is said in the
+        // note instead of refused.
+        match (f.holder, c.holder) {
+            (None, h) => a.holder = h,
+            (Some(have), Some(want)) if have != want => said.push(format!("holder {want}")),
+            _ => {}
+        }
+        match (&f.owner, &c.owner) {
+            (None, o) => a.owner.clone_from(o),
+            (Some(have), Some(want)) if have != want => said.push(format!("owner {want}")),
+            _ => {}
+        }
+        match (f.region, c.region) {
+            (None, r) => a.region = r,
+            (Some(have), Some(want)) if have != want => said.push(format!("region {want}")),
+            _ => {}
+        }
+        let mut note = format!("also raised by {origin} at {}", c.site);
+        if let Some(m) = c.note.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+            note.push_str(": ");
+            note.push_str(m);
+        }
+        if let Some(arch) = c.suggested_archetype.as_deref().filter(|x| !x.is_empty()) {
+            note.push_str(&format!("; suggests {arch}"));
+        }
+        if !said.is_empty() {
+            note.push_str(&format!("; it names {}", said.join(", ")));
+        }
+        a.note = Some(note);
+        ledger.annotate_record(a).map_err(|e| e.to_refusal())?;
+        self.seen.insert(key);
+        self.joined += 1;
+        Ok(Added::Joined(existing.clone()))
     }
 
     /// Candidates added so far.
     pub fn added(&self) -> u64 {
         self.added
+    }
+
+    /// Candidates recorded on the finding of their site (another origin raised it first).
+    pub fn joined(&self) -> u64 {
+        self.joined
     }
 
     /// Duplicates skipped so far.
@@ -721,6 +987,12 @@ impl CandidateWriter {
     /// Candidates skipped so far because their site file is outside the scope.
     pub fn out_of_scope(&self) -> u64 {
         self.out_of_scope
+    }
+
+    /// Candidates skipped so far because their site file is vendored or generated code left
+    /// out by default.
+    pub fn left_out(&self) -> u64 {
+        self.left_out
     }
 
     /// Candidates skipped so far because their site file is build logic.
@@ -1092,6 +1364,204 @@ mod tests {
         ctx.add_out_of_scope("python", 3).unwrap();
         let cov = CoverageManifest::load(&ctx.run_dir).unwrap().unwrap();
         assert_eq!(cov.workers["python"].out_of_scope, 5);
+    }
+
+    fn static_cand(origin: &str, ev: &EvidenceId, site: &str) -> Candidate {
+        Candidate {
+            origin: origin.into(),
+            evidence: vec![ev.clone()],
+            site: site.into(),
+            ..Candidate::default()
+        }
+    }
+
+    fn evidence_of(ctx: &ToolCtx, ledger: &mut Ledger, kind: EvidenceKind) -> EvidenceId {
+        ctx.add_evidence(
+            ledger,
+            EvidenceSpec::new(kind, "t", "0", json!({"hits": 1})),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_rule_hit_and_a_census_entry_at_one_site_are_one_finding_in_either_order() {
+        for rule_first in [true, false] {
+            let (_d, ctx) = run(None);
+            let mut ledger = ctx.ledger().unwrap();
+            let e_rule = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+            let e_census = evidence_of(&ctx, &mut ledger, EvidenceKind::CensusHolder);
+            let rule = Candidate {
+                suggested_archetype: Some("L-COLLECT".into()),
+                note: Some("lru_cache(None) is unbounded".into()),
+                ..static_cand("detector:dla/python-unbounded-cache", &e_rule, "pkg/app.py:82")
+            };
+            let census = Candidate {
+                holder: Some(Holder::StaticGlobal),
+                owner: Some("pkg.app._build".into()),
+                region: Some(Region::Heap),
+                ..static_cand("census", &e_census, "pkg/app.py:82")
+            };
+            let mut w = CandidateWriter::new(&ledger);
+            let (first, second) = if rule_first {
+                (rule, census)
+            } else {
+                (census, rule)
+            };
+            let Added::New(id) = w.add_outcome(&mut ledger, first).unwrap() else {
+                panic!("the first candidate is a new finding");
+            };
+            assert_eq!(
+                w.add_outcome(&mut ledger, second).unwrap(),
+                Added::Joined(id.clone())
+            );
+            assert_eq!((w.added(), w.joined(), w.skipped()), (1, 1, 0));
+            // Replay from the file: one finding, both origins, both evidence, the census data.
+            let ledger = ctx.ledger().unwrap();
+            assert_eq!(ledger.findings().count(), 1, "rule_first={rule_first}");
+            let f = ledger.finding(&id).unwrap();
+            assert_eq!(f.supports.len(), 2);
+            assert_eq!(f.also_origins.len(), 1);
+            let (main, other) = if rule_first {
+                ("detector:dla/python-unbounded-cache", "census")
+            } else {
+                ("census", "detector:dla/python-unbounded-cache")
+            };
+            assert_eq!(f.origin.as_str(), main);
+            assert_eq!(f.also_origins[0].as_str(), other);
+            assert_eq!(f.owner.as_deref(), Some("pkg.app._build"));
+            assert_eq!(f.holder, Some(Holder::StaticGlobal));
+            assert_eq!(f.region, Some(Region::Heap));
+            let notes = &ledger.annotation(&id).unwrap().notes;
+            assert!(
+                notes.iter().any(|n| n.contains(&format!("also raised by {other}"))),
+                "{notes:?}"
+            );
+            if rule_first {
+                assert!(notes.iter().any(|n| n.contains("census")), "{notes:?}");
+            } else {
+                assert!(
+                    notes.iter().any(|n| n.contains("lru_cache(None) is unbounded")
+                        && n.contains("suggests L-COLLECT")),
+                    "the rule's message and archetype are kept: {notes:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_run_of_a_stage_does_not_join_again() {
+        let (_d, ctx) = run(None);
+        let mut ledger = ctx.ledger().unwrap();
+        let e = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+        let mut w = CandidateWriter::new(&ledger);
+        w.add(&mut ledger, static_cand("detector:ruff/B019", &e, "a.py:3"))
+            .unwrap();
+        w.add(&mut ledger, static_cand("census", &e, "a.py:3")).unwrap();
+        let lines = ledger.lines().len();
+        let mut again = ctx.ledger().unwrap();
+        let mut w2 = CandidateWriter::new(&again);
+        assert_eq!(
+            w2.add_outcome(&mut again, static_cand("census", &e, "a.py:3"))
+                .unwrap(),
+            Added::Skipped
+        );
+        assert_eq!(again.lines().len(), lines, "nothing was written");
+        assert_eq!(again.findings().count(), 1);
+    }
+
+    #[test]
+    fn lines_of_one_declaration_are_one_site_and_other_lines_are_not() {
+        let (_d, ctx) = run(None);
+        let mut ledger = ctx.ledger().unwrap();
+        let e = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+        // Lines 3 to 5 are one decorated function; line 9 is a function of its own.
+        let anchor = SiteAnchor::new(|_, line| if (3..=5).contains(&line) { 5 } else { line });
+        let mut w = CandidateWriter::new(&ledger).with_anchor(anchor);
+        let a = w
+            .add_outcome(&mut ledger, static_cand("detector:dla/r", &e, "a.py:3"))
+            .unwrap();
+        let Added::New(id) = a else { panic!("{a:?}") };
+        assert_eq!(
+            w.add_outcome(&mut ledger, static_cand("census", &e, "a.py:5"))
+                .unwrap(),
+            Added::Joined(id.clone())
+        );
+        assert!(matches!(
+            w.add_outcome(&mut ledger, static_cand("census", &e, "a.py:9"))
+                .unwrap(),
+            Added::New(_)
+        ));
+        assert!(matches!(
+            w.add_outcome(&mut ledger, static_cand("census", &e, "b.py:5"))
+                .unwrap(),
+            Added::New(_)
+        ));
+        assert_eq!(ledger.findings().count(), 3);
+    }
+
+    #[test]
+    fn a_growth_series_finding_is_never_joined_to_a_static_site() {
+        let (_d, ctx) = run(None);
+        let mut ledger = ctx.ledger().unwrap();
+        let e = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+        let mut w = CandidateWriter::new(&ledger);
+        w.add(&mut ledger, static_cand("census", &e, "a.py:3")).unwrap();
+        let out = w
+            .add_outcome(&mut ledger, static_cand("correlation", &e, "a.py:3"))
+            .unwrap();
+        assert!(matches!(out, Added::New(_)), "{out:?}");
+        assert_eq!(ledger.findings().count(), 2);
+    }
+
+    #[test]
+    fn two_rules_at_one_site_stay_two_findings_and_a_census_entry_joins_the_first() {
+        let (_d, ctx) = run(None);
+        let mut ledger = ctx.ledger().unwrap();
+        let e = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+        let mut w = CandidateWriter::new(&ledger);
+        let a = w
+            .add_outcome(&mut ledger, static_cand("detector:ruff/B019", &e, "a.py:3"))
+            .unwrap();
+        let b = w
+            .add_outcome(&mut ledger, static_cand("detector:pylint/W1518", &e, "a.py:3"))
+            .unwrap();
+        assert!(matches!((&a, &b), (Added::New(_), Added::New(_))), "{a:?} {b:?}");
+        let Added::New(first) = a else { unreachable!() };
+        assert_eq!(
+            w.add_outcome(&mut ledger, static_cand("census", &e, "a.py:3"))
+                .unwrap(),
+            Added::Joined(first)
+        );
+        // A later hit of a third analyzer joins the finding that carries the census entry.
+        let c = w
+            .add_outcome(&mut ledger, static_cand("detector:semgrep/x", &e, "a.py:3"))
+            .unwrap();
+        assert!(matches!(c, Added::Joined(_)), "{c:?}");
+        assert_eq!(ledger.findings().count(), 2);
+    }
+
+    #[test]
+    fn a_different_owner_at_a_joined_site_is_said_in_the_note_not_refused() {
+        let (_d, ctx) = run(None);
+        let mut ledger = ctx.ledger().unwrap();
+        let e = evidence_of(&ctx, &mut ledger, EvidenceKind::StaticHit);
+        let mut w = CandidateWriter::new(&ledger);
+        let first = Candidate {
+            owner: Some("m.A.x".into()),
+            ..static_cand("detector:dla/r", &e, "a.py:3")
+        };
+        let second = Candidate {
+            owner: Some("m.B.y".into()),
+            ..static_cand("census", &e, "a.py:3")
+        };
+        let Added::New(id) = w.add_outcome(&mut ledger, first).unwrap() else {
+            panic!()
+        };
+        w.add_outcome(&mut ledger, second).unwrap();
+        let f = ledger.finding(&id).unwrap();
+        assert_eq!(f.owner.as_deref(), Some("m.A.x"));
+        let notes = &ledger.annotation(&id).unwrap().notes;
+        assert!(notes.iter().any(|n| n.contains("owner m.B.y")), "{notes:?}");
     }
 
     #[test]

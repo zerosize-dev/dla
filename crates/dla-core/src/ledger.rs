@@ -853,6 +853,8 @@ impl Index {
             && a.owner.is_none()
             && a.region.is_none()
             && a.site.is_none()
+            && a.also_origin.is_none()
+            && a.also_supports.is_empty()
         {
             return Err(Refusal::new(
                 codes::EMPTY_ANNOTATION,
@@ -870,6 +872,14 @@ impl Index {
         let f = self.require_finding(&a.finding, "annotation")?;
         if version >= 5 && !a.evidence.is_empty() {
             self.check_annotation_evidence(a)?;
+        }
+        if !a.also_supports.is_empty() {
+            self.check_worker_evidence(&a.also_supports)?;
+            self.require_evidence(
+                &a.also_supports,
+                &format!("annotation of {}", a.finding),
+                "cite evidence of this run (dla run status lists the IDs)",
+            )?;
         }
         let conflicts = [
             (
@@ -1537,6 +1547,17 @@ impl Index {
                     }
                     if f.owner.is_none() {
                         f.owner.clone_from(&a.owner);
+                    }
+                    if let Some(o) = &a.also_origin
+                        && *o != f.origin
+                        && !f.also_origins.contains(o)
+                    {
+                        f.also_origins.push(o.clone());
+                    }
+                    for e in &a.also_supports {
+                        if !f.supports.contains(e) {
+                            f.supports.push(e.clone());
+                        }
                     }
                 }
                 let slot = self.annotations.entry(a.finding.clone()).or_default();
@@ -2706,6 +2727,11 @@ impl Ledger {
         annotation.finding = self.own_finding_id(&annotation.finding);
         annotation.evidence = annotation
             .evidence
+            .iter()
+            .map(|e| self.own_evidence_id(e))
+            .collect();
+        annotation.also_supports = annotation
+            .also_supports
             .iter()
             .map(|e| self.own_evidence_id(e))
             .collect();

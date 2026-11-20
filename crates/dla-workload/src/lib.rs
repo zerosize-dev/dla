@@ -272,7 +272,8 @@ pub fn build_report(
 /// Reads files only; a failed `dla probe --build` is recorded as a coverage gap, not
 /// an error.
 pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Refusal> {
-    let scan = Scan::scoped(&ctx.project, ctx.scope()?);
+    let st = ctx.static_scope()?;
+    let scan = Scan::scoped(&ctx.project, st.scope, &st.defaults);
     let failed = failed_builds(ctx);
     let (report, runtimes) = build_report(&scan, lang, &failed);
 
