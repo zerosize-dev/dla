@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 12:10 UTC)
+# Where the work stands (2026-11-20, 13:30 UTC)
 
 ## Working rule from the owner (2026-11-20, 09:25 UTC), above every other habit
 "You should be using sonnet 5.5 subagents for tasks and verify yourself, since my limits are
@@ -70,15 +70,21 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
      target), fmt, schema check and grader tests pass; static passes in both modes for scratch
      copies of all eight parked fixtures with no external Go analyzer; dynamic passes for
      go-ticker-legacy, python-frozen-gc and node-signal-compose-24 with their partners.
-   - Found by the orchestrator's own probe: the slice-view rule matched callers by method name
-     only (a safe type with the same method name was flagged). Being fixed (task
-     `F-d:refix-receiver-type`).
-   - F-e (Go command mode measures while the workload runs): design `go-in-run-design.md`
-     reviewed and accepted by the orchestrator; being built (task `F-e:build`). Expected after
-     it: go-header-index passes; go-trace-context and go-feed-merge stop at the tie rule.
-   Both tasks run in workflow `open-fixtures-fix-1c` (Sonnet only). Then: the orchestrator
-   verifies (workspace tests, lints, static both modes, the full dynamic run), a Sonnet agent
-   moves the passing fixtures back and updates READMEs and counts, CI on a snapshot, commit.
+   - The slice-view rule's false positive (callers matched by method name only) is fixed and
+     verified by the orchestrator's own inputs (`open-fixtures-report-F-d2.md`).
+   - F-e (Go command mode measures while the workload runs: extra columns
+     `go.heap_live.in_run` and `go.heap_objects.in_run`, the in-run heap profile) is built
+     (`open-fixtures-report-F-e.md`). The fixer reports go-header-index passing static and
+     dynamic; go-trace-context and go-feed-merge stop at the tie rule. Not yet rerun by the
+     orchestrator.
+   State at 13:30 UTC on 2026-11-20: a Sonnet agent moves go-ticker-legacy, python-frozen-gc,
+   node-signal-compose-24 and go-header-index back to `bench/fixtures/`, restores the two pair
+   lines and updates READMEs and counts (64 fixtures). Then the orchestrator runs: workspace
+   tests, clippy (host and Windows target), fmt, schema check, grader tests, static in both
+   modes and the full dynamic run on the 64 fixtures (compare with the scratch dir
+   `u11acc/dynamic.json`), then a snapshot without `[skip ci]` for CI, then one commit on
+   `main`. Do not touch the README of node-signal-compose-22 (one sentence there is stale now;
+   the owner was told).
    Waiting for the owner (asked on 2026-11-20): (1) rust-slot-arena: add `src/arena.rs:24` to
    the key's alt_sites? (2) the tie rule: may an allocation stack tie through the nearest caller
    frame that has a finding (python-zstd-options-3144, go-trace-context), or stay strict with
