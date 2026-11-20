@@ -1,4 +1,4 @@
-# Where the work stands (2026-11-20, 09:35 UTC)
+# Where the work stands (2026-11-20, 12:10 UTC)
 
 ## Working rule from the owner (2026-11-20, 09:25 UTC), above every other habit
 "You should be using sonnet 5.5 subagents for tasks and verify yourself, since my limits are
@@ -60,13 +60,25 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
      lands one frame below the leak's site, so nothing ties.
    - rust-slot-arena: DLA confirms the leak at the holder's declaration `src/arena.rs:24`, which
      the answer key does not list.
-   Fix pass 1 (brief `open-fixtures-fix-brief.md`): five packages. F-a (label evidence) is
-   fixed (report in the scratch dir `u14/F-a/report-fix.md`), to be verified by the
-   orchestrator. Running since 09:30 UTC as workflow `open-fixtures-fix-1b` (Sonnet only, no
-   checker agents): chain 1: F-b Python census and agent, then F-c Node; chain 2: F-d Go static
-   rules (continues the partial edits of a stopped agent), then the design of F-e (Go in-run
-   measurement; written to `u14/F-e/design.md`, the orchestrator reviews it before the build).
-   Each fixer writes `u14/<package>/report-fix.md`.
+   Fix pass 1 (brief `open-fixtures-fix-brief.md`), state at 12:10 UTC on 2026-11-20:
+   - F-a (L-REGISTER accepts growth-series + alloc-stack), F-b (Python: `gc.freeze` census
+     entry, agent group `py.gc_frozen`, native codec vocabulary), F-c (Node: unmeasurable probe
+     roots, FinalizationRegistry registration holder), F-d (Go: `go-slice-view-retained`, Go in
+     the chain-head-growth rule, holder/owner/region on a static hit) are written by Sonnet
+     agents (`open-fixtures-report-F-*.md`) and verified by the orchestrator on the tree with
+     diff hash 4d93f846: workspace tests 2778 passed, 0 failed; clippy (host and Windows
+     target), fmt, schema check and grader tests pass; static passes in both modes for scratch
+     copies of all eight parked fixtures with no external Go analyzer; dynamic passes for
+     go-ticker-legacy, python-frozen-gc and node-signal-compose-24 with their partners.
+   - Found by the orchestrator's own probe: the slice-view rule matched callers by method name
+     only (a safe type with the same method name was flagged). Being fixed (task
+     `F-d:refix-receiver-type`).
+   - F-e (Go command mode measures while the workload runs): design `go-in-run-design.md`
+     reviewed and accepted by the orchestrator; being built (task `F-e:build`). Expected after
+     it: go-header-index passes; go-trace-context and go-feed-merge stop at the tie rule.
+   Both tasks run in workflow `open-fixtures-fix-1c` (Sonnet only). Then: the orchestrator
+   verifies (workspace tests, lints, static both modes, the full dynamic run), a Sonnet agent
+   moves the passing fixtures back and updates READMEs and counts, CI on a snapshot, commit.
    Waiting for the owner (asked on 2026-11-20): (1) rust-slot-arena: add `src/arena.rs:24` to
    the key's alt_sites? (2) the tie rule: may an allocation stack tie through the nearest caller
    frame that has a finding (python-zstd-options-3144, go-trace-context), or stay strict with
