@@ -1,12 +1,13 @@
 Make a measured growth binding, give flat runs a second look, fit series to their time
 
 Found by running the plugin on real libraries at versions with a documented leak. On a Go RPC
-library the documented leak is now measured and confirmed. On a JavaScript HTTP client the
-first harness measured the documented leak (one listener per request at the documented line,
-heap rising after collection) and the run still ended with nothing confirmed, twice: first
-because every series was too short for the gate and the tool said nothing, then because the
-model closed the run through holes in the ledger. On a Rust async library one flat run of one
-unit settled every candidate with almost the whole budget unused.
+library and a JavaScript HTTP client the documented leak is now measured and confirmed. On
+the HTTP client the first harness had measured it from the start (one listener per request
+at the documented line, heap rising after collection) and two runs still ended with nothing
+confirmed: first because every series was too short for the gate and the tool said nothing,
+then because the model closed the run through holes in the ledger. On a Rust async library
+one flat run of one unit settled every candidate with almost the whole budget unused, and a
+second, hand-picked unit ran one more fixed sequence.
 
 Series and drivers
 - `dla trend` lists the columns that fail the gate for their point count alone (`short`), in a
@@ -34,6 +35,10 @@ Queue
   are the same; `VARIES.txt` says what differs), with the variations to try printed in the
   driver. At most three such harnesses per runtime. A candidate is settled by two different
   drivers.
+- A second-look unit takes its sequence from the key: every driver has a choice helper, the
+  block gives the recipe (depth of derivation, which object gets the ending call, when the
+  intermediates are released, order of releases, success or failure), and a unit that takes
+  fewer than two choices is refused. The run says how many combinations the units took.
 - `unknown` settles nothing. A census registration whose own call is its only insert is its
   own writer, so a listener added to an object handed in from outside is ranked.
 
@@ -41,7 +46,10 @@ Ledger and gate
 - A finding that a passed growth column points at cannot be closed before an alloc-test is
   bound to it: `dla ledger close-rest` leaves it with runnable commands, `dla ledger resolve`
   refuses, the final gate lists it. A detector hit with a site is a gate item until it is
-  measured.
+  measured. Growth at another site of a leak an alloc-test already decided in the same
+  harness may be recorded with `dla ledger duplicate`.
+- A column that counts things made at one line (listeners, timers, goroutines by site) ties
+  only to the finding at that line, and a finding's own-site column is the one quoted.
 - `intake.workload` cannot be recorded as blocked when a harness of the run wrote a series
   for every runtime with candidates.
 - `dla gate check`, `dla run status` and the stop hook count actions: items that wait for the
