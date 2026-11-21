@@ -114,6 +114,14 @@
       "format": "uint64",
       "minimum": 0
     },
+    "targets": {
+      "description": "The findings this harness was generated to reach (`--probe` and `--next`), at most\n[`MAX_TARGETS`]. A target may have no probe of its own.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/FindingId"
+      }
+    },
     "timeout_secs": {
       "description": "Timeout per measured process in seconds (default 300).",
       "type": "integer",

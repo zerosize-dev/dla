@@ -317,7 +317,11 @@ fn with_the_queue_off_everything_is_as_before() {
     );
     assert!(!item["fix"].as_str().unwrap().contains("--next"), "{item}");
     let bounded = r.id_at("shop/reg.py:9");
-    assert_eq!(r.close(&bounded, "not_exercised").code, 0);
+    // The refusals that were there before are the only ones: no harness was generated for
+    // the entry points the discovery found.
+    let o = r.close(&bounded, "not_exercised");
+    assert_eq!(o.json["error"]["code"], "harness-not-generated", "{}", o.text);
+    assert_eq!(r.close(&bounded, "build_fails").code, 0);
     let lines: Vec<String> = fs::read_to_string(r.run_dir.join("ledger.jsonl"))
         .unwrap()
         .lines()
@@ -509,4 +513,37 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         "{ledger}"
     );
     assert!(ledger.contains("\"close_rest\""), "one run-config record lists what was closed");
+}
+
+#[test]
+fn the_stop_hook_leads_with_the_queue_item() {
+    let r = Run::new(&["--budget", "3h"]);
+    let away = tempfile::tempdir().unwrap();
+    let stdin = serde_json::json!({
+        "session_id": "0f7c2c1e-0000-4000-8000-000000000001",
+        "transcript_path": "/tmp/t.jsonl",
+        "cwd": r.dir.path(),
+        "permission_mode": "default",
+        "hook_event_name": "Stop",
+        "stop_hook_active": false,
+        "last_assistant_message": "done",
+        "background_tasks": [],
+        "session_crons": [],
+    })
+    .to_string();
+    let mut c = command(r.dir.path());
+    let o = c
+        .current_dir(away.path())
+        .args(["gate", "stop-hook"])
+        .write_stdin(stdin)
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["decision"], "block", "{v}");
+    let reason = v["reason"].as_str().unwrap();
+    assert!(reason.len() <= 1000, "{} bytes", reason.len());
+    let queue = reason.find("candidate(s) of python are ranked for measurement").unwrap();
+    let finding = reason.find("finding F1").unwrap_or(usize::MAX);
+    assert!(queue < finding, "{reason}");
+    assert!(reason.contains(BATCH), "{reason}");
 }
