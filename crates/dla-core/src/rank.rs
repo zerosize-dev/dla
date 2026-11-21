@@ -298,27 +298,41 @@ pub fn lifetime_of(f: &Finding, facts: Option<Lifetime>) -> Lifetime {
     })
 }
 
-/// Sites of `list` that exist for the score: the structured ones, or, for an annotation
-/// that carries only `file:line` strings (a hand-written one, or a language the census does
-/// not read), one unclassified site per string.
-fn sites_of(structured: &[SiteFact], plain: &[String], kind: SiteKind) -> Vec<SiteFact> {
-    if !structured.is_empty() {
-        return structured.to_vec();
-    }
-    plain
-        .iter()
-        .map(|s| SiteFact {
-            site: s.clone(),
-            kind,
-            depth: 0,
-            function: None,
-            init: false,
-            startup: false,
-            param: false,
-            constant: false,
-            exported: false,
-        })
-        .collect()
+/// The sites the score reads: the structured ones the census recorded, and one unclassified
+/// site for each plain `file:line` string that none of them covers (a site added by hand with
+/// `dla ledger annotate`, or every site of a language the census does not read).
+fn sites_of(
+    structured: &[SiteFact],
+    plain: &[String],
+    kind: SiteKind,
+    unit: bool,
+) -> Vec<SiteFact> {
+    let mut out = structured.to_vec();
+    // What the census lists for a unit (a timer, a task) is what its function does to the
+    // variable; the creation site is its one writer.
+    let plain = if unit && !structured.is_empty() {
+        &[]
+    } else {
+        plain
+    };
+    out.extend(
+        plain
+            .iter()
+            .filter(|s| !structured.iter().any(|x| &x.site == *s))
+            .take(0)
+            .map(|s| SiteFact {
+                site: s.clone(),
+                kind,
+                depth: 0,
+                function: None,
+                init: false,
+                startup: false,
+                param: false,
+                constant: false,
+                exported: false,
+            }),
+    );
+    out
 }
 
 /// Every signal that applies to a finding, with its weight, in the order of [`WEIGHTS`].
@@ -394,8 +408,13 @@ pub fn contributions(f: &Finding, annotation: Option<&Annotation>) -> Vec<(&'sta
     }
 
     // Writers.
-    let writers = sites_of(&facts.writer_sites, &a.writers, SiteKind::Insert);
-    let removers = sites_of(&facts.remover_sites, &a.removers, SiteKind::Delete);
+    let writers = sites_of(
+        &facts.writer_sites,
+        &a.writers,
+        SiteKind::Insert,
+        unit_entry,
+    );
+    let removers = sites_of(&facts.remover_sites, &a.removers, SiteKind::Delete, false);
     let inserts: Vec<&SiteFact> = writers
         .iter()
         .filter(|s| s.kind.adds() && s.depth <= 1)
@@ -1091,5 +1110,22 @@ mod tests {
             let f = finding("census", &[], Some(Holder::StaticGlobal), site);
             assert_eq!(tier(&f, Some(&ann(2, 0))), 2, "{site}");
         }
+    }
+
+    #[test]
+    fn a_writer_added_by_hand_next_to_census_sites_counts_as_an_unclassified_insert() {
+        let mut once = site("pkg/a.py:4", SiteKind::Insert, 0, "init");
+        once.init = true;
+        once.startup = true;
+        let mut a = facts_ann(|h| h.writer_sites = vec![once.clone()]);
+        let f = census_holder(Holder::ContainerField);
+        assert!(!names(&f, &a).contains(&"w_runtime"));
+        // `dla ledger annotate F1 --writer pkg/a.py:90`: no census fact says where it runs.
+        a.writers.push("pkg/a.py:90".to_owned());
+        let n = names(&f, &a);
+        assert!(
+            n.contains(&"w_runtime") && !n.contains(&"w_startup_all"),
+            "{n:?}"
+        );
     }
 }

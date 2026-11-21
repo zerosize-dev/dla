@@ -1404,20 +1404,18 @@ fn cmd_text(c: &CommandSpec, hdir: &Path) -> String {
     clip(&c.argv.join(" ").replace(&h, "<H>"), 160)
 }
 
+/// The targets of a harness, what `--next` found nothing to declare says, and the targets
+/// `--next` added because they share an owner with another (added finding, finding it came with).
+type DeclaredTargets = (
+    Vec<FindingId>,
+    Option<String>,
+    std::collections::BTreeMap<FindingId, FindingId>,
+);
+
 /// The findings a harness is generated to reach: the `--probe` findings, then (with
 /// `--next`) the next pending entries of the runtime's queue, at most [`MAX_TARGETS`] in all.
 /// The second value says so when `--next` found nothing to declare.
-fn resolve_targets(
-    ctx: &ToolCtx,
-    opts: &GenOptions,
-) -> Result<
-    (
-        Vec<FindingId>,
-        Option<String>,
-        std::collections::BTreeMap<FindingId, FindingId>,
-    ),
-    Refusal,
-> {
+fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, Refusal> {
     use dla_core::harness::{MAX_TARGETS, MAX_TARGETS_WITH_SIBLINGS};
     let rt = opts.lang;
     let mut ids: Vec<FindingId> = Vec::new();

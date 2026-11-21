@@ -208,7 +208,10 @@ fn line_of(n: Node<'_>) -> u32 {
 }
 
 fn base_type(t: &str) -> String {
-    let t = t.trim().trim_start_matches(['*', '&']).trim_start_matches("[]");
+    let t = t
+        .trim()
+        .trim_start_matches(['*', '&'])
+        .trim_start_matches("[]");
     let t = t.trim_start_matches('*').trim_start_matches("...");
     let t = t.rsplit('.').next().unwrap_or(t);
     t.split('[').next().unwrap_or(t).trim().to_owned()
@@ -225,7 +228,9 @@ fn ident_names(n: Node<'_>, src: &str, kinds: &[&str], out: &mut Vec<String>) {
 fn go_frame(n: Node<'_>, src: &str) -> Option<Frame> {
     let lit = n.kind() == "func_literal";
     let mut f = Frame {
-        name: n.child_by_field_name("name").map(|c| text(c, src).to_owned()),
+        name: n
+            .child_by_field_name("name")
+            .map(|c| text(c, src).to_owned()),
         start: line_of(n),
         end: ast::end_line(n),
         lit,
@@ -290,7 +295,9 @@ fn java_frame(n: Node<'_>, src: &str) -> Option<Frame> {
             }
         }
         _ => {
-            f.name = n.child_by_field_name("name").map(|c| text(c, src).to_owned());
+            f.name = n
+                .child_by_field_name("name")
+                .map(|c| text(c, src).to_owned());
             f.ctor = n.kind() == "constructor_declaration";
             if let Some(p) = n.child_by_field_name("parameters") {
                 let mut c = p.walk();
@@ -313,17 +320,24 @@ fn java_frame(n: Node<'_>, src: &str) -> Option<Frame> {
         .parent()
         .and_then(|p| p.parent())
         .is_some_and(|c| c.kind() == "interface_declaration");
-    f.public = mods.contains("public") || mods.contains("protected") || (in_interface && !mods.contains("private"));
+    f.public = mods.contains("public")
+        || mods.contains("protected")
+        || (in_interface && !mods.contains("private"));
     // The classes around it.
     let mut all_public = true;
     for a in ancestors(n).filter(|a| {
         matches!(
             a.kind(),
-            "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration"
+            "class_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
+                | "record_declaration"
         )
     }) {
         if f.class.is_none() {
-            f.class = a.child_by_field_name("name").map(|c| text(c, src).to_owned());
+            f.class = a
+                .child_by_field_name("name")
+                .map(|c| text(c, src).to_owned());
         }
         let m = java_modifiers(a, src);
         let nested_in_interface = a
@@ -363,13 +377,18 @@ fn py_params(p: Node<'_>, src: &str) -> Vec<String> {
 
 fn py_frame(n: Node<'_>, src: &str) -> Option<Frame> {
     let lit = n.kind() == "lambda";
-    let name = n.child_by_field_name("name").map(|c| text(c, src).to_owned());
+    let name = n
+        .child_by_field_name("name")
+        .map(|c| text(c, src).to_owned());
     let mut f = Frame {
         start: line_of(n),
         end: ast::end_line(n),
         lit,
         ctor: name.as_deref().is_some_and(|x| {
-            matches!(x, "__init__" | "__new__" | "__post_init__" | "__init_subclass__")
+            matches!(
+                x,
+                "__init__" | "__new__" | "__post_init__" | "__init_subclass__"
+            )
         }),
         name,
         ..Frame::default()
@@ -378,7 +397,9 @@ fn py_frame(n: Node<'_>, src: &str) -> Option<Frame> {
         f.params = py_params(p, src);
     }
     if let Some(c) = ancestors(n).find(|a| a.kind() == "class_definition") {
-        f.class = c.child_by_field_name("name").map(|x| text(x, src).to_owned());
+        f.class = c
+            .child_by_field_name("name")
+            .map(|x| text(x, src).to_owned());
         f.private_class = f.class.as_deref().is_some_and(|c| c.starts_with('_'));
     }
     Some(f)
@@ -426,12 +447,18 @@ fn js_params(p: Node<'_>, src: &str) -> Vec<String> {
 
 fn js_frame(n: Node<'_>, src: &str) -> Option<Frame> {
     let k = n.kind();
-    let mut name = n.child_by_field_name("name").map(|c| text(c, src).to_owned());
+    let mut name = n
+        .child_by_field_name("name")
+        .map(|c| text(c, src).to_owned());
     let anonymous = matches!(k, "arrow_function" | "function_expression" | "function");
     if anonymous && name.is_none() {
         name = n.parent().and_then(|p| match p.kind() {
-            "variable_declarator" => p.child_by_field_name("name").map(|c| text(c, src).to_owned()),
-            "pair" => p.child_by_field_name("key").map(|c| text(c, src).to_owned()),
+            "variable_declarator" => p
+                .child_by_field_name("name")
+                .map(|c| text(c, src).to_owned()),
+            "pair" => p
+                .child_by_field_name("key")
+                .map(|c| text(c, src).to_owned()),
             "assignment_expression" => p
                 .child_by_field_name("left")
                 .and_then(|c| ast::last_word(text(c, src)))
@@ -458,7 +485,9 @@ fn js_frame(n: Node<'_>, src: &str) -> Option<Frame> {
         f.params = js_params(p, src);
     }
     if let Some(c) = ancestors(n).find(|a| matches!(a.kind(), "class_declaration" | "class")) {
-        f.class = c.child_by_field_name("name").map(|x| text(x, src).to_owned());
+        f.class = c
+            .child_by_field_name("name")
+            .map(|x| text(x, src).to_owned());
     }
     Some(f)
 }
@@ -468,15 +497,18 @@ fn callee_parts(f: Node<'_>, src: &str, fam: Fam) -> Option<(String, Option<Stri
         (_, "identifier") => Some((text(f, src).to_owned(), None)),
         (Fam::Go, "selector_expression") => Some((
             text(f.child_by_field_name("field")?, src).to_owned(),
-            f.child_by_field_name("operand").map(|o| text(o, src).to_owned()),
+            f.child_by_field_name("operand")
+                .map(|o| text(o, src).to_owned()),
         )),
         (Fam::Python, "attribute") => Some((
             text(f.child_by_field_name("attribute")?, src).to_owned(),
-            f.child_by_field_name("object").map(|o| text(o, src).to_owned()),
+            f.child_by_field_name("object")
+                .map(|o| text(o, src).to_owned()),
         )),
         (Fam::Js, "member_expression") => Some((
             text(f.child_by_field_name("property")?, src).to_owned(),
-            f.child_by_field_name("object").map(|o| text(o, src).to_owned()),
+            f.child_by_field_name("object")
+                .map(|o| text(o, src).to_owned()),
         )),
         _ => None,
     }
@@ -494,7 +526,12 @@ fn build_file(sf: &SourceFile) -> Option<FileCtx> {
     visit(root, &mut |n| {
         let k = n.kind();
         let frame = match fam {
-            Fam::Go if matches!(k, "function_declaration" | "method_declaration" | "func_literal") => {
+            Fam::Go
+                if matches!(
+                    k,
+                    "function_declaration" | "method_declaration" | "func_literal"
+                ) =>
+            {
                 go_frame(n, src)
             }
             Fam::Java
@@ -545,10 +582,12 @@ fn build_file(sf: &SourceFile) -> Option<FileCtx> {
                     if fam == Fam::Python && name.chars().next().is_some_and(char::is_uppercase) {
                         creations.push((name.clone(), line_of(n)));
                     }
-                    if fam == Fam::Go && name == "new" {
-                        if let Some(a) = n.child_by_field_name("arguments") {
-                            creations.push((base_type(text(a, src).trim_matches(['(', ')'])), line_of(n)));
-                        }
+                    if fam == Fam::Go
+                        && name == "new"
+                        && let Some(a) = n.child_by_field_name("arguments")
+                    {
+                        creations
+                            .push((base_type(text(a, src).trim_matches(['(', ')'])), line_of(n)));
                     }
                     calls.push(Call {
                         name,
@@ -561,7 +600,9 @@ fn build_file(sf: &SourceFile) -> Option<FileCtx> {
                 if let Some(name) = n.child_by_field_name("name") {
                     calls.push(Call {
                         name: text(name, src).to_owned(),
-                        qual: n.child_by_field_name("object").map(|o| text(o, src).to_owned()),
+                        qual: n
+                            .child_by_field_name("object")
+                            .map(|o| text(o, src).to_owned()),
                         line: line_of(n),
                     });
                 }
@@ -634,7 +675,10 @@ impl<'a> Project<'a> {
                     .push((i, c.line, c.qual.clone()));
             }
             for (t, l) in &f.creations {
-                creations.entry((f.fam, t.clone())).or_default().push((i, *l));
+                creations
+                    .entry((f.fam, t.clone()))
+                    .or_default()
+                    .push((i, *l));
             }
         }
         Self {
@@ -658,7 +702,11 @@ impl<'a> Project<'a> {
         }
         let n = f.name.as_deref().unwrap_or("");
         match fam {
-            Fam::Go => n == "init" || n == "main" || (f.recv_type.is_none() && !f.lit && new_fn().is_match(n)),
+            Fam::Go => {
+                n == "init"
+                    || n == "main"
+                    || (f.recv_type.is_none() && !f.lit && new_fn().is_match(n))
+            }
             Fam::Python => matches!(n, "main" | "setup" | "setUp"),
             Fam::Java => n == "main",
             Fam::Js => false,
@@ -673,7 +721,10 @@ impl<'a> Project<'a> {
                 if format!("/{}", fc.rel).contains("/internal/") {
                     return false;
                 }
-                if f.recv_type.as_deref().is_some_and(|t| !t.starts_with(char::is_uppercase)) {
+                if f.recv_type
+                    .as_deref()
+                    .is_some_and(|t| !t.starts_with(char::is_uppercase))
+                {
                     return false;
                 }
                 !f.lit && n.starts_with(char::is_uppercase)
@@ -743,7 +794,14 @@ impl<'a> Project<'a> {
         if hops == 0 || f.lit || f.name.as_deref().is_none_or(|n| n.len() < 3) {
             return false;
         }
-        let key = (self.by_rel.get(fc.rel.as_str()).copied().unwrap_or(usize::MAX), f.start, hops);
+        let key = (
+            self.by_rel
+                .get(fc.rel.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+            f.start,
+            hops,
+        );
         if let Some(&v) = self.memo.borrow().get(&key) {
             return v;
         }
@@ -751,7 +809,9 @@ impl<'a> Project<'a> {
         self.memo.borrow_mut().insert(key, false);
         let callers = self.callers(fc, f);
         let ok = (1..=MAX_CALLERS).contains(&callers.len())
-            && callers.iter().all(|&(fi, ln)| self.site_startup(&self.files[fi], ln, hops - 1));
+            && callers
+                .iter()
+                .all(|&(fi, ln)| self.site_startup(&self.files[fi], ln, hops - 1));
         self.memo.borrow_mut().insert(key, ok);
         ok
     }
@@ -765,7 +825,12 @@ impl<'a> Project<'a> {
         if self.is_init(fc.fam, Some(outer)) {
             return true;
         }
-        hops > 0 && chain.iter().rev().find(|f| !f.lit && f.name.is_some()).is_some_and(|f| self.startup(fc, f, hops))
+        hops > 0
+            && chain
+                .iter()
+                .rev()
+                .find(|f| !f.lit && f.name.is_some())
+                .is_some_and(|f| self.startup(fc, f, hops))
     }
 }
 
@@ -793,7 +858,9 @@ fn decl_text(fc: &FileCtx, line: u32) -> String {
         while fc.line(k).trim_start().starts_with('@') && k < line + 8 {
             k += 1;
             post.push(fc.line(k).trim().to_owned());
-            if fc.line(k).trim_start().starts_with("def ") || fc.line(k).trim_start().starts_with("async def ") {
+            if fc.line(k).trim_start().starts_with("def ")
+                || fc.line(k).trim_start().starts_with("async def ")
+            {
                 break;
             }
         }
@@ -833,13 +900,13 @@ fn classify_decl(fc: &FileCtx, raw: &Raw, name: &str, dtext: &str, longtext: &st
     let t = dtext;
     let mut cont: i8 = 0;
     let kind = raw.kind.as_str();
-    if matches!(
-        kind,
-        "registration" | "static-init-registration"
-    ) {
+    if matches!(kind, "registration" | "static-init-registration") {
         cont = 1;
     }
-    if matches!(kind, "registry-field" | "static-registry" | "package-registry") {
+    if matches!(
+        kind,
+        "registry-field" | "static-registry" | "package-registry"
+    ) {
         cont = 2;
     }
     let cache_dec = kind == "cache-decorator"
@@ -926,8 +993,10 @@ fn classify_decl(fc: &FileCtx, raw: &Raw, name: &str, dtext: &str, longtext: &st
     .is_match(t);
     let unbounded_cache = cache_dec
         && !sized_lru
-        && Regex::new(r"lru_cache\s*\(\s*(?:maxsize\s*=\s*)?None\s*\)|@\s*(?:functools\.)?cache\b(?:\s*\()?")
-            .is_ok_and(|r| r.is_match(t));
+        && Regex::new(
+            r"lru_cache\s*\(\s*(?:maxsize\s*=\s*)?None\s*\)|@\s*(?:functools\.)?cache\b(?:\s*\()?",
+        )
+        .is_ok_and(|r| r.is_match(t));
     if unbounded_cache {
         bound = Bound::UnboundedCache;
     } else if rx(
@@ -971,7 +1040,9 @@ fn classify_decl(fc: &FileCtx, raw: &Raw, name: &str, dtext: &str, longtext: &st
     let private = match fc.fam {
         Fam::Go => !name.starts_with(char::is_uppercase),
         Fam::Python => name.starts_with('_') && !(name.starts_with("__") && name.ends_with("__")),
-        Fam::Java => Regex::new(r"\bprivate\b").is_ok_and(|r| r.is_match(t.split(name).next().unwrap_or(t))),
+        Fam::Java => {
+            Regex::new(r"\bprivate\b").is_ok_and(|r| r.is_match(t.split(name).next().unwrap_or(t)))
+        }
         Fam::Js => {
             if raw.member_access {
                 name.starts_with(['_', '#']) || t.contains("private ")
@@ -1086,12 +1157,17 @@ fn lifetime_of(raw: &Raw) -> Lifetime {
     {
         return Lifetime::Process;
     }
-    if matches!(raw.holder, H::ContainerField | H::RegistrationTable | H::ClosureContinuation)
-        || matches!(
-            k,
-            "instance-field" | "singleton-field" | "registry-field" | "closure-field" | "container-field"
-        )
-    {
+    if matches!(
+        raw.holder,
+        H::ContainerField | H::RegistrationTable | H::ClosureContinuation
+    ) || matches!(
+        k,
+        "instance-field"
+            | "singleton-field"
+            | "registry-field"
+            | "closure-field"
+            | "container-field"
+    ) {
         return Lifetime::Object;
     }
     Lifetime::Unit
@@ -1123,17 +1199,13 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
     let unit = is_unit_kind(&raw.kind);
     // Declaration.
     let dtext = decl_text(fc, raw.line);
-    let longtext = if dtext.contains("LinkedHashMap") {
-        (raw.line..raw.line + 30)
+    let evicts = dtext.contains("LinkedHashMap")
+        && (raw.line..raw.line + 30)
             .map(|l| fc.line(l))
             .collect::<Vec<_>>()
             .join(" ")
-            .contains("removeEldestEntry")
-            .then(|| " removeEldestEntry".to_owned())
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+            .contains("removeEldestEntry");
+    let longtext = if evicts { " removeEldestEntry" } else { "" }.to_owned();
     let decl = classify_decl(fc, raw, &name, &dtext, &longtext);
     let life = lifetime_of(raw);
     facts.lifetime = Some(life);
@@ -1146,7 +1218,12 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
         facts.container = decl.container;
     }
     let owner_ty = owner_type(raw, life);
-    let ofile_stem = raw.file.rsplit('/').next().and_then(|f| f.split('.').next()).unwrap_or("");
+    let ofile_stem = raw
+        .file
+        .rsplit('/')
+        .next()
+        .and_then(|f| f.split('.').next())
+        .unwrap_or("");
 
     // Which sites can name the holder at all.
     let credible = |chain: &[&Frame], text: &str, other: &FileCtx| -> bool {
@@ -1169,8 +1246,12 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
                     false
                 } else {
                     let pkg = fc.dir().rsplit('/').next().unwrap_or("");
-                    Regex::new(&format!(r"\b{}\s*\.\s*{}\b", regex::escape(pkg), regex::escape(&name)))
-                        .is_ok_and(|r| r.is_match(text))
+                    Regex::new(&format!(
+                        r"\b{}\s*\.\s*{}\b",
+                        regex::escape(pkg),
+                        regex::escape(&name)
+                    ))
+                    .is_ok_and(|r| r.is_match(text))
                 }
             }
             Fam::Java => {
@@ -1180,15 +1261,23 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
                         (p.len() >= 2).then(|| p[p.len() - 2].to_owned())
                     });
                     cls.is_some_and(|c| {
-                        Regex::new(&format!(r"\b{}\s*\.\s*{}\b", regex::escape(&c), regex::escape(&name)))
-                            .is_ok_and(|r| r.is_match(text))
+                        Regex::new(&format!(
+                            r"\b{}\s*\.\s*{}\b",
+                            regex::escape(&c),
+                            regex::escape(&name)
+                        ))
+                        .is_ok_and(|r| r.is_match(text))
                     }) && !decl.private
                 }
             }
             Fam::Python => {
                 same || (!decl.private
-                    && Regex::new(&format!(r"\b{}\s*\.\s*{}\b", regex::escape(ofile_stem), regex::escape(&name)))
-                        .is_ok_and(|r| r.is_match(text)))
+                    && Regex::new(&format!(
+                        r"\b{}\s*\.\s*{}\b",
+                        regex::escape(ofile_stem),
+                        regex::escape(&name)
+                    ))
+                    .is_ok_and(|r| r.is_match(text)))
             }
             Fam::Js => same || !decl.private,
         }
@@ -1260,7 +1349,11 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
         if !rem.is_empty() || rst {
             let d = rem.iter().map(|e| e.depth).min().unwrap_or(0);
             removers.push(mk(
-                if rem.is_empty() { SiteKind::Reset } else { SiteKind::Delete },
+                if rem.is_empty() {
+                    SiteKind::Reset
+                } else {
+                    SiteKind::Delete
+                },
                 d,
                 None,
             ));
@@ -1321,7 +1414,11 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
         );
     }
     // Registrations: where the receiver comes from.
-    if matches!(raw.kind.as_str(), "registration" | "static-init-registration") && !name.is_empty() {
+    if matches!(
+        raw.kind.as_str(),
+        "registration" | "static-init-registration"
+    ) && !name.is_empty()
+    {
         facts.receiver = receiver_of(fc, raw, &name);
     }
     // How instances of the owner type are made.
@@ -1350,7 +1447,10 @@ fn param_flow(
     _stmt: &str,
 ) -> (bool, bool) {
     let mut ps: HashSet<String> = HashSet::new();
-    let mut recvs: HashSet<String> = ["self", "cls", "this"].iter().map(|s| (*s).to_owned()).collect();
+    let mut recvs: HashSet<String> = ["self", "cls", "this"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
     for f in chain {
         ps.extend(f.params.iter().cloned());
         recvs.extend(f.recv.iter().cloned());
@@ -1388,7 +1488,8 @@ fn param_flow(
         && (ids.is_empty()
             || ids.iter().all(|i| {
                 i.chars().next().is_some_and(char::is_uppercase)
-                    && i.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
+                    && i.chars()
+                        .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
             }));
     (param, constant)
 }
@@ -1413,7 +1514,11 @@ fn receiver_of(fc: &FileCtx, raw: &Raw, name: &str) -> Option<Receiver> {
     };
     let re = Regex::new(&pat).ok()?;
     let local = (f0.start..=raw.line).any(|l| re.is_match(fc.line(l)));
-    Some(if local { Receiver::Local } else { Receiver::Outer })
+    Some(if local {
+        Receiver::Local
+    } else {
+        Receiver::Outer
+    })
 }
 
 fn owner_creation(proj: &Project<'_>, fc: &FileCtx, ty: &str) -> Option<OwnerCreation> {
@@ -1424,8 +1529,12 @@ fn owner_creation(proj: &Project<'_>, fc: &FileCtx, ty: &str) -> Option<OwnerCre
         if fc.fam == Fam::Go && other.dir() != fc.dir() {
             let pkg = fc.dir().rsplit('/').next().unwrap_or("");
             let l = other.line(ln);
-            if !Regex::new(&format!(r"\b{}\s*\.\s*{}\b", regex::escape(pkg), regex::escape(ty)))
-                .is_ok_and(|r| r.is_match(l))
+            if !Regex::new(&format!(
+                r"\b{}\s*\.\s*{}\b",
+                regex::escape(pkg),
+                regex::escape(ty)
+            ))
+            .is_ok_and(|r| r.is_match(l))
             {
                 continue;
             }
@@ -1436,7 +1545,12 @@ fn owner_creation(proj: &Project<'_>, fc: &FileCtx, ty: &str) -> Option<OwnerCre
             .iter()
             .rev()
             .find(|f| !f.lit && f.name.is_some() && f.recv_type.is_none())
-            .filter(|f| fc.fam == Fam::Go && f.name.as_deref().is_some_and(|n| n.starts_with("New") || n.starts_with("new")));
+            .filter(|f| {
+                fc.fam == Fam::Go
+                    && f.name
+                        .as_deref()
+                        .is_some_and(|n| n.starts_with("New") || n.starts_with("new"))
+            });
         if let Some(f) = factory {
             let callers = proj.callers(other, f);
             if callers.is_empty() {
@@ -1460,4 +1574,3 @@ fn owner_creation(proj: &Project<'_>, fc: &FileCtx, ty: &str) -> Option<OwnerCre
         OwnerCreation::PerCall
     })
 }
-

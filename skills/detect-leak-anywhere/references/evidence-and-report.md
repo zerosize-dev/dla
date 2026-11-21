@@ -271,6 +271,13 @@ for the verdict. For dynamic findings it prints:
   runtimes whose entry points cannot be measured (Rust, native); when a JVM run loaded project
   classes but matched no entry point it adds the count (`..., 0 of 225 entry points exercised,
   37 project classes loaded`): project code ran, the listed entry points were not the ones driven;
+- confirmed or strong leaks: a `Trigger:` line, and the `Findings:` line ends with the counts by trigger
+  (`confirmed and strong by trigger: reproduced through the public API 1, no trigger found 1, trigger not
+  checked 0`); the findings section lists the reproduced ones first. `Trigger: reproduced through the
+  public API in H5 (varies: <text>)` is a leak that real use can make grow. `Trigger: not found: it grows
+  when the harness passes new keys to <writer function>; two workloads through the public API did not
+  grow it (H5: <varies>; H6: <varies>)` is an unbounded holder with no trigger found. `Trigger: not
+  checked (<why>)` says why: queue off, the time at the floor, a blocker, or no entry-path harness yet;
 - a `Queue:` line after `Coverage:`: how many of the ranked candidates were targeted by a workload and
   how they came out (`Queue: 24 of 121 ranked candidates targeted in 3 harnesses: grew 1, changed 3,
   executed 14, not reached 6; 97 not targeted`). "Not reached" is a candidate whose unit never reached
@@ -324,7 +331,9 @@ Show the report exactly as printed. If it says INCOMPLETE, say so and list what 
 After the report, say it in this order, copying every number from `dla report` or `dla run status`:
 
 1. One line from the `Findings:` line: leaks confirmed and verified, non-leak explanations (the `N-*`
-   siblings: "explanation, not a leak", never "confirmed"), unresolved.
+   siblings: "explanation, not a leak", never "confirmed"), unresolved. Name each confirmed leak by its
+   `Trigger:` line: reproduced is a leak, with what a caller varies; `not found` is "an unbounded holder,
+   no trigger found", never "a leak" and never "disputed" for that reason alone; `not checked` says why.
 2. The `Coverage:` line. When it shows 0 or a minority of the entry points exercised, say first that this
    run did not test the rest, so it neither shows nor rules out a leak there; name the cause and quote the
    ledger's remedy as printed.

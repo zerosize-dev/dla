@@ -166,6 +166,36 @@ rank, the minutes left and the fix.
 - Remedy: declare at most 8 per harness: `--next 5 --probe F12`, or fewer `--probe` flags; the rest go
   in the next harness (`dla harness gen --lang <rt> --driver --next`).
 
+## A finding cannot get an entry-path harness (`entry-not-grown`)
+
+`dla harness gen --driver --entry F` is refused with `entry-not-grown` when F is a non-leak explanation,
+or has not grown in any harness: the trigger is asked for a holder that grows when a harness feeds it
+keys.
+- Remedy: measure it first with a hook driver (`dla harness gen --lang <rt> --driver --probe F`, fill
+  the hooks, `dla harness run H<n> --mode both`, `dla trend S<n>`); when it has `grew`, `--entry F`.
+  More than 8 findings are refused `too-many-targets`: give at most 8, the rest in the next harness.
+  `--entry` needs `--driver` and excludes `--probe` and `--next` (`invalid-value`).
+
+## An entry-path harness has no `VARIES.txt` line (`varies-missing`)
+
+`dla harness run H<n>` refuses an entry-path harness whose `harness/H<n>/driver/VARIES.txt` is empty or
+still the placeholder.
+- Remedy: write one line in that file: what a caller varies per unit (for example: the request path, a
+  different one per unit; unknown paths, which the project rejects). It is the trigger text of the report;
+  if a unit creates handlers, functions or configuration per call, say so in it. Then `dla harness run
+  H<n> --mode both`.
+
+## A confirmed leak has no trigger (item of kind `trigger`)
+
+`dla run status`, the final gate and the stop hook list `F8 grew when the harness fed it new keys;
+whether a caller of the public API can do that is not shown` for a confirmed or strong leak-side finding
+while the queue is on and more than the floor of the budget is left.
+- Remedy: the fix's `dla harness gen --lang <rt> --driver --entry F8,...`, fill the hooks with public
+  entry points only, write VARIES.txt, run, trend. After one harness without growth the item asks for a
+  second, different one. Never close the finding, answer with another reason or call the leak disputed
+  because the trigger is open; after two entry-path harnesses without growth the item is satisfied and
+  the report says `Trigger: not found`.
+
 ## Tempting moves
 
 Moves that feel like progress and are not. Where a gate also refuses the move, its refusal names the same step.
@@ -174,6 +204,7 @@ Moves that feel like progress and are not. Where a gate also refuses the move, i
 |---|---|
 | Many static findings, budget unspent: close them `suspected_static_only` and report. | Static-only is not done. Work the queue: `dla harness gen --lang <rt> --driver --next`, fill the hooks, `dla harness run H<n> --mode both`, `dla trend S<n>`; then `dla ledger close-rest` (stages.md, sections 4 and 9). |
 | One generic workload ran, so close every candidate it did not move. | It reached only what its units call. Each candidate needs a unit that reaches its writers with a new key; `target-pending` refuses the close until a batch targeted it. |
+| The first confirmed finding grew under a driver that feeds new keys, so call it a leak, or call it disputed because real use may not do that. | Growth under direct injection shows an unbounded holder. Run `dla harness gen --driver --entry F`: reproduced is a leak with its trigger; no trigger found after two different entry-path drivers is "an unbounded holder, no trigger found". |
 | Ask the user "should I continue?" with time left. | Continue. Ask only at or under the floor, to extend (Time budget in SKILL.md), or for what only the user can supply (a service, a credential, data), once, naming the finding ids and the exact input; an unattended run records the blocker with a remedy instead. |
 | A finding explains why memory is high, but nothing grows. | Record it as the `N-*` sibling, or an UNCLASSIFIED note; never confirm it as a leak. |
 | No closing reason fits. | Take the nearest real one (what was not reached, or what blocked it) with a remedy; never `time_budget` while more than the floor is left. |

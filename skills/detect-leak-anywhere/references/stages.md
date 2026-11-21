@@ -305,6 +305,35 @@ under the run directory and need tier 1.
      by `grew` or `changed`.
   5. `dla run status` again. The queue still open: the next batch (step 1). The queue empty or closed:
      `dla ledger close-rest` (stage 7).
+- The trigger of a leak: who feeds the keys? A holder GROWS when new keys reach it (what the drivers
+  above show); a caller can MAKE new keys reach it (the trigger). A hook driver feeds keys straight
+  into the writer, so its growth shows an unbounded holder, not that real use grows it. After a target
+  grew and was confirmed (stage 5), find the trigger: `dla harness gen --lang <rt> --driver --entry
+  F3,F4` (at most 8 findings, each a leak-side finding that grew in some harness; `--entry` excludes
+  `--probe` and `--next`). It writes a hook driver marked `purpose: entry-path`. Its target block gives
+  per finding the writer functions, their callers up to three hops (public ones marked, "matched by
+  name": no type is resolved), the parameter of the writer the key is built from and the expression each
+  first-hop call site passes for it, and the rules of an entry-path unit: call only the project's public
+  entry points (the functions, endpoints, commands or messages a user of the project calls), the objects
+  under test built once in `setup`; per unit vary only what a caller or a remote peer controls (ids,
+  names, paths, methods, headers, bodies, file names, message contents), including input the project
+  rejects (unknown paths, unsupported methods, malformed input: error paths often build objects per
+  call); never create functions, classes, handlers, loggers or configuration per unit unless a real
+  program does so per request, and if you do, say so. Fill `setup` and `unit`, write one line in
+  `driver/VARIES.txt` (what a caller varies per unit; `dla harness run` refuses `varies-missing` until it
+  is written), `dla harness run H<n> --mode both`, `dla trend S<n>`. The trend output of an entry-path
+  series prints `trigger` per target and the command that comes next.
+  - `reproduced`: the finding has `grew` in the trend of an entry-path harness, or in a harness that runs
+    the project's own workload (a fixed command or a JUnit repeat). The trigger text is the VARIES line.
+  - `not_found`: two entry-path harnesses with different drivers targeted it, ran, were read with `dla
+    trend`, and it grew in neither. After the first without growth write a second, different one (other
+    entry points, other inputs, the rejected-input paths); the same driver twice does not count.
+  - `unchecked`: it grew only in drivers that are not entry-path.
+  While the queue was on and more than the floor of the budget is left, a confirmed or strong leak-side
+  finding that is `unchecked` gives an item of kind `trigger` in `dla run status`, the final gate and the
+  stop hook, right after the queue items; its fix is the `--entry` command with every unchecked finding
+  of the runtime. `dla ledger confirm` is not blocked by it (confirmation says the holder grows). At or
+  under the floor the item is not raised and the report says the trigger was not checked for lack of time.
   A candidate that no probe can read is still a target: use the writer lines to make its units reach
   it; `executed` then tells you its code ran.
 - `dla harness run H1` builds once and measures every point (`--mode both` in driver mode). It records the
@@ -540,7 +569,8 @@ confirms nothing. Closing with `no_harness`, `not_exercised` or `time_budget` wh
 ## 8. Final gate
 
 `dla gate check --final` is the gate before the report. It needs everything the stage gates need, plus:
-every confirmed or strong leak-side finding has an explanation; every enumerated candidate of every
+every confirmed or strong leak-side finding has an explanation and a checked trigger (an item of kind
+`trigger` while it is unchecked and the queue is on with time left: stage 4, the trigger of a leak); every enumerated candidate of every
 backend is dispositioned (while a runtime's queue is open, one `queue` item leads the list with the
 batch command as its fix, and each pending candidate carries that command; every other open
 candidate carries `dla ledger close-rest`); every non-flat trend column is tied to a dispositioned finding (a whole-process column and a JVM type-count column that ties to no finding are accounted for by the residual rows instead); checklist
@@ -608,7 +638,9 @@ revisit, as a loop with an exit:
    <owner>") is run as one: `dla harness gen --lang <rt> --driver --probe F<n>`, fill the hooks,
    `dla harness run H<n> --mode both`, `dla trend S<n>`.
 3. `dla report` again, then repeat from 1. The report's `Queue:` line says how many ranked candidates
-   were targeted, in how many harnesses, with which verdicts, and how many were not targeted.
+   were targeted, in how many harnesses, with which verdicts, and how many were not targeted. Each
+   confirmed or strong finding has a `Trigger:` line; one that is `not checked` while time is left is
+   an open `trigger` item: run its `--entry` command first.
 
 Stop when every remaining item has a reason and a remedy that a command cannot clear now (a blocker,
 or something only the user can supply) or the deadline has passed, then judge the newest report. There
