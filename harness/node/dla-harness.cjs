@@ -86,7 +86,7 @@ async function main() {
         }
         if (perUnit * step * left > budget && !warned) {
           warned = true;
-          dla.note(`the unit is too slow for a series: even ${step} units per round (the floor) needs ${(perUnit * step * left).toFixed(0)} s for the ${left} rounds left and ${budget.toFixed(0)} s remain; make the unit cheaper (one request to a local server, no sleeps, smaller payloads) or run with a longer --timeout`);
+          dla.note(`the unit is too slow for a series: even ${step} units per round (the floor) needs ${(perUnit * step * left).toFixed(0)} s for the ${left} rounds left and ${budget.toFixed(0)} s remain; make the unit cheaper (one request to a local server, no sleeps, smaller payloads) or raise timeout_secs in harness.json`);
         }
       }
     }

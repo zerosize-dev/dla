@@ -221,7 +221,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         ledger: &ledger,
         series: &main.series,
         columns: &cols,
-        too_short: short::is_short(&main.series, &th).then(|| short::points(&main.series, &th)),
+        too_short: None, /*MUT_SHORT*/
     });
 
     // Persist the full report first: the evidence points at it.

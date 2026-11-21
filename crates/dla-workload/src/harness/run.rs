@@ -3543,7 +3543,7 @@ pub fn attention_lines(
     } else if out.tool.is_none() && out.points < planned && !out.series.is_empty() {
         lines.push(clip(
             &format!(
-                "PROCESS CUT: {} of {planned} points arrived; give the harness more time (--timeout) or a cheaper unit before trusting the series",
+                "PROCESS CUT: {} of {planned} points arrived; give the harness more time (timeout_secs in harness.json) or a cheaper unit before trusting the series",
                 out.points
             ),
             160,

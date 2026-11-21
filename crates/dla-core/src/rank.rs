@@ -218,7 +218,7 @@ fn registration_is_own_writer(f: &Finding, a: &Annotation) -> bool {
         && a.facts.writer_sites.is_empty()
         && std::iter::once(&f.origin)
             .chain(&f.also_origins)
-            .any(|o| o == "census")
+            .any(|o| o.as_str() == "census")
 }
 
 /// The tier of a finding, 1 (strongest) to 6 (demoted), from the finding and its

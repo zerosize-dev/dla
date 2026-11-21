@@ -1467,12 +1467,15 @@ fn next_commands(
                     "dla ledger add --sibling-of {root} --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence {evidence}   (a leak needs a refuted non-leak sibling)"
                 ));
             }
-            if !root_f.state.is_dispositioned() {
+            // A root that is open, or closed in a state the ledger lets go to `under_test`
+            // (`suspected_static_only`, `unresolved`), still gets its test and confirm.
+            let can_test = dla_core::machine::is_allowed(root_f.state, FindingState::UnderTest);
+            if !root_f.state.is_dispositioned() || can_test {
                 let growth = growth_evidence(ledger, root_f).map_or_else(
                     || "<growth evidence from dla trend>".to_owned(),
                     |e| e.to_string(),
                 );
-                if root_f.state == FindingState::Candidate
+                if can_test
                     && let Some(w) = workload_evidence(ledger, harness)
                 {
                     next.push(format!("dla ledger test {root} --evidence {w}"));

@@ -482,6 +482,10 @@ fn instruction(kind: &str, holder: &str, owner: &str, site: &str) -> String {
     }
 }
 
+/// Added to the instruction of a registration on an object handed in from outside (a parameter,
+/// a callback argument): it grows only when the object outlives the call.
+pub const OUTER_RECEIVER: &str = "; the object registered on comes from outside the function, so the count grows only when the same object is used again: make the units share it the way a long-lived caller does (a reused connection, a pooled or shared object) and do not shorten its life (no per-unit close of it, no timeouts that defeat the reuse)";
+
 /// The general line printed once after the targets.
 pub const GENERAL: &str = "use the project's public API the way a caller would; in fresh mode a unit must never reuse an earlier unit's key";
 
@@ -522,7 +526,17 @@ pub fn describe(
                 writers: sites(&ctx.project, &writers),
                 removers: sites(&ctx.project, &removers),
                 probe: probe_text(&ctx.project, a, probes),
-                instruction: instruction(&a.kind, &holder, &owner, &a.site),
+                instruction: {
+                    let mut text = instruction(&a.kind, &holder, &owner, &a.site);
+                    if holder == "registration-table"
+                        && ann.is_some_and(|a| {
+                            a.facts.receiver == Some(dla_core::census::Receiver::Outer)
+                        })
+                    {
+                        text.push_str(OUTER_RECEIVER);
+                    }
+                    text
+                },
                 sibling_of: siblings.get(&a.id).cloned(),
                 entry: None,
                 feature_gate: None,
