@@ -96,6 +96,7 @@ INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts
 and the missing ids, and the report says so.
 - A `harness_not_run` item means a generated harness was never run, or never built: run it (`dla harness run H<n>`; for one that did not build, fix the build error first; a run refused for time is not a run), or record why it cannot run on `intake.workload`, and ask the user first when only they can unblock it.
 - A `coverage_contradiction` item means iterations ran and no entry point was exercised: fill the DLA-HOOK bodies of the driver harness so it calls one and run it again; when the harness that produced the zero is a command harness or a JUnit repeat (no hooks), make a driver (`dla harness gen --lang <rt> --driver`), fill its hooks and run the harness it prints; when the harness did not build, fix the build error first; or record on `intake.workload` why it cannot. A `budget_left_unrevisited` item means findings were closed while the budget could still measure them: run the command in its fix, or record the blocker on `intake.workload`.
+- A `queue` item leads the list while a runtime still has pending ranked candidates: run its batch command (`dla harness gen --lang <rt> --driver --next`, fill the hooks, `dla harness run H<n> --mode both`, `dla trend S<n>`); once the queue is empty or closed, `dla ledger close-rest`.
 - Remedy: do not wait for it. Run `dla gate check --final`, fix the items it prints, or resolve each with
   `dla ledger resolve <F> --as unresolved --reason <r> --remedy "<text>"`, then `dla report`.
 - Record: if the stamp was already set, the report stays INCOMPLETE; say plainly what was left open and why.
@@ -108,7 +109,7 @@ other workers do not count as a change).
 - Remedy: `dla ledger merge` copies the slice anyway. If the worker never ended its slice it opens the item
   "worker <w> did not finish" and the run is INCOMPLETE; if it ended the slice (`ledger done`) with findings
   or open items still undispositioned, it opens the item "worker <w> stalled: ..." instead. The worker's
-  open findings block the report either way. Resolve the worker's open findings yourself with reasons and remedies
+  open findings block the report either way. Resolve the worker's open findings yourself: `dla ledger close-rest` for the candidates its queue has finished with (a pending one in an open queue is measured first, as for the core's own), else with reasons and remedies
   (`--as unresolved --reason not_exercised` when nothing measured it, the reason `dla run status` prints; `inconclusive` when
   the worker measured it; `env_unavailable` only when an environment failure stopped it), and tell the user a new run scoped to that
   runtime would cover it. A stalled worker is not restarted in the same run.
@@ -139,13 +140,40 @@ the worker's or the run's deadline; the refusal's fix names a smaller plan (`--i
   report's `Time:` line says how many findings were closed for lack of time and how many minutes
   measuring them needs; pass that to the user as the size of a new run (`--budget <m>m`).
 
+## A candidate is pending (`target-pending`)
+
+`dla ledger resolve F --reason not_exercised|no_harness|time_budget` is refused with `target-pending`
+while F is ranked for measurement, no targeted workload has settled it, and the queue of its runtime is
+open (budget over the floor, workload not blocked, candidates still pending). The message gives F's
+rank, the minutes left and the fix.
+- Remedy: run the batch command it prints (`dla harness gen --lang <rt> --driver --next`; a JVM project
+  with JUnit tests and no driver support keeps its generation command with `--next`), fill `setup` and
+  `unit` of the driver so each unit reaches the listed targets with a new key, `dla harness run H<n>
+  --mode both`, `dla trend S<n>`, read `targets`. Never answer the refusal with another reason, a blocker
+  reason you do not have, or a loop of `ledger resolve` calls.
+- When the queue is empty or closed, `dla ledger close-rest` closes the rest. `dla ledger list` shows each
+  candidate's queue status (`pending`, `settled`, `not-eligible`); never read `ledger.jsonl` by hand.
+- When no driver can be built or run for the runtime (no toolchain, the build fails, a privilege was
+  declined): `dla ledger resolve intake.workload --status unresolved --reason
+  <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy "<what blocks it>"`. That closes
+  the queue of the runtime; use it only when it is true.
+- Record: the batch you ran. A `constant`, `not_loaded` or `not_executed` target is run once more with a
+  fixed unit; two driver runs with different driver files settle a candidate whatever the verdicts.
+
+## Too many targets (`too-many-targets`)
+
+`dla harness gen` declared more than 8 targets (`--probe` and `--next` together count).
+- Remedy: declare at most 8 per harness: `--next 5 --probe F12`, or fewer `--probe` flags; the rest go
+  in the next harness (`dla harness gen --lang <rt> --driver --next`).
+
 ## Tempting moves
 
 Moves that feel like progress and are not. Where a gate also refuses the move, its refusal names the same step.
 
 | The move | What to do instead |
 |---|---|
-| Many static findings, budget unspent: close them `suspected_static_only` and report. | Static-only is not done. Run the harness for the runtime (`dla harness gen`, `dla harness run`), then revisit (stages.md, section 9). |
+| Many static findings, budget unspent: close them `suspected_static_only` and report. | Static-only is not done. Work the queue: `dla harness gen --lang <rt> --driver --next`, fill the hooks, `dla harness run H<n> --mode both`, `dla trend S<n>`; then `dla ledger close-rest` (stages.md, sections 4 and 9). |
+| One generic workload ran, so close every candidate it did not move. | It reached only what its units call. Each candidate needs a unit that reaches its writers with a new key; `target-pending` refuses the close until a batch targeted it. |
 | Ask the user "should I continue?" with time left. | Continue. Ask only at or under the floor, to extend (Time budget in SKILL.md), or for what only the user can supply (a service, a credential, data), once, naming the finding ids and the exact input; an unattended run records the blocker with a remedy instead. |
 | A finding explains why memory is high, but nothing grows. | Record it as the `N-*` sibling, or an UNCLASSIFIED note; never confirm it as a leak. |
 | No closing reason fits. | Take the nearest real one (what was not reached, or what blocked it) with a remedy; never `time_budget` while more than the floor is left. |

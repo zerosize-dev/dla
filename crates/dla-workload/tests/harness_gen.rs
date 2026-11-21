@@ -522,6 +522,7 @@ fn site_resolution_uses_the_census_then_declarations() {
 
     let (_d, ctx) = prepare("jvm-order-cache", Runtime::Jvm);
     let m = HarnessManifest {
+        targets: Vec::new(),
         probes: Vec::new(),
         ..jvm_manifest(&ctx)
     };
@@ -537,6 +538,7 @@ fn site_resolution_uses_the_census_then_declarations() {
 fn jvm_manifest(ctx: &ToolCtx) -> HarnessManifest {
     use dla_core::harness::CommandSpec;
     HarnessManifest {
+        targets: Vec::new(),
         schema_version: 1,
         id: "H9".into(),
         runtime: Runtime::Jvm,

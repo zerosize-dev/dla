@@ -365,6 +365,7 @@ fn trend_of(
         })
         .collect();
     let report = TrendReport {
+        targets: Vec::new(),
         schema_version: TREND_SCHEMA_VERSION,
         id: tc.next_trend_id(),
         series: series.id.clone(),
@@ -2455,6 +2456,7 @@ mod tests {
         s.columns[1] = col("go.heap_live");
         let ledger = Ledger::from_text("").unwrap();
         let trend = TrendReport {
+            targets: Vec::new(),
             schema_version: TREND_SCHEMA_VERSION,
             id: "T1".to_owned(),
             series: "S1".to_owned(),
@@ -2501,6 +2503,7 @@ mod tests {
             gate_failed: vec![],
         };
         let trend = TrendReport {
+            targets: Vec::new(),
             schema_version: TREND_SCHEMA_VERSION,
             id: "T1".to_owned(),
             series: "S1".to_owned(),
@@ -2517,6 +2520,7 @@ mod tests {
             p.values.push(Some(9e7 + p.x * 10.0));
         }
         let trend = TrendReport {
+            targets: Vec::new(),
             columns: vec![passed("os.vm_hwm"), passed("os.vm_data")],
             ..trend
         };
@@ -2683,6 +2687,7 @@ mod tests {
             )),
         });
         let trend = TrendReport {
+            targets: Vec::new(),
             schema_version: TREND_SCHEMA_VERSION,
             id: "T1".to_owned(),
             series: "S1".to_owned(),

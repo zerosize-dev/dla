@@ -439,6 +439,14 @@ pub struct RunState {
     /// The same counter for each worker's SubagentStop hook, by worker name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub worker_stop: BTreeMap<String, StopCounter>,
+    /// The measurement queue (`dla run init --queue on|off`): while on, a ranked candidate
+    /// that no harness targeted cannot be closed without a measurement. Older runs are on.
+    #[serde(default = "default_queue")]
+    pub queue: bool,
+}
+
+fn default_queue() -> bool {
+    true
 }
 
 /// Consecutive failing stop attempts with an unchanged digest.
@@ -535,6 +543,7 @@ impl RunState {
             stop_blocks: 0,
             stop_block_digest: None,
             worker_stop: BTreeMap::new(),
+            queue: true,
         })
     }
 

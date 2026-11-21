@@ -1730,6 +1730,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     )?;
 
     let manifest = HarnessManifest {
+        targets: Vec::new(),
         schema_version: dla_core::harness::HARNESS_SCHEMA_VERSION,
         id: id.clone(),
         runtime: rt,

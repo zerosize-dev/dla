@@ -3246,6 +3246,7 @@ mod tests_support {
 
     pub fn manifest() -> HarnessManifest {
         HarnessManifest {
+            targets: Vec::new(),
             schema_version: 1,
             id: "H1".into(),
             runtime: Runtime::Python,

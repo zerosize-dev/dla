@@ -154,6 +154,7 @@ mod tests {
             series::KeyMode,
         };
         HarnessManifest {
+            targets: Vec::new(),
             schema_version: 1,
             id: id.into(),
             runtime: Runtime::Jvm,

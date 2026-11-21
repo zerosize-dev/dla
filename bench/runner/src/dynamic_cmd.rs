@@ -232,6 +232,19 @@ pub const DEFAULT_COMMAND_TIMEOUT_S: u64 = 900;
 /// this stays well above the per-command limits).
 const RUN_BUDGET: &str = "2h";
 
+/// The `dla run init` command line of every run this driver opens (repository, artifact
+/// and symptom entries alike), followed by `extra`. It passes `--queue off`: the
+/// measurement queue makes `dla ledger resolve ... --reason not_exercised` refuse a
+/// candidate that no targeted workload has reached, and a fixed policy cannot write a
+/// workload (it cannot read the code), so it closes what its generated harnesses did not
+/// reach, as every fixture's expected result assumes. `dla-bench run` (the model
+/// benchmark) does not pass it: the model has to work the queue.
+pub(crate) fn run_init_args<'a>(extra: &[&'a str]) -> Vec<&'a str> {
+    let mut v = vec!["run", "init", "--budget", RUN_BUDGET, "--queue", "off"];
+    v.extend_from_slice(extra);
+    v
+}
+
 /// A fixture the acceptance is known to fail, and why. The policy of this driver is
 /// mechanical (it cannot read the code), so a leak whose evidence is only reachable by
 /// judgement is listed here instead of being weakened away. A listed fixture is reported as
@@ -2451,7 +2464,7 @@ fn drive(fx: &mut Fx) {
         Entry::Symptom => return artifact::drive_symptom(fx),
         Entry::Repository => {}
     }
-    if !fx.call(&["run", "init", "--budget", RUN_BUDGET]).ok {
+    if !fx.call(&run_init_args(&[])).ok {
         return;
     }
     let mut runtimes: Vec<String> = Vec::new();
@@ -2777,6 +2790,16 @@ fn run_in(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_dynamic_run_is_opened_with_the_queue_off() {
+        assert_eq!(
+            super::run_init_args(&[]),
+            ["run", "init", "--budget", "2h", "--queue", "off"]
+        );
+        let a = super::run_init_args(&["--entry", "symptom"]);
+        assert_eq!(&a[4..], ["--queue", "off", "--entry", "symptom"]);
+    }
+
     #[test]
     fn a_fixtures_toolchain_goes_first_on_the_path_of_a_dla_command() {
         let p = Provided {

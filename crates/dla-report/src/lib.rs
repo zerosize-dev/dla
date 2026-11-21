@@ -606,54 +606,12 @@ fn classes(view: &RunView, f: &Finding) -> String {
 const FULL_STATIC_ONLY: usize = 15;
 
 /// The sentence above the `suspected_static_only` findings.
-const TIER_NOTE: &str = "Suspected, static-only findings are ordered by how likely a read-only signal makes a leak, strongest first, and keep the ledger's order within a tier: (1) a known leak pattern, (2) a census holder with writers and no removers in a registration table, container field or static/global, (3) a detector hit, (4) a census holder with writers that also has removers or sits in a thread-local, closure, native handle or blocked stack, (5) everything else, such as a holder with no writers.";
+const TIER_NOTE: &str = dla_core::rank::TIER_NOTE;
 
-/// The rank of a `suspected_static_only` finding, 1 (strongest) to 5. Pure function of
-/// the finding and its census annotation, so the order is the same on every run.
+/// The rank of a finding, 1 (strongest) to 6 (demoted). Pure function of the finding and
+/// its census annotation, so the order is the same on every run.
 fn static_tier(view: &RunView, f: &Finding) -> u8 {
-    use dla_core::finding::Holder as H;
-    let origin = f.origin.as_str();
-    if origin.starts_with("known-leak:") {
-        return 1;
-    }
-    // A site raised by a rule or analyzer and by the census is one finding: it ranks as the
-    // better of the two.
-    let census = origin == "census" || f.also_origins.iter().any(|o| o.as_str() == "census");
-    let detector = origin.starts_with("detector:")
-        || f.also_origins
-            .iter()
-            .any(|o| o.as_str().starts_with("detector:"));
-    let detector_tier = if detector { 3 } else { 5 };
-    if census {
-        let (writers, removers) = view
-            .ledger
-            .annotation(&f.id)
-            .map_or((0, 0), |a| (a.writers.len(), a.removers.len()));
-        if writers > 0
-            && removers == 0
-            && matches!(
-                f.holder,
-                Some(H::RegistrationTable | H::ContainerField | H::StaticGlobal)
-            )
-        {
-            return 2;
-        }
-        if writers > 0
-            && (removers > 0
-                || matches!(
-                    f.holder,
-                    Some(
-                        H::ThreadLocal
-                            | H::ClosureContinuation
-                            | H::NativeHandleGlobalRef
-                            | H::BlockedStack
-                    )
-                ))
-        {
-            return 4.min(detector_tier);
-        }
-    }
-    detector_tier
+    dla_core::rank::tier(f, view.ledger.annotation(&f.id))
 }
 
 /// The origin cell of a table row: the origin, then the other origins that raised the site.
@@ -677,12 +635,12 @@ fn findings(out: &mut String, view: &RunView) {
     // Stable: inside a state the ledger order stays; inside suspected_static_only the
     // tier decides first.
     list.sort_by_key(|f| {
-        let tier = if f.state == FindingState::SuspectedStaticOnly {
-            static_tier(view, f)
+        let (tier, multi) = if f.state == FindingState::SuspectedStaticOnly {
+            (static_tier(view, f), dla_core::rank::multi_origin_key(f))
         } else {
-            0
+            (0, 0)
         };
-        (rank(f.state), tier)
+        (rank(f.state), tier, multi)
     });
     if list.is_empty() {
         let explained = view
@@ -1481,10 +1439,10 @@ mod tests {
             Ledger::from_text("").unwrap(),
             None,
         );
-        // A rule hit alone ranks 3; with a census entry that has no writers it still ranks 3.
-        assert_eq!(static_tier(&view, &f), 3);
+        // A DLA rule hit alone ranks 1; with a census entry that has no writers it still ranks 1.
+        assert_eq!(static_tier(&view, &f), 1);
         f.also_origins.push(Origin::parse("census").unwrap());
-        assert_eq!(static_tier(&view, &f), 3);
+        assert_eq!(static_tier(&view, &f), 1);
         let mut section = String::new();
         finding_section(&mut section, &view, &f);
         assert!(

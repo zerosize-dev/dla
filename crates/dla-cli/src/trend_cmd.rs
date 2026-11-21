@@ -213,6 +213,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     // Persist the full report first: the evidence points at it.
     let trend_id = tc.next_trend_id();
     let report = TrendReport {
+        targets: Vec::new(),
         schema_version: dla_core::trend::TREND_SCHEMA_VERSION,
         id: trend_id.clone(),
         series: main.series.id.clone(),

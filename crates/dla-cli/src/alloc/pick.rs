@@ -525,6 +525,7 @@ mod tests {
 
     fn trend(passing: &[&str]) -> TrendReport {
         TrendReport {
+            targets: Vec::new(),
             schema_version: TREND_SCHEMA_VERSION,
             id: "T1".to_owned(),
             series: "S1".to_owned(),

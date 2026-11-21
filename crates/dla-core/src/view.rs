@@ -44,6 +44,8 @@ pub struct RunView {
     /// The harnesses (`H1`) that some series names as its source (`source.harness`),
     /// built in the same pass over the series files as `gap_series`.
     pub harness_series: std::collections::BTreeSet<String>,
+    /// The harness (`H2`) each harness series (`S3`) was measured by.
+    pub series_harness: std::collections::BTreeMap<String, String>,
     /// Protected files other than `report.md` that no longer match their seal.
     pub tamper: Vec<Tamper>,
     /// True when `report.md` differs from the seal `dla` wrote at render time.
@@ -68,6 +70,7 @@ impl RunView {
             series_ids: Vec::new(),
             gap_series: std::collections::BTreeSet::new(),
             harness_series: std::collections::BTreeSet::new(),
+            series_harness: std::collections::BTreeMap::new(),
             tamper: Vec::new(),
             report_modified: false,
             unsealed_run: false,
@@ -115,6 +118,7 @@ impl RunView {
         self.series_ids = crate::series::list_ids(run_dir);
         self.gap_series.clear();
         self.harness_series.clear();
+        self.series_harness.clear();
         for id in &self.series_ids {
             let Ok(f) = crate::series::SeriesFile::load(run_dir, id) else {
                 continue;
@@ -123,6 +127,7 @@ impl RunView {
                 self.gap_series.insert(id.clone());
             }
             if let Some(h) = f.source.harness {
+                self.series_harness.insert(id.clone(), h.clone());
                 self.harness_series.insert(h);
             }
         }

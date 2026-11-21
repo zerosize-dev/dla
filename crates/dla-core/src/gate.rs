@@ -1378,7 +1378,7 @@ pub fn closes_without_exercise(reason: UnresolvedReason) -> bool {
 
 /// The reasons that record a blocker on `intake.workload`. `inconclusive` is not one: it
 /// says a measurement could not decide, not that something stopped the harness.
-fn is_blocker_reason(reason: UnresolvedReason) -> bool {
+pub(crate) fn is_blocker_reason(reason: UnresolvedReason) -> bool {
     match reason {
         UnresolvedReason::EnvUnavailable
         | UnresolvedReason::ToolMissing
@@ -1392,7 +1392,7 @@ fn is_blocker_reason(reason: UnresolvedReason) -> bool {
 }
 
 /// The harness directories of the run, `H1`, `H2`, ... in numeric order.
-fn harness_ids(run_dir: &Path) -> Vec<(u32, HarnessId)> {
+pub(crate) fn harness_ids(run_dir: &Path) -> Vec<(u32, HarnessId)> {
     let Ok(rd) = std::fs::read_dir(run_dir.join(crate::harness::HARNESS_DIR)) else {
         return Vec::new();
     };
@@ -1635,7 +1635,7 @@ pub fn finding_runtime(view: &RunView, f: &Finding) -> Option<String> {
 
 /// [`finding_runtime`] with the only-runtime-that-has-a-harness fallback computed once per
 /// caller: `only` holds it after the first use (`Some(None)`: there is no single runtime).
-fn finding_runtime_with(
+pub(crate) fn finding_runtime_with(
     view: &RunView,
     f: &Finding,
     only: &mut Option<Option<String>>,
@@ -1749,7 +1749,7 @@ impl NoHarness {
 /// `build_fails`, `privilege_declined`), or any reason when `blocker_only` is false,
 /// except `time_budget` while more than the shared floor of the budget is left (the
 /// answer must not be the early stop the rule exists to close).
-fn workload_unresolved(view: &RunView, blocker_only: bool) -> bool {
+pub(crate) fn workload_unresolved(view: &RunView, blocker_only: bool) -> bool {
     let time_left = !blocker_only && budget_over_floor(&view.state, None).is_some();
     view.ledger.lines().iter().any(|l| {
         matches!(&l.record, Record::ChecklistAnswer(a)
@@ -1781,7 +1781,7 @@ const JUNIT_TOOL: &str = "junit-platform-launcher";
 
 /// True when harness `h` of `runtime` is a JUnit repeat (its manifest names the JUnit
 /// launcher).
-fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
+pub(crate) fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
     crate::harness::HarnessManifest::load(run_dir, h)
         .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
 }

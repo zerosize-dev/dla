@@ -52,6 +52,7 @@ fn slow_project(budget: &str, script: &str, iterations: u32) -> (tempfile::TempD
     fs::create_dir_all(&work).unwrap();
     fs::create_dir_all(run_dir.join("harness/H1/agent")).unwrap();
     let m = HarnessManifest {
+        targets: Vec::new(),
         schema_version: 1,
         id: "H1".into(),
         runtime: Runtime::Native,

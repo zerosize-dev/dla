@@ -314,7 +314,10 @@ takes 10 to 90 s), `--json <file>`, `--log-dir <dir>` (default: `<json>.logs`),
 killed with its whole process group, the fixture fails with a message naming the
 command, and the rest of that fixture is skipped, so one stuck fixture cannot
 hold a worker until the job timeout). Each fixture's run is created with
-`--budget 2h`.
+`--budget 2h --queue off`: the measurement queue refuses to close a candidate no
+targeted workload has reached, and this fixed policy cannot write a workload, so it
+runs as before the queue existed. `dla-bench run` (the model benchmark) leaves the
+queue on.
 
 The policy, per fixture (repository entry, one runtime):
 
