@@ -382,11 +382,7 @@ fn many_residual_rows_are_bounded_in_the_header_and_complete_in_a_section() {
     assert!(!header.contains("1304.199053030303"), "{header}");
     // Every row is in a body section.
     let at = md.find("## Residual by series").unwrap();
-    assert_eq!(
-        md[at..].matches("unattributed of").count() >= 48,
-        true,
-        "{md}"
-    );
+    assert!(md[at..].matches("unattributed of").count() >= 48, "{md}");
 }
 
 #[test]

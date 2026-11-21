@@ -847,8 +847,7 @@ fn a_flat_series_still_records_the_verdicts_of_its_declared_targets() {
     let rec: Value = ledger
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|v| v["type"] == "evidence" && v["result"]["trend"] == "T1")
-        .next_back()
+        .rfind(|v| v["type"] == "evidence" && v["result"]["trend"] == "T1")
         .unwrap_or_else(|| panic!("no growth record of T1: {ledger}"));
     let recorded = rec["result"]["targets"].as_array().unwrap();
     assert_eq!(recorded.len(), 3, "{rec}");
