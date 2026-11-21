@@ -270,8 +270,8 @@ fn rust_function_span(project: &Path, site: &str) -> Option<(String, u32, u32)> 
 
 /// The findings whose own site or recorded writer lies in the same Rust function as `site`
 /// (an allocation stack of a Rust project is at the line of the call that allocates, the
-/// census at the line of the holder or its writer): used only when no finding is at `site`
-/// itself. Removers never count.
+/// census at the line of the holder or its writer) and none at `site` itself. This is a
+/// hint for the caller, never a tie: only `findings_at_site` ties. Removers never count.
 pub fn findings_in_rust_function(
     ledger: &Ledger,
     who: &Who,

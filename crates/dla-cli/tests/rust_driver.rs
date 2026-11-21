@@ -381,7 +381,7 @@ fn stack_diff_args(run_out: &Value) -> Vec<String> {
 }
 
 #[test]
-fn capture_alloc_names_the_leaking_function_and_ties_it_to_the_finding() {
+fn capture_alloc_names_the_leaking_function_hints_the_finding_and_an_annotate_ties_it() {
     if !have_alloc_tools() {
         return;
     }
@@ -414,6 +414,17 @@ fn capture_alloc_names_the_leaking_function_and_ties_it_to_the_finding() {
         "--capture",
         "alloc",
     ]);
+    // The series of the capture run itself does not propose the capture again.
+    let again = r.ok(&["trend", out["summary"]["series"][0].as_str().unwrap()]);
+    assert!(
+        !again["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|n| n.contains("--capture alloc")),
+        "{again}"
+    );
     let args = stack_diff_args(&out);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut cmd: Vec<&str> = Vec::new();
@@ -441,8 +452,24 @@ fn capture_alloc_names_the_leaking_function_and_ties_it_to_the_finding() {
             .starts_with("leak_one (src/lib.rs:"),
         "{sum}"
     );
-    // Tied to the finding of the static by the function that holds its writer.
-    assert_eq!(sum["tied"], serde_json::json!([kept]), "{sum}");
+    // The stack is at the line of the allocation, the writer of the static at another line of
+    // the function: not tied, but the finding is named with the command that would tie it.
+    assert_eq!(sum["tied"], serde_json::json!([]), "{sum}");
+    assert_eq!(sum["same_function"], serde_json::json!([kept]), "{sum}");
+    assert!(!sum.to_string().contains("no_leak"), "{sum}");
+    let next = sum["next"][0].as_str().unwrap();
+    let command = next.split("   #").next().unwrap();
+    assert!(
+        command.starts_with(&format!("dla ledger annotate {kept} --writer src/lib.rs:")),
+        "{next}"
+    );
+    assert!(next.contains("only if the block allocated there"), "{next}");
+    // Running the printed command and the summarize again ties it, by the site rule.
+    let words: Vec<&str> = command.split_whitespace().skip(1).collect();
+    r.ok(&words);
+    let again = r.ok(&cmd);
+    assert_eq!(again["tied"], serde_json::json!([kept]), "{again}");
+    assert!(again.get("same_function").is_none(), "{again}");
 }
 
 #[test]

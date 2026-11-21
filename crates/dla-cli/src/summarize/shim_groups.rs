@@ -742,11 +742,8 @@ fn run_diff(
                 .site
                 .as_deref()
                 .map(|site| {
-                    let mut at = tie::findings_at_site(ledger, &who, site);
-                    if at.is_empty() {
-                        at = tie::findings_in_rust_function(ledger, &who, &tc.project, site);
-                    }
-                    at.into_iter()
+                    tie::findings_at_site(ledger, &who, site)
+                        .into_iter()
                         .map(|f| (f, tie::TieReason::site(site)))
                         .collect()
                 })
@@ -754,6 +751,22 @@ fn run_diff(
             tie::resolve(matches, opts.finding.as_ref())
         })
         .collect();
+
+    // A growing stack that ties to nothing: the findings whose site or writer is in the same
+    // Rust function are named as a hint (never a tie): `(stack site, candidates)`.
+    let mut same_function: Vec<(String, Vec<FindingId>)> = Vec::new();
+    for (r, r_tie) in picked.iter().zip(&resolved) {
+        if r_tie.tie.is_some() || !r_tie.ambiguous.is_empty() || !monotone(r) {
+            continue;
+        }
+        let Some(site) = r.site.as_deref() else {
+            continue;
+        };
+        let found = tie::findings_in_rust_function(ledger, &who, &tc.project, site);
+        if !found.is_empty() && !same_function.iter().any(|(s, _)| s == site) {
+            same_function.push((site.to_owned(), found));
+        }
+    }
 
     // ---- raw file
     let (hid, hrel) = emit::next_histogram(tc)?;
@@ -1018,6 +1031,34 @@ fn run_diff(
     } else {
         "the growing stacks tie to no finding: a stack ties to the finding at its first project frame (dla census so a holder exists there); a stack with no project frame ties to nothing".to_owned()
     };
+    let mut needed = needed;
+    if !same_function.is_empty() {
+        let mut ids: Vec<String> = Vec::new();
+        let mut next: Vec<String> = Vec::new();
+        for (site, found) in &same_function {
+            let list: Vec<String> = found.iter().map(ToString::to_string).collect();
+            ids.extend(list.iter().cloned());
+            if let [one] = list.as_slice() {
+                next.push(format!(
+                    "dla ledger annotate {one} --writer {site}   # only if the block allocated there is what {one}'s holder keeps (read the function); then repeat this summarize command"
+                ));
+            } else {
+                next.push(format!(
+                    "{} have a site or writer in the function of {site}; if the block allocated there is what one holder keeps, dla ledger annotate <that finding> --writer {site} (read the function); then repeat this summarize command",
+                    list.join(", ")
+                ));
+            }
+        }
+        ids.sort();
+        ids.dedup();
+        body.insert("same_function".into(), json!(ids));
+        body.insert("next".into(), json!(next));
+        needed.push_str(&format!(
+            "; {} {} in the same function as a growing stack but not at its line: a hint, not a tie (see next)",
+            ids.join(", "),
+            if ids.len() == 1 { "has a site or writer" } else { "have a site or writer" }
+        ));
+    }
     body.insert("needed".into(), json!(needed));
     out.evidence.push(g.evidence);
     out.body = body;

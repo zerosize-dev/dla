@@ -727,6 +727,19 @@ fn suggestions(
                 // `--capture alloc` are what name the site of the growth.
                 if series.source.runtime == Some(dla_core::runtime::Runtime::Rust)
                     && let Some(h) = series.source.harness.as_deref()
+                    // Not again once this harness has allocation stacks of this run.
+                    && !ledger
+                        .path()
+                        .and_then(std::path::Path::parent)
+                        .map(|d| d.join("harness").join(h).join("out"))
+                        .and_then(|d| std::fs::read_dir(d).ok())
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .any(|e| {
+                            e.file_name().to_string_lossy().ends_with("-alloc")
+                                && e.path().join("shim-dump.jsonl").is_file()
+                        })
                 {
                     let cmd = format!(
                         "dla harness run {h} --mode fresh --capture alloc   # allocation stacks name the site of the growth of {}",

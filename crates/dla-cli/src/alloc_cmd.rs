@@ -1383,8 +1383,7 @@ fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
             .filter_map(|e| {
                 let g = GrowthSummary::from_result(&e.result)?;
                 (g.passed_gate()
-                    && g
-                        .best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
+                    && g.best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
                         .is_some())
                 .then(|| e.evidence_id.clone())
             })
@@ -1551,7 +1550,12 @@ mod tests {
         let root = l.finding(&"F1".parse().unwrap()).unwrap().clone();
         assert_eq!(growth_evidence(&l, &root), Some(tied));
         // Without a tied one the newest passing evidence is still named, as before.
-        let other = Finding { id: "F9".parse().unwrap(), site: None, owner: None, ..root.clone() };
+        let other = Finding {
+            id: "F9".parse().unwrap(),
+            site: None,
+            owner: None,
+            ..root.clone()
+        };
         assert_eq!(growth_evidence(&l, &other), Some(last(&l)));
     }
 
