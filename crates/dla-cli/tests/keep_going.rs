@@ -279,6 +279,7 @@ fn junit_manifest(r: &Run, id: &str) {
 
 fn harness_manifest_with(r: &Run, id: &str, mode: HarnessMode, tools: &[&str]) {
     HarnessManifest {
+        targets: Vec::new(),
         schema_version: 1,
         id: id.into(),
         runtime: Runtime::Jvm,
@@ -1415,7 +1416,7 @@ fn an_open_finding_names_the_harness_step_where_its_close_would_be_refused() {
     // Once a harness ran the close is accepted and the fix is the close.
     ran_attempt(&r, "H1");
     let fix = fix_of(&r);
-    assert!(fix.contains("dla ledger resolve F1"), "{fix}");
+    assert_eq!(fix, "dla ledger close-rest", "{fix}");
 }
 
 #[test]

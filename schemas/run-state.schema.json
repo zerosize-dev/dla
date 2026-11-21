@@ -66,6 +66,11 @@
       "description": "Absolute project root.",
       "type": "string"
     },
+    "queue": {
+      "description": "The measurement queue (`dla run init --queue on|off`): while on, a ranked candidate\nthat no harness targeted cannot be closed without a measurement. Older runs are on.",
+      "type": "boolean",
+      "default": true
+    },
     "redaction_salt": {
       "description": "Random per-run salt (hex) for value redaction.",
       "type": "string"

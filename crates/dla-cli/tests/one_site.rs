@@ -229,31 +229,40 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 #[test]
-fn probe_of_a_finding_no_probe_can_read_is_refused_with_the_reason() {
+fn probe_of_a_finding_no_probe_can_read_is_a_target_without_a_probe_and_says_why() {
     let d = tempfile::tempdir().unwrap();
     let project = d.path().join("project");
     copy_dir(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench/fixtures/go-buffer-pool/project"),
         &project,
     );
-    ok(&project, &["run", "init", "--session-id", "t"]);
+    let init = ok(&project, &["run", "init", "--session-id", "t"]);
     ok(&project, &["census", "--lang", "go"]);
     ok(&project, &["workload", "discover", "--lang", "go"]);
     let o = dla(
         &project,
         &["harness", "gen", "--lang", "go", "--probe", "F1"],
     );
-    assert_ne!(o.code, 0, "the request is not dropped: {}", o.text);
-    assert!(o.text.contains("--probe F1"), "{}", o.text);
+    // The request is not dropped and not refused: the finding is a target of the harness,
+    // and the manifest says why it has no probe.
+    assert_eq!(o.code, 0, "{}", o.text);
+    let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("harness/H1/harness.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["targets"], serde_json::json!(["F1"]), "{manifest}");
+    let gaps = manifest["gaps"].to_string();
+    assert!(gaps.contains("--probe F1"), "{gaps}");
     assert!(
-        o.text
-            .contains("go command mode has no package-variable probes"),
-        "{}",
-        o.text
+        gaps.contains("go command mode has no package-variable probes"),
+        "{gaps}"
     );
     assert!(
-        o.text
-            .contains("dla harness gen --lang go --driver --probe F1"),
+        gaps.contains("recorded as a target without a probe"),
+        "{gaps}"
+    );
+    assert_eq!(
+        o.json["summary"]["targets"][0]["probe"], false,
         "{}",
         o.text
     );

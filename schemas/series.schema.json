@@ -91,6 +91,11 @@
           "description": "The position of a heap dump in a series ordered by capture time.",
           "type": "string",
           "const": "dump"
+        },
+        {
+          "description": "The bytes the process had allocated in total when the capture was taken (the\nsum of `alloc_space` over a Go heap profile): proportional to the work done.",
+          "type": "string",
+          "const": "allocated-bytes"
         }
       ]
     },

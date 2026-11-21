@@ -70,6 +70,29 @@ pub struct InitArgs {
     /// Artifact file or directory relative to the project root, repeatable (entry artifact only, required there).
     #[arg(long)]
     artifact: Vec<String>,
+    /// Measurement queue: on (default) or off. While on, a ranked candidate that no workload targeted cannot be closed as not_exercised, no_harness or time_budget until the budget floor; `dla ledger list` shows the ranking and `dla harness gen --driver --next` targets the next batch. Off is for fixed policies that cannot write a workload.
+    #[arg(long, value_parser = parse_enum::<QueueSwitch>, default_value = "on")]
+    queue: QueueSwitch,
+}
+
+/// `--queue on|off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueSwitch {
+    /// The queue is enforced.
+    On,
+    /// Today's behaviour: candidates may be closed without a targeted workload.
+    Off,
+}
+
+impl std::str::FromStr for QueueSwitch {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            other => Err(format!("{other:?} is not on or off")),
+        }
+    }
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
@@ -86,7 +109,7 @@ fn run_config_result(
     seconds: u64,
     auto: bool,
     (scope, include): (&Option<Scope>, &[String]),
-    entry: EntryPath,
+    (entry, queue): (EntryPath, bool),
     artifacts: &[String],
 ) -> Res<Value> {
     if session.chars().count() > MAX_SESSION_ID_CHARS {
@@ -108,6 +131,7 @@ fn run_config_result(
         "scope": scope,
         "entry": entry.as_str(),
         "artifacts": artifacts,
+        "queue": if queue { "on" } else { "off" },
     });
     if !include.is_empty() {
         result["include"] = json!(include);
@@ -317,7 +341,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         seconds,
         auto,
         (&scope, &include),
-        entry,
+        (entry, a.queue == QueueSwitch::On),
         &artifacts,
     )?;
     if let Some(sc) = &scope {
@@ -335,6 +359,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
     st.entry = entry;
     st.artifacts = artifacts;
     st.include = include;
+    st.queue = a.queue == QueueSwitch::On;
     let ctx = Ctx {
         run_dir: state::run_dir(&project, &st.run_id),
         run_id: st.run_id.clone(),
@@ -398,6 +423,7 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         "budget_auto": auto,
         "entry": st.entry.as_str(),
         "artifacts": st.artifacts,
+        "queue": if st.queue { "on" } else { "off" },
         "evidence": "E1",
         "gitignore": ignored.as_str(),
         "record": ctx.pointer(STATE_FILE),
@@ -526,11 +552,13 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
             .filter(|f| view.ledger.merged_into(&f.id).is_none())
             .count()
     );
-    out["next_command"] = json!(next_command(
-        &view,
-        &missing,
-        &revisit,
-        ctx.worker.as_deref()
+    let queues = dla_core::queue::queues(&view, ctx.worker.as_deref());
+    if !queues.is_empty() {
+        out["queue"] = queue_json(&queues);
+    }
+    out["next_command"] = json!(queues.iter().find(|q| q.open()).map_or_else(
+        || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
+        |q| clip_command(&q.command)
     ));
     let mut truncated = total > shown.len();
     // Add revisit entries one by one while the whole object stays inside the output bound.
@@ -551,6 +579,28 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         out["truncated"] = Value::Bool(true);
     }
     Ok(out)
+}
+
+/// The `queue` object of `dla run status`: per runtime, how many candidates are eligible,
+/// settled and pending, the next batch, the command, and whether the queue is open (and why
+/// not when it is not).
+fn queue_json(queues: &[dla_core::queue::RuntimeQueue]) -> Value {
+    let mut m = serde_json::Map::new();
+    for q in queues {
+        let mut e = json!({
+            "eligible": q.eligible,
+            "settled": q.settled,
+            "pending": q.pending.len(),
+            "next": q.batch.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "command": clip_command(&q.command),
+            "open": q.open(),
+        });
+        if let Some(c) = q.closed {
+            e["closed"] = json!(c);
+        }
+        m.insert(q.runtime.clone(), e);
+    }
+    Value::Object(m)
 }
 
 /// What to do next: `dla gate check --final` while the final gate lists an item (its fix is

@@ -411,14 +411,31 @@ pub fn build_series(
     let warm = params.warmup as usize;
     if t.cols.len() > MAX_COLUMNS {
         let mut excess = t.cols.len() - MAX_COLUMNS;
-        let mut ranked: Vec<(Class, f64, String)> = t
+        // The probe column of a declared target ranks above everything else: it goes last.
+        let mut ranked: Vec<(bool, Class, f64, String)> = t
             .cols
             .iter()
-            .map(|(name, a)| (classify(name), growth(&a.vals, warm), name.clone()))
+            .map(|(name, a)| {
+                let declared = a
+                    .finding
+                    .as_ref()
+                    .is_some_and(|f| manifest.targets.contains(f));
+                (
+                    declared,
+                    classify(name),
+                    growth(&a.vals, warm),
+                    name.clone(),
+                )
+            })
             .collect();
-        ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        ranked.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then(a.2.total_cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+        });
         let mut dropped: BTreeMap<&'static str, usize> = BTreeMap::new();
-        for (class, _, name) in ranked {
+        for (_, class, _, name) in ranked {
             if excess == 0 {
                 break;
             }
@@ -542,6 +559,7 @@ mod tests {
 
     fn manifest(runtime: Runtime) -> HarnessManifest {
         HarnessManifest {
+            targets: Vec::new(),
             schema_version: 1,
             id: "H1".into(),
             runtime,
@@ -602,6 +620,57 @@ mod tests {
             limitations: vec![],
             purge: None,
         }
+    }
+
+    /// 70 probes, the first of them the probe of a finding the harness declared a target:
+    /// its column never grows, so by growth it would be the first to go at the cap of 64.
+    fn capped(declared: &[&str]) -> (Vec<String>, Vec<String>) {
+        let mut m = manifest(Runtime::Python);
+        m.probes = (1..=70)
+            .map(|i| dla_core::harness::ProbeSpec {
+                id: format!("P{i}"),
+                finding: (i == 1).then(|| "F9".parse().unwrap()),
+                target: dla_core::harness::ProbeTarget::PyGlobal {
+                    module: "m".into(),
+                    name: format!("v{i}"),
+                },
+                site: None,
+            })
+            .collect();
+        m.targets = declared.iter().map(|d| d.parse().unwrap()).collect();
+        let pts: Vec<PointInput> = (1..=4)
+            .map(|k| {
+                let probes: Vec<Value> = (1..=70)
+                    .map(|i| {
+                        let size = if i == 1 { 1.0 } else { f64::from(k * i) };
+                        json!({"id": format!("P{i}"), "path": format!("m.v{i}"), "size": size})
+                    })
+                    .collect();
+                pt(
+                    f64::from(k) * 100.0,
+                    json!({"dla_harness":1,"phase":"exit","pid":1,"runtime":"python",
+                        "values":{"os.rss": 5e6}, "probes": probes}),
+                )
+            })
+            .collect();
+        let s = build_series(&ctx(), &m, &params(), &pts);
+        (
+            s.columns.iter().map(|c| c.name.clone()).collect(),
+            s.limitations.clone(),
+        )
+    }
+
+    #[test]
+    fn the_probe_column_of_a_declared_target_is_never_dropped_by_the_cap() {
+        let (names, limits) = capped(&[]);
+        assert!(
+            !names.contains(&"probe:m.v1".to_owned()),
+            "dropped by growth: {names:?}"
+        );
+        assert!(limits.iter().any(|l| l.contains("dropped")), "{limits:?}");
+        let (names, _) = capped(&["F9"]);
+        assert_eq!(names.len(), MAX_COLUMNS, "{}", names.len());
+        assert!(names.contains(&"probe:m.v1".to_owned()), "{names:?}");
     }
 
     #[test]

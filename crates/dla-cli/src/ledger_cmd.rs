@@ -28,6 +28,11 @@ use crate::{
     parse::parse_enum,
 };
 
+#[path = "ledger_queue.rs"]
+mod ledger_queue;
+
+pub use ledger_queue::list;
+
 /// `dla ledger ...`
 #[derive(Subcommand, Debug)]
 pub enum LedgerCmd {
@@ -65,6 +70,17 @@ pub enum LedgerCmd {
     /// Merge a finding into another finding of the same leak (the same qualified owner, or
     /// the same `file:line` site) in the same worker and runtime; core and worker slices.
     Duplicate(ledger_m6::DuplicateArgs),
+    /// The findings in rank order, one line of JSON each: id, state, tier, rank among the
+    /// candidates ranked for measurement, origin, site, holder, owner, writer and remover
+    /// counts, and the queue status (pending, settled with the harnesses that targeted it,
+    /// not-eligible). Read only.
+    List(ledger_queue::ListArgs),
+    /// Close every open candidate that the measurement queue does not hold back, through the
+    /// rules of `dla ledger resolve`: suspected_static_only when it has static evidence, else
+    /// unresolved, with reason not_exercised (time_budget when the budget reached its floor)
+    /// and a remedy built from its history. Under-test findings are not touched. Prints what
+    /// it closed and what it left open.
+    CloseRest(ledger_queue::CloseRestArgs),
 }
 
 /// Flags of `dla ledger verify`.
@@ -311,6 +327,8 @@ pub fn dispatch(ctx: &Ctx, data: Option<&PathBuf>, cmd: LedgerCmd) -> Res<Value>
         LedgerCmd::Strong(a) => ledger_m6::strong(ctx, a),
         LedgerCmd::Explain(a) => ledger_m6::explain(ctx, a),
         LedgerCmd::Duplicate(a) => ledger_m6::duplicate(ctx, a),
+        LedgerCmd::List(a) => ledger_queue::list(ctx, a).map(Value::String),
+        LedgerCmd::CloseRest(a) => ledger_queue::close_rest(ctx, a),
     }
 }
 
@@ -612,6 +630,7 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
     };
     let from = ledger.finding(&id).map(|f| f.state);
     if let Some(reason) = a.reason {
+        refuse_target_pending(ctx, &id, reason)?;
         refuse_unrun_harness(ctx, &id, reason)?;
         refuse_no_harness(ctx, &id, reason)?;
         if reason == UnresolvedReason::TimeBudget {
@@ -646,6 +665,45 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+/// Refuses to close a ranked candidate with `no_harness`, `not_exercised` or `time_budget`
+/// while its runtime's measurement queue is open and no workload has settled it: the fix is
+/// the batch command that targets the next candidates.
+fn refuse_target_pending(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> Res<()> {
+    if !gate::closes_without_exercise(reason) {
+        return Ok(());
+    }
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    if !view.state.queue {
+        return Ok(());
+    }
+    let Some(r) = dla_core::queue::ranked(&view)
+        .into_iter()
+        .find(|r| &r.id == id && r.state == FindingState::Candidate)
+    else {
+        return Ok(());
+    };
+    let Some(runtime) = r.runtime.clone() else {
+        return Ok(());
+    };
+    let Some(q) = dla_core::queue::open_queue(&view, &runtime, ctx.worker.as_deref()) else {
+        return Ok(());
+    };
+    let Some((rank, tier)) = q.rank_of(id) else {
+        return Ok(());
+    };
+    let (left, total) = q.minutes.unwrap_or((0, 0));
+    Err(Failure::refuse(
+        core_codes::TARGET_PENDING,
+        format!(
+            "{id} cannot be closed with {reason}: it is ranked {rank} (tier {tier}) among the {runtime} candidates and no workload has reached it; {left} of {total} budget minutes remain."
+        ),
+        format!(
+            "a workload whose units reach {id} (a harness that targets it, then dla trend), or the blocker of the {runtime} workload recorded"
+        ),
+        dla_core::queue::steps(&q, &view.state.run_id),
+    ))
 }
 
 /// Refuses `--reason time_budget` while more time is left than the shared floor,

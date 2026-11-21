@@ -46,6 +46,8 @@ pub mod merge;
 pub mod paths;
 pub mod probe;
 pub mod proc;
+pub mod queue;
+pub mod rank;
 pub mod record;
 pub mod redact;
 pub mod runtime;

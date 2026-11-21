@@ -162,17 +162,21 @@ fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
     let is_final = target == GateTarget::Final;
     // A contradictory coverage comes first: the step it names is what the open findings'
     // closes wait for, and a list cut short (the Stop hook shows three items) must show it.
+    let base = status(view).blocking;
+    // An open measurement queue leads whatever else is listed.
     if is_final {
+        for b in base.iter().filter(|b| b.kind == BlockingKind::Queue) {
+            out.0.push(from_blocking(b.clone()));
+        }
         coverage_contradiction_items(view, &mut out);
     }
-    let base = status(view).blocking;
     for b in base {
         let keep = is_final
             || match b.kind {
                 BlockingKind::Run | BlockingKind::ChecklistItem | BlockingKind::Integrity => true,
-                BlockingKind::Finding | BlockingKind::OpenItem => false,
+                BlockingKind::Finding | BlockingKind::OpenItem | BlockingKind::Queue => false,
             };
-        if keep {
+        if keep && !(is_final && b.kind == BlockingKind::Queue) {
             out.0.push(from_blocking(b));
         }
     }
@@ -1378,7 +1382,7 @@ pub fn closes_without_exercise(reason: UnresolvedReason) -> bool {
 
 /// The reasons that record a blocker on `intake.workload`. `inconclusive` is not one: it
 /// says a measurement could not decide, not that something stopped the harness.
-fn is_blocker_reason(reason: UnresolvedReason) -> bool {
+pub(crate) fn is_blocker_reason(reason: UnresolvedReason) -> bool {
     match reason {
         UnresolvedReason::EnvUnavailable
         | UnresolvedReason::ToolMissing
@@ -1392,7 +1396,7 @@ fn is_blocker_reason(reason: UnresolvedReason) -> bool {
 }
 
 /// The harness directories of the run, `H1`, `H2`, ... in numeric order.
-fn harness_ids(run_dir: &Path) -> Vec<(u32, HarnessId)> {
+pub(crate) fn harness_ids(run_dir: &Path) -> Vec<(u32, HarnessId)> {
     let Ok(rd) = std::fs::read_dir(run_dir.join(crate::harness::HARNESS_DIR)) else {
         return Vec::new();
     };
@@ -1635,7 +1639,7 @@ pub fn finding_runtime(view: &RunView, f: &Finding) -> Option<String> {
 
 /// [`finding_runtime`] with the only-runtime-that-has-a-harness fallback computed once per
 /// caller: `only` holds it after the first use (`Some(None)`: there is no single runtime).
-fn finding_runtime_with(
+pub fn finding_runtime_with(
     view: &RunView,
     f: &Finding,
     only: &mut Option<Option<String>>,
@@ -1749,7 +1753,7 @@ impl NoHarness {
 /// `build_fails`, `privilege_declined`), or any reason when `blocker_only` is false,
 /// except `time_budget` while more than the shared floor of the budget is left (the
 /// answer must not be the early stop the rule exists to close).
-fn workload_unresolved(view: &RunView, blocker_only: bool) -> bool {
+pub(crate) fn workload_unresolved(view: &RunView, blocker_only: bool) -> bool {
     let time_left = !blocker_only && budget_over_floor(&view.state, None).is_some();
     view.ledger.lines().iter().any(|l| {
         matches!(&l.record, Record::ChecklistAnswer(a)
@@ -1781,7 +1785,7 @@ const JUNIT_TOOL: &str = "junit-platform-launcher";
 
 /// True when harness `h` of `runtime` is a JUnit repeat (its manifest names the JUnit
 /// launcher).
-fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
+pub(crate) fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
     crate::harness::HarnessManifest::load(run_dir, h)
         .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
 }
@@ -2149,8 +2153,14 @@ fn coverage_contradiction_items(view: &RunView, out: &mut Out) {
                 "{rt}: {iterations} iteration(s) ran and 0 of {discovered} entry points were exercised{loaded}: the driver did not call the code under test, so the run says nothing about the entry points"
             ),
             format!(
-                "{}. If the driver cannot reach them, record why: dla ledger resolve intake.workload --status unresolved --reason not_exercised --remedy \"<why no entry point can be called>\"",
-                driver_step(view, rt)
+                "{}. If the driver cannot reach them, record why: dla ledger resolve intake.workload --status unresolved --reason {} --remedy \"<why no entry point can be called>\"",
+                driver_step(view, rt),
+                // While the runtime's queue is open only a blocker closes it.
+                if crate::queue::open_queue(view, rt, None).is_some() {
+                    "<env_unavailable|tool_missing|build_fails|privilege_declined>"
+                } else {
+                    "not_exercised"
+                }
             ),
         );
     }
@@ -2251,10 +2261,18 @@ fn budget_left_unrevisited_items(view: &RunView, out: &mut Out) {
 fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
     let mut out = Out(Vec::new());
     let mine = |id: &str| id.split_once('/').is_some_and(|(p, _)| p == w);
+    if target == GateTarget::Final {
+        for q in crate::queue::queues(view, Some(w))
+            .iter()
+            .filter(|q| q.open())
+        {
+            out.0.push(from_blocking(crate::view::queue_item(q)));
+        }
+    }
     for b in status(view).blocking {
         let keep = match b.kind {
             BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
-            BlockingKind::ChecklistItem | BlockingKind::Integrity => false,
+            BlockingKind::ChecklistItem | BlockingKind::Integrity | BlockingKind::Queue => false,
             BlockingKind::Run => true,
         };
         if keep {

@@ -32,6 +32,8 @@ use crate::{
 
 /// Schema version of a harness manifest.
 pub const HARNESS_SCHEMA_VERSION: u32 = 1;
+/// The most findings one harness declares as targets.
+pub const MAX_TARGETS: usize = 8;
 /// Directory (inside the run directory) holding harness directories.
 pub const HARNESS_DIR: &str = "harness";
 /// Manifest file name inside a harness directory.
@@ -280,6 +282,10 @@ pub struct HarnessManifest {
     /// Holder probes.
     #[serde(default)]
     pub probes: Vec<ProbeSpec>,
+    /// The findings this harness was generated to reach (`--probe` and `--next`), at most
+    /// [`MAX_TARGETS`]. A target may have no probe of its own.
+    #[serde(default)]
+    pub targets: Vec<FindingId>,
     /// What measures the process.
     pub agent: AgentKind,
     /// Library detector flags switched on.
@@ -469,6 +475,99 @@ pub fn hooks_unfilled(run_dir: &Path, id: &str) -> bool {
         })
     }
     scan(&HarnessManifest::dir_in(run_dir, id).join("driver"), 0)
+}
+
+/// The tool a JUnit repeat harness lists: such a harness runs the project's own tests, so
+/// its units are fixed and its verdicts settle only by growth.
+pub const JUNIT_TOOL: &str = "junit-platform-launcher";
+
+impl HarnessManifest {
+    /// True for a driver whose units the model writes (hooks to fill), as opposed to a
+    /// command or a JUnit repeat, which run a fixed command.
+    pub fn is_hook_driver(&self) -> bool {
+        self.mode == HarnessMode::Driver && !self.tools.iter().any(|t| t == JUNIT_TOOL)
+    }
+}
+
+/// A digest of the files under `harness/<id>/driver/`: their relative paths and contents,
+/// sorted by path. `None` when there is no driver directory. Two runs of a driver whose
+/// digests differ ran different code.
+pub fn driver_digest(run_dir: &Path, id: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    fn walk(dir: &Path, rel: &str, depth: u32, out: &mut Vec<(String, PathBuf)>) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            match e.file_type() {
+                Ok(t) if t.is_dir() && depth < 6 => walk(&e.path(), &rel, depth + 1, out),
+                Ok(t) if t.is_file() => out.push((rel, e.path())),
+                _ => {}
+            }
+        }
+    }
+    let dir = HarnessManifest::dir_in(run_dir, id).join("driver");
+    if !dir.is_dir() {
+        return None;
+    }
+    let mut files = Vec::new();
+    walk(&dir, "", 0, &mut files);
+    files.sort();
+    let mut h = Sha256::new();
+    for (rel, path) in files {
+        h.update(rel.as_bytes());
+        h.update([0]);
+        h.update(fs::read(&path).unwrap_or_default());
+        h.update([0]);
+    }
+    Some(hex::encode(h.finalize())[..16].to_owned())
+}
+
+/// What a harness run left in `harness/<id>/run-<first series>.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRecord {
+    /// The first series of the run, which names the file.
+    pub first: String,
+    /// The digest of the driver directory when the run started.
+    pub driver_digest: Option<String>,
+}
+
+/// The run record of harness `id` that wrote `series`.
+pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord> {
+    let rd = fs::read_dir(HarnessManifest::dir_in(run_dir, id)).ok()?;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(first) = name
+            .strip_prefix("run-")
+            .and_then(|r| r.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let Ok(text) = fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let listed = doc
+            .get("series")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(series)));
+        if listed {
+            return Some(RunRecord {
+                first: first.to_owned(),
+                driver_digest: doc
+                    .get("driver_digest")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            });
+        }
+    }
+    None
 }
 
 /// The harness ID a `workload` evidence `result` names in `harness`, if any.
@@ -739,6 +838,7 @@ mod tests {
 
     fn manifest() -> HarnessManifest {
         HarnessManifest {
+            targets: Vec::new(),
             schema_version: 1,
             id: "H2".into(),
             runtime: Runtime::Go,

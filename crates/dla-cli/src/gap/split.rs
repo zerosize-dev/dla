@@ -224,6 +224,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile) -> Res<Value> {
         .collect();
     let trend_id = tc.next_trend_id();
     TrendReport {
+        targets: Vec::new(),
         schema_version: TREND_SCHEMA_VERSION,
         id: trend_id.clone(),
         series: derived.id.clone(),

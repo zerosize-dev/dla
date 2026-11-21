@@ -465,6 +465,24 @@ mod tests {
     }
 
     #[test]
+    fn half_split_and_slopes_use_x_not_the_index() {
+        // A line of slope 5 sampled at uneven x: the halves and the fit read 5, whereas
+        // the steps per index fall from 15 to 10.
+        let xs = [2.0, 5.0, 9.0, 11.0];
+        let pts: Vec<(f64, f64)> = xs.iter().map(|&x| (x, 5.0 * x)).collect();
+        let h = half_split(&pts).unwrap();
+        assert!((h.first - 5.0).abs() < 1e-9 && (h.second - 5.0).abs() < 1e-9);
+        assert!((h.ratio.unwrap() - 1.0).abs() < 1e-9);
+        let by_index: Vec<(f64, f64)> = pts
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i as f64, p.1))
+            .collect();
+        assert!(half_split(&by_index).unwrap().ratio.unwrap() < 0.7);
+        assert!((theil_sen(&pts, 0.05).unwrap().slope - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn every_delta_rule() {
         let ok = every_delta(&pts(&[0.0, 1.0, 4.0, 5.0])).unwrap();
         assert!(ok.all_at_least_one);

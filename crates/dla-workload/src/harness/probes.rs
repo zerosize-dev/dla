@@ -454,6 +454,22 @@ pub struct Derived {
     pub probes: Vec<ProbeSpec>,
     /// Notes for the manifest (gaps).
     pub notes: Vec<String>,
+    /// The findings asked for with `--probe` or `--next`, in order, with what the census
+    /// knows of their holder.
+    pub targets: Vec<Asked>,
+}
+
+/// A finding a harness is generated to reach.
+#[derive(Debug, Clone)]
+pub struct Asked {
+    /// The finding.
+    pub id: FindingId,
+    /// Qualified owner of the holder, when known.
+    pub owner: String,
+    /// Census kind of the holder (`cache-decorator`, `class-attr`, ...), when known.
+    pub kind: String,
+    /// `file:line`.
+    pub site: String,
 }
 
 /// Derives the probes of a harness for `rt`: census candidates when `auto`, plus one probe
@@ -488,6 +504,7 @@ pub fn derive(
             }
     };
     let mut asked: Vec<FindingId> = Vec::new();
+    let mut asked_info: Vec<Asked> = Vec::new();
     for id in extra {
         if let Some(canonical) = ledger.merged_into(id) {
             return Err(Refusal::new(
@@ -541,6 +558,12 @@ pub fn derive(
             .find(|e| same_site(&e.site, &site))
             .map_or_else(String::new, |e| e.kind.clone());
         asked.push(id.clone());
+        asked_info.push(Asked {
+            id: id.clone(),
+            owner: owner.clone(),
+            kind: kind.clone(),
+            site: site.clone(),
+        });
         if let Some(c) = cands.iter_mut().find(|c| same_site(&c.site, &site)) {
             c.finding = Some(id.clone());
         } else {
@@ -553,7 +576,10 @@ pub fn derive(
         }
     }
 
-    let mut out = Derived::default();
+    let mut out = Derived {
+        targets: asked_info,
+        ..Derived::default()
+    };
     let mut specific: Vec<(ProbeTarget, Option<FindingId>, Option<String>)> = Vec::new();
     // Module-level targets with the candidates that need them.
     let mut modules: Vec<(ProbeTarget, Vec<&Cand>)> = Vec::new();
@@ -581,38 +607,31 @@ pub fn derive(
             continue;
         }
         if module.is_empty() {
-            let (why, fix) = match rt {
-                Runtime::Go if !driver => (
-                    "go command mode has no package-variable probes".to_owned(),
-                    format!("dla harness gen --lang go --driver --probe {id}"),
+            let why = match rt {
+                Runtime::Go if !driver => {
+                    "go command mode has no package-variable probes".to_owned()
+                }
+                Runtime::Go => format!(
+                    "its holder {} ({}) is not a package variable",
+                    if c.owner.is_empty() {
+                        "<none>"
+                    } else {
+                        &c.owner
+                    },
+                    if c.kind.is_empty() {
+                        "no census entry"
+                    } else {
+                        &c.kind
+                    }
                 ),
-                Runtime::Go => (
-                    format!(
-                        "its holder {} ({}) is not a package variable",
-                        if c.owner.is_empty() {
-                            "<none>"
-                        } else {
-                            &c.owner
-                        },
-                        if c.kind.is_empty() {
-                            "no census entry"
-                        } else {
-                            &c.kind
-                        }
-                    ),
-                    "dla harness gen --lang go --driver --probes auto".to_owned(),
-                ),
-                _ => (
-                    format!("{} harnesses have no probe for its holder", rt.as_str()),
-                    format!("dla harness gen --lang {} --probes auto", rt.as_str()),
-                ),
+                _ => format!("{} harnesses have no probe for its holder", rt.as_str()),
             };
-            return Err(Refusal::new(
-                codes::INVALID_VALUE,
-                format!("--probe {id}: {why}, so no probe can be derived from it"),
-                format!("a finding whose holder a {} probe can read", rt.as_str()),
-                fix,
+            // Not refused: the finding is still a target of the harness; it is tied by
+            // allocation stacks or type counts, or its code is judged by coverage.
+            out.notes.push(format!(
+                "--probe {id}: {why}, so it is recorded as a target without a probe"
             ));
+            continue;
         }
         out.notes.push(format!(
             "--probe {id}: it has no probe target of its own ({}{}); its module is probed as a whole and the columns that carry its site are tied to it when the trend runs",

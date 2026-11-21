@@ -96,6 +96,64 @@ pub struct TrendReport {
     pub thresholds: GateThresholds,
     /// One entry per analysed column.
     pub columns: Vec<ColumnTrend>,
+    /// One verdict per declared target of the series' harness and per candidate an
+    /// automatic probe of that harness stands for (`dla trend` computes them once; nothing
+    /// recomputes them later).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<TargetVerdict>,
+}
+
+/// What a run showed about one targeted finding.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// A column tied to the finding passed the gate.
+    Grew,
+    /// A probe column of the finding did not pass, and its values are not all equal.
+    Changed,
+    /// A probe column of the finding stayed at one value.
+    Constant,
+    /// The harness has a probe for the finding and the series has no column for it.
+    NotLoaded,
+    /// No probe: the function enclosing the site or a writer ran.
+    Executed,
+    /// No probe: none of those functions ran.
+    NotExecuted,
+    /// Nothing can tell.
+    Unknown,
+}
+
+impl Verdict {
+    /// The name as printed.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grew => "grew",
+            Self::Changed => "changed",
+            Self::Constant => "constant",
+            Self::NotLoaded => "not_loaded",
+            Self::Executed => "executed",
+            Self::NotExecuted => "not_executed",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One finding's verdict in a trend report.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct TargetVerdict {
+    /// The finding.
+    pub finding: FindingId,
+    /// The verdict.
+    pub verdict: Verdict,
+    /// The column the verdict rests on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    /// One short sentence a reader can act on.
+    pub detail: String,
+    /// True when the finding is a declared target of the harness (not only a candidate an
+    /// automatic probe stands for).
+    #[serde(default)]
+    pub declared: bool,
 }
 
 impl TrendReport {
@@ -453,6 +511,7 @@ mod tests {
 
     fn trend() -> TrendReport {
         TrendReport {
+            targets: Vec::new(),
             schema_version: 1,
             id: "T2".into(),
             series: "S3".into(),

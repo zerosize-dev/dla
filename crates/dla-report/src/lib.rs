@@ -28,6 +28,7 @@ const DASH: &str = "\u{2014}";
 pub fn render_markdown(view: &RunView) -> String {
     let st = gate_status(view);
     let mut out = String::new();
+    QUEUE.with(|q| *q.borrow_mut() = dla_core::queue::ReportFacts::of(view));
 
     out.push_str("# DLA report\n\n");
     let _ = writeln!(out, "Run: {}\n", code(&view.state.run_id));
@@ -45,6 +46,7 @@ pub fn render_markdown(view: &RunView) -> String {
     blind_spots(&mut out, view);
     checklist(&mut out, view);
     evidence_index(&mut out, view);
+    QUEUE.with(|q| *q.borrow_mut() = None);
     out
 }
 
@@ -217,6 +219,17 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 // ---------------------------------------------------------------- sections
 
+thread_local! {
+    /// The queue facts of the report being rendered (`None` outside `render_markdown`).
+    static QUEUE: std::cell::RefCell<Option<dla_core::queue::ReportFacts>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// How a closed finding was targeted, for its section or table row.
+fn targeted_text(id: &dla_core::FindingId) -> Option<String> {
+    QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.targeted(id)))
+}
+
 fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let c = &st.counts;
     if st.complete {
@@ -234,6 +247,9 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let _ = writeln!(out, "{}\n", findings_line(c));
     let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
     let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
+    if let Some(line) = QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.line())) {
+        let _ = writeln!(out, "Queue: {line}\n");
+    }
 }
 
 /// The `Findings:` line. The leak hypotheses and the non-leak explanations (the `N-*`
@@ -606,54 +622,12 @@ fn classes(view: &RunView, f: &Finding) -> String {
 const FULL_STATIC_ONLY: usize = 15;
 
 /// The sentence above the `suspected_static_only` findings.
-const TIER_NOTE: &str = "Suspected, static-only findings are ordered by how likely a read-only signal makes a leak, strongest first, and keep the ledger's order within a tier: (1) a known leak pattern, (2) a census holder with writers and no removers in a registration table, container field or static/global, (3) a detector hit, (4) a census holder with writers that also has removers or sits in a thread-local, closure, native handle or blocked stack, (5) everything else, such as a holder with no writers.";
+const TIER_NOTE: &str = dla_core::rank::TIER_NOTE;
 
-/// The rank of a `suspected_static_only` finding, 1 (strongest) to 5. Pure function of
-/// the finding and its census annotation, so the order is the same on every run.
+/// The rank of a finding, 1 (strongest) to 6 (demoted). Pure function of the finding and
+/// its census annotation, so the order is the same on every run.
 fn static_tier(view: &RunView, f: &Finding) -> u8 {
-    use dla_core::finding::Holder as H;
-    let origin = f.origin.as_str();
-    if origin.starts_with("known-leak:") {
-        return 1;
-    }
-    // A site raised by a rule or analyzer and by the census is one finding: it ranks as the
-    // better of the two.
-    let census = origin == "census" || f.also_origins.iter().any(|o| o.as_str() == "census");
-    let detector = origin.starts_with("detector:")
-        || f.also_origins
-            .iter()
-            .any(|o| o.as_str().starts_with("detector:"));
-    let detector_tier = if detector { 3 } else { 5 };
-    if census {
-        let (writers, removers) = view
-            .ledger
-            .annotation(&f.id)
-            .map_or((0, 0), |a| (a.writers.len(), a.removers.len()));
-        if writers > 0
-            && removers == 0
-            && matches!(
-                f.holder,
-                Some(H::RegistrationTable | H::ContainerField | H::StaticGlobal)
-            )
-        {
-            return 2;
-        }
-        if writers > 0
-            && (removers > 0
-                || matches!(
-                    f.holder,
-                    Some(
-                        H::ThreadLocal
-                            | H::ClosureContinuation
-                            | H::NativeHandleGlobalRef
-                            | H::BlockedStack
-                    )
-                ))
-        {
-            return 4.min(detector_tier);
-        }
-    }
-    detector_tier
+    dla_core::rank::tier(f, view.ledger.annotation(&f.id))
 }
 
 /// The origin cell of a table row: the origin, then the other origins that raised the site.
@@ -677,12 +651,12 @@ fn findings(out: &mut String, view: &RunView) {
     // Stable: inside a state the ledger order stays; inside suspected_static_only the
     // tier decides first.
     list.sort_by_key(|f| {
-        let tier = if f.state == FindingState::SuspectedStaticOnly {
-            static_tier(view, f)
+        let (tier, multi) = if f.state == FindingState::SuspectedStaticOnly {
+            (static_tier(view, f), dla_core::rank::multi_origin_key(f))
         } else {
-            0
+            (0, 0)
         };
-        (rank(f.state), tier)
+        (rank(f.state), tier, multi)
     });
     if list.is_empty() {
         let explained = view
@@ -765,12 +739,27 @@ fn static_table(out: &mut String, rows: &[&Finding]) {
     {
         let _ = writeln!(out, "Remedy for all of them: {}\n", inline(r));
     }
-    out.push_str("| ID | Origin | Holder | Owner or site | Reason |\n|---|---|---|---|---|\n");
+    let targeted = QUEUE.with(|q| q.borrow().is_some());
+    if targeted {
+        out.push_str(
+            "| ID | Origin | Holder | Owner or site | Reason | Targeted |\n|---|---|---|---|---|---|\n",
+        );
+    } else {
+        out.push_str("| ID | Origin | Holder | Owner or site | Reason |\n|---|---|---|---|---|\n");
+    }
     for f in rows {
         let place = f.owner.as_deref().or(f.site.as_deref());
+        let tail = if targeted {
+            format!(
+                " {} |",
+                targeted_text(&f.id).map_or_else(|| DASH.to_owned(), |t| inline(&t))
+            )
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
-            "| {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} |{tail}",
             f.id,
             origins_cell(f),
             f.holder.map_or_else(|| DASH.to_owned(), |h| h.to_string()),
@@ -1023,6 +1012,13 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(r) = f.reason {
         let _ = writeln!(out, "- Reason: {r}");
+    }
+    if matches!(
+        f.state,
+        FindingState::SuspectedStaticOnly | FindingState::Unresolved
+    ) && let Some(t) = targeted_text(&f.id)
+    {
+        let _ = writeln!(out, "- {t}");
     }
     if let Some(r) = &f.remedy {
         let _ = writeln!(out, "- Remedy: {}", inline(r));
@@ -1481,10 +1477,10 @@ mod tests {
             Ledger::from_text("").unwrap(),
             None,
         );
-        // A rule hit alone ranks 3; with a census entry that has no writers it still ranks 3.
-        assert_eq!(static_tier(&view, &f), 3);
+        // A DLA rule hit alone ranks 1; with a census entry that has no writers it still ranks 1.
+        assert_eq!(static_tier(&view, &f), 1);
         f.also_origins.push(Origin::parse("census").unwrap());
-        assert_eq!(static_tier(&view, &f), 3);
+        assert_eq!(static_tier(&view, &f), 1);
         let mut section = String::new();
         finding_section(&mut section, &view, &f);
         assert!(

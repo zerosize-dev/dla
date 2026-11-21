@@ -136,14 +136,7 @@ pub(super) fn drive(fx: &mut Fx) {
             .push("the project holds no .hprof or .hprof.gz file".to_owned());
         return;
     }
-    let mut init: Vec<&str> = vec![
-        "run",
-        "init",
-        "--budget",
-        super::RUN_BUDGET,
-        "--entry",
-        "artifact",
-    ];
+    let mut init: Vec<&str> = super::run_init_args(&["--entry", "artifact"]);
     for d in &dumps {
         init.extend(["--artifact", d.as_str()]);
     }
@@ -266,17 +259,7 @@ fn finish(fx: &mut Fx) {
 
 /// The symptom path: no target, no stage, no claim.
 pub(super) fn drive_symptom(fx: &mut Fx) {
-    if !fx
-        .call(&[
-            "run",
-            "init",
-            "--budget",
-            super::RUN_BUDGET,
-            "--entry",
-            "symptom",
-        ])
-        .ok
-    {
+    if !fx.call(&super::run_init_args(&["--entry", "symptom"])).ok {
         return;
     }
     let r = fx.call(&[

@@ -100,7 +100,7 @@ lists each file in the record's `captures` array (`kind`, `file`, `role`, `bytes
 
 Driver mode captures at the checkpoints `dumpHere` picks (`DLA_CAPTURE_DUMPS`, default 4: the end of
 the warm-up, the last round and evenly spaced rounds between), so a series of 3 or more files comes from
-one process. Command mode captures at exit, one process per point (the heap profile is the in-run one, above). `tick` records capture nothing.
+one process. Command mode captures at exit, one process per point (the heap profile is the in-run one, above). The profile of a point is taken at a different share of its run, so `dla summarize alloc-stack-diff` puts the profiles on the axis of the bytes the process had allocated (the sum of `alloc_space` in each profile), not on the capture number, and orders the profiles by it, whatever order the points were taken in. `tick` records capture nothing.
 
 - `alloc` sets `runtime.MemProfileRate` (`DLA_MEMPROFILE_RATE`, default 4096) from a package variable
   initializer, before the test or the workload runs. The profile is a sample: sizes are estimates.

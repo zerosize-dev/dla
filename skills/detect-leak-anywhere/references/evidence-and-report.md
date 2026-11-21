@@ -271,6 +271,16 @@ for the verdict. For dynamic findings it prints:
   runtimes whose entry points cannot be measured (Rust, native); when a JVM run loaded project
   classes but matched no entry point it adds the count (`..., 0 of 225 entry points exercised,
   37 project classes loaded`): project code ran, the listed entry points were not the ones driven;
+- a `Queue:` line after `Coverage:`: how many of the ranked candidates were targeted by a workload and
+  how they came out (`Queue: 24 of 121 ranked candidates targeted in 3 harnesses: grew 1, changed 3,
+  executed 14, not reached 6; 97 not targeted`). "Not reached" is a candidate whose unit never reached
+  it (`constant`, `not_loaded`, `not_executed`): fix the unit and run it again while time is left, it is
+  not a result;
+- each `suspected_static_only` or `unresolved` finding (section or table row) says how it was targeted:
+  `Targeted: H2 constant, H3 not executed` (the harness and the verdict of its last run) or
+  `Not targeted (rank 143)`. Read it before you quote the finding's remedy: `Not targeted` means no
+  workload reached it yet, and the remedy names the command (`dla harness gen --lang <rt> --driver
+  --probe F143`);
 - a `Coverage warning:` line after `Measured:` (before `Time:`) when a runtime has discovered entry points and
   exercised none of them or fewer than half: it says that findings outside the exercised ones rest on
   reading the code and are hypotheses, not measured leaks, names the cause (no iteration recorded; or
@@ -319,7 +329,7 @@ After the report, say it in this order, copying every number from `dla report` o
    run did not test the rest, so it neither shows nor rules out a leak there; name the cause and quote the
    ledger's remedy as printed.
 3. One summary line for the `suspected_static_only` findings (count, why untested, remedy); the report
-   file holds the list.
+   file holds the list. Quote the `Queue:` line with it, and say how many candidates were not targeted.
 4. What is open, from the gate's `missing` list, and what only the user can supply.
 
 ## Integrity

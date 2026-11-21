@@ -373,7 +373,9 @@ fn dynamic_drives_artifact_and_symptom_fixtures_through_their_entry_paths() {
     }
     let calls = fs::read_to_string(&log).unwrap();
     assert!(
-        calls.contains("run init --budget 2h --entry artifact --artifact dumps/heap-0.hprof.gz"),
+        calls.contains(
+            "run init --budget 2h --queue off --entry artifact --artifact dumps/heap-0.hprof.gz"
+        ),
         "{calls}"
     );
     assert!(
@@ -385,7 +387,7 @@ fn dynamic_drives_artifact_and_symptom_fixtures_through_their_entry_paths() {
         "the one dump ends suspected with a remedy: {calls}"
     );
     assert!(
-        calls.contains("run init --budget 2h --entry symptom"),
+        calls.contains("run init --budget 2h --queue off --entry symptom"),
         "{calls}"
     );
     assert!(

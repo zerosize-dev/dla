@@ -16,6 +16,11 @@
 //! The profile is a sample taken
 //! with `runtime.MemProfileRate`; its sizes are estimates. Profiles from one process
 //! are ordered by the time inside each file.
+//!
+//! The series of a diff has the bytes the process had allocated when each profile was
+//! taken as its x axis (the sum of `alloc_space` over the stacks): the in-run profile of a
+//! point is written at a different share of each run, so the capture number would not say
+//! how much work each one saw.
 
 use std::fs;
 
@@ -97,6 +102,7 @@ fn limitations() -> Vec<String> {
         "a Go heap profile is a sample (runtime.MemProfileRate): sizes are estimates, and objects smaller than the rate can be missed".into(),
         "in-use figures are as of the last completed collection: write the profile after runtime.GC()".into(),
         "a command-mode profile written by the harness is taken while the workload ran, at the last sample before its end (role \"taken in the run\"): state freed before that sample is absent, and state allocated after it is too".into(),
+        "the series x axis is the bytes the process had allocated when each profile was taken (the sum of alloc_space over its stacks, proportional to the work done), not the capture number, when every profile has a positive total and the totals increase in capture order; otherwise it is the capture number and a limitation says why".into(),
         "a profile carries no holder: a stack ties to a finding only through its first project frame being the finding's site or writer".into(),
     ]
 }
@@ -149,7 +155,7 @@ impl Adapter for GoPprofHeap {
                 sha256: i.sha256.clone(),
             });
         }
-        alloc_stack::run_diff(
+        alloc_stack::run_diff_alloc_axis(
             ctx,
             opts,
             captures,

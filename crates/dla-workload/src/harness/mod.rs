@@ -33,6 +33,7 @@ mod pymemray;
 pub mod run;
 pub mod scratch;
 pub mod symbolize;
+pub mod targets;
 pub mod templates;
 
 use std::path::{Path, PathBuf};

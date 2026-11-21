@@ -46,6 +46,8 @@ pub(crate) mod analysis;
 mod candidates;
 #[path = "trend/summary.rs"]
 mod summary;
+#[path = "trend/verdicts.rs"]
+mod verdicts;
 
 /// Flags of `dla trend`.
 #[derive(Args, Debug)]
@@ -210,9 +212,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         .with_census(&ctx.run_dir)
         .fill(&mut cols);
 
+    // One verdict per targeted finding, stored with the report and never recomputed.
+    let target_verdicts = verdicts::compute(&verdicts::Inputs {
+        project,
+        run_dir: &ctx.run_dir,
+        ledger: &ledger,
+        series: &main.series,
+        columns: &cols,
+    });
+
     // Persist the full report first: the evidence points at it.
     let trend_id = tc.next_trend_id();
     let report = TrendReport {
+        targets: target_verdicts.clone(),
         schema_version: dla_core::trend::TREND_SCHEMA_VERSION,
         id: trend_id.clone(),
         series: main.series.id.clone(),
@@ -328,6 +340,33 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         out.insert("passed_more".into(), json!(passed.len() - 8));
     }
     out.insert("failed".into(), json!(cols.len() - passed.len()));
+    if !target_verdicts.is_empty() {
+        let (declared, rest): (Vec<_>, Vec<_>) = target_verdicts.iter().partition(|v| v.declared);
+        out.insert(
+            "targets".into(),
+            Value::Array(
+                declared
+                    .iter()
+                    .take(8)
+                    .map(|v| {
+                        json!({
+                            "finding": v.finding,
+                            "verdict": v.verdict.as_str(),
+                            "column": v.column,
+                            "detail": v.detail,
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+        if !rest.is_empty() {
+            let rest: Vec<_> = rest.into_iter().cloned().collect();
+            out.insert(
+                "other_targets".into(),
+                Value::Object(verdicts::counts(&rest)),
+            );
+        }
+    }
     if let Some(k) = &keys {
         out.insert("keys".into(), k.summary.clone());
     }

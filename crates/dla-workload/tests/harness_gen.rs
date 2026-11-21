@@ -79,6 +79,7 @@ fn opts(rt: Runtime) -> GenOptions {
         iterations: 8,
         warmup: 1,
         probe_findings: Vec::new(),
+        next: None,
         auto_probes: true,
         package: None,
         junit: false,
@@ -522,6 +523,7 @@ fn site_resolution_uses_the_census_then_declarations() {
 
     let (_d, ctx) = prepare("jvm-order-cache", Runtime::Jvm);
     let m = HarnessManifest {
+        targets: Vec::new(),
         probes: Vec::new(),
         ..jvm_manifest(&ctx)
     };
@@ -537,6 +539,7 @@ fn site_resolution_uses_the_census_then_declarations() {
 fn jvm_manifest(ctx: &ToolCtx) -> HarnessManifest {
     use dla_core::harness::CommandSpec;
     HarnessManifest {
+        targets: Vec::new(),
         schema_version: 1,
         id: "H9".into(),
         runtime: Runtime::Jvm,

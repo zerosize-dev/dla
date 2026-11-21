@@ -162,6 +162,7 @@ fn manifest(
     step: u64,
 ) -> HarnessManifest {
     HarnessManifest {
+        targets: Vec::new(),
         schema_version: 1,
         id: "H1".into(),
         runtime,

@@ -64,6 +64,7 @@ fn manifest(argv: &[&str], build: Option<&[&str]>) -> HarnessManifest {
         env: vec![],
     };
     HarnessManifest {
+        targets: Vec::new(),
         schema_version: 1,
         id: "H1".into(),
         runtime: Runtime::Native,

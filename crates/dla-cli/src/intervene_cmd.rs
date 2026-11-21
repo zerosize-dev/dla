@@ -706,6 +706,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
             // The treated trend: a trend report like any other, plus a copy in the raw dir.
             let tid = tc.next_trend_id();
             let report = TrendReport {
+                targets: Vec::new(),
                 schema_version: dla_core::trend::TREND_SCHEMA_VERSION,
                 id: tid.clone(),
                 series: m.series.id.clone(),

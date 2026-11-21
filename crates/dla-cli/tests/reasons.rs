@@ -462,9 +462,8 @@ fn the_unfinished_finding_fix_names_the_reason_and_never_time_budget() {
     let r = scene();
     let v = r.ok(&["run", "status"]);
     let text = v.to_string();
-    assert!(
-        text.contains("--as unresolved --reason not_exercised --remedy"),
-        "{text}"
-    );
+    // An open candidate nothing ranks for measurement is closed by `dla ledger close-rest`,
+    // which says not_exercised (never time_budget while time is left) in each remedy.
+    assert!(text.contains("dla ledger close-rest"), "{text}");
     assert!(!text.contains("--reason time_budget"), "{text}");
 }

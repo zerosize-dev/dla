@@ -69,6 +69,9 @@ string_enum! {
         N = "n",
         /// The position of a heap dump in a series ordered by capture time.
         Dump = "dump",
+        /// The bytes the process had allocated in total when the capture was taken (the
+        /// sum of `alloc_space` over a Go heap profile): proportional to the work done.
+        AllocatedBytes = "allocated-bytes",
     }
 }
 

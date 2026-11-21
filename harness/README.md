@@ -98,3 +98,9 @@ Driver templates contain hooks the model fills in. A hook is a line comment
 directly followed by a stub body that fails loudly (throws / raises) until it is replaced. The
 model replaces the stub body, keeps the comment, and does not touch the rest of the file. The hook
 names per language are listed in the language README.
+
+When the harness has declared targets (`dla harness gen --probe F<n>` or `--next`), the generated driver
+file starts with a comment block above the first `DLA-HOOK`: per target the finding, site, holder, owner,
+the rule's message, up to 3 writers and 3 removers (`file:line` with the enclosing function), what its
+probe reads, and one line of instruction by holder kind. `setup` and `unit` are filled so that every
+unit reaches each target with a new key.

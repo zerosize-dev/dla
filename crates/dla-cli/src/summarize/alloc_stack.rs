@@ -217,9 +217,73 @@ const TRACKED_HOLDERS: usize = 8;
 pub fn run_diff_with(
     ctx: &Ctx<'_>,
     opts: &Opts,
+    captures: Vec<ProfileCapture>,
+    origin: &ProfileOrigin,
+    holder_totals: bool,
+) -> Res<AdapterOut> {
+    run_diff_axis(ctx, opts, captures, origin, holder_totals, false)
+}
+
+/// [`run_diff`] for profiles that carry the cumulative bytes each stack allocated
+/// (`total_bytes`), taken from one process: the series' x is the sum of those totals, the
+/// bytes the process had allocated when the profile was taken, which is proportional to
+/// the work done at that point however late in its run each profile was written. When a
+/// capture has no positive total, or the totals do not strictly increase in capture
+/// order, x stays the capture number and a limitation says why.
+pub fn run_diff_alloc_axis(
+    ctx: &Ctx<'_>,
+    opts: &Opts,
+    captures: Vec<ProfileCapture>,
+    origin: &ProfileOrigin,
+) -> Res<AdapterOut> {
+    run_diff_axis(ctx, opts, captures, origin, false, true)
+}
+
+/// The `alloc_space` total of each capture: the bytes the process had allocated when the
+/// profile was taken.
+fn alloc_totals(captures: &[ProfileCapture]) -> Vec<u64> {
+    captures
+        .iter()
+        .map(|c| {
+            c.profile
+                .groups
+                .iter()
+                .filter_map(|g| g.total_bytes)
+                .fold(0u64, u64::saturating_add)
+        })
+        .collect()
+}
+
+/// The order of the captures by bytes allocated (indexes into `captures`), or why the axis
+/// stays the capture number: a capture without a positive total, or two equal totals.
+fn allocated_order(captures: &[ProfileCapture]) -> Result<Vec<usize>, String> {
+    let totals = alloc_totals(captures);
+    if let Some(i) = totals.iter().position(|&t| t == 0) {
+        return Err(format!(
+            "capture {} has no positive alloc_space total",
+            i + 1
+        ));
+    }
+    let mut order: Vec<usize> = (0..totals.len()).collect();
+    order.sort_by_key(|&i| totals[i]);
+    if let Some(w) = order.windows(2).find(|w| totals[w[0]] == totals[w[1]]) {
+        return Err(format!(
+            "captures {} and {} have the same alloc_space total ({} bytes)",
+            w[0].min(w[1]) + 1,
+            w[0].max(w[1]) + 1,
+            totals[w[0]]
+        ));
+    }
+    Ok(order)
+}
+
+fn run_diff_axis(
+    ctx: &Ctx<'_>,
+    opts: &Opts,
     mut captures: Vec<ProfileCapture>,
     origin: &ProfileOrigin,
     holder_totals: bool,
+    alloc_axis: bool,
 ) -> Res<AdapterOut> {
     let tc = ctx.tc;
     let n = captures.len();
@@ -227,7 +291,7 @@ pub fn run_diff_with(
         return Err(not_enough());
     }
     let timed = captures.iter().all(|c| c.profile.timestamp_ms.is_some());
-    let ordered_by = if n == 1 {
+    let mut ordered_by = if n == 1 {
         "single"
     } else if origin.order_by_time && timed {
         captures.sort_by_key(|c| c.profile.timestamp_ms);
@@ -235,6 +299,45 @@ pub fn run_diff_with(
     } else {
         "argument"
     };
+    // Capture numbers (1-based) in the order the captures are read, before any reordering.
+    let mut numbers: Vec<usize> = (1..=n).collect();
+    // Profiles of separate processes (command and driver mode) are single readings of the
+    // bytes in use at some number of bytes allocated, so the order they were taken in
+    // carries nothing: they are put in the order of the bytes allocated. Profiles of one
+    // process come in that order already.
+    let mut axis_fallback: Option<String> = None;
+    let mut axis_note: Option<String> = None;
+    if alloc_axis && n >= 2 {
+        match allocated_order(&captures) {
+            Ok(order) => {
+                if order.iter().enumerate().any(|(k, &i)| k != i) {
+                    let mut slots: Vec<Option<ProfileCapture>> =
+                        captures.into_iter().map(Some).collect();
+                    captures = order.iter().filter_map(|&i| slots[i].take()).collect();
+                    numbers = order.iter().map(|&i| i + 1).collect();
+                    axis_note = Some(format!(
+                        "captures ordered by bytes allocated: {} (capture numbers in the order the profiles were read{}), not in the order they were taken",
+                        numbers
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        if ordered_by == "timestamp" {
+                            ", after ordering by timestamp"
+                        } else {
+                            ""
+                        }
+                    ));
+                    ordered_by = "allocated-bytes";
+                }
+            }
+            Err(why) => {
+                axis_fallback = Some(format!(
+                    "x is the capture number, not the bytes allocated when each profile was taken: {why}"
+                ));
+            }
+        }
+    }
     let sampled = captures.iter().any(|c| c.profile.sampled);
     let has_live = captures
         .iter()
@@ -399,7 +502,8 @@ pub fn run_diff_with(
         "ordered_by": ordered_by,
         "live": has_live,
         "sampled": sampled,
-        "captures": captures.iter().map(|c| json!({
+        "captures": captures.iter().zip(&numbers).map(|(c, number)| json!({
+            "number": number,
             "label": c.label,
             "timestamp_ms": c.profile.timestamp_ms,
             "source": c.profile.source,
@@ -413,15 +517,33 @@ pub fn run_diff_with(
 
     // ---- the stacks followed (decided before anything is recorded, so the stack
     // evidence can state the ties the growth columns are given)
+    // The x the growth series will have: the stacks that count as growing here are the ones
+    // its gate passes, so both read the same positions.
+    let xaxis = if alloc_axis && n >= 2 && axis_fallback.is_none() {
+        growth::XAxis {
+            allocated: Some(alloc_totals(&captures).iter().map(|&t| t as f64).collect()),
+            fallback: None,
+            note: axis_note,
+        }
+    } else {
+        growth::XAxis {
+            allocated: None,
+            fallback: axis_fallback,
+            note: None,
+        }
+    };
     let monotone = |s: &Stack| {
-        rule::gate(&Observed {
-            bytes: s.live_bytes.clone(),
-            counts: if s.live_blocks.iter().flatten().any(|b| *b > 0) {
-                s.live_blocks.clone()
-            } else {
-                s.live_bytes.clone()
+        rule::gate_at(
+            &Observed {
+                bytes: s.live_bytes.clone(),
+                counts: if s.live_blocks.iter().flatten().any(|b| *b > 0) {
+                    s.live_blocks.clone()
+                } else {
+                    s.live_bytes.clone()
+                },
             },
-        })
+            xaxis.allocated.as_deref(),
+        )
         .is_ok()
     };
     let mut held: Vec<&Stack> = totals.values().collect();
@@ -695,7 +817,7 @@ pub fn run_diff_with(
         .filter(|t| t.tie.as_ref().is_some_and(|w| w.rule == "holder"))
         .map(|t| t.name.clone())
         .collect();
-    let g = growth::write(
+    let g = growth::write_at(
         ctx,
         ledger,
         growth::Plan {
@@ -711,6 +833,7 @@ pub fn run_diff_with(
             what: "capture",
             focus: opts.finding.clone(),
         },
+        &xaxis,
     )?;
     let tied_ids = growth::tied_ids(&g, opts.finding.as_ref());
     // A stack tied by its holder shows where the holder is written: its first project

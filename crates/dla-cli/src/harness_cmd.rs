@@ -75,9 +75,16 @@ pub struct GenArgs {
     /// Warm-up points.
     #[arg(long, default_value_t = 1)]
     warmup: u32,
-    /// Add a probe for the holder of this finding (repeatable).
+    /// Add a probe for the holder of this finding and declare it a target of the harness
+    /// (repeatable; at most 8 targets with --next). A finding no probe can read is still a
+    /// target: its probe is recorded as missing.
     #[arg(long = "probe", value_name = "F", value_parser = parse_enum::<FindingId>)]
     probe: Vec<FindingId>,
+    /// Declare the next N pending candidates of the runtime's measurement queue, in rank
+    /// order, as targets, exactly as if each were given with --probe (default and maximum 8
+    /// in all). The driver lists each target with its writers, removers and what to do.
+    #[arg(long, value_name = "N", num_args = 0..=1)]
+    next: Option<Option<usize>>,
     /// Probes derived from the census candidates: auto (default) or none.
     #[arg(long, default_value = "auto", value_parser = parse_enum::<ProbesChoice>)]
     probes: ProbesChoice,
@@ -191,6 +198,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 step: g.step,
                 iterations: g.iterations,
                 warmup: g.warmup,
+                // A bare `--next` fills the harness up to the limit of targets.
+                next: g.next.map(|n| {
+                    n.unwrap_or_else(|| {
+                        dla_core::harness::MAX_TARGETS.saturating_sub(g.probe.len())
+                    })
+                }),
                 probe_findings: g.probe,
                 auto_probes: g.probes == ProbesChoice::Auto,
                 package: g.package,

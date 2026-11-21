@@ -445,3 +445,82 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
         "{table}"
     );
 }
+
+#[test]
+fn the_measurement_queue_loop_is_in_the_checklist_and_the_rules_and_nothing_closes_before_it_ends()
+{
+    let read = |p: &str| fs::read_to_string(root().join(p)).unwrap();
+    let text = skill();
+    let (_, body) = split(&text);
+    // The loop is in the checklist an agent copies, with its exact commands.
+    let list = section(body, "Stage checklist");
+    let code = list.split("```").nth(1).expect("a fenced checklist");
+    for want in [
+        "dla ledger list",
+        "dla harness gen --lang <rt> --driver --next",
+        "dla harness run H<n> --mode both",
+        "dla trend S<n>",
+        "`targets`",
+        "grew -> dla ledger test",
+        "constant, not_loaded, not_executed",
+        "dla ledger close-rest",
+    ] {
+        assert!(code.contains(want), "the checklist lacks {want:?}:\n{code}");
+    }
+    assert_eq!(code.matches("- [ ] ").count(), 9, "{code}");
+    // The rules name the refusal and its fix, and the stop section the queue.
+    assert!(list.contains("`target-pending`") && list.contains("never by another reason"));
+    let stop = section(body, "Before you stop");
+    assert!(stop.contains("`dla ledger close-rest`") && stop.contains("No `queue` is open"));
+    // The skill never mentions the switch of fixed policies.
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let recovery = read("skills/detect-leak-anywhere/references/recovery.md");
+    let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
+    let worker = read("agents/worker.md");
+    for (name, t) in [
+        ("SKILL.md", &text),
+        ("stages.md", &stages),
+        ("recovery.md", &recovery),
+        ("evidence-and-report.md", &report),
+        ("worker.md", &worker),
+    ] {
+        assert!(!t.contains("--queue"), "{name} mentions the queue switch");
+        assert!(!t.contains("not_exercised\" in a shell loop"), "{name}");
+    }
+    for want in [
+        "`dla ledger list`",
+        "`--next N`",
+        "`too-many-targets`",
+        "`target-pending`",
+        "`dla ledger close-rest",
+        "`not_loaded`",
+        "`not_executed`",
+        "never close it with another reason",
+        "`queue` object per runtime",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks {want:?}");
+    }
+    // The old advice to close what the harness did not exercise is gone from stage 7.
+    assert!(
+        !stages.contains(
+            "A candidate the harness could not exercise is neither confirmed nor refuted:"
+        ),
+        "stage 7 still sanctions the close"
+    );
+    assert!(recovery.contains("## A candidate is pending (`target-pending`)"));
+    assert!(recovery.contains("## Too many targets (`too-many-targets`)"));
+    assert!(
+        report.contains("`Queue:` line")
+            && report.contains("`Targeted: H2 constant, H3 not executed`")
+    );
+    assert!(report.contains("`Not targeted (rank 143)`"));
+    for want in [
+        "ledger list",
+        "--driver --next",
+        "`target-pending`",
+        "ledger close-rest",
+        "`not_loaded`",
+    ] {
+        assert!(worker.contains(want), "worker.md lacks {want:?}");
+    }
+}

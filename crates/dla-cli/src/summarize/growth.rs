@@ -144,6 +144,44 @@ pub struct Growth {
     pub json: Value,
 }
 
+/// The limitation lines of the series: what x is, and how the points were made.
+fn axis_limitations(plan: &Plan<'_>, allocated: bool, fallback: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    if allocated {
+        out.push(format!(
+            "x is the number of bytes the process had allocated in total when the {} was taken (the sum of alloc_space over its stacks), not the {} number: it is proportional to the work done at that point; t_ms is the time since the first {} where the inputs record one",
+            plan.what, plan.what, plan.what
+        ));
+    } else {
+        out.push(format!(
+            "x is the {} number in capture order; t_ms is the time since the first {} where the inputs record one",
+            plan.what, plan.what
+        ));
+    }
+    out.push(format!(
+        "each point comes from a separate {} of one process; a figure absent from a {} has no value at that point",
+        plan.what, plan.what
+    ));
+    if let Some(why) = fallback {
+        out.push(why.to_owned());
+    }
+    out
+}
+
+/// Increase of the last present figure over the first, per unit of x, as a JSON number
+/// (4 significant digits); `null` when a figure is missing.
+fn rate(values: &[Option<u64>], xs: &[f64]) -> Value {
+    let (Some(Some(a)), Some(Some(b))) = (values.first(), values.last()) else {
+        return Value::Null;
+    };
+    let span = xs[xs.len() - 1] - xs[0];
+    let r = (*b as f64 - *a as f64) / span;
+    format!("{r:.3e}")
+        .parse::<f64>()
+        .ok()
+        .map_or(Value::Null, |r| json!(r))
+}
+
 fn mean_delta(v: &[u64]) -> u64 {
     if v.is_empty() {
         0
@@ -152,9 +190,36 @@ fn mean_delta(v: &[u64]) -> u64 {
     }
 }
 
-/// Writes the series and the growth evidence for `plan`. Needs at least two captures.
-pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Growth> {
+/// Writes the series and the growth evidence for `plan`, one capture per point and the
+/// capture number as x. Needs at least two captures.
+pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, plan: Plan<'_>) -> Res<Growth> {
+    write_at(ctx, ledger, plan, &XAxis::default())
+}
+
+/// What x is for the points of a capture series.
+#[derive(Debug, Clone, Default)]
+pub struct XAxis {
+    /// The bytes the process had allocated when each capture was taken (strictly
+    /// increasing, one per capture); `None` makes x the capture number.
+    pub allocated: Option<Vec<f64>>,
+    /// Why x is the capture number where an allocated-bytes axis was wanted; written as
+    /// a limitation of the series and of the evidence.
+    pub fallback: Option<String>,
+    /// A line for the limitations of the series and of the evidence (the order the
+    /// captures were put in).
+    pub note: Option<String>,
+}
+
+/// [`write`] with the x axis chosen by the caller. With allocated-bytes positions the gate
+/// compares rates over the x intervals and the slope shown is bytes per allocated byte.
+pub fn write_at(
+    ctx: &Ctx<'_>,
+    ledger: &mut Ledger,
+    mut plan: Plan<'_>,
+    xaxis: &XAxis,
+) -> Res<Growth> {
     let n = plan.t_ms.len();
+    let xs: Option<&[f64]> = xaxis.allocated.as_deref().filter(|x| x.len() == n);
     // Keep the column count within the series cap.
     let mut cols = 0;
     plan.tracks.retain(|t| {
@@ -205,7 +270,7 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
     }
     let points: Vec<Point> = (0..n)
         .map(|i| Point {
-            x: (i + 1) as f64,
+            x: xs.map_or((i + 1) as f64, |x| x[i]),
             t_ms: plan.t_ms[i],
             values: plan
                 .tracks
@@ -227,21 +292,20 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
         schema_version: 1,
         id: id.clone(),
         source,
-        axis: Axis::Dump,
+        axis: if xs.is_some() {
+            Axis::AllocatedBytes
+        } else {
+            Axis::Dump
+        },
         warmup: 0,
         columns,
         points,
         events: Vec::new(),
-        limitations: vec![
-            format!(
-                "x is the {} number in capture order; t_ms is the time since the first capture where the inputs record one",
-                plan.what
-            ),
-            format!(
-                "each point comes from a separate {} of one process; a figure absent from a {} has no value at that point",
-                plan.what, plan.what
-            ),
-        ],
+        limitations: axis_limitations(
+            &plan,
+            xs.is_some(),
+            xaxis.fallback.as_deref().or(xaxis.note.as_deref()),
+        ),
     };
     series.save(&tc.run_dir)?;
     let series_rel = format!("series/{id}.json");
@@ -252,10 +316,14 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
     let mut shapes = Vec::new();
     let mut slopes = Vec::new();
     for (i, t) in plan.tracks.iter().enumerate() {
-        match rule::gate(&t.observed()) {
+        match rule::gate_at(&t.observed(), xs) {
             Ok(g) => {
                 passed.push(i);
-                slopes.push(mean_delta(&g.byte_deltas));
+                slopes.push(match xs {
+                    // Bytes kept per byte allocated, first capture to last.
+                    Some(x) => rate(&t.values, x),
+                    None => json!(mean_delta(&g.byte_deltas)),
+                });
                 shapes.push(rule::shape(&g));
             }
             Err(why) => {
@@ -343,7 +411,7 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
         .collect();
     let base = json!({
         "series": id,
-        "axis": "dump",
+        "axis": if xs.is_some() { Axis::AllocatedBytes } else { Axis::Dump },
         "n": n,
         "gate": if gate_pass { "pass" } else { "fail" },
         "failed": plan.tracks.len() - passed.len(),
@@ -365,6 +433,9 @@ pub fn write(ctx: &Ctx<'_>, ledger: &mut Ledger, mut plan: Plan<'_>) -> Res<Grow
         total: Some(n as u64),
     };
     spec.limitations = plan.limitations.clone();
+    if let Some(why) = xaxis.fallback.as_ref().or(xaxis.note.as_ref()) {
+        spec.limitations.push(why.clone());
+    }
     spec.limitations.push(format!(
         "capture-series rule: at least {} captures, every figure strictly increasing across every pair, last interval at least {:.0}% of the first (provisional, not calibrated)",
         rule::MIN_DUMPS,

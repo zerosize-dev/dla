@@ -46,9 +46,9 @@ Commands:
 
 | Command | What it does |
 |---|---|
-| `dla run init` | Creates a run under `.dla/` (flags include `--budget` and `--session-id`) |
+| `dla run init` | Creates a run under `.dla/` (flags include `--budget`, `--session-id` and `--queue on\|off`: the measurement queue is on by default; off is for fixed policies that cannot write a workload, and the report header says so) |
 | `dla run extend <dur>` | Adds time to the run budget (and to every unfinished worker's deadline); records a static run-config evidence record |
-| `dla run status` | Shows run id, entry, stage, status, workers, counts and the first blocking items (in worker mode, the worker's own) |
+| `dla run status` | Shows run id, entry, stage, status, workers, counts, the first blocking items (in worker mode, the worker's own) and a `queue` object per runtime (eligible, settled and pending candidates, the next batch, the batch command, and why the queue is not open when it is not); `next_command` is the batch command while a queue is open |
 | `dla run dispatch --workers <rt,...>` | Registers one worker per runtime with an equal share of the remaining budget and prints what each worker needs |
 | `dla run abort` | Stops the processes DLA started and runs the cleanup of what it attached to (never kills an attached target) |
 | `dla probe [--build]` | Records runtimes, versions, tools on the PATH, privilege facts, test runners and library flags; `--build` also runs each runtime's build and needs tier-1 consent |
@@ -56,16 +56,18 @@ Commands:
 | `dla sweep --lang <l>` | Runs the available static backends for one runtime and adds each rule hit as a candidate |
 | `dla census --lang <l>` | Adds every process-lifetime holder of one runtime as a candidate, with heuristic writers and removers |
 | `dla workload discover` | Lists the tests, entry points and dev servers a loop can run, ranked by entry points; unrunnable ones are recorded with a reason |
-| `dla harness gen --lang <l>` | Copies the project into a scratch worktree under the run directory and writes a loop harness for a workload (command mode: the workload's own command at growing iteration counts; `--driver`: a loop test with hooks to fill in). Runs nothing and needs no consent |
+| `dla harness gen --lang <l>` | Copies the project into a scratch worktree under the run directory and writes a loop harness for a workload (command mode: the workload's own command at growing iteration counts; `--driver`: a loop test with hooks to fill in). `--probe F<n>` (repeatable) and `--next [N]` (the next N pending ranked candidates, at most 8) declare targets of the harness, at most 8 per harness (`too-many-targets`); `summary.targets` and a comment block at the top of every driver file list for each target its site, holder, owner, writers, removers, probe and what a unit must do to reach it. Runs nothing and needs no consent |
 | `dla harness run <H>` | Builds the harness once, measures every point with a per-runtime agent, shim or driver, and writes one series per key mode (`--mode fresh\|repeated\|both`). `--capture <kinds>\|all` (JVM: heap, histogram, jfr, nonheap; Node: heap, alloc, nonheap; Go: alloc, nonheap; Python: histogram, alloc, nonheap) and `--tool valgrind\|heaptrack` (Rust and native) also write raw captures and print the `dla summarize` commands that read them. Tier 1 |
-| `dla trend <series>` | Mann-Kendall, Theil-Sen and half-split statistics, the slope gate (counters: every delta at least 1) and a shape for every column; `--against` compares fresh and repeated keys |
+| `dla trend <series>` | Mann-Kendall, Theil-Sen and half-split statistics, the slope gate (counters: every delta at least 1) and a shape for every column; `--against` compares fresh and repeated keys. For every declared target of the harness it also prints a verdict (`grew`, `changed`, `constant`, `not_loaded`, `executed`, `not_executed`, `unknown`) in `targets` |
 | `dla sample --pid <P>` | Samples a running process (memory, threads, descriptors, cgroup figures and runtime counters) into a time series. Tier 1 for a process DLA started, tier 2 for any other |
 | `dla gap [<series>]` | Splits process memory into runtime-accounted and unexplained; with `--residual`, totals each region's growth, subtracts what confirmed findings explain and opens an item for the rest |
 | `dla alloc-test <H>` | Re-runs a harness with extra points and a purge (trim, free-os-memory, gc, ...) and records whether the result favors a leak or a non-leak explanation. Tier 1 |
 | `dla ledger add` | Adds a finding, which always starts as `candidate` |
 | `dla ledger annotate` | Records the writers and removers the model found for a holder (`--writer file:line`, `--remover file:line`, `--note`) and the holder, owner, region or site when the finding has none; changes no state |
 | `dla ledger test\|confirm\|refute` | Moves a finding under test, confirms it, or refutes it, each citing evidence (`--evidence E1,E2`); the ledger refuses the move unless its rules are met |
-| `dla ledger resolve` | Dispositions a finding or open item, or answers a checklist item |
+| `dla ledger resolve` | Dispositions a finding or open item, or answers a checklist item. A candidate that is still pending in an open measurement queue is refused `target-pending` for the reasons `not_exercised`, `no_harness` and `time_budget`; the message names the batch command |
+| `dla ledger list [--state <s>] [--limit N] [--all]` | One JSON line per finding in rank order: tier, rank among the eligible candidates, origin, site, holder, owner, writer and remover counts and queue status (`pending`, `settled` with its verdicts, `not-eligible`); read-only |
+| `dla ledger close-rest [--remedy <text>]` | Dispositions every open candidate that is not pending in an open queue (`suspected_static_only` with static evidence, else `unresolved`; reason `not_exercised`, or `time_budget` when the queue closed at the floor), with a remedy built from the finding's history unless given, and prints what it left open and why |
 | `dla ledger label <F> --as <ID>` | Labels a confirmed or strong finding with an archetype when the evidence, the holder kind and the refuted look-alikes that archetype requires are recorded; `--suggest` lists what each archetype has and lacks; `--as UNCLASSIFIED --note` is always allowed |
 | `dla ledger duplicate <F> --of <G>` | Merges a finding into another finding of the same leak (same worker and runtime, same canonical owner or the same `file:line` site); the duplicate's evidence then counts for the labelled one and the report counts the leak once |
 | `dla ledger strong <F> --evidence E..` | Marks a confirmed leak-side finding strong on a second independent class of evidence: a retention record or an intervention that removed the growth |
@@ -115,6 +117,11 @@ dla harness run H1                       # S1
 dla trend S1                             # passed columns and their candidates
 dla ledger add --sibling-of F4 --origin hypothesis --hypothesis N-WARM \
     --refute-if "growth continues over the extra cycles" --evidence E12
+dla ledger list --state candidate        # the candidates in rank order
+dla harness gen --lang python --driver --next   # H2: the next ranked candidates as targets
+dla harness run H2 --mode both           # after filling setup and unit of the driver
+dla trend S2                             # verdict per target: grew, constant, not_executed, ...
+dla ledger close-rest                    # when no queue is open
 dla ledger test F4 --evidence E10        # the harness run evidence
 dla alloc-test H1 --finding F4           # plateau and purge tests: favors leak
 dla ledger refute F4.n1 --evidence E13   # the non-leak sibling loses

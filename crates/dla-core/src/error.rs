@@ -128,6 +128,11 @@ pub mod codes {
     /// `time_budget` was given while more than the shared floor of the budget is left and
     /// no command was refused with nothing smaller that fits.
     pub const TIME_LEFT: &str = "time-left";
+    /// A candidate ranked for measurement was closed as not exercised while its runtime's
+    /// queue is open.
+    pub const TARGET_PENDING: &str = "target-pending";
+    /// A harness was asked to declare more targets than the limit.
+    pub const TOO_MANY_TARGETS: &str = "too-many-targets";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

@@ -214,6 +214,17 @@ that adds to it and the code that removes from it, and record `dla ledger annota
 file:line --remover file:line --note "<text>"` (both flags repeat). Annotating changes no state. A
 holder with writers and no remover is the lead for stage 4.
 
+End of the stage: `dla ledger list` prints one JSON line per finding in rank order: `id`, `state`,
+`tier`, `rank` among the eligible, origin(s), `site`, `holder`, `owner`, the counts of writers and
+removers, and the queue status (`pending`, `settled` with its verdicts per harness, `not-eligible`),
+then totals. `--state candidate` narrows it, `--limit N` (default 40) and `--all` widen it; it only
+reads. Never read `ledger.jsonl` by hand. Tiers 1 to 4 are eligible for the measurement queue and
+5 and 6 are not: 1 a `known-leak:*` or `detector:dla/*` origin; 2 a census holder with writers, no
+remover and holder `registration-table`, `container-field` or `static/global`; 3 any other
+`detector:*` origin; 4 a census holder with writers; 5 the rest; 6 a site in test, example,
+benchmark or documentation code (whatever else holds). In a tier, a finding with more than one origin
+comes first, then ledger order. Siblings (`N-*`) and duplicates are not ranked.
+
 ## 4. Classify growth
 
 Measure first and explain afterwards. These commands build and run project code in a scratch copy
@@ -233,11 +244,49 @@ under the run directory and need tier 1.
   can read is refused with the reason (Go command mode: use `--driver`), and a finding with no probe of
   its own is probed through its module and the output says so. A point killed at its timeout says
   which phase the Python agent was in (the program's own code before its first hook, a named hook, a named probe).
+- The measurement queue. The candidates of tiers 1 to 4 that no harness run has settled are PENDING;
+  `dla run status` prints a `queue` object per runtime (eligible, settled, pending, the ids of the
+  next batch, the `command`, and `open` or the reason it is not open: floor reached, workload
+  blocked, empty). While a queue is open, work it in batches of at most 8 targets:
+  1. `dla harness gen --lang <rt> --driver --next` (the command in `queue`; `--next N` takes fewer).
+     It declares the next pending candidates as targets of the harness, same as `--probe F<n>` for each
+     (at most 8 targets per harness, more is refused `too-many-targets`), prints them in
+     `summary.targets` and writes them as a comment block at the top of the driver file above the first
+     `DLA-HOOK`. A JVM project with JUnit tests and no driver support keeps its generation command
+     (`dla harness gen --lang jvm --junit --next`).
+  2. Read the target block of the driver. Per target it gives the finding, site, holder, owner, the rule's
+     message, up to 3 writers and 3 removers (`file:line` with the enclosing function), what its probe
+     reads (or "no probe: tied by allocation stacks or type counts"), and one instruction by holder:
+     a cached function: call the owner with arguments that differ for every unit (derive them from `key`);
+     `static/global` or `container-field`: make every unit reach a writer so that it adds an entry whose
+     key derives from `key`; `registration-table`: register through the public API once per unit and
+     release only what a normal caller of that API releases; any other holder: make every unit run the
+     code at the site. Read the writers' code and call them through the project's public API the way a
+     caller would. In fresh mode a unit never reuses an earlier unit's key.
+  3. Replace the body of `setup` (import the project, build what the units need) and of `unit` (one
+     unit for this `key`, reaching every target in the block) in the driver file. Keep the comments.
+  4. `dla harness run H<n> --mode both`, then `dla trend S<n>`. The output lists `targets` (at most 8
+     declared targets, with `finding`, `verdict`, `column`, `detail`) and counts the other verdicts.
+     Verdicts: `grew` (a column tied to the finding passed the gate): go on with stage 5 for it (sibling,
+     `dla ledger test`). `changed` (its probe moved but did not pass): counts as measured; `dla alloc-test`
+     may decide it. `constant` (its probe stayed flat), `not_loaded` (the module of its probe was never
+     imported) and `not_executed` (its function or a writer never ran) mean the unit did not reach the
+     target or reused a key: read `detail`, fix the unit, `dla harness run H<n> --mode both` once more
+     (the same harness, or a new one with `dla harness gen ... --driver --probe F<n>` when the driver
+     must change shape). `executed` and `unknown` (no probe, or no coverage data: Rust, native, Python
+     before 3.12) settle the candidate after a driver run. A candidate settles when a verdict is `grew`
+     or `changed`, or after one driver run with `executed` or `unknown`, or after two driver runs
+     whose driver files differ, whatever the verdicts. A fixed command (command mode, JUnit) settles only
+     by `grew` or `changed`.
+  5. `dla run status` again. The queue still open: the next batch (step 1). The queue empty or closed:
+     `dla ledger close-rest` (stage 7).
+  A candidate that no probe can read is still a target: use the writer lines to make its units reach
+  it; `executed` then tells you its code ran.
 - `dla harness run H1` builds once and measures every point (`--mode both` in driver mode). Give a
   harness run or alloc-test Bash call a timeout of 600000 ms. A harness that `gen` wrote must be run, or the
   blocker recorded on `intake.workload` (`--status unresolved --reason env_unavailable|tool_missing|build_fails|privilege_declined
-  --remedy "<what blocks it>"`), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with
-  `harness-not-run` while budget remains. Once its manifest loads, `harness run` leaves `harness/H<n>/attempt.json`.
+  --remedy "<what blocks it>"`; it closes the runtime's queue), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with
+  `harness-not-run` while budget remains, and with `target-pending` while a pending candidate of an open queue is closed that way. Once its manifest loads, `harness run` leaves `harness/H<n>/attempt.json`.
   A runtime whose entry points were discovered (`dla workload discover`) needs a harness before
   those closes too: with none generated and budget left, `dla ledger resolve` refuses
   `harness-not-generated` and prints `dla harness gen --lang <rt>`. The blocker reasons and a blocker
@@ -261,7 +310,8 @@ under the run directory and need tier 1.
   - The output lists the files under `captures` and prints the `dla summarize` commands to run
     next (the full list is in `harness/H<n>/captures.json` when the output was cut).
 - `dla trend S1` gives the shape and slope gate per column; read the `passed` columns and their
-  `candidates`. A passed column with no candidate is growth nothing explains yet.
+  `candidates`, and the `targets` of the harness (verdict per declared target, see the queue above).
+  A passed column with no candidate is growth nothing explains yet.
   `dla trend S1 --against S2 --finding F3` compares fresh with repeated keys.
 - `dla sample --pid <P>` samples a running process (see Local process). `dla gap S1` splits
   process memory into accounted and unexplained; `dla gap S1 --residual` totals growth, subtracts
@@ -442,21 +492,32 @@ and class-metadata warm-up (references/jvm.md). A candidate the
 harness exercised whose column did not grow gets the same test and is refuted when the plateau
 verdict favors non-leak. When no column tied to any candidate grew, one unbound `dla alloc-test
 H1` judges the whole workload; if it favors non-leak, refute each exercised candidate with that
-evidence. A candidate the harness could not exercise is neither confirmed nor refuted:
-`dla ledger resolve F6 --as suspected_static_only --reason not_exercised --remedy "<text>"
---evidence E4` (reasons `not_exercised`, `no_harness`, `build_fails`), or `--as unresolved` when
-no static evidence exists. A failed build or a run without usable points (`harness-failed`)
+evidence. A candidate that no harness reached is neither confirmed nor refuted, and is not closed while
+`dla run status` shows an open `queue` for its runtime: run the next batch (stage 4). Once the queue is
+empty or closed, `dla ledger close-rest [--remedy "<text>"]` dispositions every open candidate that is
+not pending in an open queue, through the rules of `dla ledger resolve`: `suspected_static_only` when
+the finding has static evidence, else `unresolved`, with reason `not_exercised` (`time_budget` when the
+queue closed at the floor), and a remedy built from the finding's history ("targeted in H2 and H3, its
+holder did not change: write a unit that adds a new key to <owner>"; "ranked 143 (tier 4), not
+targeted: dla harness gen --driver --probe F143") unless you give one. It prints counts by
+disposition and the ids it left open, with the batch command; it never touches findings under test.
+`dla ledger resolve F6 --as suspected_static_only --reason not_exercised --remedy "<text>" --evidence E4`
+(or `--as unresolved` when no static evidence exists) stays the way to close one finding by hand once its
+queue is empty or closed. A `target-pending` refusal says F6 is pending: run the batch command it
+prints; never close it with another reason. A failed build or a run without usable points (`harness-failed`)
 confirms nothing. Closing with `no_harness`, `not_exercised` or `time_budget` while a generated harness of the runtime was never run, or never built with nothing else of the runtime run and no blocker recorded (`harness-not-run`; the build is then the step), or while the runtime has discovered entry points and no harness (`harness-not-generated`), is refused when more than 10 minutes and more than 20% of the budget remains; if only the user can unblock the harness (services, credentials, data), ask the user once, naming the finding ids and the exact input, before closing.
 
 ## 8. Final gate
 
 `dla gate check --final` is the gate before the report. It needs everything the stage gates need, plus:
 every confirmed or strong leak-side finding has an explanation; every enumerated candidate of every
-backend is dispositioned; every non-flat trend column is tied to a dispositioned finding (a whole-process column and a JVM type-count column that ties to no finding are accounted for by the residual rows instead); checklist
+backend is dispositioned (while a runtime's queue is open, one `queue` item leads the list with the
+batch command as its fix, and each pending candidate carries that command; every other open
+candidate carries `dla ledger close-rest`); every non-flat trend column is tied to a dispositioned finding (a whole-process column and a JVM type-count column that ties to no finding are accounted for by the residual rows instead); checklist
 answers cite evidence that exists; no worker slice is unmerged; the integrity seals match (see
 `references/safety-and-effects.md`); the run is not aborted. Work through the `missing` list. What cannot be
-done is recorded: `dla ledger resolve F3 --as unresolved --reason <r> --remedy "<what to do
-next>"`. Pick the reason that says what happened: `not_exercised` (nothing reached it);
+done is recorded: `dla ledger close-rest` for the candidates the queue has finished with, else
+`dla ledger resolve F3 --as unresolved --reason <r> --remedy "<what to do next>"`. Pick the reason that says what happened: `not_exercised` (nothing reached it);
 `inconclusive` (it was measured and the measurement cannot decide: too few points, no plateau yet,
 a single snapshot, an inconclusive discriminator; `unresolved` only, and the ledger needs a
 measurement tied to the finding: a discriminator or intervention for it, a growth column tied to it, or a residual,
@@ -505,13 +566,19 @@ at or under the floor), `budget_left_unrevisited` only a blocker reason (`env_un
 `dla report` writes `report.md` from the ledger and prints it; show it exactly as printed. Then
 revisit, as a loop with an exit:
 
-1. `dla run status`: `budget.remaining_seconds` is the time left, `next_command` the next step,
-   `revisit` lists up to 10 findings that are `unresolved` or `suspected_static_only` (`revisit_total`
-   gives the count), each with `id`, `state`, `reason` and `remedy`; `harnesses_generated`,
-   `harnesses_run` and `closed_static_only` show whether anything was measured.
-2. Take the first `revisit` item, preferring one whose runtime has a harness that can run, and run
-   what its `remedy` or `next_command` names. A result that settles it moves it out of `revisit`.
-3. `dla report` again, then repeat from 1.
+1. `dla run status`: `queue` per runtime (`open`, `pending`, the next batch and its `command`),
+   `budget.remaining_seconds` is the time left, `next_command` the next step (the batch command while a
+   queue is open), `revisit` lists up to 10 findings that are `unresolved` or `suspected_static_only`
+   (`revisit_total` gives the count), each with `id`, `state`, `reason` and `remedy`;
+   `harnesses_generated`, `harnesses_run` and `closed_static_only` show whether anything was measured.
+2. A queue is open: run its batch (stage 4, steps 1 to 5), then `dla ledger close-rest` once it is
+   empty or closed. Otherwise take the first `revisit` item, preferring one whose runtime has a harness
+   that can run, and run what its `remedy` or `next_command` names. A result that settles it moves it
+   out of `revisit`. A remedy that names a targeted workload ("write a unit that adds a new key to
+   <owner>") is run as one: `dla harness gen --lang <rt> --driver --probe F<n>`, fill the hooks,
+   `dla harness run H<n> --mode both`, `dla trend S<n>`.
+3. `dla report` again, then repeat from 1. The report's `Queue:` line says how many ranked candidates
+   were targeted, in how many harnesses, with which verdicts, and how many were not targeted.
 
 Stop when every remaining item has a reason and a remedy that a command cannot clear now (a blocker,
 or something only the user can supply) or the deadline has passed, then judge the newest report. There

@@ -26,6 +26,13 @@
       "description": "The series analysed (`S3`).",
       "type": "string"
     },
+    "targets": {
+      "description": "One verdict per declared target of the series' harness and per candidate an\nautomatic probe of that harness stands for (`dla trend` computes them once; nothing\nrecomputes them later).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TargetVerdict"
+      }
+    },
     "thresholds": {
       "description": "Thresholds the gate used.",
       "$ref": "#/$defs/GateThresholds"
@@ -372,6 +379,41 @@
         }
       ]
     },
+    "TargetVerdict": {
+      "description": "One finding's verdict in a trend report.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "description": "The column the verdict rests on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "declared": {
+          "description": "True when the finding is a declared target of the harness (not only a candidate an\nautomatic probe stands for).",
+          "type": "boolean",
+          "default": false
+        },
+        "detail": {
+          "description": "One short sentence a reader can act on.",
+          "type": "string"
+        },
+        "finding": {
+          "description": "The finding.",
+          "$ref": "#/$defs/FindingId"
+        },
+        "verdict": {
+          "description": "The verdict.",
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "required": [
+        "finding",
+        "verdict",
+        "detail"
+      ]
+    },
     "TheilSen": {
       "description": "Theil-Sen slope with Sen's confidence interval.",
       "type": "object",
@@ -467,6 +509,46 @@
           "description": "Seconds.",
           "type": "string",
           "const": "seconds"
+        }
+      ]
+    },
+    "Verdict": {
+      "description": "What a run showed about one targeted finding.",
+      "oneOf": [
+        {
+          "description": "A column tied to the finding passed the gate.",
+          "type": "string",
+          "const": "grew"
+        },
+        {
+          "description": "A probe column of the finding did not pass, and its values are not all equal.",
+          "type": "string",
+          "const": "changed"
+        },
+        {
+          "description": "A probe column of the finding stayed at one value.",
+          "type": "string",
+          "const": "constant"
+        },
+        {
+          "description": "The harness has a probe for the finding and the series has no column for it.",
+          "type": "string",
+          "const": "not_loaded"
+        },
+        {
+          "description": "No probe: the function enclosing the site or a writer ran.",
+          "type": "string",
+          "const": "executed"
+        },
+        {
+          "description": "No probe: none of those functions ran.",
+          "type": "string",
+          "const": "not_executed"
+        },
+        {
+          "description": "Nothing can tell.",
+          "type": "string",
+          "const": "unknown"
         }
       ]
     }
