@@ -134,7 +134,11 @@ and no tied column) the region's primary column, else every column that passed t
 latest trend of the harness plus `os.rss`; a peak or a size no purge can give back (`os.vm_hwm`,
 `native.peak_bytes`, `os.vm_data`) is tested and reported, and votes only when nothing else
 can. The file-backed pages `os.rss_file` vote on their plateau test, but a retained purge reading
-of that column never contradicts a plateau (no purge gives file-backed pages back). For a JVM
+of that column never contradicts a plateau (no purge gives file-backed pages back); the same
+holds for those peaks and sizes and for `go.total` (everything the Go runtime has mapped: it only
+steps up, and a purge moves bytes inside it). `go.released` (heap the Go runtime handed back to
+the system) is recorded and shown but never passes the gate: a rise of it is memory given back,
+not memory held. For a JVM
 non-heap finding the primary is `jvm.nonheap_used`, which must plateau together with every
 `jvm.nmt.*` category that passed the gate in the latest trend and with `jvm.threads` and
 `os.threads` (when those passed the gate, or when the harness has no trend yet);

@@ -49,6 +49,16 @@ const NO_RELEASE: &[&str] = &["os.vm_hwm", "native.peak_bytes", "os.vm_data"];
 /// all. A real growth of file-backed memory still reads as one: through its plateau test,
 /// and through a retained purge against an undecided plateau.
 pub const PURGE_CANNOT_CONTRADICT: &[&str] = &["os.rss_file"];
+/// Whether no purge can give this column's memory back, whatever the program holds: the
+/// process peaks and virtual sizes of [`NO_RELEASE`], and `go.total` (`/memory/classes/total`,
+/// everything the runtime has mapped, released pages included: a collection or a return of
+/// memory to the system moves bytes inside it, and the figure itself only steps up). A
+/// retained purge reading of such a column says nothing about the plateau of its extra window,
+/// so it never contradicts one (the column still votes where it did, the reading stays in the
+/// result, and a continuing plateau still reads leak).
+pub fn purge_cannot_release(name: &str) -> bool {
+    NO_RELEASE.contains(&name) || name == "go.total"
+}
 /// Most tied columns tested for a bound finding.
 const MAX_TIED: usize = 6;
 /// Most gate-passing columns tested without a finding.

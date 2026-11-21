@@ -377,6 +377,19 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
     nf.shape = a.shape;
     nf.locus = a.locus;
     nf.site = a.site;
+    // A finding added from growth evidence takes the site of the first passing column that
+    // names one (an allocation stack's first project frame) when none is given.
+    if nf.site.is_none() && a.origin == "growth-series" {
+        nf.site = nf.supports.iter().find_map(|e| {
+            ledger
+                .evidence_by_id(e)?
+                .result
+                .get("passed")?
+                .as_array()?
+                .iter()
+                .find_map(|c| c.get("site")?.as_str().map(str::to_owned))
+        });
+    }
     nf.amplifiers = a.amplifiers;
     nf.repair_class = a.repair_class;
     nf.explanation = match (a.explanation, a.explanation_tag) {

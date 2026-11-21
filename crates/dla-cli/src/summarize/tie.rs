@@ -239,6 +239,66 @@ pub fn finding_by_holder(
     (v.len() == 1).then(|| v.remove(0))
 }
 
+/// The first and last line of the Rust function that contains `file:line`, read from the
+/// source under `project` with the syntax tree.
+fn rust_function_span(project: &Path, site: &str) -> Option<(String, u32, u32)> {
+    use dla_census::parse::{Lang, parse, tree_sitter::Point};
+    let (file, line) = site.rsplit_once(':')?;
+    if !file.ends_with(".rs") {
+        return None;
+    }
+    let line: usize = line.trim().parse().ok()?;
+    let src = fs::read_to_string(project.join(file)).ok()?;
+    let tree = parse(Lang::from_path(Path::new(file))?, &src).ok()?;
+    let row = line.checked_sub(1)?;
+    let column = src.lines().nth(row)?.len();
+    let mut node = tree
+        .root_node()
+        .descendant_for_point_range(Point { row, column: 0 }, Point { row, column });
+    while let Some(n) = node {
+        if n.kind() == "function_item" {
+            return Some((
+                file.to_owned(),
+                u32::try_from(n.start_position().row + 1).ok()?,
+                u32::try_from(n.end_position().row + 1).ok()?,
+            ));
+        }
+        node = n.parent();
+    }
+    None
+}
+
+/// The findings whose own site or recorded writer lies in the same Rust function as `site`
+/// (an allocation stack of a Rust project is at the line of the call that allocates, the
+/// census at the line of the holder or its writer): used only when no finding is at `site`
+/// itself. Removers never count.
+pub fn findings_in_rust_function(
+    ledger: &Ledger,
+    who: &Who,
+    project: &Path,
+    site: &str,
+) -> Vec<FindingId> {
+    let Some((file, lo, hi)) = rust_function_span(project, site) else {
+        return Vec::new();
+    };
+    let inside = |s: &str| {
+        s.rsplit_once(':').is_some_and(|(f, l)| {
+            f == file && l.parse::<u32>().is_ok_and(|l| (lo..=hi).contains(&l))
+        })
+    };
+    ledger
+        .findings()
+        .filter(|f| who.sees(f))
+        .filter(|f| {
+            f.site.as_deref().is_some_and(inside)
+                || ledger
+                    .annotation(&f.id)
+                    .is_some_and(|a| a.writers.iter().any(|w| inside(w)))
+        })
+        .map(|f| f.id.clone())
+        .collect()
+}
+
 /// The findings at `site` (`file:line`): the finding's own site, or one of its recorded
 /// writers. Removers never count.
 pub fn findings_at_site(ledger: &Ledger, who: &Who, site: &str) -> Vec<FindingId> {

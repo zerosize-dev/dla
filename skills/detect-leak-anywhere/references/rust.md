@@ -28,6 +28,12 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   system allocator but not a custom one (jemalloc, mimalloc) or a statically linked binary.
 - Command mode reads live bytes at exit: a program that drops its buffers before exiting shows
   little in `native.live_bytes`; read `native.peak_bytes` or use driver mode.
+- Allocation stacks: `dla harness run H1 --mode fresh --capture alloc` (a Rust holder has no size probe, so this is what
+  names the site of a growing column). Driver mode runs the same binary four more times (1 to 4 rounds of `step` units, no warm-up)
+  with the allocator shim preloaded and narrowed to it, into `out/p<k>-alloc/`; command mode uses the shim dumps of its
+  points. Measured points are untouched (the shim slows an allocation-heavy unit about ten times, in those extra processes only). Then run the
+  `dla summarize alloc-stack-diff` command it prints. A crate with its own `#[global_allocator]`, or a build without
+  debug line tables, shows fewer project frames (limitation lines say so).
 - Purges: `trim` (glibc `malloc_trim`).
 
 ## Attach backends

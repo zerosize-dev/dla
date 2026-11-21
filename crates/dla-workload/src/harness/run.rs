@@ -2073,6 +2073,129 @@ fn go_cover_point(
     Ok(())
 }
 
+/// Process counts of the allocation-stack points of a Rust driver: units `step * k`.
+const ALLOC_POINTS: u32 = 4;
+
+/// `--capture alloc` for a Rust driver. The driver counts allocations itself and the shim
+/// writes at process exit, so the stacks come from separate short processes (like the Go and
+/// Rust coverage points, the measured points stay as they are): the same binary
+/// (`line-tables-only` debug info) with the allocator shim preloaded and narrowed to it, run
+/// for `k = 1..=4` rounds of `step` units without a warm-up, key mode `fresh`. Each process
+/// leaves `out/p<k>-alloc/dump.jsonl` (the driver's records and the shim's exit record) and the
+/// shim's record is split out into `shim-dump.jsonl` next to it, which
+/// `dla summarize alloc-stack-diff` reads. Problems are limitations, never refusals.
+fn rust_alloc_points(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    timeout: Duration,
+    out: &mut RunOutput,
+) -> Result<(), Refusal> {
+    let shim = paths
+        .hdir
+        .join(super::AGENT)
+        .join(super::commands::shim_file());
+    if cfg!(windows) || !shim.is_file() {
+        out.limitations.push(
+            "--capture alloc needs the allocator shim in the harness's agent directory (cc builds it at dla harness gen; this harness has none: generate it again with cc on PATH)"
+                .to_owned(),
+        );
+        return Ok(());
+    }
+    // A crate with its own global allocator is not seen by the shim.
+    let mut stack = vec![paths.work.clone()];
+    let mut own_allocator = false;
+    let mut seen = 0;
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.filter_map(Result::ok) {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if p.is_dir() {
+                if name != "target" && !name.starts_with('.') {
+                    stack.push(p);
+                }
+                continue;
+            }
+            seen += 1;
+            if seen > 2000 || !name.ends_with(".rs") || name == "dla_harness.rs" {
+                continue;
+            }
+            if fs::read_to_string(&p).is_ok_and(|t| t.contains("#[global_allocator]")) {
+                own_allocator = true;
+            }
+        }
+    }
+    if own_allocator {
+        out.limitations.push(
+            "the crate sets a #[global_allocator]: the shim sees the system allocator only, so the stacks may miss what that allocator serves"
+                .to_owned(),
+        );
+    }
+    let Some(program) = manifest.run.argv.first() else {
+        return Ok(());
+    };
+    let base = Path::new(program)
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mode = KeyMode::Fresh;
+    let mut written = 0;
+    for k in 1..=ALLOC_POINTS {
+        let label = format!("p{k}-alloc");
+        let pe = PointEnv {
+            manifest,
+            paths,
+            label: label.clone(),
+            mode,
+            n: manifest.step,
+            purge: None,
+            rounds: k,
+            capture: None,
+            dumps: 0,
+        };
+        let dump = pe.dump_path();
+        if let Some(d) = dump.parent() {
+            fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
+        }
+        let _ = fs::remove_file(&dump);
+        let mut spec = pe.exec_spec(
+            timeout,
+            "",
+            &[
+                ("DLA_WARMUP", "0".to_owned()),
+                (
+                    super::commands::preload_var(),
+                    shim.to_string_lossy().into_owned(),
+                ),
+                ("DLA_SHIM_ONLY", base.clone()),
+            ],
+        );
+        spec.env.retain(|(k, _)| k != "DLA_SHIM_DISABLE");
+        spec.sample = false;
+        let command = spec.argv.join(" ");
+        spec.command = &command;
+        let res = exec(ctx, &spec)?;
+        out.logs.push(paths.rel(ctx, &spec.log));
+        if res.spawn_error.is_some() || res.timed_out || res.code != Some(0) {
+            out.limitations.push(format!(
+                "the allocation-stack run {label} did not complete (log {})",
+                paths.rel(ctx, &spec.log)
+            ));
+            continue;
+        }
+        if capture::split_shim_dump(&paths.out.join(&label), res.pid) == capture::ShimSplit::Written
+        {
+            written += 1;
+        }
+    }
+    if written < 3 {
+        out.limitations.push(format!(
+            "--capture alloc: {written} of {ALLOC_POINTS} allocation-stack runs left shim stacks (dla summarize alloc-stack-diff needs 3 or more; does the program use the system allocator?)"
+        ));
+    }
+    Ok(())
+}
+
 /// `rustc -vV` in `cwd`: `(host triple, LLVM major version)`.
 fn rustc_host_llvm(cwd: &Path, env: &[(String, String)]) -> Option<(String, Option<u32>)> {
     let mut cmd = Command::new("rustc");
@@ -2507,12 +2630,18 @@ pub fn run_points(
                 .to_owned(),
         );
     }
-    if !asked.is_empty() && capture::supported(manifest.runtime).is_empty() {
+    let rust_alloc = manifest.runtime == dla_core::runtime::Runtime::Rust && asked.alloc;
+    if rust_alloc && (asked.heap || asked.histogram || asked.jfr || asked.nonheap) {
+        out.limitations.push(
+            "--capture: rust harnesses write allocation stacks (alloc) only; the other kinds were not taken"
+                .to_owned(),
+        );
+    } else if !asked.is_empty() && !rust_alloc && capture::supported(manifest.runtime).is_empty() {
         out.limitations.push(format!(
             "--capture is available for jvm and node harnesses; {} writes no capture files (use --tool for rust and native code)",
             manifest.runtime.as_str()
         ));
-    } else if asked != opts.capture {
+    } else if asked != opts.capture && !rust_alloc {
         let dropped = CaptureSet {
             heap: asked.heap && !opts.capture.heap,
             histogram: asked.histogram && !opts.capture.histogram,
@@ -2744,6 +2873,28 @@ pub fn run_points(
         out.modes.push(mode);
         out.series.push(series.id.clone());
         usable_modes += 1;
+    }
+
+    if asked.alloc && matches!(manifest.runtime, dla_core::runtime::Runtime::Rust) {
+        if command_mode {
+            // The shim is preloaded in every measured process: its dumps hold the stacks.
+            let mut wrote = 0;
+            if let Ok(rd) = fs::read_dir(&paths.out) {
+                for e in rd.filter_map(Result::ok) {
+                    if capture::copy_native_shim_dump(&e.path()) {
+                        wrote += 1;
+                    }
+                }
+            }
+            if wrote == 0 {
+                out.limitations.push(
+                    "--capture alloc: no measured process wrote allocator shim stacks (is the shim preloaded, and does the program use the system allocator?)"
+                        .to_owned(),
+                );
+            }
+        } else if usable_modes > 0 {
+            rust_alloc_points(ctx, manifest, &paths, timeout, &mut out)?;
+        }
     }
 
     // Detector pass at the warm-up n: abort-type detectors would end a measured run.
@@ -3079,11 +3230,21 @@ fn run_loaded(
     if captured && opts.tool.is_none() {
         // A JVM harness with the allocator shim: the shim's exit records are a
         // type-histogram-diff input of their own.
-        let shim = capture::shim_dump_commands(
+        let mut shim = capture::shim_dump_commands(
             &harness_dir(&ctx.run_dir, &manifest.id).join(OUT),
             &manifest.id,
             &|p| ctx.pointer(p),
         );
+        // A Rust run asked for allocation stacks: that command comes first.
+        if manifest.runtime == dla_core::runtime::Runtime::Rust
+            && opts.capture.alloc
+            && let Some(i) = shim
+                .iter()
+                .position(|c| c.starts_with("dla summarize alloc-stack-diff"))
+        {
+            let c = shim.remove(i);
+            shim.insert(0, c);
+        }
         for list in [&mut commands, &mut compact] {
             let at = list
                 .iter()

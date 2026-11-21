@@ -107,8 +107,16 @@ fn have_llvm_tools() -> bool {
 
 impl Run {
     fn new() -> Self {
+        Self::of(project)
+    }
+
+    fn of(make: fn(&Path)) -> Self {
+        Self::build(make, true)
+    }
+
+    fn build(make: fn(&Path), census: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        project(dir.path());
+        make(dir.path());
         let o = command(dir.path())
             .env("DLA_CONSENT_TIERS", "1-4")
             .env("DLA_CONSENT_RAW_VALUES", "1")
@@ -119,12 +127,10 @@ impl Run {
         assert_eq!(v["ok"], true, "{v}");
         let run_dir = dir.path().join(".dla").join(v["run_id"].as_str().unwrap());
         let r = Self { dir, run_dir };
-        for a in [
-            &["census", "--lang", "rust"][..],
-            &["workload", "discover", "--lang", "rust"][..],
-        ] {
-            r.ok(a);
+        if census {
+            r.ok(&["census", "--lang", "rust"]);
         }
+        r.ok(&["workload", "discover", "--lang", "rust"]);
         r
     }
 
@@ -329,4 +335,198 @@ fn features_are_for_a_rust_driver_only() {
         assert_ne!(o.code, 0, "{}", o.text);
         assert_eq!(o.json["error"]["code"], "invalid-value", "{}", o.text);
     }
+}
+
+/// A crate whose `leak_one` keeps a boxed value per call in a static and whose `no_leak` frees
+/// what it allocates; `forget_one` forgets a box through `mem::forget` where no holder is declared.
+fn leaky(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"leaky\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic KEPT: Mutex<Vec<Box<[u8; 64]>>> = Mutex::new(Vec::new());\n\npub fn leak_one(key: u64) {\n    let b = Box::new([key as u8; 64]);\n    KEPT.lock().unwrap().push(b);\n}\n\npub fn no_leak(key: u64) -> u64 {\n    let v: Vec<u8> = vec![key as u8; 64];\n    v.iter().map(|x| u64::from(*x)).sum()\n}\n\npub fn forget_one(key: u64) {\n    std::mem::forget(std::hint::black_box(Box::new([key as u8; 48])));\n}\n",
+    );
+}
+
+fn have_alloc_tools() -> bool {
+    let ok = have_cargo()
+        && cfg!(target_os = "linux")
+        && ["cc", "addr2line"].iter().all(|t| {
+            Proc::new(t)
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+    if !ok {
+        eprintln!("skipping: cc or addr2line is missing");
+    }
+    ok
+}
+
+/// The `dla summarize alloc-stack-diff` command a capturing run printed, as arguments.
+fn stack_diff_args(run_out: &Value) -> Vec<String> {
+    let cmd = run_out["summary"]["summarize"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|c| c.starts_with("dla summarize alloc-stack-diff"))
+        .unwrap_or_else(|| panic!("no alloc-stack-diff command in {run_out}"))
+        .to_owned();
+    cmd.split_whitespace().skip(1).map(str::to_owned).collect()
+}
+
+#[test]
+fn capture_alloc_names_the_leaking_function_and_ties_it_to_the_finding() {
+    if !have_alloc_tools() {
+        return;
+    }
+    let r = Run::of(leaky);
+    let kept = r.id_at("src/lib.rs:3");
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    assert!(r.run_dir.join("harness/H1/agent/libdlashim.so").is_file());
+    r.fill(
+        "H1",
+        "leaky::leak_one(key);\n    let _ = leaky::no_leak(key);",
+    );
+    // Without --capture the trend of the whole-process column proposes the capture run.
+    r.ok(&["harness", "run", "H1", "--mode", "fresh"]);
+    let trend = r.ok(&["trend", "S1"]);
+    assert!(
+        trend["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|n| n.starts_with("dla harness run H1 --mode fresh --capture alloc")),
+        "{trend}"
+    );
+    let out = r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    let args = stack_diff_args(&out);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut cmd: Vec<&str> = Vec::new();
+    cmd.extend(args);
+    let sum = r.ok(&cmd);
+    assert_eq!(sum["gate"], "pass", "{sum}");
+    let passed: Vec<&str> = sum["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        passed
+            .iter()
+            .any(|p| p.starts_with("stack:leak_one (src/lib.rs:")),
+        "{sum}"
+    );
+    assert!(!passed.iter().any(|p| p.contains("no_leak")), "{sum}");
+    // The first project frame, not the driver's counting allocator or std.
+    assert!(
+        sum["top"][0]["at"]
+            .as_str()
+            .unwrap()
+            .starts_with("leak_one (src/lib.rs:"),
+        "{sum}"
+    );
+    // Tied to the finding of the static by the function that holds its writer.
+    assert_eq!(sum["tied"], serde_json::json!([kept]), "{sum}");
+}
+
+#[test]
+fn a_finding_added_from_an_untied_allocation_stack_takes_its_site_from_the_tool() {
+    if !have_alloc_tools() {
+        return;
+    }
+    // No census: no finding names any function of the crate.
+    let r = Run::build(leaky, false);
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver"]);
+    // Only `forget_one` runs: the stack is in a function no finding names.
+    r.fill("H1", "leaky::forget_one(key);");
+    let out = r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    let args = stack_diff_args(&out);
+    let mut cmd: Vec<&str> = Vec::new();
+    cmd.extend(args.iter().map(String::as_str));
+    let sum = r.ok(&cmd);
+    assert_eq!(sum["gate"], "pass", "{sum}");
+    assert_eq!(sum["tied"], serde_json::json!([]), "{sum}");
+    let site = sum["top"][0]["site"].as_str().unwrap().to_owned();
+    assert!(site.starts_with("src/lib.rs:"), "{sum}");
+    let evidence = sum["growth_evidence"].as_str().unwrap();
+    let added = r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        evidence,
+    ]);
+    let id = added["id"].as_str().unwrap();
+    assert_eq!(r.id_at(&site), id, "{added}");
+}
+
+fn ledger_sync(dir: &Path) {
+    fn copy(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for e in fs::read_dir(from).unwrap().flatten() {
+            let (src, dst) = (e.path(), to.join(e.file_name()));
+            if e.file_type().unwrap().is_dir() {
+                copy(&src, &dst);
+            } else {
+                fs::copy(&src, &dst).unwrap();
+            }
+        }
+    }
+    copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bench/fixtures/rust-ledger-sync/project"),
+        dir,
+    );
+}
+
+#[test]
+fn a_command_mode_rust_run_with_capture_alloc_leaves_stacks_and_the_command() {
+    if !have_alloc_tools() {
+        return;
+    }
+    let r = Run::of(ledger_sync);
+    r.ok(&["harness", "gen", "--lang", "rust"]);
+    let out = r.ok(&["harness", "run", "H1", "--capture", "alloc"]);
+    // The first command printed reads the allocation stacks.
+    let first = out["summary"]["summarize"][0].as_str().unwrap();
+    assert!(first.starts_with("dla summarize alloc-stack-diff"), "{out}");
+    let args = stack_diff_args(&out);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let sum = r.ok(&args);
+    assert_eq!(sum["gate"], "pass", "{sum}");
+    assert!(
+        sum["passed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|p| p.starts_with("stack:add (src/journal.rs:")),
+        "{sum}"
+    );
+    assert!(!sum["tied"].as_array().unwrap().is_empty(), "{sum}");
 }

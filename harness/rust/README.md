@@ -44,6 +44,17 @@ another feature enables; `any(a, b)` names `a`).
 library left out). The tools are the toolchain's (`<sysroot>/lib/rustlib/<host>/bin`, component `llvm-tools`), else
 those on PATH when their LLVM major version is the one rustc reports. The measured points are not instrumented.
 
+### Allocation stacks (`--capture alloc`)
+
+`dla harness gen --driver` also builds the allocator shim (`agent/libdlashim.so`, needs `cc`; a missing compiler is not a
+refusal). `dla harness run H<n> --mode fresh --capture alloc` runs the driver four more times, 1 to 4 rounds of `step` units
+without warm-up, with the shim preloaded and narrowed to `dla_harness` (the build is the measured one: `line-tables-only`,
+no frame pointers needed, the shim unwinds with `backtrace`), and leaves `out/p<k>-alloc/dump.jsonl` and the shim's record split out into
+`shim-dump.jsonl`. `dla summarize alloc-stack-diff` reads those files: the first frame inside the project (the driver's own
+file is skipped), demangled by `addr2line -C`. The measured points are not slowed; the extra processes are (about ten times for a
+unit that only allocates). Command mode has the shim in every point already: `--capture alloc` copies the shim dumps to
+`out/p<k>-native/shim-dump.jsonl`.
+
 ### dhat-rs variant
 
 `dla harness gen` does not generate this variant yet; it records a gap when `dhat` does not resolve

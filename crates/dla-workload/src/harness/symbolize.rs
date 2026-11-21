@@ -179,7 +179,10 @@ fn project_relative(work: &Path, file: &str) -> Option<String> {
     let outside = s.starts_with("../")
         || s.starts_with("target/")
         || s.starts_with("node_modules/")
-        || s.starts_with(".cargo/");
+        || s.starts_with(".cargo/")
+        // The generated Rust driver (its counting allocator wraps every allocation).
+        || s == "dla_harness.rs"
+        || s.ends_with("/dla_harness.rs");
     (!outside && !s.is_empty()).then_some(s)
 }
 

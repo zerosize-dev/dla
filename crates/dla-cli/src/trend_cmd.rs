@@ -723,6 +723,19 @@ fn suggestions(
                 // The gate never ties a whole-process column to a finding: the residual
                 // accounting covers it, so a `ledger add` would open a finding that can
                 // never be tied.
+                // A Rust harness has no size probe: the allocation stacks of
+                // `--capture alloc` are what name the site of the growth.
+                if series.source.runtime == Some(dla_core::runtime::Runtime::Rust)
+                    && let Some(h) = series.source.harness.as_deref()
+                {
+                    let cmd = format!(
+                        "dla harness run {h} --mode fresh --capture alloc   # allocation stacks name the site of the growth of {}",
+                        c.name
+                    );
+                    if !next.iter().any(|n| n.contains("--capture alloc")) {
+                        next.push(cmd);
+                    }
+                }
                 let hint = if has_gap_row {
                     gap_row_hint(&series.id)
                 } else {

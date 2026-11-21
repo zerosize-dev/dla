@@ -912,7 +912,13 @@ fn write_agent(rt: Runtime, driver: bool, agent: &Path) -> Result<(), Refusal> {
         Runtime::Node => write(&agent.join("dla-preload.cjs"), templates::NODE_AGENT),
         Runtime::Go => Ok(()),
         Runtime::Rust | Runtime::Native => {
-            if driver || cfg!(windows) {
+            if cfg!(windows) || (driver && rt == Runtime::Native) {
+                Ok(())
+            } else if driver {
+                // A Rust driver counts allocations itself; the shim is built for
+                // `dla harness run --capture alloc` only (allocation stacks), so a missing
+                // compiler is not a refusal here: that run says so.
+                let _ = compile_shim(agent);
                 Ok(())
             } else {
                 compile_shim(agent)

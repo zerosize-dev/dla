@@ -267,7 +267,8 @@ fn test_column(
     // A column whose purge reading cannot tell growth from retention: a retained purge never
     // contradicts its plateau (the reading stays in the result); against an undecided or
     // continuing plateau it counts as for any column.
-    let contradicts = !(pick::PURGE_CANNOT_CONTRADICT.contains(&name)
+    let contradicts = !((pick::PURGE_CANNOT_CONTRADICT.contains(&name)
+        || pick::purge_cannot_release(name))
         && plateau.verdict == PlateauVerdict::Plateau);
     let (favors, supports) =
         judge::combine(plateau.verdict, purge.as_ref().filter(|_| contradicts), gc);
@@ -2891,6 +2892,41 @@ mod tests {
             PurgeVerdict::Retained,
             "{r:?}"
         );
+    }
+
+    #[test]
+    fn a_retained_purge_does_not_contradict_the_plateau_of_a_column_no_purge_can_release() {
+        // `go.total` of a Go run that passed the first trend on the step of the heap growing
+        // into new arenas (a stair of 200 KB early in the window, flat after it): the runtime
+        // maps memory and never unmaps it, and the purge returns nothing of it. Its plateau
+        // stands; the reading stays. The same series under an ordinary column name is
+        // inconclusive (the test below).
+        for name in ["go.total", "os.vm_data", "os.vm_hwm"] {
+            let (favors, r) = stair_run(name);
+            assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{name}: {r:?}");
+            assert_eq!(
+                r.purge.as_ref().unwrap().verdict,
+                PurgeVerdict::Retained,
+                "{name}: {r:?}"
+            );
+            assert_eq!(r.favors, Favors::NonLeak, "{name}: {r:?}");
+            if name == "go.total" {
+                assert_eq!(favors, Favors::NonLeak, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn growth_that_continues_in_a_column_no_purge_can_release_still_reads_leak() {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("go.total")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![Some(500e6), Some(10e6 + 400_000.0 * i as f64)];
+        }
+        let (_, results, _) = unbound_run(s, &["go.total"]);
+        let r = results.iter().find(|r| r.name == "go.total").unwrap();
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Continues, "{r:?}");
+        assert_eq!(r.favors, Favors::Leak, "{r:?}");
     }
 
     #[test]

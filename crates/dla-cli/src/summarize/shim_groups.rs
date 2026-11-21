@@ -245,7 +245,10 @@ fn project_file(scratch: Option<&Path>, project: &Path, file: &str) -> Option<St
     let outside = s.starts_with("../")
         || s.starts_with("target/")
         || s.starts_with("node_modules/")
-        || s.starts_with(".cargo/");
+        || s.starts_with(".cargo/")
+        // The generated Rust driver (its counting allocator wraps every allocation).
+        || s == "dla_harness.rs"
+        || s.ends_with("/dla_harness.rs");
     (!outside && !s.is_empty()).then_some(s)
 }
 
@@ -739,8 +742,11 @@ fn run_diff(
                 .site
                 .as_deref()
                 .map(|site| {
-                    tie::findings_at_site(ledger, &who, site)
-                        .into_iter()
+                    let mut at = tie::findings_at_site(ledger, &who, site);
+                    if at.is_empty() {
+                        at = tie::findings_in_rust_function(ledger, &who, &tc.project, site);
+                    }
+                    at.into_iter()
                         .map(|f| (f, tie::TieReason::site(site)))
                         .collect()
                 })
@@ -933,6 +939,11 @@ fn run_diff(
         if let Some((f, why)) = r_tie.tie {
             let site = tie::site_of(ledger, &f);
             t.tie_to_all(f, &r_tie.also, why, site);
+        } else if t.ambiguous.is_empty() {
+            // Tied to no finding: the column still says where the stack allocates, so a
+            // finding added from this growth (`dla ledger add --origin growth-series`) takes
+            // that site, and the column ties to it by site at once.
+            t.site.clone_from(&r.site);
         }
         tracks.push(t);
     }
