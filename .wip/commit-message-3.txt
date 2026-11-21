@@ -1,0 +1,68 @@
+Make a measured growth binding, give flat runs a second look, fit series to their time
+
+Found by running the plugin on real libraries at versions with a documented leak. On a Go RPC
+library the documented leak is now measured and confirmed. On a JavaScript HTTP client the
+first harness measured the documented leak (one listener per request at the documented line,
+heap rising after collection) and the run still ended with nothing confirmed, twice: first
+because every series was too short for the gate and the tool said nothing, then because the
+model closed the run through holes in the ledger. On a Rust async library one flat run of one
+unit settled every candidate with almost the whole budget unused.
+
+Series and drivers
+- `dla trend` lists the columns that fail the gate for their point count alone (`short`), in a
+  short series and for a column that appears late in a full one, and its first `next` line
+  names them and the command that measures long enough. A target is not settled by "the code
+  ran and no column passed" on such a series.
+- The drivers fit their rounds into the time limit of their process (inside the first round
+  and after every round), never below ten units a round, and say so. The Node, Python and JVM
+  drivers end their process when the loop is done.
+- `dla harness run` prints `_attention` first: a runtime detector hit, a short or cut series,
+  a lowered step, missing coverage. A `MaxListenersExceededWarning` carries the registration
+  site that holds the listeners.
+- Node: the harness files are `.cjs` and work in ES-module packages; top-level bindings of ES
+  modules are probed; a plain object has a size (its key count).
+- Go: a `--next` batch is one package; struct fields are read by reflection.
+- Rust: `--features` and `--no-default-features`; function coverage of the driver; a driver run
+  with `--capture alloc` leaves allocation stacks, and `dla summarize alloc-stack-diff` names
+  the allocating function. A stack in the function of a finding's writer is a printed hint
+  with the `dla ledger annotate --writer` command, not a tie.
+
+Queue
+- A target two different drivers missed gets a focus harness of at most three targets.
+- While time is left above the floor, the best candidates that one driver read flat get a
+  second look: a focus harness whose unit must differ from the first (refused when its hooks
+  are the same; `VARIES.txt` says what differs), with the variations to try printed in the
+  driver. At most three such harnesses per runtime. A candidate is settled by two different
+  drivers.
+- `unknown` settles nothing. A census registration whose own call is its only insert is its
+  own writer, so a listener added to an object handed in from outside is ranked.
+
+Ledger and gate
+- A finding that a passed growth column points at cannot be closed before an alloc-test is
+  bound to it: `dla ledger close-rest` leaves it with runnable commands, `dla ledger resolve`
+  refuses, the final gate lists it. A detector hit with a site is a gate item until it is
+  measured.
+- `intake.workload` cannot be recorded as blocked when a harness of the run wrote a series
+  for every runtime with candidates.
+- `dla gate check`, `dla run status` and the stop hook count actions: items that wait for the
+  same thing are one line with a count. Both commands fit their own output and keep the first
+  item and the next command whole.
+- The stop hook does not count or stamp while a `dla` command of the run is still running. A
+  stamp does not close the queue, and the next working command lifts it. An `auto` budget is
+  settled by every command once sweep and census have run.
+- `dla alloc-test`: memory returned to the OS never passes as growth; a purge that kept the
+  growth does not contradict the plateau of a column no purge can lower, and holds an ordinary
+  plateau back only while the plateau window is too short to have shown another rise. Its
+  printed steps name evidence `dla ledger confirm` accepts and include the refute of the
+  sibling.
+
+Report
+- Growth reached only by calling the holder's own registration function has its own trigger
+  reading and count. A confirmed finding the blind verifier reads as a non-leak is counted and
+  listed apart.
+- The residual open item names the capture that can attribute it.
+
+Speed
+- Census: a per-file word index and lazily compiled patterns (a large Go tree: 129 s to 15 s
+  of CPU in a debug build, identical output). `dla trend` and `dla ledger close-rest` no
+  longer reload the run per item.
