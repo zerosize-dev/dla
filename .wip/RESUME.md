@@ -543,3 +543,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - PASS 10 SENT to P3 (resumed a8249474e4d24c8ca): resolve and gate agree; a column's finding in a harness whose growth an alloc-test already decided may be recorded as part of that finding (existing duplicate/merge); the bench driver follows the printed route; no fixture, key, xfail or criterion change; run dla-bench dynamic --only rust- and native- after my node/go/python check ends.
 - My local bench check (task bz4b0fbdp, u53) of node-, go-, python- for N's tie rule is still running.
 - NEXT: after pass 10 and the bench checks: snapshot for CI (third), freeze third build, real runs tokio-4, spring-5, grpc-5; commit to main when CI is green.
+
+## State at 20:38 UTC, 2026-11-21
+- LOCAL BENCH CHECK DONE for N's per-site tie rule (u53/dyn-*.out): node- 12/12, go- 8/8, python- 9/9 pass. Task 68 done.
+- Running: P3 pass 10 (growth rule vs bench driver; will run dla-bench dynamic --only rust- and native-).
+- NEXT: verify pass 10; local checks; third CI snapshot; freeze third build; tokio-4, spring-5, grpc-5; commit to main when CI is green (commit-message-3.txt needs two more lines: per-site tie rule, choices recipe, part-of route).

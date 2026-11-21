@@ -248,6 +248,128 @@ fn a_target_read_unknown_does_not_make_the_workload_unrunnable() {
     }
 }
 
+/// Rewrites the trend of `run_with_a_passed_column` so that its column lists no candidate (the
+/// trend ran before the finding of the column was added): only the column's site names it.
+fn forget_the_candidates(r: &R) {
+    let path = r.run_dir.join("trend/T1.json");
+    let mut t: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    t["columns"][0]["candidates"] = json!([]);
+    // The column's own site is the declaration of F2.
+    t["columns"][0]["site"] = json!("shop/reg.py:2");
+    t["columns"][0]["name"] = json!("probe:Registry._by_key@shop/reg.py:2");
+    fs::write(&path, t.to_string()).unwrap();
+}
+
+fn close_f2(r: &R) -> (i32, Value) {
+    r.run(&[
+        "ledger",
+        "resolve",
+        "F2",
+        "--as",
+        "unresolved",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "x",
+    ])
+}
+
+#[test]
+fn a_column_points_at_the_finding_at_its_site_even_when_the_trend_did_not_list_it() {
+    // A finding added from a column after the trend ran is not among the trend's candidates;
+    // the resolve must refuse what the final gate will list once the trend is read again.
+    let (r, _, _) = run_with_a_passed_column("3h");
+    forget_the_candidates(&r);
+    let (code, v) = close_f2(&r);
+    assert_ne!(code, 0, "{v}");
+    assert_eq!(v["error"]["code"], "growth-not-measured", "{v}");
+    assert!(
+        r.final_gate().iter().any(|m| m["id"] == "F2"),
+        "the gate lists it too"
+    );
+}
+
+#[test]
+fn growth_at_another_site_of_a_measured_leak_may_be_recorded_as_part_of_it() {
+    let (r, w, growth) = run_with_a_passed_column("3h");
+    // F4 is another finding of the same leak (the same site as F2), under test and with an
+    // alloc-test of harness H1 that favored leak.
+    let add = r.ok(&[
+        "ledger",
+        "add",
+        "--origin",
+        "growth-series",
+        "--evidence",
+        &growth,
+        "--site",
+        "shop/reg.py:2",
+        "--holder",
+        "static/global",
+        "--owner",
+        "Registry._by_key",
+    ]);
+    let g = add["id"].as_str().unwrap().to_owned();
+    r.ok(&[
+        "ledger",
+        "add",
+        "--sibling-of",
+        &g,
+        "--origin",
+        "hypothesis",
+        "--hypothesis",
+        "N-WARM",
+        "--refute-if",
+        "growth continues over the extra cycles",
+        "--evidence",
+        &growth,
+    ]);
+    r.ok(&["ledger", "test", &g, "--evidence", &w]);
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    let discriminator = |harness: &str| {
+        evidence(
+            EvidenceKind::Discriminator,
+            json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"],
+                "finding": g, "harness": harness}),
+        )
+    };
+    // An alloc-test of another harness does not make it the same leak's measurement.
+    l.add_evidence(discriminator("H9")).unwrap();
+    drop(l);
+    let (code, v) = close_f2(&r);
+    assert_ne!(code, 0, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(!fix.contains("dla ledger duplicate"), "{fix}");
+    assert!(fix.contains("dla alloc-test H1 --finding F2"), "{fix}");
+    // One of H1, on a finding under test: the duplicate route is offered, the alloc-test too.
+    let mut l = Ledger::load(&r.run_dir).unwrap();
+    l.add_evidence(discriminator("H1")).unwrap();
+    drop(l);
+    let (code, v) = close_f2(&r);
+    assert_ne!(code, 0, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    let dup = format!("dla ledger duplicate F2 --of {g}");
+    assert!(fix.contains(&dup), "{fix}");
+    assert!(fix.contains("dla alloc-test H1 --finding F2"), "{fix}");
+    // close-rest and the final gate offer it too.
+    let out = r.ok(&["ledger", "close-rest"]);
+    let why = out["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "F2")
+        .map(|l| l["why"].to_string())
+        .unwrap_or_default();
+    assert!(why.contains(&dup), "{out}");
+    // Taking the route settles it: F2 is part of the measured finding and the gate lists nothing
+    // for it.
+    r.ok(&["ledger", "duplicate", "F2", "--of", &g]);
+    assert!(
+        !r.final_gate().iter().any(|m| m["id"] == "F2"),
+        "{:?}",
+        r.final_gate()
+    );
+}
+
 #[test]
 fn a_workload_blocker_is_accepted_when_no_harness_ran() {
     let dir = tempfile::tempdir().unwrap();

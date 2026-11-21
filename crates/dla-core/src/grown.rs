@@ -42,6 +42,10 @@ pub struct Grown {
     pub workload: Option<String>,
     /// Whether the finding has a non-leak sibling.
     pub has_sibling: bool,
+    /// A finding of the same harness whose alloc-test favours leak and that this finding is a
+    /// duplicate of (the same owner or the same site, as `dla ledger duplicate` requires): the
+    /// growth may be recorded as part of that finding instead of being tested again.
+    pub same_leak: Option<(FindingId, String)>,
 }
 
 impl Grown {
@@ -49,6 +53,20 @@ impl Grown {
     /// (the ledger lets a candidate and a closed `unresolved` or `suspected_static_only`
     /// finding go under test), the alloc-test.
     pub fn commands(&self) -> Vec<String> {
+        let own = self.own_commands();
+        match &self.same_leak {
+            Some((g, by)) => vec![format!(
+                "dla ledger duplicate {} --of {g}   ({by}: the same leak as {g}, whose alloc-test on {} favored leak; if it is a leak of its own: {})",
+                self.finding,
+                self.harness,
+                own.join("   then   ")
+            )],
+            None => own,
+        }
+    }
+
+    /// The commands that decide it by its own alloc-test.
+    fn own_commands(&self) -> Vec<String> {
         commands(
             &self.finding,
             &self.harness,
@@ -106,6 +124,46 @@ fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
     })
 }
 
+/// The `file:line` a column is tied to: its `site`, else the part of its name after `@`.
+fn column_site(c: &crate::trend::ColumnTrend) -> Option<&str> {
+    c.site
+        .as_deref()
+        .or_else(|| c.name.split_once('@').map(|(_, s)| s))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// A finding of `harness` that an alloc-test (on that harness) found to favour leak, that is
+/// confirmed, strong or under test with that evidence, and that `f` is a duplicate of by
+/// `dla ledger duplicate`'s own rule. The growth of `f` is then another site of that leak.
+fn same_leak_as(view: &RunView, f: &FindingId, harness: &str) -> Option<(FindingId, String)> {
+    view.ledger
+        .evidence()
+        .filter(|e| {
+            e.kind == EvidenceKind::Discriminator
+                && e.result.get("test").and_then(|t| t.as_str()) == Some("plateau+purge")
+                && e.result.get("favors").and_then(|t| t.as_str()) == Some("leak")
+                && (e.result.get("harness").and_then(|t| t.as_str()) == Some(harness))
+        })
+        .filter_map(crate::discriminator::finding_of)
+        .map(|g| view.ledger.finding(&g).map_or(g.clone(), |x| x.root_id()))
+        .filter(|g| g != f)
+        .filter(|g| {
+            view.ledger.finding(g).is_some_and(|x| {
+                x.polarity() == Polarity::Leak
+                    && matches!(
+                        x.state,
+                        FindingState::Confirmed | FindingState::Strong | FindingState::UnderTest
+                    )
+            })
+        })
+        .find_map(|g| {
+            crate::duplicate::check(&view.ledger, f, &g)
+                .ok()
+                .map(|by| (g, by.describe()))
+        })
+}
+
 /// Findings a passed growth column of a harness series points at, or that a trend gave the
 /// verdict `grew`, that no alloc-test evidence is bound to, in the order of the trends. Only open findings and findings closed `unresolved` or
 /// `suspected_static_only` count: the others have been decided.
@@ -134,6 +192,19 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 .find(|f| view.ledger.finding(f).is_some())
             {
                 pointed.push((f.clone(), c.name.clone(), c.kind));
+            } else if let Some(f) = column_site(c).and_then(|site| {
+                // The trend lists the findings that existed when it ran; a finding added
+                // after it (from this very column) is the one at the column's own site.
+                view.ledger
+                    .findings()
+                    .find(|f| {
+                        f.site.as_deref().map(str::trim) == Some(site)
+                            && f.polarity() == Polarity::Leak
+                            && !f.id.is_sibling()
+                    })
+                    .map(|f| f.id.clone())
+            }) {
+                pointed.push((f, c.name.clone(), c.kind));
             }
         }
         for v in t.targets.iter().filter(|v| v.verdict == Verdict::Grew) {
@@ -200,6 +271,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                     .ledger
                     .findings()
                     .any(|s| s.parent.as_ref() == Some(&root) && s.polarity() == Polarity::NonLeak),
+                same_leak: same_leak_as(view, &root, harness),
             });
         }
     }

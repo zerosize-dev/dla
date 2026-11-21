@@ -1018,6 +1018,78 @@ fn resolve_unresolved(fx: &mut Fx, target: &str, hint: Option<&str>) -> Out {
     close(fx, "not_exercised")
 }
 
+/// The route the tool prints for a finding whose passed growth column no alloc-test decided
+/// (the fix of a `growth-not-measured` refusal, or of a `growth` item of the final gate), taken
+/// as a model would take it: part of the measured finding when `dla ledger duplicate ... --of`
+/// is offered and the ledger accepts it; else the commands in the order printed (the non-leak
+/// sibling, `ledger test`, `dla alloc-test H --finding F`) and then the commands the alloc-test
+/// prints as `next`. A command with a placeholder is not run. Returns what was done.
+fn follow_growth_route(fx: &mut Fx, fix: &str) -> String {
+    let mut said: Vec<String> = Vec::new();
+    let mut own = fix.to_owned();
+    if fix.starts_with("dla ledger duplicate") {
+        let cmd = fix.split("   (").next().unwrap_or(fix).trim().to_owned();
+        let o = run_dla_line(fx, &cmd);
+        said.push(format!(
+            "{cmd}: {}",
+            if o.ok { "ok".to_owned() } else { refusal(&o) }
+        ));
+        if o.ok {
+            return said.join("; ");
+        }
+        // The ledger does not accept it as the same leak: decide it by its own alloc-test.
+        own = fix
+            .split_once("if it is a leak of its own: ")
+            .map_or(String::new(), |(_, rest)| {
+                rest.trim_end_matches(')').to_owned()
+            });
+    }
+    for cmd in own.split("   then   ").map(|c| fix_command(c).to_owned()) {
+        if !cmd.starts_with("dla ") || cmd.contains('<') {
+            said.push(format!("{cmd}: not run (it carries a placeholder)"));
+            break;
+        }
+        let o = run_dla_line(fx, &cmd);
+        said.push(format!(
+            "{cmd}: {}",
+            if o.ok { "ok".to_owned() } else { refusal(&o) }
+        ));
+        if !o.ok {
+            break;
+        }
+        if cmd.starts_with("dla alloc-test ") {
+            // The step the alloc-test prints.
+            let next: Vec<String> = o.json["next"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|n| n.as_str())
+                .map(|n| fix_command(n).to_owned())
+                .collect();
+            for n in next {
+                if !n.starts_with("dla ledger ") || n.contains('<') {
+                    continue;
+                }
+                let r = run_dla_line(fx, &n);
+                said.push(format!(
+                    "{n}: {}",
+                    if r.ok { "ok".to_owned() } else { refusal(&r) }
+                ));
+                if !r.ok {
+                    break;
+                }
+            }
+        }
+    }
+    said.join("; ")
+}
+
+/// Whether `o` is the refusal of closing a finding whose growth was measured and not decided.
+fn growth_not_measured(o: &Out) -> Option<String> {
+    (o.code() == "growth-not-measured")
+        .then(|| o.json["error"]["fix"].as_str().unwrap_or("").to_owned())
+}
+
 /// One item, with the command the gate names for it. Returns what was done, if anything.
 fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<String> {
     let cmd = fix_command(&item.fix).to_owned();
@@ -1055,7 +1127,7 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
             } else {
                 resolve_unresolved(fx, &item.id, Some(&item.fix))
             };
-            Some(format!(
+            let mut said = format!(
                 "resolve {} {}: {}",
                 item.id,
                 if statics {
@@ -1064,6 +1136,22 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                     "unresolved"
                 },
                 if o.ok { "ok".to_owned() } else { refusal(&o) }
+            );
+            if let Some(route) = growth_not_measured(&o) {
+                said.push_str(&format!("; route: {}", follow_growth_route(fx, &route)));
+            }
+            Some(said)
+        }
+        "growth" => {
+            // A finding closed or open whose passed column no alloc-test decided: the gate prints
+            // the route in the item's fix.
+            if !tried.insert(format!("growth {}", item.id)) {
+                return None;
+            }
+            Some(format!(
+                "growth {}: {}",
+                item.id,
+                follow_growth_route(fx, &item.fix)
             ))
         }
         "label" => {
@@ -1126,6 +1214,9 @@ fn fix_item(fx: &mut Fx, item: &Item, tried: &mut BTreeSet<String>) -> Option<St
                     "; resolve {new} unresolved: {}",
                     if r.ok { "ok".to_owned() } else { refusal(&r) }
                 ));
+                if let Some(route) = growth_not_measured(&r) {
+                    said.push_str(&format!("; route: {}", follow_growth_route(fx, &route)));
+                }
             }
             Some(said)
         }
@@ -1299,7 +1390,16 @@ case "$1 $2" in
   echo '{"ok":true}';;
 "summarize heap-graph") touch narrowed; echo '{"ok":true}';;
 "ledger add") echo '{"ok":true,"id":"F12"}';;
+"ledger duplicate") echo '{"ok":true}';;
+"alloc-test H1")
+  echo '{"ok":true,"next":["dla ledger confirm F12 --evidence E30","dla ledger refute <F>"]}';;
 "ledger resolve")
+  if [ "$FAKE_GROWTH" = dup ] && [ "$3" = F12 ]; then
+    echo '{"ok":false,"error":{"code":"growth-not-measured","message":"m","fix":"dla ledger duplicate F12 --of F1   (same site: the same leak as F1, whose alloc-test on H1 favored leak; if it is a leak of its own: dla alloc-test H1 --finding F12)"}}'; exit 2
+  fi
+  if [ "$FAKE_GROWTH" = alloc ] && [ "$3" = F12 ]; then
+    echo '{"ok":false,"error":{"code":"growth-not-measured","message":"m","fix":"dla ledger add --sibling-of F12 --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues\" --evidence E6   then   dla alloc-test H1 --finding F12"}}'; exit 2
+  fi
   if [ -n "$FAKE_NOTHING_MEASURED" ]; then
     case "$*" in *"--reason inconclusive"*)
       echo '{"ok":false,"error":{"code":"measurement-required","message":"m","fix":"f"}}'; exit 2;;
@@ -1894,6 +1994,31 @@ cause = "{cause}"
         assert_eq!(g.first_missing, 6);
         assert!(g.known_gaps.is_empty(), "{:?}", g.known_gaps);
         assert_eq!(g.missing.len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_finding_added_from_a_column_takes_the_route_the_refusal_prints() {
+        // Part of the measured finding when the refusal offers `ledger duplicate`.
+        let (_, calls) = drive_fake(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1"), ("FAKE_GROWTH", "dup")],
+        );
+        let c = |s: &str| calls.lines().any(|l| l.starts_with(s));
+        assert!(c("ledger duplicate F12 --of F1"), "{calls}");
+        assert!(!c("alloc-test H1 --finding F12"), "{calls}");
+        // Else the alloc-test, then the step it prints (a command with a placeholder is not run).
+        let (_, calls) = drive_fake(
+            &expected("L-COLLECT", "container-field"),
+            false,
+            &[("FAKE_GAPS", "1"), ("FAKE_GROWTH", "alloc")],
+        );
+        let c = |s: &str| calls.lines().any(|l| l.starts_with(s));
+        assert!(c("ledger add --sibling-of F12"), "{calls}");
+        assert!(c("alloc-test H1 --finding F12"), "{calls}");
+        assert!(c("ledger confirm F12 --evidence E30"), "{calls}");
+        assert!(!c("ledger refute <F>"), "{calls}");
     }
 
     #[cfg(unix)]
