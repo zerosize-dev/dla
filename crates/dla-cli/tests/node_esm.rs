@@ -276,3 +276,83 @@ fn driver_mode_in_a_commonjs_package_is_unchanged() {
     grew(&cols, "probe:src/store.js:ordersById");
     grew(&cols, "node.listeners@src/bus.js:8");
 }
+
+/// An ES-module package whose module-level state is a plain object used as a table of flags and
+/// a `Map`, both written through an exported function: the probe columns rise one per unit.
+/// Before: the plain object read a constant 1 (the walk counts objects, and `true` is not one),
+/// so a probe of a table of primitives never moved while the heap grew.
+fn table_project(dir: &Path) {
+    write(
+        dir,
+        "package.json",
+        "{\"name\":\"tables\",\"version\":\"1.0.0\",\"type\":\"module\",\"scripts\":{\"load\":\"node load.js --iterations 400\"}}\n",
+    );
+    write(
+        dir,
+        "src/seen.js",
+        "export const seen = {};\nexport const byKey = new Map();\n\nexport function note(key) {\n  seen['opt' + key] = true;\n  byKey.set('k' + key, true);\n}\n",
+    );
+    write(
+        dir,
+        "load.js",
+        "import { note } from './src/seen.js';\n\nconst n = Number.parseInt(process.argv[3] || process.argv[2] || '100', 10);\nfor (let i = 0; i < n; i += 1) note(i);\n",
+    );
+}
+
+#[test]
+fn a_module_level_object_table_and_a_map_rise_one_per_unit_in_driver_mode() {
+    if !have_node() {
+        return;
+    }
+    let p = prepared(table_project);
+    let g = dla(
+        &p.project,
+        &["harness", "gen", "--lang", "node", "--driver", "--next"],
+    );
+    let edit = p.project.join(g["summary"]["edit"].as_str().unwrap());
+    fill(
+        &edit,
+        "  state.seen = await projectImport('src/seen.js');",
+        "  state.seen.note(key);",
+    );
+    let run = dla(&p.project, &["harness", "run", "H1", "--mode", "fresh"]);
+    let s: Value = serde_json::from_str(
+        &fs::read_to_string(p.run_dir.join("series").join(format!(
+            "{}.json",
+            run["summary"]["series"][0].as_str().unwrap()
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    let names: Vec<&str> = s["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    let step = run["summary"]["points"].as_u64().unwrap();
+    assert!(step >= 8, "{run}");
+    for col in [
+        "probe:src/seen.js:seen.size",
+        "probe:src/seen.js:byKey.size",
+    ] {
+        let i = names
+            .iter()
+            .position(|n| *n == col)
+            .unwrap_or_else(|| panic!("{col} not in {names:?}"));
+        let ys: Vec<f64> = s["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|pt| pt["values"][i].as_f64())
+            .collect();
+        let xs: Vec<f64> = s["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pt| pt["x"].as_f64().unwrap())
+            .collect();
+        // one entry per unit: the size equals the units done at every checkpoint
+        assert_eq!(ys, xs, "{col}");
+    }
+}

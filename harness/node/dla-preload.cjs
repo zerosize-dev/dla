@@ -756,6 +756,10 @@ function sizeOf(value) {
   try {
     if (util.types.isMap(value) || util.types.isSet(value)) return value.size;
     if (Array.isArray(value)) return value.length;
+    // A plain object used as a table (`const seen = {}; seen[name] = true`): its key count. The walk
+    // counts objects only, so a table of primitives would read a constant 1 without this.
+    const proto = Object.getPrototypeOf(value);
+    if (proto === null || proto === Object.prototype) return Reflect.ownKeys(value).length;
   } catch (_) {
     // ignore
   }

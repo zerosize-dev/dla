@@ -464,3 +464,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - REAL RUNS STARTED 16:54 UTC on the frozen build: axios-4 (u18/axios/proj-deps; waiter b2rfu44uu) and grpc-4 (u18/grpc/proj; waiter blmpj0h3h). Next: spring-5 (--warm-m2 /root/dla-real/m2warm, source /root/dla-real/src/spring-data-commons) and tokio-2 (u18/tokio/proj).
 - N FOLLOW-UP RUNNING (resumed a747f7bdc3d1ef293): fit the step inside round 1; port exit + fitting to Python/Go/JVM/Rust drivers; residual capture advice rows and tests. Its edits are NOT in the frozen build.
 - Deferred idea (not done): let dla-bench follow the printed --extra once after an inconclusive alloc-test; decide after CI.
+
+## State at 16:59 UTC, 2026-11-21
+- REAL RUN axios-4 FINISHED in 129 s: COMPLETE, no leak confirmed, although the tool printed the passing :924 column and the commands (notes real-run-plugin-axios-4.md, evidence u36/axios-4; run dir /root/dla-real/axios-4 kept for P3's re-run of the commands).
+- PASS 8 STARTED: P3 resumed (a8249474e4d24c8ca), brief wip-notes/pass8-brief.md, scratch u49.
+- N got one more item first (queued message): ES-module probe on validator.js deprecatedWarnings read flat while the holder grew.
+- Still running: grpc-4 (waiter blmpj0h3h), CI on 0dbf4c9 (waiter bgkwk8545).
+- spring-5 and tokio-2 NOT started yet: start them on the frozen build while pass 8 is built (they test other fixes: focus rule, trend speed, Rust stacks), or wait for pass 8? Decision: start them now, the holes of pass 8 apply to them too but they also show what else breaks.

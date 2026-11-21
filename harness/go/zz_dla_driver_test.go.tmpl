@@ -758,6 +758,56 @@ func dlaProbe(id, name, path string, size int) map[string]any {
 	return map[string]any{"id": id, "name": name, "path": path, "size": size, "reachable": nil, "bytes": nil, "error": nil}
 }
 
+// dlaMinStep is the smallest step the fitting leaves: with fewer units per round the per-round
+// costs (the forced collection and the checkpoint) and the heap noise swamp a leak of one entry
+// per unit.
+const dlaMinStep = 10
+
+// dlaLoopStart is when the rounds began (after setup): the time per unit is measured from it.
+var dlaLoopStart dlatime.Time
+
+func dlaFloat(v float64) string { return dlastrconv.FormatFloat(v, 'f', 1, 64) }
+
+// dlaFit lowers *step when the units left would not fit into the process's time limit
+// (DLA_TIME_LIMIT_SECS, set by `dla harness run`; 0 or unset = no fitting; 15 percent and 5 s of
+// margin). Called once dlaMinStep units of a round have run (inRound units of round `round`, so
+// one slow round cannot outlast the limit before the first look) and after every round (inRound
+// 0 of the next one); `left` rounds follow the one in progress. It never goes below dlaMinStep
+// and says what it did in the limitations.
+func dlaFit(limit float64, round, total, inRound, done int, step *int, warned *bool) {
+	if limit <= 0 || done == 0 {
+		return
+	}
+	left := total - round
+	spent := dlatime.Since(dlaStart).Seconds()
+	perUnit := dlatime.Since(dlaLoopStart).Seconds() / float64(done)
+	budget := limit*0.85 - 5 - spent
+	need := perUnit * float64(*step-inRound+*step*left)
+	if need <= budget {
+		return
+	}
+	units := int(budget / perUnit)
+	lowered := (units + inRound) / (left + 1)
+	if lowered > *step {
+		lowered = *step
+	}
+	floor := dlaMinStep
+	if *step < floor {
+		floor = *step
+	}
+	if lowered < floor {
+		lowered = floor
+	}
+	if lowered < *step {
+		dlaNotes = append(dlaNotes, "the driver lowered its step from "+dlastrconv.Itoa(*step)+" to "+dlastrconv.Itoa(lowered)+" units per round in round "+dlastrconv.Itoa(round)+" (after "+dlastrconv.Itoa(inRound)+" units of it): one unit takes "+dlaFloat(perUnit*1000)+" ms and the "+dlaFloat(limit)+" s time limit would cut the process (the x axis is still the cumulative unit count)")
+		*step = lowered
+	}
+	if need = perUnit * float64(*step-inRound+*step*left); !*warned && need > budget {
+		*warned = true
+		dlaNotes = append(dlaNotes, "the unit is too slow for a series: even "+dlastrconv.Itoa(*step)+" units per round (the floor) needs "+dlaFloat(need)+" s for the units left and "+dlaFloat(budget)+" s remain; make the unit cheaper (one call, no sleeps, smaller payloads) or raise timeout_secs in harness.json")
+	}
+}
+
 // TestDLADriver runs warm-up and measured rounds and writes a checkpoint after each.
 func TestDLADriver(t *dlatesting.T) {
 	dlaT = t
@@ -771,6 +821,9 @@ func TestDLADriver(t *dlatesting.T) {
 	dlaSetup()
 	dlaProbeHook = dlaProbes
 	total := warmup + rounds
+	limit, _ := dlastrconv.ParseFloat(dlaEnv("DLA_TIME_LIMIT_SECS"), 64)
+	warned := false
+	dlaLoopStart = dlatime.Now()
 	done := 0
 	for round := 1; round <= total; round++ {
 		for n := 0; n < step; n++ {
@@ -780,6 +833,9 @@ func TestDLADriver(t *dlatesting.T) {
 				key = done % repeat
 			}
 			dlaUnit(done, key)
+			if n+1 == dlaMinStep && n+1 <= step {
+				dlaFit(limit, round, total, n+1, done, &step, &warned)
+			}
 		}
 		last := round == total
 		if last {
@@ -795,5 +851,8 @@ func TestDLADriver(t *dlatesting.T) {
 		}
 		x := done
 		dlaDump("checkpoint", &x, last)
+		if !last {
+			dlaFit(limit, round+1, total, 0, done, &step, &warned)
+		}
 	}
 }
