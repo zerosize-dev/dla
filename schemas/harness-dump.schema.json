@@ -184,7 +184,7 @@
       }
     },
     "values_in_run": {
-      "description": "Readings taken while the workload ran (Go command mode): the floor of the\nafter-collection readings of the last third of the run. Absent when no sample ended\nbefore the exit record.",
+      "description": "Readings taken while the workload ran (Go command mode): the floor envelope of the\nafter-collection readings, read at three quarters of the run time. Absent when no sample\nended before the exit record.",
       "type": [
         "object",
         "null"
@@ -361,7 +361,7 @@
           "format": "double"
         },
         "reading_ms": {
-          "description": "Milliseconds since the process started at which the reported sample ended.",
+          "description": "Milliseconds since the process started at which the reading stands (three quarters of the run).",
           "type": [
             "number",
             "null"
@@ -386,14 +386,14 @@
           "format": "double"
         },
         "statistic": {
-          "description": "The statistic the reading is: `floor-last-third`.",
+          "description": "The statistic the reading is: `floor-at-three-quarters`.",
           "type": [
             "string",
             "null"
           ]
         },
         "window_samples": {
-          "description": "Samples that ended in the last third of the run (the window the reading is taken from).",
+          "description": "Samples that ended in the last third of the run.",
           "type": [
             "integer",
             "null"

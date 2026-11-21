@@ -893,6 +893,7 @@ mod tests {
             owner: owner.into(),
             writers: Vec::new(),
             removers: Vec::new(),
+            facts: Default::default(),
         }
     }
 

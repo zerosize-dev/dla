@@ -47,26 +47,33 @@ fn split(site: &str) -> Option<(String, u32)> {
     Some((file.strip_prefix("./").unwrap_or(&file).to_owned(), line))
 }
 
-/// The 1-based line range of the innermost function around `line`, else of the
-/// innermost class.
-fn enclosing(tree: &Tree, src: &str, line: u32) -> Option<(u32, u32)> {
-    let row = (line as usize).checked_sub(1)?;
-    let root = tree.root_node();
-    // Start at the first non-blank column: a `fn` line begins at its indentation, so a
-    // range from column 0 would not lie inside the function and would name its parent.
+/// The innermost node at the first non-blank character of the 0-based line `row`.
+///
+/// The point is the start of the line's code, not a range to its end: a range that reaches
+/// past the end of the last line of a function (trailing whitespace, a trailing comment, the
+/// newline) is not inside that function, so the function would be missed and its parent
+/// named. The first character of the code is inside every node the line belongs to, a
+/// function whose last line it is included. One helper for [`enclosing`] and for the
+/// function lookup of the verdicts.
+pub(super) fn node_at_line<'t>(tree: &'t Tree, src: &str, row: usize) -> Option<Node<'t>> {
+    // A `fn` line begins at its indentation, so a point at column 0 would not lie inside the
+    // function and would name its parent.
     let indent = src
         .lines()
         .nth(row)
         .map_or(0, |l| l.len() - l.trim_start().len());
-    let start = Point {
+    let at = Point {
         row,
         column: indent,
     };
-    let end = Point {
-        row,
-        column: usize::MAX / 2,
-    };
-    let mut node: Option<Node<'_>> = root.descendant_for_point_range(start, end);
+    tree.root_node().descendant_for_point_range(at, at)
+}
+
+/// The 1-based line range of the innermost function around `line`, else of the
+/// innermost class.
+fn enclosing(tree: &Tree, src: &str, line: u32) -> Option<(u32, u32)> {
+    let row = (line as usize).checked_sub(1)?;
+    let mut node = node_at_line(tree, src, row);
     let mut class = None;
     while let Some(n) = node {
         if FUNCTIONS.contains(&n.kind()) {
@@ -319,6 +326,75 @@ mod tests {
         c.name = "probe:Audit.trail.size".into();
         c.site = None;
         assert_eq!(m.candidates(&c), [FindingId::new(2)]);
+    }
+
+    /// The range of the function around `line` of `src`, as `enclosing` finds it.
+    fn function_around(lang: Lang, src: &str, line: u32) -> Option<(u32, u32)> {
+        let tree = parse(lang, src).unwrap();
+        enclosing(&tree, src, line)
+    }
+
+    #[test]
+    fn a_site_on_the_last_line_of_a_function_belongs_to_that_function() {
+        // Python: the method ends on a real statement, with trailing space or a comment.
+        for tail in ["", "   ", "  # remembered", " \t# remembered  "] {
+            let py = format!(
+                "class Store:\n    def put(self, key, value):\n        self._n = 1\n        self._cache[key] = value{tail}\n"
+            );
+            assert_eq!(
+                function_around(Lang::Python, &py, 4),
+                Some((2, 4)),
+                "{tail:?}"
+            );
+            // And without a newline at the end of the file.
+            let py = py.trim_end_matches('\n').to_owned();
+            assert_eq!(
+                function_around(Lang::Python, &py, 4),
+                Some((2, 4)),
+                "{tail:?}"
+            );
+        }
+        // The method that follows is not the one around the last line of the first.
+        let py = "class S:\n    def a(self):\n        self.x = 1\n    def b(self):\n        self.y = 2\n";
+        assert_eq!(function_around(Lang::Python, py, 3), Some((2, 3)));
+        assert_eq!(function_around(Lang::Python, py, 5), Some((4, 5)));
+        // Go: the closing brace is the last line.
+        let go = "package c\n\nfunc Put(k string) {\n\tentries[k] = 1\n}\n";
+        assert_eq!(function_around(Lang::Go, go, 5), Some((3, 5)));
+        assert_eq!(
+            function_around(
+                Lang::Go,
+                "package c\nfunc Put() { entries[k] = 1 } // note\n",
+                2
+            ),
+            Some((2, 2))
+        );
+        // JavaScript: a function and an arrow function inside it on the last line.
+        let js = "function put(k) {\n  return (x) => cache.set(k, x); }  // done\n";
+        assert_eq!(function_around(Lang::JavaScript, js, 2), Some((1, 2)));
+        let js = "const cache = new Map();\nfunction put(k) { return (x) => cache.set(k, x) }\n";
+        assert_eq!(function_around(Lang::JavaScript, js, 2), Some((2, 2)));
+        // Java: a method on one line, and a method whose last line is the closing brace.
+        let java = "class Cache {\n  void put(String k) { M.put(k, k); }  \n  void drop() {\n    M.clear();\n  }\n}\n";
+        assert_eq!(function_around(Lang::Java, java, 2), Some((2, 2)));
+        assert_eq!(function_around(Lang::Java, java, 5), Some((3, 5)));
+    }
+
+    #[test]
+    fn a_column_on_the_last_line_of_a_method_names_the_finding_written_in_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let py = "class Store:\n    def put(self, key, value):\n        self._n = 1\n        self._cache[key] = value  # remember\n\n    def other(self):\n        self._other[1] = 2\n";
+        fs::write(dir.path().join("store.py"), py).unwrap();
+        let ledger = ledger_with(&[
+            ("census", Some("store.py:3")),
+            ("census", Some("store.py:7")),
+        ]);
+        let mut m = Matcher::new(dir.path(), &ledger);
+        // The column's site is the last line of `put`: F1 is written in it, F2 is not.
+        assert_eq!(
+            m.candidates(&trend_of("store.py:4", None)),
+            [FindingId::new(1)]
+        );
     }
 
     #[test]

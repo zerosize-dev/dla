@@ -82,6 +82,9 @@ pub struct GenOptions {
     /// Declare this many of the next pending queue entries of the runtime as targets
     /// (`--next`); `None` declares none.
     pub next: Option<usize>,
+    /// `--entry`: the findings an entry-path harness is generated for (at most 8, each a
+    /// leak-side finding that grew in some harness). Excludes `--probe` and `--next`.
+    pub entry: Vec<FindingId>,
     /// Derive probes from census candidates.
     pub auto_probes: bool,
     /// Go/JVM package (directory or name) for driver mode.
@@ -1401,14 +1404,19 @@ fn cmd_text(c: &CommandSpec, hdir: &Path) -> String {
     clip(&c.argv.join(" ").replace(&h, "<H>"), 160)
 }
 
+/// The targets of a harness, what `--next` found nothing to declare says, and the targets
+/// `--next` added because they share an owner with another (added finding, finding it came with).
+type DeclaredTargets = (
+    Vec<FindingId>,
+    Option<String>,
+    std::collections::BTreeMap<FindingId, FindingId>,
+);
+
 /// The findings a harness is generated to reach: the `--probe` findings, then (with
 /// `--next`) the next pending entries of the runtime's queue, at most [`MAX_TARGETS`] in all.
 /// The second value says so when `--next` found nothing to declare.
-fn resolve_targets(
-    ctx: &ToolCtx,
-    opts: &GenOptions,
-) -> Result<(Vec<FindingId>, Option<String>), Refusal> {
-    use dla_core::harness::MAX_TARGETS;
+fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, Refusal> {
+    use dla_core::harness::{MAX_TARGETS, MAX_TARGETS_WITH_SIBLINGS};
     let rt = opts.lang;
     let mut ids: Vec<FindingId> = Vec::new();
     for f in &opts.probe_findings {
@@ -1417,6 +1425,7 @@ fn resolve_targets(
         }
     }
     let mut note = None;
+    let mut siblings = std::collections::BTreeMap::new();
     if let Some(n) = opts.next {
         if n > MAX_TARGETS || ids.len() + n > MAX_TARGETS {
             return Err(refuse(
@@ -1436,19 +1445,24 @@ fn resolve_targets(
         }
         let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
             .map_err(|e| e.to_refusal())?;
-        let batch = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        let (batch, sib) = dla_core::queue::queues(&view, ctx.worker.as_deref())
             .into_iter()
             .find(|q| q.runtime == rt.as_str())
-            .map(|q| q.batch)
+            .map(|q| q.batch_for(&view, n))
             .unwrap_or_default();
         let before = ids.len();
-        for f in batch {
-            if ids.len() - before >= n {
+        // The first `n` by rank, then the siblings of their owners, up to the limit.
+        for (k, f) in batch.into_iter().enumerate() {
+            if ids.contains(&f) {
+                continue;
+            }
+            if k >= n && ids.len() >= MAX_TARGETS_WITH_SIBLINGS {
                 break;
             }
-            if !ids.contains(&f) {
-                ids.push(f);
+            if let Some(with) = sib.get(&f) {
+                siblings.insert(f.clone(), with.clone());
             }
+            ids.push(f);
         }
         if ids.len() == before {
             note = Some(format!(
@@ -1457,12 +1471,12 @@ fn resolve_targets(
             ));
         }
     }
-    if ids.len() > MAX_TARGETS {
+    if ids.len() - siblings.len() > MAX_TARGETS {
         return Err(refuse(
             codes::TOO_MANY_TARGETS,
             format!(
                 "{} targets were asked for with --probe; one harness declares at most {MAX_TARGETS}",
-                ids.len()
+                ids.len() - siblings.len()
             ),
             format!("at most {MAX_TARGETS} targets per harness"),
             format!(
@@ -1471,7 +1485,108 @@ fn resolve_targets(
             ),
         ));
     }
-    Ok((ids, note))
+    Ok((ids, note, siblings))
+}
+
+/// The findings of `--entry`: refused before anything is created unless the harness is a hook
+/// driver, no `--probe` or `--next` is given, there are at most [`MAX_TARGETS`] findings and each
+/// is a leak-side finding that grew in some harness (the trigger of a holder that never grew is
+/// not a question yet).
+fn entry_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<Vec<FindingId>, Refusal> {
+    use dla_core::harness::MAX_TARGETS;
+    let lang = opts.lang.as_str();
+    if !opts.driver || opts.junit {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            "--entry writes a hook driver whose units call the project's entry points",
+            "--driver (and no --junit)",
+            format!("dla harness gen --lang {lang} --driver --entry <F>"),
+        ));
+    }
+    if !opts.probe_findings.is_empty() || opts.next.is_some() {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            "--entry cannot be combined with --probe or --next: an entry-path harness declares exactly the findings of --entry",
+            "--entry alone",
+            format!(
+                "dla harness gen --lang {lang} --driver --entry {}",
+                opts.entry
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        ));
+    }
+    let mut ids: Vec<FindingId> = Vec::new();
+    for f in &opts.entry {
+        if !ids.contains(f) {
+            ids.push(f.clone());
+        }
+    }
+    if ids.len() > MAX_TARGETS {
+        return Err(refuse(
+            codes::TOO_MANY_TARGETS,
+            format!(
+                "{} findings were given to --entry; one harness declares at most {MAX_TARGETS}",
+                ids.len()
+            ),
+            format!("at most {MAX_TARGETS} findings per entry-path harness"),
+            format!(
+                "dla harness gen --lang {lang} --driver --entry {}   (then again for the rest)",
+                ids.iter()
+                    .take(MAX_TARGETS)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        ));
+    }
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
+        .map_err(|e| e.to_refusal())?;
+    let triggers = dla_core::trigger::Triggers::of(&view);
+    for id in &ids {
+        let measure = format!(
+            "dla harness gen --lang {lang} --driver --probe {id}, fill the hooks so a unit reaches it with a new key, dla harness run <H> --mode both, dla trend S<n>; then --entry {id}"
+        );
+        let Some(f) = view.ledger.finding(id) else {
+            return Err(refuse(
+                codes::UNKNOWN_FINDING,
+                format!("--entry {id}: the ledger has no such finding"),
+                format!("finding {id}"),
+                "dla ledger list   (lists the findings)",
+            ));
+        };
+        if let Some(canonical) = view.ledger.merged_into(id) {
+            return Err(refuse(
+                codes::INVALID_VALUE,
+                format!("--entry {id}: {id} is a duplicate of {canonical} (one site, one finding)"),
+                format!("the finding that stands for the site: {canonical}"),
+                format!("dla harness gen --lang {lang} --driver --entry {canonical}"),
+            ));
+        }
+        if f.polarity() != dla_core::finding::Polarity::Leak {
+            return Err(refuse(
+                codes::ENTRY_NOT_GROWN,
+                format!(
+                    "--entry {id}: it is a non-leak explanation; only a leak-side finding has a trigger"
+                ),
+                format!("a leak-side finding that grew in a harness, not {id}"),
+                "dla ledger list   (the leak-side findings, with their harnesses)",
+            ));
+        }
+        if !triggers.grew_in_a_harness(id) {
+            return Err(refuse(
+                codes::ENTRY_NOT_GROWN,
+                format!(
+                    "--entry {id}: it has not grown in any harness yet; the trigger is asked for a holder that grows when a harness feeds it keys"
+                ),
+                format!("a trend of a harness in which {id} has the verdict grew"),
+                measure,
+            ));
+        }
+    }
+    Ok(ids)
 }
 
 /// Removes a half-written harness directory when generation fails.
@@ -1502,6 +1617,12 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     };
     let rt = opts.lang;
     let lang = rt.as_str();
+    // `--entry`: its findings and options are checked before anything else is read.
+    let entry_ids = if opts.entry.is_empty() {
+        None
+    } else {
+        Some(entry_targets(ctx, opts)?)
+    };
     if !opts.junit
         && !opts.driver
         && let Some(t) = opts.tests.first()
@@ -1570,8 +1691,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     }
 
     // The targets: `--probe` findings, then the next pending queue entries. Refused before
-    // anything is created.
-    let (asked_ids, next_note) = resolve_targets(ctx, opts)?;
+    // anything is created. An entry-path harness declares its `--entry` findings.
+    let (asked_ids, next_note, siblings) = match entry_ids {
+        None => resolve_targets(ctx, opts)?,
+        Some(ids) => (ids, None, std::collections::BTreeMap::new()),
+    };
 
     // Tools first: nothing is created when one is missing.
     if rt == Runtime::Jvm {
@@ -1837,6 +1961,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             vec![KeyMode::Native]
         },
         probes: derived.probes.clone(),
+        sibling_of: siblings.clone(),
+        purpose: (!opts.entry.is_empty()).then_some(dla_core::harness::HarnessPurpose::EntryPath),
         targets: derived.targets.iter().map(|a| a.id.clone()).collect(),
         agent: agent_kind,
         detectors: det.on.clone(),
@@ -1853,11 +1979,24 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
 
     // What each declared target needs, printed and written above the driver's first hook.
-    let described = if derived.targets.is_empty() {
+    let mut described = if derived.targets.is_empty() {
         Vec::new()
     } else {
-        targets::describe(ctx, &ctx.ledger()?, &derived.targets, &derived.probes)
+        targets::describe(
+            ctx,
+            &ctx.ledger()?,
+            &derived.targets,
+            &derived.probes,
+            &siblings,
+        )
     };
+    if manifest.is_entry_path() {
+        targets::add_entry_facts(&ctx.project, rt, &mut described);
+        write(
+            &hdir.join(DRIVER).join(dla_core::harness::VARIES_FILE),
+            &dla_core::harness::varies_template(),
+        )?;
+    }
     let mut block_in: Option<String> = None;
     if !described.is_empty() {
         write(
@@ -1901,6 +2040,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         "gaps": manifest.gaps.len(),
         "files": copied.files,
         "ffi": ffi_info.as_ref().map(|f| format!("{}:{}", f.kind, f.library.as_deref().unwrap_or("?"))),
+        "purpose": manifest.purpose.map(|p| p.as_str()),
     });
     let skipped_sources: u64 = copied.out_of_scope_sources.values().sum();
     if let Value::Object(m) = &mut result {
@@ -1942,6 +2082,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                             "holder": t.holder,
                             "owner": t.owner,
                             "probe": t.probe.is_some(),
+                            "sibling_of": t.sibling_of,
                             "to_do": clip(&t.instruction, 90),
                         }))
                         .collect::<Vec<_>>()
@@ -1998,6 +2139,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             "next".into(),
             json!(if junit.is_some() {
                 format!("dla harness run {id}")
+            } else if manifest.is_entry_path() {
+                format!(
+                    "fill the hooks so that each unit calls only the project's public entry points with data a caller controls, write the one line of {} (what a caller varies per unit), then dla harness run {id} --mode both",
+                    ctx.pointer(&format!("harness/{id}/{DRIVER}/{}", dla_core::harness::VARIES_FILE))
+                )
             } else if opts.driver && !described.is_empty() {
                 format!(
                     "fill the hooks so that each unit reaches the targets listed in the driver, then dla harness run {id} --mode both"

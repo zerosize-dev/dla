@@ -516,8 +516,11 @@ dependencies = [
 name = "dla-report"
 version = "0.9.0-preview.2"
 dependencies = [
+ "chrono",
  "dla-core",
+ "dla-stats",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

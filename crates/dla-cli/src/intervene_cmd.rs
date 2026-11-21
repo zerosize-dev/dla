@@ -260,6 +260,8 @@ struct Measured {
     trend: Vec<ColumnTrend>,
     run_ok: bool,
     limitations: Vec<String>,
+    /// Dependency variables taken from the harness's last run (`env_reused`).
+    env_reused: Vec<String>,
 }
 
 enum Ran {
@@ -320,6 +322,7 @@ fn run_clone(
         trend,
         run_ok,
         limitations,
+        env_reused: out.env_reused,
     })))
 }
 
@@ -581,10 +584,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
     }
 
     let mut reproduced: Option<bool> = None;
+    let mut env_reused: Vec<String> = Vec::new();
     let mut rerun_json = Value::Null;
     if a.rerun_control {
         match run_clone(&tc, &cloned.manifest, &ctl, &th, mode)? {
             Ran::Ok(m) => {
+                env_reused.clone_from(&m.env_reused);
                 let col = m.trend.iter().find(|c| c.name == ctl.column.name);
                 let ok = m.run_ok
                     && col.is_some_and(|c| {
@@ -635,6 +640,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
             source_rel = format!("{raw_rel}/patch.diff");
         }
         Ran::Ok(m) => {
+            env_reused.clone_from(&m.env_reused);
             guards.run_ok = m.run_ok;
             guards.same_points = same_points(&ctl.series, &m.series);
             let others = other_passing(&ctl, &f);
@@ -793,6 +799,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: InterveneArgs) 
         "limitations": limitations.iter().take(4).collect::<Vec<_>>(),
         "next": next_commands(&f, &ctl, &a, effect, &evidence, &guard_json, &edit),
     });
+    if !env_reused.is_empty() {
+        out["env_reused"] = json!(env_reused);
+    }
     if !out["treated"]["present"].as_bool().unwrap_or(true) && effect == Effect::GrowthRemoved {
         out["why"] = json!("the treated series has no such column: the edit removed what wrote it");
     }

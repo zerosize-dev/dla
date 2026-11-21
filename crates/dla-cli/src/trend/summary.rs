@@ -6,7 +6,7 @@ use dla_core::{
     MAX_RESULT_BYTES,
     evidence::Signal,
     series::{ColumnKind, SeriesFile, Unit},
-    trend::{ColumnTrend, GrowthSummary, PassedColumn},
+    trend::{ColumnTrend, GrowthSummary, GrowthTarget, PassedColumn, TargetVerdict},
 };
 use dla_stats::GateVerdict;
 use serde_json::Value;
@@ -66,6 +66,22 @@ pub fn passing<'a>(columns: &[&'a ColumnTrend]) -> Vec<&'a ColumnTrend> {
     v
 }
 
+/// The declared targets of `verdicts` as the evidence carries them, the ones that measured
+/// something first so a cut for size keeps them.
+fn growth_targets(verdicts: &[TargetVerdict]) -> Vec<GrowthTarget> {
+    let mut v: Vec<GrowthTarget> = verdicts
+        .iter()
+        .filter(|t| t.declared)
+        .map(|t| GrowthTarget {
+            finding: t.finding.clone(),
+            verdict: t.verdict,
+            declared: true,
+        })
+        .collect();
+    v.sort_by_key(|t| !t.is_measurement());
+    v
+}
+
 /// The summary for the columns of one kind (gauge or counter) of `series`, written
 /// into trend `trend_id`. `passed` is cut from the end until the serialized result
 /// fits in [`MAX_RESULT_BYTES`]; `truncated` counts the cut entries.
@@ -73,6 +89,7 @@ pub fn summarize(
     trend_id: &str,
     series: &SeriesFile,
     columns: &[&ColumnTrend],
+    verdicts: &[TargetVerdict],
     signal: &Signal,
 ) -> Value {
     let ordered = passing(columns);
@@ -113,6 +130,7 @@ pub fn summarize(
             GateVerdict::Pass
         }),
         truncated: None,
+        targets: growth_targets(verdicts),
     };
     let mut cut = 0u32;
     loop {
@@ -121,8 +139,16 @@ pub fn summarize(
             m.insert("signal".to_owned(), signal.to_value());
         }
         let size = serde_json::to_string(&v).map_or(usize::MAX, |s| s.len());
-        if size <= MAX_RESULT_BYTES || summary.passed.is_empty() {
+        if size <= MAX_RESULT_BYTES {
             return v;
+        }
+        // Over the bound: the declared verdicts that measured nothing go first, then the
+        // passed columns.
+        if summary.passed.is_empty() || summary.targets.len() > 16 {
+            if summary.targets.pop().is_none() {
+                return v;
+            }
+            continue;
         }
         // Cut in chunks proportional to the overshoot so 64 columns need few rounds.
         let per = (size / summary.passed.len()).max(1);
@@ -186,7 +212,7 @@ mod tests {
         let (s, t) = many(64);
         let refs: Vec<&ColumnTrend> = t.iter().collect();
         assert!(t.iter().all(|c| c.gate == GateVerdict::Pass));
-        let v = summarize("T2", &s, &refs, &sig());
+        let v = summarize("T2", &s, &refs, &[], &sig());
         let text = serde_json::to_string(&v).unwrap();
         assert!(text.len() <= MAX_RESULT_BYTES, "{}", text.len());
         let g = GrowthSummary::from_result(&v).unwrap();
@@ -220,7 +246,7 @@ mod tests {
         let names: Vec<&str> = passing(&refs).iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names[0], "jvm.heap_used");
         assert!(names.contains(&"os.rss"));
-        let v = summarize("T1", &s, &refs, &sig());
+        let v = summarize("T1", &s, &refs, &[], &sig());
         let g = GrowthSummary::from_result(&v).unwrap();
         assert_eq!(g.passed[0].column, "jvm.heap_used");
         assert_eq!(g.passed[0].site.as_deref(), Some("a.java:3"));
@@ -251,7 +277,7 @@ mod tests {
         let s = series("S1", 1, vec![Col::counter("a", &plateau(100.0))]);
         let t = analyze_series(&s, &[0], &GateThresholds::default());
         let refs: Vec<&ColumnTrend> = t.iter().collect();
-        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &sig())).unwrap();
+        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &[], &sig())).unwrap();
         assert!(!g.passed_gate());
         assert_eq!(g.gate, Some(GateVerdict::Fail));
         assert_eq!(g.failed, Some(1));
@@ -273,12 +299,12 @@ mod tests {
         );
         let t = analyze_series(&s, &[0, 1, 2], &GateThresholds::default());
         let refs: Vec<&ColumnTrend> = t.iter().collect();
-        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &sig())).unwrap();
+        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &[], &sig())).unwrap();
         assert_eq!(g.failed, Some(3));
         assert_eq!(g.failed_beyond_process, Some(1));
         // Only the process: nothing a finding could be made from.
         let refs: Vec<&ColumnTrend> = t.iter().take(2).collect();
-        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &sig())).unwrap();
+        let g = GrowthSummary::from_result(&summarize("T1", &s, &refs, &[], &sig())).unwrap();
         assert_eq!(g.gate, Some(GateVerdict::Fail));
         assert_eq!(g.failed_beyond_process, Some(0));
     }

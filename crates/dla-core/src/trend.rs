@@ -388,6 +388,37 @@ pub struct GrowthSummary {
     /// How many passed columns were cut to keep the result bounded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<u32>,
+    /// The verdicts `dla trend` gave the declared targets of the series' harness, so the
+    /// ledger rule "a measurement tied to the finding" can read them from evidence alone.
+    /// Absent in a record written before it existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<GrowthTarget>,
+}
+
+/// One declared target's verdict as the growth evidence of `dla trend` carries it.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct GrowthTarget {
+    /// The finding.
+    pub finding: FindingId,
+    /// The verdict.
+    pub verdict: Verdict,
+    /// True when the harness declared the finding a target (an automatic probe's candidate
+    /// is not a measurement of it).
+    #[serde(default)]
+    pub declared: bool,
+}
+
+impl GrowthTarget {
+    /// True for a verdict that measured the finding's own code or holder: `constant`,
+    /// `changed` or `executed`. `not_executed`, `not_loaded` and `unknown` measured nothing
+    /// of it, and `grew` is a growth column the ledger reads as such.
+    pub fn is_measurement(&self) -> bool {
+        self.declared
+            && matches!(
+                self.verdict,
+                Verdict::Constant | Verdict::Changed | Verdict::Executed
+            )
+    }
 }
 
 impl GrowthSummary {

@@ -556,6 +556,10 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     if !queues.is_empty() {
         out["queue"] = queue_json(&queues);
     }
+    let triggers = trigger_json(&view);
+    if !triggers.is_empty() {
+        out["triggers"] = Value::Object(triggers);
+    }
     out["next_command"] = json!(queues.iter().find(|q| q.open()).map_or_else(
         || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
         |q| clip_command(&q.command)
@@ -579,6 +583,51 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         out["truncated"] = Value::Bool(true);
     }
     Ok(out)
+}
+
+/// The `triggers` object of `dla run status`: for each confirmed or strong leak-side finding
+/// (the first few), whether a caller of the public API makes its holder grow: `reproduced`
+/// with the harness and what a caller varies, `not_found` with the two entry-path harnesses, or
+/// `unchecked`.
+fn trigger_json(view: &RunView) -> serde_json::Map<String, Value> {
+    /// Findings listed; the rest are counted.
+    const SHOWN: usize = 12;
+    let t = dla_core::trigger::Triggers::of(view);
+    let mut m = serde_json::Map::new();
+    let mut more = 0usize;
+    for f in view
+        .ledger
+        .findings()
+        .filter(|f| dla_core::trigger::is_subject(view, f))
+    {
+        if m.len() >= SHOWN {
+            more += 1;
+            continue;
+        }
+        use dla_core::trigger::Trigger;
+        let trig = t.trigger(&f.id);
+        let mut v = match &trig {
+            Trigger::Reproduced { harness, varies } => {
+                json!({"trigger": trig.name(), "harness": harness, "varies": varies})
+            }
+            Trigger::NotFound { runs } => json!({
+                "trigger": trig.name(),
+                "harnesses": runs.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(", "),
+            }),
+            Trigger::Unchecked => json!({"trigger": trig.name()}),
+        };
+        if let Some(why) = (trig == Trigger::Unchecked)
+            .then(|| dla_core::trigger::unchecked_because(view))
+            .flatten()
+        {
+            v["not_checked"] = json!(why);
+        }
+        m.insert(f.id.to_string(), v);
+    }
+    if more > 0 {
+        m.insert("more".into(), json!(more));
+    }
+    m
 }
 
 /// The `queue` object of `dla run status`: per runtime, how many candidates are eligible,

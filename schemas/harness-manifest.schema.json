@@ -89,6 +89,17 @@
         "$ref": "#/$defs/ProbeSpec"
       }
     },
+    "purpose": {
+      "description": "What the harness was generated for: `entry-path` for a driver whose units call the\nproject's public entry points. Absent for every other harness.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HarnessPurpose"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "run": {
       "description": "The measured command; `{n}` is replaced by the iteration count in command mode.",
       "$ref": "#/$defs/CommandSpec"
@@ -107,6 +118,16 @@
     "scratch": {
       "description": "Run-relative path of the scratch copy, for example `harness/H2/work`.",
       "type": "string"
+    },
+    "sibling_of": {
+      "description": "Targets that `--next` added because they hold state of the same owner as an earlier\ntarget (fields of one struct or class): the added finding, and the target it came\nwith. Absent for a target asked for by rank or by `--probe`.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$": {
+          "$ref": "#/$defs/FindingId"
+        }
+      }
     },
     "step": {
       "description": "Command mode: `n_k = step * k`; driver mode: units per round.",
@@ -450,6 +471,16 @@
           "description": "A generated loop test runs inside one process.",
           "type": "string",
           "const": "driver"
+        }
+      ]
+    },
+    "HarnessPurpose": {
+      "description": "What a harness was generated for, when that is more than reaching its targets.",
+      "oneOf": [
+        {
+          "description": "A hook driver whose units call only the project's public entry points with data a\ncaller controls (`dla harness gen --driver --entry`): growth in it shows that a\ncaller can make new keys reach the holder.",
+          "type": "string",
+          "const": "entry-path"
         }
       ]
     },

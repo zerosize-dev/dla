@@ -162,6 +162,8 @@ fn manifest(
     step: u64,
 ) -> HarnessManifest {
     HarnessManifest {
+        sibling_of: Default::default(),
+        purpose: None,
         targets: Vec::new(),
         schema_version: 1,
         id: "H1".into(),
@@ -848,7 +850,7 @@ fn go_command_mode_reads_state_owned_by_locals_while_the_workload_runs() {
         series
             .limitations
             .iter()
-            .any(|l| l.contains("go.*.in_run: the lowest after-collection reading")),
+            .any(|l| l.contains("go.*.in_run: the floor")),
         "{:?}",
         series.limitations
     );
@@ -3050,5 +3052,284 @@ fn a_point_of_another_runtime_that_times_out_says_it_knows_no_phase() {
     assert!(
         said.contains("the agent recorded no phase, so where it was stuck is not known"),
         "{said}"
+    );
+}
+
+/// A Go driver run: the driver package is not the package of the targets, so what the hooks
+/// reach is read from a coverage point over the whole module (or every module of a
+/// workspace), written to `cov/` and listed in `executed-<S>.json`.
+fn go_driver_cover_fixture(workspace: bool) -> (Fx, HarnessManifest, &'static str) {
+    let fx = fixture("", &["go"], &[1]);
+    let (target_dir, drv_dir, drv_pkg, cwd) = if workspace {
+        fs::write(
+            fx.work.join("go.work"),
+            "go 1.21\n\nuse (\n\t./a\n\t./b\n)\n",
+        )
+        .unwrap();
+        for (d, m) in [("a", "example.com/a"), ("b", "example.com/b")] {
+            fs::create_dir_all(fx.work.join(d)).unwrap();
+            fs::write(
+                fx.work.join(d).join("go.mod"),
+                format!("module {m}\n\ngo 1.21\n"),
+            )
+            .unwrap();
+        }
+        (fx.work.join("b"), fx.work.join("a/drv"), "./a/drv", ".")
+    } else {
+        fs::write(fx.work.join("go.mod"), "module example.com/a\n\ngo 1.21\n").unwrap();
+        (fx.work.join("target"), fx.work.join("drv"), "./drv", ".")
+    };
+    fs::create_dir_all(&target_dir).unwrap();
+    fs::create_dir_all(&drv_dir).unwrap();
+    fs::write(
+        target_dir.join("target.go"),
+        "package target\n\nvar Kept [][]byte\n\nfunc Hit(n int) {\n\tKept = append(Kept, make([]byte, 64))\n}\n\nfunc Miss(n int) {\n\tKept = nil\n}\n",
+    )
+    .unwrap();
+    let import = if workspace {
+        "example.com/b"
+    } else {
+        "example.com/a/target"
+    };
+    let tmpl = fs::read_to_string(fx.agent.join("zz_dla_driver_test.go.tmpl")).unwrap();
+    let filled = tmpl
+        .replace("@@DLA_PACKAGE@@", "drv")
+        .replace("@@DLA_STEP@@", "10")
+        .replace("@@DLA_WARMUP@@", "1")
+        .replace("@@DLA_ROUNDS@@", "3")
+        .replace("@@DLA_REPEAT@@", "5")
+        .replace(r#"panic("DLA-HOOK setup has not been filled in")"#, "_ = 0")
+        .replace(
+            r#"panic("DLA-HOOK unit has not been filled in")"#,
+            "target.Hit(key)",
+        )
+        .replacen("import (", &format!("import (\n\t\"{import}\""), 1);
+    fs::write(drv_dir.join("zz_dla_driver_test.go"), filled).unwrap();
+    let mut m = manifest(
+        Runtime::Go,
+        &[
+            "go",
+            "test",
+            "-vet=off",
+            "-count=1",
+            "-timeout",
+            "0",
+            "-run",
+            "^TestDLADriver$",
+            drv_pkg,
+        ],
+        // `-mod=mod` is refused in workspace mode.
+        if workspace {
+            vec![(s("GOPROXY"), s("off"))]
+        } else {
+            vec![(s("GOFLAGS"), s("-mod=mod")), (s("GOPROXY"), s("off"))]
+        },
+        10,
+    );
+    m.run.cwd = cwd.into();
+    m.mode = HarnessMode::Driver;
+    m.key_modes = vec![KeyMode::Fresh];
+    m.agent = AgentKind::DriverGo;
+    m.iterations = 3;
+    m.warmup = 1;
+    write_manifest(&fx, &m);
+    let entry_file = if workspace {
+        "b/target.go"
+    } else {
+        "target/target.go"
+    };
+    dla_core::coverage::CoverageManifest::update(&fx.ctx.run_dir, |c| {
+        c.set_entry_points(
+            "go",
+            dla_core::coverage::EntryPoints {
+                discovered: vec![format!("{entry_file}::Hit"), format!("{entry_file}::Miss")],
+                ..Default::default()
+            },
+        );
+    })
+    .unwrap();
+    (fx, m, entry_file)
+}
+
+fn check_go_driver_cover(workspace: bool) {
+    if !have(&["go"]) {
+        return;
+    }
+    let (fx, m, entry_file) = go_driver_cover_fixture(workspace);
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    assert_eq!(out.series, ["S1"], "{:?}", out.limitations);
+    let series = load(&fx, &out, 0);
+    // The measured points are the uninstrumented run's: 1 warm-up + 3 rounds.
+    assert_eq!(series.points.len(), 4);
+    let executed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(fx.hdir.join("executed.json")).unwrap()).unwrap();
+    assert_eq!(
+        executed["kind"], "functions",
+        "{executed} {:?}",
+        out.limitations
+    );
+    let names: Vec<&str> = executed["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["name"].as_str())
+        .collect();
+    assert!(names.contains(&"Hit"), "{names:?}");
+    assert!(!names.contains(&"Miss"), "{names:?}");
+    let cov = dla_core::CoverageManifest::load(&fx.ctx.run_dir)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cov.workers["go"].entry_points.exercised,
+        [format!("{entry_file}::Hit")],
+        "{:?}",
+        out.limitations
+    );
+}
+
+#[test]
+fn a_go_driver_run_records_the_functions_its_hooks_reach() {
+    check_go_driver_cover(false);
+}
+
+#[test]
+fn a_go_driver_run_in_a_workspace_covers_every_module() {
+    check_go_driver_cover(true);
+}
+
+/// The in-run reading of Go command mode stands at one share of the run, whatever share of it
+/// the sampler's last sample fell at (the geometric schedule puts it at 63 to 96 % in measured
+/// runs, and at 40 % of a run under load), so a series over n is linear for a linear leak.
+#[test]
+fn the_go_in_run_reading_stands_at_one_share_of_the_run() {
+    if !have(&["go"]) {
+        return;
+    }
+    let fx = fixture("", &["go"], &[1]);
+    fs::write(
+        fx.work.join("go.mod"),
+        "module example.com/pick\n\ngo 1.21\n",
+    )
+    .unwrap();
+    fs::write(fx.work.join("main.go"), "package main\n\nfunc main() {}\n").unwrap();
+    let tmpl = fs::read_to_string(fx.agent.join("zz_dla_harness_test.go.tmpl")).unwrap();
+    fs::write(
+        fx.work.join("zz_dla_harness_test.go"),
+        tmpl.replace("@@DLA_PACKAGE@@", "main"),
+    )
+    .unwrap();
+    fs::write(
+        fx.work.join("zz_pick_test.go"),
+        r#"package main
+
+import (
+	"math"
+	"strings"
+	"testing"
+)
+
+// run sets the samples of one run: geometric (15 %) back from a last sample at lastShare of the run.
+func run(end, lastShare float64, live func(t float64) float64) float64 {
+	dlaSamples = nil
+	var ts []float64
+	for t := lastShare * end; t >= 2; t /= 1.15 {
+		ts = append([]float64{t}, ts...)
+	}
+	for _, t := range ts {
+		dlaSamples = append(dlaSamples, dlaSample{endMs: t, live: live(t), objects: live(t) / 100})
+	}
+	dlaSampleEndMs = end
+	return read()
+}
+
+func read() float64 {
+	var notes []string
+	v, _ := dlaInRunReading(&notes)
+	return v["go.heap_live"]
+}
+
+func TestLeakIsLinearInTheRunWhateverTheShareOfTheLastSample(t *testing.T) {
+	// A leak of 50 kB per ms, runs of 1, 4, 6 and 9 units of 400 ms, last samples at 67, 87, 100
+	// and 82 % of their runs.
+	for i, u := range []float64{1, 4, 6, 9} {
+		share := []float64{0.67, 0.87, 1.0, 0.82}[i]
+		got := run(400*u, share, func(t float64) float64 { return 50000 * t })
+		want := 50000 * 0.75 * 400 * u
+		if math.Abs(got-want) > 0.015*want {
+			t.Errorf("units %v: reading %.0f, want %.0f (within 1.5 %%)", u, got, want)
+		}
+	}
+}
+
+func TestFlatHeapStaysFlatAndATransientIsIgnored(t *testing.T) {
+	flat := func(t float64) float64 { return 20e6 }
+	for _, u := range []float64{1, 4, 9} {
+		if got := run(400*u, 0.9, flat); math.Abs(got-20e6) > 1 {
+			t.Errorf("flat heap read %.0f", got)
+		}
+	}
+	// A batch in flight in one sample of the last third: 60 MB on a 20 MB floor.
+	got := run(3600, 0.95, func(t float64) float64 {
+		if t > 2700 && t < 3000 {
+			return 60e6
+		}
+		return 20e6
+	})
+	if got > 20e6+1 {
+		t.Errorf("a transient moved the floor to %.0f", got)
+	}
+}
+
+func TestARunWhoseLastSampleCameEarlyContinuesTheFloor(t *testing.T) {
+	// The failing run of go-header-index under load: 4 samples, the last at 919 ms of a 2317 ms run.
+	got := run(2317, 919.0/2317, func(t float64) float64 { return 50000 * t })
+	want := 50000 * 0.75 * 2317
+	if math.Abs(got-want) > 0.02*want {
+		t.Errorf("reading %.0f, want about %.0f", got, want)
+	}
+	var notes []string
+	dlaInRunReading(&notes)
+	if !strings.Contains(strings.Join(notes, "|"), "continues the floor") {
+		t.Errorf("no note: %v", notes)
+	}
+	// A heap that is flat there does not grow by being continued.
+	if got := run(2317, 919.0/2317, func(t float64) float64 { return 20e6 }); math.Abs(got-20e6) > 1 {
+		t.Errorf("flat heap continued to %.0f", got)
+	}
+}
+
+func TestASawToothIsNotContinuedAtTheSlopeOfOneTooth(t *testing.T) {
+	// A heap that rises from 20 to 60 MB every second and falls back, read in runs whose last sample
+	// came at 40 % of the run and high on a tooth. The reading stays within two tooth heights of the
+	// base however long the run is; continued at the slope of the last tooth it would grow with the run.
+	tooth := func(t float64) float64 { return 20e6 + 40e6*(t/1000-math.Floor(t/1000)) }
+	for _, end := range []float64{10000, 20000, 40000, 80000} {
+		last := math.Floor(0.4*end/1000)*1000 - 100
+		if got := run(end, last/end, tooth); got > 100e6 {
+			t.Errorf("run of %.0f ms: a saw-tooth of 60 MB at most read %.0f", end, got)
+		}
+	}
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new("go")
+        .args([
+            "test",
+            "-vet=off",
+            "-count=1",
+            "-run",
+            "^Test(Leak|Flat|ARun|ASaw)",
+        ])
+        .current_dir(&fx.work)
+        .env("GOFLAGS", "-mod=mod")
+        .env("GOPROXY", "off")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 }

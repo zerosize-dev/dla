@@ -233,7 +233,7 @@ impl Index {
 
 /// Everything recorded about a finding's writers and removers, merged over all
 /// `finding_annotated` lines in ledger order without duplicates.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Annotation {
     /// Sites that add to the holder.
     pub writers: Vec<String>,
@@ -243,6 +243,24 @@ pub struct Annotation {
     pub notes: Vec<String>,
     /// Holder corrections backed by evidence, oldest first.
     pub holder_changes: Vec<HolderChange>,
+    /// What the census recorded of the holder and of its writer and remover sites.
+    pub facts: crate::census::HolderFacts,
+}
+
+/// Prints the fields every ledger of an older version has; the census facts only when there
+/// are some, so that an annotation made before they existed prints as it always did.
+impl std::fmt::Debug for Annotation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("Annotation");
+        d.field("writers", &self.writers)
+            .field("removers", &self.removers)
+            .field("notes", &self.notes)
+            .field("holder_changes", &self.holder_changes);
+        if !self.facts.is_empty() {
+            d.field("facts", &self.facts);
+        }
+        d.finish()
+    }
 }
 
 /// A holder replaced by an evidence-backed annotation (schema 5).
@@ -857,6 +875,7 @@ impl Index {
         }
         if a.writers.is_empty()
             && a.removers.is_empty()
+            && a.facts.is_empty()
             && a.note.is_none()
             && a.holder.is_none()
             && a.owner.is_none()
@@ -1594,6 +1613,7 @@ impl Index {
                 {
                     slot.notes.push(n.clone());
                 }
+                slot.facts.merge(&a.facts);
             }
             Record::SliceStarted(s) => {
                 self.slices.entry(s.worker.clone()).or_default().started = Some(s.clone());
@@ -3059,8 +3079,8 @@ impl Ledger {
     }
 
     /// Core mode: records what a verifier concluded about `finding` from its bundle.
-    /// The agreement with the finding's site (same file, within 3 lines, or both none)
-    /// and holder is computed here; a disagreement also opens an open item naming both
+    /// The agreement with the finding's site (same file, within 3 lines of the site or of one
+    /// of its recorded writers or removers, or both none) and holder is computed here; a disagreement also opens an open item naming both
     /// values. Returns the verification line and the open item line, if any.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
@@ -3125,6 +3145,13 @@ impl Ledger {
             }
             _ => {}
         }
+        let known: Vec<String> = self
+            .index
+            .annotations
+            .get(finding)
+            .map_or_else(Vec::new, |a| {
+                a.writers.iter().chain(&a.removers).cloned().collect()
+            });
         let v = verify::record(
             f,
             site,
@@ -3133,6 +3160,7 @@ impl Ledger {
             label.to_owned(),
             bundle.to_owned(),
             matches!(archetypes, Archetypes::On(_)),
+            &known,
         );
         let mut batch = vec![Pending::new(Record::Verification(v.clone()))];
         if !verify::agrees(&v) {

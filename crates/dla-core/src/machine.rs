@@ -670,7 +670,10 @@ fn only_whole_process(e: &EvidenceRecord) -> bool {
 ///   member of the family ([`PassedColumn::tied_to_owner`]); these are the findings the
 ///   gate's tie rule (`gate::tied_findings`) ties to a growth column;
 /// * a residual, non-heap or capture record that is already among the `supports` of a
-///   member of the family.
+///   member of the family;
+/// * a growth record whose `targets` list a verdict `constant`, `changed` or `executed`
+///   of a member of the family from a harness that declared it a target (its code ran or
+///   its holder was read); `not_executed`, `not_loaded` and `unknown` are not.
 ///
 /// A workload record never counts (the harness ran, which says nothing about this
 /// finding), and neither does evidence that is only cited on the line being judged.
@@ -724,7 +727,10 @@ pub fn tied_measurement(
                         family
                             .iter()
                             .any(|m| c.tied_to_owner(&m.id, m.site.as_deref(), m.owner.as_deref()))
-                    })
+                    }) || s
+                        .targets
+                        .iter()
+                        .any(|t| t.is_measurement() && family.iter().any(|m| m.id == t.finding))
                 })
             }
             _ => false,

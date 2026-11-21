@@ -69,6 +69,7 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
     let ranked = queue::ranked(&view);
     let ix = Index::of(&view);
     let queues = queue::queues(&view, ctx.worker.as_deref());
+    let triggers = dla_core::trigger::Triggers::of(&view);
     let mut order: Vec<&FindingId> = ranked.iter().map(|r| &r.id).collect();
     let in_rank: std::collections::BTreeSet<&FindingId> = order.iter().copied().collect();
     let others: Vec<FindingId> = view
@@ -98,6 +99,11 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             "state": f.state_label(),
             "tier": tier,
             "rank": r.and_then(|r| r.rank),
+            "score": rank::score(f, ann),
+            "why": rank::why(f, ann, 3)
+                .into_iter()
+                .map(|(name, points)| format!("{name} {points:+}"))
+                .collect::<Vec<_>>(),
             "origin": f.origin.as_str(),
             "site": f.site,
             "holder": f.holder.map(|h| h.to_string()),
@@ -121,6 +127,9 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
                 m.insert(h, json!(v.map(Verdict::as_str)));
             }
             e["harnesses"] = Value::Object(m);
+        }
+        if dla_core::trigger::is_subject(&view, f) {
+            e["trigger"] = json!(triggers.trigger(id).name());
         }
         if let Some(Standing::Settled(why)) = standing {
             e["settled_by"] = json!(match why {
@@ -212,8 +221,9 @@ fn default_remedy(
             "its probe never loaded: the workload did not import its module".to_owned()
         }
         Some(Verdict::NotExecuted) => "its code did not run".to_owned(),
-        Some(Verdict::Executed | Verdict::Unknown) => {
-            "its code ran and showed no growth".to_owned()
+        Some(Verdict::Executed) => "its code ran and showed no growth".to_owned(),
+        Some(Verdict::Unknown) => {
+            "whether its code ran is not known: no coverage data for this run".to_owned()
         }
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
         Some(Verdict::Grew) => "its holder grew".to_owned(),
@@ -280,18 +290,23 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             ));
             continue;
         }
+        // A finding that was measured and left undecided is `inconclusive`, at the budget
+        // floor too; one nothing reached is `not_exercised`, or `time_budget` at the floor.
+        let measured = ledger.supported_reason(&f.id) == UnresolvedReason::Inconclusive;
         let static_evidence = f
             .supports
             .iter()
             .filter_map(|e| view.ledger.evidence_by_id(e))
             .any(|e| matches!(e.kind, EvidenceKind::StaticHit | EvidenceKind::CensusHolder));
-        let (to, disposition) = if static_evidence {
+        let (to, disposition) = if static_evidence && !measured {
             ("suspected_static_only", ResolveAs::SuspectedStaticOnly)
         } else {
             ("unresolved", ResolveAs::Unresolved)
         };
-        // The queue closed because the budget reached the floor: that is what time_budget says.
-        let reason = if q.is_some_and(|q| q.closed == Some(Closed::Floor)) {
+        let reason = if measured {
+            UnresolvedReason::Inconclusive
+        } else if q.is_some_and(|q| q.closed == Some(Closed::Floor)) {
+            // The queue closed because the budget reached the floor: that is what time_budget says.
             UnresolvedReason::TimeBudget
         } else {
             UnresolvedReason::NotExercised
@@ -362,6 +377,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                     "suspected_static_only": count("suspected_static_only"),
                     "unresolved": count("unresolved"),
                     "not_exercised": by_reason(UnresolvedReason::NotExercised),
+                    "inconclusive": by_reason(UnresolvedReason::Inconclusive),
                     "time_budget": by_reason(UnresolvedReason::TimeBudget),
                     "left_open": left.len(),
                     "ids": ids.join(","),
@@ -387,6 +403,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         },
         "reason": {
             "not_exercised": by_reason(UnresolvedReason::NotExercised),
+            "inconclusive": by_reason(UnresolvedReason::Inconclusive),
             "time_budget": by_reason(UnresolvedReason::TimeBudget),
         },
         "left_open": left.len(),

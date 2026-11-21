@@ -613,6 +613,112 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
 
 type Built = (String, usize, usize, Vec<String>, Vec<String>);
 
+/// The result of writing one file of the bundle.
+type Written = Result<(), Failure>;
+
+/// At most this many entry-path harnesses go into a bundle.
+const MAX_ENTRY_HARNESSES: usize = 2;
+/// Largest driver file copied for an entry-path harness.
+const MAX_DRIVER_BYTES: u64 = 256 * 1024;
+
+/// Removes the generated target block from a driver: the run of comment lines that starts at
+/// the line that names the harness (`Entry-path harness H5:` or `Targets of harness H5:`). It
+/// names the finding, its site, the rule that raised it and its writers, which the verifier
+/// must find from the evidence.
+fn without_target_block(text: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let comment = |l: &str| {
+        let t = l.trim_start();
+        t.starts_with('#') || t.starts_with("//") || t.starts_with("/*")
+    };
+    let Some(start) = lines.iter().position(|l| {
+        comment(l) && (l.contains("Entry-path harness H") || l.contains("Targets of harness H"))
+    }) else {
+        return text.to_owned();
+    };
+    let mut end = start;
+    while end < lines.len() && comment(lines[end]) && !lines[end].contains("DLA-HOOK") {
+        end += 1;
+    }
+    let first = lines[start];
+    let pad = &first[..first.len() - first.trim_start().len()];
+    let marker = if first.trim_start().starts_with('#') {
+        "#"
+    } else {
+        "//"
+    };
+    let mut out: String = lines[..start].concat();
+    out.push_str(&format!(
+        "{pad}{marker} (the generated target block is not part of the bundle)\n"
+    ));
+    out.push_str(&lines[end..].concat());
+    out
+}
+
+/// The driver, `VARIES.txt` and trend verdict of the entry-path harnesses that targeted the
+/// finding (the one in which it grew, else up to two), copied into `entry-path/<H>/`. The
+/// verifier judges the trigger from them: whether the unit calls public entry points only and
+/// whether what it varies is under a caller's control. The finding's id, site and writers are
+/// scrubbed from the copies like those of every other record.
+fn entry_path_files(
+    tc: &ToolCtx,
+    id: &FindingId,
+    needles: &Needles,
+    write: &dyn Fn(&str, &[u8]) -> Written,
+) -> Result<Vec<Value>, Failure> {
+    let Ok(view) = dla_core::RunView::load(&tc.run_dir) else {
+        return Ok(Vec::new());
+    };
+    let triggers = dla_core::trigger::Triggers::of(&view);
+    let mut runs = triggers.entry_runs(id);
+    let mut seen = std::collections::BTreeSet::new();
+    runs.retain(|r| seen.insert(r.harness.clone()));
+    runs.truncate(MAX_ENTRY_HARNESSES);
+    let mut out = Vec::new();
+    for r in runs {
+        let driver = dla_core::HarnessManifest::dir_in(&tc.run_dir, &r.harness).join("driver");
+        let mut listing = Vec::new();
+        let mut names: Vec<(String, PathBuf)> = Vec::new();
+        files_under(&driver, &driver, &mut names).map_err(|e| io_fail(&driver, e))?;
+        names.sort();
+        for (rel, path) in names {
+            if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_DRIVER_BYTES) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let cleaned = without_target_block(&text);
+            let kept = bundle_bytes(cleaned.as_bytes(), false, needles, false);
+            let name = format!("entry-path/{}/{rel}", r.harness);
+            write(&name, &kept)?;
+            listing.push(name);
+        }
+        let verdict = json!({
+            "harness": r.harness,
+            "series": r.series,
+            "driver_digest": r.digest,
+            "varies": r.varies,
+            "verdict": r.verdict.map(|v| v.as_str()),
+            "meaning": "grew: the holder grew when this driver ran; any other verdict: it did not grow",
+        });
+        let vname = format!("entry-path/{}/verdict.json", r.harness);
+        let mut vv = verdict.clone();
+        scrub_ties(&mut vv, needles, false);
+        write(&vname, to_pretty_json(&vv).as_bytes())?;
+        listing.push(vname);
+        let mut entry = json!({
+            "harness": r.harness,
+            "verdict": r.verdict.map(|v| v.as_str()),
+            "varies": r.varies,
+            "files": listing,
+        });
+        scrub_ties(&mut entry, needles, false);
+        out.push(entry);
+    }
+    Ok(out)
+}
+
 fn build(
     tc: &ToolCtx,
     ledger: &dla_core::Ledger,
@@ -713,6 +819,10 @@ fn build(
         "frames": frames,
         "evidence": records,
     });
+    let entry = entry_path_files(tc, id, &needles, &write)?;
+    if !entry.is_empty() {
+        index["entry_path"] = Value::Array(entry);
+    }
     if let Some(o) = owner {
         index["owner"] = json!(o);
     }
@@ -980,5 +1090,25 @@ mod tests {
             bundle_bytes(&[0xff, 0x46, 0x33], false, &needles(), false),
             [0xff, 0x46, 0x33]
         );
+    }
+    #[test]
+    fn the_generated_target_block_is_cut_out_of_a_driver() {
+        let text = "import os\n\ndef setup():\n    # Entry-path harness H5: show whether\n    # F1 at a.py:3: holder static/global\n    #   writers: a.py:9 (put)\n    # DLA-HOOK setup: build\n    x = 1\n";
+        let out = without_target_block(text);
+        assert!(
+            out.contains("    # (the generated target block is not part of the bundle)\n"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("F1 at a.py:3") && !out.contains("writers:"),
+            "{out}"
+        );
+        // The hook comment, which is not part of the block's run, stays.
+        assert!(
+            out.contains("# DLA-HOOK setup: build") && out.contains("x = 1"),
+            "{out}"
+        );
+        // No block: unchanged.
+        assert_eq!(without_target_block("a = 1\n"), "a = 1\n");
     }
 }

@@ -66,6 +66,20 @@ pub struct Target {
     pub probe: Option<String>,
     /// One line of instruction by holder kind.
     pub instruction: String,
+    /// `--next` added this target because it holds state of the same owner as this earlier
+    /// target.
+    pub sibling_of: Option<FindingId>,
+    /// What an entry-path harness adds: the callers chain and where the key comes from.
+    pub entry: Option<Entry>,
+}
+
+/// What `dla harness gen --entry` says about a target besides what every harness says.
+#[derive(Debug, Clone, Default)]
+pub struct Entry {
+    /// The writer functions the callers chains start from (`Class.method`).
+    pub writer_functions: Vec<String>,
+    /// The lines of the callers chains and the key provenance, in the block.
+    pub lines: Vec<String>,
 }
 
 /// The name of the function (`Class.method`) that encloses `file:line`, when the file parses.
@@ -214,6 +228,7 @@ pub fn describe(
     ledger: &Ledger,
     asked: &[Asked],
     probes: &[ProbeSpec],
+    siblings: &std::collections::BTreeMap<FindingId, FindingId>,
 ) -> Vec<Target> {
     asked
         .iter()
@@ -240,9 +255,154 @@ pub fn describe(
                 removers: sites(&ctx.project, &removers),
                 probe: probe_text(&ctx.project, a, probes),
                 instruction: instruction(&a.kind, &holder, &owner, &a.site),
+                sibling_of: siblings.get(&a.id).cloned(),
+                entry: None,
             }
         })
         .collect()
+}
+
+/// Adds what an entry-path harness says about each target: the callers chain of each writer
+/// function (up to three hops, matched by name) and where the key comes from. Runtimes with
+/// no syntax-tree reader of calls get a line that says "not computed".
+pub fn add_entry_facts(project: &Path, rt: dla_core::runtime::Runtime, targets: &mut [Target]) {
+    use dla_census::callers::{self, Func, Index};
+    let files = dla_census::walk::source_files(project, rt);
+    let readable = files.iter().any(|f| callers::supported(f.lang));
+    let ix = if readable {
+        Index::build(&files)
+    } else {
+        Index::default()
+    };
+    for t in targets {
+        if !readable {
+            t.entry = Some(Entry {
+                writer_functions: Vec::new(),
+                lines: vec![
+                    format!(
+                        "  callers: not computed (no reader of calls for {} sources)",
+                        rt.as_str()
+                    ),
+                    "  key from: not computed".to_owned(),
+                ],
+            });
+            continue;
+        }
+        // The writer functions: the decorated function of a cache decorator, then the
+        // function around each listed writer line.
+        let mut fns: Vec<(Func, Option<usize>, bool)> = Vec::new();
+        let mut add = |f: Option<Func>, line: Option<usize>, all: bool| {
+            if let Some(f) = f.filter(|f| f.name != "<module>")
+                && !fns
+                    .iter()
+                    .any(|(g, _, _)| g.file == f.file && g.name == f.name)
+            {
+                fns.push((f, line, all));
+            }
+        };
+        if t.kind == "cache-decorator"
+            && let Some((file, line)) = t.site.rsplit_once(':')
+            && let Ok(line) = line.parse::<usize>()
+        {
+            add(ix.function_at(file, line), None, true);
+        }
+        for w in &t.writers.0 {
+            let at = w.split(' ').next().unwrap_or_default();
+            if let Some((file, line)) = at.rsplit_once(':')
+                && let Ok(line) = line.parse::<usize>()
+            {
+                add(ix.function_at(file, line), Some(line), false);
+            }
+        }
+        let mut lines = Vec::new();
+        let mut names = Vec::new();
+        if fns.is_empty() {
+            lines.push("  callers: no writer function was found to start from".to_owned());
+            lines.push("  key from: not found".to_owned());
+        }
+        for (f, line, all) in &fns {
+            names.push(f.name.clone());
+            lines.push(format!("  writer function: {}", f.label()));
+            lines.push(
+                "    callers (matched by name; [public] marks a function a user of the project can call; \"referenced\" is a place that passes or stores it without calling it, shown when nothing calls it):"
+                    .to_owned(),
+            );
+            let chain = ix.chain(&files, f);
+            if chain.is_empty() {
+                lines.push("      none found".to_owned());
+            }
+            for (i, hop) in chain.iter().enumerate() {
+                let list: Vec<String> = hop
+                    .callers
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "{}{} ({}:{}{})",
+                            c.func.name,
+                            if c.func.public { " [public]" } else { "" },
+                            c.func.file,
+                            c.line,
+                            if c.by_reference { ", referenced" } else { "" }
+                        )
+                    })
+                    .collect();
+                let more = if hop.more > 0 {
+                    format!(" and {} more", hop.more)
+                } else {
+                    String::new()
+                };
+                lines.push(format!("      hop {}: {}{more}", i + 1, list.join(", ")));
+            }
+            let p = ix.provenance(&files, f, *line, *all);
+            if p.params.is_empty() {
+                lines.push(format!(
+                    "    key from: no parameter of {} (it is built from state the holder's owner keeps, a constant or a counter)",
+                    f.name
+                ));
+            } else {
+                let ps: Vec<String> = p.params.iter().map(|x| format!("`{x}`")).collect();
+                lines.push(format!(
+                    "    key from: parameter {} of {}",
+                    ps.join(", "),
+                    f.name
+                ));
+                if p.sites.is_empty() {
+                    lines.push(
+                        "      no call site found (it may be called through a variable or a framework: read the places above that mention it)"
+                            .to_owned(),
+                    );
+                }
+                for site in &p.sites {
+                    let what = if site.passed.is_empty() {
+                        "passes none of them by name or position".to_owned()
+                    } else {
+                        site.passed
+                            .iter()
+                            .map(|(k, v)| format!("{k} = {v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    lines.push(format!("      {} ({}): {what}", site.at, site.caller));
+                    if !site.guards.is_empty() {
+                        lines.push(format!(
+                            "        the call happens only when: {}",
+                            site.guards.join("; ")
+                        ));
+                    }
+                    for (name, rhs) in &site.origins {
+                        lines.push(format!("        {name} is set by: {}", rhs.join("; ")));
+                    }
+                }
+                if p.more_sites > 0 {
+                    lines.push(format!("      and {} more call sites", p.more_sites));
+                }
+            }
+        }
+        t.entry = Some(Entry {
+            writer_functions: names,
+            lines,
+        });
+    }
 }
 
 fn site_list(label: &str, s: &(Vec<String>, usize)) -> String {
@@ -276,16 +436,29 @@ impl Target {
                 format!(", owner {}", self.owner)
             }
         )];
+        if let Some(s) = &self.sibling_of {
+            out[0].push_str(&format!(" (sibling_of {s}: state of the same owner)"));
+        }
         if let Some(m) = &self.message {
             out.push(format!("  rule: {m}"));
         }
         out.push(format!("  {}", site_list("writers", &self.writers)));
         out.push(format!("  {}", site_list("removers", &self.removers)));
+        if let Some(e) = &self.entry {
+            out.extend(e.lines.iter().cloned());
+        }
         out.push(match &self.probe {
             Some(p) => format!("  probe reads: {p}"),
             None => "  no probe: tied by allocation stacks or type counts".to_owned(),
         });
-        out.push(format!("  to do: {}", self.instruction));
+        out.push(format!(
+            "  to do: {}",
+            if self.entry.is_some() {
+                ENTRY_INSTRUCTION
+            } else {
+                self.instruction.as_str()
+            }
+        ));
         out
     }
 
@@ -301,20 +474,46 @@ impl Target {
             "removers": self.removers.0,
             "probe": self.probe,
             "instruction": self.instruction,
+            "sibling_of": self.sibling_of,
+            "writer_functions": self.entry.as_ref().map(|e| &e.writer_functions),
         })
     }
 }
 
+/// What each target of an entry-path harness is told to do.
+const ENTRY_INSTRUCTION: &str =
+    "reach it through the project's public entry points, with data a caller controls";
+
+/// The rules of an entry-path unit, as printed in the block.
+pub const ENTRY_RULES: [&str; 5] = [
+    "Rules of an entry-path unit:",
+    "- call only the project's public entry points (the functions, endpoints, commands or messages a user of the project calls), with the objects under test built once in setup",
+    "- per unit vary only data that a caller or a remote peer controls (ids, names, paths, methods, headers, bodies, file names, message contents), including inputs the project rejects (unknown paths, unsupported methods, malformed input): error paths often build objects per call",
+    "- never create new functions, classes, handlers, loggers or configuration per unit unless a real program does so per request, and if you do, say so in the varies line",
+    "- write one line in VARIES.txt next to the driver: what a caller varies per unit; dla harness run refuses the harness until it is written",
+];
+
 /// The comment block for a driver, above the first hook. `prefix` is the line comment
 /// marker (`#` or `//`); `None` wraps each line in `/* */`.
 pub fn block(harness: &str, targets: &[Target], prefix: Option<&str>) -> String {
-    let mut lines = vec![format!(
-        "Targets of harness {harness}: make every unit reach these, with a new key per unit"
-    )];
+    let entry = targets.iter().any(|t| t.entry.is_some());
+    let mut lines = vec![if entry {
+        format!(
+            "Entry-path harness {harness}: show whether a caller of the project's public API can make new keys reach these holders (they grew when a driver fed them keys directly)"
+        )
+    } else {
+        format!(
+            "Targets of harness {harness}: make every unit reach these, with a new key per unit"
+        )
+    }];
     for t in targets {
         lines.extend(t.lines());
     }
-    lines.push(format!("In general: {GENERAL}"));
+    if entry {
+        lines.extend(ENTRY_RULES.iter().map(|l| (*l).to_owned()));
+    } else {
+        lines.push(format!("In general: {GENERAL}"));
+    }
     lines
         .iter()
         .map(|l| match prefix {
@@ -383,6 +582,8 @@ mod tests {
                 "pkg.web_app._build",
                 "pkg/web_app.py:82",
             ),
+            sibling_of: None,
+            entry: None,
         }
     }
 
@@ -459,5 +660,62 @@ mod tests {
             Some("free")
         );
         assert_eq!(enclosing_name(dir.path(), "a.py:1"), None);
+    }
+    fn writer_target() -> Target {
+        Target {
+            id: "F3".parse().unwrap(),
+            site: "a.py:1".into(),
+            holder: "static/global".into(),
+            kind: "container".into(),
+            owner: "a.CACHE".into(),
+            message: None,
+            writers: (vec!["a.py:5 (C.put)".into()], 1),
+            removers: (Vec::new(), 0),
+            probe: None,
+            instruction: "make every unit reach a writer".into(),
+            sibling_of: None,
+            entry: None,
+        }
+    }
+
+    #[test]
+    fn an_entry_path_block_has_the_callers_the_key_and_the_rules_and_no_general_line() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("a.py"),
+            "CACHE = {}\n\nclass C:\n    def put(self, k, v):\n        CACHE[k] = v\n\ndef serve(req):\n    return C().put(req.path, 1)\n",
+        )
+        .unwrap();
+        let mut t = vec![writer_target()];
+        add_entry_facts(dir.path(), dla_core::runtime::Runtime::Python, &mut t);
+        assert_eq!(t[0].entry.as_ref().unwrap().writer_functions, ["C.put"]);
+        let b = block("H5", &t, Some("#"));
+        for want in [
+            "# Entry-path harness H5:",
+            "#   writer function: a.py:4 (C.put)",
+            "#       hop 1: serve [public] (a.py:8)",
+            "(matched by name",
+            "#     key from: parameter `k`, `v` of C.put",
+            "#       a.py:8 (serve): k = req.path, v = 1",
+            "# Rules of an entry-path unit:",
+            "#   to do: reach it through the project's public entry points, with data a caller controls",
+        ] {
+            assert!(b.contains(want), "{want}\n{b}");
+        }
+        assert!(!b.contains("In general:"), "{b}");
+        // A harness that is not entry-path keeps its block.
+        let plain = block("H5", &[writer_target()], Some("#"));
+        assert!(plain.contains("In general:") && !plain.contains("Rules of an entry-path unit"));
+    }
+
+    #[test]
+    fn a_runtime_without_a_reader_of_calls_says_not_computed() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("lib.rs"), "fn put() {}\n").unwrap();
+        let mut t = vec![writer_target()];
+        add_entry_facts(dir.path(), dla_core::runtime::Runtime::Rust, &mut t);
+        let lines = t[0].entry.as_ref().unwrap().lines.join("\n");
+        assert!(lines.contains("callers: not computed"), "{lines}");
+        assert!(lines.contains("key from: not computed"), "{lines}");
     }
 }

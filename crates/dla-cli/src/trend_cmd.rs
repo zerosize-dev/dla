@@ -269,7 +269,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             kind,
             "dla",
             env!("CARGO_PKG_VERSION"),
-            summary::summarize(&trend_id, &main.series, group, &signal),
+            summary::summarize(&trend_id, &main.series, group, &target_verdicts, &signal),
         );
         spec.authority = authority;
         spec.raw = Some(raw.clone());
@@ -367,6 +367,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             );
         }
     }
+    entry_path_triggers(ctx, &main.series, &mut out);
     if let Some(k) = &keys {
         out.insert("keys".into(), k.summary.clone());
     }
@@ -405,6 +406,62 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     );
     out.insert("next".into(), json!(next));
     Ok(Value::Object(out))
+}
+
+/// For the series of an entry-path harness: the trigger of each declared target now (the
+/// report just stored counts), `trigger: reproduced` and the command that comes next.
+fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<String, Value>) {
+    use dla_core::trigger::{Trigger, Triggers};
+    let Some(h) = series.source.harness.as_deref() else {
+        return;
+    };
+    let Ok(m) = dla_core::HarnessManifest::load(&ctx.run_dir, h) else {
+        return;
+    };
+    if !m.is_entry_path() {
+        return;
+    }
+    let Ok(view) = dla_core::RunView::load(&ctx.run_dir) else {
+        return;
+    };
+    let t = Triggers::of(&view);
+    let (mut reproduced, mut unchecked, mut not_found) = (Vec::new(), Vec::new(), Vec::new());
+    if let Some(Value::Array(list)) = out.get_mut("targets") {
+        for e in list {
+            let Some(id) = e["finding"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(fid) = id.parse::<dla_core::FindingId>() else {
+                continue;
+            };
+            let trig = t.trigger(&fid);
+            e["trigger"] = json!(trig.name());
+            match trig {
+                Trigger::Reproduced { .. } => reproduced.push(id),
+                Trigger::NotFound { .. } => not_found.push(id),
+                Trigger::Unchecked => unchecked.push(id),
+            }
+        }
+    }
+    let next = if !unchecked.is_empty() {
+        format!(
+            "{} did not grow here: dla harness gen --lang {} --driver --entry {} for a second, different driver (other entry points, inputs, rejected-input paths), fill, VARIES.txt, run, trend",
+            unchecked.join(", "),
+            m.runtime.as_str(),
+            unchecked.join(",")
+        )
+    } else if !reproduced.is_empty() {
+        format!(
+            "the trigger of {} is reproduced through the public API; dla run status shows what else is open",
+            reproduced.join(", ")
+        )
+    } else {
+        format!(
+            "no trigger was found for {}: the report says so; dla run status shows what else is open",
+            not_found.join(", ")
+        )
+    };
+    out.insert("trigger_next".into(), json!(next));
 }
 
 /// What the key-mode comparison produced.

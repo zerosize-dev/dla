@@ -23,19 +23,24 @@
 //! registration tables, spawned units, acquired handles, thread-locals, stored
 //! closures and (Rust) `Rc` cycles. For the JVM, class files under the project are
 //! read first by a small reader ([`classfile`]); the source files they cover are not
-//! parsed again. Writers and removers are textual name matches over the project
-//! ([`usage`]) and are labelled heuristic.
+//! parsed again. Writers and removers are first found by name over the project ([`usage`]) and
+//! labelled heuristic, then read in the syntax tree ([`sites`], [`events`]; Go, Java, Python,
+//! JavaScript and TypeScript): sites that cannot name the holder are dropped, and each site and
+//! each holder carries the facts the ranking reads (`dla_core::census::HolderFacts`).
 //!
 //! [`parse`] is the shared tree-sitter layer (`Lang`, `parse`, `captures`) also used
 //! by the DLA rule backend and workload discovery.
 
 pub mod anchor;
 pub mod ast;
+pub mod callers;
 pub mod classfile;
+pub mod events;
 pub mod jvm_class;
 pub mod lang;
 pub mod model;
 pub mod parse;
+pub mod sites;
 pub mod statement;
 pub mod usage;
 pub mod vocab;
@@ -44,7 +49,7 @@ pub mod walk;
 use std::{collections::BTreeMap, fs};
 
 use dla_core::{
-    CoverageManifest, EvidenceId, Refusal,
+    CoverageManifest, EvidenceId, FindingAnnotation, Refusal,
     census::CensusEntry,
     coverage::BackendCoverage,
     error::Error,
@@ -79,18 +84,30 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
     // Holders read from class files of a source that lies outside the scope.
     found.raws.retain(|r| inside(&r.file));
     let usages = usage::find(&found.raws, &files);
+    let analysed = sites::analyse(&found.raws, &usages, &files);
     let entries: Vec<CensusEntry> = found
         .raws
         .iter()
         .zip(&usages)
-        .map(|(r, u)| CensusEntry {
-            kind: r.kind.clone(),
-            holder: r.holder,
-            region: r.region,
-            site: format!("{}:{}", r.file, r.line),
-            owner: r.owner.clone(),
-            writers: u.writers.clone(),
-            removers: u.removers.clone(),
+        .zip(analysed)
+        .map(|((r, u), a)| {
+            // A holder the syntax-tree pass read has its sites re-read there: the ones that
+            // only matched the name of a holder private to another file are gone, and each
+            // survivor says what it does. Others keep the census's name matches.
+            let (writers, removers, facts) = match a {
+                Some(a) => (a.writers, a.removers, a.facts),
+                None => (u.writers.clone(), u.removers.clone(), Default::default()),
+            };
+            CensusEntry {
+                kind: r.kind.clone(),
+                holder: r.holder,
+                region: r.region,
+                site: format!("{}:{}", r.file, r.line),
+                owner: r.owner.clone(),
+                writers,
+                removers,
+                facts,
+            }
         })
         .collect();
 
@@ -104,7 +121,7 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
         "files_scanned": files.iter().filter(|f| !f.is_test).count(),
         "class_files": found.classes,
         "class_files_unreadable": found.unreadable,
-        "usage": "writers and removers are heuristic name matches, not an analysis",
+        "usage": "writers and removers are name matches read in the syntax tree; facts are per holder and per site",
         "by_holder": by_holder,
         "by_kind": by_kind,
         "entries": entries,
@@ -162,15 +179,16 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
             Added::Skipped => None,
         };
         if let Some(id) = id
-            && (!e.writers.is_empty() || !e.removers.is_empty())
+            && (!e.writers.is_empty() || !e.removers.is_empty() || !e.facts.is_empty())
         {
             ledger
-                .annotate(
-                    &id,
-                    e.writers.clone(),
-                    e.removers.clone(),
-                    Some("heuristic name match over the project's sources".into()),
-                )
+                .annotate_record(FindingAnnotation {
+                    writers: e.writers.clone(),
+                    removers: e.removers.clone(),
+                    note: Some("heuristic name match over the project's sources".into()),
+                    facts: e.facts.clone(),
+                    ..FindingAnnotation::new(id)
+                })
                 .map_err(|er| er.to_refusal())?;
             annotated += 1;
         }
@@ -369,6 +387,9 @@ fn enumerate(ctx: &ToolCtx, runtime: Runtime, files: &[SourceFile]) -> Found {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod sites_tests;
 
 #[cfg(test)]
 mod dedup_tests {

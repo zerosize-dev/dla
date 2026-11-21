@@ -30,25 +30,23 @@ hooks:
 
 # Detect Leak Anywhere (DLA)
 
-DLA diagnoses memory leaks: it measures, attributes and reports, and never edits project source. A run is a directory `.dla/<run-id>/` that only the `dla` binary writes. Whether something counts as a finding, a label or a strong finding is settled by the ledger rules inside `dla`, never by a persuasive explanation. Work at high effort.
+DLA diagnoses memory leaks: it measures, attributes and reports, and never edits project source. A run is a directory `.dla/<run-id>/` that only the `dla` binary writes. Whether something counts as a finding, a label or a strong finding is settled by the ledger rules in `dla`, never by a persuasive explanation. Work at high effort.
 
 ## Non-negotiables (MUST)
 
-1. Never edit project source, and never write under `.dla/` by hand, except the harness driver file `dla harness gen --driver` tells you to edit (`.dla/<run>/harness/H<n>/driver/`). State moves only through `dla` commands. Integrity seals detect a hand edit and the report says INCOMPLETE; the write hook also refuses every other file under `.dla/`, which no seal covers.
+1. Never edit project source, and never write under `.dla/` by hand, except the harness driver file `dla harness gen --driver` tells you to edit (`.dla/<run>/harness/H<n>/driver/`). State moves only through `dla` commands. Integrity seals detect a hand edit and the report says INCOMPLETE; the write hook refuses every other file under `.dla/`.
 2. Ask the consent question once for the whole run (tiers in `references/safety-and-effects.md`). Never work around a refused command by running the tool yourself.
 3. An archetype row or a detector hit only opens a hypothesis. Only `dla ledger test`, then `confirm`, makes a finding. `label` and `strong` need the evidence the ledger names.
 4. Each growth series gets a non-leak sibling (`N-*`) and every hypothesis states what would refute it.
-5. The report comes from `dla report` alone; show it exactly as printed. `dla run status` and `dla gate check` are the gates: their `missing` and `blocking` lists name each open item and the fixing command. Never present an INCOMPLETE run as finished.
+5. The report comes from `dla report` alone; show it exactly as printed. `dla run status` and `dla gate check` are the gates: their `missing` and `blocking` lists name each open item and the fixing command. Never present an INCOMPLETE run as done.
 
 ## Invoking the binary
 
-While the plugin is enabled, `dla` is on the Bash tool's PATH; confirm with `command -v dla`, else use `${CLAUDE_PLUGIN_ROOT}/bin/dla`. This skill passes values as arguments, not environment variables. `dla <cmd> --help` gives the exact flags of the installed release; never guess a flag. When a command named in these files does not exist, record that item `unresolved` with reason `tool_missing` and a remedy naming the command. Do not invent a stand-in.
-
-Each command prints one small JSON object.
+While the plugin is enabled, `dla` is on the Bash tool's PATH; confirm with `command -v dla`, else use `${CLAUDE_PLUGIN_ROOT}/bin/dla`. This skill passes values as arguments, not environment variables. `dla <cmd> --help` gives the exact flags of the installed release; never guess a flag. When a command named in these files does not exist, record that item `unresolved` with reason `tool_missing` and a remedy naming the command.
 
 ## Stage checklist
 
-Copy this into your notes (details: `references/stages.md`). Run `dla gate check --stage <s>` at the end of a stage (cumulative; it lists what is missing and records the pass).
+Copy into your notes (see `references/stages.md`). Run `dla gate check --stage <s>` at the end of a stage (cumulative; it lists what is missing and records the pass).
 
 ```
 - [ ] 1. Intake checklist and consent            gate: intake
@@ -64,6 +62,8 @@ Copy this into your notes (details: `references/stages.md`). Run `dla gate check
         the pass unlocks references/<lang>-archetypes.md and known-leaks.md; read them now, not before
 - [ ] 5. Confirm; then label each confirmed leak with its evidence
         dla ledger label F --suggest, then --as <ID>; nothing fits: --as UNCLASSIFIED --note   gate: confirm
+        confirmed and grew: dla harness gen --lang <rt> --driver --entry F,F2; fill with public entry
+        points only, write VARIES.txt, run, trend; no growth: a second, different driver
 - [ ] 6. Attribute; explain each confirmed leak  gate: attribute
         dla ledger explain F ...; strong comes last, only when time allows: a second independent
         class from a dump's retention path or `dla intervene`, then dla ledger strong F --evidence E
@@ -79,12 +79,12 @@ Rules that stay in force at every stage:
 
 - Intake: items `intake.target`, `intake.scope`, `intake.symptom`, `intake.runtimes`, `intake.build`, `intake.workload`, `intake.consent`, `intake.budget` are answered with `dla ledger resolve <item> --status answered --evidence E1`, or `--status unresolved --reason <r> --remedy "<text>"`. `dla run init` may report a `consent` object from an unattended runner: ask nothing and cite its evidence. Otherwise `dla consent --tiers <list> --ceiling ${user_config.privilege_ceiling}`; a second consent is refused.
 - Measure first, explain afterwards. Harness, trend, alloc-test and the plateau verdict decide leak versus non-leak; a runtime-heap sample alone is only a lead.
-- Confirmation needs passing growth tied to the finding (its probe, a column at its site, or a column listing it as a candidate), a holder, a refuted `N-*` sibling and a `file:line` (artifact runs: an owner and no site). Growth of another holder or of the whole process (`os.rss`) does not confirm a particular holder: `growth-not-tied`. When `confirm` prints a warning that the tied column observed another holder, run the `ledger annotate --holder --evidence` command it prints.
+- Confirmation needs passing growth tied to the finding (its probe, a column at its site, or a column listing it as a candidate), a holder, a refuted `N-*` sibling and a `file:line` (artifact runs: an owner and no site). Growth of another holder or of the whole process (`os.rss`) does not confirm a particular holder: `growth-not-tied`. A `confirm` warning that the tied column observed another holder: run the `ledger annotate` command it prints.
 - Attribute with `dla summarize <heap-graph|type-histogram-diff|alloc-stack-diff|non-heap> <files...>` on the captures `dla harness run` (`--capture`, `--tool`) or `dla attach` wrote; `references/backends.md` says which op reads which file. Cite the evidence it returns. A column confirms only the holder it is tied to (the output's `tie`: holder, site or type); `--finding` never forces a tie. An empty or failed-gate result never refutes a leak, and a missing tool is a coverage row, not a finding. Native growth under a JNI boundary reaches a managed finding only through `dla correlate <H>`; `dla probe` known-leak verdicts are context, never findings.
 - Measure the ranked candidates before closing any: while `dla run status` shows an open `queue`, run the batch of checklist item 4. A `target-pending` refusal of `dla ledger resolve` is fixed by the batch command it prints, never by another reason. A candidate that could not be exercised is never confirmed or refuted: `dla ledger resolve <F> --as suspected_static_only|unresolved --reason <r> --remedy "<text>"`. Reasons: see Before you stop.
 - A `time-budget` refusal whose fix names a smaller plan: run that command. When the deadline has passed or nothing smaller fits, the floor rule of Time budget applies, then report. A result marked `partial run` is inconclusive: it never confirms or refutes.
-- A refused command is fixed with the command the refusal prints, never retried in a loop.
-- If a run is interrupted, `dla run abort --reason "<why>"` stops what DLA started.
+- A refused command is fixed with the command the refusal prints, never looped.
+- Interrupted run: `dla run abort --reason "<why>"` stops what DLA started.
 
 ## When nothing fits
 
@@ -100,9 +100,10 @@ Take the `file:line` of an annotated site or writer from `grep -n` or `cat -n` o
 - Run a harness `dla harness gen` wrote (`dla harness run`), or generate one when entry points were discovered, before closing a finding of its runtime as `no_harness`, `not_exercised` or `time_budget`; the ledger refuses otherwise. If no driver can be built or run, record the blocker on `intake.workload` (`dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy "<text>"`); that closes the runtime's queue.
 - If the report's `Measured:` line says nothing was measured, say first and plainly that the run measured nothing, so it neither shows nor rules out a leak, and name what would let it measure.
 - Closing message: one line from the report's `Findings:` line, numbers copied (leaks confirmed and verified; the line's "non-leak explanations: confirmed N" you write as "N explanations, not leaks", never "confirmed"; unresolved), then the Coverage line. When it shows 0 or a minority of entry points exercised, say first that this run did not test the rest, so it neither shows nor rules out a leak there; name the cause and quote the ledger's remedy. One line for the `suspected_static_only` findings (count, why untested, remedy) and the report's `Queue:` line. Copy every number from `dla report` or `dla run status`.
+- Name each confirmed leak by its `Trigger:` line: reproduced through the public API is a leak, said with what a caller varies; no trigger found is "an unbounded holder, no trigger found", never "a leak" and never "disputed" for that reason alone; not checked says why. Growth when a driver feeds the holder keys shows it is unbounded, not that a caller can make it grow.
 - If `dla report` shows INCOMPLETE, say so plainly and list what is open. Never write "done" over it.
 - A Stop hook may block your stop while `gate check --final` fails. Do not rely on it: it lets the third attempt go if the ledger did not change, stamping the run INCOMPLETE.
-- Never edit `.dla` files to make a check pass: the integrity seals detect it and the report names it. `dla run reseal --reason` is only for a change made outside `dla` that you disclose.
+- Never edit `.dla` files to pass a check: the integrity seals detect it; `dla run reseal --reason` is only for a change made outside `dla` that you disclose.
 - A familiar pattern never confirms a leak; a suggested repair names only a class of repair.
 
 ## Router: pick the entry path before anything else

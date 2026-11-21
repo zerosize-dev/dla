@@ -27,10 +27,10 @@ pub struct Usage {
 }
 
 const CHAIN: &str = r"(?:\s*\(\s*[^()\n]*\)|\s*\[[^\]\n]*\]|\s*\.\s*(?:borrow_mut|borrow|lock|write|read|unwrap|expect|get_mut|as_mut|as_ref|entry|or_default|or_insert_with|or_insert|get|Load|Store)\s*(?:\([^()\n]*\))?)*";
-const W_PREFIX: &str = "add|put|push|offer|append|insert|register|subscribe|emplace|enqueue|attach|compute|schedule|track|enter|intern|remember|memoize|cache|record";
-const W_EXACT: &str = "on|once|set|setdefault|update|merge|extend|store|listen|watch|prepend|unshift|write|send|Add|Store|Set|Put|Push";
-const R_PREFIX: &str = "remove|delete|clear|pop|poll|drain|evict|unregister|unsubscribe|detach|release|dispose|destroy|shutdown|retain|purge|prune|expire|trim|invalidate|cancel|terminate|abort|dequeue|reap";
-const R_EXACT: &str = "take|discard|off|close|free|stop|reset|truncate|shift|splice|swap_remove|unlink|kill|cache_clear|Delete|Close|Stop|Swap|Clear|Pop";
+pub(crate) const W_PREFIX: &str = "add|put|push|offer|append|insert|register|subscribe|emplace|enqueue|attach|compute|schedule|track|enter|intern|remember|memoize|cache|record";
+pub(crate) const W_EXACT: &str = "on|once|set|setdefault|update|merge|extend|store|listen|watch|prepend|unshift|write|send|Add|Store|Set|Put|Push";
+pub(crate) const R_PREFIX: &str = "remove|delete|clear|pop|poll|drain|evict|unregister|unsubscribe|detach|release|dispose|destroy|shutdown|retain|purge|prune|expire|trim|invalidate|cancel|terminate|abort|dequeue|reap";
+pub(crate) const R_EXACT: &str = "take|discard|off|close|free|stop|reset|truncate|shift|splice|swap_remove|unlink|kill|cache_clear|Delete|Close|Stop|Swap|Clear|Pop";
 const EMPTY_RHS: &str = r"^(?:nil|None|null|undefined|NULL|nullptr|0|false|\[\s*\]|\{\s*\}|\x22\x22|(?:Vec|HashMap|HashSet|BTreeMap|BTreeSet|VecDeque|dict|list|set|deque|Map|Set|Array)(?:::new)?(?:<[^>]*>)?\(\s*\)|new\s+(?:Map|Set|Array|WeakMap|WeakSet|[A-Z]\w*)(?:<[^>]*>)?\(\s*\)|make\([^)]*\)|None\s*;?)\s*[;,]?\s*(?://.*|#.*)?$";
 
 #[derive(Clone)]
@@ -66,7 +66,10 @@ fn build(name: &str, member_access: bool) -> Option<Patterns> {
     Some(Patterns {
         writer_call: call(W_PREFIX, W_EXACT)?,
         remover_call: call(R_PREFIX, R_EXACT)?,
-        assign: Regex::new(&format!(r"{pre}{CHAIN}\s*([-+*|&^]?)=(?:[^=>~]|$)\s*(.*)$")).ok()?,
+        assign: Regex::new(&format!(
+            r"{pre}({CHAIN})\s*([-+*|&^]?)=(?:[^=>~]|$)\s*(.*)$"
+        ))
+        .ok()?,
         remover_fn,
         writer_fn,
         chan_send: Regex::new(&format!(r"{pre}\s*<-")).ok()?,
@@ -74,7 +77,7 @@ fn build(name: &str, member_access: bool) -> Option<Patterns> {
     })
 }
 
-fn empty_rhs() -> &'static Regex {
+pub(crate) fn empty_rhs() -> &'static Regex {
     static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     R.get_or_init(|| Regex::new(EMPTY_RHS).expect("static pattern"))
 }
@@ -202,9 +205,12 @@ fn classify(p: &Patterns, l: &str, u: &mut Usage, site: &str) {
     let mut remover =
         p.remover_call.is_match(l) || p.remover_fn.is_match(l) || p.chan_recv.is_match(l);
     if let Some(c) = p.assign.captures(l) {
-        let op = c.get(1).map_or("", |m| m.as_str());
-        let rhs = c.get(2).map_or("", |m| m.as_str()).trim();
-        if op == "-" || empty_rhs().is_match(rhs) {
+        let chain = c.get(1).map_or("", |m| m.as_str());
+        let op = c.get(2).map_or("", |m| m.as_str());
+        let rhs = c.get(3).map_or("", |m| m.as_str()).trim();
+        // `x[k] = make(..)` stores a value under a key: a write, not a reset of `x`.
+        let element = chain.trim_end().ends_with(']');
+        if op == "-" || (!element && empty_rhs().is_match(rhs)) {
             remover = true;
         } else {
             writer = true;
@@ -335,5 +341,19 @@ mod tests {
         );
         assert_eq!(u[0].writers, ["p/poller.go:2"], "{u:?}");
         assert!(u[0].removers.is_empty(), "{u:?}");
+    }
+
+    #[test]
+    fn an_element_assigned_a_made_container_is_a_writer_and_the_holder_reset_is_a_remover() {
+        let f = file(
+            "p/s.go",
+            "func (s *S) Watch(k string) {\n\ts.updates[k] = make(map[int]int)\n}\nfunc (s *S) Drop() {\n\ts.updates = make(map[string]map[int]int)\n}\n",
+        );
+        let u = find(
+            &[raw("updates", "p/s.go", 99, Scope::Dir("p".into()), true)],
+            &[f],
+        );
+        assert_eq!(u[0].writers, ["p/s.go:2"], "{u:?}");
+        assert_eq!(u[0].removers, ["p/s.go:5"], "{u:?}");
     }
 }

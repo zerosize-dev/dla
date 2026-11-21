@@ -218,6 +218,11 @@ pub struct RunOutput {
     /// or kept later points from starting. The series it wrote is partial and never
     /// refutes anything.
     pub partial: Vec<String>,
+    /// The dependency variables (`PYTHONPATH`...) the run's processes used, as the run
+    /// record keeps them: this environment's values, and the ones taken from the last run.
+    pub dependency_env: BTreeMap<String, String>,
+    /// Of those, the names that were unset here and taken from the last run of the harness.
+    pub env_reused: Vec<String>,
 }
 
 fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<String>) -> Refusal {
@@ -300,6 +305,65 @@ fn merged_env(spec_env: &[(String, String)], tokens: &[(&str, String)]) -> Vec<(
 }
 
 // ---------------------------------------------------------------------------------------
+// Dependency variables of the last run
+
+/// `(name, value)` pairs of environment variables.
+type EnvPairs = Vec<(String, String)>;
+
+thread_local! {
+    /// The harness and the dependency variables (`dla_core::harness::DEPENDENCY_ENV`) the
+    /// last successful run of it used and this environment lacks: every process the run on
+    /// this thread starts gets them.
+    static ENV_REUSE: RefCell<Option<(String, EnvPairs)>> = const { RefCell::new(None) };
+}
+
+/// Holds [`ENV_REUSE`] for the length of one `run_points`.
+struct EnvReuseGuard;
+
+impl EnvReuseGuard {
+    fn set(harness: &str, vars: EnvPairs) -> Self {
+        ENV_REUSE.with(|r| *r.borrow_mut() = Some((harness.to_owned(), vars)));
+        Self
+    }
+}
+
+impl Drop for EnvReuseGuard {
+    fn drop(&mut self) {
+        ENV_REUSE.with(|r| *r.borrow_mut() = None);
+    }
+}
+
+/// `env` with the reused dependency variables put in: a variable the spec sets too keeps its
+/// own value and takes the reused one as the inherited value it merges with (as
+/// [`merged_env`] does with a set one). Returns the variables that were put in, and the
+/// harness they come from.
+fn with_reused_env(env: &[(String, String)]) -> (EnvPairs, Option<(String, Vec<String>)>) {
+    let Some((harness, vars)) = ENV_REUSE.with(|r| r.borrow().clone()) else {
+        return (env.to_vec(), None);
+    };
+    if vars.is_empty() {
+        return (env.to_vec(), None);
+    }
+    let mut out = env.to_vec();
+    for (k, old) in &vars {
+        match out.iter_mut().find(|(ek, _)| ek == k) {
+            Some((_, cur)) => {
+                if let Merge::Prepend(sep) | Merge::Append(sep) = merge_rule(k) {
+                    let joined = match merge_rule(k) {
+                        Merge::Append(_) => format!("{old}{sep}{cur}"),
+                        _ => format!("{cur}{sep}{old}"),
+                    };
+                    *cur = joined;
+                }
+            }
+            None => out.push((k.clone(), old.clone())),
+        }
+    }
+    let names = vars.into_iter().map(|(k, _)| k).collect();
+    (out, Some((harness, names)))
+}
+
+// ---------------------------------------------------------------------------------------
 // Running one process
 
 struct ExecSpec<'a> {
@@ -345,7 +409,16 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
     if let Some(dir) = spec.log.parent() {
         fs::create_dir_all(dir).map_err(|e| io_refusal(dir, e))?;
     }
-    let log = File::create(&spec.log).map_err(|e| io_refusal(&spec.log, e))?;
+    let mut log = File::create(&spec.log).map_err(|e| io_refusal(&spec.log, e))?;
+    let (env, reused) = with_reused_env(&spec.env);
+    if let Some((harness, names)) = &reused {
+        use std::io::Write as _;
+        let _ = writeln!(
+            log,
+            "dla: reused from the last run of {harness}: {} (not set in this environment)",
+            names.join(", ")
+        );
+    }
     let log2 = match &spec.stderr_log {
         Some(p) => File::create(p).map_err(|e| io_refusal(p, e))?,
         None => log.try_clone().map_err(|e| io_refusal(&spec.log, e))?,
@@ -358,7 +431,7 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
     let mut cmd = Command::new(&program_path);
     cmd.args(args)
         .current_dir(&spec.cwd)
-        .envs(spec.env.iter().map(|(k, v)| (k, v)))
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log2));
@@ -1817,6 +1890,9 @@ fn run_driver_mode(
     if let Some(s) = &res.sampler {
         run.limitations.extend(s.limitations.iter().cloned());
     }
+    if manifest.runtime == dla_core::runtime::Runtime::Go && !res.timed_out {
+        go_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
+    }
     let file: DumpFile = dumps::read_dumps(&dump);
     if file.bad_lines > 0 {
         run.limitations.push(format!(
@@ -1886,6 +1962,109 @@ fn run_driver_mode(
         .warmup
         .min(u32::try_from(run.points.len()).unwrap_or(0));
     Ok(run)
+}
+
+/// The module paths a Go coverage profile should cover: `go list -m` in the harness's
+/// working directory (every module of a `go.work` workspace, one pattern each), as
+/// `<module>/...`; `./...` when the go command cannot say. The driver package is rarely the
+/// package of a target, so the patterns name the modules, not the driver's package.
+fn go_coverpkg(spec: &ExecSpec<'_>) -> String {
+    let mut cmd = std::process::Command::new("go");
+    cmd.args(["list", "-m"])
+        .current_dir(&spec.cwd)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
+    let modules: Vec<String> = cmd
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.contains(' '))
+                .map(|m| format!("{m}/..."))
+                .collect()
+        })
+        .unwrap_or_default();
+    if modules.is_empty() {
+        "-coverpkg=./...".to_owned()
+    } else {
+        format!("-coverpkg={}", modules.join(","))
+    }
+}
+
+/// A Go driver run measures without coverage instrumentation, so the points are the
+/// uninstrumented program's. What the driver's hooks reach is read from one more, short
+/// process: the same driver for one round of `step` units, no warm-up, no captures, no
+/// sampler, built with `-coverprofile` and `-coverpkg` over the whole module (or every module of
+/// the workspace). Its profile goes to `cov/` like a command-mode one, and `dla trend` and
+/// the entry-point coverage read it from there. Its failure is a limitation, never a refusal.
+fn go_cover_point(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    mode: KeyMode,
+    timeout: Duration,
+    run: &mut ModeRun,
+) -> Result<(), Refusal> {
+    let label = format!("p1-{}-cover", mode.as_str());
+    let pe = PointEnv {
+        manifest,
+        paths,
+        label: label.clone(),
+        mode,
+        n: manifest.step,
+        purge: None,
+        rounds: 1,
+        capture: None,
+        dumps: 0,
+    };
+    let dump = pe.dump_path();
+    if let Some(d) = dump.parent() {
+        fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
+    }
+    fs::create_dir_all(&paths.cov).map_err(|e| io_refusal(&paths.cov, e))?;
+    let profile = paths.cov.join(format!("{label}.out"));
+    let _ = fs::remove_file(&profile);
+    let mut spec = pe.exec_spec(timeout, "", &[("DLA_WARMUP", "0".to_owned())]);
+    let Some(at) = spec.argv.iter().position(|a| a == "test") else {
+        return Ok(());
+    };
+    let pkgs = go_coverpkg(&spec);
+    spec.argv.splice(
+        at + 1..at + 1,
+        [
+            "-coverprofile".to_owned(),
+            profile.to_string_lossy().into_owned(),
+            pkgs,
+        ],
+    );
+    spec.sample = false;
+    let command = spec.argv.join(" ");
+    spec.command = &command;
+    let res = exec(ctx, &spec)?;
+    run.logs.push(paths.rel(ctx, &spec.log));
+    let log_rel = paths.rel(ctx, &spec.log);
+    if let Some(e) = &res.spawn_error {
+        run.limitations
+            .push(format!("the coverage run {label} did not start: {e}"));
+    } else if res.timed_out {
+        run.limitations.push(format!(
+            "the coverage run {label} did not finish in {} s and was killed (log {log_rel}): which entry points ran is not known",
+            timeout.as_secs()
+        ));
+    } else if res.code != Some(0) {
+        run.limitations.push(format!(
+            "the coverage run {label} exited with {} (log {log_rel}): which entry points ran may be incomplete",
+            res.code
+                .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1978,10 +2157,16 @@ pub fn run_points(
     };
     let (asked, opts) = (opts.capture, &masked);
     let paths = Paths::new(ctx, manifest)?;
+    let reuse = dla_core::harness::dependency_env_to_reuse(&ctx.run_dir, &manifest.id);
+    let mut dependency_env = dla_core::harness::current_dependency_env();
+    dependency_env.extend(reuse.iter().cloned());
     let mut out = RunOutput {
         gaps: manifest.gaps.clone(),
+        env_reused: reuse.iter().map(|(k, _)| k.clone()).collect(),
+        dependency_env,
         ..RunOutput::default()
     };
+    let _reuse = EnvReuseGuard::set(&manifest.id, reuse);
     let _signals = SignalGuard::install(ctx);
     build_once(ctx, manifest, &paths, &mut out)?;
     if let Some(tool) = opts.tool {
@@ -2537,6 +2722,28 @@ fn run_loaded(
     mut manifest: HarnessManifest,
     opts: &RunOptions,
 ) -> Result<(StageOutcome, bool), Refusal> {
+    // An entry-path harness says what a caller varies per unit before it runs: the line is
+    // what the trigger of the findings it targets is judged by.
+    let varies = dla_core::harness::varies_line(&ctx.run_dir, &manifest.id);
+    if manifest.is_entry_path() && varies.is_none() {
+        let varies_path = ctx.pointer(&format!(
+            "harness/{}/driver/{}",
+            manifest.id,
+            dla_core::harness::VARIES_FILE
+        ));
+        return Err(Refusal::new(
+            dla_core::error::codes::VARIES_MISSING,
+            format!(
+                "harness {} is an entry-path harness and {varies_path} is empty or still the placeholder",
+                manifest.id,
+            ),
+            format!("one line in {varies_path}: what a caller varies per unit"),
+            format!(
+                "write one line in {varies_path} (for example: the request path, a different one per unit), then dla harness run {} --mode both",
+                manifest.id
+            ),
+        ));
+    }
     let out = run_points(ctx, &manifest, opts)?;
     let partial = !out.partial.is_empty();
     let captured = !opts.capture.is_empty() || opts.tool.is_some();
@@ -2592,6 +2799,10 @@ fn run_loaded(
         "captures": out.captures,
         "ffi_sites": out.ffi_sites.iter().map(ffi_site_json).collect::<Vec<_>>(),
         "driver_digest": dla_core::harness::driver_digest(&ctx.run_dir, &manifest.id),
+        "purpose": manifest.purpose.map(|p| p.as_str()),
+        "varies": varies,
+        dla_core::harness::RUN_DEPENDENCY_ENV: out.dependency_env,
+        "env_reused": out.env_reused,
     });
     let first = out
         .series
@@ -2767,6 +2978,9 @@ fn run_loaded(
         |s| format!("dla trend {s}"),
     );
     summary["next"] = json!(next);
+    if !out.env_reused.is_empty() {
+        summary["env_reused"] = json!(out.env_reused);
+    }
     Ok((
         StageOutcome {
             evidence: vec![ev.to_string()],
@@ -3256,6 +3470,8 @@ mod tests_support {
 
     pub fn manifest() -> HarnessManifest {
         HarnessManifest {
+            sibling_of: Default::default(),
+            purpose: None,
             targets: Vec::new(),
             schema_version: 1,
             id: "H1".into(),

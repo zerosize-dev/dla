@@ -956,6 +956,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     };
     let out = run_points(&tc, &manifest, &opts)?;
     let partial: Vec<String> = out.partial.clone();
+    let env_reused: Vec<String> = out.env_reused.clone();
     let series_id = out.series.first().cloned().ok_or_else(|| {
         Failure::refuse(
             "harness-failed",
@@ -1244,6 +1245,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     out.insert("finding".into(), json!(a.finding));
     out.insert("basis".into(), json!(picked.basis));
     out.insert("purge".into(), json!(purge_kind));
+    if !env_reused.is_empty() {
+        out.insert("env_reused".into(), json!(env_reused));
+    }
     if let Some(Drift::Agent(note)) = &drift {
         out.insert("caution".into(), json!(note));
     }

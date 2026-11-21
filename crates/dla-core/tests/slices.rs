@@ -1192,6 +1192,43 @@ fn a_verification_that_agrees_opens_nothing() {
 }
 
 #[test]
+fn a_verifier_naming_a_writer_or_remover_of_the_holder_agrees_on_the_site() {
+    let dir = new_run(&[]);
+    confirmed_in_main(dir.path());
+    let mut l = Ledger::load(dir.path()).unwrap();
+    // The finding's site is the holder's declaration (a.go:1); its writer is far from it.
+    l.annotate(
+        &fid(1),
+        vec!["a.go:75".into()],
+        vec!["a.go:90".into()],
+        Some("n".into()),
+    )
+    .unwrap();
+    let verify = |l: &mut Ledger, site: &str| {
+        let (line, item) = l
+            .verify(
+                &fid(1),
+                Some(site.into()),
+                Holder::StaticGlobal,
+                "a static map keeps every request",
+                "UNCLASSIFIED",
+                &"b".repeat(64),
+                dla_core::labels::Archetypes::Off,
+            )
+            .unwrap();
+        let Record::Verification(v) = line.record else {
+            panic!()
+        };
+        (v.agrees_site, item.is_some())
+    };
+    assert_eq!(verify(&mut l, "a.go:75"), (true, false), "a writer");
+    assert_eq!(verify(&mut l, "a.go:91"), (true, false), "near a remover");
+    // A line that is none of the finding's sites still disagrees, and so does another file.
+    assert_eq!(verify(&mut l, "a.go:200"), (false, true));
+    assert_eq!(verify(&mut l, "b.go:75"), (false, true));
+}
+
+#[test]
 fn a_verification_that_disagrees_opens_an_item_naming_both_values() {
     let dir = new_run(&[]);
     confirmed_in_main(dir.path());

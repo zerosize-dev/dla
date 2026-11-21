@@ -21,8 +21,45 @@ use crate::{
     view::RunView,
 };
 
-/// The most candidates one batch (`dla harness gen --next`) declares.
+/// The most candidates one batch (`dla harness gen --next`) takes by rank.
 pub const MAX_BATCH: usize = MAX_TARGETS;
+/// The most candidates one batch declares once the siblings of its candidates are added.
+pub const MAX_BATCH_WITH_SIBLINGS: usize = crate::harness::MAX_TARGETS_WITH_SIBLINGS;
+
+/// The next batch from the pending candidates in rank order: the first [`MAX_BATCH`], then,
+/// in rank order, every other one that is state of the same owner as a candidate already in
+/// it (fields of one struct or class; module-level holders that share a writer function), up
+/// to [`MAX_BATCH_WITH_SIBLINGS`] in all. A driver that exercises an owner reaches all of its
+/// state, so the holders of one owner are measured together. The map says which candidate
+/// each added one came with.
+pub fn with_siblings(
+    view: &RunView,
+    pending: &[&FindingId],
+    head: usize,
+) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
+    let head = head.min(MAX_BATCH);
+    let mut batch: Vec<FindingId> = pending.iter().take(head).map(|f| (*f).clone()).collect();
+    let mut siblings = BTreeMap::new();
+    let of = |id: &FindingId| {
+        view.ledger
+            .finding(id)
+            .map(|f| (f, view.ledger.annotation(id)))
+    };
+    for cand in pending.iter().skip(head) {
+        if batch.len() >= MAX_BATCH_WITH_SIBLINGS {
+            break;
+        }
+        let Some(c) = of(cand) else { continue };
+        let with = batch
+            .iter()
+            .find(|b| of(b).is_some_and(|b| rank::same_owner(b, c)));
+        if let Some(with) = with {
+            siblings.insert((*cand).clone(), with.clone());
+            batch.push((*cand).clone());
+        }
+    }
+    (batch, siblings)
+}
 
 /// States a ranked finding can be in: the queue's universe. A closed finding keeps its
 /// rank so that the report can say how it was ranked.
@@ -42,6 +79,8 @@ pub struct Ranked {
     pub state: FindingState,
     /// Tier 1 to 6.
     pub tier: u8,
+    /// The score the order inside the eligible set follows ([`rank::score`]).
+    pub score: i32,
     /// 1-based position among the eligible (tier 1 to 4) findings of the universe, in
     /// rank order; `None` for tier 5 and 6.
     pub rank: Option<usize>,
@@ -57,11 +96,12 @@ impl Ranked {
 }
 
 /// Every leak-side, non-sibling, non-duplicate finding in state `candidate`, `unresolved`
-/// or `suspected_static_only`, in rank order: tier, then findings with more than one origin
-/// first, then ledger order. The eligible ones carry their rank.
+/// or `suspected_static_only`, in rank order: descending [`rank::score`], then tier, then
+/// findings with more than one origin first, then ledger order. The eligible ones (tier 1 to
+/// 4) come first and carry their rank; the others follow by tier.
 pub fn ranked(view: &RunView) -> Vec<Ranked> {
     let mut only: Option<Option<String>> = None;
-    let mut list: Vec<(u8, u8, &Finding)> = view
+    let mut list: Vec<(u8, i32, &Finding)> = view
         .ledger
         .findings()
         .filter(|f| {
@@ -71,18 +111,23 @@ pub fn ranked(view: &RunView) -> Vec<Ranked> {
                 && view.ledger.merged_into(&f.id).is_none()
         })
         .map(|f| {
-            (
-                rank::tier(f, view.ledger.annotation(&f.id)),
-                rank::multi_origin_key(f),
-                f,
-            )
+            let a = view.ledger.annotation(&f.id);
+            (rank::tier(f, a), rank::score(f, a), f)
         })
         .collect();
-    // Stable: ledger order is the tiebreak.
-    list.sort_by_key(|(t, m, _)| (*t, *m));
+    // The eligible ones in score order (ties: tier, then more than one origin first), the
+    // rest after them by tier. Stable: ledger order is the last tiebreak.
+    list.sort_by_key(|(t, s, f)| {
+        (
+            !rank::eligible_tier(*t),
+            if rank::eligible_tier(*t) { -*s } else { 0 },
+            *t,
+            rank::multi_origin_key(f),
+        )
+    });
     let mut n = 0;
     list.into_iter()
-        .map(|(tier, _, f)| {
+        .map(|(tier, score, f)| {
             let rank = rank::eligible_tier(tier).then(|| {
                 n += 1;
                 n
@@ -91,6 +136,7 @@ pub fn ranked(view: &RunView) -> Vec<Ranked> {
                 id: f.id.clone(),
                 state: f.state,
                 tier,
+                score,
                 rank,
                 runtime: gate::finding_runtime_with(view, f, &mut only),
             }
@@ -327,8 +373,16 @@ pub struct RuntimeQueue {
     pub pending: Vec<FindingId>,
     /// `(id, rank, tier)` of the pending candidates, parallel to `pending`.
     pub pending_rank: Vec<(usize, u8)>,
-    /// The next batch: the first pending candidates that no unrun harness declares.
+    /// The next batch: the first pending candidates that no unrun harness declares, then
+    /// every other pending candidate that is state of the same owner as one of them (see
+    /// [`MAX_BATCH_WITH_SIBLINGS`]).
     pub batch: Vec<FindingId>,
+    /// The candidates `batch` holds because of their owner, each with the earlier candidate
+    /// it came with.
+    pub siblings: BTreeMap<FindingId, FindingId>,
+    /// The pending candidates no unrun harness declares, in rank order: what a batch is taken
+    /// from.
+    pub declarable: Vec<FindingId>,
     /// A generated harness that declares pending candidates and has not run.
     pub in_flight: Option<String>,
     /// The command that makes the next batch.
@@ -346,6 +400,17 @@ impl RuntimeQueue {
     /// True while the queue refuses to close pending candidates unmeasured.
     pub fn open(&self) -> bool {
         self.closed.is_none()
+    }
+
+    /// The batch of `--next n`: the first `n` (at most [`MAX_BATCH`]) declarable candidates
+    /// and the siblings of the owners they hold.
+    pub fn batch_for(
+        &self,
+        view: &RunView,
+        n: usize,
+    ) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
+        let free: Vec<&FindingId> = self.declarable.iter().collect();
+        with_siblings(view, &free, n)
     }
 
     /// The rank and tier of a pending candidate.
@@ -423,16 +488,16 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 }
             }
             let in_flight = ix.in_flight(&runtime, &pending);
-            let batch: Vec<FindingId> = pending
+            let free: Vec<&FindingId> = pending
                 .iter()
                 .filter(|p| {
                     in_flight
                         .as_ref()
                         .is_none_or(|h| !ix.declared_by.get(*p).is_some_and(|v| v.contains(h)))
                 })
-                .take(MAX_BATCH)
-                .cloned()
                 .collect();
+            let (batch, siblings) = with_siblings(view, &free, MAX_BATCH);
+            let declarable: Vec<FindingId> = free.iter().map(|f| (*f).clone()).collect();
             let batch_command = batch_command(view, &runtime);
             let command = match (&in_flight, batch.is_empty()) {
                 (Some(h), true) => format!("dla harness run {h} --mode both"),
@@ -456,6 +521,8 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 pending,
                 pending_rank,
                 batch,
+                siblings,
+                declarable,
                 in_flight,
                 batch_command,
                 command,
@@ -484,9 +551,17 @@ pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
 
 /// What the report says about the queue: its header line and, per finding, how it was
 /// targeted.
+///
+/// The header line counts every finding the queue took when it was built, whatever its state
+/// now: a leak-side, non-sibling, non-duplicate finding of an eligible tier (1 to 4) in any
+/// state. A finding that grew and was then taken under test, confirmed or refuted still
+/// counts as targeted and, by its best verdict, as grew; the line is a record of the
+/// measurement the queue did, not of the candidates still open.
 #[derive(Debug)]
 pub struct ReportFacts {
     ranks: BTreeMap<FindingId, (Option<usize>, u8)>,
+    /// The findings the header line counts.
+    counted: Vec<FindingId>,
     index: Index,
     queue_on: bool,
 }
@@ -499,8 +574,20 @@ impl ReportFacts {
             .into_iter()
             .map(|r| (r.id, (r.rank, r.tier)))
             .collect();
+        let counted = view
+            .ledger
+            .findings()
+            .filter(|f| {
+                !f.id.is_sibling()
+                    && f.polarity() == Polarity::Leak
+                    && view.ledger.merged_into(&f.id).is_none()
+                    && rank::eligible_tier(rank::tier(f, view.ledger.annotation(&f.id)))
+            })
+            .map(|f| f.id.clone())
+            .collect();
         Some(Self {
             ranks,
+            counted,
             index: Index::of(view),
             queue_on: view.state.queue,
         })
@@ -514,12 +601,7 @@ impl ReportFacts {
                     .to_owned(),
             );
         }
-        let ranked: Vec<&FindingId> = self
-            .ranks
-            .iter()
-            .filter(|(_, (rank, _))| rank.is_some())
-            .map(|(id, _)| id)
-            .collect();
+        let ranked: Vec<&FindingId> = self.counted.iter().collect();
         if ranked.is_empty() {
             return None;
         }
@@ -744,6 +826,60 @@ mod tests {
     }
 
     #[test]
+    fn the_queue_line_counts_a_finding_that_left_the_candidate_state() {
+        let (run, _) = Run::new(3);
+        run.harness(&manifest("H1", &[1, 2, 3], true));
+        run.series("S1", "H1");
+        run.trend(
+            "T1",
+            "S1",
+            &[
+                (1, Verdict::Grew),
+                (2, Verdict::Executed),
+                (3, Verdict::Constant),
+            ],
+        );
+        let line = |run: &Run| ReportFacts::of(&run.reload()).unwrap().line().unwrap();
+        let before = line(&run);
+        assert_eq!(
+            before,
+            "3 of 3 ranked candidates targeted in 1 harness: grew 1, executed 1, not reached 1; 0 not targeted"
+        );
+        // F1 grew and was taken under test (later: confirmed); it still counts, as grew.
+        let mut l = Ledger::load(run.dir.path()).unwrap();
+        let mut ev = evidence("python");
+        ev.kind = EvidenceKind::Workload;
+        ev.authority = Authority::Test;
+        ev.result = json!({"harness": "H1", "mode": "driver", "runtime": "python"});
+        l.add_evidence(ev).unwrap();
+        let mut sib = NewFinding::new(
+            Origin::parse("hypothesis").unwrap(),
+            vec![crate::EvidenceId::new(1)],
+        );
+        sib.sibling_of = Some(FindingId::new(1));
+        sib.hypothesis = Some("N-WARM".into());
+        sib.refute_if = Some("keeps growing".into());
+        l.add_finding(sib).unwrap();
+        l.transition(
+            &FindingId::new(1),
+            FindingState::UnderTest,
+            None,
+            None,
+            vec![crate::EvidenceId::new(2)],
+            "t",
+        )
+        .unwrap();
+        assert!(!in_universe(
+            RunView::load(run.dir.path())
+                .unwrap()
+                .ledger
+                .finding(&FindingId::new(1))
+                .unwrap()
+        ));
+        assert_eq!(line(&run), before);
+    }
+
+    #[test]
     fn a_changed_verdict_settles() {
         let (run, _) = Run::new(2);
         run.harness(&manifest("H1", &[1], true));
@@ -891,5 +1027,139 @@ mod tests {
                 ("F4".into(), 6, None),
             ]
         );
+    }
+
+    /// A run of census candidates `(owner, site, lifetime, writer function)`, each with one
+    /// insert site in the named function, in ledger order.
+    fn owned_run(items: &[(&str, &str, crate::census::Lifetime, &str)]) -> (Run, RunView) {
+        use crate::census::{ContainerClass, HolderFacts, SiteFact, SiteKind};
+        let dir = tempfile::tempdir().unwrap();
+        let st = RunState::init("/p", None, 3600, None, now_utc()).unwrap();
+        st.save(dir.path()).unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        l.add_evidence(evidence("python")).unwrap();
+        for (i, (owner, site, life, function)) in items.iter().enumerate() {
+            let mut nf = NewFinding::new(
+                Origin::parse("census").unwrap(),
+                vec![crate::EvidenceId::new(1)],
+            );
+            nf.site = Some((*site).to_owned());
+            nf.owner = Some((*owner).to_owned());
+            l.add_finding(nf).unwrap();
+            let file = site.rsplit_once(':').unwrap().0;
+            let w = format!("{file}:{}", 50 + i);
+            l.annotate_record(crate::FindingAnnotation {
+                writers: vec![w.clone()],
+                facts: HolderFacts {
+                    container: Some(ContainerClass::Container),
+                    lifetime: Some(*life),
+                    writer_sites: vec![SiteFact {
+                        site: w,
+                        kind: SiteKind::Insert,
+                        depth: 0,
+                        function: Some((*function).to_owned()),
+                        init: false,
+                        startup: false,
+                        param: true,
+                        constant: false,
+                        exported: true,
+                    }],
+                    ..HolderFacts::default()
+                },
+                ..crate::FindingAnnotation::new(FindingId::new(u32::try_from(i + 1).unwrap()))
+            })
+            .unwrap();
+        }
+        let view = RunView::load(dir.path()).unwrap();
+        (Run { dir }, view)
+    }
+
+    #[test]
+    fn the_order_inside_the_eligible_set_is_the_score_not_the_ledger() {
+        use crate::census::Lifetime::Object;
+        // F1 and F2 are the same tier in ledger order; F1's holder is weak, F2's is plain.
+        let (run, _) = owned_run(&[
+            ("pkg.m.A.weak", "pkg/m.py:3", Object, "put"),
+            ("pkg.n.B.plain", "pkg/n.py:3", Object, "put"),
+        ]);
+        let mut l = Ledger::load(run.dir.path()).unwrap();
+        l.annotate_record(crate::FindingAnnotation {
+            facts: crate::census::HolderFacts {
+                bound: Some(crate::census::Bound::WeakKeys),
+                ..Default::default()
+            },
+            ..crate::FindingAnnotation::new(FindingId::new(1))
+        })
+        .unwrap();
+        let r = ranked(&run.reload());
+        let order: Vec<String> = r.iter().map(|x| x.id.to_string()).collect();
+        assert_eq!(order, ["F2", "F1"]);
+        assert!(r[0].score > r[1].score);
+        assert_eq!(r[0].rank, Some(1));
+    }
+
+    #[test]
+    fn a_batch_brings_the_holders_of_one_owner_with_it() {
+        use crate::census::Lifetime::Object;
+        let mut items = Vec::new();
+        let sites: Vec<String> = (0..9).map(|i| format!("pkg/m{i}.py:3")).collect();
+        let owners: Vec<String> = (0..9).map(|i| format!("pkg.m{i}.C{i}.x")).collect();
+        for i in 0..9 {
+            items.push((owners[i].as_str(), sites[i].as_str(), Object, "put"));
+        }
+        // F10: another field of the class of F1 (same file, same owner path).
+        items.push(("pkg.m0.C0.y", "pkg/m0.py:4", Object, "put"));
+        // F11: a field of a class of the same name in another file: not a sibling.
+        items.push(("pkg.z.C0.y", "pkg/z.py:4", Object, "put"));
+        let (_run, view) = owned_run(&items);
+        let q = &queues(&view, None)[0];
+        let ids: Vec<String> = q.batch.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            ids,
+            ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F10"],
+            "{ids:?}"
+        );
+        assert_eq!(q.siblings.len(), 1);
+        assert_eq!(q.siblings[&FindingId::new(10)], FindingId::new(1));
+        // `--next 3` takes the first three by rank and the sibling of F1; F9 is not related.
+        let (b3, s3) = q.batch_for(&view, 3);
+        let ids: Vec<String> = b3.iter().map(ToString::to_string).collect();
+        assert_eq!(ids, ["F1", "F2", "F3", "F10"]);
+        assert_eq!(s3.len(), 1);
+    }
+
+    #[test]
+    fn module_level_holders_are_siblings_only_through_a_shared_writer_function() {
+        use crate::census::Lifetime::Process;
+        let mut items = vec![("pkg.m.FIRST", "pkg/m.py:1", Process, "register")];
+        // Seven unrelated candidates fill the head of the batch...
+        let sites: Vec<String> = (0..7).map(|i| format!("pkg/o{i}.py:1")).collect();
+        let owners: Vec<String> = (0..7).map(|i| format!("pkg.o{i}.V{i}")).collect();
+        for i in 0..7 {
+            items.push((owners[i].as_str(), sites[i].as_str(), Process, "x"));
+        }
+        // ...and then two module-level holders of F1's module, one sharing its writer function.
+        items.push(("pkg.m.SECOND", "pkg/m.py:2", Process, "register"));
+        items.push(("pkg.m.THIRD", "pkg/m.py:3", Process, "elsewhere"));
+        let (_run, view) = owned_run(&items);
+        let q = &queues(&view, None)[0];
+        assert!(q.batch.contains(&FindingId::new(9)), "{:?}", q.batch);
+        assert!(!q.batch.contains(&FindingId::new(10)), "{:?}", q.batch);
+        assert_eq!(q.siblings[&FindingId::new(9)], FindingId::new(1));
+    }
+
+    #[test]
+    fn a_batch_with_siblings_never_passes_sixteen() {
+        use crate::census::Lifetime::Object;
+        let mut items = vec![("pkg.m.C.f0", "pkg/m.py:1", Object, "put")];
+        let owners: Vec<String> = (1..30).map(|i| format!("pkg.m.C.f{i}")).collect();
+        let sites: Vec<String> = (1..30).map(|i| format!("pkg/m.py:{}", i + 1)).collect();
+        for i in 0..29 {
+            items.push((owners[i].as_str(), sites[i].as_str(), Object, "put"));
+        }
+        let (_run, view) = owned_run(&items);
+        let q = &queues(&view, None)[0];
+        assert_eq!(q.batch.len(), MAX_BATCH_WITH_SIBLINGS);
+        assert_eq!(q.siblings.len(), MAX_BATCH_WITH_SIBLINGS - MAX_BATCH);
     }
 }

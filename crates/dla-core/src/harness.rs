@@ -34,6 +34,8 @@ use crate::{
 pub const HARNESS_SCHEMA_VERSION: u32 = 1;
 /// The most findings one harness declares as targets.
 pub const MAX_TARGETS: usize = 8;
+/// The most findings one harness declares when `--next` adds the siblings of its targets.
+pub const MAX_TARGETS_WITH_SIBLINGS: usize = 16;
 /// Directory (inside the run directory) holding harness directories.
 pub const HARNESS_DIR: &str = "harness";
 /// Manifest file name inside a harness directory.
@@ -80,6 +82,16 @@ string_enum! {
         Command = "command",
         /// A generated loop test runs inside one process.
         Driver = "driver",
+    }
+}
+
+string_enum! {
+    /// What a harness was generated for, when that is more than reaching its targets.
+    pub enum HarnessPurpose {
+        /// A hook driver whose units call only the project's public entry points with data a
+        /// caller controls (`dla harness gen --driver --entry`): growth in it shows that a
+        /// caller can make new keys reach the holder.
+        EntryPath = "entry-path",
     }
 }
 
@@ -286,6 +298,15 @@ pub struct HarnessManifest {
     /// [`MAX_TARGETS`]. A target may have no probe of its own.
     #[serde(default)]
     pub targets: Vec<FindingId>,
+    /// What the harness was generated for: `entry-path` for a driver whose units call the
+    /// project's public entry points. Absent for every other harness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<HarnessPurpose>,
+    /// Targets that `--next` added because they hold state of the same owner as an earlier
+    /// target (fields of one struct or class): the added finding, and the target it came
+    /// with. Absent for a target asked for by rank or by `--probe`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sibling_of: std::collections::BTreeMap<FindingId, FindingId>,
     /// What measures the process.
     pub agent: AgentKind,
     /// Library detector flags switched on.
@@ -489,6 +510,46 @@ impl HarnessManifest {
     }
 }
 
+impl HarnessManifest {
+    /// True for an entry-path harness (`dla harness gen --driver --entry`).
+    pub fn is_entry_path(&self) -> bool {
+        self.purpose == Some(HarnessPurpose::EntryPath)
+    }
+}
+
+/// The file in the driver directory of an entry-path harness that says, in one line, what a
+/// caller varies per unit.
+pub const VARIES_FILE: &str = "VARIES.txt";
+/// What the first line of an unfilled [`VARIES_FILE`] starts with.
+pub const VARIES_PLACEHOLDER: &str = "DLA-VARIES-PLACEHOLDER";
+/// The longest `varies` line kept.
+pub const VARIES_MAX: usize = 300;
+
+/// The text `dla harness gen --entry` writes in [`VARIES_FILE`].
+pub fn varies_template() -> String {
+    format!(
+        "{VARIES_PLACEHOLDER}: replace this whole line with one line that says what a caller varies per unit (for example: the request path, a different one per unit)\n"
+    )
+}
+
+/// The one line of `harness/<id>/driver/VARIES.txt` that says what a caller varies per
+/// unit: its first line that is not empty and not a `#` comment, cut to [`VARIES_MAX`]
+/// characters. `None` when the file is missing or empty, or still holds the placeholder.
+pub fn varies_line(run_dir: &Path, id: &str) -> Option<String> {
+    let path = HarnessManifest::dir_in(run_dir, id)
+        .join("driver")
+        .join(VARIES_FILE);
+    let text = fs::read_to_string(path).ok()?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))?;
+    if line.starts_with(VARIES_PLACEHOLDER) {
+        return None;
+    }
+    Some(line.chars().take(VARIES_MAX).collect())
+}
+
 /// A digest of the files under `harness/<id>/driver/`: their relative paths and contents,
 /// sorted by path. `None` when there is no driver directory. Two runs of a driver whose
 /// digests differ ran different code.
@@ -534,6 +595,9 @@ pub struct RunRecord {
     pub first: String,
     /// The digest of the driver directory when the run started.
     pub driver_digest: Option<String>,
+    /// What a caller varies per unit, from the `VARIES.txt` of an entry-path harness when
+    /// the run started.
+    pub varies: Option<String>,
 }
 
 /// The run record of harness `id` that wrote `series`.
@@ -564,10 +628,101 @@ pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord
                     .get("driver_digest")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
+                varies: doc.get("varies").and_then(Value::as_str).map(str::to_owned),
             });
         }
     }
     None
+}
+
+/// The variables a harness run records and a rerun puts back when its own environment lacks
+/// them: the paths its dependencies were found through. Nothing else is ever recorded (no
+/// token, no `PATH`).
+pub const DEPENDENCY_ENV: [&str; 8] = [
+    "PYTHONPATH",
+    "NODE_PATH",
+    "CLASSPATH",
+    "GOFLAGS",
+    "GOWORK",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "VIRTUAL_ENV",
+];
+
+/// The key of the run record that holds the dependency variables the run used.
+pub const RUN_DEPENDENCY_ENV: &str = "dependency_env";
+
+/// The values of [`DEPENDENCY_ENV`] that are set in this process's environment.
+pub fn current_dependency_env() -> BTreeMap<String, String> {
+    DEPENDENCY_ENV
+        .iter()
+        .filter_map(|k| Some(((*k).to_owned(), std::env::var(k).ok()?)))
+        .collect()
+}
+
+/// The dependency variables of the latest successful run of harness `id` (an edited clone of
+/// a harness: of the harness it was cloned from) that are unset in this process's
+/// environment, with the values that run used. A variable set here, even to an empty
+/// string, is not listed: the current environment wins.
+pub fn dependency_env_to_reuse(run_dir: &Path, id: &str) -> Vec<(String, String)> {
+    dependency_env_to_reuse_with(run_dir, id, |k| std::env::var_os(k).is_some())
+}
+
+/// [`dependency_env_to_reuse`] with the answer to "is this variable set here" given.
+pub fn dependency_env_to_reuse_with(
+    run_dir: &Path,
+    id: &str,
+    is_set: impl Fn(&str) -> bool,
+) -> Vec<(String, String)> {
+    let dir = HarnessManifest::dir_in(run_dir, id);
+    let Some(recorded) = latest_dependency_env(&dir).or_else(|| {
+        let from = fs::read_to_string(dir.join(CLONE_MARKER)).ok()?;
+        latest_dependency_env(&HarnessManifest::dir_in(run_dir, from.trim()))
+    }) else {
+        return Vec::new();
+    };
+    DEPENDENCY_ENV
+        .iter()
+        .filter(|k| !is_set(k))
+        .filter_map(|k| Some(((*k).to_owned(), recorded.get(*k)?.clone())))
+        .collect()
+}
+
+/// The `dependency_env` of the newest `run-<first series>.json` in a harness directory (the
+/// one with the newest modification time; the larger series number breaks a tie).
+fn latest_dependency_env(dir: &Path) -> Option<BTreeMap<String, String>> {
+    let mut newest: Option<((std::time::SystemTime, u32), Value)> = None;
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(first) = name
+            .strip_prefix("run-")
+            .and_then(|r| r.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let Ok(text) = fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let at = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let key = (at, numbered('S', first).unwrap_or(0));
+        if newest.as_ref().is_none_or(|(k, _)| key > *k) {
+            newest = Some((key, doc));
+        }
+    }
+    let (_, doc) = newest?;
+    let map = doc.get(RUN_DEPENDENCY_ENV)?.as_object()?;
+    Some(
+        map.iter()
+            .filter(|(k, _)| DEPENDENCY_ENV.contains(&k.as_str()))
+            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+            .collect(),
+    )
 }
 
 /// The harness ID a `workload` evidence `result` names in `harness`, if any.
@@ -721,9 +876,9 @@ pub struct HarnessDump {
     /// Readings taken just before the forced collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_pre_gc: Option<BTreeMap<String, Option<f64>>>,
-    /// Readings taken while the workload ran (Go command mode): the floor of the
-    /// after-collection readings of the last third of the run. Absent when no sample ended
-    /// before the exit record.
+    /// Readings taken while the workload ran (Go command mode): the floor envelope of the
+    /// after-collection readings, read at three quarters of the run time. Absent when no sample
+    /// ended before the exit record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_in_run: Option<BTreeMap<String, Option<f64>>>,
     /// How the in-run readings were taken.
@@ -772,10 +927,10 @@ pub struct DumpInRun {
     /// Samples that ended before the exit path started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<u32>,
-    /// Samples that ended in the last third of the run (the window the reading is taken from).
+    /// Samples that ended in the last third of the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_samples: Option<u32>,
-    /// Milliseconds since the process started at which the reported sample ended.
+    /// Milliseconds since the process started at which the reading stands (three quarters of the run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_ms: Option<f64>,
     /// Milliseconds since the process started when the sampler was stopped.
@@ -784,7 +939,7 @@ pub struct DumpInRun {
     /// Milliseconds spent inside samples (collection, reading, profile).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent_ms: Option<f64>,
-    /// The statistic the reading is: `floor-last-third`.
+    /// The statistic the reading is: `floor-at-three-quarters`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statistic: Option<String>,
 }
@@ -838,6 +993,8 @@ mod tests {
 
     fn manifest() -> HarnessManifest {
         HarnessManifest {
+            sibling_of: Default::default(),
+            purpose: None,
             targets: Vec::new(),
             schema_version: 1,
             id: "H2".into(),
@@ -952,5 +1109,40 @@ mod tests {
         assert_eq!(harness_id_of(&json!({"harness":"H2"})), Some("H2"));
         assert_eq!(harness_id_of(&json!({"harness":"x"})), None);
         assert_eq!(harness_id_of(&json!({"top":[]})), None);
+    }
+    #[test]
+    fn varies_is_the_first_real_line_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = HarnessManifest::dir_in(dir.path(), "H3").join("driver");
+        std::fs::create_dir_all(&d).unwrap();
+        // Missing, the placeholder, empty and comments only: nothing is said yet.
+        assert_eq!(varies_line(dir.path(), "H3"), None);
+        for text in [varies_template(), String::new(), "\n  \n# a note\n".into()] {
+            std::fs::write(d.join(VARIES_FILE), text).unwrap();
+            assert_eq!(varies_line(dir.path(), "H3"), None);
+        }
+        std::fs::write(
+            d.join(VARIES_FILE),
+            "# what a caller varies\n\n  the request path, new per unit  \nsecond line\n",
+        )
+        .unwrap();
+        assert_eq!(
+            varies_line(dir.path(), "H3").as_deref(),
+            Some("the request path, new per unit")
+        );
+        std::fs::write(d.join(VARIES_FILE), "x".repeat(VARIES_MAX + 50)).unwrap();
+        assert_eq!(varies_line(dir.path(), "H3").unwrap().len(), VARIES_MAX);
+    }
+
+    #[test]
+    fn the_purpose_is_optional_and_named_entry_path() {
+        let mut m = manifest();
+        assert!(!m.is_entry_path());
+        assert!(!serde_json::to_string(&m).unwrap().contains("purpose"));
+        m.purpose = Some(HarnessPurpose::EntryPath);
+        let text = serde_json::to_string(&m).unwrap();
+        assert!(text.contains(r#""purpose":"entry-path""#), "{text}");
+        let back: HarnessManifest = serde_json::from_str(&text).unwrap();
+        assert!(back.is_entry_path());
     }
 }

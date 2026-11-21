@@ -506,3 +506,73 @@ fn a_residual_or_capture_cited_only_on_the_resolve_line_does_not_count() {
         assert_eq!(l.supported_reason(&f), R::NotExercised, "{kind:?}");
     }
 }
+
+/// A growth record of `dla trend` that passed nothing and carries these target verdicts.
+fn trend_with_targets(targets: serde_json::Value) -> dla_core::NewEvidence {
+    evidence_with(
+        K::GrowthSeries,
+        A::Test,
+        json!({"trend": "T1", "series": "S1", "n": 8, "passed": [], "failed": 1,
+            "failed_beyond_process": 0, "gate": "fail", "targets": targets}),
+    )
+}
+
+#[test]
+fn a_declared_target_verdict_that_read_the_finding_makes_it_measured() {
+    for (verdict, measured) in [
+        ("constant", true),
+        ("changed", true),
+        ("executed", true),
+        ("not_executed", false),
+        ("not_loaded", false),
+        ("unknown", false),
+    ] {
+        let (mut l, f) = base();
+        push(
+            &mut l,
+            trend_with_targets(json!([{"finding": "F1", "verdict": verdict, "declared": true}])),
+        );
+        if measured {
+            assert_eq!(l.supported_reason(&f), R::Inconclusive, "{verdict}");
+            close(&mut l, &f, R::Inconclusive).unwrap();
+        } else {
+            assert_eq!(l.supported_reason(&f), R::NotExercised, "{verdict}");
+            let r = refusal(close(&mut l, &f, R::Inconclusive));
+            assert_eq!(r.code, codes::MEASUREMENT_REQUIRED, "{verdict}: {r}");
+        }
+    }
+}
+
+#[test]
+fn a_verdict_of_a_candidate_an_automatic_probe_covered_is_not_a_measurement() {
+    let (mut l, f) = base();
+    push(
+        &mut l,
+        trend_with_targets(json!([{"finding": "F1", "verdict": "constant", "declared": false}])),
+    );
+    let r = refusal(close(&mut l, &f, R::Inconclusive));
+    assert_eq!(r.code, codes::MEASUREMENT_REQUIRED, "{r}");
+    // A record written before the flag existed does not say it was declared either.
+    let (mut l, f) = base();
+    push(
+        &mut l,
+        trend_with_targets(json!([{"finding": "F1", "verdict": "constant"}])),
+    );
+    assert_eq!(l.supported_reason(&f), R::NotExercised);
+}
+
+#[test]
+fn a_verdict_of_a_sibling_in_the_family_counts_and_one_of_another_finding_does_not() {
+    let (mut l, f) = base();
+    push(
+        &mut l,
+        trend_with_targets(json!([{"finding": "F9", "verdict": "constant", "declared": true}])),
+    );
+    assert_eq!(l.supported_reason(&f), R::NotExercised);
+    add_sibling(&mut l, &f, "N-WARM");
+    push(
+        &mut l,
+        trend_with_targets(json!([{"finding": "F1.n1", "verdict": "executed", "declared": true}])),
+    );
+    assert_eq!(l.supported_reason(&f), R::Inconclusive);
+}

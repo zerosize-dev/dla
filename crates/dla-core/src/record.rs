@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    census::HolderFacts,
     checklist::ChecklistAnswer,
     evidence::EvidenceRecord,
     finding::{ExplanationTag, Finding, FindingState, Holder, Origin, Region, UnresolvedReason},
@@ -119,6 +120,10 @@ pub struct FindingAnnotation {
     /// The evidence of that other origin; it joins the finding's `supports`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also_supports: Vec<EvidenceId>,
+    /// What the census knows of the holder and of each writer and remover site; the ranking
+    /// reads it. Absent in annotations of older versions and in hand-written ones.
+    #[serde(flatten)]
+    pub facts: HolderFacts,
 }
 
 impl FindingAnnotation {
@@ -137,6 +142,7 @@ impl FindingAnnotation {
             replaced_holder: None,
             also_origin: None,
             also_supports: Vec::new(),
+            facts: HolderFacts::default(),
         }
     }
 }
