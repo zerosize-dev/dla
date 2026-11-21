@@ -220,7 +220,7 @@ mod tests {
             Some("dla harness run H1 --mode fresh"),
         );
         assert!(
-            line.starts_with("COLUMN TOO SHORT: a column has 6 points"),
+            line.starts_with("COLUMN TOO SHORT (a column has 6 of 8 points"),
             "{line}"
         );
         assert!(line.contains("--iterations 10"), "{line}");

@@ -1,9 +1,7 @@
 //! What every `dla` command of a run does around its own work: it registers itself while it
 //! runs when it can take long (so the stop hook sees that the run is still working), settles
 //! an `auto` budget once sweep and census have run, and lifts a stop-hook stamp when the run
-//! goes on (the command wrote a ledger record).
-
-use std::path::Path;
+//! goes on (a command that works on the run lifts it before it starts).
 
 use dla_core::{
     CoverageManifest, RunState, RunView,
@@ -67,28 +65,8 @@ pub fn register(ctx: &Ctx, command: &str) -> Option<Registered> {
     })
 }
 
-/// Total size of the run's ledger files (the main ledger and every worker slice): it grows
-/// exactly when a command writes a record.
-pub fn ledger_mark(run_dir: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(run_dir) else {
-        return 0;
-    };
-    rd.flatten()
-        .filter(|e| {
-            let n = e.file_name().to_string_lossy().into_owned();
-            n == "ledger.jsonl" || (n.starts_with("ledger.") && n.ends_with(".jsonl"))
-        })
-        .filter_map(|e| e.metadata().ok())
-        .map(|m| m.len())
-        .sum()
-}
-
-/// Lifts the stop-hook stamp of the run when the ledger grew since `before`: the run is going
-/// again. Best effort.
-pub fn lift_stamp_if_the_ledger_grew(ctx: &Ctx, before: u64) {
-    if ledger_mark(&ctx.run_dir) <= before {
-        return;
-    }
+/// Lifts the stop-hook stamp of the run, when it has one: the run is going again. Best effort.
+pub fn lift_stop_stamp(ctx: &Ctx) {
     let _ = RunState::update(&ctx.run_dir, |s| Ok(s.lift_stop_stamp()));
 }
 

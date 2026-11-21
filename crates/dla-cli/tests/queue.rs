@@ -938,9 +938,7 @@ fn an_unknown_verdict_does_not_settle_and_is_explained() {
     assert!(r.report().contains(&format!("H1 unknown ({WHAT})")));
 }
 
-#[test]
-fn a_stamped_run_with_time_left_closes_not_exercised_and_the_close_lifts_the_stamp() {
-    let r = Run::new(&["--budget", "3h"]);
+fn stamp(r: &Run) {
     dla_core::RunState::update(&r.run_dir, |s| {
         s.stamp_stop(format!(
             "{} 3 stop attempts with no ledger change: F1",
@@ -949,18 +947,56 @@ fn a_stamped_run_with_time_left_closes_not_exercised_and_the_close_lifts_the_sta
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn a_stamped_run_with_time_left_keeps_its_queue_and_close_rest_lifts_the_stamp() {
+    let r = Run::new(&["--budget", "3h"]);
+    stamp(&r);
+    // The same queue and the same next command as a going run, and one field about the stamp.
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["open"], true, "{st}");
+    assert_eq!(st["queue"]["python"]["pending"], 3, "{st}");
+    assert_eq!(st["next_command"], BATCH, "{st}");
+    assert!(
+        st["stop_stamp"]
+            .as_str()
+            .unwrap()
+            .contains("lifts the stamp"),
+        "{st}"
+    );
+    // close-rest closes nothing a queue holds back, names the batch command, lifts the stamp.
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert_eq!(out["closed"], 0, "{out}");
+    assert_eq!(out["left_open"], 3, "{out}");
+    assert_eq!(out["batch_command"], BATCH, "{out}");
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["status"], "active", "{st}");
+    assert!(st.get("stop_stamp").is_none(), "{st}");
+    assert_eq!(st["queue"]["python"]["pending"], 3, "{st}");
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir.join("state.json")).unwrap()).unwrap();
+    assert!(state["stop_stamps"][0]["lifted_at"].is_string(), "{state}");
+}
+
+#[test]
+fn a_stamped_run_at_the_floor_closes_with_time_budget() {
+    let r = Run::new(&["--budget", "90s"]);
+    stamp(&r);
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["closed"], "floor", "{st}");
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert!(out["closed"].as_u64().unwrap() >= 3, "{out}");
+    assert_eq!(out["reason"]["time_budget"], out["closed"], "{out}");
+}
+
+#[test]
+fn an_aborted_run_keeps_its_queue_over_and_nothing_lifts_it() {
+    let r = Run::new(&["--budget", "3h"]);
+    r.ok(&["run", "abort", "--reason", "x"]);
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["closed"], "over", "{st}");
     let out = r.ok(&["ledger", "close-rest"]);
-    assert!(out["closed"].as_u64().unwrap() >= 3, "{out}");
     assert_eq!(out["reason"]["time_budget"], 0, "{out}");
-    assert_eq!(out["reason"]["not_exercised"], out["closed"], "{out}");
-    // The close wrote to the ledger: the run goes on, the stamp is lifted and kept in the
-    // history.
-    let st = r.ok(&["run", "status"]);
-    assert_eq!(st["status"], "active", "{st}");
-    let state: Value =
-        serde_json::from_str(&fs::read_to_string(r.run_dir.join("state.json")).unwrap()).unwrap();
-    assert_eq!(state["stop_stamps"].as_array().unwrap().len(), 1, "{state}");
-    assert!(state["stop_stamps"][0]["lifted_at"].is_string(), "{state}");
+    assert_eq!(r.ok(&["run", "status"])["status"], "aborted");
 }

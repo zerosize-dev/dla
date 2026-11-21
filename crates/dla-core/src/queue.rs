@@ -1408,13 +1408,24 @@ mod tests {
         let (_run, view) = Run::new(1);
         // Time left and the run going: open.
         assert!(queues(&view, None)[0].open());
-        // A run stamped incomplete or aborted with most of its time left is over, not at the
-        // floor.
-        for status in [RunStatus::Incomplete, RunStatus::Aborted] {
-            let mut over = view.clone();
-            over.state.status = status;
-            assert_eq!(queues(&over, None)[0].closed, Some(Closed::Over));
-        }
+        // An aborted run, or one a merge made incomplete, with most of its time left is over,
+        // not at the floor.
+        let mut aborted = view.clone();
+        aborted.state.status = RunStatus::Aborted;
+        assert_eq!(queues(&aborted, None)[0].closed, Some(Closed::Over));
+        let mut merged = view.clone();
+        merged.state.status = RunStatus::Incomplete;
+        merged.state.incomplete_reason = Some("workers did not finish".into());
+        assert_eq!(queues(&merged, None)[0].closed, Some(Closed::Over));
+        // A stop-hook stamp does not close the queue: the time left decides.
+        let mut stamped = view.clone();
+        stamped.state.stamp_stop(format!(
+            "{} 3 stop attempts with no ledger change: F1",
+            crate::gate::STOP_BLOCKED_REASON
+        ));
+        assert!(queues(&stamped, None)[0].open());
+        stamped.state.budget.deadline = crate::state::now_utc() - chrono::Duration::minutes(1);
+        assert_eq!(queues(&stamped, None)[0].closed, Some(Closed::Floor));
         // No time left on a run that is going: the floor.
         let mut late = view.clone();
         late.state.budget.deadline = crate::state::now_utc() - chrono::Duration::minutes(1);

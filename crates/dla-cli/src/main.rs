@@ -147,19 +147,32 @@ enum Output {
 /// can take long, settles an `auto` budget once sweep and census have run, lifts a stop-hook
 /// stamp when the command wrote to the ledger.
 fn dispatch(cli: Cli) -> Res<Output> {
-    let around = Around::before(&cli);
-    let out = dispatch_command(cli);
-    if let Some(a) = around {
-        a.after();
-    }
-    out
+    // Held until the command ends: a registered command marks itself stopped when dropped.
+    let _around = Around::before(&cli);
+    dispatch_command(cli)
 }
 
-/// The run a command works on, and what was done before it for [`Around::after`].
+/// What was done for the run before its command: the registration that lasts until the
+/// command ends.
 struct Around {
-    ctx: Ctx,
-    ledger_before: u64,
     _registered: Option<scope::Registered>,
+}
+
+/// True for a command that works on the run (and so lifts a stop-hook stamp): everything
+/// except the status and the gate, the report and the bundle, `dla ledger list` and the
+/// commands that handle the run itself.
+fn works_on_the_run(c: &Command) -> bool {
+    !matches!(
+        c,
+        Command::Run(_)
+            | Command::Gate(_)
+            | Command::Report
+            | Command::Bundle(_)
+            | Command::Consent(_)
+            | Command::Schema(_)
+            | Command::Install(_)
+            | Command::Ledger(ledger_cmd::LedgerCmd::List(_))
+    )
 }
 
 impl Around {
@@ -199,23 +212,20 @@ impl Around {
             cli.worker.as_deref(),
         )
         .ok()?;
+        // A stop-hook stamp is lifted before the work, whether or not it writes to the ledger.
+        if works_on_the_run(&cli.command) {
+            scope::lift_stop_stamp(&ctx);
+        }
         // `dla gate check` settles the budget itself and prints that it did.
         if !matches!(&cli.command, Command::Gate(_)) {
             scope::settle_auto_budget(&ctx);
         }
-        let ledger_before = scope::ledger_mark(&ctx.run_dir);
         let registered = (!name.is_empty())
             .then(|| scope::register(&ctx, name))
             .flatten();
         Some(Self {
-            ctx,
-            ledger_before,
             _registered: registered,
         })
-    }
-
-    fn after(self) {
-        scope::lift_stamp_if_the_ledger_grew(&self.ctx, self.ledger_before);
     }
 }
 

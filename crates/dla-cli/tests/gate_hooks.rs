@@ -1523,17 +1523,22 @@ fn a_command_running_past_the_limit_is_taken_for_hung() {
 }
 
 #[test]
-fn a_stamped_run_that_goes_on_has_its_stamp_lifted_and_keeps_it_in_its_history() {
+fn a_stamped_run_has_its_stamp_lifted_by_the_next_working_command_and_keeps_it_in_its_history() {
     let p = project("symptom");
     stop_attempts(&p, 3);
     let st = p.state();
     assert_eq!(st["status"], "incomplete", "{st}");
     assert_eq!(st["stop_stamps"].as_array().unwrap().len(), 1, "{st}");
-    // A read-only command leaves it.
+    // Looking at the run does not lift it: status, gate check, report, ledger list, bundle.
     p.ok(&["run", "status"]);
-    assert_eq!(p.state()["status"], "incomplete");
-    // A command that writes to the ledger lifts it.
-    answer_intake(&p);
+    let _ = p.dla().args(["gate", "check", "--final"]).output().unwrap();
+    let _ = p.dla().arg("report").output().unwrap();
+    let _ = p.dla().args(["ledger", "list"]).output().unwrap();
+    assert_eq!(p.state()["status"], "incomplete", "{}", p.state());
+    // A command that works on the run lifts it before it does its work, whether or not it
+    // then writes to the ledger (this one fails: there is no such series).
+    let o = p.dla().args(["trend", "S9"]).output().unwrap();
+    assert_ne!(o.status.code(), Some(0));
     let st = p.state();
     assert_eq!(st["status"], "active", "{st}");
     assert!(st["incomplete_reason"].is_null(), "{st}");
@@ -1543,9 +1548,17 @@ fn a_stamped_run_that_goes_on_has_its_stamp_lifted_and_keeps_it_in_its_history()
         stamp["reason"].as_str().unwrap().contains("stop attempts"),
         "{st}"
     );
-    // An aborted run stays aborted.
+}
+
+#[test]
+fn an_aborted_run_stays_aborted_whatever_runs_after() {
+    let p = project("symptom");
     p.ok(&["run", "abort", "--reason", "x"]);
     assert_eq!(p.state()["status"], "aborted");
+    let _ = p.dla().args(["trend", "S9"]).output().unwrap();
+    answer_intake(&p);
+    assert_eq!(p.state()["status"], "aborted", "{}", p.state());
+    assert!(p.state()["stop_stamps"].is_null(), "{}", p.state());
 }
 
 #[test]
