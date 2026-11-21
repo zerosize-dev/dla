@@ -512,3 +512,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - SECOND FROZEN BUILD: snapshot 167233aec6d5f0317efa84c90efe2ca3b1fa7fcc (pushed WITHOUT [skip ci]; CI waiter bvy4qn016, logs u51/ci). Binary /root/dla-real/bin/dla = u51/bin/dla; plugin refreshed. Contains everything checked so far: R, P3 passes 5-9c, G (Go batches, focus, second look), N (ES modules, brief S, follow-up), F (go.released, cannot-release columns, expected-rises plateau rule), my small edits.
 - REAL RUNS STARTED 18:55 UTC on the second frozen build: axios-5 (waiter b7od4bt89), tokio-3 (waiter btjron562). Then spring-5 (--warm-m2 /root/dla-real/m2warm, source /root/dla-real/src/spring-data-commons), then grpc-5.
 - If CI on 167233a is green: commit that snapshot tree to main with commit-snapshot-tree.sh (write the message first: wip-notes/commit-message-3.txt), push main and main:dev/wonderful-mccarthy-algc5s.
+
+## State at 19:01 UTC, 2026-11-21
+- REAL RUN tokio-3 FINISHED (226 s): COMPLETE, no leak; second look ran twice, grew 0; the unit was one fixed sequence (notes real-run-plugin-tokio-3.md, evidence u36/tokio-3).
+- BRIEF M STARTED: G resumed (a349aef413818803c), wip-notes/choices-brief.md, scratch u52: choice-from-key helper in all driver templates, recipe in the second-look block, refusal of a second-look unit with fewer than two choices, combination count.
+- Running: axios-5 (waiter b7od4bt89), CI on 167233a (waiter bvy4qn016), G brief M.
+- Commit message for main drafted: wip-notes/commit-message-3.txt (use with commit-snapshot-tree.sh 167233aec6d5f0317efa84c90efe2ca3b1fa7fcc when CI is green).
