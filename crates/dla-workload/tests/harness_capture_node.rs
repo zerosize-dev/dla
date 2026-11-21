@@ -1,5 +1,5 @@
 //! The Node agent's raw captures (`DLA_CAPTURE`): heap snapshots, sampling heap profiles and
-//! resource creation sites, written by `harness/node/dla-preload.js`.
+//! resource creation sites, written by `harness/node/dla-preload.cjs`.
 //!
 //! These tests start `node` with the agent preloaded, the way `dla harness run` does, on copies
 //! of the benchmark fixtures. Each test prints why it is skipped when `node` is missing.
@@ -74,7 +74,7 @@ impl Run {
 
     /// Runs `node <args>` in the project with the agent preloaded and `env` set.
     fn node(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
-        let preload = repo().join("harness/node/dla-preload.js");
+        let preload = repo().join("harness/node/dla-preload.cjs");
         let mut c = Command::new("node");
         c.args(args)
             .current_dir(&self.project)
@@ -295,7 +295,7 @@ fn driver_dumps_are_placed_like_the_rust_selection_and_come_from_one_process() {
     if !have_node() {
         return;
     }
-    let agent = repo().join("harness/node/dla-preload.js");
+    let agent = repo().join("harness/node/dla-preload.cjs");
     for (warmup, rounds, dumps) in [(1u32, 8u32, 4u32), (2, 7, 3), (1, 3, 4), (3, 12, 5)] {
         let run = Run::new("");
         fs::write(run.project.join("driver.js"), DRIVER).unwrap();

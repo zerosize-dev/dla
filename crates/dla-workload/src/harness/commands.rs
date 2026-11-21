@@ -528,7 +528,7 @@ fn plan_python(w: &Workload, iter_arg: Option<&str>, layout: &Layout) -> Plan {
 fn node_options(layout: &Layout) -> String {
     format!(
         "--require {}",
-        quote_opt(&abs(&layout.agent.join("dla-preload.js")))
+        quote_opt(&abs(&layout.agent.join("dla-preload.cjs")))
     )
 }
 
@@ -1105,7 +1105,7 @@ pub fn plan_driver(
         }
         Runtime::Node => {
             let mut run = CommandSpec {
-                argv: vec!["node".into(), driver("dla-harness.js")],
+                argv: vec!["node".into(), driver("dla-harness.cjs")],
                 cwd: cwd.to_owned(),
                 env: Vec::new(),
             };
@@ -1113,7 +1113,7 @@ pub fn plan_driver(
             set_env(
                 &mut run,
                 "DLA_AGENT",
-                abs(&layout.agent.join("dla-preload.js")),
+                abs(&layout.agent.join("dla-preload.cjs")),
             );
             set_env(&mut run, "NODE_V8_COVERAGE", "{cov}".to_owned());
             Plan {
@@ -1500,7 +1500,7 @@ mod tests {
         assert_eq!(p.run.argv, ["node", "load.js", "--iterations", "{n}"]);
         assert_eq!(
             env(&p.run, "NODE_OPTIONS"),
-            Some("--require /r/harness/H1/agent/dla-preload.js")
+            Some("--require /r/harness/H1/agent/dla-preload.cjs")
         );
         assert_eq!(env(&p.run, "NODE_V8_COVERAGE"), Some("{cov}"));
         let shell = plan(

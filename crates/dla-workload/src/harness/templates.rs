@@ -29,9 +29,9 @@ pub const PY_DRIVER: &str = include_str!("../../../../harness/python/dla_harness
 /// pytest-memray variant of the Python driver.
 pub const PY_PYTEST: &str = include_str!("../../../../harness/python/test_dla_harness.py");
 /// Node preload agent.
-pub const NODE_AGENT: &str = include_str!("../../../../harness/node/dla-preload.js");
+pub const NODE_AGENT: &str = include_str!("../../../../harness/node/dla-preload.cjs");
 /// Node driver template.
-pub const NODE_DRIVER: &str = include_str!("../../../../harness/node/dla-harness.js");
+pub const NODE_DRIVER: &str = include_str!("../../../../harness/node/dla-harness.cjs");
 /// Go command-mode wrapper test.
 pub const GO_WRAPPER: &str = include_str!("../../../../harness/go/zz_dla_harness_test.go.tmpl");
 /// Go driver test.

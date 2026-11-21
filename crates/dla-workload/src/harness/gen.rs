@@ -905,7 +905,7 @@ fn write_agent(rt: Runtime, driver: bool, agent: &Path) -> Result<(), Refusal> {
             write(&agent.join("sitecustomize.py"), templates::PY_AGENT)?;
             write(&agent.join("dla_memray_leaks.py"), templates::PY_MEMRAY)
         }
-        Runtime::Node => write(&agent.join("dla-preload.js"), templates::NODE_AGENT),
+        Runtime::Node => write(&agent.join("dla-preload.cjs"), templates::NODE_AGENT),
         Runtime::Go => Ok(()),
         Runtime::Rust | Runtime::Native => {
             if driver || cfg!(windows) {
@@ -1114,6 +1114,41 @@ fn fill_with(template: &str, base: &[(String, String)]) -> Result<String, Refusa
     })
 }
 
+/// True when the nearest `package.json` at or above `work/cwd` (not above `work`) says
+/// `"type": "module"`: every `.js` file under it is then an ES module.
+fn node_module_package(work: &Path, cwd: &str) -> bool {
+    let mut dir = work.join(if cwd == "." { "" } else { cwd });
+    loop {
+        if let Ok(text) = fs::read_to_string(dir.join("package.json")) {
+            return serde_json::from_str::<Value>(&text)
+                .ok()
+                .is_some_and(|v| v.get("type").and_then(Value::as_str) == Some("module"));
+        }
+        if dir == work || !dir.pop() || !dir.starts_with(work) {
+            return false;
+        }
+    }
+}
+
+/// The block line that tells the model to import (not require) ES modules in a Node driver: the
+/// project is a `"type": "module"` package, or the workload's file is a `.mjs`.
+fn node_module_note(work: &Path, cwd: &str, w: Option<&Workload>) -> Option<String> {
+    let mjs = w.is_some_and(|w| w.file.ends_with(".mjs"));
+    if node_module_package(work, cwd) {
+        Some(
+            "This project's package.json says \"type\": \"module\": its .js files are ES modules. Load them in the hooks with `await projectImport('<file>')` (a dynamic import(): the namespace object); `projectRequire` is for CommonJS files (.cjs, or a package without that type) and throws on an ES module."
+                .to_owned(),
+        )
+    } else if mjs {
+        Some(
+            "The workload's file is an .mjs ES module: load it in the hooks with `await projectImport('<file>')`; `projectRequire` is for CommonJS files and throws on an ES module."
+                .to_owned(),
+        )
+    } else {
+        None
+    }
+}
+
 /// Writes the driver template of the runtime and returns what the caller needs.
 fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
     let rt = d.opts.lang;
@@ -1236,9 +1271,12 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
         }
         Runtime::Node => {
             let text = fill_with(templates::NODE_DRIVER, &vars)?;
-            write(&d.driver.join("dla-harness.js"), &text)?;
+            write(&d.driver.join("dla-harness.cjs"), &text)?;
             out.hooks = templates::hooks(&text);
-            out.edit = driver_rel("dla-harness.js");
+            out.edit = driver_rel("dla-harness.cjs");
+            if let Some(note) = node_module_note(d.work, d.cwd, d.workload) {
+                out.block_notes.push(note);
+            }
         }
         Runtime::Go => {
             let dir = go_package_dir_for(d.ctx, d.workload, d.opts.package.as_deref());

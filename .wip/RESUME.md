@@ -362,3 +362,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Real-run evidence kept in scratch u36/<run>/ (report, ledger, transcript, a driver); the run directories under /root/dla-real were deleted to free disk (4.9 GB free at 10:15). /root/dla-real/plugin = snapshot 3b0cc2d files; /root/dla-real/bin/dla = scratch u36/bin/dla.
 - Still pending: CI rerun of the failed job on 3b0cc2d (waiter bjtazwe6y, output scratch u36/ci2); then commit the snapshot tree with wip-notes/commit-message-2.txt.
 - Not yet run on the combined build: spring-data-commons (JVM), Jetty, Pillow.
+
+## State 2026-11-21 10:26 UTC (container clock)
+- COMMITTED: main = c5abcd4 "Order candidates by a score, ask who feeds the keys, Go driver coverage" (tree of snapshot 3b0cc2d; 77 files, +11136/-223), pushed to main and dev/wonderful-mccarthy-algc5s. CI on the snapshot: run 44886491565, all 15 jobs green after one rerun of "clippy and test (ubuntu-latest)" (first attempt: Maven could not resolve its dependency plugin from Central in `maven_project_series_grows_with_the_repeated_tests`; rerun passed, test untouched). CI on main started by the push: waiter in the background (output scratch u36/ci-main).
+- Working tree vs main now: P3 pass 5 (trigger unmeasured, close-rest speed, gap --residual --all; checked by me) and the in-progress edits of builders G (Go batches), N (Node ES modules), R (Rust coverage, unknown rule, features, life-of-objects rule).
+- REAL RUN spring-4 started 10:18 (JVM, combined build, warm Maven home); waiter bzlzi5w5q.
+- Tasks: #53 ranking done (committed); #56 G, #58 N, #59 R in progress; #49 open until the other projects' leaks are found.

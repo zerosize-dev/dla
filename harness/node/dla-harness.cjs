@@ -10,11 +10,16 @@
 //
 // Run from the scratch project root with the agent preloaded:
 //
-//     NODE_OPTIONS="--require <harness dir>/dla-preload.js" node <harness dir>/dla-harness.js
+//     NODE_OPTIONS="--require <harness dir>/dla-preload.cjs" node <harness dir>/dla-harness.cjs
+//
+// This file is CommonJS whatever the project's package type is (the .cjs extension). Hooks run
+// inside async functions: load a CommonJS file with projectRequire(file), and an ES module (a .mjs
+// file, or any file in a package whose package.json says "type": "module") with
+// `await projectImport(file)`.
 
 const path = require('path');
 
-const dla = require(process.env.DLA_AGENT || path.join(__dirname, 'dla-preload.js'));
+const dla = require(process.env.DLA_AGENT || path.join(__dirname, 'dla-preload.cjs'));
 
 const STEP = Number.parseInt(process.env.DLA_STEP || '@@DLA_STEP@@', 10);
 const WARMUP = Number.parseInt(process.env.DLA_WARMUP || '@@DLA_WARMUP@@', 10);
@@ -26,11 +31,13 @@ const REPEATED = process.env.DLA_KEY_MODE === 'repeated';
 // modules named in probes.json are loaded through the agent.
 const ROOT = path.resolve(process.env.DLA_PROJECT || process.cwd());
 const projectRequire = (file) => require(path.resolve(ROOT, file));
+// The same for ES modules: dynamic import() of the file URL (returns a promise of the namespace).
+const projectImport = (file) => import(require('url').pathToFileURL(path.resolve(ROOT, file)).href);
 
 const state = {};
 
 async function setup() {
-  // DLA-HOOK setup: require the project modules (projectRequire) and construct the services/caches/pools the workload needs; keep them in `state` (or module variables) for unit()
+  // DLA-HOOK setup: load the project modules (projectRequire for CommonJS, await projectImport for ES modules) and construct the services/caches/pools the workload needs; keep them in `state` (or module variables) for unit()
   throw new Error('DLA-HOOK setup has not been filled in');
 }
 

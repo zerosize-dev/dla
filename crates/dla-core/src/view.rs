@@ -318,9 +318,18 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
         kind: BlockingKind::Queue,
         id: q.runtime.clone(),
         description: format!(
-            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}",
+            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}{}",
             q.pending.len(),
-            q.runtime
+            q.runtime,
+            if q.no_coverage.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " {} candidate(s) had a driver run with no coverage data: {}.",
+                    q.no_coverage.len(),
+                    crate::queue::NO_COVERAGE
+                )
+            }
         ),
         fix: if let (Some(h), true) = (&q.in_flight, q.batch.is_empty()) {
             format!(

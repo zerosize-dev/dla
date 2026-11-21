@@ -216,13 +216,13 @@ fn node_command_mode_resolves_the_npm_script() {
     assert_eq!(m.run.argv, ["node", "load.js", "--iterations", "{n}"]);
     let preload = env(&m.run, "NODE_OPTIONS").unwrap();
     assert!(
-        preload.starts_with("--require ") && preload.ends_with("dla-preload.js"),
+        preload.starts_with("--require ") && preload.ends_with("dla-preload.cjs"),
         "{preload}"
     );
     assert_eq!(env(&m.run, "NODE_V8_COVERAGE"), Some("{cov}"));
     assert!(
         ctx.run_dir
-            .join("harness/H1/agent/dla-preload.js")
+            .join("harness/H1/agent/dla-preload.cjs")
             .is_file()
     );
     let doc = probes_json(&ctx, "H1");

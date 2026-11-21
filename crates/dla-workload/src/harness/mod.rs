@@ -8,7 +8,7 @@
 //! | `harness.json` | gen | the [`dla_core::harness::HarnessManifest`] |
 //! | `probes.json` | gen | `{"probes": [ProbeSpec...]}` as serialised by dla-core |
 //! | `work/` | gen | the scratch copy of the project; build outputs land here |
-//! | `agent/` | gen | per-runtime agent files: `dla-agent.jar`, `sitecustomize.py`, `dla-preload.js`, `libdlashim.so`, Go test files to drop into `work/` |
+//! | `agent/` | gen | per-runtime agent files: `dla-agent.jar`, `sitecustomize.py`, `dla-preload.cjs`, `libdlashim.so`, Go test files to drop into `work/` |
 //! | `driver/` | gen | driver-mode template instance the model edits |
 //! | `out/<label>/` | run | dump records (`dump.jsonl`) of one measured process, label `p<k>-<mode>` |
 //! | `out/<label>/capture/<pid>/` | run | `--capture` files of the JVM agent: heap dumps, class histograms, flight recording, non-heap reports |

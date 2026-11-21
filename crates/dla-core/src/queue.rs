@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn executed_and_unknown_settle_only_a_declared_driver_target() {
+    fn executed_settles_only_a_declared_driver_target_and_unknown_does_not() {
         let (run, _) = Run::new(3);
         run.harness(&manifest("H1", &[1, 2], true));
         run.series("S1", "H1");
@@ -1030,8 +1030,56 @@ mod tests {
                 (3, Verdict::Executed),
             ],
         );
-        // F3 was not declared by the harness: its verdict does not settle it.
-        assert_eq!(pending_of(&run.reload()), ["F3"]);
+        // F3 was not declared by the harness: its verdict does not settle it. F2 read
+        // `unknown` (no coverage data): nothing says its code ran.
+        assert_eq!(pending_of(&run.reload()), ["F2", "F3"]);
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(q.no_coverage, [FindingId::new(2)]);
+        assert!(steps(&q, "R").contains("F2 read `unknown`"), "{}", steps(&q, "R"));
+        assert!(steps(&q, "R").contains("run a second, different driver, or one with a size reading"));
+    }
+
+    #[test]
+    fn an_unknown_run_counts_as_one_of_two_drivers() {
+        let (run, _) = Run::new(1);
+        run.harness(&manifest("H1", &[1], true));
+        let driver = |text: &str| {
+            let d = run.dir.path().join("harness").join("H1").join("driver");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("dla_harness.py"), text).unwrap();
+        };
+        let record = |series: &str| {
+            let digest = crate::harness::driver_digest(run.dir.path(), "H1").unwrap();
+            let text = json!({"series": [series], "driver_digest": digest});
+            std::fs::write(
+                run.dir.path().join("harness").join("H1").join(format!("run-{series}.json")),
+                text.to_string(),
+            )
+            .unwrap();
+        };
+        driver("a");
+        run.series("S1", "H1");
+        record("S1");
+        run.trend("T1", "S1", &[(1, Verdict::Unknown)]);
+        assert_eq!(pending_of(&run.reload()), ["F1"]);
+        driver("b");
+        run.series("S2", "H1");
+        record("S2");
+        run.trend("T2", "S2", &[(1, Verdict::Unknown)]);
+        assert!(pending_of(&run.reload()).is_empty());
+    }
+
+    #[test]
+    fn the_targeted_line_says_what_unknown_means() {
+        let (run, _) = Run::new(1);
+        run.harness(&manifest("H1", &[1], true));
+        run.series("S1", "H1");
+        run.trend("T1", "S1", &[(1, Verdict::Unknown)]);
+        let facts = ReportFacts::of(&run.reload()).unwrap();
+        let t = facts.targeted(&FindingId::new(1)).unwrap();
+        assert!(t.contains("H1 unknown (the run has no coverage data"), "{t}");
+        let line = facts.line().unwrap();
+        assert!(line.contains("no coverage data 1") && !line.contains("executed"), "{line}");
     }
 
     #[test]

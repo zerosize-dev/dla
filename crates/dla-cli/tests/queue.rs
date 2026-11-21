@@ -874,3 +874,54 @@ fn a_flat_series_still_records_the_verdicts_of_its_declared_targets() {
         .count();
     assert_eq!(out["reason"]["inconclusive"], measured, "{out} {rec}");
 }
+
+/// A target whose run had no coverage data (`unknown`) is not settled by it, and every text
+/// that shows its standing says what `unknown` means.
+#[test]
+fn an_unknown_verdict_does_not_settle_and_is_explained() {
+    let r = Run::new(&["--budget", "3h"]);
+    let registry = r.id_at("shop/reg.py:2");
+    r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    r.fill("H1", "");
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    r.ok(&["trend", "S1"]);
+    // The registry's probe stayed flat; the stored report is read as if the run had no
+    // coverage data for it.
+    let path = r.run_dir.join("trend/T1.json");
+    let mut stored: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for t in stored["targets"].as_array_mut().unwrap() {
+        if t["finding"] == registry.as_str() {
+            t["verdict"] = Value::from("unknown");
+        }
+    }
+    fs::write(&path, stored.to_string()).unwrap();
+    const WHAT: &str = "the run has no coverage data, so whether its code ran is not known: run a second, different driver, or one with a size reading";
+
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["pending"], 2, "{st}");
+    let item = st["blocking"][0]["description"].as_str().unwrap();
+    assert!(item.contains("had a driver run with no coverage data"), "{item}");
+    let o = r.close(&registry, "not_exercised");
+    assert_eq!(o.json["error"]["code"], "target-pending", "{}", o.text);
+    assert!(o.json["error"]["fix"].as_str().unwrap().contains(WHAT), "{}", o.text);
+    let (_, lines) = r.list();
+    let line = lines.iter().find(|l| l["id"] == registry.as_str()).unwrap();
+    assert_eq!(line["verdict_note"], WHAT, "{line}");
+    assert!(line.get("settled_by").is_none(), "{line}");
+
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "intake.workload",
+        "--status",
+        "unresolved",
+        "--reason",
+        "build_fails",
+        "--remedy",
+        "no harness here",
+    ]);
+    r.ok(&["ledger", "close-rest"]);
+    let record = fs::read_to_string(r.run_dir.join("ledger.jsonl")).unwrap();
+    assert!(record.contains(WHAT), "{}", record.len());
+    assert!(r.report().contains(&format!("H1 unknown ({WHAT})")));
+}

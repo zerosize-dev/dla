@@ -131,6 +131,9 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
         if dla_core::trigger::is_subject(&view, f) {
             e["trigger"] = json!(triggers.trigger(id).name());
         }
+        if ix.best_verdict(id) == Some(Verdict::Unknown) {
+            e["verdict_note"] = json!(queue::NO_COVERAGE);
+        }
         if let Some(Standing::Settled(why)) = standing {
             e["settled_by"] = json!(match why {
                 Why::Moved => "growth",
@@ -222,9 +225,7 @@ fn default_remedy(
         }
         Some(Verdict::NotExecuted) => "its code did not run".to_owned(),
         Some(Verdict::Executed) => "its code ran and showed no growth".to_owned(),
-        Some(Verdict::Unknown) => {
-            "whether its code ran is not known: no coverage data for this run".to_owned()
-        }
+        Some(Verdict::Unknown) => queue::NO_COVERAGE.to_owned(),
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
         Some(Verdict::Grew) => "its holder grew".to_owned(),
         None => "no run of it was read with dla trend".to_owned(),

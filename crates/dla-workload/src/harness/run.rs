@@ -1893,6 +1893,12 @@ fn run_driver_mode(
     if manifest.runtime == dla_core::runtime::Runtime::Go && !res.timed_out {
         go_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
     }
+    if manifest.runtime == dla_core::runtime::Runtime::Rust
+        && manifest.mode == HarnessMode::Driver
+        && !res.timed_out
+    {
+        rust_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
+    }
     let file: DumpFile = dumps::read_dumps(&dump);
     if file.bad_lines > 0 {
         run.limitations.push(format!(
@@ -2064,6 +2070,323 @@ fn go_cover_point(
                 .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
         ));
     }
+    Ok(())
+}
+
+/// `rustc -vV` in `cwd`: `(host triple, LLVM major version)`.
+fn rustc_host_llvm(cwd: &Path, env: &[(String, String)]) -> Option<(String, Option<u32>)> {
+    let mut cmd = Command::new("rustc");
+    cmd.arg("-vV")
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let host = text.lines().find_map(|l| l.strip_prefix("host: "))?.to_owned();
+    let llvm = text
+        .lines()
+        .find_map(|l| l.strip_prefix("LLVM version: "))
+        .and_then(|v| v.split('.').next())
+        .and_then(|v| v.trim().parse().ok());
+    Some((host, llvm))
+}
+
+/// The major version in the first line of `<tool> --version` that names `LLVM version`.
+fn llvm_tool_major(tool: &Path) -> Option<u32> {
+    let out = Command::new(tool)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.split("LLVM version ").nth(1))
+        .and_then(|v| v.split('.').next())
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// `llvm-profdata` and `llvm-cov` of the toolchain that builds the harness
+/// (`<sysroot>/lib/rustlib/<host>/bin`, the `llvm-tools` component), else the ones on PATH
+/// when their LLVM major version is the one rustc was built with. `Err` is the limitation text.
+fn rust_llvm_tools(cwd: &Path, env: &[(String, String)]) -> Result<(PathBuf, PathBuf), String> {
+    let exe = if cfg!(windows) { ".exe" } else { "" };
+    let (host, llvm) = rustc_host_llvm(cwd, env)
+        .ok_or_else(|| "rustc did not report its host: coverage tools were not looked for".to_owned())?;
+    let mut sysroot = Command::new("rustc");
+    sysroot
+        .args(["--print", "sysroot"])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    for (k, v) in env {
+        sysroot.env(k, v);
+    }
+    if let Some(root) = sysroot
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    {
+        let bin = Path::new(&root).join("lib/rustlib").join(&host).join("bin");
+        let (prof, cov) = (
+            bin.join(format!("llvm-profdata{exe}")),
+            bin.join(format!("llvm-cov{exe}")),
+        );
+        if prof.is_file() && cov.is_file() {
+            return Ok((prof, cov));
+        }
+    }
+    let on_path = |name: &str| -> Option<PathBuf> {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths)
+            .map(|d| d.join(format!("{name}{exe}")))
+            .find(|p| p.is_file())
+    };
+    let (Some(prof), Some(cov)) = (on_path("llvm-profdata"), on_path("llvm-cov")) else {
+        return Err("no llvm-profdata and llvm-cov for the toolchain (rustup component add llvm-tools): the targets read unknown".to_owned());
+    };
+    match (llvm, llvm_tool_major(&cov), llvm_tool_major(&prof)) {
+        (Some(want), Some(c), Some(p)) if c == want && p == want => Ok((prof, cov)),
+        (want, c, _) => Err(format!(
+            "llvm-cov on PATH is LLVM {}, the toolchain's rustc uses LLVM {}: a profile of one cannot be read by the other (rustup component add llvm-tools): the targets read unknown",
+            c.map_or_else(|| "?".to_owned(), |v| v.to_string()),
+            want.map_or_else(|| "?".to_owned(), |v| v.to_string())
+        )),
+    }
+}
+
+/// A Rust driver run measures without coverage instrumentation, so the points are the
+/// uninstrumented program's. What the driver's hooks reach is read from one more, short
+/// process: the driver built again with `-C instrument-coverage` into its own target
+/// directory under the harness directory (`cov-build/`), run for one round of `step` units
+/// (no warm-up, no captures, no sampler), its `.profraw` merged with `llvm-profdata` and the
+/// functions that ran exported with `llvm-cov` into `cov/<label>.rust.json`. `dla trend` and
+/// the entry-point coverage read that file. Its failure, or tools that are missing or of
+/// another LLVM version, is a limitation (the targets read `unknown`), never a refusal.
+fn rust_cover_point(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    mode: KeyMode,
+    timeout: Duration,
+    run: &mut ModeRun,
+) -> Result<(), Refusal> {
+    let label = format!("p1-{}-cover", mode.as_str());
+    let Some(build) = &manifest.build else {
+        return Ok(());
+    };
+    let cwd = cwd_of(paths, build);
+    let tokens = [
+        ("cov", paths.cov.to_string_lossy().into_owned()),
+        ("out", paths.out.to_string_lossy().into_owned()),
+    ];
+    let mut env = merged_env(&build.env, &tokens);
+    let tools = match rust_llvm_tools(&cwd, &env) {
+        Ok(t) => t,
+        Err(why) => {
+            run.limitations
+                .push(format!("the coverage run {label} was not made: {why}"));
+            return Ok(());
+        }
+    };
+    // The coverage build: the same command, its own target directory, instrumented.
+    let cov_target = paths.hdir.join("cov-build");
+    let old_target = env
+        .iter()
+        .find(|(k, _)| k == "CARGO_TARGET_DIR")
+        .map(|(_, v)| v.clone());
+    let flags = {
+        let old = env
+            .iter()
+            .find(|(k, _)| k == "RUSTFLAGS")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("RUSTFLAGS").ok())
+            .unwrap_or_default();
+        format!("{old} -C instrument-coverage").trim().to_owned()
+    };
+    env.retain(|(k, _)| k != "CARGO_TARGET_DIR" && k != "RUSTFLAGS");
+    env.push((
+        "CARGO_TARGET_DIR".to_owned(),
+        cov_target.to_string_lossy().into_owned(),
+    ));
+    env.push(("RUSTFLAGS".to_owned(), flags));
+    let build_log = paths.logs.join(format!("{label}-build.log"));
+    run.logs.push(paths.rel(ctx, &build_log));
+    let command = subst(&build.argv.join(" "), &tokens);
+    let res = exec(
+        ctx,
+        &ExecSpec {
+            argv: build.argv.iter().map(|a| subst(a, &tokens)).collect(),
+            cwd,
+            env,
+            log: build_log.clone(),
+            stderr_log: None,
+            timeout: Duration::from_secs(BUILD_TIMEOUT_SECS),
+            sample: false,
+            command: &command,
+            vgdb: None,
+        },
+    )?;
+    let build_rel = paths.rel(ctx, &build_log);
+    if res.spawn_error.is_some() || res.timed_out || res.code != Some(0) {
+        run.limitations.push(format!(
+            "the instrumented build for {label} failed (log {build_rel}): the targets read unknown"
+        ));
+        return Ok(());
+    }
+    let Some(program) = manifest.run.argv.first() else {
+        return Ok(());
+    };
+    let exe = match old_target.as_deref().and_then(|t| program.strip_prefix(t)) {
+        Some(rest) => format!("{}{rest}", cov_target.to_string_lossy()),
+        None => {
+            run.limitations.push(format!(
+                "the coverage run {label} was not made: the driver binary {program} is not in the build's target directory"
+            ));
+            return Ok(());
+        }
+    };
+    let pe = PointEnv {
+        manifest,
+        paths,
+        label: label.clone(),
+        mode,
+        n: manifest.step,
+        purge: None,
+        rounds: 1,
+        capture: None,
+        dumps: 0,
+    };
+    let dump = pe.dump_path();
+    if let Some(d) = dump.parent() {
+        fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
+    }
+    fs::create_dir_all(&paths.cov).map_err(|e| io_refusal(&paths.cov, e))?;
+    let raw = |name: &str| paths.cov.join(format!("{label}{name}"));
+    if let Ok(rd) = fs::read_dir(&paths.cov) {
+        for e in rd.filter_map(Result::ok) {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with(&label) && (n.ends_with(".profraw") || n.ends_with(".profdata")) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+    let mut spec = pe.exec_spec(
+        timeout,
+        "",
+        &[
+            ("DLA_WARMUP", "0".to_owned()),
+            (
+                "LLVM_PROFILE_FILE",
+                paths
+                    .cov
+                    .join(format!("{label}-%p.profraw"))
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ],
+    );
+    spec.argv[0] = exe.clone();
+    spec.sample = false;
+    let command = spec.argv.join(" ");
+    spec.command = &command;
+    let res = exec(ctx, &spec)?;
+    let log_rel = paths.rel(ctx, &spec.log);
+    run.logs.push(log_rel.clone());
+    if let Some(e) = &res.spawn_error {
+        run.limitations
+            .push(format!("the coverage run {label} did not start: {e}"));
+        return Ok(());
+    }
+    if res.timed_out {
+        run.limitations.push(format!(
+            "the coverage run {label} did not finish in {} s and was killed (log {log_rel}): which entry points ran is not known",
+            timeout.as_secs()
+        ));
+    } else if res.code != Some(0) {
+        run.limitations.push(format!(
+            "the coverage run {label} exited with {} (log {log_rel}): which entry points ran may be incomplete",
+            res.code
+                .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
+        ));
+    }
+    let profraws: Vec<PathBuf> = fs::read_dir(&paths.cov)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with(&label) && n.ends_with(".profraw")
+            })
+        })
+        .collect();
+    if profraws.is_empty() {
+        run.limitations.push(format!(
+            "the coverage run {label} wrote no profile (log {log_rel}): the targets read unknown"
+        ));
+        return Ok(());
+    }
+    let profdata = raw(".profdata");
+    let merged = Command::new(&tools.0)
+        .args(["merge", "-sparse"])
+        .args(&profraws)
+        .arg("-o")
+        .arg(&profdata)
+        .stdin(Stdio::null())
+        .output();
+    let tidy = |files: &[PathBuf]| {
+        for f in files {
+            let _ = fs::remove_file(f);
+        }
+    };
+    match merged {
+        Ok(o) if o.status.success() => {}
+        other => {
+            let why = match other {
+                Ok(o) => String::from_utf8_lossy(&o.stderr)
+                    .lines()
+                    .find(|l| l.contains("error") || l.contains("version"))
+                    .unwrap_or("it failed")
+                    .trim()
+                    .to_owned(),
+                Err(e) => e.to_string(),
+            };
+            tidy(&profraws);
+            run.limitations.push(format!(
+                "llvm-profdata could not merge the profile of {label}: {why}: the targets read unknown"
+            ));
+            return Ok(());
+        }
+    }
+    tidy(&profraws);
+    let exported = Command::new(&tools.1)
+        .arg("export")
+        .arg(&exe)
+        .arg(format!("-instr-profile={}", profdata.display()))
+        .arg("--ignore-filename-regex=/\\.cargo/|/\\.rustup/|/rustc/")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let _ = fs::remove_file(&profdata);
+    let doc = exported
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
+    let Some(doc) = doc else {
+        run.limitations.push(format!(
+            "llvm-cov could not export the profile of {label}: the targets read unknown"
+        ));
+        return Ok(());
+    };
+    let functions = cover::rust_export_functions(&doc, &paths.work);
+    let file = raw(cover::RUST_COVER_SUFFIX);
+    fs::write(&file, json!({"functions": functions}).to_string())
+        .map_err(|e| io_refusal(&file, e))?;
     Ok(())
 }
 
