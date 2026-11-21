@@ -570,3 +570,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - CI on 89bc8a8: run 44950113560 in progress.
 - DISK was at 322 MB at 22:14 (grpc-5 3.3 GB, target/debug/build 9.6 GB): freed to 4.9 GB (prune, deleted grpc-5 run dir, u52/u46/u50 copies, axios-4 run dir).
 - NEXT: read spring-5; pass 11 for P3 (Trigger::Direct only for start-up registrations by census facts; untied stack columns of one capture evidence = one action and one finding accounts for them); fourth frozen build with M2 + pass 11; tokio-5.
+
+## State at 22:20 UTC, 2026-11-21
+- CI ON THIRD FROZEN SNAPSHOT 89bc8a8 (run 44950113560): ALL 15 JOBS GREEN, dynamic acceptance included.
+- COMMITTED TO MAIN: d297716 "Make a measured growth binding, give flat runs a second look, fit series to their time" (tree of snapshot 89bc8a8; 110 files, +14376/-476; no trailers; author and committer Mykyta Hriaznov). Pushed to origin main and origin dev/wonderful-mccarthy-algc5s. CI on main will run for d297716: check it (gh run list --branch main).
+- In the working tree after the commit (not in main): G's M2 (second-look skeleton, checked) and P3's pass 11 (in progress).
+- P3 PASS 11 SENT: 11.1 direct-call trigger reading only for start-up registrations by census facts; 11.2 untied columns of one capture evidence are one gate action and one finding accounts for them.
+- Running: spring-5 (waiter bnsh78dwh), P3 pass 11.
