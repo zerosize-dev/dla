@@ -871,10 +871,19 @@ fn status_in_worker_mode_lists_only_the_workers_items_and_core_mode_reports_slic
         .iter()
         .map(|b| b["id"].as_str().unwrap())
         .collect();
-    // The worker's measurement queue (its runtime's) leads, then its own finding.
-    assert_eq!(ids, ["jvm", "jvm/F1"], "{s}");
+    // The worker's measurement queue (its runtime's) leads; its own finding waits on that
+    // batch, so it is counted in the queue's line, not as an action of its own.
+    assert_eq!(ids, ["jvm"], "{s}");
     assert_eq!(s["blocking"][0]["kind"], "queue", "{s}");
-    assert_eq!(s["blocking_total"], 2);
+    assert!(
+        s["blocking"][0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("waiting on it: jvm/F1"),
+        "{s}"
+    );
+    assert_eq!(s["blocking_total"], 1);
+    assert_eq!(s["blocking_dependents"], 1);
     assert_eq!(s["counts"]["enumerated"], 1);
     assert!(s.get("unmerged_slices").is_none());
 

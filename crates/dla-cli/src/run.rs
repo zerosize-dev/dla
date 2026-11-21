@@ -590,7 +590,8 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     if truncated {
         out["truncated"] = Value::Bool(true);
     }
-    Ok(out)
+    // Fit it ourselves, by the order in `out::fit`, before the generic bound has to cut.
+    Ok(crate::out::fit(out, "blocking"))
 }
 
 /// The `triggers` object of `dla run status`: for each confirmed or strong leak-side finding

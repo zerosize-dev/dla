@@ -234,7 +234,7 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
         .map(|m| format!(" First: {} ({}). Fix: {}", m.id, m.description, m.fix))
         .unwrap_or_default();
     Ok(GateOut::Raw {
-        stdout: crate::out::bound(out).to_string(),
+        stdout: crate::out::bound(crate::out::fit(out, "missing")).to_string(),
         stderr: format!(
             "dla gate check --{}: {} item(s) missing{}.{first}",
             if matches!(target, GateTarget::Final) {
