@@ -310,3 +310,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Caveat (T's own): T knew the cause when it wrote the units. Whether the plugin's model finds it from the block is what the real run aiohttp-3 must show.
 - P3 RESUMED at 08:20 with pass 4 (wip-notes/pass4-brief.md, scratch u37): Queue line counts, Residual header, "0 of 0 entry points", residual gate items per series, verifier site comparison, flat-series verdict record.
 - Still running: V2 (ranking; dynamic bench fixture by fixture, scratch u33), P3 (pass 4).
+
+## State 2026-11-21 08:26 UTC (container clock)
+- REAL RUN aiohttp-3 STARTED 08:26 (/root/dla-real/aiohttp-3; plugin copy refreshed from the working tree at 08:26; binary = target/debug/dla built 08:24 = T's trigger step + A's Go work + my slope limit + V2's ranking as it stood, before P3's pass-4 edits). What it must show: the documented leak aiohttp/web_app.py:82 reported with "Trigger: reproduced through the public API", by a model that does not know the cause.
+- Disk: deleted scratch binaries of finished agents (u34/bin, bin2, grpc; u35/bin; u26 bin and capture dirs; u23/bin; u28/Q1/bench; u19 aiohttp and venv) and three stale /tmp/dla-bench-* work dirs: 4.8 GB free.
+- grpc-2 real run waits for V2's report (ranking final) to keep the machine usable for V2's dynamic bench.

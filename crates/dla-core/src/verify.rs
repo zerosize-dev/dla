@@ -70,6 +70,7 @@ pub fn agrees_label(finding: &Finding, verifier: &str, archetypes_on: bool) -> O
 
 /// Builds the record for `finding` from the verifier's answer, computing the agreement.
 /// `archetypes_on` says whether the label could be compared.
+#[allow(clippy::too_many_arguments)]
 pub fn record(
     finding: &Finding,
     site: Option<String>,

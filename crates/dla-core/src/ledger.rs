@@ -3145,9 +3145,13 @@ impl Ledger {
             }
             _ => {}
         }
-        let known: Vec<String> = self.index.annotations.get(finding).map_or_else(Vec::new, |a| {
-            a.writers.iter().chain(&a.removers).cloned().collect()
-        });
+        let known: Vec<String> = self
+            .index
+            .annotations
+            .get(finding)
+            .map_or_else(Vec::new, |a| {
+                a.writers.iter().chain(&a.removers).cloned().collect()
+            });
         let v = verify::record(
             f,
             site,

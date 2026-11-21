@@ -811,3 +811,67 @@ fn at_the_budget_floor_a_measured_candidate_is_inconclusive_not_time_budget() {
     // What nothing reached keeps the floor's reason.
     assert_eq!(state(&ids[1]), "unresolved(time_budget)");
 }
+
+/// A series whose targets did nothing is flat, and `dla trend` still records the verdicts of
+/// its declared targets in a growth record of the ledger, so `ledger list` and `close-rest`
+/// read them.
+#[test]
+fn a_flat_series_still_records_the_verdicts_of_its_declared_targets() {
+    let r = Run::new(&["--budget", "3h"]);
+    r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    // Setup imports the modules; the unit touches none of the targets.
+    let p = r.driver("H1");
+    let text = fs::read_to_string(&p).unwrap();
+    let text = text
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK setup has not been filled in\")",
+            "    from shop import cache, reg\n    _state['cache'] = cache",
+        )
+        .replace(
+            "    raise NotImplementedError(\"DLA-HOOK unit has not been filled in\")",
+            "    pass",
+        );
+    fs::write(&p, text).unwrap();
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let trend = r.ok(&["trend", "S1"]);
+    let verdicts: Vec<String> = trend["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["verdict"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(verdicts.len(), 3, "{trend}");
+    assert!(verdicts.iter().all(|v| v != "grew"), "{trend}");
+    // The ledger holds them: the growth record of the trend names each declared target.
+    let ledger = fs::read_to_string(r.run_dir.join("ledger.jsonl")).unwrap();
+    let rec: Value = ledger
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["type"] == "evidence" && v["result"]["trend"] == "T1")
+        .next_back()
+        .unwrap_or_else(|| panic!("no growth record of T1: {ledger}"));
+    let recorded = rec["result"]["targets"].as_array().unwrap();
+    assert_eq!(recorded.len(), 3, "{rec}");
+    // A second, different driver settles them (the queue asks for two); then close-rest reads
+    // the recorded verdicts of the flat series.
+    r.fill_more("H1");
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    r.ok(&["trend", "S3"]);
+    // ledger list reads them from the stored report, close-rest from the ledger.
+    let (_, lines) = r.list();
+    assert!(
+        lines.iter().any(|l| l["harnesses"]["H1"].is_string()),
+        "{lines:?}"
+    );
+    let out = r.ok(&["ledger", "close-rest"]);
+    let measured = recorded
+        .iter()
+        .filter(|t| {
+            matches!(
+                t["verdict"].as_str(),
+                Some("constant" | "changed" | "executed")
+            )
+        })
+        .count();
+    assert_eq!(out["reason"]["inconclusive"], measured, "{out} {rec}");
+}

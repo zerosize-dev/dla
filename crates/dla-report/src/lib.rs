@@ -599,7 +599,10 @@ fn residual_section(out: &mut String, view: &RunView) {
 }
 
 fn residual_row(r: &ResidualRow) -> String {
-    let series = r.series.as_deref().map_or(String::new(), |s| format!("{s} "));
+    let series = r
+        .series
+        .as_deref()
+        .map_or(String::new(), |s| format!("{s} "));
     let mut s = format!(
         "{series}{} {} {} unattributed of {} total (threshold {})",
         r.region,

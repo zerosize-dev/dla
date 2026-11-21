@@ -374,12 +374,19 @@ fn many_residual_rows_are_bounded_in_the_header_and_complete_in_a_section() {
         header.contains("S4 heap 1304.199 bytes/iteration") || header.contains("S4 heap 1304.1991"),
         "{header}"
     );
-    assert!(header.contains("see O4") && header.contains("see O9"), "{header}");
+    assert!(
+        header.contains("see O4") && header.contains("see O9"),
+        "{header}"
+    );
     assert!(header.contains("46 series below threshold"), "{header}");
     assert!(!header.contains("1304.199053030303"), "{header}");
     // Every row is in a body section.
     let at = md.find("## Residual by series").unwrap();
-    assert_eq!(md[at..].matches("unattributed of").count() >= 48, true, "{md}");
+    assert_eq!(
+        md[at..].matches("unattributed of").count() >= 48,
+        true,
+        "{md}"
+    );
 }
 
 #[test]
