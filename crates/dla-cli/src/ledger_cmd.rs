@@ -380,14 +380,16 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
     // A finding added from growth evidence takes the site of the first passing column that
     // names one (an allocation stack's first project frame) when none is given.
     if nf.site.is_none() && a.origin == "growth-series" {
+        // The largest of them: a capture summary's finding stands for the evidence's untied
+        // columns, and its site is the largest one's.
         nf.site = nf.supports.iter().find_map(|e| {
-            ledger
-                .evidence_by_id(e)?
-                .result
-                .get("passed")?
-                .as_array()?
+            let passed = ledger.evidence_by_id(e)?.result.get("passed")?.as_array()?;
+            let size = |c: &Value| c.get("slope").and_then(Value::as_f64).map_or(0.0, f64::abs);
+            passed
                 .iter()
-                .find_map(|c| c.get("site")?.as_str().map(str::to_owned))
+                .filter(|c| c.get("site").and_then(Value::as_str).is_some())
+                .max_by(|a, b| size(a).total_cmp(&size(b)))
+                .and_then(|c| c.get("site")?.as_str().map(str::to_owned))
         });
     }
     nf.amplifiers = a.amplifiers;

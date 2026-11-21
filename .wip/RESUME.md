@@ -577,3 +577,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - In the working tree after the commit (not in main): G's M2 (second-look skeleton, checked) and P3's pass 11 (in progress).
 - P3 PASS 11 SENT: 11.1 direct-call trigger reading only for start-up registrations by census facts; 11.2 untied columns of one capture evidence are one gate action and one finding accounts for them.
 - Running: spring-5 (waiter bnsh78dwh), P3 pass 11.
+
+## State at 22:30 UTC, 2026-11-21
+- REAL RUN spring-5 FINISHED (75 min, cost 5.85): INCOMPLETE, no leak; the documented holder F282 was reached by a focus harness and read constant (Java driver cannot produce Kotlin property references; JUnit loop blocked by Mockito self-attach in this sandbox). Notes real-run-plugin-spring-5.md, evidence u36/spring-5.
+- Pillow 10.1.0 and Jetty 12.0.31: not run. Pillow needs its C extension built (freetype, zlib, jpeg headers; Python <= 3.12; this machine has 3.13); Jetty source copy is partial. Environment limits, to tell the owner.
+- Running: P3 pass 11. After it: verify, fourth frozen build (M2 skeleton + pass 11), CI snapshot, tokio-5.

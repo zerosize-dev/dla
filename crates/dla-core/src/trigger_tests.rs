@@ -377,8 +377,36 @@ fn driver_calling(run: &Run, h: &str, text: &str, writers: &[&str]) {
     .unwrap();
 }
 
-#[test]
-fn growth_by_a_unit_that_calls_the_holders_own_writer_is_not_reproduced_through_the_public_api() {
+/// Records the census facts of F1's one writer site.
+fn writer_facts(run: &Run, init: bool, startup: bool, param: bool, constant: bool) {
+    use crate::{
+        FindingAnnotation,
+        census::{HolderFacts, SiteFact, SiteKind},
+    };
+    let mut l = Ledger::load(run.dir.path()).unwrap();
+    l.annotate_record(FindingAnnotation {
+        writers: vec!["pkg/m1.go:9".into()],
+        facts: HolderFacts {
+            writer_sites: vec![SiteFact {
+                site: "pkg/m1.go:9".into(),
+                kind: SiteKind::Insert,
+                depth: 0,
+                function: Some("Register".into()),
+                init,
+                startup,
+                param,
+                constant,
+                exported: true,
+            }],
+            ..Default::default()
+        },
+        ..FindingAnnotation::new(f(1))
+    })
+    .unwrap();
+}
+
+/// A run whose unit calls `Register` itself and made F1 grow.
+fn a_unit_that_calls_the_writer() -> Run {
     let run = Run::new(1);
     run.harness("H1", Kind::Entry, &[1]);
     run.run(
@@ -395,25 +423,36 @@ fn growth_by_a_unit_that_calls_the_holders_own_writer_is_not_reproduced_through_
         "// Register is the writer\nfunc unit(i int) {\n\tbalancer.Register(newBuilder(i))\n}\n",
         &["Register"],
     );
+    run
+}
+
+#[test]
+fn a_start_up_registry_the_unit_feeds_directly_is_the_direct_reading() {
+    // Every writer site runs at start-up with constant keys: the census says registration.
+    let run = a_unit_that_calls_the_writer();
+    writer_facts(&run, false, true, false, true);
     match run.triggers().trigger(&f(1)) {
         Trigger::Direct {
-            harness,
-            writer,
-            startup,
-            ..
+            harness, writer, ..
         } => {
             assert_eq!((harness.as_str(), writer.as_str()), ("H1", "Register"));
-            assert!(!startup);
         }
         other => panic!("{other:?}"),
     }
-    // A unit that calls a public entry point, and only names the writer, is reproduced.
-    driver_calling(
-        &run,
-        "H1",
-        "// Register is the writer\nfunc unit(i int) {\n\tserver.Handle(req(i))\n}\nfunc RegisterAll() {}\n",
-        &["Register"],
-    );
+    // An initialiser counts the same way.
+    let run = a_unit_that_calls_the_writer();
+    writer_facts(&run, true, false, false, true);
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Direct { .. }
+    ));
+}
+
+#[test]
+fn a_handler_no_project_code_calls_is_a_public_entry_and_is_reproduced() {
+    // `Server.Watch`: exported, not at start-up, no key from a parameter in a project caller.
+    let run = a_unit_that_calls_the_writer();
+    writer_facts(&run, false, false, false, false);
     assert!(matches!(
         run.triggers().trigger(&f(1)),
         Trigger::Reproduced { .. }
@@ -421,11 +460,25 @@ fn growth_by_a_unit_that_calls_the_holders_own_writer_is_not_reproduced_through_
 }
 
 #[test]
-fn a_direct_call_of_a_start_up_writer_says_so_and_is_counted_apart() {
-    use crate::{
-        FindingAnnotation,
-        census::{HolderFacts, SiteFact, SiteKind},
-    };
+fn a_run_time_caller_with_a_key_from_a_parameter_is_reproduced() {
+    let run = a_unit_that_calls_the_writer();
+    writer_facts(&run, false, false, true, false);
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
+}
+
+#[test]
+fn without_census_facts_on_the_writer_neither_reading_is_given() {
+    let run = a_unit_that_calls_the_writer();
+    let t = run.triggers();
+    assert_eq!(t.trigger(&f(1)), Trigger::Unchecked);
+    assert_eq!(
+        t.direct_without_facts(&f(1)),
+        Some(("H1".to_owned(), "Register".to_owned()))
+    );
+    // A unit that only names the writer in a comment is not a direct call at all.
     let run = Run::new(1);
     run.harness("H1", Kind::Entry, &[1]);
     run.run(
@@ -438,33 +491,11 @@ fn a_direct_call_of_a_start_up_writer_says_so_and_is_counted_apart() {
     driver_calling(
         &run,
         "H1",
-        "func unit(i int) {\n\tRegister(b(i))\n}\n",
+        "// Register is the writer\nfunc unit(i int) {\n\tserver.Handle(req(i))\n}\n",
         &["Register"],
     );
-    let mut l = Ledger::load(run.dir.path()).unwrap();
-    l.annotate_record(FindingAnnotation {
-        writers: vec!["pkg/m1.py:9".into()],
-        facts: HolderFacts {
-            writer_sites: vec![SiteFact {
-                site: "pkg/m1.py:9".into(),
-                kind: SiteKind::Insert,
-                depth: 0,
-                function: Some("Register".into()),
-                init: false,
-                startup: true,
-                param: true,
-                constant: false,
-                exported: true,
-            }],
-            ..Default::default()
-        },
-        ..FindingAnnotation::new(f(1))
-    })
-    .unwrap();
-    drop(l);
-    let t = run.triggers();
-    let Trigger::Direct { startup, .. } = t.trigger(&f(1)) else {
-        panic!("{:?}", t.trigger(&f(1)))
-    };
-    assert!(startup);
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
 }

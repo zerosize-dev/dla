@@ -1049,6 +1049,8 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     }
     // (c) every non-flat column is tied to a finding (dispositioned for the final gate) or
     // covered by a resolved open item.
+    let mut captured: BTreeMap<(String, String), Vec<(&TrendReport, &ColumnTrend)>> =
+        BTreeMap::new();
     for t in &view.trends {
         // The trend of a series `dla gap` derived measures the accounting, not the target:
         // its gap.unexplained growth is governed by the residual rows of the source series.
@@ -1145,6 +1147,22 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 );
                 continue;
             }
+            // A column of a capture summary (a stack, type or histogram diff): all the growing
+            // columns of one summary that tie to no finding are one obligation, listed once
+            // after the loop. One tied only to findings without a disposition waits on
+            // those findings' own items.
+            if view.summary_series.contains(&t.series) {
+                if tied.is_empty() {
+                    // One action per evidence: a trend has one for its gauge columns and one
+                    // for its counters.
+                    let key = (
+                        t.id.clone(),
+                        evidence_for_column(view, t, c).unwrap_or_default(),
+                    );
+                    captured.entry(key).or_default().push((t, c));
+                }
+                continue;
+            }
             let fix = match evidence_for_column(view, t, c) {
                 Some(e) => format!(
                     "dla ledger add --origin growth-series --evidence {e}   # column {}",
@@ -1170,6 +1188,75 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
             );
         }
     }
+    for (_, cols) in captured {
+        capture_item(view, &cols, out);
+    }
+}
+
+/// The one item of a capture summary's untied growing columns. They are accounted for together
+/// by a finding the evidence ties to that an alloc-test decided (the stacks are context of it),
+/// or by one `dla ledger add --origin growth-series --evidence E`: the finding it makes
+/// stands for the evidence, and its other columns are listed under it in the report.
+fn capture_item(view: &RunView, cols: &[(&TrendReport, &ColumnTrend)], out: &mut Out) {
+    let Some(&(t, first)) = cols.first() else {
+        return;
+    };
+    let evidence = evidence_for_column(view, t, first);
+    let decided = t
+        .columns
+        .iter()
+        .filter(|c| evidence_for_column(view, t, c) == evidence)
+        .any(|c| {
+            tied_findings(view, t, c).iter().any(|f| {
+                let canonical = view
+                    .ledger
+                    .merged_into(&f.id)
+                    .cloned()
+                    .unwrap_or(f.root_id());
+                crate::grown::alloc_tested(view, &canonical)
+            })
+        });
+    let stands_for = evidence
+        .as_deref()
+        .and_then(|e| e.parse::<crate::ids::EvidenceId>().ok())
+        .is_some_and(|eid| {
+            view.ledger.findings().any(|f| {
+                f.origin.as_str() == "growth-series"
+                    && f.supports.contains(&eid)
+                    && view.ledger.merged_into(&f.id).is_none()
+            })
+        });
+    if decided || stands_for {
+        return;
+    }
+    let mut sorted: Vec<&ColumnTrend> = cols.iter().map(|(_, c)| *c).collect();
+    sorted.sort_by(|a, b| b.rise.abs().total_cmp(&a.rise.abs()));
+    let names: Vec<String> = sorted
+        .iter()
+        .take(3)
+        .map(|c| readable_column(&c.name))
+        .collect();
+    let fix = match &evidence {
+        Some(e) => format!(
+            "dla ledger add --origin growth-series --evidence {e}   # one finding for the capture summary {}: it stands for its {} untied growing columns, the largest {}",
+            t.id,
+            sorted.len(),
+            names.first().cloned().unwrap_or_default()
+        ),
+        None => format!("dla trend {}", t.series),
+    };
+    out.add(
+        "trend_column",
+        format!("{}:{}", t.id, sorted[0].name),
+        format!(
+            "{} growing column(s) of the capture summary {} ({}) are tied to no finding; the largest: {}",
+            sorted.len(),
+            t.id,
+            sorted[0].shape_name(),
+            names.join(", ")
+        ),
+        fix,
+    );
 }
 
 trait ShapeName {

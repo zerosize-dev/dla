@@ -363,7 +363,12 @@ impl Triggers {
             .find(|r| r.verdicts.get(id) == Some(&Verdict::Grew))?;
         self.direct
             .contains(&(id.clone(), r.harness.clone()))
-            .then(|| (r.harness.clone(), self.writer.get(id).cloned().unwrap_or_default()))
+            .then(|| {
+                (
+                    r.harness.clone(),
+                    self.writer.get(id).cloned().unwrap_or_default(),
+                )
+            })
     }
 
     /// The trigger of `id`.
