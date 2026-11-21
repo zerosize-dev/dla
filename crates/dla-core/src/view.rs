@@ -305,7 +305,9 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             None => f.to_string(),
         })
         .collect();
-    let kind = if q.focus {
+    let kind = if q.focus && q.missed.is_empty() && !q.second.is_empty() {
+        "Next batch (second look"
+    } else if q.focus {
         "Next batch (focus"
     } else {
         "Next batch ("
@@ -324,7 +326,13 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             (None, false) => format!(" Next batch: {}.", next.join(", ")),
         }
     };
-    let missed_note = if q.missed.is_empty() {
+    let missed_note = if q.missed.is_empty() && !q.second.is_empty() {
+        let ids: Vec<String> = q.second.keys().take(8).map(ToString::to_string).collect();
+        format!(
+            " Second look, a different driver for one flat run: {}.",
+            ids.join(", ")
+        )
+    } else if q.missed.is_empty() {
         String::new()
     } else {
         let ids: Vec<String> = q.missed.keys().take(8).map(ToString::to_string).collect();

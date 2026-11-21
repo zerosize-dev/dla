@@ -218,6 +218,21 @@ struct DeclaredRun {
     focused: bool,
     /// An entry-path harness: it has its own rules, so it is no run of the queue's rule.
     entry: bool,
+    /// A second-look harness.
+    second_look: bool,
+}
+
+/// Where a candidate stands with respect to its second look.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SecondLook {
+    /// Not a candidate for one: it did not read `executed` in a hook driver, grew, was missed,
+    /// or an entry-path harness is all that ran.
+    No,
+    /// One driver read it `executed` (a flat reading of one arbitrary unit): it waits for a
+    /// different driver. Holds the harness of that first reading.
+    Awaiting(String),
+    /// A focused harness with another driver has run for it (the harness is named).
+    Done(String),
 }
 
 /// A run that missed a target: where, and what the trend said.
@@ -233,6 +248,11 @@ pub struct Miss {
 
 /// The most targets of a focus harness (and so of a FOCUSED harness).
 pub const FOCUS_MAX: usize = 3;
+
+/// The most second-look harnesses per runtime: one flat run of one driver does not end a run
+/// that has budget left, but the second look has to end (3 harnesses of [`FOCUS_MAX`]
+/// targets: 9 candidates, one look each).
+pub const SECOND_LOOK_MAX: usize = 3;
 
 /// A verdict that says a harness run did not reach the target: it ran, its trend was read and
 /// nothing shows the target's code run (or its holder move).
@@ -256,6 +276,8 @@ pub struct Index {
     run: std::collections::BTreeSet<String>,
     /// The runtime of each harness.
     runtime: BTreeMap<String, String>,
+    /// The second-look harnesses (any state) of each runtime.
+    second_looks: BTreeMap<String, Vec<String>>,
 }
 
 impl Index {
@@ -277,6 +299,12 @@ impl Index {
                 continue;
             }
             ix.runtime.insert(h.clone(), m.runtime.as_str().to_owned());
+            if m.is_second_look() {
+                ix.second_looks
+                    .entry(m.runtime.as_str().to_owned())
+                    .or_default()
+                    .push(h.clone());
+            }
             for t in &m.targets {
                 ix.declared_by.entry(t.clone()).or_default().push(h.clone());
             }
@@ -315,6 +343,7 @@ impl Index {
                     detail,
                     focused: m.targets.len() <= FOCUS_MAX,
                     entry: m.is_entry_path(),
+                    second_look: m.is_second_look(),
                 });
             }
         }
@@ -353,6 +382,44 @@ impl Index {
             return Standing::Settled(Why::NotReached);
         }
         Standing::Pending
+    }
+
+    /// The second look of `id`: one read `executed` in a hook driver (not entry-path), nothing
+    /// grew or missed, and no focused harness with another driver has run for it yet
+    /// ([`SecondLook::Awaiting`]); or one has ([`SecondLook::Done`]).
+    pub fn second_look(&self, id: &FindingId) -> SecondLook {
+        let runs = self.declared.get(id).map_or(&[][..], Vec::as_slice);
+        let moved = self.verdicts.get(id).is_some_and(|v| {
+            v.iter()
+                .any(|(_, x)| matches!(x, Verdict::Grew | Verdict::Changed))
+        });
+        let live = |r: &&DeclaredRun| r.hook_driver && !r.entry;
+        let executed: Vec<&DeclaredRun> = runs
+            .iter()
+            .filter(live)
+            .filter(|r| r.verdict == Some(Verdict::Executed))
+            .collect();
+        if moved || executed.is_empty() || self.missed_in(id).is_some() {
+            return SecondLook::No;
+        }
+        let done = runs.iter().filter(live).find(|r| {
+            r.verdict.is_some()
+                && (r.second_look
+                    || (r.focused && executed.iter().any(|e| e.driver_key != r.driver_key)))
+        });
+        match done {
+            Some(r) => SecondLook::Done(r.harness.clone()),
+            None => SecondLook::Awaiting(executed[0].harness.clone()),
+        }
+    }
+
+    /// The verdict a second-look harness read for `id`, when one has run and its trend was read.
+    pub fn second_look_verdict(&self, id: &FindingId) -> Option<Verdict> {
+        self.declared
+            .get(id)?
+            .iter()
+            .filter(|r| r.second_look)
+            .find_map(|r| r.verdict)
     }
 
     /// The runs of hook-driver harnesses (not entry-path) that missed `id`.
@@ -506,6 +573,8 @@ pub struct Batch {
     pub focus: bool,
     /// Go: the package directory of the batch.
     pub package: Option<String>,
+    /// True for a focus batch of candidates that wait for a second look.
+    pub second: bool,
 }
 
 /// Chooses the batch from `free` (the declarable pending candidates in rank order).
@@ -584,6 +653,7 @@ pub fn choose_batch<V>(
             siblings: BTreeMap::new(),
             focus: true,
             package: pkg,
+            second: false,
         };
     }
     let fresh: Vec<&FindingId> = in_pkg
@@ -603,6 +673,7 @@ pub fn choose_batch<V>(
                     siblings,
                     focus: false,
                     package: Some(p),
+                    second: false,
                 }
             }
             None => Batch::default(),
@@ -614,6 +685,7 @@ pub fn choose_batch<V>(
         siblings,
         focus: false,
         package: None,
+        second: false,
     }
 }
 
@@ -642,6 +714,10 @@ pub struct RuntimeQueue {
     pub package: Option<String>,
     /// True when `batch` is a focus batch (see [`choose_batch`]).
     pub focus: bool,
+    /// The pending candidates that wait for a second look (see [`SECOND_LOOK_MAX`]), each with
+    /// the first harness that read it flat. Non-empty only while no first-pass candidate is
+    /// pending; `batch` is then a second-look focus batch.
+    pub second: BTreeMap<FindingId, Miss>,
     /// The pending candidates that a hook-driver harness run missed, each with the first
     /// harness that missed it and its verdict.
     pub missed: BTreeMap<FindingId, Miss>,
@@ -675,17 +751,18 @@ impl RuntimeQueue {
     pub fn batch_for(&self, view: &RunView, n: usize) -> Batch {
         let free: Vec<&FindingId> = self.declarable.iter().collect();
         let go = self.runtime == GO;
+        let pool = self.pool();
         // A Go batch is one package: the one of the best-ranked candidate when that one was
-        // missed (a focus batch), else of the best-ranked fresh one.
+        // missed or waits for a second look (a focus batch), else of the best-ranked fresh one.
         let package = go
             .then(|| {
                 let first = free.first()?;
-                if self.missed.contains_key(*first) {
+                if pool.contains_key(*first) {
                     package_of(view, first)
                 } else {
                     let fresh: Vec<&FindingId> = free
                         .iter()
-                        .filter(|f| !self.missed.contains_key(**f))
+                        .filter(|f| !pool.contains_key(**f))
                         .copied()
                         .collect();
                     go_packages(view, &fresh).into_iter().next()
@@ -695,7 +772,19 @@ impl RuntimeQueue {
         if go && package.is_none() {
             return Batch::default();
         }
-        choose_batch(view, &free, &self.missed, n, package.as_deref(), go)
+        let mut b = choose_batch(view, &free, &pool, n, package.as_deref(), go);
+        b.second = b.focus && self.missed.is_empty() && !self.second.is_empty();
+        b
+    }
+
+    /// The candidates a focus batch is chosen from: the missed ones, or (when the first pass
+    /// is over) the ones that wait for a second look.
+    fn pool(&self) -> BTreeMap<FindingId, ()> {
+        self.missed
+            .keys()
+            .chain(self.second.keys())
+            .map(|f| (f.clone(), ()))
+            .collect()
     }
 
     /// Go: the package directories of the declarable candidates, in the rank order of their
@@ -711,7 +800,9 @@ impl RuntimeQueue {
     /// Go: the batch of the declarable candidates in the package directory `package`.
     pub fn batch_in_package(&self, view: &RunView, n: usize, package: &str) -> Batch {
         let free: Vec<&FindingId> = self.declarable.iter().collect();
-        choose_batch(view, &free, &self.missed, n, Some(package), true)
+        let mut b = choose_batch(view, &free, &self.pool(), n, Some(package), true);
+        b.second = b.focus && self.missed.is_empty() && !self.second.is_empty();
+        b
     }
 
     /// The rank and tier of a pending candidate.
@@ -788,6 +879,43 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                     pending_rank.push((r.rank.unwrap_or(0), r.tier));
                 }
             }
+            // The second look: the first pass first; then, while the run is going and budget is
+            // left, the candidates one flat run of one driver settled wait for a different
+            // driver (see `SECOND_LOOK_MAX`).
+            let mut second: BTreeMap<FindingId, Miss> = BTreeMap::new();
+            if pending.is_empty() && view.state.queue && budget.is_some() && !blocked {
+                let used = ix.second_looks.get(&runtime).map_or(0, Vec::len);
+                let in_flight_second = |id: &FindingId| {
+                    ix.declared_by.get(id).is_some_and(|hs| {
+                        hs.iter().any(|h| {
+                            ix.second_looks.get(&runtime).is_some_and(|l| l.contains(h))
+                                && !ix.run.contains(h)
+                        })
+                    })
+                };
+                let mut room = SECOND_LOOK_MAX.saturating_sub(used) * FOCUS_MAX;
+                for r in &open_ones {
+                    let SecondLook::Awaiting(first) = ix.second_look(&r.id) else {
+                        continue;
+                    };
+                    if in_flight_second(&r.id) || room > 0 {
+                        if !in_flight_second(&r.id) {
+                            room -= 1;
+                        }
+                        pending.push(r.id.clone());
+                        pending_rank.push((r.rank.unwrap_or(0), r.tier));
+                        second.insert(
+                            r.id.clone(),
+                            Miss {
+                                harness: first,
+                                verdict: Verdict::Executed,
+                                detail: "its code ran and its holder stayed flat under one driver"
+                                    .into(),
+                            },
+                        );
+                    }
+                }
+            }
             let no_coverage: Vec<FindingId> = pending
                 .iter()
                 .filter(|p| ix.best_verdict(p) == Some(Verdict::Unknown))
@@ -811,6 +939,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 runtime: runtime.clone(),
                 declarable: declarable.clone(),
                 missed: missed.clone(),
+                second: second.clone(),
                 ..RuntimeQueue::default()
             };
             let Batch {
@@ -818,6 +947,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 siblings,
                 focus,
                 package,
+                ..
             } = chooser.batch_for(view, MAX_BATCH);
             let batch_command = batch_command(view, &runtime);
             let command = match (&in_flight, batch.is_empty()) {
@@ -856,6 +986,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 package,
                 focus,
                 missed,
+                second,
                 no_coverage,
                 declarable,
                 in_flight,
@@ -881,7 +1012,9 @@ pub const NO_COVERAGE: &str = "the run has no coverage data, so whether its code
 /// The full text of the guidance a refusal or an item gives for an open queue.
 pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
     let _ = run_id;
-    let focus = if q.focus {
+    let focus = if q.focus && q.missed.is_empty() && !q.second.is_empty() {
+        " The next batch is a second look: one flat run of one driver settled these candidates, and budget is left, so they get a harness of their own (3 targets at most) with a different driver (other call orders, objects derived from derived objects, failing and cancelling paths, overlapping lifetimes) and a VARIES.txt line per target; `dla harness run` refuses hooks equal to an earlier harness's."
+    } else if q.focus {
         " The next batch is a focus batch: the best-ranked pending candidate was missed by an earlier harness, so it gets a harness of its own (at most 3 targets, no siblings); a target no driver can reach is given up only with a reason: dla ledger resolve <F> --as unresolved --reason env_unavailable --remedy \"<what it needs>\"."
     } else {
         ""
@@ -1011,8 +1144,19 @@ impl ReportFacts {
         } else {
             format!(": {}", parts.join(", "))
         };
+        // Candidates one flat run settled that got a different driver, and how many of those grew.
+        let looked: Vec<Verdict> = ranked
+            .iter()
+            .filter_map(|id| self.index.second_look_verdict(id))
+            .collect();
+        let grew_on_look = looked.iter().filter(|v| **v == Verdict::Grew).count();
+        let second = if looked.is_empty() {
+            String::new()
+        } else {
+            format!("; second look {} (grew {grew_on_look})", looked.len())
+        };
         Some(format!(
-            "{targeted} of {} ranked candidates targeted{in_h}{verdicts}; {} not targeted",
+            "{targeted} of {} ranked candidates targeted{in_h}{verdicts}; {} not targeted{second}",
             ranked.len(),
             ranked.len() - targeted
         ))
@@ -1107,8 +1251,13 @@ mod tests {
     impl Run {
         /// Findings 1..=n are census candidates with writers (tier 4) at `pkg/m<i>.py`.
         fn new(n: u32) -> (Self, RunView) {
+            Self::with_budget(n, 3600)
+        }
+
+        /// As [`Run::new`] with a budget of `secs` seconds.
+        fn with_budget(n: u32, secs: u64) -> (Self, RunView) {
             let dir = tempfile::tempdir().unwrap();
-            let st = RunState::init("/p", None, 3600, None, now_utc()).unwrap();
+            let st = RunState::init("/p", None, secs, None, now_utc()).unwrap();
             st.save(dir.path()).unwrap();
             let mut l = Ledger::create(dir.path()).unwrap();
             l.add_evidence(evidence("python")).unwrap();
@@ -1826,6 +1975,184 @@ mod tests {
             Standing::Settled(Why::Executed)
         );
         assert!(ix.missed_in(&FindingId::new(2)).is_none());
+    }
+
+    /// Like `ran` for a second-look harness.
+    fn looked(run: &Run, h: &str, targets: &[u32], driver: &str, s: &str, v: &[(u32, Verdict)]) {
+        let mut m = manifest(h, targets, true);
+        m.purpose = Some(crate::harness::HarnessPurpose::SecondLook);
+        run.harness(&m);
+        let d = run.dir.path().join("harness").join(h).join("driver");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("dla_harness.py"), driver).unwrap();
+        run.series(s, h);
+        let digest = crate::harness::driver_digest(run.dir.path(), h).unwrap();
+        std::fs::write(
+            run.dir
+                .path()
+                .join("harness")
+                .join(h)
+                .join(format!("run-{s}.json")),
+            json!({"series": [s], "driver_digest": digest}).to_string(),
+        )
+        .unwrap();
+        run.trend(&format!("T{}", &s[1..]), s, v);
+    }
+
+    #[test]
+    fn one_flat_run_leaves_the_candidates_for_a_second_look_when_the_first_pass_is_over() {
+        let (run, _) = Run::new(5);
+        // H1 (5 targets) read F1..F4 `executed`; F5 was never declared: the first pass is
+        // not over, so there is no second look yet.
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[
+                (1, Verdict::Executed),
+                (2, Verdict::Executed),
+                (3, Verdict::Executed),
+                (4, Verdict::Executed),
+            ],
+        );
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(pending_of(&run.reload()), ["F5"]);
+        assert!(q.second.is_empty() && !q.focus);
+        // F5 read flat too: the first pass is over, the second look starts, best-ranked first,
+        // three to a harness.
+        ran(&run, "H2", &[5], "b", "S2", &[(5, Verdict::Executed)]);
+        let view = run.reload();
+        let q = queues(&view, None).remove(0);
+        assert!(q.open());
+        assert_eq!(pending_of(&view), ["F1", "F2", "F3", "F4", "F5"]);
+        assert_eq!(
+            q.batch,
+            [FindingId::new(1), FindingId::new(2), FindingId::new(3)]
+        );
+        assert!(q.focus && q.second.len() == 5 && q.missed.is_empty());
+        assert_eq!(q.second[&FindingId::new(1)].harness, "H1");
+        assert!(q.batch_for(&view, 8).second);
+        assert!(steps(&q, "R").contains("The next batch is a second look"));
+        // F5's single run was a focused harness, but its own driver is the only one.
+        let item = crate::view::queue_item(&q);
+        assert!(
+            item.description.contains("Next batch (second look"),
+            "{}",
+            item.description
+        );
+    }
+
+    #[test]
+    fn a_second_look_ends_and_settles_after_a_different_driver() {
+        let (run, _) = Run::new(2);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[(1, Verdict::Executed), (2, Verdict::Executed)],
+        );
+        assert_eq!(pending_of(&run.reload()), ["F1", "F2"]);
+        // The second look runs: a focused harness with another driver, flat again.
+        looked(
+            &run,
+            "H2",
+            &[1, 2],
+            "b",
+            "S2",
+            &[(1, Verdict::Executed), (2, Verdict::Executed)],
+        );
+        let view = run.reload();
+        assert!(pending_of(&view).is_empty());
+        assert_eq!(queues(&view, None)[0].closed, Some(Closed::Empty));
+        let ix = Index::of(&view);
+        assert_eq!(
+            ix.second_look(&FindingId::new(1)),
+            SecondLook::Done("H2".into())
+        );
+        assert_eq!(
+            ReportFacts::of(&view).unwrap().line().unwrap(),
+            "2 of 2 ranked candidates targeted in 2 harnesses: executed 2; 0 not targeted; second look 2 (grew 0)"
+        );
+    }
+
+    #[test]
+    fn the_second_look_is_bounded_and_skips_grew_missed_and_floor() {
+        // Ten candidates, all flat under H1: nine get a look (three harnesses of three), the
+        // tenth is settled.
+        let (run, _) = Run::new(10);
+        let all: Vec<u32> = (1..=10).collect();
+        let flat: Vec<(u32, Verdict)> = all.iter().map(|n| (*n, Verdict::Executed)).collect();
+        ran(&run, "H1", &all[..8], "a", "S1", &flat[..8]);
+        ran(&run, "H2", &all[8..], "b", "S2", &flat[8..]);
+        let view = run.reload();
+        assert_eq!(pending_of(&view).len(), 9);
+        assert!(!pending_of(&view).contains(&"F10".to_owned()));
+        // Two second-look harnesses have been generated (any state): room for one more look.
+        let mut m = manifest("H3", &[1, 2, 3], true);
+        m.purpose = Some(crate::harness::HarnessPurpose::SecondLook);
+        run.harness(&m);
+        let mut m = manifest("H4", &[4, 5, 6], true);
+        m.purpose = Some(crate::harness::HarnessPurpose::SecondLook);
+        run.harness(&m);
+        // H3 and H4 have not run: their candidates stay pending (in flight), and F7..F9 are
+        // the last three that may get a look.
+        assert_eq!(pending_of(&run.reload()).len(), 9);
+        let mut m = manifest("H5", &[7, 8, 9], true);
+        m.purpose = Some(crate::harness::HarnessPurpose::SecondLook);
+        run.harness(&m);
+        // Three second-look harnesses exist: no candidate beyond the ones they declare.
+        assert_eq!(pending_of(&run.reload()).len(), 9);
+        // Grew and missed ones are no candidates for a look.
+        let (run, _) = Run::new(3);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[
+                (1, Verdict::Executed),
+                (2, Verdict::Grew),
+                (3, Verdict::Constant),
+            ],
+        );
+        // F3 was missed: it is first-pass work, so the second look waits (rule 4); F2 grew and
+        // is never part of it.
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(pending_of(&run.reload()), ["F3"]);
+        assert!(q.second.is_empty() && q.focus);
+        let (run, _) = Run::new(2);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[(1, Verdict::Executed), (2, Verdict::Grew)],
+        );
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(pending_of(&run.reload()), ["F1"]);
+        assert!(q.second.contains_key(&FindingId::new(1)));
+        // At the floor nothing is asked: the queue is closed and has no second look.
+        let (run, _) = Run::with_budget(2, 60);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[(1, Verdict::Executed), (2, Verdict::Executed)],
+        );
+        let q = queues(&run.reload(), None).remove(0);
+        assert!(
+            q.second.is_empty() && q.pending.is_empty(),
+            "{:?}",
+            q.closed
+        );
     }
 
     #[test]

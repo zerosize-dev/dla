@@ -425,7 +425,14 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         .find(|(k, _)| *k == EvidenceKind::UnitCountSeries)
         .or_else(|| evidence.first())
         .map(|(_, e)| e.to_string());
-    if let Some(entry) = detector_entry(ctx, &ledger, &main.series, counter_evidence.as_deref()) {
+    if let Some(entry) = detector_entry(
+        ctx,
+        &ledger,
+        &main.series,
+        counter_evidence.as_deref(),
+        &passed,
+        &evidence,
+    ) {
         next.insert(0, entry);
     }
     if !short_cols.is_empty() || short::is_short(&main.series, &th) {
@@ -470,6 +477,8 @@ fn detector_entry(
     ledger: &Ledger,
     series: &dla_core::SeriesFile,
     evidence: Option<&str>,
+    passed: &[&ColumnTrend],
+    growth_evidence: &[(EvidenceKind, EvidenceId)],
 ) -> Option<String> {
     let h = series.source.harness.as_deref()?;
     let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
@@ -496,6 +505,57 @@ fn detector_entry(
         {
             format!(
                 "{head}: finding {f} is a target of {h}; follow the ledger lines for node.listeners@{site}, at full length"
+            )
+        }
+        // Decided already: nothing to measure there.
+        Some(f)
+            if ledger.finding(f).is_some_and(|x| {
+                matches!(
+                    x.state,
+                    FindingState::Confirmed | FindingState::Strong | FindingState::Refuted
+                )
+            }) =>
+        {
+            let state = ledger
+                .finding(f)
+                .map_or(String::new(), |x| x.state.to_string());
+            format!("{head}: finding {f} is already {state}")
+        }
+        // The column at the site passed in this series: the finding is measured, and what is
+        // left is to decide it, not to build another harness.
+        Some(f)
+            if passed.iter().any(|c| {
+                c.site.as_deref() == Some(site) && evidence_of(growth_evidence, c).is_some()
+            }) =>
+        {
+            let col = passed.iter().find(|c| {
+                c.site.as_deref() == Some(site) && evidence_of(growth_evidence, c).is_some()
+            })?;
+            let e = evidence_of(growth_evidence, col);
+            let root = ledger.finding(f).map_or_else(|| f.clone(), |x| x.root_id());
+            let has_sibling = ledger
+                .findings()
+                .any(|s| s.parent.as_ref() == Some(&root) && s.polarity() == Polarity::NonLeak);
+            let can_test = ledger.finding(&root).is_some_and(|r| {
+                matches!(
+                    r.state,
+                    FindingState::Candidate
+                        | FindingState::Unresolved
+                        | FindingState::SuspectedStaticOnly
+                )
+            });
+            let cmds = dla_core::grown::commands(
+                &root,
+                h,
+                e.as_deref(),
+                harness_evidence(ledger, series).as_deref(),
+                has_sibling,
+                can_test,
+            );
+            format!(
+                "{head}: {f} holds it and its column {} passed in this series: {}",
+                col.name,
+                cmds.join("   then   ")
             )
         }
         Some(f) => format!(

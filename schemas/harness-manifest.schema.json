@@ -486,6 +486,11 @@
           "description": "A hook driver of at most three targets that an earlier harness declared and whose\ncode did not run there (`dla harness gen --next` when the best-ranked pending\ncandidate was missed). `focus.json` in the harness directory says which harness\nmissed each target.",
           "type": "string",
           "const": "focus"
+        },
+        {
+          "description": "A focus harness for candidates that one flat run of one driver settled while\nbudget was left: a different driver (other orders, derived-from-derived objects,\nfailing and cancelling paths, overlapping lifetimes), with a `VARIES.txt` line per\ntarget. `focus.json` names the earlier harness.",
+          "type": "string",
+          "const": "second-look"
         }
       ]
     },

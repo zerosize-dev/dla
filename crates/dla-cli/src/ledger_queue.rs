@@ -92,7 +92,13 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
         }
         let ann = view.ledger.annotation(id);
         let r = by_id.get(id);
-        let (qs, standing) = r.map_or(("not-eligible", None), |r| status_of(r, &ix, &queues));
+        let (mut qs, mut standing) =
+            r.map_or(("not-eligible", None), |r| status_of(r, &ix, &queues));
+        // A candidate one flat run settled that waits for a different driver is pending.
+        let second_q = queues.iter().find(|q| q.second.contains_key(id));
+        if second_q.is_some() {
+            (qs, standing) = ("pending", Some(Standing::Pending));
+        }
         let tier = r.map_or_else(|| rank::tier(f, ann), |r| r.tier);
         let mut e = json!({
             "id": id.to_string(),
@@ -127,6 +133,23 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
                 m.insert(h, json!(v.map(Verdict::as_str)));
             }
             e["harnesses"] = Value::Object(m);
+        }
+        match (second_q, ix.second_look(id)) {
+            (Some(q), _) => {
+                e["second_look"] = json!(format!(
+                    "pending: one flat run of one driver ({}) settled it and budget is left; {} gives it a different driver",
+                    q.second[id].harness, q.batch_command
+                ));
+            }
+            (None, queue::SecondLook::Awaiting(h)) if r.is_some_and(|r| r.eligible()) => {
+                e["second_look"] = json!(format!(
+                    "after the first pass, if budget is left (one flat run of {h} settled it)"
+                ));
+            }
+            (None, queue::SecondLook::Done(h)) => {
+                e["second_look"] = json!(format!("done in {h}"));
+            }
+            _ => {}
         }
         if dla_core::trigger::is_subject(&view, f) {
             e["trigger"] = json!(triggers.trigger(id).name());

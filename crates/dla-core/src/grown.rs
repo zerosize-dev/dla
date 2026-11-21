@@ -106,8 +106,8 @@ fn alloc_tested(view: &RunView, root: &FindingId) -> bool {
     })
 }
 
-/// Findings a passed growth column of a harness series points at that no alloc-test evidence is
-/// bound to, in the order of the trends. Only open findings and findings closed `unresolved` or
+/// Findings a passed growth column of a harness series points at, or that a trend gave the
+/// verdict `grew`, that no alloc-test evidence is bound to, in the order of the trends. Only open findings and findings closed `unresolved` or
 /// `suspected_static_only` count: the others have been decided.
 pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
     let mut out: Vec<Grown> = Vec::new();
@@ -118,18 +118,38 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
         let Some(harness) = view.series_harness.get(&t.series) else {
             continue;
         };
+        // (finding, column, kind of its growth evidence) of every column that passed and points
+        // at a finding, then every target the trend gave the verdict `grew`.
+        let mut pointed: Vec<(FindingId, String, crate::series::ColumnKind)> = Vec::new();
         for c in t
             .columns
             .iter()
             .filter(|c| c.gate == GateVerdict::Pass && c.unit != Unit::Seconds)
             .filter(|c| !is_whole_process(&c.name))
         {
-            let Some(f) = c
+            if let Some(f) = c
                 .finding
                 .iter()
                 .chain(c.candidates.iter())
-                .find_map(|f| view.ledger.finding(f))
-            else {
+                .find(|f| view.ledger.finding(f).is_some())
+            {
+                pointed.push((f.clone(), c.name.clone(), c.kind));
+            }
+        }
+        for v in t.targets.iter().filter(|v| v.verdict == Verdict::Grew) {
+            let column = v
+                .column
+                .clone()
+                .unwrap_or_else(|| "(a passed column)".into());
+            let kind = t
+                .columns
+                .iter()
+                .find(|c| Some(&c.name) == v.column.as_ref())
+                .map_or(crate::series::ColumnKind::Gauge, |c| c.kind);
+            pointed.push((v.finding.clone(), column, kind));
+        }
+        for (f, column, ckind) in pointed {
+            let Some(f) = view.ledger.finding(&f) else {
                 continue;
             };
             let root = f.root_id();
@@ -142,6 +162,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 || !matches!(
                     rf.state,
                     FindingState::Candidate
+                        | FindingState::UnderTest
                         | FindingState::Unresolved
                         | FindingState::SuspectedStaticOnly
                 )
@@ -150,7 +171,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
             {
                 continue;
             }
-            let want = match c.kind {
+            let want = match ckind {
                 crate::series::ColumnKind::Gauge => EvidenceKind::GrowthSeries,
                 crate::series::ColumnKind::Counter => EvidenceKind::UnitCountSeries,
             };
@@ -159,7 +180,7 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                 state: rf.state,
                 harness: harness.clone(),
                 series: t.series.clone(),
-                column: c.name.clone(),
+                column,
                 growth: view
                     .ledger
                     .evidence()
@@ -253,7 +274,10 @@ pub fn detector_leads(view: &RunView, grown: &[Grown]) -> Vec<Lead> {
                             )
                     })
                 });
-                if decided || measured || grown.iter().any(|g| &g.finding == f) || alloc_tested(view, f)
+                if decided
+                    || measured
+                    || grown.iter().any(|g| &g.finding == f)
+                    || alloc_tested(view, f)
                 {
                     continue;
                 }
@@ -274,7 +298,8 @@ pub fn detector_leads(view: &RunView, grown: &[Grown]) -> Vec<Lead> {
 /// and a detector lead. `grown` is [`grown_unmeasured`] of the view.
 pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
     let mut out = Vec::new();
-    for g in grown.iter().filter(|g| g.state != FindingState::Candidate) {
+    // An open finding (candidate, under test) is listed as a `finding` item with these commands.
+    for g in grown.iter().filter(|g| g.state.is_dispositioned()) {
         out.push(BlockingItem {
             kind: BlockingKind::Growth,
             id: g.finding.to_string(),
@@ -303,7 +328,10 @@ pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
                     l.harness, l.harness
                 ),
             ),
-            (Some(f), None) => (f.to_string(), format!("measure {f}: dla harness gen --driver --probe {f}")),
+            (Some(f), None) => (
+                f.to_string(),
+                format!("measure {f}: dla harness gen --driver --probe {f}"),
+            ),
             (None, _) => (
                 l.site.clone(),
                 format!(

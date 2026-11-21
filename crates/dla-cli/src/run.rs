@@ -664,6 +664,9 @@ fn queue_json(queues: &[dla_core::queue::RuntimeQueue]) -> Value {
         if q.focus {
             e["focus"] = json!(true);
         }
+        if !q.second.is_empty() {
+            e["second_look"] = json!(true);
+        }
         m.insert(q.runtime.clone(), e);
     }
     Value::Object(m)

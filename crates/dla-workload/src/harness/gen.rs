@@ -1478,6 +1478,8 @@ type DeclaredTargets = (
 struct FocusFacts {
     missed: std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
     why: Option<String>,
+    /// A second look: the targets read `executed` flat in the earlier harness.
+    second: bool,
 }
 
 /// The findings a harness is generated to reach: the `--probe` findings, then (with
@@ -1531,10 +1533,11 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             && let Some(q) = &queue
         {
             for f in &chosen.ids {
-                if let Some(m) = q.missed.get(f) {
+                if let Some(m) = q.missed.get(f).or_else(|| q.second.get(f)) {
                     focus.missed.insert(f.clone(), m.clone());
                 }
             }
+            focus.second = chosen.second;
             let first = chosen
                 .ids
                 .first()
@@ -1548,10 +1551,17 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             } else {
                 String::new()
             };
-            focus.why = Some(format!(
-                "focus batch: the best-ranked pending candidate {first} was declared in an earlier harness and its code did not run there, so this harness holds it and at most {} more candidates that a harness missed, alone (no siblings, no fresh candidates).{cap}",
-                dla_core::queue::FOCUS_MAX - 1
-            ));
+            focus.why = Some(if chosen.second {
+                format!(
+                    "second look: one flat run of one driver settled {first} and budget is left, so this harness holds it and at most {} more such candidates, alone, with a different driver (a VARIES.txt line per target is required).{cap}",
+                    dla_core::queue::FOCUS_MAX - 1
+                )
+            } else {
+                format!(
+                    "focus batch: the best-ranked pending candidate {first} was declared in an earlier harness and its code did not run there, so this harness holds it and at most {} more candidates that a harness missed, alone (no siblings, no fresh candidates).{cap}",
+                    dla_core::queue::FOCUS_MAX - 1
+                )
+            });
         }
         let (batch, sib) = (chosen.ids, chosen.siblings);
         let before = ids.len();
@@ -2219,6 +2229,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         sibling_of: siblings.clone(),
         purpose: if !opts.entry.is_empty() {
             Some(dla_core::harness::HarnessPurpose::EntryPath)
+        } else if !focus.missed.is_empty() && focus.second {
+            Some(dla_core::harness::HarnessPurpose::SecondLook)
         } else if !focus.missed.is_empty() {
             Some(dla_core::harness::HarnessPurpose::Focus)
         } else {
@@ -2238,8 +2250,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         captures: vec![],
     };
     manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
-    if manifest.is_focus() {
-        // Which earlier harness missed each target, and what its trend said.
+    if manifest.is_focus() || manifest.is_second_look() {
+        // Which earlier harness missed (or read flat) each target, and what its trend said.
         let doc = json!({
             "focus": true,
             "missed_in": focus.missed.iter().map(|(f, x)| (f.to_string(), json!({
@@ -2274,6 +2286,12 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             &dla_core::harness::varies_template(),
         )?;
     }
+    if manifest.is_second_look() {
+        write(
+            &hdir.join(DRIVER).join(dla_core::harness::VARIES_FILE),
+            &dla_core::harness::second_look_varies_template(&manifest.targets),
+        )?;
+    }
     let mut block_in: Option<String> = None;
     if !described.is_empty() {
         write(
@@ -2289,7 +2307,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         if let Some(info) = driver_info.as_ref().filter(|i| !i.edit.is_empty()) {
             let file = hdir.join(&info.edit);
             let mut notes = info.block_notes.clone();
-            if manifest.is_focus() {
+            if manifest.is_second_look() {
+                notes.extend(targets::second_look_notes(&focus.missed, &derived.targets));
+            } else if manifest.is_focus() {
                 notes.extend(targets::focus_notes(&focus.missed, &derived.targets));
             } else if opts.next.is_some() && !manifest.is_entry_path() {
                 notes.push(targets::BROAD_NOTE.to_owned());
@@ -2477,6 +2497,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             "next".into(),
             json!(if junit.is_some() {
                 format!("dla harness run {id}")
+            } else if manifest.is_second_look() {
+                format!(
+                    "write a driver that differs from the one of the earlier harness (read its unit; follow the to-dos in the block), write one line per target in {} (what this driver does that the first did not), then dla harness run {id} --mode both",
+                    ctx.pointer(&format!("harness/{id}/{DRIVER}/{}", dla_core::harness::VARIES_FILE))
+                )
             } else if manifest.is_entry_path() {
                 format!(
                     "fill the hooks so that each unit calls only the project's public entry points with data a caller controls, write the one line of {} (what a caller varies per unit), then dla harness run {id} --mode both",

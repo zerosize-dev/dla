@@ -807,6 +807,36 @@ pub fn focus_notes(
     out
 }
 
+/// What a second look is told to vary, general to any project.
+const SECOND_LOOK_TODOS: [&str; 5] = [
+    "  - other call orders than the first driver's (do the steps in a different order, or in a different order per key)",
+    "  - objects derived from derived objects, three deep where the API allows it (a child of a child, a clone of a clone)",
+    "  - the failing and cancelling paths: cancel or close the parent before the child, drop an object before its work completes, fail half-way through",
+    "  - overlapping lifetimes: start the next before the last one ended",
+    "  - one long-lived object reused across units next to a fresh one per unit",
+];
+
+/// The lines of a second-look harness's block, above its targets.
+pub fn second_look_notes(
+    missed: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
+    asked: &[Asked],
+) -> Vec<String> {
+    let mut out = vec![
+        "Second look: one flat run of one driver settled these targets (their code ran and their holder stayed flat), and budget is left. A flat reading of one arbitrary unit says that unit does not leak; a leak that needs a sequence stays hidden. This harness needs a DIFFERENT driver: dla harness run refuses hooks equal to an earlier harness's, and a VARIES.txt line per target (what this driver does that the first did not).".to_owned(),
+        "To vary, at least some of:".to_owned(),
+    ];
+    out.extend(SECOND_LOOK_TODOS.iter().map(|l| (*l).to_owned()));
+    for a in asked {
+        if let Some(m) = missed.get(&a.id) {
+            out.push(format!(
+                "  {} was read flat in {}: read the unit of that harness (harness/{}/driver) and do something else",
+                a.id, m.harness, m.harness
+            ));
+        }
+    }
+    out
+}
+
 /// The comment block for a driver, above the first hook. `prefix` is the line comment
 /// marker (`#` or `//`); `None` wraps each line in `/* */`.
 pub fn block(harness: &str, targets: &[Target], prefix: Option<&str>) -> String {

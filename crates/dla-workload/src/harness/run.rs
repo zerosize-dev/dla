@@ -3224,6 +3224,50 @@ fn run_loaded(
             ),
         ));
     }
+    // A second look is a different driver: one `VARIES.txt` line per target says what differs
+    // (the same file and wording as an entry-path harness), and the code of its hooks is not
+    // that of an earlier harness of the same targets.
+    if manifest.is_second_look() {
+        let varies_path = ctx.pointer(&format!(
+            "harness/{}/driver/{}",
+            manifest.id,
+            dla_core::harness::VARIES_FILE
+        ));
+        let lines = dla_core::harness::varies_lines(&ctx.run_dir, &manifest.id).len();
+        if lines < manifest.targets.len() {
+            return Err(Refusal::new(
+                dla_core::error::codes::VARIES_MISSING,
+                format!(
+                    "harness {} is a second look and {varies_path} has {lines} of {} lines (one per target; the placeholder lines do not count)",
+                    manifest.id,
+                    manifest.targets.len()
+                ),
+                format!(
+                    "one line per target in {varies_path}: what this driver does that the first did not"
+                ),
+                format!(
+                    "write one line per target in {varies_path} (for example: cancels the parent before the child, derives a child of a child), then dla harness run {} --mode both",
+                    manifest.id
+                ),
+            ));
+        }
+        if let Some(h) = dla_core::harness::same_driver_as_earlier(&ctx.run_dir, &manifest.id) {
+            return Err(Refusal::new(
+                dla_core::error::codes::INVALID_VALUE,
+                format!(
+                    "the hooks of harness {} are the same code as those of {h}, which declares the same targets: a second look needs a different driver",
+                    manifest.id
+                ),
+                format!(
+                    "hook bodies that differ from those of {h} (comments and whitespace do not count)"
+                ),
+                format!(
+                    "read the unit of {h} (harness/{h}/driver) and change what a unit does (other call order, derived-from-derived objects, cancelling or failing paths, overlapping lifetimes), then dla harness run {} --mode both",
+                    manifest.id
+                ),
+            ));
+        }
+    }
     let out = run_points(ctx, &manifest, opts)?;
     let partial = !out.partial.is_empty();
     let captured = !opts.capture.is_empty() || opts.tool.is_some();

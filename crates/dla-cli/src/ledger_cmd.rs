@@ -1123,7 +1123,10 @@ fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>
             "{id} cannot be closed: its column {} of {} passed the growth gate, and no alloc-test is bound to it",
             g.column, g.series
         ),
-        format!("an alloc-test of {id} on {} (growth measured is decided, not closed)", g.harness),
+        format!(
+            "an alloc-test of {id} on {} (growth measured is decided, not closed)",
+            g.harness
+        ),
         g.commands().join("   then   "),
     ))
 }

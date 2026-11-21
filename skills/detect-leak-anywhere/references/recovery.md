@@ -156,6 +156,9 @@ rank, the minutes left and the fix.
   `unit` of the driver so each unit reaches the listed targets with a new key, `dla harness run H<n>
   --mode both`, `dla trend S<n>`, read `targets`. Never answer the refusal with another reason, a blocker
   reason you do not have, or a loop of `ledger resolve` calls.
+- A candidate settled by one flat run (`executed`) stays in the queue as a second look while budget is left and
+  the first pass is over: run the batch command, write a different unit (see the block), a `VARIES.txt` line per
+  target, run, trend. Closing it is refused the same way until a different driver has looked.
 - A target a harness missed (`constant`, `not_loaded`, `not_executed`, `unknown`) is refused too, until a
   focus harness (at most 3 targets) missed it as well with a different driver: the fix names the focus
   batch (`--next` when it is the best-ranked pending candidate). Call the writer function the block names
