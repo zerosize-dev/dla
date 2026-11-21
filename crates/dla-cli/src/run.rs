@@ -478,8 +478,10 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         }
     };
     let StatusParts { rs, missing } = rs;
-    let total = missing.len();
-    let shown: Vec<_> = missing.iter().take(3).collect();
+    // Actions, not dependents: items that wait for the same thing are one line.
+    let acts = gate::actions(&missing);
+    let total = acts.list.len();
+    let shown: Vec<_> = acts.list.iter().take(3).collect();
     let revisit = revisit_entries(&view, ctx.worker.as_deref());
     let revisit_total = revisit.len();
     let mut out = json!({
@@ -491,6 +493,7 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         "complete": rs.complete,
         "counts": rs.counts,
         "blocking_total": total,
+        "blocking_dependents": acts.dependents,
         "blocking": shown,
         "budget": extend::status_json(&view, ctx.worker.as_deref()),
         "record": ctx.pointer(STATE_FILE),

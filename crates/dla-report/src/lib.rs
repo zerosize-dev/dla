@@ -66,9 +66,13 @@ struct ReportStatus {
 /// `dla gate check --final` and `dla run status` use, so the three cannot disagree. The
 /// counts come from the findings and the checklist.
 fn gate_status(view: &RunView) -> ReportStatus {
-    let blocking = gate::missing(view, GateTarget::Final, None);
+    let all = gate::missing(view, GateTarget::Final, None);
+    // Actions, as the gate and the status show them: items that wait for the same thing are
+    // one line.
+    let complete = all.is_empty();
+    let blocking = gate::actions(&all).list;
     ReportStatus {
-        complete: blocking.is_empty(),
+        complete,
         blocking,
         counts: status(view).counts,
     }

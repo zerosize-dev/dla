@@ -1539,6 +1539,11 @@ fn next_commands(
                 next.push(format!(
                     "dla ledger add --sibling-of {root} --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence {evidence}   (a leak needs a refuted non-leak sibling)"
                 ));
+                // The sibling that add creates is refuted by this same result; without that
+                // step the confirm below is refused.
+                next.push(format!(
+                    "dla ledger refute {root}.n1 --evidence {evidence}   (the sibling the add creates: use the id it prints)"
+                ));
             }
             // A root that is open, or closed in a state the ledger lets go to `under_test`
             // (`suspected_static_only`, `unresolved`), still gets its test and confirm.
@@ -1697,6 +1702,24 @@ mod tests {
             "t",
         )
         .unwrap();
+        // With no sibling yet: add it, refute it with this result, then test and confirm (a
+        // confirm without the refuted sibling is refused).
+        {
+            let f = l.finding(&root).unwrap().clone();
+            let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4);
+            let at = |needle: &str| {
+                next.iter()
+                    .position(|n| n.starts_with(needle))
+                    .unwrap_or(usize::MAX)
+            };
+            let add = at("dla ledger add --sibling-of F1 ");
+            let refute = at("dla ledger refute F1.n1 --evidence ");
+            let confirm = at(&format!("dla ledger confirm F1 --evidence {growth}"));
+            assert!(
+                add < refute && refute < confirm && confirm < next.len(),
+                "{next:?}"
+            );
+        }
         let mut sib = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![census]);
         sib.sibling_of = Some(root.clone());
         sib.hypothesis = Some("N-WARM".into());

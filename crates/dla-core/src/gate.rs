@@ -668,7 +668,19 @@ pub fn write_back_accounting(
 
 /// A trend column that is not flat: its gate passed, or its shape is steady or stair.
 pub fn non_flat(c: &ColumnTrend) -> bool {
-    c.gate == GateVerdict::Pass || matches!(c.shape, TrendShape::Steady | TrendShape::Stair)
+    !not_a_growth_signal(c)
+        && (c.gate == GateVerdict::Pass || matches!(c.shape, TrendShape::Steady | TrendShape::Stair))
+}
+
+/// A column that rises with the work whatever the program holds, so it never passes as growth
+/// and is not listed as "not flat": a cumulative time (`jvm.jit_seconds`) and the bytes the Go
+/// runtime has released to the operating system (`go.released`).
+pub fn not_a_growth_signal(c: &ColumnTrend) -> bool {
+    c.unit == crate::series::Unit::Seconds
+        || c.name
+            .strip_suffix(".pre_gc")
+            .unwrap_or(&c.name)
+            .eq("go.released")
 }
 
 fn evidence_for_column(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> Option<String> {

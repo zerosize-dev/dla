@@ -739,13 +739,21 @@ fn digest_of(view: &RunView, missing: &[Missing], worker: Option<&str>) -> Strin
         .map(|s| s.lines)
         .sum();
     let mut h = Sha256::new();
-    // The ledger's own length counts what the model decided (findings, answers, moves, open
-    // items), not the evidence the commands in the background write.
+    // The ledger's length counts what the model did (findings, answers, moves, open items, harness
+    // runs), not the trend and residual records that commands finishing in the background write.
     let decided = view
         .ledger
         .lines()
         .iter()
-        .filter(|l| !matches!(l.record, dla_core::Record::Evidence(_)))
+        .filter(|l| {
+            !matches!(&l.record, dla_core::Record::Evidence(e)
+            if matches!(
+                e.kind,
+                dla_core::EvidenceKind::GrowthSeries
+                    | dla_core::EvidenceKind::UnitCountSeries
+                    | dla_core::EvidenceKind::Residual
+            ))
+        })
         .count();
     h.update(format!("{decided}:{slice_lines}:"));
     h.update(ids.join(","));
@@ -1147,6 +1155,113 @@ mod tests {
         assert!(editable_rest("r1/harness/h1/driver/dlaharness.java"));
         assert!(!editable_rest("r1/harness/h1/out/x.json"));
         assert!(!editable_rest("r1/harness/hx/driver/a.py"));
+    }
+
+    fn item(kind: &str, id: &str, fix: &str) -> Missing {
+        Missing {
+            kind: kind.into(),
+            id: id.into(),
+            description: format!("{kind} {id}"),
+            fix: fix.into(),
+        }
+    }
+
+    /// One open item, a queue, and many items that wait on them.
+    fn waiting(columns: usize) -> Vec<Missing> {
+        let mut v = vec![
+            item(
+                "queue",
+                "go",
+                "dla harness gen --lang go --driver --next, fill the hooks",
+            ),
+            item("open_item", "O13", "dla ledger resolve O13 --by <F>"),
+        ];
+        for i in 0..columns {
+            v.push(item(
+                "trend_column",
+                &format!("T{i}:go.heap_live"),
+                "dla ledger resolve O13 --by <F>   ;   dla ledger resolve O14 --by <F>",
+            ));
+            v.push(item(
+                "residual",
+                &format!("S{i}"),
+                "dla ledger resolve O13 --by <F>",
+            ));
+            v.push(item(
+                "finding",
+                &format!("F{i}"),
+                "dla harness gen --lang go --driver --next",
+            ));
+        }
+        v
+    }
+
+    #[test]
+    fn items_that_wait_for_the_same_thing_are_one_action() {
+        let acts = gate::actions(&waiting(40));
+        // The queue, the open item: everything else waits on them.
+        let kinds: Vec<&str> = acts.list.iter().map(|m| m.kind.as_str()).collect();
+        assert_eq!(kinds, ["queue", "open_item"], "{acts:?}");
+        assert_eq!(acts.dependents, 120);
+        assert!(
+            acts.list[0]
+                .description
+                .contains("(+40 waiting on it: F0, F1, F2, ...)")
+        );
+        assert!(acts.list[1].description.contains("(+80 waiting on it: "));
+        // The block reason says the number of actions.
+        let r = block_reason(&waiting(40), None, None, std::path::Path::new("."));
+        assert!(r.contains("2 item(s) are still missing"), "{r}");
+        assert!(r.contains("120 more wait on them"), "{r}");
+        // An item that waits on nothing listed is its own action.
+        let mut v = waiting(2);
+        v.push(item(
+            "trend_column",
+            "T9:os.rss",
+            "dla ledger resolve O99 --by <F>",
+        ));
+        assert_eq!(gate::actions(&v).list.len(), 3);
+    }
+
+    #[test]
+    fn the_digest_follows_the_actions_and_what_was_done_not_the_dependents() {
+        use dla_core::{Authority, EvidenceKind, Ledger, NewEvidence, Source, Tool};
+        let state = RunState::init("/p", None, 3600, None, state::now_utc()).unwrap();
+        let mut ledger = Ledger::from_text("").unwrap();
+        let ev = |kind| NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Test,
+            kind,
+            result: json!({}),
+            raw: None,
+            coverage: dla_core::evidence::EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        };
+        ledger.add_evidence(ev(EvidenceKind::StaticHit)).unwrap();
+        let view = RunView::new(state.clone(), ledger, None);
+        let base = digest_of(&view, &waiting(10), None);
+        // More columns waiting on the same actions: the same digest.
+        assert_eq!(digest_of(&view, &waiting(60), None), base);
+        // An action gone: another digest.
+        let mut fewer = waiting(10);
+        fewer.retain(|m| m.kind != "open_item");
+        assert_ne!(digest_of(&view, &fewer, None), base);
+        // A trend finishing in the background does not change it; a harness run does.
+        let mut l2 = view.ledger.clone();
+        l2.add_evidence(ev(EvidenceKind::GrowthSeries)).unwrap();
+        let v2 = RunView::new(state.clone(), l2.clone(), None);
+        assert_eq!(digest_of(&v2, &waiting(10), None), base);
+        l2.add_evidence(ev(EvidenceKind::Workload)).unwrap();
+        let v3 = RunView::new(state, l2, None);
+        assert_ne!(digest_of(&v3, &waiting(10), None), base);
     }
 
     #[test]
