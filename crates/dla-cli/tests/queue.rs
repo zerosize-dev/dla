@@ -948,17 +948,13 @@ fn an_unknown_verdict_does_not_settle_and_is_explained() {
     assert_eq!(line["verdict_note"], WHAT, "{line}");
     assert!(line.get("settled_by").is_none(), "{line}");
 
-    r.ok(&[
-        "ledger",
-        "resolve",
-        "intake.workload",
-        "--status",
-        "unresolved",
-        "--reason",
-        "build_fails",
-        "--remedy",
-        "no harness here",
-    ]);
+    // A workload blocker is refused while a harness ran (`workload-ran`); the way to the close is
+    // the floor of the time budget: the time is spent but for half a minute.
+    dla_core::RunState::update(&r.run_dir, |s| {
+        s.budget.deadline = dla_core::state::now_utc() + chrono::Duration::seconds(30);
+        Ok(())
+    })
+    .unwrap();
     r.ok(&["ledger", "close-rest"]);
     let record = fs::read_to_string(r.run_dir.join("ledger.jsonl")).unwrap();
     assert!(record.contains(WHAT), "{}", record.len());

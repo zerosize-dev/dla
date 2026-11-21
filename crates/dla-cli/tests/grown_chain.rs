@@ -220,6 +220,35 @@ fn a_workload_blocker_is_refused_while_a_harness_ran_for_every_runtime_with_cand
 }
 
 #[test]
+fn a_target_read_unknown_does_not_make_the_workload_unrunnable() {
+    let (r, _, _) = run_with_a_passed_column("3h");
+    // One target of the run reads `unknown` (nothing can tell whether its code ran); the
+    // others are read. `unknown` is a statement about a target's coverage, not the workload.
+    let path = r.run_dir.join("trend/T1.json");
+    let mut t: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    t["targets"] = serde_json::json!([
+        {"finding": "F998", "verdict": "constant", "detail": "", "declared": true},
+        {"finding": "F999", "verdict": "unknown", "detail": "", "declared": true},
+    ]);
+    fs::write(&path, t.to_string()).unwrap();
+    for reason in ["tool_missing", "build_fails"] {
+        let (code, v) = r.run(&[
+            "ledger",
+            "resolve",
+            "intake.workload",
+            "--status",
+            "unresolved",
+            "--reason",
+            reason,
+            "--remedy",
+            "x",
+        ]);
+        assert_ne!(code, 0, "{reason}: {v}");
+        assert_eq!(v["error"]["code"], "workload-ran", "{v}");
+    }
+}
+
+#[test]
 fn a_workload_blocker_is_accepted_when_no_harness_ran() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("a.py"), "X = {}\n").unwrap();
