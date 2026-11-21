@@ -271,8 +271,10 @@ on to the user. The `Findings:` line counts the leak hypotheses and the non-leak
 strong 0, refuted 13, suspected 9, unresolved 2; non-leak explanations: confirmed 13, refuted 0,
 suspected 0, unresolved 0; no leak confirmed`. A non-leak explanation that held is `confirmed` on its
 side and its leak-side root is `refuted`, so one test is not two leaks; the closing `no leak
-confirmed` appears when something was measured and no leak is confirmed or strong. Read the leak side
-for the verdict. For dynamic findings it prints:
+confirmed` appears when something was measured and no leak is confirmed or strong. A leak finding the
+blind verifier reads as an `N-*` label is counted `confirmed but disputed by the verifier (reads N-INTENT) D`
+and listed after the others: say it as "disputed", not as a confirmed leak. Read the leak side for the
+verdict. For dynamic findings it prints:
 
 - confirmed: `Growth: <column> <slope> <unit>/<axis> (<shape>, gate pass, E12)`, for example
   `Growth: probe:reports.builder.ReportBuilder.category_totals 36.73 count/n (steady, gate pass, E12)`;
@@ -286,7 +288,10 @@ for the verdict. For dynamic findings it prints:
   37 project classes loaded`): project code ran, the listed entry points were not the ones driven;
 - confirmed or strong leaks: a `Trigger:` line, and the `Findings:` line ends with the counts by trigger
   (`confirmed and strong by trigger: reproduced through the public API 1, no trigger found 1, trigger not
-  checked 0`); the findings section lists the reproduced ones first. `Trigger: reproduced through the
+  checked 0`); the findings section lists the reproduced ones first. `Trigger: grown only by calling the
+  registration function itself (<writer>) ...` (counted `grown only by calling the registration function
+  itself`) is a holder the unit fed by calling its writer: a leak only if run-time input reaches that call;
+  say it so, never "reproduced". `Trigger: reproduced through the
   public API in H5 (varies: <text>)` is a leak that real use can make grow. `Trigger: not found: it grows
   when the harness passes new keys to <writer function>; two workloads through the public API did not
   grow it (H5: <varies>; H6: <varies>)` is an unbounded holder with no trigger found (both runs measured the holder flat). `Trigger: not

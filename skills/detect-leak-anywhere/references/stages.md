@@ -666,3 +666,5 @@ or something only the user can supply) or the deadline has passed, then judge th
 is no fixed number of rounds: ending with most of the budget unspent and entry points unexercised
 measured nothing. Never ask the user whether to continue while time is left. To stop early,
 `dla run abort --reason "<why>"` closes the run.
+
+The final gate, `dla gate check` and `dla run status` count actions, not dependents: `N item(s) missing (and D more that wait on them)`. A line that stands for others says `(+K waiting on it: A, B, C, ...)`: the whole-process columns and residual rows that wait for one open item are that open item's line, the queue candidates are the queue's line. Work the list from the top: queue, findings whose column grew, triggers, open items, findings, the rest. The stored gate file keeps every item.

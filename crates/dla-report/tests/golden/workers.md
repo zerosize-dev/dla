@@ -22,6 +22,9 @@ Coverage: not measured
 
 - **O1**: open item O1: worker rust did not finish (slice ends at line 3). Fix: `dla ledger resolve O1 --as unresolved --reason not_exercised --remedy "<text>"`
 - **O2**: open item O2: verifier disagrees with rust/F2 (site: finding native/pool.rs:7 vs verifier none; holder: finding native-handle/global-ref vs verifier thread-local); bundle aaaaaaaaaaaa. Fix: `dla ledger resolve O2 --as unresolved --reason not_exercised --remedy "<text>"`
+- **jvm/F1**: finding jvm/F1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1 --as unresolved --reason not_exercised --remedy "<text>"`
+- **jvm/F1.n1**: finding jvm/F1.n1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1.n1 --as unresolved --reason not_exercised --remedy "<text>"`
+- **rust/F2**: finding rust/F2 is candidate and has no disposition. Fix: `dla ledger resolve rust/F2 --as unresolved --reason not_exercised --remedy "<text>"`
 - **intake.target**: checklist item intake.target is unanswered: Is the target a repository, a local process, an artifact, or only a symptom? Fix: `dla ledger resolve intake.target --status answered --evidence E1`
 - **intake.scope**: checklist item intake.scope is unanswered: Does the investigation cover the whole repository, one module or one service, and what is excluded? Fix: `dla ledger resolve intake.scope --status answered --evidence E1`
 - **intake.symptom**: checklist item intake.symptom is unanswered: What growth was observed, where, and over what time? Fix: `dla ledger resolve intake.symptom --status answered --evidence E1`
@@ -39,9 +42,6 @@ Coverage: not measured
 - **rust/sweep**: no sweep has run for runtime rust. Fix: `dla sweep --lang rust`
 - **rust**: slice of worker rust has 4 line(s) and 3 merged. Fix: `dla ledger merge`
 - **rust**: slice of worker rust ends in a torn line (the worker was killed mid-write). Fix: `dla ledger merge`
-- **jvm/F1**: finding jvm/F1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1 --as unresolved --reason not_exercised --remedy "<text>"`
-- **jvm/F1.n1**: finding jvm/F1.n1 is candidate and has no disposition. Fix: `dla ledger resolve jvm/F1.n1 --as unresolved --reason not_exercised --remedy "<text>"`
-- **rust/F2**: finding rust/F2 is candidate and has no disposition. Fix: `dla ledger resolve rust/F2 --as unresolved --reason not_exercised --remedy "<text>"`
 
 ## Workers
 

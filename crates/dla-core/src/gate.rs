@@ -108,7 +108,7 @@ pub fn pointer_for(target: GateTarget) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Actions {
     /// One item per action, most urgent first: the measurement queue, findings whose column
-    /// grew, triggers, open items, the rest. A line that stands for others says how many
+    /// grew, triggers, open items, findings still to close, the rest. A line that stands for others says how many
     /// wait on it and names three of them.
     pub list: Vec<Missing>,
     /// How many items were folded into the lines of `list`.
@@ -175,7 +175,9 @@ pub fn actions(all: &[Missing]) -> Actions {
         "finding" if m.fix.contains("alloc-test") => 1,
         "trigger" => 2,
         "open_item" => 3,
-        _ => 4,
+        // Findings still to close come before the checklist and the other bookkeeping.
+        "finding" => 4,
+        _ => 5,
     };
     list.sort_by_key(|(m, _)| rank(m));
     let dependents = list.iter().map(|(_, d)| d.len()).sum();
@@ -184,14 +186,31 @@ pub fn actions(all: &[Missing]) -> Actions {
             .into_iter()
             .map(|(mut m, deps)| {
                 if !deps.is_empty() {
-                    let ex: Vec<&str> = deps.iter().take(3).map(String::as_str).collect();
-                    m.description = format!(
-                        "{} (+{} waiting on it: {}{})",
-                        m.description,
-                        deps.len(),
-                        ex.join(", "),
-                        if deps.len() > 3 { ", ..." } else { "" }
-                    );
+                    // Names of other things only: one finding with several items is not an
+                    // example of itself.
+                    let mut ex: Vec<&str> = Vec::new();
+                    for d in &deps {
+                        if *d != m.id && !ex.contains(&d.as_str()) {
+                            ex.push(d);
+                        }
+                    }
+                    let more = ex.len() > 3;
+                    ex.truncate(3);
+                    m.description = if ex.is_empty() {
+                        format!(
+                            "{} (+{} more item(s) with the same fix)",
+                            m.description,
+                            deps.len()
+                        )
+                    } else {
+                        format!(
+                            "{} (+{} waiting on it: {}{})",
+                            m.description,
+                            deps.len(),
+                            ex.join(", "),
+                            if more { ", ..." } else { "" }
+                        )
+                    };
                 }
                 m
             })
@@ -1088,7 +1107,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                     format!("{}:{}", t.id, c.name),
                     format!(
                         "column {} of {} ({}) measures the whole process, is not flat and is never tied to a finding; it is accounted for by the residual rows, which are missing or over their threshold without a resolved open item",
-                        c.name,
+                        readable_column(&c.name),
                         t.id,
                         c.shape_name()
                     ),
@@ -1143,7 +1162,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 format!("{}:{}", t.id, c.name),
                 format!(
                     "column {} of {} ({}) is not flat and {why}",
-                    c.name,
+                    readable_column(&c.name),
                     t.id,
                     c.shape_name()
                 ),

@@ -11,8 +11,15 @@
         "$ref": "#/$defs/Missing"
       }
     },
+    "missing_dependents": {
+      "description": "How many further items wait on those actions (whole-process columns on an open item,\ncandidates on the queue, findings with one fix). The full list is in the stored file.",
+      "type": "integer",
+      "format": "uint",
+      "default": 0,
+      "minimum": 0
+    },
     "missing_total": {
-      "description": "Number of missing items in total.",
+      "description": "Number of actions that are missing: items that wait for the same thing count once.",
       "type": "integer",
       "format": "uint",
       "minimum": 0
