@@ -186,10 +186,27 @@ pub fn census_entries(run_dir: &Path) -> Vec<CensusEntry> {
 /// The census entry for `owner`: an exact owner first, else the only entry that matches
 /// by dotted suffix. Several matches resolve to nothing.
 pub fn find_entry<'e>(entries: &'e [CensusEntry], owner: &str) -> Option<&'e CensusEntry> {
+    find_entry_with(entries, &canonical_owners(entries), owner)
+}
+
+/// [`canonical`] of the owner of each entry, in order: computed once for many lookups.
+pub fn canonical_owners(entries: &[CensusEntry]) -> Vec<Option<String>> {
+    entries.iter().map(|e| canonical(&e.owner)).collect()
+}
+
+/// [`find_entry`] with the canonical owners of `entries` given (`canon[i]` for `entries[i]`),
+/// so a lookup compares strings instead of normalizing every entry's owner again.
+pub fn find_entry_with<'e>(
+    entries: &'e [CensusEntry],
+    canon: &[Option<String>],
+    owner: &str,
+) -> Option<&'e CensusEntry> {
     let want = canonical(owner)?;
     let exact: Vec<&CensusEntry> = entries
         .iter()
-        .filter(|e| canonical(&e.owner).as_deref() == Some(want.as_str()))
+        .zip(canon)
+        .filter(|(_, c)| c.as_deref() == Some(want.as_str()))
+        .map(|(e, _)| e)
         .collect();
     if exact.len() == 1 {
         return exact.first().copied();
@@ -197,9 +214,17 @@ pub fn find_entry<'e>(entries: &'e [CensusEntry], owner: &str) -> Option<&'e Cen
     if exact.len() > 1 {
         return None;
     }
+    // `owners_match(entry, want)`: both canonical, one a dotted suffix of the other. The
+    // canonical form of `want` is taken again, as `owners_match` takes it.
+    let want2 = canonical(&want);
     let loose: Vec<&CensusEntry> = entries
         .iter()
-        .filter(|e| owners_match(&e.owner, &want))
+        .zip(canon)
+        .filter(|(_, c)| match (c.as_deref(), want2.as_deref()) {
+            (Some(a), Some(b)) => dotted_suffix(a, b) || dotted_suffix(b, a),
+            _ => false,
+        })
+        .map(|(e, _)| e)
         .collect();
     if loose.len() == 1 {
         loose.first().copied()
@@ -356,6 +381,7 @@ pub struct Resolver {
     run_dir: PathBuf,
     project: PathBuf,
     entries: std::sync::OnceLock<Vec<CensusEntry>>,
+    canon: std::sync::OnceLock<Vec<Option<String>>>,
     index: std::sync::OnceLock<SourceIndex>,
 }
 
@@ -366,6 +392,7 @@ impl Resolver {
             run_dir: run_dir.to_path_buf(),
             project: project.to_path_buf(),
             entries: std::sync::OnceLock::new(),
+            canon: std::sync::OnceLock::new(),
             index: std::sync::OnceLock::new(),
         }
     }
@@ -383,7 +410,8 @@ impl Resolver {
     /// See [`resolve`].
     pub fn resolve(&self, key_or_owner: &str) -> Option<Resolved> {
         let owner = normalize(key_or_owner)?;
-        if let Some(e) = find_entry(self.entries(), &owner) {
+        let canon = self.canon.get_or_init(|| canonical_owners(self.entries()));
+        if let Some(e) = find_entry_with(self.entries(), canon, &owner) {
             return Some(Resolved {
                 owner: e.owner.clone(),
                 site: e.site.clone(),
