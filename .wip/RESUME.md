@@ -478,3 +478,16 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Running: grpc-4 (waiter blmpj0h3h), CI on 0dbf4c9 (waiter bgkwk8545), P3 pass 8 (u49), N follow-up (u46: flat ES-module probe first), G brief L (u50).
 - spring-5 not started (wait for grpc-4 to end; it would meet the same holes as axios-4/tokio-2, so consider waiting for pass 8 and brief L before spending the run).
 - Disk: freed to 3 GB (deleted old /root/.cache/dla-bench benchmark caches, go build cache, u43 run copies, tokio-2 run dir). grpc-4 run dir is 2.1 GB (Go caches): delete when read.
+
+## State at 17:36 UTC, 2026-11-21
+- N FOLLOW-UP REPORTED AND CHECKED (u46/report.md; my log u47/verify-n2.log): (a) the flat probe: the probe read `reachable` (object count, 1) and a plain object had no `.size` column; `sizeOf` in dla-preload.cjs now gives a plain object its key count (test node_esm::a_module_level_object_table_and_a_map_rise_one_per_unit_in_driver_mode); (b) Node driver fits its step inside round 1; (c) Python, Go, JVM, Rust drivers fit the step (inside round 1 and after each round); Python (os._exit after flush; agent exit handler returns anyway once a checkpoint was written; memray is stopped at the last dump) and JVM end explicitly (tests crates/dla-workload/tests/driver_fit.rs, 4 pass; MUT_N1 on the Python in-round check failed its test; restored); (d) capture_advice rows for every runtime incl. Go and Python, 12 rows tested. Task 62 done.
+- N saw 2 queue tests and the schema test fail: P3 (pass 8) and G (brief L) are editing gate/queue/manifest now; recheck when they report.
+- grpc-4 at 17:33: the model is trying to stop, run INCOMPLETE, about 810 gate items missing (569 trend columns tied to no finding, 137 more), 64 ranked candidates untargeted (next batch xdsclient). It reported confirming several registry holders (F185, F184, F188, F205) and three focus targets grew (F685, F682, F687). Read it when run.json appears (waiter blmpj0h3h).
+- CI on 0dbf4c9: run 44927090561 in progress at 17:33.
+
+## State at 17:38 UTC, 2026-11-21
+- REAL RUN grpc-4 FINISHED (42 min, 238 turns, cost 6.33): INCOMPLETE, but the DOCUMENTED LEAK IS CONFIRMED: F204 health.Server.updates (PR 9411), probe 1 count/iteration, trigger reproduced through Health.Watch with distinct service names (notes real-run-plugin-grpc-4.md, evidence u36/grpc-4, run dir deleted).
+- Real-project score so far on current code: aiohttp found (aiohttp-3), grpc-go found (grpc-4); axios measured and printed but the model escaped (pass 8 fixes); tokio-util not triggered (brief L fixes); spring not rerun yet; Jetty and Pillow never run.
+- grpc-4 problems -> PASS 9 brief wip-notes/pass9-brief.md, queued for P3 after pass 8: gate lists 810 dependents for about 7 actions; about 18 start-up registries "confirmed" (verifier N-INTENT each); empty package in a probe name; stop-hook digest.
+- Running: CI on 0dbf4c9 (run 44927090561, waiter bgkwk8545), P3 pass 8 then 9 (u49), G brief L (u50). N is done (follow-up checked).
+- Disk 6.4 GB free after deleting /root/dla-real/grpc-4.

@@ -107,16 +107,6 @@ impl Run {
             .collect()
     }
 
-    fn id_at(&self, site: &str) -> String {
-        self.list()
-            .iter()
-            .find(|l| l["site"].as_str() == Some(site))
-            .unwrap_or_else(|| panic!("no finding at {site}"))["id"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    }
-
     fn driver(&self, h: &str) -> std::path::PathBuf {
         self.run_dir
             .join("harness")
@@ -147,29 +137,6 @@ impl Run {
             );
         fs::write(p, text).unwrap();
     }
-}
-
-/// The verdicts of the stored trend report (the command's output is bounded).
-fn verdicts(r: &Run, t: &Value) -> Vec<(String, String)> {
-    let stored: Value = serde_json::from_str(
-        &fs::read_to_string(
-            r.run_dir
-                .join(format!("trend/{}.json", t["trend"].as_str().unwrap())),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    stored["targets"]
-        .as_array()
-        .unwrap_or_else(|| panic!("no targets: {t}"))
-        .iter()
-        .map(|v| {
-            (
-                v["finding"].as_str().unwrap().to_owned(),
-                v["verdict"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect()
 }
 
 /// Sets every target verdict of the stored trend report `trend` to `verdict` (the Python

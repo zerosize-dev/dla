@@ -597,9 +597,11 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         "one run-config record lists what was closed"
     );
 
-    // The one that grew is tested or closed by the caller; then nothing of the queue is left
-    // and the final gate asks for no finding.
-    let o = r.run(&[
+    // The one that grew is decided by an alloc-test, not closed: closing it is refused with
+    // the commands that decide it. With an alloc-test evidence bound to it (written directly
+    // here: a real alloc-test needs the built harness) the existing rules decide, and then
+    // nothing of the queue is left and the final gate asks for no finding.
+    let args = [
         "ledger",
         "resolve",
         &cached,
@@ -609,7 +611,32 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         "not_exercised",
         "--remedy",
         "x",
-    ]);
+    ];
+    let o = r.run(&args);
+    assert_eq!(o.json["error"]["code"], "growth-not-measured", "{}", o.text);
+    {
+        use dla_core::{Authority, EvidenceKind, Ledger, NewEvidence, Source, Tool};
+        let mut l = Ledger::load(&r.run_dir).unwrap();
+        l.add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Test,
+            kind: EvidenceKind::Discriminator,
+            result: serde_json::json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"], "finding": cached}),
+            raw: None,
+            coverage: dla_core::evidence::EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+    }
+    let o = r.run(&args);
     assert_eq!(o.code, 0, "{}", o.text);
     let left = r.missing();
     assert!(
