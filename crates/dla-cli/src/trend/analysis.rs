@@ -3,7 +3,7 @@
 use dla_core::{
     Refusal,
     error::codes,
-    series::{ColumnKind, ColumnScope, SeriesFile},
+    series::{ColumnKind, ColumnScope, SeriesFile, not_a_growth_signal},
     trend::ColumnTrend,
 };
 use dla_stats::{GateThresholds, GateVerdict, analyze};
@@ -67,6 +67,10 @@ pub fn analyze_column(series: &SeriesFile, idx: usize, th: &GateThresholds) -> C
     if col.scope == ColumnScope::Container {
         gate = GateVerdict::Fail;
         gate_failed.push(CONTAINER_REASON.to_owned());
+    }
+    if let Some(reason) = not_a_growth_signal(&col.name) {
+        gate = GateVerdict::Fail;
+        gate_failed.push(reason.to_owned());
     }
     ColumnTrend {
         name: col.name.clone(),
@@ -211,6 +215,7 @@ pub mod testutil {
 mod tests {
     use super::testutil::*;
     use super::*;
+    use dla_core::series::NOT_GROWTH_REASON;
     use dla_stats::TrendShape;
 
     fn th() -> GateThresholds {
@@ -284,6 +289,26 @@ mod tests {
         assert_eq!(t.gate_failed, [CONTAINER_REASON]);
         assert_eq!(t.shape, TrendShape::Steady);
         assert!(t.sen.is_some());
+    }
+
+    #[test]
+    fn memory_returned_to_the_os_is_analysed_but_never_passes_as_growth() {
+        // The shape of `go.released` in a run of a flat Go fixture: lumps the scavenger returned,
+        // a stair. As any other byte column it passes.
+        let v = [
+            12.0e6, 13.0e6, 13.4e6, 14.0e6, 18.5e6, 19.0e6, 19.5e6, 24.0e6, 24.5e6,
+        ];
+        let other = series("S1", 1, vec![Col::gauge("go.total", &v)]);
+        let t = analyze_column(&other, 0, &th());
+        assert_eq!(t.gate, GateVerdict::Pass, "{:?}", t.gate_failed);
+        assert_eq!(t.shape, TrendShape::Stair);
+        let s = series("S1", 1, vec![Col::gauge("go.released", &v)]);
+        let t = analyze_column(&s, 0, &th());
+        assert_eq!(t.gate, GateVerdict::Fail);
+        assert_eq!(t.gate_failed, [NOT_GROWTH_REASON]);
+        // Recorded and shown: the figures and the shape are still there.
+        assert_eq!(t.shape, TrendShape::Stair);
+        assert!(t.sen.is_some() && t.rise > 0.0);
     }
 
     #[test]

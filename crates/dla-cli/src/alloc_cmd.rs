@@ -312,6 +312,10 @@ fn trend_of(
                 gate = GateVerdict::Fail;
                 gate_failed.push("container scope".to_owned());
             }
+            if let Some(reason) = dla_core::series::not_a_growth_signal(&col.name) {
+                gate = GateVerdict::Fail;
+                gate_failed.push(reason.to_owned());
+            }
             let mut candidates: Vec<FindingId> = Vec::new();
             let mut push = |f: &FindingId| {
                 if !candidates.contains(f) {
