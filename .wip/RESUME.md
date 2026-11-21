@@ -582,3 +582,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - REAL RUN spring-5 FINISHED (75 min, cost 5.85): INCOMPLETE, no leak; the documented holder F282 was reached by a focus harness and read constant (Java driver cannot produce Kotlin property references; JUnit loop blocked by Mockito self-attach in this sandbox). Notes real-run-plugin-spring-5.md, evidence u36/spring-5.
 - Pillow 10.1.0 and Jetty 12.0.31: not run. Pillow needs its C extension built (freetype, zlib, jpeg headers; Python <= 3.12; this machine has 3.13); Jetty source copy is partial. Environment limits, to tell the owner.
 - Running: P3 pass 11. After it: verify, fourth frozen build (M2 skeleton + pass 11), CI snapshot, tokio-5.
+
+## State at 22:42 UTC, 2026-11-21
+- P3 PASS 11 REPORTED AND CHECKED (u49/report.md; my log u47/verify-p11.log): 11.1 Trigger::Direct only when every writer site is init or startup by the census facts (else reproduced; no facts -> not checked); on the grpc-5 ledger 8 of 10 become reproduced (F202 among them), F143 and F182 keep the reading. 11.2 untied growing columns of a capture summary (series of source kind dump) are one action per (trend, evidence); one finding from `ledger add --origin growth-series --evidence E` stands for them ("Also growing in the same capture"); on the grpc-5 gate 124 actions would be 18. Tests: trigger 15, grown_chain 11; MUT_H1 and MUT_H2 each failed 2 tests; restored. fmt, clippy workspace, schema, test_grade, skill_text clean.
+- FOURTH FROZEN BUILD: snapshot 56aa2217ce837e543c01503ec7ccd4b63b0ebbdf (pushed WITHOUT [skip ci]; CI waiter in background, logs u55/ci). Binary /root/dla-real/bin/dla = u55/bin/dla; plugin refreshed. On top of main d297716: G's M2 skeleton, P3's pass 11.
+- REAL RUN tokio-5 STARTED 22:41 UTC on the fourth frozen build (waiter in background).
+- CI on main d297716 (run 44955952991) and on the dev branch (44955954569): in progress at 22:27.
+- If CI on 56aa221 is green: write commit-message-4.txt (skeleton, trigger facts, capture grouping) and commit with commit-snapshot-tree.sh.
