@@ -471,3 +471,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - N got one more item first (queued message): ES-module probe on validator.js deprecatedWarnings read flat while the holder grew.
 - Still running: grpc-4 (waiter blmpj0h3h), CI on 0dbf4c9 (waiter bgkwk8545).
 - spring-5 and tokio-2 NOT started yet: start them on the frozen build while pass 8 is built (they test other fixes: focus rule, trend speed, Rust stacks), or wait for pass 8? Decision: start them now, the holes of pass 8 apply to them too but they also show what else breaks.
+
+## State at 17:03 UTC, 2026-11-21
+- REAL RUN tokio-2 FINISHED in 78 s: COMPLETE, no leak; the unit never built a grandchild token (notes real-run-plugin-tokio-2.md, evidence u36/tokio-2; run dir deleted).
+- BRIEF L STARTED: G resumed (a349aef413818803c), wip-notes/second-look-brief.md, scratch u50: second look (different driver, focus harness) for top flat-settled candidates while budget is above the floor; bounded; VARIES.txt; settled after two different drivers.
+- Running: grpc-4 (waiter blmpj0h3h), CI on 0dbf4c9 (waiter bgkwk8545), P3 pass 8 (u49), N follow-up (u46: flat ES-module probe first), G brief L (u50).
+- spring-5 not started (wait for grpc-4 to end; it would meet the same holes as axios-4/tokio-2, so consider waiting for pass 8 and brief L before spending the run).
+- Disk: freed to 3 GB (deleted old /root/.cache/dla-bench benchmark caches, go build cache, u43 run copies, tokio-2 run dir). grpc-4 run dir is 2.1 GB (Go caches): delete when read.

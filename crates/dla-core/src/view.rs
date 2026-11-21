@@ -171,6 +171,9 @@ pub enum BlockingKind {
     /// A confirmed or strong leak-side finding grew when a harness fed it new keys, and
     /// nothing shows that a caller of the public API can do that.
     Trigger,
+    /// A finding a passed growth column points at (or a detector hit with a site) that no
+    /// alloc-test or measurement decided.
+    Growth,
 }
 
 /// One thing that must be dispositioned, with the command that does it.
@@ -404,6 +407,10 @@ pub fn status(view: &RunView) -> ReportStatus {
     // Right after the queue: a leak that grew under direct injection and whose trigger is
     // not checked.
     blocking.extend(crate::trigger::items(view));
+    // Growth the run measured and nobody decided (a passed column points at the finding, a
+    // detector hit names a site): listed with the commands that decide it.
+    let grown = crate::grown::grown_unmeasured(view);
+    blocking.extend(crate::grown::items(view, &grown));
     let queue_on = view.state.queue && view.run_dir.is_some();
     let ranked: std::collections::BTreeMap<_, _> = if queue_on {
         crate::queue::ranked(view)
@@ -438,7 +445,9 @@ pub fn status(view: &RunView) -> ReportStatus {
                 .and_then(|r| r.runtime.as_ref())
                 .and_then(|rt| queues.iter().find(|q| &q.runtime == rt && q.open()))
                 .filter(|q| q.pending.contains(&f.id));
-            let fix = if let Some(q) = pending_in {
+            let fix = if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
+                g.commands().join("   then   ")
+            } else if let Some(q) = pending_in {
                 q.command.clone()
             } else if let Some(step) = step {
                 step

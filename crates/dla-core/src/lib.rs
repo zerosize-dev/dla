@@ -33,6 +33,7 @@ pub mod explain;
 pub mod finding;
 pub mod fsutil;
 pub mod gate;
+pub mod grown;
 pub mod harness;
 pub mod holders;
 pub mod ids;

@@ -171,6 +171,9 @@ fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
         for b in base.iter().filter(|b| b.kind == BlockingKind::Trigger) {
             out.0.push(from_blocking(b.clone()));
         }
+        for b in base.iter().filter(|b| b.kind == BlockingKind::Growth) {
+            out.0.push(from_blocking(b.clone()));
+        }
         coverage_contradiction_items(view, &mut out);
     }
     for b in base {
@@ -180,9 +183,16 @@ fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
                 BlockingKind::Finding
                 | BlockingKind::OpenItem
                 | BlockingKind::Queue
-                | BlockingKind::Trigger => false,
+                | BlockingKind::Trigger
+                | BlockingKind::Growth => false,
             };
-        if keep && !(is_final && matches!(b.kind, BlockingKind::Queue | BlockingKind::Trigger)) {
+        if keep
+            && !(is_final
+                && matches!(
+                    b.kind,
+                    BlockingKind::Queue | BlockingKind::Trigger | BlockingKind::Growth
+                ))
+        {
             out.0.push(from_blocking(b));
         }
     }
@@ -1422,7 +1432,7 @@ pub fn closes_without_exercise(reason: UnresolvedReason) -> bool {
 
 /// The reasons that record a blocker on `intake.workload`. `inconclusive` is not one: it
 /// says a measurement could not decide, not that something stopped the harness.
-pub(crate) fn is_blocker_reason(reason: UnresolvedReason) -> bool {
+pub fn is_blocker_reason(reason: UnresolvedReason) -> bool {
     match reason {
         UnresolvedReason::EnvUnavailable
         | UnresolvedReason::ToolMissing
@@ -1432,6 +1442,33 @@ pub(crate) fn is_blocker_reason(reason: UnresolvedReason) -> bool {
         | UnresolvedReason::NotExercised
         | UnresolvedReason::TimeBudget
         | UnresolvedReason::Inconclusive => false,
+    }
+}
+
+/// The harness and series that contradict a blocker recorded on `intake.workload`: a series
+/// of a harness of this run exists for every runtime that has ranked candidates, so a workload
+/// could be run. `None` when some runtime with candidates never ran a harness (the blocker may
+/// be about it), or when there are no candidates.
+pub fn workload_ran(view: &RunView) -> Option<(String, String)> {
+    let run_dir = view.run_dir.as_deref()?;
+    let mut wanted: BTreeSet<String> = BTreeSet::new();
+    for r in crate::queue::ranked(view) {
+        wanted.insert(r.runtime?);
+    }
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut ran: std::collections::BTreeMap<String, (String, String)> = Default::default();
+    for (series, h) in &view.series_harness {
+        if let Ok(m) = crate::harness::HarnessManifest::load(run_dir, h) {
+            ran.entry(m.runtime.as_str().to_owned())
+                .or_insert((h.clone(), series.clone()));
+        }
+    }
+    if wanted.iter().all(|rt| ran.contains_key(rt)) {
+        wanted.iter().find_map(|rt| ran.get(rt).cloned())
+    } else {
+        None
     }
 }
 
@@ -2315,7 +2352,10 @@ fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
         let keep = match b.kind {
             BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
             BlockingKind::Trigger => target == GateTarget::Final && mine(&b.id),
-            BlockingKind::ChecklistItem | BlockingKind::Integrity | BlockingKind::Queue => false,
+            BlockingKind::ChecklistItem
+            | BlockingKind::Integrity
+            | BlockingKind::Queue
+            | BlockingKind::Growth => false,
             BlockingKind::Run => true,
         };
         if keep {

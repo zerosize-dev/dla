@@ -631,6 +631,8 @@ pub(crate) struct Loaded<'a> {
     pub ranked: &'a [dla_core::queue::Ranked],
     /// [`dla_core::queue::queues`] of the view.
     pub queues: &'a [dla_core::queue::RuntimeQueue],
+    /// [`dla_core::grown::grown_unmeasured`] of the view.
+    pub grown: &'a [dla_core::grown::Grown],
 }
 
 pub(crate) fn resolve_finding(
@@ -663,6 +665,11 @@ pub(crate) fn resolve_finding(
         }
     };
     let from = ledger.finding(&id).map(|f| f.state);
+    // A finding a passed growth column points at is decided by an alloc-test, not closed
+    // unmeasured; the floor rule (`time_budget`) and an aborted run keep their own.
+    if a.reason != Some(UnresolvedReason::TimeBudget) {
+        refuse_grown_unmeasured(ctx, &id, loaded)?;
+    }
     if let Some(reason) = a.reason {
         refuse_target_pending(ctx, &id, reason, loaded)?;
         refuse_unrun_harness(ctx, &id, reason, loaded)?;
@@ -1072,6 +1079,7 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
             format!("dla ledger resolve {item} --status answered --evidence E1"),
         )
     })?;
+    refuse_contradicted_workload_blocker(ctx, &item, status, a.reason)?;
     let line = ledger.answer_checklist(ChecklistAnswer {
         item: item.clone(),
         status,
@@ -1087,6 +1095,73 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+/// Refuses to close `id` (`unresolved` or `suspected_static_only`) while a passed growth
+/// column points at it and no alloc-test evidence is bound to it: the fix is the commands that
+/// decide it. An aborted run is not held to it.
+fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>>) -> Res<()> {
+    let own;
+    let own_grown;
+    let (view, grown): (&RunView, &[dla_core::grown::Grown]) = match loaded {
+        Some(l) => (l.view, l.grown),
+        None => {
+            own = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+            own_grown = dla_core::grown::grown_unmeasured(&own);
+            (&own, &own_grown)
+        }
+    };
+    if view.state.status == dla_core::state::RunStatus::Aborted {
+        return Ok(());
+    }
+    let Some(g) = grown.iter().find(|g| &g.finding == id) else {
+        return Ok(());
+    };
+    Err(Failure::refuse(
+        core_codes::GROWTH_NOT_MEASURED,
+        format!(
+            "{id} cannot be closed: its column {} of {} passed the growth gate, and no alloc-test is bound to it",
+            g.column, g.series
+        ),
+        format!("an alloc-test of {id} on {} (growth measured is decided, not closed)", g.harness),
+        g.commands().join("   then   "),
+    ))
+}
+
+/// Refuses `intake.workload` as `unresolved` with a blocker reason (`tool_missing`,
+/// `env_unavailable`, `build_fails`, `privilege_declined`: the ones that close the measurement
+/// queue) when the run's own records contradict it: a harness ran and wrote a series for every
+/// runtime that has candidates. A probe that reads flat is a verdict about one target, not
+/// about the workload.
+fn refuse_contradicted_workload_blocker(
+    ctx: &Ctx,
+    item: &str,
+    status: AnswerStatus,
+    reason: Option<UnresolvedReason>,
+) -> Res<()> {
+    if item != "intake.workload"
+        || status != AnswerStatus::Unresolved
+        || !reason.is_some_and(gate::is_blocker_reason)
+    {
+        return Ok(());
+    }
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let Some((harness, series)) = gate::workload_ran(&view) else {
+        return Ok(());
+    };
+    let reason = reason.map_or(String::new(), |r| r.to_string());
+    Err(Failure::refuse(
+        core_codes::WORKLOAD_RAN,
+        format!(
+            "intake.workload cannot be recorded as {reason}: harness {harness} ran and wrote series {series}, so a workload can be run"
+        ),
+        format!(
+            "a blocker that the run's records do not contradict (no harness of a runtime with candidates ran), not {reason}"
+        ),
+        format!(
+            "a probe that reads flat is a verdict about one target, not about the workload: read dla trend {series} (its targets and next lines), give the target a unit that reaches it with a new key or a size reading, and run {harness} again; or measure the findings a passed column points at (dla ledger list, dla gate check --final)"
+        ),
+    ))
 }
 
 /// Runs `dla --worker <name> ledger done`: ends the worker's slice.

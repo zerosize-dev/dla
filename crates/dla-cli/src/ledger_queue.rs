@@ -267,10 +267,12 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
     let queues = queue::queues(&view, ctx.worker.as_deref());
     // Loaded once: the refusals of `resolve` read these for every finding instead of loading
     // the run again.
+    let grown = dla_core::grown::grown_unmeasured(&view);
     let loaded = Loaded {
         view: &view,
         ranked: &ranked,
         queues: &queues,
+        grown: &grown,
     };
     let mut only: Option<Option<String>> = None;
     let mine = |f: &Finding| {
@@ -295,6 +297,16 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         let q = runtime
             .as_deref()
             .and_then(|rt| queues.iter().find(|q| q.runtime == rt));
+        // A candidate whose column grew is a lead to decide, not one to close: a passed
+        // column points at it and no alloc-test is bound to it. The commands are printed in
+        // order and each one is accepted as printed.
+        if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
+            left.push((
+                f.id.to_string(),
+                format!("its column grew: {}", g.commands().join("   then   ")),
+            ));
+            continue;
+        }
         // Pending in an open queue: it waits for a measurement.
         if q.is_some_and(|q| q.open() && q.pending.contains(&f.id)) {
             let cmd = q.map(|q| q.command.clone()).unwrap_or_default();
@@ -307,11 +319,13 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             ));
             continue;
         }
-        // A candidate whose column grew is a lead to test, not one to close.
         if ix.best_verdict(&f.id) == Some(Verdict::Grew) {
             left.push((
                 f.id.to_string(),
-                format!("its column grew: dla ledger test {}", f.id),
+                format!(
+                    "its column grew: dla ledger test {} --evidence <workload evidence of the harness>, then dla alloc-test <H> --finding {}",
+                    f.id, f.id
+                ),
             ));
             continue;
         }
