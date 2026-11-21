@@ -311,8 +311,6 @@ fn run_diff_axis(
         match allocated_order(&captures) {
             Ok(order) => {
                 if order.iter().enumerate().any(|(k, &i)| k != i) {
-                    axis_fallback = Some("x is the capture number, not the bytes allocated when each profile was taken: the alloc_space totals do not strictly increase".into());
-                } else if false {
                     let mut slots: Vec<Option<ProfileCapture>> =
                         captures.into_iter().map(Some).collect();
                     captures = order.iter().filter_map(|&i| slots[i].take()).collect();

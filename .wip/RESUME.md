@@ -249,3 +249,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - My check of the queue build on aiohttp 3.10.10 (static stage, copy in scratch u29/aiohttp): `run status` leads with the queue item (92 ranked, F8 = aiohttp/web_app.py:82 is rank 1), `dla ledger list` works, `dla harness gen --lang python --driver --next` declares 8 targets and writes the target block into the driver.
 - Seen, for the next ranking step: the Python census lists TypeVar assignments (`aiohttp.client._RetType`, `aiohttp.helpers._T`) as static/global holders with writers; they take queue slots in tier 2.
 - Next: verify Q1's report (tests, clippy, fmt on tests/queue.rs, schema, static both modes, dynamic), refresh /root/dla-real/plugin and bin, real runs aiohttp-2, grpc-2, spring-4. Then give A the Go driver-mode coverage gap.
+
+## State 2026-11-21 03:16 UTC
+- Real run aiohttp-2 started 03:13 (/root/dla-real/aiohttp-2, plugin copy refreshed from the working tree, binary = queue build u28/Q1/bench/dla). Waiter task writes when run.json appears.
+- Ranking with the queue build (static stage, scratch u29/<name>, lists in u29/<name>-list.jsonl): grpc-go 298 ranked, documented site health/server.go:49 is rank 159 (tier 4, its only removers delete from the inner map); spring-data-commons 479 ranked, TypedPropertyPaths.java:53 is rank 325 (tier 4, writers/removers matched by name in other files). The queue alone cannot reach them: a ranking second step is needed.
+- Research agent R (Sonnet, read-only, scratch u30, brief wip-notes/rank2-research-brief.md) is measuring generic static signals for a better order, with the bench fixtures as a guard against fitting.
+- Agent A: follow-up "order captures by bytes allocated" in progress (report appended to u26/report.md). After it: Go driver-mode harness writes no cover profile.
+- Agent Q1: still tracing a refuted-count difference on python-report-memo-bounded before reporting.

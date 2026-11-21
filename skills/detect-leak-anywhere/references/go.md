@@ -42,9 +42,12 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   taken (the sum of `alloc_space` over its stacks, the series `axis` `allocated-bytes`), which is
   proportional to the work done at that sample in command mode, in driver mode and for profiles of one
   process taken by `dla attach`. The gate then compares rates per allocated byte, and a slope shown for
-  the series is bytes kept per byte allocated. When a profile has no positive `alloc_space` total, or the
-  totals do not increase in capture order, x stays the capture number (`axis` `dump`) and a limitation
-  says why. The cost measured was +2 to +3 % of the run time on runs of 8 to 100 seconds and up to +16 %
+  the series is bytes kept per byte allocated. The captures are put in the order of
+  those totals whatever order they were taken in (each command-mode point is its own process, so the
+  order of the readings carries nothing, and a sample taken early in a run can hold less work than the
+  point before it); a limitation line gives the order when it differs from the capture order. When a
+  profile has no positive `alloc_space` total, or two totals are equal, x stays the capture number
+  (`axis` `dump`) and a limitation says why. The cost measured was +2 to +3 % of the run time on runs of 8 to 100 seconds and up to +16 %
   on a one-second run of a pointer-heavy heap. A workload that is never idle at the sampler's instants
   and frees nothing between batches reads its working set as the floor: flat in `n`, so no trend.
 - Purges: `free-os-memory` and `gc`.

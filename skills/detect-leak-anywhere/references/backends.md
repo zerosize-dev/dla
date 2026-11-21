@@ -23,7 +23,7 @@ first; `--backend <name>` forces one.
 | `alloc-stack-diff` | JVM | `jfr-old-object-sample` | a `.jfr` recording | `jfr` (JDK 11+) | `jfr-old-object-sample` |
 | `alloc-stack-diff` | JVM | `jfr-old-object-text` | `jfr print` text of `jdk.OldObjectSample` | none | none |
 | `alloc-stack-diff` | Node | `node-heapprofile` | `alloc-<n>.heapprofile` (sampling heap profile) | none | none |
-| `alloc-stack-diff` | Go | `go-pprof-heap` | `go-<n>.heap.pb.gz` (heap profile, stacks; the series x is the bytes allocated when each profile was taken, the capture number when the totals are missing or do not increase) | none | none |
+| `alloc-stack-diff` | Go | `go-pprof-heap` | `go-<n>.heap.pb.gz` (heap profile, stacks; the series x is the bytes allocated when each profile was taken, captures ordered by those totals; the capture number when a total is missing or two are equal) | none | none |
 | `alloc-stack-diff` | Python | `py-tracemalloc` | `py-<n>.alloc.json` | none | none |
 | `alloc-stack-diff` | Python | `py-memray` | `py-<n>.memray.json` (needs memray in the target's interpreter to capture) | none to read | none |
 | `alloc-stack-diff` | native | `shim-alloc-stacks` | shim `dump.jsonl` of command-mode points (the same stacks as `shim-stack-groups`, recorded as allocation-stack evidence) | `addr2line` for project sites | `addr2line` |
