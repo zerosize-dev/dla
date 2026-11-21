@@ -364,3 +364,107 @@ fn a_repeated_series_says_nothing_about_new_keys() {
     std::fs::write(&p, doc.to_string()).unwrap();
     assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
 }
+
+/// Writes `driver/<file>` and `targets.json` (writer functions of F1) of entry-path harness `h`.
+fn driver_calling(run: &Run, h: &str, text: &str, writers: &[&str]) {
+    let dir = run.dir.path().join("harness").join(h);
+    std::fs::create_dir_all(dir.join("driver")).unwrap();
+    std::fs::write(dir.join("driver/zz_driver_test.go"), text).unwrap();
+    std::fs::write(
+        dir.join("targets.json"),
+        json!({"targets": [{"finding": "F1", "writer_functions": writers}]}).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn growth_by_a_unit_that_calls_the_holders_own_writer_is_not_reproduced_through_the_public_api() {
+    let run = Run::new(1);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        Some("the name"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    // The unit calls Register itself (a comment that names it does not count).
+    driver_calling(
+        &run,
+        "H1",
+        "// Register is the writer\nfunc unit(i int) {\n\tbalancer.Register(newBuilder(i))\n}\n",
+        &["Register"],
+    );
+    match run.triggers().trigger(&f(1)) {
+        Trigger::Direct {
+            harness,
+            writer,
+            startup,
+            ..
+        } => {
+            assert_eq!((harness.as_str(), writer.as_str()), ("H1", "Register"));
+            assert!(!startup);
+        }
+        other => panic!("{other:?}"),
+    }
+    // A unit that calls a public entry point, and only names the writer, is reproduced.
+    driver_calling(
+        &run,
+        "H1",
+        "// Register is the writer\nfunc unit(i int) {\n\tserver.Handle(req(i))\n}\nfunc RegisterAll() {}\n",
+        &["Register"],
+    );
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Reproduced { .. }
+    ));
+}
+
+#[test]
+fn a_direct_call_of_a_start_up_writer_says_so_and_is_counted_apart() {
+    use crate::{
+        FindingAnnotation,
+        census::{HolderFacts, SiteFact, SiteKind},
+    };
+    let run = Run::new(1);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run(
+        "S1",
+        "H1",
+        "aa",
+        Some("the name"),
+        Some(&[(1, Verdict::Grew)]),
+    );
+    driver_calling(
+        &run,
+        "H1",
+        "func unit(i int) {\n\tRegister(b(i))\n}\n",
+        &["Register"],
+    );
+    let mut l = Ledger::load(run.dir.path()).unwrap();
+    l.annotate_record(FindingAnnotation {
+        writers: vec!["pkg/m1.py:9".into()],
+        facts: HolderFacts {
+            writer_sites: vec![SiteFact {
+                site: "pkg/m1.py:9".into(),
+                kind: SiteKind::Insert,
+                depth: 0,
+                function: Some("Register".into()),
+                init: false,
+                startup: true,
+                param: true,
+                constant: false,
+                exported: true,
+            }],
+            ..Default::default()
+        },
+        ..FindingAnnotation::new(f(1))
+    })
+    .unwrap();
+    drop(l);
+    let t = run.triggers();
+    let Trigger::Direct { startup, .. } = t.trigger(&f(1)) else {
+        panic!("{:?}", t.trigger(&f(1)))
+    };
+    assert!(startup);
+}

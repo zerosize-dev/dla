@@ -47,6 +47,20 @@ pub enum Trigger {
         /// `the project's workload <id>`.
         varies: String,
     },
+    /// The holder grew in an entry-path harness whose unit calls the holder's own writer: it
+    /// is a registration the harness fed names to, not a path a caller of the public API was
+    /// shown to take.
+    Direct {
+        /// The harness that showed it.
+        harness: String,
+        /// What the unit varies, from `VARIES.txt`.
+        varies: String,
+        /// The writer function the unit calls.
+        writer: String,
+        /// The census says every writer site runs at start-up (an initialiser, or called from
+        /// one), so only run-time input that reaches the call makes it a leak.
+        startup: bool,
+    },
     /// Two different entry-path drivers measured the holder flat.
     NotFound {
         /// The first two entry-path harnesses that measured it flat, with their `varies`.
@@ -67,11 +81,27 @@ impl Trigger {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Reproduced { .. } => "reproduced",
+            Self::Direct { .. } => "direct",
             Self::NotFound { .. } => "not_found",
             Self::Unmeasured { .. } => "unmeasured",
             Self::Unchecked => "unchecked",
         }
     }
+}
+
+/// True when `code` calls a function named `name`: the name, not part of a longer word,
+/// followed by an opening parenthesis.
+fn calls(code: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let bytes = code.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    code.match_indices(name).any(|(i, _)| {
+        let before_ok = i == 0 || !word(bytes[i - 1]);
+        let rest = code[i + name.len()..].trim_start_matches([' ', '\t']);
+        before_ok && rest.starts_with('(')
+    })
 }
 
 /// One read series of an entry-path harness that targeted a finding.
@@ -118,6 +148,12 @@ pub struct Triggers {
     ran: BTreeSet<String>,
     /// The first writer function of each finding's entry-path targets.
     writer: BTreeMap<FindingId, String>,
+    /// Every writer function of each finding's entry-path targets.
+    writers_all: BTreeMap<FindingId, Vec<String>>,
+    /// `(finding, harness)` whose entry-path driver calls a writer function of the finding.
+    direct: BTreeSet<(FindingId, String)>,
+    /// Findings whose census facts say every writer site runs at start-up.
+    startup: BTreeSet<FindingId>,
     /// The harnesses that never ran, by finding, for the fix text.
     runtime: BTreeMap<String, String>,
 }
@@ -150,8 +186,19 @@ impl Triggers {
                         .push(h.clone());
                 }
                 t.read_writers(run_dir, &h, &m);
+                t.find_direct_calls(run_dir, &h, &m);
             }
             manifests.insert(h, m);
+        }
+        for id in t.entry_declared.keys() {
+            let sites = view
+                .ledger
+                .annotation(id)
+                .map(|a| a.facts.writer_sites.as_slice())
+                .unwrap_or_default();
+            if !sites.is_empty() && sites.iter().all(|s| s.startup || s.init) {
+                t.startup.insert(id.clone());
+            }
         }
         let mut latest: BTreeMap<&str, &crate::trend::TrendReport> = BTreeMap::new();
         for r in &view.trends {
@@ -219,6 +266,47 @@ impl Triggers {
                 self.writer
                     .entry(id.clone())
                     .or_insert_with(|| w.to_owned());
+                let all: Vec<String> = t
+                    .get("writer_functions")
+                    .and_then(|w| w.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|w| w.as_str().map(str::to_owned))
+                    .collect();
+                self.writers_all.entry(id.clone()).or_insert(all);
+            }
+        }
+    }
+
+    /// Notes the targets of entry-path harness `h` whose driver calls a writer function of the
+    /// target itself (not in a comment): the unit feeds the holder's own writer.
+    fn find_direct_calls(&mut self, run_dir: &std::path::Path, h: &str, m: &HarnessManifest) {
+        let dir = HarnessManifest::dir_in(run_dir, h).join("driver");
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let mut code = String::new();
+        for e in rd.flatten() {
+            let Ok(text) = std::fs::read_to_string(e.path()) else {
+                continue;
+            };
+            for line in text.lines() {
+                let t = line.trim_start();
+                if !(t.starts_with("//") || t.starts_with('#') || t.starts_with('*')) {
+                    code.push_str(line);
+                    code.push('\n');
+                }
+            }
+        }
+        for id in &m.targets {
+            let Some(names) = self.writers_all.get(id) else {
+                continue;
+            };
+            if names
+                .iter()
+                .any(|n| calls(&code, n.rsplit('.').next().unwrap_or(n)))
+            {
+                self.direct.insert((id.clone(), h.to_owned()));
             }
         }
     }
@@ -263,6 +351,17 @@ impl Triggers {
     pub fn trigger(&self, id: &FindingId) -> Trigger {
         let grew = |r: &&Run| r.verdicts.get(id) == Some(&Verdict::Grew);
         if let Some(r) = self.runs.iter().filter(|r| r.entry).find(grew) {
+            if self.direct.contains(&(id.clone(), r.harness.clone())) {
+                return Trigger::Direct {
+                    harness: r.harness.clone(),
+                    varies: r
+                        .varies
+                        .clone()
+                        .unwrap_or_else(|| "not recorded".to_owned()),
+                    writer: self.writer.get(id).cloned().unwrap_or_default(),
+                    startup: self.startup.contains(id),
+                };
+            }
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
                 varies: r
@@ -495,6 +594,20 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
             "reproduced through the public API in {harness} (varies: {})",
             one_line(&varies)
         ),
+        Trigger::Direct {
+            harness,
+            varies,
+            writer,
+            startup,
+        } => format!(
+            "grown only by calling the registration function itself ({writer}) in {harness} (varies: {}); a leak only if run-time input reaches that call{}",
+            one_line(&varies),
+            if startup {
+                " (the census reads its writers as start-up registrations)"
+            } else {
+                ""
+            }
+        ),
         Trigger::NotFound { runs } => {
             let writer = t
                 .writer_function(&f.id)
@@ -561,6 +674,8 @@ pub fn counts(view: &RunView, t: &Triggers) -> (usize, usize, usize) {
     for f in view.ledger.findings().filter(|f| is_subject(view, f)) {
         match t.trigger(&f.id) {
             Trigger::Reproduced { .. } => c.0 += 1,
+            // Counted apart (`ReportFacts::direct`): not shown to be reachable by a caller.
+            Trigger::Direct { .. } => {}
             Trigger::NotFound { .. } => c.1 += 1,
             Trigger::Unmeasured { .. } | Trigger::Unchecked => c.2 += 1,
         }
@@ -576,6 +691,8 @@ pub struct ReportFacts {
     reproduced: BTreeSet<FindingId>,
     /// Reproduced, not found, not checked.
     pub counts: (usize, usize, usize),
+    /// Grown only by a direct call of the holder's own writer.
+    pub direct: usize,
 }
 
 impl ReportFacts {
@@ -585,9 +702,14 @@ impl ReportFacts {
         let t = Triggers::of(view);
         let mut lines = BTreeMap::new();
         let mut reproduced = BTreeSet::new();
+        let mut direct = 0;
         for f in view.ledger.findings().filter(|f| is_subject(view, f)) {
-            if matches!(t.trigger(&f.id), Trigger::Reproduced { .. }) {
-                reproduced.insert(f.id.clone());
+            match t.trigger(&f.id) {
+                Trigger::Reproduced { .. } => {
+                    reproduced.insert(f.id.clone());
+                }
+                Trigger::Direct { .. } => direct += 1,
+                _ => {}
             }
             lines.insert(f.id.clone(), line(view, &t, f));
         }
@@ -595,6 +717,7 @@ impl ReportFacts {
             lines,
             reproduced,
             counts: counts(view, &t),
+            direct,
         })
     }
 
@@ -611,9 +734,15 @@ impl ReportFacts {
     /// The clause of the `Findings:` line, or `None` when no finding is confirmed or strong.
     pub fn clause(&self) -> Option<String> {
         let (r, n, u) = self.counts;
-        (r + n + u > 0).then(|| {
+        let d = self.direct;
+        let direct = if d > 0 {
+            format!(", grown only by calling the registration function itself {d}")
+        } else {
+            String::new()
+        };
+        (r + n + u + d > 0).then(|| {
             format!(
-                "confirmed and strong by trigger: reproduced through the public API {r}, no trigger found {n}, trigger not checked {u}"
+                "confirmed and strong by trigger: reproduced through the public API {r}{direct}, no trigger found {n}, trigger not checked {u}"
             )
         })
     }

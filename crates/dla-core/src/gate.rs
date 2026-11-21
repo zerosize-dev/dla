@@ -669,7 +669,8 @@ pub fn write_back_accounting(
 /// A trend column that is not flat: its gate passed, or its shape is steady or stair.
 pub fn non_flat(c: &ColumnTrend) -> bool {
     !not_a_growth_signal(c)
-        && (c.gate == GateVerdict::Pass || matches!(c.shape, TrendShape::Steady | TrendShape::Stair))
+        && (c.gate == GateVerdict::Pass
+            || matches!(c.shape, TrendShape::Steady | TrendShape::Stair))
 }
 
 /// A column that rises with the work whatever the program holds, so it never passes as growth
@@ -1185,6 +1186,7 @@ fn confirm(view: &RunView, out: &mut Out) {
         }
     }
     // A finding tied to growth that passed the gate must have been tested.
+    let grown = crate::grown::grown_unmeasured(view);
     for t in &view.trends {
         for c in t.columns.iter().filter(|c| c.gate == GateVerdict::Pass) {
             for f in tied_findings(view, t, c) {
@@ -1194,16 +1196,31 @@ fn confirm(view: &RunView, out: &mut Out) {
                         f.id.to_string(),
                         format!(
                             "finding {} is tied to growth that passed the gate ({} of {}) and was never tested",
-                            f.id, c.name, t.id
+                            f.id,
+                            readable_column(&c.name),
+                            t.id
                         ),
-                        format!(
-                            "dla ledger test {}   or   dla ledger resolve {} --as unresolved --reason not_exercised --remedy \"<text>\"",
-                            f.id, f.id
-                        ),
+                        // Growth the run measured is decided by an alloc-test, not closed.
+                        match grown.iter().find(|g| g.finding == f.id) {
+                            Some(g) => g.commands().join("   then   "),
+                            None => format!(
+                                "dla ledger test {}   or   dla ledger resolve {} --as unresolved --reason not_exercised --remedy \"<text>\"",
+                                f.id, f.id
+                            ),
+                        },
                     );
                 }
             }
         }
+    }
+}
+
+/// A column name for a person: a Go probe of a package in the project root has an empty
+/// package part (`probe:.ServiceConfig.Methods`), which reads as a typo.
+fn readable_column(name: &str) -> String {
+    match name.strip_prefix("probe:.") {
+        Some(rest) => format!("probe:(root package).{rest}"),
+        None => name.to_owned(),
     }
 }
 
@@ -2626,5 +2643,20 @@ mod in_run_column_tests {
         let view = view_with_series(6, &["S1", "S2", "S3"]);
         let fix = residual_fix(&view, "S4", &col);
         assert!(fix.starts_with("dla gap S4 --residual"), "{fix}");
+    }
+
+    #[test]
+    fn released_bytes_and_cumulative_times_are_not_listed_as_not_flat() {
+        let col = |name: &str, unit: &str| -> ColumnTrend {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "unit": unit, "kind": "gauge", "region": "process",
+                "n": 8, "noise": 0.0, "rise": 100.0, "shape": "steady", "gate": "pass"
+            }))
+            .unwrap()
+        };
+        assert!(non_flat(&col("go.heap_live", "bytes")));
+        assert!(!non_flat(&col("go.released", "bytes")));
+        assert!(!non_flat(&col("go.released.pre_gc", "bytes")));
+        assert!(!non_flat(&col("jvm.jit_seconds", "seconds")));
     }
 }

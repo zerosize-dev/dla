@@ -244,7 +244,10 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
             },
             report.missing_total,
             if report.missing_dependents > 0 {
-                format!(" (and {} more that wait on them)", report.missing_dependents)
+                format!(
+                    " (and {} more that wait on them)",
+                    report.missing_dependents
+                )
             } else {
                 String::new()
             },

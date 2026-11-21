@@ -626,6 +626,7 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
     let (mut reproduced, mut unchecked, mut not_found, mut unmeasured) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut unread = Vec::new();
+    let mut direct: Vec<String> = Vec::new();
     if let Some(Value::Array(list)) = out.get_mut("targets") {
         for e in list {
             let Some(id) = e["finding"].as_str().map(str::to_owned) else {
@@ -638,6 +639,7 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
             e["trigger"] = json!(trig.name());
             match trig {
                 Trigger::Reproduced { .. } => reproduced.push(id),
+                Trigger::Direct { .. } => direct.push(id),
                 Trigger::NotFound { .. } => not_found.push(id),
                 Trigger::Unmeasured { .. } => unmeasured.push(id),
                 // One run that did not grow it: flat when measured, else not measured at all.
@@ -662,6 +664,11 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
             unchecked.join(", "),
             m.runtime.as_str(),
             unchecked.join(",")
+        )
+    } else if !direct.is_empty() {
+        format!(
+            "{} grew only because the unit calls the registration function itself: reach the holder through a run-time entry (a request, a message, a connection), not by calling the writer with new names",
+            direct.join(", ")
         )
     } else if !reproduced.is_empty() {
         format!(

@@ -288,3 +288,75 @@ fn a_view_without_a_run_directory_says_nothing_about_triggers() {
     assert!(!md.contains("Trigger:"), "{md}");
     assert!(!findings_line(&md).contains("by trigger"));
 }
+
+#[test]
+fn growth_by_calling_the_registration_function_itself_has_its_own_reading_and_count() {
+    let run = Run::new();
+    run.harness("H2", true, &["F1", "F3"], Some("Bus.add"));
+    run.ran("S2", "H2", "bb", &[(1, Verdict::Grew), (3, Verdict::Grew)]);
+    // F1's unit calls the writer itself; F3's does not name any writer.
+    let dir = run.dir.path().join("harness/H2");
+    std::fs::create_dir_all(dir.join("driver")).unwrap();
+    std::fs::write(
+        dir.join("driver/zz_driver_test.go"),
+        "func unit(i int) {\n\tbus.add(name(i))\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("targets.json"),
+        json!({"harness": "H2", "targets": [
+            {"finding": "F1", "writer_functions": ["Bus.add"]},
+            {"finding": "F3", "writer_functions": ["Q.push"]},
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let md = run.report();
+    assert!(
+        md.contains(
+            "- Trigger: grown only by calling the registration function itself (Bus.add) in H2"
+        ),
+        "{md}"
+    );
+    assert!(
+        findings_line(&md).contains("grown only by calling the registration function itself 1"),
+        "{}",
+        findings_line(&md)
+    );
+    assert!(
+        findings_line(&md).contains("reproduced through the public API 1"),
+        "{}",
+        findings_line(&md)
+    );
+}
+
+#[test]
+fn a_confirmed_finding_the_verifier_reads_as_not_a_leak_is_counted_apart_and_listed_last() {
+    let run = Run::new();
+    let ts = r#""schema_version":2,"ts":"2026-01-01T00:00:00Z""#;
+    let mut text = ledger_text();
+    let n = text.lines().count();
+    let ver = |seq: usize, f: &str, site: &str, label: &str| {
+        format!(
+            "{{{ts},\"seq\":{seq},\"type\":\"verification\",\"finding\":\"{f}\",\"site\":\"{site}\",\"holder\":\"static/global\",\"mechanism\":\"m\",\"label\":\"{label}\",\"bundle\":\"{}\",\"agrees_site\":true,\"agrees_holder\":true,\"agrees_label\":false}}\n",
+            "a".repeat(64)
+        )
+    };
+    // F1 (listed first by default) is disputed: the verifier reads N-INTENT.
+    text.push_str(&ver(n + 1, "F1", "src/bus.go:12", "N-INTENT"));
+    let st = RunState::load(run.dir.path()).unwrap();
+    let md = render_markdown(
+        &RunView::new(st, Ledger::from_text(&text).unwrap(), None).with_disk_facts(run.dir.path()),
+    );
+    let line = findings_line(&md);
+    assert!(
+        line.contains("confirmed but disputed by the verifier (reads N-INTENT) 1"),
+        "{line}"
+    );
+    assert!(md.contains("DISAGREES"), "{md}");
+    let o = order(&md);
+    assert!(
+        o.iter().position(|h| h.contains("F3")) < o.iter().position(|h| h.contains("F1")),
+        "{o:?}"
+    );
+}

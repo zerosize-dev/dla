@@ -618,6 +618,14 @@ fn trigger_json(view: &RunView) -> serde_json::Map<String, Value> {
             Trigger::Reproduced { harness, varies } => {
                 json!({"trigger": trig.name(), "harness": harness, "varies": varies})
             }
+            Trigger::Direct {
+                harness,
+                varies,
+                writer,
+                ..
+            } => json!({
+                "trigger": trig.name(), "harness": harness, "varies": varies, "writer": writer,
+            }),
             Trigger::NotFound { runs } => json!({
                 "trigger": trig.name(),
                 "harnesses": runs.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(", "),

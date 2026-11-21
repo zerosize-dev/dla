@@ -486,6 +486,11 @@ fn instruction(kind: &str, holder: &str, owner: &str, site: &str) -> String {
 /// a callback argument): it grows only when the object outlives the call.
 pub const OUTER_RECEIVER: &str = "; the object registered on comes from outside the function, so the count grows only when the same object is used again: make the units share it the way a long-lived caller does (a reused connection, a pooled or shared object) and do not shorten its life (no per-unit close of it, no timeouts that defeat the reuse)";
 
+/// What a target says when the census reads every writer of the holder as a start-up
+/// registration (an initialiser, or called from one): calling the writer with new names grows
+/// it and shows nothing about a caller.
+const STARTUP_WRITERS: &str = " The census reads every writer of this holder as a start-up registration: reach the holder through a run-time entry (a request, a message, a connection), not by calling the registration function with new names.";
+
 /// The general line printed once after the targets.
 pub const GENERAL: &str = "use the project's public API the way a caller would; in fresh mode a unit must never reuse an earlier unit's key";
 
@@ -534,6 +539,12 @@ pub fn describe(
                         })
                     {
                         text.push_str(OUTER_RECEIVER);
+                    }
+                    if ann.is_some_and(|a| {
+                        !a.facts.writer_sites.is_empty()
+                            && a.facts.writer_sites.iter().all(|s| s.startup || s.init)
+                    }) {
+                        text.push_str(STARTUP_WRITERS);
                     }
                     text
                 },
