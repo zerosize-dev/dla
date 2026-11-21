@@ -562,3 +562,11 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - M2 SENT to G (resumed a349aef413818803c): second-look unit hook generated as a skeleton with named slot variables; harness run refuses an unused slot; explicit give-up form (at most two), listed in run and trend. Task 70.
 - Running: spring-5 (waiter bnsh78dwh), CI on 89bc8a8 (waiter bzq5j3ssu), G M2.
 - grpc-5 not started yet (start when spring-5 ends, or now if load allows: load is low; Go run needs about 2 GB disk; 5 GB free).
+
+## State at 22:16 UTC, 2026-11-21
+- G M2 REPORTED AND CHECKED (u52/report.md; my log u47/verify-m2s.log): second-look unit hook generated as a skeleton with five slot variables (depth, ending, when, order, outcome); harness run refuses an unused slot (`slot_report_in` in dla-core harness.rs); give-up form "// slot <name>: not applicable: <reason>" (at most two), listed as slots_given_up. Tests pass; MUT_K1 failed two tests; restored. G's tokio3 copy: laziest fill grows, F6 confirmed. Task 70 done. NOT in the third frozen build.
+- REAL RUN grpc-5 FINISHED (40 min, cost 8.32): INCOMPLETE (124 open); documented leak confirmed again (F202); headline split works (notes real-run-plugin-grpc-5.md, evidence u36/grpc-5). New defects: trigger "registration function itself" wrongly on the RPC handler Server.Watch; 120 untied stack columns of captures are 120 gate actions; 28 stop attempts.
+- spring-5 still running (in a stop loop at 22:14: INCOMPLETE, 298 of 367 ranked never targeted, about 115 of 180 min left, JUnit loop blocked by Mockito self-attach in the sandbox).
+- CI on 89bc8a8: run 44950113560 in progress.
+- DISK was at 322 MB at 22:14 (grpc-5 3.3 GB, target/debug/build 9.6 GB): freed to 4.9 GB (prune, deleted grpc-5 run dir, u52/u46/u50 copies, axios-4 run dir).
+- NEXT: read spring-5; pass 11 for P3 (Trigger::Direct only for start-up registrations by census facts; untied stack columns of one capture evidence = one action and one finding accounts for them); fourth frozen build with M2 + pass 11; tokio-5.

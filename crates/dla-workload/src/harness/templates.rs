@@ -309,4 +309,41 @@ mod tests {
             1
         );
     }
+    #[test]
+    fn the_unit_skeleton_parses_unfilled_in_python_node_and_rust() {
+        use dla_core::{harness::unit_skeleton, runtime::Runtime};
+        let py = format!(
+            "{}\ndef unit(i, key):\n{}    raise NotImplementedError('x')\n",
+            choice_block(PY_DRIVER),
+            unit_skeleton(Runtime::Python)
+        );
+        let _ = run_choice_program("s.py", &py, &[&["python3", "-m", "py_compile", "s.py"]]);
+        let node = format!(
+            "{}\nfunction unit(i, key) {{\n{}  throw new Error('x');\n}}\n",
+            choice_block(NODE_DRIVER),
+            unit_skeleton(Runtime::Node)
+        );
+        run_choice_program("s.cjs", &node, &[&["node", "--check", "s.cjs"]]);
+        let rs = format!(
+            "use std::sync::atomic::{{AtomicU64, Ordering::Relaxed}};\n{}\nfn unit(i: u64, key: u64) {{\n    let _ = i;\n{}    todo!(\"x\")\n}}\n",
+            choice_block(RUST_DRIVER),
+            unit_skeleton(Runtime::Rust)
+        );
+        run_choice_program(
+            "s.rs",
+            &rs,
+            &[&[
+                "rustc",
+                "--edition",
+                "2021",
+                "--crate-type",
+                "lib",
+                "-A",
+                "warnings",
+                "-o",
+                "libs.rlib",
+                "s.rs",
+            ]],
+        );
+    }
 }

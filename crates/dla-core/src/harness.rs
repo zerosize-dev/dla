@@ -674,6 +674,209 @@ pub fn choice_calls_in(text: &str, helper: &str) -> usize {
     n
 }
 
+/// The five choices of a second look: the slot variable of the generated unit skeleton, the
+/// number of options and what the slot means (the same words as the block).
+pub const SECOND_LOOK_SLOTS: [(&str, usize, &str); 5] = [
+    (
+        "depth",
+        3,
+        "how deep to derive when objects of the type are made from objects of the same type: depth + 1 levels, 1 to 3",
+    ),
+    (
+        "ending",
+        4,
+        "which object of the chain gets the ending call (cancel, close, abort, shutdown, remove, unsubscribe): 0 none, 1 the first, 2 a middle one, 3 the last",
+    ),
+    (
+        "when",
+        3,
+        "when the intermediate objects are released: 0 at once (a temporary), 1 before the ending call, 2 after it",
+    ),
+    (
+        "order",
+        2,
+        "the order of the remaining releases: 0 forward, 1 reversed",
+    ),
+    (
+        "outcome",
+        2,
+        "the success or the failure path where the API has one: 0 success, 1 failure (fail or drop half-way)",
+    ),
+];
+
+/// The most slots a second look may give up (explicitly, with a reason).
+pub const SLOTS_GIVEN_UP_MAX: usize = 2;
+
+/// The line-comment marker of the driver language.
+pub fn line_comment(rt: Runtime) -> &'static str {
+    if rt == Runtime::Python { "#" } else { "//" }
+}
+
+/// The form in which a slot is given up: the whole line of its definition replaced by this
+/// comment.
+pub fn slot_given_up_form(rt: Runtime, name: &str) -> String {
+    format!("{} slot {name}: not applicable: <reason>", line_comment(rt))
+}
+
+/// The unit skeleton of a second-look harness: one named variable per slot, taken with the
+/// choice helper, the options in a comment on the same line. It goes above the marker line
+/// that says the hook is not filled in; the unit body goes below it.
+pub fn unit_skeleton(rt: Runtime) -> String {
+    let helper = choice_helper(rt);
+    let c = line_comment(rt);
+    let mut out = String::new();
+    for (i, (name, n, meaning)) in SECOND_LOOK_SLOTS.iter().enumerate() {
+        let call = format!("{helper}(key, {i}, {n})");
+        let decl = match rt {
+            Runtime::Python => format!("    {name} = {call}"),
+            Runtime::Node => format!("  const {name} = {call};"),
+            Runtime::Go => format!("\t{name} := {call}"),
+            Runtime::Jvm => format!("        int {name} = {call};"),
+            Runtime::Rust => format!("    let {name} = {call};"),
+            Runtime::Native => format!("    unsigned long {name} = {call};"),
+        };
+        out.push_str(&format!(
+            "{decl} {c} slot {name}: {meaning} (every slot variable must be used by the unit)\n"
+        ));
+    }
+    out
+}
+
+/// What the unit of a second-look harness does with its five slots.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SlotReport {
+    /// Slots (indexes into [`SECOND_LOOK_SLOTS`]) whose variable is not used in the unit and
+    /// that are not given up.
+    pub unused: Vec<usize>,
+    /// Slots given up in the fixed form, with the reason.
+    pub given_up: Vec<(usize, String)>,
+}
+
+fn strip_trailing_comment(line: &str, rt: Runtime) -> &str {
+    let at = line.find(line_comment(rt)).unwrap_or(line.len());
+    &line[..at]
+}
+
+fn has_word(line: &str, word: &str) -> bool {
+    let mut from = 0;
+    while let Some(at) = line[from..].find(word) {
+        let i = from + at;
+        let before = line[..i].chars().next_back();
+        let after = line[i + word.len()..].chars().next();
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        if !before.is_some_and(ident) && !after.is_some_and(ident) {
+            return true;
+        }
+        from = i + word.len();
+    }
+    false
+}
+
+/// The lines of the unit body: from the `DLA-HOOK unit` line to the end of the function (by
+/// indentation for Python, by braces otherwise).
+fn unit_region(text: &str, rt: Runtime) -> Vec<&str> {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.contains("DLA-HOOK unit")) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if rt == Runtime::Python {
+        for l in &lines[start..] {
+            if !l.trim().is_empty() && !l.starts_with([' ', '\t']) {
+                break;
+            }
+            out.push(*l);
+        }
+        return out;
+    }
+    let mut depth = 1i32;
+    for l in &lines[start..] {
+        out.push(*l);
+        let code = strip_trailing_comment(l, rt);
+        for ch in code.chars() {
+            match ch {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth <= 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// [`slot_report`] over one text.
+pub fn slot_report_in(text: &str, rt: Runtime) -> SlotReport {
+    let helper = choice_helper(rt);
+    let c = line_comment(rt);
+    let region = unit_region(text, rt);
+    let mut report = SlotReport::default();
+    for (i, (name, _, _)) in SECOND_LOOK_SLOTS.iter().enumerate() {
+        let form = format!("slot {name}: not applicable:");
+        let reason = region.iter().find_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix(c)?.trim_start().strip_prefix(&form)?;
+            let rest = rest.trim().trim_end_matches("*/").trim();
+            (!rest.is_empty() && rest != "<reason>").then(|| rest.to_owned())
+        });
+        if let Some(r) = reason {
+            report.given_up.push((i, r));
+            continue;
+        }
+        let def = format!("{helper}(key,{i},");
+        let code: Vec<&str> = region
+            .iter()
+            .map(|l| strip_trailing_comment(l, rt))
+            .collect();
+        let def_at = code.iter().position(|l| l.replace(' ', "").contains(&def));
+        let used = def_at.is_some()
+            && code
+                .iter()
+                .enumerate()
+                .any(|(k, l)| Some(k) != def_at && has_word(l, name));
+        if !used {
+            report.unused.push(i);
+        }
+    }
+    report
+}
+
+/// The slots of the second-look harness `id`: the unit of its driver files.
+pub fn slot_report(run_dir: &Path, id: &str, rt: Runtime) -> SlotReport {
+    let dir = HarnessManifest::dir_in(run_dir, id).join("driver");
+    let Ok(rd) = fs::read_dir(dir) else {
+        return SlotReport::default();
+    };
+    let mut files: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| e.file_name() != VARIES_FILE)
+        .map(|e| e.path())
+        .collect();
+    files.sort();
+    for f in files {
+        let Ok(text) = fs::read_to_string(&f) else {
+            continue;
+        };
+        if text.contains("DLA-HOOK unit") {
+            return slot_report_in(&text, rt);
+        }
+    }
+    SlotReport {
+        unused: (0..SECOND_LOOK_SLOTS.len()).collect(),
+        given_up: Vec::new(),
+    }
+}
+
+/// "slot when: not applicable: <reason>" lines of a report, for the run output and the trend.
+pub fn slots_given_up_lines(r: &SlotReport) -> Vec<String> {
+    r.given_up
+        .iter()
+        .map(|(i, why)| format!("slot {}: not applicable: {why}", SECOND_LOOK_SLOTS[*i].0))
+        .collect()
+}
+
 /// The code of the driver files of harness `id` with comments and whitespace removed: what
 /// two drivers are compared by (the generated block and the model's comments are not code).
 /// `None` when there is no driver directory.
@@ -694,7 +897,12 @@ fn driver_code(run_dir: &Path, id: &str) -> Option<String> {
         };
         for line in text.lines() {
             let l = line.trim();
-            if l.is_empty() || ["#", "//", "/*", "*"].iter().any(|c| l.starts_with(c)) {
+            // The generated slot lines of a second-look skeleton are the same in every
+            // harness: they are no part of what makes two units different.
+            if l.is_empty()
+                || ["#", "//", "/*", "*"].iter().any(|c| l.starts_with(c))
+                || l.contains("(every slot variable must be used by the unit)")
+            {
                 continue;
             }
             out.extend(l.chars().filter(|c| !c.is_whitespace()));
@@ -1345,5 +1553,72 @@ mod tests {
         assert!(text.contains(r#""purpose":"entry-path""#), "{text}");
         let back: HarnessManifest = serde_json::from_str(&text).unwrap();
         assert!(back.is_entry_path());
+    }
+    /// A unit of `rt` made of the skeleton, `body` and the closing of the function.
+    fn unit_text(rt: Runtime, body: &str) -> String {
+        let c = line_comment(rt);
+        let open = format!("    {c} DLA-HOOK unit: x\n{}{body}", unit_skeleton(rt));
+        match rt {
+            Runtime::Python => format!("def unit(i, key):\n{open}\ndef other():\n    pass\n"),
+            _ => format!("fn unit() {{\n{open}}}\nfn other() {{ let order = 1; }}\n"),
+        }
+    }
+
+    #[test]
+    fn a_slot_is_used_given_up_or_reported_unused_in_every_language() {
+        for rt in [
+            Runtime::Python,
+            Runtime::Node,
+            Runtime::Go,
+            Runtime::Jvm,
+            Runtime::Rust,
+            Runtime::Native,
+        ] {
+            let all: Vec<usize> = (0..SECOND_LOOK_SLOTS.len()).collect();
+            // The skeleton alone: nothing is used (the `order` of `other()` is no use).
+            let r = slot_report_in(&unit_text(rt, "    todo();\n"), rt);
+            assert_eq!(r.unused, all, "{rt:?}");
+            assert!(r.given_up.is_empty());
+            // Each variable used on a line of its own.
+            let uses: String = SECOND_LOOK_SLOTS
+                .iter()
+                .map(|(n, _, _)| format!("    use_it({n});\n"))
+                .collect();
+            assert_eq!(
+                slot_report_in(&unit_text(rt, &uses), rt),
+                SlotReport::default(),
+                "{rt:?}"
+            );
+            // One left out is named.
+            let some: String = SECOND_LOOK_SLOTS
+                .iter()
+                .filter(|(n, _, _)| *n != "when")
+                .map(|(n, _, _)| format!("    use_it({n});\n"))
+                .collect();
+            assert_eq!(
+                slot_report_in(&unit_text(rt, &some), rt).unused,
+                [2],
+                "{rt:?}"
+            );
+            // A use in a comment is no use; a longer name is no use.
+            let c = line_comment(rt);
+            let fake = format!("    {c} when\n    use_it(whenever); {c} when\n");
+            assert!(
+                slot_report_in(&unit_text(rt, &fake), rt)
+                    .unused
+                    .contains(&2)
+            );
+            // Given up in the fixed form, with a reason: listed, not unused.
+            let given = format!(
+                "{}    {c} slot when: not applicable: nothing is released early\n",
+                uses.replace("    use_it(when);\n", "")
+            );
+            let r = slot_report_in(&unit_text(rt, &given), rt);
+            assert!(r.unused.is_empty(), "{rt:?} {r:?}");
+            assert_eq!(r.given_up, [(2, "nothing is released early".to_owned())]);
+            // The form without a reason is no give-up.
+            let empty = format!("{}    {c} slot when: not applicable:\n", some);
+            assert_eq!(slot_report_in(&unit_text(rt, &empty), rt).unused, [2]);
+        }
     }
 }

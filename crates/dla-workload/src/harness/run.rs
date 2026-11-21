@@ -3286,6 +3286,48 @@ fn run_loaded(
                 ),
             ));
         }
+        // Every slot variable of the generated skeleton is used, or given up in the fixed form
+        // (at most two), so the unit cannot leave out the slot it finds inconvenient.
+        let slots = dla_core::harness::slot_report(&ctx.run_dir, &manifest.id, manifest.runtime);
+        let too_many = slots.given_up.len() > dla_core::harness::SLOTS_GIVEN_UP_MAX;
+        if !slots.unused.is_empty() || too_many {
+            let names: Vec<String> = slots
+                .unused
+                .iter()
+                .map(|i| {
+                    let (name, _, meaning) = dla_core::harness::SECOND_LOOK_SLOTS[*i];
+                    format!("{name} ({meaning})")
+                })
+                .collect();
+            let form = dla_core::harness::slot_given_up_form(manifest.runtime, "<slot>");
+            let message = if too_many {
+                format!(
+                    "the unit of harness {} gives up {} slots ({}): at most {} of the {} may be given up",
+                    manifest.id,
+                    slots.given_up.len(),
+                    dla_core::harness::slots_given_up_lines(&slots).join("; "),
+                    dla_core::harness::SLOTS_GIVEN_UP_MAX,
+                    dla_core::harness::SECOND_LOOK_SLOTS.len()
+                )
+            } else {
+                format!(
+                    "the unit of harness {} does not use slot variable(s): {}",
+                    manifest.id,
+                    names.join("; ")
+                )
+            };
+            return Err(Refusal::new(
+                dla_core::error::codes::INVALID_VALUE,
+                message,
+                "every slot variable of the unit skeleton used by the unit (a use beyond its own line), or given up in the fixed form with a reason".to_owned(),
+                format!(
+                    "use each slot variable in the unit (a fixed sequence runs one case for every unit); a slot that truly does not apply to the API of the targets is given up by replacing its line with `{form}` (at most {} of {}); then dla harness run {} --mode both",
+                    dla_core::harness::SLOTS_GIVEN_UP_MAX,
+                    dla_core::harness::SECOND_LOOK_SLOTS.len(),
+                    manifest.id
+                ),
+            ));
+        }
     }
     let out = run_points(ctx, &manifest, opts)?;
     let partial = !out.partial.is_empty();
@@ -3499,6 +3541,16 @@ fn run_loaded(
         .and_then(|s| dla_core::series::choices_line(&s).map(str::to_owned))
     {
         summary["choices"] = json!(line);
+    }
+    if manifest.is_second_look() {
+        let given = dla_core::harness::slots_given_up_lines(&dla_core::harness::slot_report(
+            &ctx.run_dir,
+            &manifest.id,
+            manifest.runtime,
+        ));
+        if !given.is_empty() {
+            summary["slots_given_up"] = json!(given);
+        }
     }
     if !out.ffi_sites.is_empty() {
         summary["ffi"] = json!(
