@@ -850,7 +850,7 @@ fn go_command_mode_reads_state_owned_by_locals_while_the_workload_runs() {
         series
             .limitations
             .iter()
-            .any(|l| l.contains("go.*.in_run: the lowest after-collection reading")),
+            .any(|l| l.contains("go.*.in_run: the floor")),
         "{:?}",
         series.limitations
     );
@@ -3297,6 +3297,19 @@ func TestARunWhoseLastSampleCameEarlyContinuesTheFloor(t *testing.T) {
 		t.Errorf("flat heap continued to %.0f", got)
 	}
 }
+
+func TestASawToothIsNotContinuedAtTheSlopeOfOneTooth(t *testing.T) {
+	// A heap that rises from 20 to 60 MB every second and falls back, read in runs whose last sample
+	// came at 40 % of the run and high on a tooth. The reading stays within two tooth heights of the
+	// base however long the run is; continued at the slope of the last tooth it would grow with the run.
+	tooth := func(t float64) float64 { return 20e6 + 40e6*(t/1000-math.Floor(t/1000)) }
+	for _, end := range []float64{10000, 20000, 40000, 80000} {
+		last := math.Floor(0.4*end/1000)*1000 - 100
+		if got := run(end, last/end, tooth); got > 100e6 {
+			t.Errorf("run of %.0f ms: a saw-tooth of 60 MB at most read %.0f", end, got)
+		}
+	}
+}
 "#,
     )
     .unwrap();
@@ -3306,7 +3319,7 @@ func TestARunWhoseLastSampleCameEarlyContinuesTheFloor(t *testing.T) {
             "-vet=off",
             "-count=1",
             "-run",
-            "^Test(Leak|Flat|ARun)",
+            "^Test(Leak|Flat|ARun|ASaw)",
         ])
         .current_dir(&fx.work)
         .env("GOFLAGS", "-mod=mod")

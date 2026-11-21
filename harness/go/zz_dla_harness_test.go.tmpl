@@ -702,8 +702,8 @@ func dlaStartSampler() func() {
 // reading at or after each of them (so a transient high is ignored and the curve never falls), and the
 // envelope is read at t by linear interpolation between the samples that bracket it. Before the first
 // sample it is the first reading. After the last sample it continues the slope of the envelope over
-// its last four points (never below zero) when t is at most four times the last sample's time, and
-// else stays at the last reading. The second result says which: "interpolated", "extrapolated" or "last".
+// its last four points, or the slope of the whole envelope when that is lower (never below zero),
+// when t is at most four times the last sample's time, and else stays at the last reading. The second result says which: "interpolated", "extrapolated" or "last".
 func dlaEnvelopeAt(ts, ys []float64, t float64) (float64, string) {
 	n := len(ts)
 	env := make([]float64, n)
@@ -731,6 +731,14 @@ func dlaEnvelopeAt(ts, ys []float64, t float64) (float64, string) {
 		return env[n-1], "last"
 	}
 	slope := (env[n-1] - env[from]) / (ts[n-1] - ts[from])
+	if ts[n-1] > ts[0] {
+		// The last envelope point is a raw reading (no later sample can lower it), so the slope of the
+		// last points alone follows one tooth of a heap that rises and falls. The slope of the whole
+		// envelope is the limit: a leak has both, a saw-tooth only the first.
+		if whole := (env[n-1] - env[0]) / (ts[n-1] - ts[0]); whole < slope {
+			slope = whole
+		}
+	}
 	if slope < 0 {
 		slope = 0
 	}

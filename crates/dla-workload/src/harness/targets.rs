@@ -322,10 +322,10 @@ pub fn add_entry_facts(project: &Path, rt: dla_core::runtime::Runtime, targets: 
             names.push(f.name.clone());
             lines.push(format!("  writer function: {}", f.label()));
             lines.push(
-                "    callers (matched by name; [public] marks a function a user of the project can call):"
+                "    callers (matched by name; [public] marks a function a user of the project can call; \"referenced\" is a place that passes or stores it without calling it, shown when nothing calls it):"
                     .to_owned(),
             );
-            let chain = ix.chain(f);
+            let chain = ix.chain(&files, f);
             if chain.is_empty() {
                 lines.push("      none found".to_owned());
             }
@@ -335,11 +335,12 @@ pub fn add_entry_facts(project: &Path, rt: dla_core::runtime::Runtime, targets: 
                     .iter()
                     .map(|c| {
                         format!(
-                            "{}{} ({}:{})",
+                            "{}{} ({}:{}{})",
                             c.func.name,
                             if c.func.public { " [public]" } else { "" },
                             c.func.file,
-                            c.line
+                            c.line,
+                            if c.by_reference { ", referenced" } else { "" }
                         )
                     })
                     .collect();
@@ -364,7 +365,10 @@ pub fn add_entry_facts(project: &Path, rt: dla_core::runtime::Runtime, targets: 
                     f.name
                 ));
                 if p.sites.is_empty() {
-                    lines.push("      no call site found".to_owned());
+                    lines.push(
+                        "      no call site found (it may be called through a variable or a framework: read the places above that mention it)"
+                            .to_owned(),
+                    );
                 }
                 for site in &p.sites {
                     let what = if site.passed.is_empty() {
@@ -377,6 +381,15 @@ pub fn add_entry_facts(project: &Path, rt: dla_core::runtime::Runtime, targets: 
                             .join(", ")
                     };
                     lines.push(format!("      {} ({}): {what}", site.at, site.caller));
+                    if !site.guards.is_empty() {
+                        lines.push(format!(
+                            "        the call happens only when: {}",
+                            site.guards.join("; ")
+                        ));
+                    }
+                    for (name, rhs) in &site.origins {
+                        lines.push(format!("        {name} is set by: {}", rhs.join("; ")));
+                    }
                 }
                 if p.more_sites > 0 {
                     lines.push(format!("      and {} more call sites", p.more_sites));
@@ -643,5 +656,62 @@ mod tests {
             Some("free")
         );
         assert_eq!(enclosing_name(dir.path(), "a.py:1"), None);
+    }
+    fn writer_target() -> Target {
+        Target {
+            id: "F3".parse().unwrap(),
+            site: "a.py:1".into(),
+            holder: "static/global".into(),
+            kind: "container".into(),
+            owner: "a.CACHE".into(),
+            message: None,
+            writers: (vec!["a.py:5 (C.put)".into()], 1),
+            removers: (Vec::new(), 0),
+            probe: None,
+            instruction: "make every unit reach a writer".into(),
+            sibling_of: None,
+            entry: None,
+        }
+    }
+
+    #[test]
+    fn an_entry_path_block_has_the_callers_the_key_and_the_rules_and_no_general_line() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("a.py"),
+            "CACHE = {}\n\nclass C:\n    def put(self, k, v):\n        CACHE[k] = v\n\ndef serve(req):\n    return C().put(req.path, 1)\n",
+        )
+        .unwrap();
+        let mut t = vec![writer_target()];
+        add_entry_facts(dir.path(), dla_core::runtime::Runtime::Python, &mut t);
+        assert_eq!(t[0].entry.as_ref().unwrap().writer_functions, ["C.put"]);
+        let b = block("H5", &t, Some("#"));
+        for want in [
+            "# Entry-path harness H5:",
+            "#   writer function: a.py:4 (C.put)",
+            "#       hop 1: serve [public] (a.py:8)",
+            "(matched by name",
+            "#     key from: parameter `k`, `v` of C.put",
+            "#       a.py:8 (serve): k = req.path, v = 1",
+            "# Rules of an entry-path unit:",
+            "#   to do: reach it through the project's public entry points, with data a caller controls",
+        ] {
+            assert!(b.contains(want), "{want}\n{b}");
+        }
+        assert!(!b.contains("In general:"), "{b}");
+        // A harness that is not entry-path keeps its block.
+        let plain = block("H5", &[writer_target()], Some("#"));
+        assert!(plain.contains("In general:") && !plain.contains("Rules of an entry-path unit"));
+    }
+
+    #[test]
+    fn a_runtime_without_a_reader_of_calls_says_not_computed() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("lib.rs"), "fn put() {}\n").unwrap();
+        let mut t = vec![writer_target()];
+        add_entry_facts(dir.path(), dla_core::runtime::Runtime::Rust, &mut t);
+        let lines = t[0].entry.as_ref().unwrap().lines.join("\n");
+        assert!(lines.contains("callers: not computed"), "{lines}");
+        assert!(lines.contains("key from: not computed"), "{lines}");
     }
 }

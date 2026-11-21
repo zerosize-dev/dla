@@ -162,7 +162,7 @@ rank, the minutes left and the fix.
 
 ## Too many targets (`too-many-targets`)
 
-`dla harness gen` declared more than 8 targets (`--probe` and `--next` together count).
+`dla harness gen` was asked for more than 8 targets (`--probe` and `--next` together count; the siblings `--next` adds for the owners of its targets do not, up to 16 in all).
 - Remedy: declare at most 8 per harness: `--next 5 --probe F12`, or fewer `--probe` flags; the rest go
   in the next harness (`dla harness gen --lang <rt> --driver --next`).
 

@@ -319,7 +319,6 @@ fn sites_of(
         plain
             .iter()
             .filter(|s| !structured.iter().any(|x| &x.site == *s))
-            .take(0)
             .map(|s| SiteFact {
                 site: s.clone(),
                 kind,

@@ -23,8 +23,10 @@
 //! registration tables, spawned units, acquired handles, thread-locals, stored
 //! closures and (Rust) `Rc` cycles. For the JVM, class files under the project are
 //! read first by a small reader ([`classfile`]); the source files they cover are not
-//! parsed again. Writers and removers are textual name matches over the project
-//! ([`usage`]) and are labelled heuristic.
+//! parsed again. Writers and removers are first found by name over the project ([`usage`]) and
+//! labelled heuristic, then read in the syntax tree ([`sites`], [`events`]; Go, Java, Python,
+//! JavaScript and TypeScript): sites that cannot name the holder are dropped, and each site and
+//! each holder carries the facts the ranking reads (`dla_core::census::HolderFacts`).
 //!
 //! [`parse`] is the shared tree-sitter layer (`Lang`, `parse`, `captures`) also used
 //! by the DLA rule backend and workload discovery.

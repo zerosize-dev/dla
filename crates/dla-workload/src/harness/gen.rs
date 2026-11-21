@@ -1613,6 +1613,12 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     };
     let rt = opts.lang;
     let lang = rt.as_str();
+    // `--entry`: its findings and options are checked before anything else is read.
+    let entry_ids = if opts.entry.is_empty() {
+        None
+    } else {
+        Some(entry_targets(ctx, opts)?)
+    };
     if !opts.junit
         && !opts.driver
         && let Some(t) = opts.tests.first()
@@ -1682,14 +1688,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
 
     // The targets: `--probe` findings, then the next pending queue entries. Refused before
     // anything is created. An entry-path harness declares its `--entry` findings.
-    let (asked_ids, next_note, siblings) = if opts.entry.is_empty() {
-        resolve_targets(ctx, opts)?
-    } else {
-        (
-            entry_targets(ctx, opts)?,
-            None,
-            std::collections::BTreeMap::new(),
-        )
+    let (asked_ids, next_note, siblings) = match entry_ids {
+        None => resolve_targets(ctx, opts)?,
+        Some(ids) => (ids, None, std::collections::BTreeMap::new()),
     };
 
     // Tools first: nothing is created when one is missing.
@@ -2136,8 +2137,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 format!("dla harness run {id}")
             } else if manifest.is_entry_path() {
                 format!(
-                    "fill the hooks so that each unit calls only the project's public entry points with data a caller controls, write the one line of harness/{id}/{DRIVER}/{} (what a caller varies per unit), then dla harness run {id} --mode both",
-                    dla_core::harness::VARIES_FILE
+                    "fill the hooks so that each unit calls only the project's public entry points with data a caller controls, write the one line of {} (what a caller varies per unit), then dla harness run {id} --mode both",
+                    ctx.pointer(&format!("harness/{id}/{DRIVER}/{}", dla_core::harness::VARIES_FILE))
                 )
             } else if opts.driver && !described.is_empty() {
                 format!(

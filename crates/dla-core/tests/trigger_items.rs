@@ -90,9 +90,12 @@ fn with_state(dir: &Path, f: impl FnOnce(&mut RunState)) {
 #[test]
 fn a_confirmed_leak_that_grew_under_a_hook_driver_is_asked_for_its_trigger() {
     let dir = run();
-    // Nothing grew in a harness yet: there is no trigger to ask for.
+    // Nothing grew in a harness yet: there is no trigger to ask for, with no harness or with
+    // one whose run showed no growth.
     assert!(items(dir.path()).is_empty());
     harness(dir.path(), "H1", false);
+    ran(dir.path(), "S1", "H1", "aa", Verdict::Constant);
+    assert!(items(dir.path()).is_empty());
     ran(dir.path(), "S1", "H1", "aa", Verdict::Grew);
     let it = items(dir.path());
     assert_eq!(it.len(), 1, "{it:?}");

@@ -386,3 +386,20 @@ fn registrations_say_where_their_receiver_comes_from() {
     assert_eq!(by(":5").facts.receiver, Some(Receiver::Outer));
     assert_eq!(by(":10").facts.receiver, Some(Receiver::Local));
 }
+
+#[test]
+fn java_a_head_assigned_a_local_built_from_the_old_head_is_a_chain_that_grows() {
+    let src = "package a;\n\nfinal class Chain {\n  private static Chain latest;\n  private final Chain previous;\n\n  private Chain(Chain previous) {\n    this.previous = previous;\n  }\n\n  static Chain open() {\n    Chain context = new Chain(latest);\n    latest = context;\n    return context;\n  }\n}\n";
+    let es = entries(&[("src/a/Chain.java", src)], Runtime::Jvm);
+    let e = entry(&es, "Chain.latest");
+    // Written by `latest = context`, where `context` was built from `latest`: a writer that
+    // adds, not an assignment of the variable as a whole.
+    assert_eq!(e.writers, ["src/a/Chain.java:13"], "{e:?}");
+    assert_eq!(e.facts.writer_sites[0].kind, SiteKind::Insert);
+    // A head that is only replaced by an unrelated value is not.
+    let plain = "package a;\n\nfinal class Settings {\n  private static Settings current;\n\n  static void set(Settings h) {\n    Settings next = h;\n    current = next;\n  }\n}\n";
+    let es = entries(&[("src/a/Settings.java", plain)], Runtime::Jvm);
+    let e = entry(&es, "Settings.current");
+    assert!(e.writers.is_empty(), "{e:?}");
+    assert_eq!(e.facts.container, Some(ContainerClass::NotContainer));
+}

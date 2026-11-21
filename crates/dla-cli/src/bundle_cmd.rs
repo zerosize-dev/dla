@@ -634,7 +634,7 @@ fn without_target_block(text: &str) -> String {
         return text.to_owned();
     };
     let mut end = start;
-    while end < lines.len() && comment(lines[end]) {
+    while end < lines.len() && comment(lines[end]) && !lines[end].contains("DLA-HOOK") {
         end += 1;
     }
     let first = lines[start];
@@ -1085,5 +1085,16 @@ mod tests {
             bundle_bytes(&[0xff, 0x46, 0x33], false, &needles(), false),
             [0xff, 0x46, 0x33]
         );
+    }
+    #[test]
+    fn the_generated_target_block_is_cut_out_of_a_driver() {
+        let text = "import os\n\ndef setup():\n    # Entry-path harness H5: show whether\n    # F1 at a.py:3: holder static/global\n    #   writers: a.py:9 (put)\n    # DLA-HOOK setup: build\n    x = 1\n";
+        let out = without_target_block(text);
+        assert!(out.contains("    # (the generated target block is not part of the bundle)\n"), "{out}");
+        assert!(!out.contains("F1 at a.py:3") && !out.contains("writers:"), "{out}");
+        // The hook comment, which is not part of the block's run, stays.
+        assert!(out.contains("# DLA-HOOK setup: build") && out.contains("x = 1"), "{out}");
+        // No block: unchanged.
+        assert_eq!(without_target_block("a = 1\n"), "a = 1\n");
     }
 }

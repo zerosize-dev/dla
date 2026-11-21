@@ -232,6 +232,20 @@ fn a_trigger_that_was_not_checked_says_why() {
 }
 
 #[test]
+fn a_trigger_with_one_entry_path_harness_without_growth_says_what_is_missing() {
+    let run = Run::new();
+    run.harness("H1", false, &["F1", "F3"], None);
+    run.ran("S1", "H1", "aa", &[(1, Verdict::Grew), (3, Verdict::Grew)]);
+    run.harness("H2", true, &["F3"], Some("Q.push"));
+    run.ran("S2", "H2", "bb", &[(3, Verdict::Constant)]);
+    let md = run.report();
+    assert!(
+        md.contains("- Trigger: not checked (the entry-path harness H2 did not grow it (varies: H2 varies) and a second, different one was not run)"),
+        "{md}"
+    );
+}
+
+#[test]
 fn a_view_without_a_run_directory_says_nothing_about_triggers() {
     let st = RunState::init("/p", None, 3600, None, now_utc()).unwrap();
     let md = render_markdown(&RunView::new(st, Ledger::from_text(&ledger_text()).unwrap(), None));

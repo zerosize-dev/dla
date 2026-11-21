@@ -144,11 +144,6 @@ pub fn events(line: &str, name: &str) -> Vec<Event> {
         n = regex::escape(name)
     ))
     .ok();
-    let wrap = Regex::new(&format!(
-        r"^(?:[\w.]+::)?[A-Za-z_][\w.]*\s*\([^()]*\b{n}\b\s*(?:,[^()]*)?\)\s*$",
-        n = regex::escape(name)
-    ))
-    .ok();
     let mut out = Vec::new();
     for (at, _) in line.match_indices(name) {
         let b = line.as_bytes();
@@ -244,9 +239,10 @@ pub fn events(line: &str, name: &str) -> Vec<Event> {
                     });
                 }
             } else if depth == 0 {
-                // `x = wrap(x)`: the new value holds the old one, a chain that can grow.
-                let wrapped = wrap.as_ref().is_some_and(|r| r.is_match(&rhs));
-                let own = wrapped || own_append.as_ref().is_some_and(|r| r.is_match(&rhs));
+                // `x = wrap(x)`, `x = {next: x}`: the new value holds the old one, a chain
+                // that can grow.
+                let own = holds_itself(&rhs, name)
+                    || own_append.as_ref().is_some_and(|r| r.is_match(&rhs));
                 let kind = if op == "-" || empty_rhs().is_match(&rhs) {
                     Ev::Reset
                 } else if own || op == "+" || op == "|" {
@@ -268,6 +264,27 @@ pub fn events(line: &str, name: &str) -> Vec<Event> {
         }
     }
     out
+}
+
+/// True when `value` holds the holder's own value as one of the parts it is built from: the
+/// name stands as an argument, a list element or a field value (`wrap(x)`, `Node(v, x)`,
+/// `{next: x}`), not as the thing read from (`x.next`, `x[1:]`) or computed on (`x + 1`).
+pub fn holds_itself(value: &str, name: &str) -> bool {
+    let value = value.trim().trim_end_matches(';').trim();
+    if value == name {
+        return false;
+    }
+    let b = value.as_bytes();
+    value.match_indices(name).any(|(at, _)| {
+        let end = at + name.len();
+        if (at > 0 && is_ident(b[at - 1])) || (end < b.len() && is_ident(b[end])) {
+            return false;
+        }
+        matches!(
+            value[end..].trim_start().bytes().next(),
+            Some(b')' | b',' | b'}' | b']') | None
+        )
+    })
 }
 
 /// The identifiers of a text, without keywords and string literals.
@@ -411,5 +428,17 @@ mod tests {
         assert!(one("cache2.put(k, v)", "cache").is_empty());
         assert!(one("mycache.put(k, v)", "cache").is_empty());
         assert_eq!(one("self.cache.put(k, v)", "cache"), [(Ev::Grow, 0)]);
+    }
+
+    #[test]
+    fn a_value_built_from_the_holder_is_a_chain_and_a_value_read_from_it_is_not() {
+        assert_eq!(one("head = Node(v, head)", "head"), [(Ev::Grow, 0)]);
+        assert_eq!(one("p.ctx = trace.Start(p.ctx, s)", "ctx"), [(Ev::Grow, 0)]);
+        assert_eq!(one("h = {next: h}", "h"), [(Ev::Grow, 0)]);
+        assert_eq!(one("head = head.next", "head"), [(Ev::Reassign, 0)]);
+        assert_eq!(one("x = x[1:]", "x"), [(Ev::Reassign, 0)]);
+        assert_eq!(one("n = n * 2", "n"), [(Ev::Reassign, 0)]);
+        assert!(holds_itself("wrap(a, a)", "a"));
+        assert!(!holds_itself("a", "a"));
     }
 }

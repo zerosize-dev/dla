@@ -1113,4 +1113,39 @@ mod tests {
         assert_eq!(harness_id_of(&json!({"harness":"x"})), None);
         assert_eq!(harness_id_of(&json!({"top":[]})), None);
     }
+    #[test]
+    fn varies_is_the_first_real_line_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = HarnessManifest::dir_in(dir.path(), "H3").join("driver");
+        std::fs::create_dir_all(&d).unwrap();
+        // Missing, the placeholder, empty and comments only: nothing is said yet.
+        assert_eq!(varies_line(dir.path(), "H3"), None);
+        for text in [varies_template(), String::new(), "\n  \n# a note\n".into()] {
+            std::fs::write(d.join(VARIES_FILE), text).unwrap();
+            assert_eq!(varies_line(dir.path(), "H3"), None);
+        }
+        std::fs::write(
+            d.join(VARIES_FILE),
+            "# what a caller varies\n\n  the request path, new per unit  \nsecond line\n",
+        )
+        .unwrap();
+        assert_eq!(
+            varies_line(dir.path(), "H3").as_deref(),
+            Some("the request path, new per unit")
+        );
+        std::fs::write(d.join(VARIES_FILE), "x".repeat(VARIES_MAX + 50)).unwrap();
+        assert_eq!(varies_line(dir.path(), "H3").unwrap().len(), VARIES_MAX);
+    }
+
+    #[test]
+    fn the_purpose_is_optional_and_named_entry_path() {
+        let mut m = manifest();
+        assert!(!m.is_entry_path());
+        assert!(!serde_json::to_string(&m).unwrap().contains("purpose"));
+        m.purpose = Some(HarnessPurpose::EntryPath);
+        let text = serde_json::to_string(&m).unwrap();
+        assert!(text.contains(r#""purpose":"entry-path""#), "{text}");
+        let back: HarnessManifest = serde_json::from_str(&text).unwrap();
+        assert!(back.is_entry_path());
+    }
 }

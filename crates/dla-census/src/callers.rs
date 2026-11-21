@@ -23,6 +23,12 @@ pub const MAX_HOPS: usize = 3;
 pub const MAX_PER_HOP: usize = 5;
 /// The most call sites a key provenance lists.
 pub const MAX_SITES: usize = 5;
+/// The most mentions of a function read when nothing calls it by name.
+pub const MAX_REFERENCES: usize = 200;
+/// The most assignments listed for a local name a call site passes.
+pub const MAX_ORIGINS: usize = 3;
+/// The most `if` conditions listed for a call site.
+pub const MAX_GUARDS: usize = 3;
 /// Deepest syntax tree level read; deeper subtrees are skipped.
 const MAX_DEPTH: usize = 300;
 /// Longest argument or callee text kept.
@@ -94,6 +100,9 @@ pub struct Call {
     pub name: String,
     /// The arguments in order.
     pub args: Vec<Arg>,
+    /// The conditions of the `if` statements around the call (innermost first, at most
+    /// [`MAX_GUARDS`]) that the call sits in the branch of: the call happens only when they hold.
+    pub guards: Vec<String>,
 }
 
 /// A function definition with its extent, for finding the function around a line.
@@ -124,8 +133,11 @@ pub struct Index {
 pub struct Caller {
     /// The calling function.
     pub func: Func,
-    /// The first line in it that calls the function.
+    /// The first line in it that calls the function (or mentions it, see `by_reference`).
     pub line: usize,
+    /// The function is passed, stored or named there, not called: found only for a function
+    /// nothing calls by name (a callback, a class a framework instantiates).
+    pub by_reference: bool,
 }
 
 /// The callers of the functions of the hop before it (the first hop: of the function itself).
@@ -146,6 +158,11 @@ pub struct SitePass {
     pub caller: String,
     /// `(parameter, expression)` for each key parameter the call passes.
     pub passed: Vec<(String, String)>,
+    /// The conditions the call happens under (see [`Call::guards`]).
+    pub guards: Vec<String>,
+    /// For each passed expression that is a plain local name: the assignments to it in the
+    /// calling function before the call (at most [`MAX_ORIGINS`], the right-hand sides).
+    pub origins: Vec<(String, Vec<String>)>,
 }
 
 /// Where the key or stored value of a writer comes from.
@@ -540,6 +557,7 @@ impl<'a> Walker<'a> {
             callee,
             name,
             args,
+            guards: guards_of(n, src),
         });
     }
 
@@ -564,6 +582,55 @@ impl<'a> Walker<'a> {
     }
 }
 
+/// The conditions of the `if` statements that `n` sits in the branch of, innermost first, up to
+/// the function around it: `if self._run_middlewares:` around a call says the call happens
+/// only when the application has middlewares.
+fn guards_of(n: Node<'_>, src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut child = n;
+    let mut up = n.parent();
+    while let Some(p) = up {
+        if p.kind().contains("function") || p.kind().contains("method") || p.kind() == "lambda" {
+            break;
+        }
+        if matches!(p.kind(), "if_statement" | "elif_clause" | "if_expression")
+            && let (Some(cond), Some(body)) =
+                (p.child_by_field_name("condition"), p.child_by_field_name("consequence"))
+            && body.id() == child.id()
+        {
+            let text = one_line(unparen(text(cond, src)));
+            if !text.is_empty() && out.len() < MAX_GUARDS {
+                out.push(text);
+            }
+        }
+        child = p;
+        up = p.parent();
+    }
+    out
+}
+
+/// `(a and b)` without its outer parentheses (JavaScript, Java and Go wrap an `if` condition).
+fn unparen(t: &str) -> &str {
+    let t = t.trim();
+    if t.starts_with('(') && t.ends_with(')') {
+        let mut depth = 0usize;
+        for (i, c) in t.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 && i + 1 < t.len() {
+                        return t;
+                    }
+                }
+                _ => {}
+            }
+        }
+        return &t[1..t.len() - 1];
+    }
+    t
+}
+
 fn read_file(f: &SourceFile) -> FileFacts {
     let mut w = Walker {
         lang: f.lang,
@@ -586,6 +653,124 @@ fn read_file(f: &SourceFile) -> FileFacts {
 // ------------------------------------------------------------------ the index
 
 impl Index {
+    /// The functions that mention `f` by name without calling it, nor defining it: a callback
+    /// handed to a framework, a class stored as a default. Lines that import, comment or define
+    /// are left out; at most [`MAX_REFERENCES`] are read.
+    fn references(&self, files: &[SourceFile], f: &Func) -> Vec<(Func, usize)> {
+        let name = f.call_name();
+        if name.chars().count() < 3 {
+            return Vec::new();
+        }
+        let Ok(re) = regex::Regex::new(&format!(r"\b{}\b", regex::escape(&name))) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(Func, usize)> = Vec::new();
+        for file in files.iter().filter(|x| !x.is_test && supported(x.lang)) {
+            for (n, line) in file.text.lines().enumerate() {
+                let n = n + 1;
+                let t = line.trim_start();
+                if t.starts_with(['#', '*'])
+                    || t.starts_with("//")
+                    || t.starts_with("import ")
+                    || t.starts_with("from ")
+                    || t.starts_with("package ")
+                    || t.starts_with("use ")
+                {
+                    continue;
+                }
+                for m in re.find_iter(line) {
+                    let before = line[..m.start()].trim_end();
+                    let after = line[m.end()..].trim_start();
+                    let defines = ["def", "func", "function", "class", "fn", "async", "void"]
+                        .iter()
+                        .any(|k| before.ends_with(k))
+                        || before.ends_with(')') && after.starts_with('{');
+                    if after.starts_with('(') || defines {
+                        continue;
+                    }
+                    let func = self
+                        .function_at(&file.rel, n)
+                        .unwrap_or_else(|| Func {
+                            file: file.rel.clone(),
+                            line: 1,
+                            name: "<module>".to_owned(),
+                            public: false,
+                            params: Vec::new(),
+                        });
+                    // The function itself, and a function of the same name.
+                    if func.file == f.file && func.name == f.name {
+                        continue;
+                    }
+                    out.push((func, n));
+                    break;
+                }
+                if out.len() >= MAX_REFERENCES {
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
+    /// The assignments to each plain local name `passed` holds, inside the caller of `call` and
+    /// before the call.
+    fn origins(
+        &self,
+        files: &[SourceFile],
+        call: &Call,
+        passed: &[(String, String)],
+    ) -> Vec<(String, Vec<String>)> {
+        let Some(file) = files.iter().find(|f| f.rel == call.caller.file) else {
+            return Vec::new();
+        };
+        let Some(def) = self
+            .files
+            .iter()
+            .find(|f| f.rel == call.caller.file)
+            .and_then(|f| {
+                f.defs
+                    .iter()
+                    .find(|d| d.func.name == call.caller.name && d.func.line == call.caller.line)
+            })
+        else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        for (_, expr) in passed {
+            let is_name = !expr.is_empty()
+                && expr.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && !expr.chars().next().is_some_and(|c| c.is_ascii_digit())
+                && !matches!(expr.as_str(), "None" | "True" | "False" | "nil" | "null" | "self" | "this");
+            if !is_name || out.iter().any(|(n, _)| n == expr) {
+                continue;
+            }
+            let Ok(re) = regex::Regex::new(&format!(
+                r"(?:^|[^.\w]){}\s*(?::=|=)([^=].*)$",
+                regex::escape(expr)
+            )) else {
+                continue;
+            };
+            let mut rhs: Vec<String> = Vec::new();
+            for (n, line) in file.text.lines().enumerate() {
+                let n = n + 1;
+                if n < def.start || n > def.end.min(call.line) {
+                    continue;
+                }
+                if let Some(m) = re.captures(line) {
+                    let t = one_line(m[1].trim().trim_end_matches(';'));
+                    if !t.is_empty() && !rhs.contains(&t) {
+                        rhs.push(t);
+                    }
+                }
+            }
+            let from = rhs.len().saturating_sub(MAX_ORIGINS);
+            if !rhs.is_empty() {
+                out.push((expr.clone(), rhs.split_off(from)));
+            }
+        }
+        out
+    }
+
     /// Reads the calls of every non-test file of a supported language.
     pub fn build(files: &[SourceFile]) -> Self {
         let mut ix = Self::default();
@@ -633,9 +818,15 @@ impl Index {
         v
     }
 
-    fn hop(&self, of: &[Func], seen: &mut BTreeSet<(String, String)>) -> Hop {
+    fn hop(
+        &self,
+        files: &[SourceFile],
+        of: &[Func],
+        seen: &mut BTreeSet<(String, String)>,
+    ) -> Hop {
         let mut by_caller: Vec<Caller> = Vec::new();
         for f in of {
+            let before = by_caller.len();
             for c in self.calls_of(&f.call_name()) {
                 let key = (c.caller.file.clone(), c.caller.name.clone());
                 if seen.contains(&key) || by_caller.iter().any(|x| x.func == c.caller) {
@@ -644,11 +835,27 @@ impl Index {
                 by_caller.push(Caller {
                     func: c.caller.clone(),
                     line: c.line,
+                    by_reference: false,
                 });
+            }
+            // Nothing calls it by name: where is it passed or stored?
+            if by_caller.len() == before {
+                for (func, line) in self.references(files, f) {
+                    let key = (func.file.clone(), func.name.clone());
+                    if seen.contains(&key) || by_caller.iter().any(|x| x.func == func) {
+                        continue;
+                    }
+                    by_caller.push(Caller {
+                        func,
+                        line,
+                        by_reference: true,
+                    });
+                }
             }
         }
         by_caller.sort_by(|a, b| {
-            (!a.func.public, &a.func.file, a.line).cmp(&(!b.func.public, &b.func.file, b.line))
+            (!a.func.public, a.by_reference, &a.func.file, a.line)
+                .cmp(&(!b.func.public, b.by_reference, &b.func.file, b.line))
         });
         let more = by_caller.len().saturating_sub(MAX_PER_HOP);
         by_caller.truncate(MAX_PER_HOP);
@@ -662,14 +869,16 @@ impl Index {
     }
 
     /// The callers of `func`, then of those, up to [`MAX_HOPS`] hops; it ends at the first hop
-    /// with no caller. A function is listed once in all.
-    pub fn chain(&self, func: &Func) -> Vec<Hop> {
+    /// with no caller. A function is listed once in all. A function nothing calls by name is
+    /// followed by the functions that mention it without calling it.
+    ///
+    pub fn chain(&self, files: &[SourceFile], func: &Func) -> Vec<Hop> {
         let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
         seen.insert((func.file.clone(), func.name.clone()));
         let mut hops = Vec::new();
         let mut of = vec![func.clone()];
         for _ in 0..MAX_HOPS {
-            let hop = self.hop(&of, &mut seen);
+            let hop = self.hop(files, &of, &mut seen);
             if hop.callers.is_empty() {
                 break;
             }
@@ -706,7 +915,7 @@ impl Index {
             .filter(|c| !(c.caller.file == func.file && c.caller.name == func.name))
             .collect();
         for c in calls.iter().take(MAX_SITES) {
-            let passed = used
+            let passed: Vec<(String, String)> = used
                 .iter()
                 .filter_map(|p| {
                     let idx = func.params.iter().position(|x| x == p)?;
@@ -716,10 +925,13 @@ impl Index {
                     Some((p.clone(), arg.text.clone()))
                 })
                 .collect();
+            let origins = self.origins(files, c, &passed);
             sites.push(SitePass {
                 at: format!("{}:{}", c.caller.file, c.line),
                 caller: c.caller.name.clone(),
                 passed,
+                guards: c.guards.clone(),
+                origins,
             });
         }
         Provenance {

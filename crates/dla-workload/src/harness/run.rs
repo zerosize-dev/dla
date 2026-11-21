@@ -2726,23 +2726,20 @@ fn run_loaded(
     // what the trigger of the findings it targets is judged by.
     let varies = dla_core::harness::varies_line(&ctx.run_dir, &manifest.id);
     if manifest.is_entry_path() && varies.is_none() {
+        let varies_path = ctx.pointer(&format!(
+            "harness/{}/driver/{}",
+            manifest.id,
+            dla_core::harness::VARIES_FILE
+        ));
         return Err(Refusal::new(
             dla_core::error::codes::VARIES_MISSING,
             format!(
-                "harness {} is an entry-path harness and harness/{}/driver/{} is empty or still the placeholder",
+                "harness {} is an entry-path harness and {varies_path} is empty or still the placeholder",
                 manifest.id,
-                manifest.id,
-                dla_core::harness::VARIES_FILE
             ),
+            format!("one line in {varies_path}: what a caller varies per unit"),
             format!(
-                "one line in harness/{}/driver/{}: what a caller varies per unit",
-                manifest.id,
-                dla_core::harness::VARIES_FILE
-            ),
-            format!(
-                "write one line in harness/{}/driver/{} (for example: the request path, a different one per unit), then dla harness run {} --mode both",
-                manifest.id,
-                dla_core::harness::VARIES_FILE,
+                "write one line in {varies_path} (for example: the request path, a different one per unit), then dla harness run {} --mode both",
                 manifest.id
             ),
         ));

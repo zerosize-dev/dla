@@ -90,6 +90,8 @@ struct Run {
     varies: Option<String>,
     /// The trend of the series was read.
     read: bool,
+    /// The series reuses no keys (a `repeated` series says nothing about new keys).
+    fresh: bool,
     verdicts: BTreeMap<FindingId, Verdict>,
     declared: BTreeSet<FindingId>,
 }
@@ -160,6 +162,10 @@ impl Triggers {
                     .unwrap_or_else(|| h.clone()),
                 varies: rec.and_then(|r| r.varies),
                 read: report.is_some(),
+                fresh: crate::series::SeriesFile::load(run_dir, series)
+                    .ok()
+                    .and_then(|f| f.source.mode)
+                    != Some(crate::series::KeyMode::Repeated),
                 verdicts: report
                     .map(|r| r.targets.iter().map(|v| (v.finding.clone(), v.verdict)).collect())
                     .unwrap_or_default(),
@@ -252,37 +258,34 @@ impl Triggers {
                 ),
             };
         }
+        // The first run of each of two harnesses whose drivers differ.
+        let mut runs: Vec<(String, String)> = Vec::new();
+        let mut digests: BTreeSet<&str> = BTreeSet::new();
         let none = self.without_growth(id);
-        let digests: BTreeSet<&str> = none.iter().map(|r| r.digest.as_str()).collect();
-        let harnesses: BTreeSet<&str> = none.iter().map(|r| r.harness.as_str()).collect();
-        if digests.len() >= 2 && harnesses.len() >= 2 {
-            // The first run of each of the first two harnesses with a different digest.
-            let mut runs: Vec<(String, String)> = Vec::new();
-            let mut seen: BTreeSet<&str> = BTreeSet::new();
-            for r in &none {
-                if runs.len() == 2 {
-                    break;
-                }
-                if seen.insert(r.digest.as_str()) && !runs.iter().any(|(h, _)| *h == r.harness) {
-                    runs.push((
-                        r.harness.clone(),
-                        r.varies.clone().unwrap_or_else(|| "not recorded".to_owned()),
-                    ));
-                }
-            }
+        for r in &none {
             if runs.len() == 2 {
-                return Trigger::NotFound { runs };
+                break;
             }
+            if !runs.iter().any(|(h, _)| *h == r.harness) && digests.insert(r.digest.as_str()) {
+                runs.push((
+                    r.harness.clone(),
+                    r.varies.clone().unwrap_or_else(|| "not recorded".to_owned()),
+                ));
+            }
+        }
+        if runs.len() == 2 {
+            return Trigger::NotFound { runs };
         }
         Trigger::Unchecked
     }
 
     /// The runs of entry-path harnesses that targeted `id`, ran, were read, and did not make
-    /// it grow.
+    /// it grow. A `repeated` series is left out: it reuses its keys, so a flat holder in it
+    /// says nothing about new keys.
     fn without_growth(&self, id: &FindingId) -> Vec<&Run> {
         self.runs
             .iter()
-            .filter(|r| r.entry && r.read && r.declared.contains(id))
+            .filter(|r| r.entry && r.read && r.fresh && r.declared.contains(id))
             .filter(|r| r.verdicts.get(id) != Some(&Verdict::Grew))
             .collect()
     }
@@ -436,7 +439,13 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
         Trigger::Unchecked => {
             let why = unchecked_because(view).map_or_else(
                 || {
-                    if t.grew_in_a_harness(&f.id) {
+                    let none = t.entry_runs_without_growth(&f.id);
+                    if let Some((h, varies)) = none.first() {
+                        format!(
+                            "the entry-path harness {h} did not grow it (varies: {}) and a second, different one was not run",
+                            one_line(varies)
+                        )
+                    } else if t.grew_in_a_harness(&f.id) {
                         "no entry-path harness was run for it".to_owned()
                     } else {
                         "no harness series that grew is tied to it".to_owned()

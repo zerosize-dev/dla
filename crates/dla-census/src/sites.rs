@@ -1341,6 +1341,9 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
         let reass = evs.iter().any(|e| e.kind == Ev::Reassign);
         if let Some(g) = grow.iter().min_by_key(|e| e.depth) {
             writers.push(mk(SiteKind::Insert, g.depth, Some(g)));
+        } else if reass && wraps_itself_through_a_local(sfc, &chain, line, &evs, &name) {
+            // `context = new Context(.., head); head = context;`: the head holds the old head.
+            writers.push(mk(SiteKind::Insert, 0, None));
         } else if reass || (rst && in_writers) {
             writers.push(mk(SiteKind::Reassign, 0, None));
         }
@@ -1434,6 +1437,43 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
         writers: out_writers,
         removers: removers_out,
         facts,
+    })
+}
+
+/// True when the holder is assigned a local variable that the function built from the holder's
+/// own value earlier (`ctx = new Ctx(.., latest); latest = ctx;`): the same chain as
+/// `latest = new Ctx(.., latest)`, one hop away.
+fn wraps_itself_through_a_local(
+    fc: &FileCtx,
+    chain: &[&Frame],
+    line: u32,
+    evs: &[crate::events::Event],
+    name: &str,
+) -> bool {
+    let Some(outer) = chain.last() else {
+        return false;
+    };
+    let Some(rhs) = evs
+        .iter()
+        .find(|e| e.kind == Ev::Reassign)
+        .map(|e| e.rhs.trim())
+    else {
+        return false;
+    };
+    let var = rhs.trim_end_matches(';').trim();
+    if var.is_empty()
+        || !var
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
+    {
+        return false;
+    }
+    let Ok(def) = Regex::new(&format!(r"\b{}\s*:?=([^=].*)$", regex::escape(var))) else {
+        return false;
+    };
+    (outer.start..line).any(|l| {
+        def.captures(&fc.statement(l))
+            .is_some_and(|c| crate::events::holds_itself(&c[1], name))
     })
 }
 

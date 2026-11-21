@@ -256,3 +256,19 @@ fn an_entry_harness_not_run_yet_is_in_flight() {
     run.run("S1", "H1", "aa", Some("a"), Some(&[(1, Verdict::Constant)]));
     assert_eq!(run.triggers().entry_in_flight(&f(1)), None);
 }
+
+#[test]
+fn a_repeated_series_says_nothing_about_new_keys() {
+    let run = Run::new(1);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run("S1", "H1", "aa", Some("a"), Some(&[(1, Verdict::Constant)]));
+    run.harness("H2", Kind::Entry, &[1]);
+    run.run("S2", "H2", "bb", Some("b"), Some(&[(1, Verdict::Constant)]));
+    assert!(matches!(run.triggers().trigger(&f(1)), Trigger::NotFound { .. }));
+    // H2's only read series reused its keys: H2 does not count.
+    let p = run.dir.path().join("series/S2.json");
+    let mut doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    doc["source"]["mode"] = json!("repeated");
+    std::fs::write(&p, doc.to_string()).unwrap();
+    assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
+}

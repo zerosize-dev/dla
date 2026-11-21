@@ -445,7 +445,7 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
     }
     let next = if !unchecked.is_empty() {
         format!(
-            "{} did not grow in an entry-path harness yet: write a second, different one (other entry points, other inputs, the rejected-input paths): dla harness gen --lang {} --driver --entry {}, fill the hooks, write VARIES.txt, dla harness run <H> --mode both, dla trend S<n>",
+            "{} did not grow here: dla harness gen --lang {} --driver --entry {} for a second, different driver (other entry points, inputs, rejected-input paths), fill, VARIES.txt, run, trend",
             unchecked.join(", "),
             m.runtime.as_str(),
             unchecked.join(",")
