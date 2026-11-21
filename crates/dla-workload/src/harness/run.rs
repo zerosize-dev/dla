@@ -3615,14 +3615,28 @@ mod tests {
             points: 5,
             modes: vec![KeyMode::Fresh],
             exits: vec![("p1-fresh".into(), None)],
-            detectors: vec![json!({"lib": "node", "text": "MaxListenersExceededWarning: 11 error listeners", "site": "src/a.js:9", "sites": [{"site": "src/a.js:9", "count": 11}]})],
-            limitations: vec!["the driver lowered its step from 90 to 30 units per round after round 1: slow".into()],
+            detectors: vec![
+                json!({"lib": "node", "text": "MaxListenersExceededWarning: 11 error listeners", "site": "src/a.js:9", "sites": [{"site": "src/a.js:9", "count": 11}]}),
+            ],
+            limitations: vec![
+                "the driver lowered its step from 90 to 30 units per round after round 1: slow"
+                    .into(),
+            ],
             ..RunOutput::default()
         };
         let lines = attention_lines(&m, &out, 9, &ledger, &executed);
         assert_eq!(lines.len(), 3, "{lines:?}");
-        assert!(lines[0].starts_with("READ THE DETECTOR HIT") && lines[0].contains("src/a.js:9 (11 registered)"), "{lines:?}");
-        assert!(lines[1].starts_with("SERIES TOO SHORT (4 points after warm-up, the gate needs 8; the process was cut)"), "{lines:?}");
+        assert!(
+            lines[0].starts_with("READ THE DETECTOR HIT")
+                && lines[0].contains("src/a.js:9 (11 registered)"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].starts_with(
+                "SERIES TOO SHORT (4 points after warm-up, the gate needs 8; the process was cut)"
+            ),
+            "{lines:?}"
+        );
         assert!(lines[2].starts_with("DRIVER STEP"), "{lines:?}");
         assert!(lines.iter().all(|l| l.len() <= 160));
         // Nothing to say: no lines.
@@ -3639,7 +3653,10 @@ mod tests {
             ..quiet
         };
         let l = attention_lines(&m, &cov_only, 9, &ledger, &executed);
-        assert!(l[0].starts_with("NO COVERAGE DATA") && l[0].contains("killed"), "{l:?}");
+        assert!(
+            l[0].starts_with("NO COVERAGE DATA") && l[0].contains("killed"),
+            "{l:?}"
+        );
     }
 
     #[test]

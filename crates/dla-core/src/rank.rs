@@ -751,7 +751,12 @@ mod tests {
             h.bound = Some(Bound::None);
             h.lifetime = Some(Lifetime::Object);
             h.receiver = Some(receiver);
-            h.remover_sites = vec![site("lib/adapters/http.js:913", SiteKind::Delete, 0, "httpAdapter")];
+            h.remover_sites = vec![site(
+                "lib/adapters/http.js:913",
+                SiteKind::Delete,
+                0,
+                "httpAdapter",
+            )];
         });
         (f, a)
     }
@@ -762,7 +767,10 @@ mod tests {
         // Eligible (tier 4: it has a remover), not tier 5, and no w_none.
         assert_eq!(tier(&f, Some(&a)), 4);
         let names: Vec<&str> = contributions(&f, Some(&a)).iter().map(|c| c.0).collect();
-        assert!(!names.contains(&"w_none") && !names.contains(&"tier5"), "{names:?}");
+        assert!(
+            !names.contains(&"w_none") && !names.contains(&"tier5"),
+            "{names:?}"
+        );
         assert!(names.contains(&"w_grow"), "{names:?}");
         let (fl, al) = own_registration(Receiver::Local);
         assert!(score(&f, Some(&a)) > score(&fl, Some(&al)));

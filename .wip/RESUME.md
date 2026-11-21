@@ -434,3 +434,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - AXIOS BY HAND: in /root/dla-real/axios-3/project (13:23 binary) F23 at lib/adapters/http.js:924 went to confirmed following the printed commands (notes real-run-plugin-axios-3.md).
 - Running: N on brief S (u46), F (u43), P3 pass 7 (u45). fmt diffs currently in trend_cmd.rs and rank.rs are N's in-flight edits.
 - Next: when N, F, P3 report: verify each; rebuild; freeze binary + plugin from a snapshot; real runs axios-4, grpc-4, spring-5, tokio-2; then combined commit via CI.
+
+## State at 16:04 UTC, 2026-11-21
+- P3 PASS 7 REPORTED (u45/report.md) and checked (my log u47/verify-p7.log; census timing u47: old 129 s CPU, new 15.1 s, outputs identical): census word index + lazy regex + parse cache + dev-profile opt-level 3 for regex/tree-sitter deps (kept); stop hook does not count or stamp while a registered dla command runs (scope.rs, ProcessKind::Command, 30 min limit); auto budget settles in every working command; stamp history. Mutations MUT_P1..P3 seen failing, restored.
+- NOT ACCEPTED in pass 7: a stamped run with time left still shows the queue closed (`over`) and close-rest closes all pending candidates (as not_exercised) before the stamp lifts. Sent pass 7b to P3 (resumed a8249474e4d24c8ca): a stop-hook stamp does not close the queue; any working command lifts the stamp before its work; run status shows the going-run queue and next command; close-rest leaves pending candidates; aborted unchanged.
+- My own edit: gate_hooks.rs running-command message now gives `while kill -0 <pid> ...` as the one-command wait.
+- Running: P3 pass 7b, N brief S (u46), F (u43, in its after-change sweeps).

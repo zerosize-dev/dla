@@ -454,9 +454,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
 fn detector_site(ctx: &Ctx, series: &dla_core::SeriesFile) -> Option<String> {
     let h = series.source.harness.as_deref()?;
     let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
-    rec.detectors
-        .iter()
-        .find_map(|d| d["site"].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
+    rec.detectors.iter().find_map(|d| {
+        d["site"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    })
 }
 
 /// The `next` entry for a runtime detector hit of the run that wrote `series` whose registration
@@ -488,9 +491,13 @@ fn detector_entry(
     let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
     let head = format!("DETECTOR HIT (listeners added at {site}{held})");
     Some(match at.first() {
-        Some(f) if m.targets.contains(f) || m.probes.iter().any(|p| p.finding.as_ref() == Some(f)) => format!(
-            "{head}: finding {f} is a target of {h}; follow the ledger lines for node.listeners@{site}, at full length"
-        ),
+        Some(f)
+            if m.targets.contains(f) || m.probes.iter().any(|p| p.finding.as_ref() == Some(f)) =>
+        {
+            format!(
+                "{head}: finding {f} is a target of {h}; follow the ledger lines for node.listeners@{site}, at full length"
+            )
+        }
         Some(f) => format!(
             "{head}: dla harness gen --lang {} --driver --probe {f}   # {f} holds it, {h} did not target it; copy the hooks of {h}",
             m.runtime.as_str()

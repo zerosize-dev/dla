@@ -605,7 +605,11 @@ mod tests {
             capture_advice(&s, Region::Heap).unwrap(),
             "dla harness run H1 --mode fresh --capture alloc,heap   # allocation stacks name the site, snapshots the types"
         );
-        assert!(capture_advice(&s, Region::NonHeap).unwrap().contains("--capture nonheap"));
+        assert!(
+            capture_advice(&s, Region::NonHeap)
+                .unwrap()
+                .contains("--capture nonheap")
+        );
         s.source.runtime = Some(Runtime::Go);
         assert!(capture_advice(&s, Region::Heap).is_none());
     }
