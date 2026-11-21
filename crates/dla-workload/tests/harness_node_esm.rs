@@ -274,8 +274,7 @@ fn es_module_project_in_command_mode_is_measured_by_probes_listeners_and_coverag
     }
     let fx = fixture();
     esm_project(&fx);
-    fs::rename(fx.agent.join("dla-preload.cjs"), fx.agent.join("dla-preload.js")).unwrap();
-    let mut m = manifest(require(&fx, "dla-preload.js"));
+    let mut m = manifest(require(&fx, "dla-preload.cjs"));
     m.probes = store_probes();
     dla_core::coverage::CoverageManifest::update(&fx.ctx.run_dir, |c| {
         c.set_entry_points(
