@@ -1,0 +1,20 @@
+Second-look skeleton, trigger reading by census facts, one gate action per capture
+
+Found by further real runs of the plugin. On the Rust async library the documented leak is
+now measured and confirmed: the second look had run with choices from the key, but the model
+left out the one choice the leak needs (when the intermediate objects are released).
+
+- The unit hook of a second-look harness is generated as a skeleton: one named variable per
+  choice (depth, ending, when, order, outcome) with its options on the same line.
+  `dla harness run` refuses the harness while a slot variable is unused. A slot that does not
+  apply is given up with `// slot <name>: not applicable: <reason>` (two at most), and the
+  run output and `dla trend` list the slots given up.
+- Growth through a unit that calls the holder's own writer reads "grown only by calling the
+  registration function itself" only when the census says every writer site is start-up
+  code. A handler nothing in the project calls, or a run-time caller with a key from a
+  parameter, is a public entry and reads "reproduced through the public API". Without census
+  facts the trigger is "not checked".
+- The growing columns of one capture summary that tie to no finding are one gate action per
+  evidence, with a count and the three largest. One `dla ledger add --origin growth-series`
+  finding stands for them, and the report lists the others under it. A finding of the
+  evidence that an alloc-test decided accounts for them too.

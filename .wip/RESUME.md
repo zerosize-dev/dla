@@ -589,3 +589,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - REAL RUN tokio-5 STARTED 22:41 UTC on the fourth frozen build (waiter in background).
 - CI on main d297716 (run 44955952991) and on the dev branch (44955954569): in progress at 22:27.
 - If CI on 56aa221 is green: write commit-message-4.txt (skeleton, trigger facts, capture grouping) and commit with commit-snapshot-tree.sh.
+
+## State at 22:50 UTC, 2026-11-21
+- REAL RUN tokio-5 FINISHED (6 min, cost 1.19) on the fourth frozen build: COMPLETE and THE DOCUMENTED LEAK IS CONFIRMED (F2 child_token, stack at cancellation_token.rs:218, mechanism "middle token dropped before its child"). Notes real-run-plugin-tokio-5.md, evidence u36/tokio-5.
+- REAL-PROJECT SCORE (real plugin runs, model claude-sonnet-5-5, current code): aiohttp 3.10.10 found; grpc-go v1.84.0 found (twice); axios 1.15.1 found; tokio-util 0.7.1 found; spring-data-commons 4.1.1 not found (needs a Kotlin caller; holder reached and read flat); Pillow and Jetty not run (environment).
+- Waiting: CI on the fourth snapshot 56aa221 (waiter b11o93v59). Then: commit-message-4.txt, commit to main, push both branches.
+- THEN RELEASE 0.9.0-preview.3 (pre-authorized previews; the hold condition "real runs find the other projects' leaks" is met for 4 of 5): bump Cargo.toml workspace version and the nine path deps, cargo update -w --offline, .claude-plugin/plugin.json, .claude-plugin/marketplace.json; CI green on main; dispatch release.yml on main with publish=true; check the assets; tell the owner.
