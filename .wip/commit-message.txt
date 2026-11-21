@@ -1,40 +1,51 @@
-Leave vendored and generated code out of scope; probes never import; one site, one finding
+Measure the ranked candidates before closing any; Go heap captures on the bytes-allocated axis
 
-Found by running DLA on real libraries at versions with a documented leak.
+Found by running the plugin on real libraries at versions with a documented leak. The agent
+closed every static candidate as not exercised within minutes, with most of the time budget
+left: the tool printed that close as the fix for each open candidate, and every "measure
+before you close" rule was per runtime, never per candidate.
 
-Scope
-- Vendored directories (vendor, third_party, node_modules, a git submodule, a virtual
-  environment and the like) and generated source files (by the marker in their first
-  lines) are not analysed by default: they do not count as a runtime of the project, are
-  not swept, not in the census, not in workload discovery, not in the entry-point totals
-  and not in the figures the time budget is sized from. On one Python library this takes
-  the candidates from 922 to 187, the runtimes from three to one and the static stage from
-  about five minutes to under one. A leak in such code that the project's workload
-  triggers still shows as measured growth.
-- The probe and the report name what was left out; `dla run init --include <path>` brings
-  a path back.
+Measurement queue
+- Candidates are ranked (a DLA rule or known-leak pattern; a census holder with writers and
+  no removers in a registration table, container field or static; another detector hit; a
+  census holder with writers; test, example, benchmark and documentation code last), and
+  `dla ledger list` prints them in that order.
+- `dla harness gen --driver --next [N]` declares the next pending candidates, 8 at most, as
+  targets of the harness and writes above the driver's hooks what each one is: site, holder,
+  owner, the rule's message, writers and removers with their functions, what its probe
+  reads and what a unit of work must do to reach it. `--probe F` declares a target too, and
+  a finding no probe can read is still a target.
+- `dla trend` gives every target a verdict: grew, changed, constant, not_loaded, executed,
+  not_executed, or unknown when the run has no coverage data.
+- A ranked candidate is settled when a verdict is grew or changed, when a driver that
+  targeted it saw its code run, or after two different drivers targeted it. While the queue
+  of a runtime is open (time left above the floor, the workload not blocked, candidates
+  pending), closing a pending candidate with not_exercised, no_harness or time_budget is
+  refused (`target-pending`) with the batch command as the fix. The queue leads
+  `dla run status`, the final gate and the stop hook; only a blocker recorded on
+  `intake.workload` closes it.
+- `dla ledger close-rest` closes what the queue does not hold back, through the rules of
+  `dla ledger resolve`; a candidate whose column grew stays open for `dla ledger test`.
+- The report has a `Queue:` line and says for each static-only or unresolved finding how
+  it was targeted.
+- `dla run init --queue off` keeps the earlier behaviour; the fixed policy of
+  `dla-bench dynamic` uses it.
+- The skill's checklist, rules, stage and recovery references and the worker agent follow
+  the queue loop.
+With this build the plugin, run on a Python HTTP library, confirmed the documented leak
+(an unbounded cache on a module-level function) about five minutes into the run and went
+on with the next batches; the build before closed all 187 candidates in five minutes.
 
-Python harness
-- A module probe reads a module only if the workload has loaded it and never imports one.
-  A driver whose probes imported an example script that starts a server hung until its
-  timeout; it now finishes, and the probe says the module was not loaded.
-- A point killed at its timeout says what the agent was doing (start-up, a hook, a named
-  probe).
-
-Ledger
-- A rule or analyzer hit and a census entry at the same site are one finding that carries
-  both origins, the holder, owner, writers and removers of the census entry and the
-  rule's message. For Python a decorator stack and its def line are one site.
-- `dla harness gen --probe F<n>` for a finding without a probe target of its own answers
-  with the reason and the finding to use; it no longer drops the request.
-- What a rule's hit declares (holder, owner, region) wins over the census entry it joins,
-  in either order of arrival; the census value goes into the note. The Go ticker rules and
-  the Node timer rule declare the registered timer in the heap, so a joined ticker finding
-  is not measured on the goroutine count.
-
-alloc-test
-- For a Go heap finding the exact exit column leads when the trend passed it and it rose
-  by at least a tenth of what the in-run column rose by; otherwise the in-run column
-  leads when it passed. The in-run reading is the noisier of the two and made a ticker
-  leak read flat in about one run in four, and an exit column can pass on a kilobyte of
-  its own while the state the finding holds is gone at exit.
+Go heap profiles
+- In command mode the heap profile of a point is the one of its last in-run sample, taken
+  at a varying share of the run, while the capture series used the capture number as x. A
+  leak that is linear in the work could read as slowing down, and the growth rule (the last
+  step at least half of the first) failed by chance. On ten kept capture sets of two
+  fixtures the second-half over first-half ratio of the leak's stack read 0.81 to 1.82.
+- x is now the number of bytes the process had allocated when the profile was taken (the
+  sum of alloc_space in the profile); the same ratio reads 0.90 to 1.19. The rule compares
+  rates over x, the alloc-stack evidence reads the same positions, and a slope of such a
+  series is bytes kept per byte allocated.
+- Captures are put in the order of that total, since each profile of a separate process is
+  one reading. Without positive, distinct totals x stays the capture number and a
+  limitation line says why.

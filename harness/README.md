@@ -51,6 +51,8 @@ or the last checkpoint. Absent optional sections are simply left out.
 | `DLA_CAPTURE_DIR` | directory the captures go to (`<dir>/<pid>/<file>`); required with `DLA_CAPTURE` |
 | `DLA_CAPTURE_DUMPS` | JVM driver: how many of the rounds take a heap dump (default 4: the end of the warm-up, the last round and evenly spaced rounds between) |
 
+`dla harness run` records the values of `PYTHONPATH`, `NODE_PATH`, `CLASSPATH`, `GOFLAGS`, `GOWORK`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` and `VIRTUAL_ENV` it ran with in `harness/H<n>/run-S<n>.json` (no other variable), and a rerun of the harness (`dla harness run`, `dla alloc-test`, `dla intervene`) sets those of them that are unset in its own environment from the latest run, names them in `env_reused` and in a line at the top of the process log; a variable that is set always wins.
+
 Driver-only variables (read by `DlaHarness` and `dla_harness.py`; the defaults are baked into the
 file at generation time, so the variables are optional overrides):
 

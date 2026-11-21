@@ -282,7 +282,10 @@ under the run directory and need tier 1.
      `dla ledger close-rest` (stage 7).
   A candidate that no probe can read is still a target: use the writer lines to make its units reach
   it; `executed` then tells you its code ran.
-- `dla harness run H1` builds once and measures every point (`--mode both` in driver mode). Give a
+- `dla harness run H1` builds once and measures every point (`--mode both` in driver mode). It records the
+  dependency-path variables it ran with (`PYTHONPATH`, `NODE_PATH`, `CLASSPATH`, `GOFLAGS`, `GOWORK`,
+  `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `VIRTUAL_ENV`), and a rerun of the harness (`dla harness run`,
+  `dla alloc-test`, `dla intervene`) sets the unset ones from the last run and prints `env_reused`; a variable you set wins. Give a
   harness run or alloc-test Bash call a timeout of 600000 ms. A harness that `gen` wrote must be run, or the
   blocker recorded on `intake.workload` (`--status unresolved --reason env_unavailable|tool_missing|build_fails|privilege_declined
   --remedy "<what blocks it>"`; it closes the runtime's queue), before any finding of its runtime is closed `no_harness`, `not_exercised` or `time_budget`; `dla ledger resolve` refuses with

@@ -539,6 +539,7 @@ fn site_resolution_uses_the_census_then_declarations() {
 fn jvm_manifest(ctx: &ToolCtx) -> HarnessManifest {
     use dla_core::harness::CommandSpec;
     HarnessManifest {
+        sibling_of: Default::default(),
         targets: Vec::new(),
         schema_version: 1,
         id: "H9".into(),

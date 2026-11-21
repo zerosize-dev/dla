@@ -6,7 +6,7 @@ use dla_core::{Ledger, RunState, state::now_utc, toolctx::ToolCtx};
 
 use super::*;
 
-fn project(files: &[(&str, &str)]) -> (tempfile::TempDir, ToolCtx) {
+pub(crate) fn project(files: &[(&str, &str)]) -> (tempfile::TempDir, ToolCtx) {
     let dir = tempfile::tempdir().unwrap();
     for (p, c) in files {
         let path = dir.path().join(p);

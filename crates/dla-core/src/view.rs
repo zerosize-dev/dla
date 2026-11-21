@@ -291,7 +291,14 @@ fn resolve_args(reason: crate::finding::UnresolvedReason) -> String {
 /// are next and the command that targets them.
 pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
     let (left, total) = q.minutes.unwrap_or((0, 0));
-    let next: Vec<String> = q.batch.iter().map(ToString::to_string).collect();
+    let next: Vec<String> = q
+        .batch
+        .iter()
+        .map(|f| match q.siblings.get(f) {
+            Some(with) => format!("{f} (same owner as {with})"),
+            None => f.to_string(),
+        })
+        .collect();
     let next = if next.is_empty() {
         String::new()
     } else {

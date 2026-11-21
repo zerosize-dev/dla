@@ -66,6 +66,9 @@ pub struct Target {
     pub probe: Option<String>,
     /// One line of instruction by holder kind.
     pub instruction: String,
+    /// `--next` added this target because it holds state of the same owner as this earlier
+    /// target.
+    pub sibling_of: Option<FindingId>,
 }
 
 /// The name of the function (`Class.method`) that encloses `file:line`, when the file parses.
@@ -214,6 +217,7 @@ pub fn describe(
     ledger: &Ledger,
     asked: &[Asked],
     probes: &[ProbeSpec],
+    siblings: &std::collections::BTreeMap<FindingId, FindingId>,
 ) -> Vec<Target> {
     asked
         .iter()
@@ -240,6 +244,7 @@ pub fn describe(
                 removers: sites(&ctx.project, &removers),
                 probe: probe_text(&ctx.project, a, probes),
                 instruction: instruction(&a.kind, &holder, &owner, &a.site),
+                sibling_of: siblings.get(&a.id).cloned(),
             }
         })
         .collect()
@@ -276,6 +281,9 @@ impl Target {
                 format!(", owner {}", self.owner)
             }
         )];
+        if let Some(s) = &self.sibling_of {
+            out[0].push_str(&format!(" (sibling_of {s}: state of the same owner)"));
+        }
         if let Some(m) = &self.message {
             out.push(format!("  rule: {m}"));
         }
@@ -301,6 +309,7 @@ impl Target {
             "removers": self.removers.0,
             "probe": self.probe,
             "instruction": self.instruction,
+            "sibling_of": self.sibling_of,
         })
     }
 }
@@ -383,6 +392,7 @@ mod tests {
                 "pkg.web_app._build",
                 "pkg/web_app.py:82",
             ),
+            sibling_of: None,
         }
     }
 

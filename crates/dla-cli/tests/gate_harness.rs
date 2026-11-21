@@ -149,6 +149,7 @@ fn manifest(runtime: Runtime) -> HarnessManifest {
 
 fn manifest_of(id: &str, runtime: Runtime) -> HarnessManifest {
     HarnessManifest {
+        sibling_of: Default::default(),
         targets: Vec::new(),
         schema_version: 1,
         id: id.into(),

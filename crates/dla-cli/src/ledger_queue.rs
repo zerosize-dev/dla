@@ -98,6 +98,11 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             "state": f.state_label(),
             "tier": tier,
             "rank": r.and_then(|r| r.rank),
+            "score": rank::score(f, ann),
+            "why": rank::why(f, ann, 3)
+                .into_iter()
+                .map(|(name, points)| format!("{name} {points:+}"))
+                .collect::<Vec<_>>(),
             "origin": f.origin.as_str(),
             "site": f.site,
             "holder": f.holder.map(|h| h.to_string()),

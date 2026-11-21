@@ -1407,8 +1407,15 @@ fn cmd_text(c: &CommandSpec, hdir: &Path) -> String {
 fn resolve_targets(
     ctx: &ToolCtx,
     opts: &GenOptions,
-) -> Result<(Vec<FindingId>, Option<String>), Refusal> {
-    use dla_core::harness::MAX_TARGETS;
+) -> Result<
+    (
+        Vec<FindingId>,
+        Option<String>,
+        std::collections::BTreeMap<FindingId, FindingId>,
+    ),
+    Refusal,
+> {
+    use dla_core::harness::{MAX_TARGETS, MAX_TARGETS_WITH_SIBLINGS};
     let rt = opts.lang;
     let mut ids: Vec<FindingId> = Vec::new();
     for f in &opts.probe_findings {
@@ -1417,6 +1424,7 @@ fn resolve_targets(
         }
     }
     let mut note = None;
+    let mut siblings = std::collections::BTreeMap::new();
     if let Some(n) = opts.next {
         if n > MAX_TARGETS || ids.len() + n > MAX_TARGETS {
             return Err(refuse(
@@ -1436,19 +1444,24 @@ fn resolve_targets(
         }
         let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
             .map_err(|e| e.to_refusal())?;
-        let batch = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        let (batch, sib) = dla_core::queue::queues(&view, ctx.worker.as_deref())
             .into_iter()
             .find(|q| q.runtime == rt.as_str())
-            .map(|q| q.batch)
+            .map(|q| q.batch_for(&view, n))
             .unwrap_or_default();
         let before = ids.len();
-        for f in batch {
-            if ids.len() - before >= n {
+        // The first `n` by rank, then the siblings of their owners, up to the limit.
+        for (k, f) in batch.into_iter().enumerate() {
+            if ids.contains(&f) {
+                continue;
+            }
+            if k >= n && ids.len() >= MAX_TARGETS_WITH_SIBLINGS {
                 break;
             }
-            if !ids.contains(&f) {
-                ids.push(f);
+            if let Some(with) = sib.get(&f) {
+                siblings.insert(f.clone(), with.clone());
             }
+            ids.push(f);
         }
         if ids.len() == before {
             note = Some(format!(
@@ -1457,12 +1470,12 @@ fn resolve_targets(
             ));
         }
     }
-    if ids.len() > MAX_TARGETS {
+    if ids.len() - siblings.len() > MAX_TARGETS {
         return Err(refuse(
             codes::TOO_MANY_TARGETS,
             format!(
                 "{} targets were asked for with --probe; one harness declares at most {MAX_TARGETS}",
-                ids.len()
+                ids.len() - siblings.len()
             ),
             format!("at most {MAX_TARGETS} targets per harness"),
             format!(
@@ -1471,7 +1484,7 @@ fn resolve_targets(
             ),
         ));
     }
-    Ok((ids, note))
+    Ok((ids, note, siblings))
 }
 
 /// Removes a half-written harness directory when generation fails.
@@ -1571,7 +1584,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
 
     // The targets: `--probe` findings, then the next pending queue entries. Refused before
     // anything is created.
-    let (asked_ids, next_note) = resolve_targets(ctx, opts)?;
+    let (asked_ids, next_note, siblings) = resolve_targets(ctx, opts)?;
 
     // Tools first: nothing is created when one is missing.
     if rt == Runtime::Jvm {
@@ -1837,6 +1850,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             vec![KeyMode::Native]
         },
         probes: derived.probes.clone(),
+        sibling_of: siblings.clone(),
         targets: derived.targets.iter().map(|a| a.id.clone()).collect(),
         agent: agent_kind,
         detectors: det.on.clone(),
@@ -1856,7 +1870,13 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     let described = if derived.targets.is_empty() {
         Vec::new()
     } else {
-        targets::describe(ctx, &ctx.ledger()?, &derived.targets, &derived.probes)
+        targets::describe(
+            ctx,
+            &ctx.ledger()?,
+            &derived.targets,
+            &derived.probes,
+            &siblings,
+        )
     };
     let mut block_in: Option<String> = None;
     if !described.is_empty() {
@@ -1942,6 +1962,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                             "holder": t.holder,
                             "owner": t.owner,
                             "probe": t.probe.is_some(),
+                            "sibling_of": t.sibling_of,
                             "to_do": clip(&t.instruction, 90),
                         }))
                         .collect::<Vec<_>>()

@@ -34,6 +34,8 @@ use crate::{
 pub const HARNESS_SCHEMA_VERSION: u32 = 1;
 /// The most findings one harness declares as targets.
 pub const MAX_TARGETS: usize = 8;
+/// The most findings one harness declares when `--next` adds the siblings of its targets.
+pub const MAX_TARGETS_WITH_SIBLINGS: usize = 16;
 /// Directory (inside the run directory) holding harness directories.
 pub const HARNESS_DIR: &str = "harness";
 /// Manifest file name inside a harness directory.
@@ -286,6 +288,11 @@ pub struct HarnessManifest {
     /// [`MAX_TARGETS`]. A target may have no probe of its own.
     #[serde(default)]
     pub targets: Vec<FindingId>,
+    /// Targets that `--next` added because they hold state of the same owner as an earlier
+    /// target (fields of one struct or class): the added finding, and the target it came
+    /// with. Absent for a target asked for by rank or by `--probe`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sibling_of: std::collections::BTreeMap<FindingId, FindingId>,
     /// What measures the process.
     pub agent: AgentKind,
     /// Library detector flags switched on.
@@ -600,6 +607,15 @@ pub fn current_dependency_env() -> BTreeMap<String, String> {
 /// environment, with the values that run used. A variable set here, even to an empty
 /// string, is not listed: the current environment wins.
 pub fn dependency_env_to_reuse(run_dir: &Path, id: &str) -> Vec<(String, String)> {
+    dependency_env_to_reuse_with(run_dir, id, |k| std::env::var_os(k).is_some())
+}
+
+/// [`dependency_env_to_reuse`] with the answer to "is this variable set here" given.
+pub fn dependency_env_to_reuse_with(
+    run_dir: &Path,
+    id: &str,
+    is_set: impl Fn(&str) -> bool,
+) -> Vec<(String, String)> {
     let dir = HarnessManifest::dir_in(run_dir, id);
     let Some(recorded) = latest_dependency_env(&dir).or_else(|| {
         let from = fs::read_to_string(dir.join(CLONE_MARKER)).ok()?;
@@ -609,7 +625,7 @@ pub fn dependency_env_to_reuse(run_dir: &Path, id: &str) -> Vec<(String, String)
     };
     DEPENDENCY_ENV
         .iter()
-        .filter(|k| std::env::var_os(k).is_none())
+        .filter(|k| !is_set(k))
         .filter_map(|k| Some(((*k).to_owned(), recorded.get(*k)?.clone())))
         .collect()
 }
@@ -919,6 +935,7 @@ mod tests {
 
     fn manifest() -> HarnessManifest {
         HarnessManifest {
+            sibling_of: Default::default(),
             targets: Vec::new(),
             schema_version: 1,
             id: "H2".into(),

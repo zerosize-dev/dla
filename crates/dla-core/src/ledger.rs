@@ -243,6 +243,8 @@ pub struct Annotation {
     pub notes: Vec<String>,
     /// Holder corrections backed by evidence, oldest first.
     pub holder_changes: Vec<HolderChange>,
+    /// What the census recorded of the holder and of its writer and remover sites.
+    pub facts: crate::census::HolderFacts,
 }
 
 /// A holder replaced by an evidence-backed annotation (schema 5).
@@ -857,6 +859,7 @@ impl Index {
         }
         if a.writers.is_empty()
             && a.removers.is_empty()
+            && a.facts.is_empty()
             && a.note.is_none()
             && a.holder.is_none()
             && a.owner.is_none()
@@ -1594,6 +1597,7 @@ impl Index {
                 {
                     slot.notes.push(n.clone());
                 }
+                slot.facts.merge(&a.facts);
             }
             Record::SliceStarted(s) => {
                 self.slices.entry(s.worker.clone()).or_default().started = Some(s.clone());
