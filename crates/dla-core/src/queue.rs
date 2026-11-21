@@ -301,9 +301,12 @@ impl Index {
             return Standing::Settled(Why::Moved);
         }
         let runs = self.declared.get(id).map_or(&[][..], Vec::as_slice);
-        if runs.iter().any(|r| {
-            r.hook_driver && matches!(r.verdict, Some(Verdict::Executed | Verdict::Unknown))
-        }) {
+        // `unknown` (the run had no coverage data) says nothing about the target's code: it
+        // counts as a driver run for the two-drivers rule below, not as a settled target.
+        if runs
+            .iter()
+            .any(|r| r.hook_driver && r.verdict == Some(Verdict::Executed))
+        {
             return Standing::Settled(Why::Executed);
         }
         let keys: std::collections::BTreeSet<&str> = runs
@@ -366,7 +369,7 @@ impl Index {
 pub enum Why {
     /// A verdict is `grew` or `changed`.
     Moved,
-    /// A driver run targeted it and saw its code run (or could not tell).
+    /// A driver run targeted it and its code ran (a verdict `executed`).
     Executed,
     /// Two driver runs with different drivers targeted it.
     TwoDrivers,
@@ -443,6 +446,9 @@ pub struct RuntimeQueue {
     /// Go: the package directory every candidate of `batch` is in (`""` is the project
     /// root); `None` for other runtimes and for an empty batch.
     pub package: Option<String>,
+    /// The pending candidates whose best verdict is `unknown`: a driver ran, there was no
+    /// coverage data, and nothing says their code ran.
+    pub no_coverage: Vec<FindingId>,
     /// The pending candidates no unrun harness declares, in rank order: what a batch is taken
     /// from.
     pub declarable: Vec<FindingId>,
@@ -577,6 +583,11 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                     pending_rank.push((r.rank.unwrap_or(0), r.tier));
                 }
             }
+            let no_coverage: Vec<FindingId> = pending
+                .iter()
+                .filter(|p| ix.best_verdict(p) == Some(Verdict::Unknown))
+                .cloned()
+                .collect();
             let in_flight = ix.in_flight(&runtime, &pending);
             let free: Vec<&FindingId> = pending
                 .iter()
@@ -624,6 +635,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 batch,
                 siblings,
                 package,
+                no_coverage,
                 declarable,
                 in_flight,
                 batch_command,
@@ -642,11 +654,20 @@ pub fn open_queue(view: &RunView, runtime: &str, worker: Option<&str>) -> Option
         .find(|q| q.runtime == runtime && q.open())
 }
 
+/// What a verdict `unknown` means for a target, in every text that explains its standing.
+pub const NO_COVERAGE: &str = "the run has no coverage data, so whether its code ran is not known: run a second, different driver, or one with a size reading";
+
 /// The full text of the guidance a refusal or an item gives for an open queue.
 pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
     let _ = run_id;
+    let unknown = if q.no_coverage.is_empty() {
+        String::new()
+    } else {
+        let ids: Vec<String> = q.no_coverage.iter().map(ToString::to_string).collect();
+        format!(" {} read `unknown`: {NO_COVERAGE}.", ids.join(", "))
+    };
     format!(
-        "{}. Fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime)",
+        "{}. Fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime).{unknown}",
         q.command, q.runtime
     )
 }
@@ -708,7 +729,8 @@ impl ReportFacts {
             return None;
         }
         let mut harnesses: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        let (mut grew, mut changed, mut executed, mut missed, mut unread) = (0, 0, 0, 0, 0);
+        let (mut grew, mut changed, mut executed, mut no_coverage, mut missed, mut unread) =
+            (0, 0, 0, 0, 0, 0);
         let mut targeted = 0;
         for id in &ranked {
             let t = self.index.targeted_in(id);
@@ -720,7 +742,8 @@ impl ReportFacts {
             match self.index.best_verdict(id) {
                 Some(Verdict::Grew) => grew += 1,
                 Some(Verdict::Changed) => changed += 1,
-                Some(Verdict::Executed | Verdict::Unknown) => executed += 1,
+                Some(Verdict::Executed) => executed += 1,
+                Some(Verdict::Unknown) => no_coverage += 1,
                 Some(Verdict::Constant | Verdict::NotExecuted | Verdict::NotLoaded) => missed += 1,
                 None => unread += 1,
             }
@@ -730,6 +753,7 @@ impl ReportFacts {
             (grew, "grew"),
             (changed, "changed"),
             (executed, "executed"),
+            (no_coverage, "no coverage data"),
             (missed, "not reached"),
             (unread, "not read yet"),
         ] {
@@ -777,10 +801,12 @@ impl ReportFacts {
         let list: Vec<String> = t
             .iter()
             .map(|(h, v)| {
-                format!(
-                    "{h} {}",
-                    v.map_or("not run".to_owned(), |v| v.as_str().replace('_', " "))
-                )
+                let what = v.map_or("not run".to_owned(), |v| v.as_str().replace('_', " "));
+                if *v == Some(Verdict::Unknown) {
+                    format!("{h} {what} ({NO_COVERAGE})")
+                } else {
+                    format!("{h} {what}")
+                }
             })
             .collect();
         Some(format!("Targeted: {}", list.join(", ")))
