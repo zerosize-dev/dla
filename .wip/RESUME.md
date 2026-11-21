@@ -59,6 +59,33 @@ Next after the release: ordering of candidates and a command that lists them, bu
 dispositions for untested static candidates, the gate treadmill after follow-up measurements,
 the keys discriminator in the flow, the macOS test.
 
+State at 00:30 UTC on 2026-11-21: CI on snapshot `d2264d3` failed one fixture, go-header-index
+(the other 14 jobs passed): its exit column `go.heap_live` passed the trend on a rise of about
+1.5 KB (stair) beside 113 MB in the run, and the column-choice correction let it lead, so the
+bound alloc-test read non-leak. Refined in `crates/dla-cli/src/alloc/pick.rs`
+(`in_run_leads`, `EXIT_SHARE` 0.1): the exit column leads only when it passed and rose by at
+least a tenth of the in-run rise. Over the saved trends the ratio of the two slopes is 0.6 to
+3.7 where the state survives the exit (155 trends) and at most 0.00002 where it does not (7).
+The test `the_exit_heap_column_leads_when_it_passed_the_trend_beside_the_in_run_one` got the
+token-rise case (seen failing with the share set to 0). Local on the tree before this
+refinement (scratch `u23/`): workspace tests 2846 passed, static 64/64 both modes, dynamic 63
+pass and 1 expected failure. Snapshot `42857a1` ([skip ci]) holds the refined tree. Running:
+Go reruns with the refined rule (scratch `u24/`: all `go-` once, then go-header-index and
+go-ticker-legacy five times each). Then: snapshot without [skip ci] for a CI run, and when
+green the commit on `main`, preview.3.
+
+Real plugin runs (the way the owner runs it): `/root/dla-real/run.py` (copy:
+`real-run-driver.py`) runs `claude -p "/dla:detect-leak-anywhere <task>"` headless with
+`--plugin-dir` (a frozen copy of skills, data, bin, agents, hooks), Sonnet 5.5, the Bash
+sandbox with package registries allowed, a sanitised environment and `DLA_BIN`; `tl.py`
+prints a timeline of the transcript. A headless child authenticates here without any of the
+session's CLAUDE variables. First run: aiohttp 3.10.10 (`/root/dla-real/aiohttp-1`, started
+00:18 UTC, prompt "Find memory leaks in this project."). Next: grpc-go v1.84.0
+(`u18/grpc/proj`, site `health/server.go:49`), spring-data-commons 4.1.1 (cloned to
+`/root/dla-real/src/spring-data-commons`, site `TypedPropertyPaths.java:53`). Public
+repositories can be cloned through the git proxy (`git clone https://github.com/...`).
+/root/dla-real does not survive a new container; the transcripts' findings go into notes here.
+
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `fbcd6b2` "Find four more kinds of leak;
   move four parked fixtures back", on top of `4aae86f` (the chance failures of the dynamic
