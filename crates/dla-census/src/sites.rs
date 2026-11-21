@@ -923,7 +923,7 @@ fn classify_decl(fc: &FileCtx, raw: &Raw, name: &str, dtext: &str, longtext: &st
             );
             if rx(
                 &GO_NONCONT,
-                r"sync\.(?:Pool|Once|Mutex|RWMutex|WaitGroup)|\bregexp\.|\berror\b|\bfunc\s*\(|atomic\.|\btime\.|Logger|\*?log\.|\bgrpclog\b|\bcontext\.|errors\.New|\bbool\b|\bint\d*\b|\buint\d*\b|\bfloat\d*\b",
+                r"sync\.(?:Pool|Once|Mutex|RWMutex|WaitGroup)|\bregexp\.|\berror\b|\bfunc\s*\(|atomic\.|\btime\.|Logger|\*?log\.|\bcontext\.|errors\.New|\bbool\b|\bint\d*\b|\buint\d*\b|\bfloat\d*\b",
             )
             .is_match(t)
                 && !keep.is_match(t)
