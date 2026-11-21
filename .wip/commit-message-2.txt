@@ -1,0 +1,68 @@
+Order candidates by a score, ask who feeds the keys, Go driver coverage
+
+Found by running the plugin on real libraries at versions with a documented leak. With the
+measurement queue the documented leak of a Python HTTP library was measured and confirmed,
+and then talked down: the driver had fed new keys straight into the holder, nothing showed
+that a caller of the public API can do that, and the blind verifier disagreed. On a Go RPC
+library and a Java data library the documented site was ranked 159th and 325th, out of reach
+of any run.
+
+Candidate order
+- The census records facts about each holder (container or not, bounded, lifetime, private,
+  pool, literal table, where its owner is created) and about each writer and remover site
+  (insert, reassign, reset or delete; depth of the element operation; function; start-up or
+  runtime; whether the key comes from a parameter; exported). They are stored on the census
+  entry and on the finding's annotation.
+- Inside the eligible set the queue is ordered by a score: the sum of named weights, one
+  table in `dla_core::rank`. `dla ledger list` prints the score and its three largest
+  contributions.
+- `dla harness gen --driver --next [N]` takes N candidates by rank (8 at most) and then the
+  other pending holders of the same owner type, up to 16 targets; a sibling says which
+  target brought it.
+- Census fixes that the facts need: `x[k] = make(..)` and a constructor's `this.x = new T()`
+  are not removers; a private holder is not matched by name in other files; a channel
+  receive is not a remover; a chain head assigned a node built from the old head is a writer.
+- Documented site, rank before and after: Python HTTP library 1 and 1, Go RPC library 159 and
+  10 (in the first batch as a sibling), Java data library 325 and 23, JavaScript HTTP client
+  29 and 23. On the 64 fixtures no true site left the first 8 (within rank 1, 3, 8: 21, 31,
+  37 before; 15, 31, 37 after) and the candidate sets are unchanged.
+
+Trigger
+- `dla harness gen --driver --entry F[,F2..]` writes an entry-path harness for findings that
+  grew: its units call public entry points only. The block above the hooks gives, per
+  target, the writer functions, a callers chain (three hops, public functions first), where
+  the key comes from, the conditions the call sits under, and the places that mention a
+  function nothing calls by name. The driver directory gets `VARIES.txt`, one line saying
+  what a caller varies per unit; `dla harness run` refuses the harness without it.
+- A confirmed or strong leak has a trigger: reproduced (it grew in an entry-path harness or
+  in the project's own workload), not found (two different entry-path harnesses did not make
+  it grow), or not checked. While the queue is on and time is left above the floor, a
+  confirmed leak that grew only when a driver fed it keys is an open item of `dla run
+  status`, the final gate and the stop hook, with the `--entry` command as the fix.
+- The report prints a `Trigger:` line per confirmed leak, counts the three outcomes in the
+  `Findings:` line and lists reproduced leaks first. The verifier's bundle holds the
+  entry-path driver, `VARIES.txt` and the verdict, and the verifier judges the trigger from
+  them. The skill says how to name a leak with no trigger found.
+
+Go
+- A driver run takes one more short process after the measured one, built with
+  `-coverprofile` over every module of the workspace, so the targets of a Go driver read
+  executed or not_executed.
+- The in-run reading of command mode is the floor envelope of the samples read at three
+  quarters of the run time, not the sample that happened to fall in the last third; when no
+  sample ended after that time the floor is continued at no more than the slope of the whole
+  envelope, with a limitation line. A linear leak read as a spike under load before.
+
+Smaller fixes from the same runs
+- `dla ledger close-rest` closes a measured candidate as unresolved with reason
+  inconclusive, not as not exercised; a declared target with verdict constant, changed or
+  executed counts as a measurement tied to the finding.
+- `dla harness run` and `dla alloc-test` reuse the dependency-path variables recorded by
+  the first run of the harness.
+- A site on the last line of a function is matched to that function.
+- The report's `Queue:` line counts findings that left the candidate state; the `Residual:`
+  header names the series above threshold and counts the rest, with every row in a section;
+  a runtime with no listed entry points says so and no longer reads "0 of 0".
+- A verifier that names a recorded writer or remover of the holder agrees on the site.
+
+@@REAL_RUN_RESULT@@

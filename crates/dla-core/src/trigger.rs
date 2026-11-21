@@ -10,8 +10,13 @@
 //!   only), or in a harness that runs the project's own workload (a fixed command of the
 //!   project or a JUnit repeat: no hand-written hooks).
 //! * [`Trigger::NotFound`]: at least two entry-path harnesses with different driver digests
-//!   targeted it, ran and were read with `dla trend`, and it grew in none.
-//! * [`Trigger::Unchecked`]: anything else (it grew only in drivers that are not entry-path).
+//!   targeted it, ran with fresh keys, were read with `dla trend`, and MEASURED the holder
+//!   flat in both (verdict `constant`). Only a measured, flat holder "did not grow".
+//! * [`Trigger::Unmeasured`]: two such harnesses ran and were read, but at least one gave a
+//!   verdict that is neither `grew` nor `constant` (nothing read the holder's size there).
+//!   That is no evidence either way: the report says "not checked", with the verdicts.
+//! * [`Trigger::Unchecked`]: anything else (it grew only in drivers that are not entry-path,
+//!   or fewer than two entry-path runs without growth exist).
 //!
 //! The leak-side findings in state `confirmed` or `strong` whose trigger is unchecked give an
 //! item of kind `trigger` in the gate while the run was started with the queue on and more
@@ -42,9 +47,15 @@ pub enum Trigger {
         /// `the project's workload <id>`.
         varies: String,
     },
-    /// Two different entry-path drivers did not make it grow.
+    /// Two different entry-path drivers measured the holder flat.
     NotFound {
-        /// The first two entry-path harnesses that ran without growth, with their `varies`.
+        /// The first two entry-path harnesses that measured it flat, with their `varies`.
+        runs: Vec<(String, String)>,
+    },
+    /// Two different entry-path drivers ran, but nothing measured the holder in at least one.
+    Unmeasured {
+        /// The two entry-path harnesses with the verdict each gave (`no verdict` when the
+        /// trend names none for the finding).
         runs: Vec<(String, String)>,
     },
     /// The holder grew only when the harness fed it keys.
@@ -52,11 +63,12 @@ pub enum Trigger {
 }
 
 impl Trigger {
-    /// `reproduced`, `not_found` or `unchecked`.
+    /// `reproduced`, `not_found`, `unmeasured` or `unchecked`.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Reproduced { .. } => "reproduced",
             Self::NotFound { .. } => "not_found",
+            Self::Unmeasured { .. } => "unmeasured",
             Self::Unchecked => "unchecked",
         }
     }
@@ -268,25 +280,54 @@ impl Triggers {
                 ),
             };
         }
-        // The first run of each of two harnesses whose drivers differ.
-        let mut runs: Vec<(String, String)> = Vec::new();
+        // The first run of each of two harnesses whose drivers differ, the ones that measured
+        // the holder flat first, so a later run with a size reading is the one that counts.
+        let mut none = self.without_growth(id);
+        none.sort_by_key(|r| r.verdicts.get(id) != Some(&Verdict::Constant));
+        let mut picked: Vec<&Run> = Vec::new();
         let mut digests: BTreeSet<&str> = BTreeSet::new();
-        let none = self.without_growth(id);
-        for r in &none {
-            if runs.len() == 2 {
+        for r in none {
+            if picked.len() == 2 {
                 break;
             }
-            if !runs.iter().any(|(h, _)| *h == r.harness) && digests.insert(r.digest.as_str()) {
-                runs.push((
-                    r.harness.clone(),
-                    r.varies
-                        .clone()
-                        .unwrap_or_else(|| "not recorded".to_owned()),
-                ));
+            if !picked.iter().any(|p| p.harness == r.harness) && digests.insert(r.digest.as_str())
+            {
+                picked.push(r);
             }
         }
-        if runs.len() == 2 {
-            return Trigger::NotFound { runs };
+        if picked.len() == 2 {
+            if picked
+                .iter()
+                .all(|r| r.verdicts.get(id) == Some(&Verdict::Constant))
+            {
+                return Trigger::NotFound {
+                    runs: picked
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.harness.clone(),
+                                r.varies
+                                    .clone()
+                                    .unwrap_or_else(|| "not recorded".to_owned()),
+                            )
+                        })
+                        .collect(),
+                };
+            }
+            return Trigger::Unmeasured {
+                runs: picked
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.harness.clone(),
+                            r.verdicts
+                                .get(id)
+                                .map_or("no verdict", |v| v.as_str())
+                                .to_owned(),
+                        )
+                    })
+                    .collect(),
+            };
         }
         Trigger::Unchecked
     }
@@ -303,11 +344,16 @@ impl Triggers {
     }
 
     /// The entry-path harnesses that ran and were read without making `id` grow: one per
-    /// distinct driver digest, in harness order.
-    pub fn entry_runs_without_growth(&self, id: &FindingId) -> Vec<(String, String)> {
+    /// distinct driver digest, in harness order, with what a caller varies and the verdict
+    /// (`constant` only when the holder was measured flat), a run that measured it first.
+    pub fn entry_runs_without_growth(
+        &self,
+        id: &FindingId,
+    ) -> Vec<(String, String, Option<Verdict>)> {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
-        self.without_growth(id)
-            .into_iter()
+        let mut runs = self.without_growth(id);
+        runs.sort_by_key(|r| r.verdicts.get(id) != Some(&Verdict::Constant));
+        runs.into_iter()
             .filter(|r| seen.insert(r.digest.as_str()))
             .map(|r| {
                 (
@@ -315,6 +361,7 @@ impl Triggers {
                     r.varies
                         .clone()
                         .unwrap_or_else(|| "not recorded".to_owned()),
+                    r.verdicts.get(id).copied(),
                 )
             })
             .collect()
@@ -400,7 +447,20 @@ pub fn items(view: &RunView) -> Vec<BlockingItem> {
                     "fill the hooks and VARIES.txt of {h} so each unit calls public entry points only, dla harness run {h} --mode both, dla trend S<n>"
                 ),
             )
-        } else if let Some((h, varies)) = none.first() {
+        } else if let Some((h, _, verdict)) = none
+            .first()
+            .filter(|(_, _, v)| *v != Some(Verdict::Constant))
+        {
+            let said = verdict.map_or("no verdict", |v| v.as_str());
+            (
+                format!(
+                    "{id}: the entry-path harness {h} ran but nothing measured the holder there (verdict: {said}); a flat holder is shown only by a size reading"
+                ),
+                format!(
+                    "the entry-path harness {h} ran but did not measure {id}: give it a size reading (a probe of the holder; for Go track the object, see the driver's hook comment), then run {h} again and dla trend S<n>; after that a second, different entry-path harness is needed: {command}"
+                ),
+            )
+        } else if let Some((h, varies, _)) = none.first() {
             (
                 format!(
                     "{id} did not grow in the entry-path harness {h} (varies: {varies}); one more entry-path harness with a different driver is needed before no trigger is found"
@@ -452,11 +512,28 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
                 list.join("; ")
             )
         }
+        Trigger::Unmeasured { runs } => {
+            let hs: Vec<&str> = runs.iter().map(|(h, _)| h.as_str()).collect();
+            let verdicts: Vec<String> = runs.iter().map(|(_, v)| v.replace('_', " ")).collect();
+            format!(
+                "not checked: the entry-path harnesses {} ran, but nothing measured the holder there (verdicts: {})",
+                hs.join(" and "),
+                verdicts.join(", ")
+            )
+        }
         Trigger::Unchecked => {
             let why = unchecked_because(view).map_or_else(
                 || {
                     let none = t.entry_runs_without_growth(&f.id);
-                    if let Some((h, varies)) = none.first() {
+                    if let Some((h, _, v)) = none
+                        .first()
+                        .filter(|(_, _, v)| *v != Some(Verdict::Constant))
+                    {
+                        format!(
+                            "the entry-path harness {h} ran but nothing measured the holder there (verdict: {}); a size reading is missing",
+                            v.map_or("no verdict", |v| v.as_str())
+                        )
+                    } else if let Some((h, varies, _)) = none.first() {
                         format!(
                             "the entry-path harness {h} did not grow it (varies: {}) and a second, different one was not run",
                             one_line(varies)
@@ -486,7 +563,7 @@ pub fn counts(view: &RunView, t: &Triggers) -> (usize, usize, usize) {
         match t.trigger(&f.id) {
             Trigger::Reproduced { .. } => c.0 += 1,
             Trigger::NotFound { .. } => c.1 += 1,
-            Trigger::Unchecked => c.2 += 1,
+            Trigger::Unmeasured { .. } | Trigger::Unchecked => c.2 += 1,
         }
     }
     c
