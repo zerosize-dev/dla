@@ -109,12 +109,33 @@ pub fn latest_trend(run_dir: &Path, harness: &str) -> Option<TrendReport> {
 /// is read after `main` returned, so state owned by locals of the workload is gone from it.
 const GO_IN_RUN: &str = "go.heap_live.in_run";
 
+/// The least share of the in-run column's rise the exit column must show to lead beside it.
+const EXIT_SHARE: f64 = 0.1;
+
+/// Whether `go.heap_live.in_run` decides for a heap finding: `trend` passed it through the gate,
+/// and the exit column `go.heap_live` either did not pass or rose by less than [`EXIT_SHARE`] of
+/// what the in-run column rose by. An exit column can pass the gate on a few hundred bytes of
+/// its own while the state the finding holds is gone at exit; a rise of that size says nothing
+/// about the finding.
+fn in_run_leads(trend: &TrendReport) -> bool {
+    let passed = |n: &str| {
+        trend
+            .columns
+            .iter()
+            .find(|c| c.name == n && c.gate == GateVerdict::Pass)
+    };
+    let Some(in_run) = passed(GO_IN_RUN) else {
+        return false;
+    };
+    passed("go.heap_live").is_none_or(|exit| exit.rise < in_run.rise * EXIT_SHARE)
+}
+
 /// The column a region is summarized by in `series`. Of the heap columns, `go.heap_live.in_run`
-/// leads only when `trend` passed it through the gate and did not pass the exit column
-/// `go.heap_live`: where the exit column passed too, the state survives the exit and the exact
-/// exit reading decides (the in-run one is a floor over a few samples, the noisier of the two);
-/// where only the in-run column grows, the exit column is flat for a reason that has nothing to
-/// do with the finding.
+/// leads when [`in_run_leads`] says so: where the exit column `go.heap_live` passed too and
+/// carries a real share of the growth, the state survives the exit and the exact exit reading
+/// decides (the in-run one is a floor over a few samples, the noisier of the two); where only
+/// the in-run column grows, the exit column is flat for a reason that has nothing to do with
+/// the finding.
 fn region_primary(
     series: &SeriesFile,
     region: Option<SeriesRegion>,
@@ -122,14 +143,7 @@ fn region_primary(
 ) -> &'static str {
     if region == Some(SeriesRegion::Heap)
         && series.column_index(GO_IN_RUN).is_some()
-        && trend.is_some_and(|t| {
-            let passed = |n: &str| {
-                t.columns
-                    .iter()
-                    .any(|c| c.name == n && c.gate == GateVerdict::Pass)
-            };
-            passed(GO_IN_RUN) && !passed("go.heap_live")
-        })
+        && trend.is_some_and(in_run_leads)
     {
         return GO_IN_RUN;
     }
@@ -590,6 +604,22 @@ mod tests {
         let only = trend(&["go.heap_live.in_run"]);
         let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&only), "H1").unwrap();
         assert_eq!(p.primary.as_deref(), Some("go.heap_live.in_run"));
+        // The exit column passed on a rise of a kilobyte beside 100 MB in the run: the state
+        // the finding holds is gone at exit, and the in-run column decides.
+        let mut token = trend(&["go.heap_live", "go.heap_live.in_run"]);
+        token.columns[0].rise = 1526.0;
+        token.columns[1].rise = 113_058_442.0;
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&token), "H1").unwrap();
+        assert_eq!(
+            p.primary.as_deref(),
+            Some("go.heap_live.in_run"),
+            "{}",
+            p.basis
+        );
+        // An exit column that rose by most of what the in-run one did leads.
+        token.columns[0].rise = 71_000_000.0;
+        let p = pick(&s, &ledger, Some(&heap_finding()), &[], Some(&token), "H1").unwrap();
+        assert_eq!(p.primary.as_deref(), Some("go.heap_live"), "{}", p.basis);
         let neither = trend(&["os.rss"]);
         let p = pick(
             &s,

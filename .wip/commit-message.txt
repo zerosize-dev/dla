@@ -27,3 +27,14 @@ Ledger
   rule's message. For Python a decorator stack and its def line are one site.
 - `dla harness gen --probe F<n>` for a finding without a probe target of its own answers
   with the reason and the finding to use; it no longer drops the request.
+- What a rule's hit declares (holder, owner, region) wins over the census entry it joins,
+  in either order of arrival; the census value goes into the note. The Go ticker rules and
+  the Node timer rule declare the registered timer in the heap, so a joined ticker finding
+  is not measured on the goroutine count.
+
+alloc-test
+- For a Go heap finding the exact exit column leads when the trend passed it and it rose
+  by at least a tenth of what the in-run column rose by; otherwise the in-run column
+  leads when it passed. The in-run reading is the noisier of the two and made a ticker
+  leak read flat in about one run in four, and an exit column can pass on a kilobyte of
+  its own while the state the finding holds is gone at exit.
