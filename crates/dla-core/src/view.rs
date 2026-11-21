@@ -302,23 +302,45 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             None => f.to_string(),
         })
         .collect();
+    let kind = if q.focus {
+        "Next batch (focus"
+    } else {
+        "Next batch ("
+    };
     let next = if next.is_empty() {
         String::new()
     } else {
-        match &q.package {
-            Some(p) => format!(
-                " Next batch (all in package {}): {}.",
+        match (&q.package, q.focus) {
+            (Some(p), _) => format!(
+                " {kind}{}all in package {}): {}.",
+                if q.focus { ", " } else { "" },
                 crate::queue::package_label(p),
                 next.join(", ")
             ),
-            None => format!(" Next batch: {}.", next.join(", ")),
+            (None, true) => format!(" {kind}): {}.", next.join(", ")),
+            (None, false) => format!(" Next batch: {}.", next.join(", ")),
         }
+    };
+    let missed_note = if q.missed.is_empty() {
+        String::new()
+    } else {
+        let ids: Vec<String> = q.missed.keys().take(8).map(ToString::to_string).collect();
+        let more = q.missed.len().saturating_sub(8);
+        format!(
+            " Missed once: {}{}.",
+            ids.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        )
     };
     BlockingItem {
         kind: BlockingKind::Queue,
         id: q.runtime.clone(),
         description: format!(
-            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}{}",
+            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}{}{missed_note}",
             q.pending.len(),
             q.runtime,
             if q.no_coverage.is_empty() {

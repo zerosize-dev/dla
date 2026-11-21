@@ -743,6 +743,30 @@ fn refuse_target_pending(
         return Ok(());
     };
     let (left, total) = q.minutes.unwrap_or((0, 0));
+    // A candidate a harness missed waits for a harness of its own (a focus harness).
+    if let Some(m) = q.missed.get(id) {
+        return Err(Failure::refuse(
+            core_codes::TARGET_PENDING,
+            format!(
+                "{id} cannot be closed with {reason}: it is ranked {rank} (tier {tier}) among the {runtime} candidates; {} did not reach it ({} {}), and it is given up only after a focus harness (at most 3 targets) missed it too; {left} of {total} budget minutes remain.",
+                m.harness,
+                m.verdict.as_str(),
+                m.detail
+            ),
+            format!(
+                "a focus harness for {id} (dla harness gen --next gives the best-ranked missed candidates a harness of their own), or an unresolved reason that says what it needs (env_unavailable, tool_missing, build_fails, privilege_declined)"
+            ),
+            format!(
+                "{} (the focus batch: the best-ranked pending candidate was missed), fill the hooks so each unit calls the writer function of each target with a new key, dla harness run <H> --mode both, dla trend S<n>; or dla ledger resolve {id} --as unresolved --reason env_unavailable --remedy \"<what it needs>\"{}",
+                q.batch_command,
+                if m.verdict == dla_core::trend::Verdict::Unknown {
+                    format!(". {id} read `unknown`: {}", dla_core::queue::NO_COVERAGE)
+                } else {
+                    String::new()
+                }
+            ),
+        ));
+    }
     Err(Failure::refuse(
         core_codes::TARGET_PENDING,
         format!(

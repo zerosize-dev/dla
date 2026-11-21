@@ -404,8 +404,47 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         keys.as_ref(),
         a.finding.as_ref(),
     );
+    let mut next = next;
+    if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
+        next.insert(0, entry);
+    }
     out.insert("next".into(), json!(next));
     Ok(Value::Object(out))
+}
+
+/// The first `next` entry of a hook-driver series of the measurement queue that missed some
+/// of its declared targets: their ids (at most 8, then a count) and the batch command that
+/// gives them a harness of their own. `None` for other series, or when the queue is off.
+fn missed_targets_entry(
+    ctx: &Ctx,
+    series: &dla_core::SeriesFile,
+    verdicts: &[dla_core::trend::TargetVerdict],
+) -> Option<String> {
+    let h = series.source.harness.as_deref()?;
+    let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
+    if !m.is_hook_driver() || m.is_entry_path() {
+        return None;
+    }
+    let missed: Vec<String> = verdicts
+        .iter()
+        .filter(|v| v.declared && dla_core::queue::is_miss(v.verdict))
+        .map(|v| v.finding.to_string())
+        .collect();
+    if missed.is_empty() {
+        return None;
+    }
+    let shown: Vec<&str> = missed.iter().take(8).map(String::as_str).collect();
+    let more = if missed.len() > 8 {
+        format!(" and {} more", missed.len() - 8)
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{h} missed {} target(s): {}{more}; give them a harness of their own (3 at most): dla harness gen --lang {} --driver --next",
+        missed.len(),
+        shown.join(", "),
+        m.runtime.as_str()
+    ))
 }
 
 /// For the series of an entry-path harness: the trigger of each declared target now (the

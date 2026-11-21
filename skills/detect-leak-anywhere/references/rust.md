@@ -13,9 +13,10 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   (`state`, `setup`, `unit`; `tokio` only for tokio projects, unverified).
 - Features: `dla harness gen --lang rust --driver --features a,b` (and `--no-default-features`) passes them
   to the driver build; the build command in `harness.json` carries them and `dla harness run` reuses it. A target in a
-  module the crate declares behind `#[cfg(feature = "x")]` says "behind feature x: generate with
+  module the crate declares behind `#[cfg(feature = "x")]` (or inside a `cfg_x! { .. }` macro block the crate defines with that
+  attribute) says "behind feature x: generate with
   --features x" in its block (and `gen` prints it as `feature_note`). That reader is a line scan of the `mod`
-  declarations up to `lib.rs`: it does not see `#[path]`, a module declared in a macro or inline, a gate on the item
+  declarations up to `lib.rs`: it does not see `#[path]`, a module declared in another macro or inline, a gate on the item
   itself, `cfg_attr`, or a feature another feature turns on.
 - Coverage: after the measured process `dla harness run` builds the driver again with
   `-C instrument-coverage` into `harness/H<n>/cov-build/`, runs one round (no warm-up, no captures) and reads

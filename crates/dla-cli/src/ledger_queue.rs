@@ -138,8 +138,23 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             e["settled_by"] = json!(match why {
                 Why::Moved => "growth",
                 Why::Executed => "executed",
-                Why::TwoDrivers => "two_drivers",
+                Why::NotReached => "not_reached",
             });
+            if let Some(h) = ix.not_reached_in(id) {
+                e["not_reached_in"] = json!(format!(
+                    "missed by two different drivers, the focused harness {h} among them"
+                ));
+            }
+        } else if let Some(m) = ix.missed_in(id) {
+            // Missed once: it waits for a focus harness.
+            e["missed_in"] = json!(format!(
+                "{} {}: {}",
+                m.harness,
+                m.verdict.as_str(),
+                m.detail
+            ));
+            e["focus"] =
+                json!("pending: dla harness gen --driver --next gives it a harness of its own");
         }
         lines.push((f.state.as_str().to_owned(), e));
     }
@@ -273,6 +288,8 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         .collect();
     let mut closed: Vec<Closed1> = Vec::new();
     let mut left: Vec<(String, String)> = Vec::new();
+    // Closed with a miss on record and no focus harness that settled it: "missed once".
+    let mut missed_once = 0usize;
     for f in &candidates {
         let runtime = dla_core::gate::finding_runtime_with(&view, f, &mut only);
         let q = runtime
@@ -333,11 +350,16 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             note: None,
         };
         match resolve_finding(ctx, &mut ledger, f.id.clone(), args, Some(&loaded)) {
-            Ok(_) => closed.push(Closed1 {
-                id: f.id.to_string(),
-                to,
-                reason,
-            }),
+            Ok(_) => {
+                if ix.missed_in(&f.id).is_some() && ix.standing(&f.id) == Standing::Pending {
+                    missed_once += 1;
+                }
+                closed.push(Closed1 {
+                    id: f.id.to_string(),
+                    to,
+                    reason,
+                });
+            }
             Err(e) => left.push((f.id.to_string(), e.refusal.message.clone())),
         }
     }
@@ -388,6 +410,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                     "inconclusive": by_reason(UnresolvedReason::Inconclusive),
                     "time_budget": by_reason(UnresolvedReason::TimeBudget),
                     "left_open": left.len(),
+                    "missed_once_no_focus_harness": missed_once,
                     "ids": ids.join(","),
                 },
             }),
@@ -414,6 +437,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             "inconclusive": by_reason(UnresolvedReason::Inconclusive),
             "time_budget": by_reason(UnresolvedReason::TimeBudget),
         },
+        "missed_once_no_focus_harness": missed_once,
         "left_open": left.len(),
         "left": left.iter().take(8).map(|(i, w)| json!({"id": i, "why": w})).collect::<Vec<_>>(),
         "record": record,

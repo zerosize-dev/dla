@@ -1463,7 +1463,16 @@ type DeclaredTargets = (
     Option<String>,
     std::collections::BTreeMap<FindingId, FindingId>,
     Option<String>,
+    FocusFacts,
 );
+
+/// What a focus batch records: for each target the earlier run that missed it, and the text
+/// that says the batch is a focus batch and why (empty for a broad batch).
+#[derive(Debug, Default, Clone)]
+struct FocusFacts {
+    missed: std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
+    why: Option<String>,
+}
 
 /// The findings a harness is generated to reach: the `--probe` findings, then (with
 /// `--next`) the next pending entries of the runtime's queue, at most [`MAX_TARGETS`] in all.
@@ -1482,6 +1491,7 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
     // Go: the package directory every declared candidate of `--next` is in, and so the one
     // the driver is generated in.
     let mut go_package: Option<String> = None;
+    let mut focus = FocusFacts::default();
     if let Some(n) = opts.next {
         if n > MAX_TARGETS || ids.len() + n > MAX_TARGETS {
             return Err(refuse(
@@ -1505,15 +1515,39 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             .into_iter()
             .find(|q| q.runtime == rt.as_str());
         let mut skipped: Vec<String> = Vec::new();
-        let (batch, sib) = match queue {
-            Some(q) if rt == Runtime::Go => {
-                let (b, s, p) = go_batch(ctx, opts, &view, &q, n, &ids, &mut skipped)?;
-                go_package = p;
-                (b, s)
-            }
+        let chosen = match &queue {
+            Some(q) if rt == Runtime::Go => go_batch(ctx, opts, &view, q, n, &ids, &mut skipped)?,
             Some(q) => q.batch_for(&view, n),
             None => Default::default(),
         };
+        go_package = chosen.package.clone();
+        if chosen.focus
+            && let Some(q) = &queue
+        {
+            for f in &chosen.ids {
+                if let Some(m) = q.missed.get(f) {
+                    focus.missed.insert(f.clone(), m.clone());
+                }
+            }
+            let first = chosen
+                .ids
+                .first()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let cap = if n > dla_core::queue::FOCUS_MAX {
+                format!(
+                    " --next {n} is capped at {} for a focus batch.",
+                    dla_core::queue::FOCUS_MAX
+                )
+            } else {
+                String::new()
+            };
+            focus.why = Some(format!(
+                "focus batch: the best-ranked pending candidate {first} was declared in an earlier harness and its code did not run there, so this harness holds it and at most {} more candidates that a harness missed, alone (no siblings, no fresh candidates).{cap}",
+                dla_core::queue::FOCUS_MAX - 1
+            ));
+        }
+        let (batch, sib) = (chosen.ids, chosen.siblings);
         let before = ids.len();
         // The first `n` by rank, then the siblings of their owners, up to the limit.
         for (k, f) in batch.into_iter().enumerate() {
@@ -1556,15 +1590,8 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             ),
         ));
     }
-    Ok((ids, note, siblings, go_package))
+    Ok((ids, note, siblings, go_package, focus))
 }
-
-/// A Go batch: its candidates, the siblings among them, and the package directory.
-type GoBatch = (
-    Vec<FindingId>,
-    std::collections::BTreeMap<FindingId, FindingId>,
-    Option<String>,
-);
 
 /// A reason a Go package directory cannot hold the driver, or `None` when it can (or when
 /// `go` cannot be asked): a driver is a test file of the package, so the directory needs a
@@ -1607,7 +1634,7 @@ fn go_batch(
     n: usize,
     probed: &[FindingId],
     skipped: &mut Vec<String>,
-) -> Result<GoBatch, Refusal> {
+) -> Result<dla_core::queue::Batch, Refusal> {
     use dla_core::queue::{go_package_dir, package_label};
     let packages = q.packages(view);
     let named = opts.package.as_deref().map(|p| {
@@ -1643,25 +1670,30 @@ fn go_batch(
                     },
                 ));
             }
-            return Ok((Vec::new(), Default::default(), Some(p)));
+            return Ok(dla_core::queue::Batch {
+                package: Some(p),
+                ..Default::default()
+            });
         }
-        let (b, s) = q.batch_in_package(view, n, &p);
-        return Ok((b, s, Some(p)));
+        let mut b = q.batch_in_package(view, n, &p);
+        b.package = Some(p);
+        return Ok(b);
     }
     for p in &packages {
         if let Some(why) = go_package_problem(&ctx.project, p) {
-            let (b, _) = q.batch_in_package(view, n, p);
+            let b = q.batch_in_package(view, n, p);
             skipped.push(format!(
                 "package {} cannot hold the driver ({why}): its {} best-ranked candidate(s) stay pending and are not targeted, and the next package by rank was taken",
                 package_label(p),
-                b.len()
+                b.ids.len()
             ));
             continue;
         }
-        let (b, s) = q.batch_in_package(view, n, p);
-        return Ok((b, s, Some(p.clone())));
+        let mut b = q.batch_in_package(view, n, p);
+        b.package = Some(p.clone());
+        return Ok(b);
     }
-    Ok((Vec::new(), Default::default(), None))
+    Ok(Default::default())
 }
 
 /// The findings of `--entry`: refused before anything is created unless the harness is a hook
@@ -1891,9 +1923,15 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
 
     // The targets: `--probe` findings, then the next pending queue entries. Refused before
     // anything is created. An entry-path harness declares its `--entry` findings.
-    let (asked_ids, next_note, siblings, go_package) = match entry_ids {
+    let (asked_ids, next_note, siblings, go_package, focus) = match entry_ids {
         None => resolve_targets(ctx, opts)?,
-        Some(ids) => (ids, None, std::collections::BTreeMap::new(), None),
+        Some(ids) => (
+            ids,
+            None,
+            std::collections::BTreeMap::new(),
+            None,
+            FocusFacts::default(),
+        ),
     };
     // A Go `--next` batch is one package: the driver is generated in it, as `--package` does.
     let package_opts;
@@ -2173,7 +2211,13 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         },
         probes: derived.probes.clone(),
         sibling_of: siblings.clone(),
-        purpose: (!opts.entry.is_empty()).then_some(dla_core::harness::HarnessPurpose::EntryPath),
+        purpose: if !opts.entry.is_empty() {
+            Some(dla_core::harness::HarnessPurpose::EntryPath)
+        } else if !focus.missed.is_empty() {
+            Some(dla_core::harness::HarnessPurpose::Focus)
+        } else {
+            None
+        },
         targets: derived.targets.iter().map(|a| a.id.clone()).collect(),
         agent: agent_kind,
         detectors: det.on.clone(),
@@ -2188,6 +2232,19 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         captures: vec![],
     };
     manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
+    if manifest.is_focus() {
+        // Which earlier harness missed each target, and what its trend said.
+        let doc = json!({
+            "focus": true,
+            "missed_in": focus.missed.iter().map(|(f, x)| (f.to_string(), json!({
+                "harness": x.harness, "verdict": x.verdict.as_str(), "detail": x.detail,
+            }))).collect::<serde_json::Map<_, _>>(),
+        });
+        write(
+            &hdir.join("focus.json"),
+            &(serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"),
+        )?;
+    }
 
     // What each declared target needs, printed and written above the driver's first hook.
     let mut described = if derived.targets.is_empty() {
@@ -2225,7 +2282,13 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         )?;
         if let Some(info) = driver_info.as_ref().filter(|i| !i.edit.is_empty()) {
             let file = hdir.join(&info.edit);
-            if targets::write_block_with(&file, &id, &described, &info.block_notes)
+            let mut notes = info.block_notes.clone();
+            if manifest.is_focus() {
+                notes.extend(targets::focus_notes(&focus.missed, &derived.targets));
+            } else if opts.next.is_some() && !manifest.is_entry_path() {
+                notes.push(targets::BROAD_NOTE.to_owned());
+            }
+            if targets::write_block_with(&file, &id, &described, &notes)
                 .map_err(|e| io_refusal(&file, e))?
             {
                 block_in = Some(info.edit.clone());
@@ -2312,18 +2375,30 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                         .collect::<Vec<_>>()
                 ),
             );
-            let gated: Vec<String> = described
-                .iter()
-                .filter_map(|t| {
-                    let g = t.feature_gate.as_ref().filter(|g| !g.enabled)?;
-                    Some(format!("{} at {}: {}", t.id, t.site, g.text()))
-                })
-                .collect();
+            // One short note per set of features: the ids behind them and what to generate with.
+            let mut gated: std::collections::BTreeMap<Vec<String>, Vec<String>> =
+                std::collections::BTreeMap::new();
+            for t in &described {
+                if let Some(g) = t.feature_gate.as_ref().filter(|g| !g.enabled) {
+                    gated
+                        .entry(g.features.clone())
+                        .or_default()
+                        .push(t.id.to_string());
+                }
+            }
             if !gated.is_empty() {
-                m.insert(
-                    "feature_note".into(),
-                    json!(format!("note: {}", gated.join("; "))),
-                );
+                let notes: Vec<String> = gated
+                    .iter()
+                    .map(|(f, ids)| {
+                        format!(
+                            "{} behind feature {}: generate with --features {}",
+                            ids.join(","),
+                            f.join(", "),
+                            f.join(",")
+                        )
+                    })
+                    .collect();
+                m.insert("feature_note".into(), json!(notes.join("; ")));
             }
             m.insert(
                 "targets_full".into(),
@@ -2339,6 +2414,22 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         }
         if let Some(n) = &next_note {
             m.insert("next_note".into(), json!(n));
+        }
+        if let Some(why) = &focus.why {
+            m.insert("focus".into(), json!(why));
+            m.insert(
+                "missed_in".into(),
+                json!(
+                    focus
+                        .missed
+                        .iter()
+                        .map(|(f, x)| (
+                            f.to_string(),
+                            json!(format!("{} {}", x.harness, x.verdict.as_str()))
+                        ))
+                        .collect::<serde_json::Map<_, _>>()
+                ),
+            );
         }
     }
     if let (Some(info), Value::Object(m)) = (&driver_info, &mut summary) {

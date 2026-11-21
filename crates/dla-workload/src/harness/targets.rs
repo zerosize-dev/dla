@@ -119,13 +119,15 @@ impl FeatureGate {
 
 /// The features that gate the module a Rust file belongs to, read with a plain line scan of
 /// the `mod` declarations from the file up to the crate root (`lib.rs`, `main.rs`): a
-/// `#[cfg(feature = "x")]` attribute on the line or lines right above `mod name;` (also inside
-/// `all(..)` and `any(..)`) names `x`. `file` is project-relative.
+/// `#[cfg(feature = "x")]` attribute on the line or lines right above `mod name;` names `x`,
+/// and so does a declaration inside `cfg_x! { .. }` when the crate defines that macro with
+/// `macro_rules!` and a `feature = "x"` attribute in its body (the habit of crates that wrap
+/// their gated items). `file` is project-relative.
 ///
-/// It does not see: a module declared with `#[path = ".."]`, in a macro or inline
+/// It does not see: a module declared with `#[path = ".."]`, in another macro or inline
 /// (`mod name { .. }`), a gate on the item itself instead of its module, `cfg_attr`, a `not(..)`
 /// gate (skipped, not read as a requirement), a target-specific or platform gate, and a feature
-/// another feature turns on (the gate names the feature written in the attribute).
+/// another feature turns on. For `any(a, b)` it names the first, which is enough to enable.
 pub fn feature_gate(project: &Path, file: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut current = Path::new(file).to_path_buf();
@@ -159,12 +161,18 @@ pub fn feature_gate(project: &Path, file: &str) -> Vec<String> {
         ) {
             parents.push(up.join(format!("{dn}.rs")));
         }
+        let root = crate_root(project, &current);
+        let macro_features = |m: &str| -> Vec<String> {
+            root.as_deref()
+                .map(|r| macro_features(project, r, m))
+                .unwrap_or_default()
+        };
         let mut next = None;
         for p in parents {
             let Ok(text) = fs::read_to_string(project.join(&p)) else {
                 continue;
             };
-            if let Some(features) = mod_gate(&text, &name) {
+            if let Some(features) = mod_gate(&text, &name, &macro_features) {
                 for f in features {
                     if !found.contains(&f) {
                         found.push(f);
@@ -181,18 +189,97 @@ pub fn feature_gate(project: &Path, file: &str) -> Vec<String> {
     found
 }
 
-/// The features of the `cfg` attributes right above `mod <name>;` in `text`; `None` when no such
-/// declaration is in it.
-fn mod_gate(text: &str, name: &str) -> Option<Vec<String>> {
+/// The directory of the nearest `lib.rs` or `main.rs` at or above `file`'s directory.
+fn crate_root(project: &Path, file: &Path) -> Option<PathBuf> {
+    let mut dir = file.parent()?.to_path_buf();
+    loop {
+        if project.join(&dir).join("lib.rs").is_file()
+            || project.join(&dir).join("main.rs").is_file()
+        {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// The features a `cfg_x!` macro gates its items with: the first feature of each `#[cfg(..)]`
+/// attribute in the body of `macro_rules! cfg_x`, found in the `.rs` files under `root`.
+fn macro_features(project: &Path, root: &Path, name: &str) -> Vec<String> {
+    let def = regex::Regex::new(&format!(r"macro_rules!\s+{}\b", regex::escape(name)));
+    let (Ok(def), Ok(feature)) = (def, regex::Regex::new(r#"feature\s*=\s*"([^"]+)""#)) else {
+        return Vec::new();
+    };
+    let mut stack = vec![project.join(root)];
+    let mut seen = 0;
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.filter_map(Result::ok) {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            seen += 1;
+            if seen > 500 || p.extension().and_then(|x| x.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&p) else {
+                continue;
+            };
+            let Some(at) = def.find(&text) else { continue };
+            let mut out: Vec<String> = Vec::new();
+            // The body of the macro: from its first `{` to the brace that closes it.
+            let (mut depth, mut started) = (0i32, false);
+            for line in text[at.end()..].lines().take(40) {
+                let t = line.trim();
+                if t.starts_with("#[cfg(") && !t.contains("not(") {
+                    out.extend(feature.captures_iter(t).take(1).map(|c| c[1].to_owned()));
+                }
+                depth += i32::try_from(t.matches('{').count()).unwrap_or(0)
+                    - i32::try_from(t.matches('}').count()).unwrap_or(0);
+                started |= t.contains('{');
+                if started && depth <= 0 {
+                    break;
+                }
+            }
+            out.dedup();
+            return out;
+        }
+    }
+    Vec::new()
+}
+
+/// The features of the `cfg` attributes right above `mod <name>;` in `text`, and of the
+/// `cfg_x! { .. }` blocks around it (`macro_features` gives the features of a macro); `None`
+/// when no such declaration is in it.
+fn mod_gate(
+    text: &str,
+    name: &str,
+    macro_features: &dyn Fn(&str) -> Vec<String>,
+) -> Option<Vec<String>> {
     let decl = regex::Regex::new(&format!(
         r"^\s*(pub(\([^)]*\))?\s+)?mod\s+{}\s*;",
         regex::escape(name)
     ))
     .ok()?;
     let feature = regex::Regex::new(r#"feature\s*=\s*"([^"]+)""#).ok()?;
+    let open = regex::Regex::new(r"^\s*(cfg_[a-z0-9_]+)!\s*\{").ok()?;
     let mut attrs: Vec<&str> = Vec::new();
+    // `(brace depth after the opening line, macro name)` of the `cfg_x! {` blocks around.
+    let mut blocks: Vec<(i32, String)> = Vec::new();
+    let mut depth = 0i32;
     for line in text.lines() {
         let t = line.trim();
+        let delta = i32::try_from(t.matches('{').count()).unwrap_or(0)
+            - i32::try_from(t.matches('}').count()).unwrap_or(0);
+        if let Some(c) = open.captures(line) {
+            depth += delta;
+            blocks.push((depth, c[1].to_owned()));
+            attrs.clear();
+            continue;
+        }
         if t.starts_with("#[") {
             attrs.push(t);
             continue;
@@ -204,12 +291,21 @@ fn mod_gate(text: &str, name: &str) -> Option<Vec<String>> {
             let mut out = Vec::new();
             for a in &attrs {
                 if a.starts_with("#[cfg(") && !a.contains("not(") {
-                    out.extend(feature.captures_iter(a).map(|c| c[1].to_owned()));
+                    // `any(a, b)`: one is enough, the first is named; `all(..)`: every one.
+                    let take = if a.contains("any(") { 1 } else { usize::MAX };
+                    out.extend(feature.captures_iter(a).take(take).map(|c| c[1].to_owned()));
                 }
+            }
+            for (_, m) in &blocks {
+                out.extend(macro_features(m));
             }
             return Some(out);
         }
         attrs.clear();
+        depth += delta;
+        while blocks.last().is_some_and(|(d, _)| depth < *d) {
+            blocks.pop();
+        }
     }
     None
 }
@@ -671,6 +767,32 @@ pub const ENTRY_RULES: [&str; 6] = [
     "- write one line in VARIES.txt next to the driver: what a caller varies per unit; dla harness run refuses the harness until it is written",
 ];
 
+/// The line of a broad batch's block about targets whose code does not run.
+pub const BROAD_NOTE: &str = "A target whose code does not run in this harness comes back in a small harness of its own; reach as many as one unit naturally can.";
+
+/// The lines of a focus harness's block, above its targets: what the harness is, what to do,
+/// the way out for a target no driver can reach, and per target where it was missed and why.
+pub fn focus_notes(
+    missed: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
+    asked: &[Asked],
+) -> Vec<String> {
+    let mut out = vec![
+        "Focus harness: these targets were declared in an earlier harness and their code did not run there. This harness exists for them alone. Call the writer function of each (named below) with a new key per unit. A target that no driver can reach here (it needs a container, a peer, another platform) is not left silently: after the run, dla ledger resolve <F> --as unresolved --reason env_unavailable --remedy \"<what it needs>\".".to_owned(),
+    ];
+    for a in asked {
+        if let Some(m) = missed.get(&a.id) {
+            out.push(format!(
+                "  {} was declared in {} and read {}: {}",
+                a.id,
+                m.harness,
+                m.verdict.as_str().replace('_', " "),
+                m.detail
+            ));
+        }
+    }
+    out
+}
+
 /// The comment block for a driver, above the first hook. `prefix` is the line comment
 /// marker (`#` or `//`); `None` wraps each line in `/* */`.
 pub fn block(harness: &str, targets: &[Target], prefix: Option<&str>) -> String {
@@ -1005,6 +1127,27 @@ mod open;
         // A file nothing declares (a binary) has no gate.
         assert!(gate("src/bin/tool.rs").is_empty());
         assert!(gate("src/lib.rs").is_empty());
+    }
+
+    #[test]
+    fn a_module_inside_a_cfg_macro_block_is_gated_by_the_macro_features() {
+        let dir = crate_tree(&[
+            (
+                "src/lib.rs",
+                "mod cfg;\n\ncfg_rt! {\n    pub mod context;\n    pub mod task;\n}\n\ncfg_time! {\n    pub mod time;\n}\n\npub mod sync;\n",
+            ),
+            (
+                "src/cfg.rs",
+                "macro_rules! cfg_rt {\n    ($($item:item)*) => {\n        $(\n            #[cfg(feature = \"rt\")]\n            #[cfg_attr(docsrs, doc(cfg(feature = \"rt\")))]\n            $item\n        )*\n    }\n}\n\nmacro_rules! cfg_time {\n    ($($item:item)*) => {\n        $(\n            #[cfg(feature = \"time\")]\n            $item\n        )*\n    }\n}\n",
+            ),
+            ("src/task/spawn_pinned.rs", "pub static A: u8 = 0;\n"),
+            ("src/task/mod.rs", "mod spawn_pinned;\n"),
+            ("src/sync.rs", "pub static B: u8 = 0;\n"),
+            ("src/time.rs", "pub static C: u8 = 0;\n"),
+        ]);
+        assert_eq!(feature_gate(dir.path(), "src/task/spawn_pinned.rs"), ["rt"]);
+        assert_eq!(feature_gate(dir.path(), "src/time.rs"), ["time"]);
+        assert!(feature_gate(dir.path(), "src/sync.rs").is_empty());
     }
 
     #[test]

@@ -212,6 +212,35 @@ struct DeclaredRun {
     /// The driver digest of the run, or the harness id when none was recorded.
     driver_key: String,
     verdict: Option<Verdict>,
+    /// The reason text the trend gave for the verdict.
+    detail: Option<String>,
+    /// The harness declares at most [`FOCUS_MAX`] targets.
+    focused: bool,
+    /// An entry-path harness: it has its own rules, so it is no run of the queue's rule.
+    entry: bool,
+}
+
+/// A run that missed a target: where, and what the trend said.
+#[derive(Debug, Clone)]
+pub struct Miss {
+    /// The harness.
+    pub harness: String,
+    /// The verdict (one of [`is_miss`]).
+    pub verdict: Verdict,
+    /// The reason text the trend gave.
+    pub detail: String,
+}
+
+/// The most targets of a focus harness (and so of a FOCUSED harness).
+pub const FOCUS_MAX: usize = 3;
+
+/// A verdict that says a harness run did not reach the target: it ran, its trend was read and
+/// nothing shows the target's code run (or its holder move).
+pub fn is_miss(v: Verdict) -> bool {
+    matches!(
+        v,
+        Verdict::Constant | Verdict::NotLoaded | Verdict::NotExecuted | Verdict::Unknown
+    )
 }
 
 /// What the stored trend reports and harness records say, indexed by finding.
@@ -275,11 +304,17 @@ impl Index {
                 let verdict = report
                     .and_then(|r| r.targets.iter().find(|t| &t.finding == f))
                     .map(|t| t.verdict);
+                let detail = report
+                    .and_then(|r| r.targets.iter().find(|t| &t.finding == f))
+                    .map(|t| t.detail.clone());
                 ix.declared.entry(f.clone()).or_default().push(DeclaredRun {
                     harness: h.clone(),
                     hook_driver: m.is_hook_driver(),
                     driver_key: key.clone(),
                     verdict,
+                    detail,
+                    focused: m.targets.len() <= FOCUS_MAX,
+                    entry: m.is_entry_path(),
                 });
             }
         }
@@ -309,15 +344,44 @@ impl Index {
         {
             return Standing::Settled(Why::Executed);
         }
-        let keys: std::collections::BTreeSet<&str> = runs
-            .iter()
-            .filter(|r| r.hook_driver)
-            .map(|r| r.driver_key.as_str())
-            .collect();
-        if keys.len() >= 2 {
-            return Standing::Settled(Why::TwoDrivers);
+        // Not reached: missed by two different drivers, at least one of the runs a focused
+        // harness (at most FOCUS_MAX targets). Two big batches naming a target settle nothing.
+        let missed = self.misses(id);
+        let keys: std::collections::BTreeSet<&str> =
+            missed.iter().map(|r| r.driver_key.as_str()).collect();
+        if keys.len() >= 2 && missed.iter().any(|r| r.focused) {
+            return Standing::Settled(Why::NotReached);
         }
         Standing::Pending
+    }
+
+    /// The runs of hook-driver harnesses (not entry-path) that missed `id`.
+    fn misses(&self, id: &FindingId) -> Vec<&DeclaredRun> {
+        self.declared
+            .get(id)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter(|r| r.hook_driver && !r.entry && r.verdict.is_some_and(is_miss))
+            .collect()
+    }
+
+    /// The first run that missed `id`; `None` when no run missed it.
+    pub fn missed_in(&self, id: &FindingId) -> Option<Miss> {
+        self.misses(id).first().and_then(|r| {
+            Some(Miss {
+                harness: r.harness.clone(),
+                verdict: r.verdict?,
+                detail: r.detail.clone().unwrap_or_default(),
+            })
+        })
+    }
+
+    /// The focused harness whose miss settled `id` as not reached.
+    pub fn not_reached_in(&self, id: &FindingId) -> Option<String> {
+        self.misses(id)
+            .iter()
+            .find(|r| r.focused)
+            .map(|r| r.harness.clone())
     }
 
     /// The harnesses that declared `id` as a target, with the best verdict each showed
@@ -371,8 +435,9 @@ pub enum Why {
     Moved,
     /// A driver run targeted it and its code ran (a verdict `executed`).
     Executed,
-    /// Two driver runs with different drivers targeted it.
-    TwoDrivers,
+    /// Two driver runs with different drivers missed it, one of them a focused harness
+    /// (at most three targets).
+    NotReached,
 }
 
 /// Settled or pending.
@@ -423,8 +488,133 @@ impl Closed {
     }
 }
 
+/// A batch `--next` declares.
+#[derive(Debug, Clone, Default)]
+pub struct Batch {
+    /// The candidates, in rank order (a focus batch: best-ranked first, then the others in
+    /// the order of their choice).
+    pub ids: Vec<FindingId>,
+    /// The candidates held because of their owner, each with the one it came with (a broad
+    /// batch only).
+    pub siblings: BTreeMap<FindingId, FindingId>,
+    /// True for a focus batch: the best-ranked pending candidate was one that a harness
+    /// missed, so the batch is that candidate and at most [`FOCUS_MAX`] - 1 more missed ones.
+    pub focus: bool,
+    /// Go: the package directory of the batch.
+    pub package: Option<String>,
+}
+
+/// Chooses the batch from `free` (the declarable pending candidates in rank order).
+/// `missed` holds the candidates that a harness run missed. With `package` (Go) only the
+/// candidates of that directory are taken from.
+///
+/// When the best-ranked candidate is one that was missed, the batch is a FOCUS batch: it,
+/// then up to two more missed ones (same owner first, then same file, then next by rank),
+/// no siblings and no fresh candidates. Otherwise it is the broad batch of fresh candidates
+/// only: the first `head`, then their same-owner siblings. A missed candidate is never put
+/// into a broad batch again. A Go batch is one package.
+pub fn choose_batch<V>(
+    view: &RunView,
+    free: &[&FindingId],
+    missed: &BTreeMap<FindingId, V>,
+    head: usize,
+    package: Option<&str>,
+    go: bool,
+) -> Batch {
+    let in_pkg: Vec<&FindingId> = free
+        .iter()
+        .filter(|f| package.is_none_or(|p| package_of(view, f).is_some_and(|q| q == p)))
+        .copied()
+        .collect();
+    let Some(first) = in_pkg.first() else {
+        return Batch::default();
+    };
+    if missed.contains_key(*first) {
+        let pkg = go.then(|| package_of(view, first)).flatten();
+        let pool: Vec<&FindingId> = in_pkg
+            .iter()
+            .skip(1)
+            .filter(|f| missed.contains_key(**f))
+            .filter(|f| !go || package_of(view, f) == pkg)
+            .copied()
+            .collect();
+        let of = |id: &FindingId| {
+            view.ledger
+                .finding(id)
+                .map(|f| (f, view.ledger.annotation(id)))
+        };
+        let file = |id: &FindingId| {
+            view.ledger
+                .finding(id)
+                .and_then(|f| f.site.as_deref())
+                .and_then(|s| s.rsplit_once(':').map(|(f, _)| f.to_owned()))
+        };
+        let first_file = file(first);
+        let mut ranked_pool: Vec<(u8, &FindingId)> = pool
+            .iter()
+            .map(|c| {
+                let same_owner =
+                    matches!((of(first), of(c)), (Some(a), Some(b)) if rank::same_owner(a, b));
+                let class = if same_owner {
+                    0
+                } else if first_file.is_some() && file(c) == first_file {
+                    1
+                } else {
+                    2
+                };
+                (class, *c)
+            })
+            .collect();
+        // Stable: inside a class the rank order stays.
+        ranked_pool.sort_by_key(|(class, _)| *class);
+        let take = head.clamp(1, FOCUS_MAX);
+        let mut ids: Vec<FindingId> = vec![(*first).clone()];
+        ids.extend(
+            ranked_pool
+                .into_iter()
+                .take(take - 1)
+                .map(|(_, c)| c.clone()),
+        );
+        return Batch {
+            ids,
+            siblings: BTreeMap::new(),
+            focus: true,
+            package: pkg,
+        };
+    }
+    let fresh: Vec<&FindingId> = in_pkg
+        .iter()
+        .filter(|f| !missed.contains_key(**f))
+        .copied()
+        .collect();
+    if go {
+        let p = package
+            .map(str::to_owned)
+            .or_else(|| go_packages(view, &fresh).into_iter().next());
+        return match p {
+            Some(p) => {
+                let (ids, siblings) = package_batch(view, &fresh, head, &p);
+                Batch {
+                    ids,
+                    siblings,
+                    focus: false,
+                    package: Some(p),
+                }
+            }
+            None => Batch::default(),
+        };
+    }
+    let (ids, siblings) = with_siblings(view, &fresh, head);
+    Batch {
+        ids,
+        siblings,
+        focus: false,
+        package: None,
+    }
+}
+
 /// The queue of one runtime.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeQueue {
     /// The runtime (`python`).
     pub runtime: String,
@@ -446,6 +636,11 @@ pub struct RuntimeQueue {
     /// Go: the package directory every candidate of `batch` is in (`""` is the project
     /// root); `None` for other runtimes and for an empty batch.
     pub package: Option<String>,
+    /// True when `batch` is a focus batch (see [`choose_batch`]).
+    pub focus: bool,
+    /// The pending candidates that a hook-driver harness run missed, each with the first
+    /// harness that missed it and its verdict.
+    pub missed: BTreeMap<FindingId, Miss>,
     /// The pending candidates whose best verdict is `unknown`: a driver ran, there was no
     /// coverage data, and nothing says their code ran.
     pub no_coverage: Vec<FindingId>,
@@ -473,19 +668,30 @@ impl RuntimeQueue {
 
     /// The batch of `--next n`: the first `n` (at most [`MAX_BATCH`]) declarable candidates
     /// and the siblings of the owners they hold.
-    pub fn batch_for(
-        &self,
-        view: &RunView,
-        n: usize,
-    ) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
+    pub fn batch_for(&self, view: &RunView, n: usize) -> Batch {
         let free: Vec<&FindingId> = self.declarable.iter().collect();
-        if self.runtime == GO {
-            return match go_packages(view, &free).first() {
-                Some(p) => package_batch(view, &free, n, p),
-                None => (Vec::new(), BTreeMap::new()),
-            };
+        let go = self.runtime == GO;
+        // A Go batch is one package: the one of the best-ranked candidate when that one was
+        // missed (a focus batch), else of the best-ranked fresh one.
+        let package = go
+            .then(|| {
+                let first = free.first()?;
+                if self.missed.contains_key(*first) {
+                    package_of(view, first)
+                } else {
+                    let fresh: Vec<&FindingId> = free
+                        .iter()
+                        .filter(|f| !self.missed.contains_key(**f))
+                        .copied()
+                        .collect();
+                    go_packages(view, &fresh).into_iter().next()
+                }
+            })
+            .flatten();
+        if go && package.is_none() {
+            return Batch::default();
         }
-        with_siblings(view, &free, n)
+        choose_batch(view, &free, &self.missed, n, package.as_deref(), go)
     }
 
     /// Go: the package directories of the declarable candidates, in the rank order of their
@@ -499,14 +705,9 @@ impl RuntimeQueue {
     }
 
     /// Go: the batch of the declarable candidates in the package directory `package`.
-    pub fn batch_in_package(
-        &self,
-        view: &RunView,
-        n: usize,
-        package: &str,
-    ) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
+    pub fn batch_in_package(&self, view: &RunView, n: usize, package: &str) -> Batch {
         let free: Vec<&FindingId> = self.declarable.iter().collect();
-        package_batch(view, &free, n, package)
+        choose_batch(view, &free, &self.missed, n, Some(package), true)
     }
 
     /// The rank and tier of a pending candidate.
@@ -597,19 +798,23 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                         .is_none_or(|h| !ix.declared_by.get(*p).is_some_and(|v| v.contains(h)))
                 })
                 .collect();
-            let (batch, siblings, package) = if runtime == GO {
-                match go_packages(view, &free).into_iter().next() {
-                    Some(p) => {
-                        let (b, s) = package_batch(view, &free, MAX_BATCH, &p);
-                        (b, s, Some(p))
-                    }
-                    None => (Vec::new(), BTreeMap::new(), None),
-                }
-            } else {
-                let (b, s) = with_siblings(view, &free, MAX_BATCH);
-                (b, s, None)
-            };
+            let missed: BTreeMap<FindingId, Miss> = pending
+                .iter()
+                .filter_map(|p| ix.missed_in(p).map(|m| (p.clone(), m)))
+                .collect();
             let declarable: Vec<FindingId> = free.iter().map(|f| (*f).clone()).collect();
+            let chooser = RuntimeQueue {
+                runtime: runtime.clone(),
+                declarable: declarable.clone(),
+                missed: missed.clone(),
+                ..RuntimeQueue::default()
+            };
+            let Batch {
+                ids: batch,
+                siblings,
+                focus,
+                package,
+            } = chooser.batch_for(view, MAX_BATCH);
             let batch_command = batch_command(view, &runtime);
             let command = match (&in_flight, batch.is_empty()) {
                 (Some(h), true) => format!("dla harness run {h} --mode both"),
@@ -635,6 +840,8 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 batch,
                 siblings,
                 package,
+                focus,
+                missed,
                 no_coverage,
                 declarable,
                 in_flight,
@@ -660,6 +867,11 @@ pub const NO_COVERAGE: &str = "the run has no coverage data, so whether its code
 /// The full text of the guidance a refusal or an item gives for an open queue.
 pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
     let _ = run_id;
+    let focus = if q.focus {
+        " The next batch is a focus batch: the best-ranked pending candidate was missed by an earlier harness, so it gets a harness of its own (at most 3 targets, no siblings); a target no driver can reach is given up only with a reason: dla ledger resolve <F> --as unresolved --reason env_unavailable --remedy \"<what it needs>\"."
+    } else {
+        ""
+    };
     let unknown = if q.no_coverage.is_empty() {
         String::new()
     } else {
@@ -667,7 +879,7 @@ pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
         format!(" {} read `unknown`: {NO_COVERAGE}.", ids.join(", "))
     };
     format!(
-        "{}. Fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime).{unknown}",
+        "{}. Fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime).{unknown}{focus}",
         q.command, q.runtime
     )
 }
@@ -731,6 +943,7 @@ impl ReportFacts {
         let mut harnesses: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         let (mut grew, mut changed, mut executed, mut no_coverage, mut missed, mut unread) =
             (0, 0, 0, 0, 0, 0);
+        let mut missed_once = 0;
         let mut targeted = 0;
         for id in &ranked {
             let t = self.index.targeted_in(id);
@@ -744,7 +957,15 @@ impl ReportFacts {
                 Some(Verdict::Changed) => changed += 1,
                 Some(Verdict::Executed) => executed += 1,
                 Some(Verdict::Unknown) => no_coverage += 1,
-                Some(Verdict::Constant | Verdict::NotExecuted | Verdict::NotLoaded) => missed += 1,
+                Some(Verdict::Constant | Verdict::NotExecuted | Verdict::NotLoaded) => {
+                    // "Not reached" is only what the rule settled: missed by two drivers, one
+                    // of them a focused harness. A miss with no focus harness is "missed once".
+                    if self.index.standing(id) == Standing::Settled(Why::NotReached) {
+                        missed += 1;
+                    } else {
+                        missed_once += 1;
+                    }
+                }
                 None => unread += 1,
             }
         }
@@ -755,6 +976,7 @@ impl ReportFacts {
             (executed, "executed"),
             (no_coverage, "no coverage data"),
             (missed, "not reached"),
+            (missed_once, "missed once, no focus harness"),
             (unread, "not read yet"),
         ] {
             if n > 0 {
@@ -809,7 +1031,14 @@ impl ReportFacts {
                 }
             })
             .collect();
-        Some(format!("Targeted: {}", list.join(", ")))
+        let tail = match (self.index.not_reached_in(id), self.index.missed_in(id)) {
+            (Some(h), _) if self.index.standing(id) == Standing::Settled(Why::NotReached) => {
+                format!("; not reached (missed by two drivers, the focused harness {h} among them)")
+            }
+            (_, Some(_)) => "; missed once, no focus harness".to_owned(),
+            _ => String::new(),
+        };
+        Some(format!("Targeted: {}{tail}", list.join(", ")))
     }
 }
 
@@ -971,7 +1200,7 @@ mod tests {
         let before = line(&run);
         assert_eq!(
             before,
-            "3 of 3 ranked candidates targeted in 1 harness: grew 1, executed 1, not reached 1; 0 not targeted"
+            "3 of 3 ranked candidates targeted in 1 harness: grew 1, executed 1, missed once, no focus harness 1; 0 not targeted"
         );
         // F1 grew and was taken under test (later: confirmed); it still counts, as grew.
         let mut l = Ledger::load(run.dir.path()).unwrap();
@@ -1314,10 +1543,11 @@ mod tests {
         assert_eq!(q.siblings.len(), 1);
         assert_eq!(q.siblings[&FindingId::new(10)], FindingId::new(1));
         // `--next 3` takes the first three by rank and the sibling of F1; F9 is not related.
-        let (b3, s3) = q.batch_for(&view, 3);
-        let ids: Vec<String> = b3.iter().map(ToString::to_string).collect();
+        let b3 = q.batch_for(&view, 3);
+        let ids: Vec<String> = b3.ids.iter().map(ToString::to_string).collect();
         assert_eq!(ids, ["F1", "F2", "F3", "F10"]);
-        assert_eq!(s3.len(), 1);
+        assert_eq!(b3.siblings.len(), 1);
+        assert!(!b3.focus);
     }
 
     #[test]
@@ -1338,6 +1568,220 @@ mod tests {
         assert!(q.batch.contains(&FindingId::new(9)), "{:?}", q.batch);
         assert!(!q.batch.contains(&FindingId::new(10)), "{:?}", q.batch);
         assert_eq!(q.siblings[&FindingId::new(9)], FindingId::new(1));
+    }
+
+    /// Writes harness `h` declaring `targets` as a hook driver with the driver text `driver`
+    /// (so two harnesses with different text are two different drivers), one series `s` and
+    /// a trend `t` with `verdicts`.
+    fn ran(
+        run: &Run,
+        h: &str,
+        targets: &[u32],
+        driver: &str,
+        s: &str,
+        verdicts: &[(u32, Verdict)],
+    ) {
+        run.harness(&manifest(h, targets, true));
+        let d = run.dir.path().join("harness").join(h).join("driver");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("dla_harness.py"), driver).unwrap();
+        run.series(s, h);
+        let digest = crate::harness::driver_digest(run.dir.path(), h).unwrap();
+        std::fs::write(
+            run.dir
+                .path()
+                .join("harness")
+                .join(h)
+                .join(format!("run-{s}.json")),
+            json!({"series": [s], "driver_digest": digest}).to_string(),
+        )
+        .unwrap();
+        run.trend(&format!("T{}", &s[1..]), s, verdicts);
+    }
+
+    #[test]
+    fn two_big_batches_that_missed_a_target_leave_it_pending_and_missed() {
+        let (run, _) = Run::new(5);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[
+                (1, Verdict::NotLoaded),
+                (2, Verdict::Grew),
+                (3, Verdict::Grew),
+                (4, Verdict::Grew),
+            ],
+        );
+        ran(
+            &run,
+            "H2",
+            &[1, 2, 3, 4],
+            "b",
+            "S2",
+            &[(1, Verdict::NotLoaded)],
+        );
+        let view = run.reload();
+        // Two different drivers missed F1, but neither harness is focused (4 targets): pending.
+        assert_eq!(pending_of(&view), ["F1", "F5"]);
+        let q = queues(&view, None).remove(0);
+        assert_eq!(
+            q.missed.keys().map(ToString::to_string).collect::<Vec<_>>(),
+            ["F1"]
+        );
+        assert_eq!(q.missed[&FindingId::new(1)].harness, "H1");
+        assert!(q.focus);
+    }
+
+    #[test]
+    fn a_focus_batch_is_chosen_when_the_best_ranked_pending_candidate_was_missed() {
+        let (run, _) = Run::new(7);
+        // F1, F3, F4 and F5 are missed (a constant, a not_loaded, an unknown and a
+        // not_executed run); F2 grew; F6 and F7 are fresh.
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4, 5],
+            "a",
+            "S1",
+            &[
+                (1, Verdict::Constant),
+                (2, Verdict::Grew),
+                (3, Verdict::NotLoaded),
+                (4, Verdict::Unknown),
+                (5, Verdict::NotExecuted),
+            ],
+        );
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(
+            pending_of(&run.reload()),
+            ["F1", "F3", "F4", "F5", "F6", "F7"]
+        );
+        assert!(q.focus);
+        // The best-ranked missed one and the next two missed ones by rank: no fresh F6, no
+        // reached F2, and no sibling expansion; F5 is over the cap of three.
+        assert_eq!(
+            q.batch,
+            [FindingId::new(1), FindingId::new(3), FindingId::new(4)]
+        );
+        assert!(q.siblings.is_empty());
+        let item = crate::view::queue_item(&q);
+        assert!(
+            item.description.contains("Next batch (focus): F1, F3, F4.")
+                && item.description.contains("Missed once: F1, F3, F4, F5."),
+            "{}",
+            item.description
+        );
+        // `--next 8` is capped at three for a focus batch.
+        let b = q.batch_for(&run.reload(), 8);
+        assert!(b.focus && b.ids.len() == 3, "{b:?}");
+    }
+
+    #[test]
+    fn a_broad_batch_holds_fresh_candidates_only() {
+        let (run, _) = Run::new(4);
+        // F2 is missed but F1, the best-ranked pending, is fresh: a broad batch of the fresh
+        // candidates; the missed one waits for its turn at the head.
+        ran(
+            &run,
+            "H1",
+            &[2, 3, 4, 1],
+            "a",
+            "S1",
+            &[
+                (2, Verdict::Constant),
+                (3, Verdict::Grew),
+                (4, Verdict::Grew),
+            ],
+        );
+        // F1 is declared by H1 but its verdict was not read: fresh.
+        let q = queues(&run.reload(), None).remove(0);
+        assert_eq!(pending_of(&run.reload()), ["F1", "F2"]);
+        assert!(!q.focus);
+        assert_eq!(q.batch, [FindingId::new(1)]);
+        assert!(q.missed.contains_key(&FindingId::new(2)));
+    }
+
+    #[test]
+    fn the_focus_batch_prefers_the_same_owner_then_the_same_file_then_the_rank() {
+        use crate::census::Lifetime::Object;
+        let items = [
+            ("pkg.m0.C0.x", "pkg/m0.py:3", Object, "put"),
+            ("pkg.m1.C1.x", "pkg/m1.py:3", Object, "put"),
+            ("pkg.m0.D0.z", "pkg/m0.py:5", Object, "put"),
+            ("pkg.m0.C0.y", "pkg/m0.py:4", Object, "put"),
+        ];
+        let (run, _) = owned_run(&items);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[
+                (1, Verdict::Constant),
+                (2, Verdict::Constant),
+                (3, Verdict::Constant),
+                (4, Verdict::Constant),
+            ],
+        );
+        let q = queues(&run.reload(), None).remove(0);
+        // F4 shares F1's owner, F3 its file, F2 only the rank: F2 is left out.
+        assert_eq!(
+            q.batch,
+            [FindingId::new(1), FindingId::new(4), FindingId::new(3)]
+        );
+        assert!(q.focus && q.siblings.is_empty());
+    }
+
+    #[test]
+    fn one_focused_miss_after_a_broad_miss_settles_and_the_same_driver_twice_does_not() {
+        let (run, _) = Run::new(2);
+        ran(
+            &run,
+            "H1",
+            &[1, 2, 3, 4],
+            "a",
+            "S1",
+            &[(1, Verdict::Constant), (2, Verdict::Constant)],
+        );
+        assert_eq!(pending_of(&run.reload()), ["F1", "F2"]);
+        // A focused harness with the same driver text again: the same driver key, no settle.
+        ran(&run, "H2", &[1], "a", "S2", &[(1, Verdict::NotLoaded)]);
+        // (H2 and H1 differ in digest only when their driver files differ: the key is a digest
+        // of the driver directory of each harness, so the same text is the same key.)
+        assert_eq!(pending_of(&run.reload()), ["F1", "F2"]);
+        // A different driver in a focused harness settles F1 as not reached; F2 stays.
+        ran(&run, "H3", &[1], "c", "S3", &[(1, Verdict::Constant)]);
+        let view = run.reload();
+        assert_eq!(pending_of(&view), ["F2"]);
+        let ix = Index::of(&view);
+        assert_eq!(
+            ix.standing(&FindingId::new(1)),
+            Standing::Settled(Why::NotReached)
+        );
+        assert_eq!(ix.not_reached_in(&FindingId::new(1)).as_deref(), Some("H2"));
+    }
+
+    #[test]
+    fn an_entry_path_miss_is_not_a_miss_of_the_queue_and_a_reached_target_is_never_missed() {
+        let (run, _) = Run::new(2);
+        let mut m = manifest("H1", &[1], true);
+        m.purpose = Some(crate::harness::HarnessPurpose::EntryPath);
+        run.harness(&m);
+        run.series("S1", "H1");
+        run.trend("T1", "S1", &[(1, Verdict::Constant)]);
+        let ix = Index::of(&run.reload());
+        assert!(ix.missed_in(&FindingId::new(1)).is_none());
+        ran(&run, "H2", &[2], "a", "S2", &[(2, Verdict::Executed)]);
+        let ix = Index::of(&run.reload());
+        assert_eq!(
+            ix.standing(&FindingId::new(2)),
+            Standing::Settled(Why::Executed)
+        );
+        assert!(ix.missed_in(&FindingId::new(2)).is_none());
     }
 
     #[test]

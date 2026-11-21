@@ -253,9 +253,7 @@ fn a_gated_module_is_named_in_the_block_and_features_reach_the_build() {
     let out = r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
     let note = out["summary"]["feature_note"].as_str().unwrap();
     assert!(
-        note.contains(&format!(
-            "{gated} at src/extra.rs:3: behind feature extras: generate with --features extras"
-        )),
+        note == format!("{gated} behind feature extras: generate with --features extras"),
         "{note}"
     );
     let block = fs::read_to_string(r.driver("H1")).unwrap();

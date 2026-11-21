@@ -309,9 +309,15 @@ under the run directory and need tier 1.
      built again with `-C instrument-coverage` into `cov-build/`, read with the `llvm-profdata` and `llvm-cov`
      of the toolchain), so a Go or Rust target without a probe reads `executed` or `not_executed`, and
      `not_executed` keeps it open. A candidate settles when a verdict is `grew`
-     or `changed`, or after one driver run with `executed`, or after two driver runs
-     whose driver files differ, whatever the verdicts (an `unknown` run counts as one of the two). A fixed command (command mode, JUnit) settles only
-     by `grew` or `changed`.
+     or `changed`, or after one driver run with `executed`. A target that a driver run MISSED (`constant`,
+     `not_loaded`, `not_executed` or `unknown`) stays pending and comes back in a FOCUS harness: when the
+     best-ranked pending candidate was missed, `--next` gives it and up to two more missed ones a harness
+     of their own (at most 3 targets, no siblings, no fresh candidates; the block names each target's
+     earlier harness and reason and the writer functions to call), and `dla trend` names the missed
+     targets first in `next`. A missed target is settled as not reached only when two different drivers
+     missed it and one of them was a focus harness; a target no driver can reach is given up with
+     `dla ledger resolve F --as unresolved --reason env_unavailable --remedy "<what it needs>"`, never
+     by closing it `not_exercised`. A fixed command (command mode, JUnit) settles only by `grew` or `changed`.
   5. `dla run status` again. The queue still open: the next batch (step 1). The queue empty or closed:
      `dla ledger close-rest` (stage 7).
 - The trigger of a leak: who feeds the keys? A holder GROWS when new keys reach it (what the drivers

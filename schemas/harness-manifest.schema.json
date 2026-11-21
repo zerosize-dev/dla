@@ -481,6 +481,11 @@
           "description": "A hook driver whose units call only the project's public entry points with data a\ncaller controls (`dla harness gen --driver --entry`): growth in it shows that a\ncaller can make new keys reach the holder.",
           "type": "string",
           "const": "entry-path"
+        },
+        {
+          "description": "A hook driver of at most three targets that an earlier harness declared and whose\ncode did not run there (`dla harness gen --next` when the best-ranked pending\ncandidate was missed). `focus.json` in the harness directory says which harness\nmissed each target.",
+          "type": "string",
+          "const": "focus"
         }
       ]
     },

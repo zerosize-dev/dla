@@ -656,6 +656,9 @@ fn queue_json(queues: &[dla_core::queue::RuntimeQueue]) -> Value {
         if let Some(p) = &q.package {
             e["package"] = json!(dla_core::queue::package_label(p));
         }
+        if q.focus {
+            e["focus"] = json!(true);
+        }
         m.insert(q.runtime.clone(), e);
     }
     Value::Object(m)

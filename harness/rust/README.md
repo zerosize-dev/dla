@@ -32,9 +32,10 @@ Rust allocator sees; C libraries linked into the process allocate outside it (vi
 
 `dla harness gen --lang rust --driver --features a,b [--no-default-features]` adds them to the `cargo build` of the
 driver (the command in `harness.json` keeps them). A target whose module the crate declares behind
-`#[cfg(feature = "x")]` gets the line "behind feature x: generate with --features x" in the block; the reader is a line
-scan of the `mod` declarations up to `lib.rs` (not seen: `#[path]`, macro or inline modules, a gate on the item,
-`cfg_attr`, a feature another feature enables).
+`#[cfg(feature = "x")]`, or inside a `cfg_x! { .. }` block whose `macro_rules!` the crate defines with that attribute, gets
+the line "behind feature x: generate with --features x" in the block; the reader is a line scan of the `mod` declarations
+up to `lib.rs` (not seen: `#[path]`, modules declared in other macros or inline, a gate on the item, `cfg_attr`, a feature
+another feature enables; `any(a, b)` names `a`).
 
 `dla harness run` then builds the driver once more with `RUSTFLAGS=-C instrument-coverage` into
 `harness/H<n>/cov-build/`, runs it for one round of `step` units (no warm-up, no captures, no sampler) with

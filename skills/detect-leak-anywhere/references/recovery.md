@@ -151,6 +151,11 @@ rank, the minutes left and the fix.
   `unit` of the driver so each unit reaches the listed targets with a new key, `dla harness run H<n>
   --mode both`, `dla trend S<n>`, read `targets`. Never answer the refusal with another reason, a blocker
   reason you do not have, or a loop of `ledger resolve` calls.
+- A target a harness missed (`constant`, `not_loaded`, `not_executed`, `unknown`) is refused too, until a
+  focus harness (at most 3 targets) missed it as well with a different driver: the fix names the focus
+  batch (`--next` when it is the best-ranked pending candidate). Call the writer function the block names
+  with a new key; a target no driver can reach is given up with `--as unresolved --reason env_unavailable
+  --remedy "<what it needs>"` (a reason that says what blocks it is accepted as before).
 - When the queue is empty or closed, `dla ledger close-rest` closes the rest (`inconclusive` for a candidate a declared harness measured with verdict `constant`, `changed` or `executed`, else `not_exercised`, or `time_budget` at the floor). `dla ledger list` shows each
   candidate's queue status (`pending`, `settled`, `not-eligible`); never read `ledger.jsonl` by hand.
 - When no driver can be built or run for the runtime (no toolchain, the build fails, a privilege was

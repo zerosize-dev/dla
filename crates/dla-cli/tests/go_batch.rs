@@ -323,3 +323,75 @@ fn a_package_that_cannot_hold_the_driver_is_skipped_and_its_candidates_stay_pend
         .unwrap();
     assert_eq!(line["queue"], "pending", "{line}");
 }
+
+#[test]
+fn a_focus_batch_stays_inside_one_package() {
+    if !have_go() {
+        return;
+    }
+    let r = Run::new(true);
+    let driver = |h: &str| {
+        r.run_dir
+            .join("harness")
+            .join(h)
+            .join("driver/zz_dla_driver_test.go")
+    };
+    // Two harnesses whose units do nothing: every target of both is missed (health first,
+    // then store).
+    let mut missed = Vec::new();
+    for pkg in ["health", "store"] {
+        let args = [
+            "harness",
+            "gen",
+            "--lang",
+            "go",
+            "--driver",
+            "--next",
+            "--package",
+            pkg,
+        ];
+        let out = r.ok(&args);
+        let h = out["summary"]["harness"].as_str().unwrap().to_owned();
+        let text = fs::read_to_string(driver(&h)).unwrap();
+        let text = text
+            .replace("\tpanic(\"DLA-HOOK setup has not been filled in\")", "")
+            .replace("\tpanic(\"DLA-HOOK unit has not been filled in\")", "");
+        fs::write(driver(&h), text).unwrap();
+        let ran = r.ok(&["harness", "run", &h, "--mode", "both"]);
+        let trend = r.ok(&["trend", ran["summary"]["series"][0].as_str().unwrap()]);
+        assert_eq!(trend["targets"].as_array().unwrap().len(), 2, "{trend}");
+        assert!(
+            trend["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|t| t["verdict"] == "not_loaded"),
+            "{trend}"
+        );
+        missed.push(h);
+    }
+    // The best-ranked pending candidate (a health field) was missed: the batch is a focus
+    // batch of the missed health candidates, though two more missed ones wait in `store`.
+    let out = r.ok(&["harness", "gen", "--lang", "go", "--driver", "--next"]);
+    let s = &out["summary"];
+    assert_eq!(s["package"], "health", "{out}");
+    assert!(
+        s["focus"].as_str().unwrap().contains("focus batch"),
+        "{out}"
+    );
+    let m: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H3/harness.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(m["purpose"], "focus", "{m}");
+    assert_eq!(m["targets"].as_array().unwrap().len(), 2, "{m}");
+    assert_eq!(
+        m["run"]["argv"].as_array().unwrap().last().unwrap(),
+        "./health"
+    );
+    assert!(
+        r.run_dir
+            .join("harness/H3/work/health/zz_dla_driver_test.go")
+            .is_file()
+    );
+}

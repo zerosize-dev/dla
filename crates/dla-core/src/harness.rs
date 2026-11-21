@@ -92,6 +92,11 @@ string_enum! {
         /// caller controls (`dla harness gen --driver --entry`): growth in it shows that a
         /// caller can make new keys reach the holder.
         EntryPath = "entry-path",
+        /// A hook driver of at most three targets that an earlier harness declared and whose
+        /// code did not run there (`dla harness gen --next` when the best-ranked pending
+        /// candidate was missed). `focus.json` in the harness directory says which harness
+        /// missed each target.
+        Focus = "focus",
     }
 }
 
@@ -525,6 +530,11 @@ impl HarnessManifest {
     /// True for an entry-path harness (`dla harness gen --driver --entry`).
     pub fn is_entry_path(&self) -> bool {
         self.purpose == Some(HarnessPurpose::EntryPath)
+    }
+
+    /// True for a focus harness (`purpose: focus`).
+    pub fn is_focus(&self) -> bool {
+        self.purpose == Some(HarnessPurpose::Focus)
     }
 }
 

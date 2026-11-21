@@ -626,7 +626,11 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         ),
         "{md}"
     );
-    assert!(md.contains("- Targeted: H1 constant\n"), "{md}");
+    // (changed for the focus rule: the two drivers that missed it, one of a focused harness)
+    assert!(
+        md.contains("- Targeted: H1 constant; not reached (missed by two drivers, the focused harness H1 among them)\n"),
+        "{md}"
+    );
     assert!(
         md.contains("- Not targeted (tier 6, not ranked for measurement)\n"),
         "{md}"
