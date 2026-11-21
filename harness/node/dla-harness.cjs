@@ -47,12 +47,14 @@ async function unit(i, key) {
 }
 
 // Time limit of this process (seconds; `dla harness run` sets DLA_TIME_LIMIT_SECS from the
-// harness timeout, 0 or unset = no fitting). The loop fits its rounds into it: after every round
-// it knows the time per unit, and when the rounds left would not fit into the limit (with a
-// margin of 15 percent and 5 seconds for the final checkpoint and the exit), it lowers the step
-// of the rounds left, never below MIN_STEP. 10 units: with fewer, the per-round costs (the forced
-// collection and the checkpoint) and the heap noise swamp a leak of one entry per unit.
-// The x axis stays the cumulative unit count.
+// harness timeout, 0 or unset = no fitting). The loop fits its rounds into it: once MIN_STEP units
+// have run (inside the first round, so one slow round cannot outlast the limit before the first
+// look) and after every round it knows the time per unit, and when the units left would not fit
+// into the limit (with a margin of 15 percent and 5 seconds for the final checkpoint and the
+// exit), it lowers the step of the round in progress and of the rounds left, never below
+// MIN_STEP. 10 units: with fewer, the per-round costs (the forced collection and the checkpoint)
+// and the heap noise swamp a leak of one entry per unit. The x axis stays the cumulative unit
+// count.
 const LIMIT_SECS = Number.parseFloat(process.env.DLA_TIME_LIMIT_SECS || '0');
 const MIN_STEP = 10;
 
@@ -63,33 +65,37 @@ async function main() {
   let step = STEP;
   let done = 0;
   let warned = false;
+  // `inRound` units of round `round` have run; `left` rounds follow it.
+  const fit = (round, inRound) => {
+    if (!(LIMIT_SECS > 0) || done === 0) return;
+    const left = total - round;
+    const spent = Number(process.hrtime.bigint() - loopStart) / 1e9;
+    const perUnit = spent / done;
+    const budget = LIMIT_SECS * 0.85 - 5 - process.uptime();
+    const need = perUnit * (step - inRound + step * left);
+    if (need <= budget) return;
+    const units = Math.floor(budget / perUnit); // units that still fit, the round in progress included
+    const lowered = Math.max(Math.min(MIN_STEP, step), Math.min(step, Math.floor((units + inRound) / (left + 1))));
+    if (lowered < step) {
+      dla.note(`the driver lowered its step from ${step} to ${lowered} units per round in round ${round} (after ${inRound} units of it): one unit takes ${(perUnit * 1000).toFixed(1)} ms and the ${LIMIT_SECS} s time limit would cut the process (the x axis is still the cumulative unit count)`);
+      step = lowered;
+    }
+    if (!warned && perUnit * (step - inRound + step * left) > budget) {
+      warned = true;
+      dla.note(`the unit is too slow for a series: even ${step} units per round (the floor) needs ${(perUnit * (step - inRound + step * left)).toFixed(0)} s for the units left and ${Math.max(0, budget).toFixed(0)} s remain; make the unit cheaper (one request to a local server, no sleeps, smaller payloads) or raise timeout_secs in harness.json`);
+    }
+  };
   for (let round = 1; round <= total; round += 1) {
     for (let n = 0; n < step; n += 1) {
       done += 1;
       const result = unit(done, REPEATED ? done % REPEAT : done);
       if (result && typeof result.then === 'function') await result;
+      if (n + 1 === Math.min(MIN_STEP, STEP)) fit(round, n + 1);
     }
     // let timers and I/O callbacks run between rounds, as they would in a long-lived process
     await new Promise((resolve) => setImmediate(resolve));
     dla.checkpoint(done, round === total);
-    if (LIMIT_SECS > 0 && round < total) {
-      const spent = Number(process.hrtime.bigint() - loopStart) / 1e9;
-      const perUnit = spent / done;
-      const budget = LIMIT_SECS * 0.85 - 5 - process.uptime();
-      const left = total - round;
-      if (perUnit * step * left > budget) {
-        const fit = Math.floor(budget / (perUnit * left));
-        const lowered = Math.max(Math.min(MIN_STEP, step), Math.min(step, fit));
-        if (lowered < step) {
-          dla.note(`the driver lowered its step from ${step} to ${lowered} units per round after round ${round}: one unit takes ${(perUnit * 1000).toFixed(1)} ms and the ${LIMIT_SECS} s time limit would cut the process (the x axis is still the cumulative unit count)`);
-          step = lowered;
-        }
-        if (perUnit * step * left > budget && !warned) {
-          warned = true;
-          dla.note(`the unit is too slow for a series: even ${step} units per round (the floor) needs ${(perUnit * step * left).toFixed(0)} s for the ${left} rounds left and ${budget.toFixed(0)} s remain; make the unit cheaper (one request to a local server, no sleeps, smaller payloads) or raise timeout_secs in harness.json`);
-        }
-      }
-    }
+    if (round < total) fit(round + 1, 0);
   }
 }
 

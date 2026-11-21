@@ -311,3 +311,29 @@ fn a_slow_unit_lowers_the_step_and_all_points_arrive() {
         out.text
     );
 }
+
+/// S2: one full round alone (90 units of 100 ms = 9 s plus the start) would use more than the
+/// time left under a 20 s limit once the other rounds count; the driver looks inside round 1.
+#[test]
+fn a_unit_so_slow_that_one_round_exceeds_the_limit_is_fitted_inside_the_first_round() {
+    if !have_node() {
+        return;
+    }
+    let run = prepared(
+        SETUP,
+        "  await new Promise((resolve) => setTimeout(resolve, 100));\n  state.pool.connect(key);",
+    );
+    let path = run.run_dir.join("harness/H1/harness.json");
+    let mut m: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    m["timeout_secs"] = Value::from(20);
+    // a round of 300 units would take 30 s alone
+    m["step"] = Value::from(300);
+    fs::write(&path, serde_json::to_string_pretty(&m).unwrap()).unwrap();
+    let out = dla(&run.project, &["harness", "run", "H1", "--mode", "fresh"]);
+    assert_eq!(out.json["summary"]["points"], 9, "{}", out.text);
+    assert!(
+        out.text.contains("in round 1 (after 10 units of it)"),
+        "{}",
+        out.text
+    );
+}
