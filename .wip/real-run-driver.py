@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--timeout", type=int, default=3 * 3600)
     ap.add_argument("--max-turns", type=int, default=600)
     ap.add_argument("--deny-read", action="append", default=[])
+    ap.add_argument("--warm-m2", help="a Maven user home filled outside the sandbox (wrapper "
+                    "distribution and repository); copied into the run's cache")
     a = ap.parse_args()
 
     work = os.path.join(ROOT, a.name)
@@ -68,7 +70,13 @@ def main():
         p = os.path.join(ROOT, other)
         if other not in (a.name, "plugin", "bin") and os.path.isdir(p):
             deny_read.append(p)
-    allow_write = [project, cache, tmp, data, "/tmp"]
+    # Build tools write under the home directory on a developer's machine (the Kotlin daemon,
+    # Maven and Gradle state); the sandbox must allow the same.
+    home_state = ["/root/.m2", "/root/.local/share", "/root/.gradle", "/root/.kotlin",
+                  "/root/.npm", "/root/.cargo"]
+    for d in home_state:
+        os.makedirs(d, exist_ok=True)
+    allow_write = [project, cache, tmp, data, "/tmp"] + home_state
     allow = ["Bash", "Read", "Glob", "Grep", "Agent", "Task", "Skill"]
     for tool in ("Edit", "Write"):
         for p in (project, cache, tmp):
@@ -101,7 +109,8 @@ def main():
         "CLAUDE_CODE_TMPDIR": tmp,
         "GOCACHE": at("go-build"), "GOPATH": at("gopath"), "GOMODCACHE": at("gopath/pkg/mod"),
         "GOFLAGS": "-modcacherw",
-        "MAVEN_OPTS": f"-Dmaven.repo.local={at('m2')}",
+        "MAVEN_USER_HOME": at("m2"),
+        "MAVEN_OPTS": f"-Dmaven.repo.local={at('m2/repository')}",
         "GRADLE_USER_HOME": at("gradle"),
         "npm_config_cache": at("npm"), "npm_config_update_notifier": "false",
         "PIP_CACHE_DIR": at("pip"),
@@ -111,7 +120,10 @@ def main():
         "DLA_CONSENT_TIERS": "1-4",
         "DLA_CONSENT_RAW_VALUES": "1",
     })
-    for sub in ("go-build", "gopath/pkg/mod", "m2", "gradle", "npm", "pip", "cargo", "xdg"):
+    if a.warm_m2:
+        shutil.copytree(a.warm_m2, at("m2"), symlinks=True)
+    for sub in ("go-build", "gopath/pkg/mod", "m2/repository", "gradle", "npm", "pip", "cargo",
+                "xdg"):
         os.makedirs(at(sub), exist_ok=True)
 
     task = open(a.prompt).read().strip()

@@ -110,6 +110,7 @@ fn junit_opts() -> GenOptions {
         iterations: 8,
         warmup: 1,
         probe_findings: Vec::new(),
+        next: None,
         auto_probes: true,
         package: None,
         junit: true,

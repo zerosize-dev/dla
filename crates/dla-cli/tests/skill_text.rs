@@ -489,7 +489,7 @@ fn the_measurement_queue_loop_is_in_the_checklist_and_the_rules_and_nothing_clos
     }
     for want in [
         "`dla ledger list`",
-        "`--next`",
+        "`--next N`",
         "`too-many-targets`",
         "`target-pending`",
         "`dla ledger close-rest",

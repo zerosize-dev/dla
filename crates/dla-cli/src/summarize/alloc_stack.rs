@@ -217,9 +217,75 @@ const TRACKED_HOLDERS: usize = 8;
 pub fn run_diff_with(
     ctx: &Ctx<'_>,
     opts: &Opts,
+    captures: Vec<ProfileCapture>,
+    origin: &ProfileOrigin,
+    holder_totals: bool,
+) -> Res<AdapterOut> {
+    run_diff_axis(ctx, opts, captures, origin, holder_totals, false)
+}
+
+/// [`run_diff`] for profiles that carry the cumulative bytes each stack allocated
+/// (`total_bytes`), taken from one process: the series' x is the sum of those totals, the
+/// bytes the process had allocated when the profile was taken, which is proportional to
+/// the work done at that point however late in its run each profile was written. When a
+/// capture has no positive total, or the totals do not strictly increase in capture
+/// order, x stays the capture number and a limitation says why.
+pub fn run_diff_alloc_axis(
+    ctx: &Ctx<'_>,
+    opts: &Opts,
+    captures: Vec<ProfileCapture>,
+    origin: &ProfileOrigin,
+) -> Res<AdapterOut> {
+    run_diff_axis(ctx, opts, captures, origin, false, true)
+}
+
+/// The x axis of a series of `captures` in their order: the bytes allocated when each was
+/// taken, or the capture number with the reason.
+fn allocated_axis(captures: &[ProfileCapture]) -> growth::XAxis {
+    let totals: Vec<u64> = captures
+        .iter()
+        .map(|c| {
+            c.profile
+                .groups
+                .iter()
+                .filter_map(|g| g.total_bytes)
+                .fold(0u64, u64::saturating_add)
+        })
+        .collect();
+    let fallback = |why: String| growth::XAxis {
+        allocated: None,
+        fallback: Some(format!(
+            "x is the capture number, not the bytes allocated when each profile was taken: {why}"
+        )),
+    };
+    if let Some(i) = totals.iter().position(|&t| t == 0) {
+        return fallback(format!(
+            "capture {} has no positive alloc_space total",
+            i + 1
+        ));
+    }
+    if let Some(i) = totals.windows(2).position(|w| w[1] <= w[0]) {
+        return fallback(format!(
+            "the alloc_space totals do not strictly increase from capture {} to {} ({} then {} bytes)",
+            i + 1,
+            i + 2,
+            totals[i],
+            totals[i + 1]
+        ));
+    }
+    growth::XAxis {
+        allocated: Some(totals.iter().map(|&t| t as f64).collect()),
+        fallback: None,
+    }
+}
+
+fn run_diff_axis(
+    ctx: &Ctx<'_>,
+    opts: &Opts,
     mut captures: Vec<ProfileCapture>,
     origin: &ProfileOrigin,
     holder_totals: bool,
+    alloc_axis: bool,
 ) -> Res<AdapterOut> {
     let tc = ctx.tc;
     let n = captures.len();
@@ -695,7 +761,12 @@ pub fn run_diff_with(
         .filter(|t| t.tie.as_ref().is_some_and(|w| w.rule == "holder"))
         .map(|t| t.name.clone())
         .collect();
-    let g = growth::write(
+    let xaxis = if alloc_axis {
+        allocated_axis(&captures)
+    } else {
+        growth::XAxis::default()
+    };
+    let g = growth::write_at(
         ctx,
         ledger,
         growth::Plan {
@@ -711,6 +782,7 @@ pub fn run_diff_with(
             what: "capture",
             focus: opts.finding.clone(),
         },
+        &xaxis,
     )?;
     let tied_ids = growth::tied_ids(&g, opts.finding.as_ref());
     // A stack tied by its holder shows where the holder is written: its first project

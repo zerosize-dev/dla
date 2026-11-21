@@ -77,6 +77,7 @@ pub fn unit_of(axis: Axis) -> String {
             Axis::Seconds => "second",
             Axis::N => "n",
             Axis::Dump => "dump",
+            Axis::AllocatedBytes => "allocated-byte",
         }
     )
 }

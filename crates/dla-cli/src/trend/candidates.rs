@@ -12,7 +12,7 @@ use dla_census::parse::{
 use dla_core::{FindingId, Ledger, attribution::Resolver, finding::Polarity, trend::ColumnTrend};
 
 /// Node kinds that are a function or method body in some supported grammar.
-const FUNCTIONS: &[&str] = &[
+pub(super) const FUNCTIONS: &[&str] = &[
     "function_declaration",
     "method_declaration",
     "function_definition",
@@ -24,7 +24,7 @@ const FUNCTIONS: &[&str] = &[
 ];
 
 /// Node kinds that are a class-like body.
-const CLASSES: &[&str] = &[
+pub(super) const CLASSES: &[&str] = &[
     "class_declaration",
     "class_definition",
     "class_specifier",

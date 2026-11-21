@@ -45,6 +45,14 @@ fn all_present(v: &[Option<u64>]) -> Option<Vec<u64>> {
 /// dominated count strictly increasing across every consecutive pair, and the last
 /// interval's byte increase at least [`LAST_OVER_FIRST`] of the first's.
 pub fn gate(o: &Observed) -> Result<Growth, Vec<String>> {
+    gate_at(o, None)
+}
+
+/// [`gate`] over points at the given `x` positions (strictly increasing, one per dump):
+/// the last-over-first comparison is then between the rates (bytes per unit of x) of the
+/// last and the first interval, so unevenly spaced dumps do not bias it. With `None` the
+/// dumps are one unit apart.
+pub fn gate_at(o: &Observed, xs: Option<&[f64]>) -> Result<Growth, Vec<String>> {
     let n = o.bytes.len();
     if n < MIN_DUMPS {
         return Err(vec![format!("dumps < {MIN_DUMPS}")]);
@@ -79,12 +87,32 @@ pub fn gate(o: &Observed) -> Result<Growth, Vec<String>> {
     if !why.is_empty() {
         return Err(why);
     }
-    let first = db[0] as f64;
-    let last = db[db.len() - 1] as f64;
+    let mut first = db[0] as f64;
+    let mut last = db[db.len() - 1] as f64;
+    let rated = match xs {
+        Some(xs) if xs.len() == n => {
+            let (dx_first, dx_last) = (xs[1] - xs[0], xs[n - 1] - xs[n - 2]);
+            if dx_first > 0.0 && dx_last > 0.0 {
+                first /= dx_first;
+                last /= dx_last;
+                true
+            } else {
+                return Err(vec![
+                    "the x positions of the dumps do not increase".to_owned(),
+                ]);
+            }
+        }
+        _ => false,
+    };
     let ratio = last / first;
     if ratio < LAST_OVER_FIRST {
         return Err(vec![format!(
-            "last interval's increase is {:.0}% of the first's (needs >= {:.0}%)",
+            "last interval's {} is {:.0}% of the first's (needs >= {:.0}%)",
+            if rated {
+                "rate of increase per unit of x"
+            } else {
+                "increase"
+            },
             ratio * 100.0,
             LAST_OVER_FIRST * 100.0
         )]);
@@ -222,6 +250,40 @@ mod tests {
         let p = plateau(&o).unwrap();
         assert_eq!(p.favors, Favors::NonLeak);
         assert_eq!(p.supports, vec!["N-WARM", "N-HWM"]);
+    }
+
+    #[test]
+    fn unevenly_spaced_dumps_are_judged_by_their_rate_over_x() {
+        // A linear leak (5 bytes per unit of x) read at x = 0.67, 3.5, 6.0, 7.4: the last
+        // step is about half of the first in bytes, and the same rate in bytes per x.
+        let xs = [670.0, 3500.0, 6000.0, 7400.0];
+        let b: Vec<u64> = xs.iter().map(|x| (x * 5.0) as u64).collect();
+        let c: Vec<u64> = b.iter().map(|x| x / 100).collect();
+        let o = obs(&b, &c);
+        let why = gate(&o).unwrap_err();
+        assert!(why[0].contains("49%"), "{why:?}");
+        let g = gate_at(&o, Some(&xs)).unwrap();
+        assert!((g.last_over_first - 1.0).abs() < 0.01, "{g:?}");
+        assert_eq!(shape(&g), "stair");
+        // The same figures at evenly spaced x are the plain rule.
+        assert!(gate_at(&o, Some(&[1.0, 2.0, 3.0, 4.0])).is_err());
+        assert_eq!(
+            gate_at(&obs(&[10, 20, 30], &[1, 2, 3]), None),
+            gate_at(&obs(&[10, 20, 30], &[1, 2, 3]), Some(&[1.0, 2.0, 3.0]))
+        );
+    }
+
+    #[test]
+    fn a_flat_series_and_a_plateau_in_x_still_fail_at_any_spacing() {
+        let xs = [670.0, 3500.0, 6000.0, 7400.0];
+        // Flat.
+        assert!(gate_at(&obs(&[500; 4], &[5; 4]), Some(&xs)).is_err());
+        // Rises over the first two intervals, then stops: the rate of the last interval
+        // is 2% of the first.
+        let o = obs(&[3350, 17500, 30000, 30140], &[33, 175, 300, 301]);
+        let why = gate_at(&o, Some(&xs)).unwrap_err();
+        assert!(why[0].contains("rate of increase per unit of x"), "{why:?}");
+        assert_eq!(plateau(&o).unwrap().favors, Favors::NonLeak);
     }
 
     #[test]

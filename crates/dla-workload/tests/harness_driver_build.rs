@@ -90,6 +90,7 @@ fn driver_opts(workload: Option<&str>) -> GenOptions {
         iterations: 3,
         warmup: 1,
         probe_findings: Vec::new(),
+        next: None,
         auto_probes: false,
         package: None,
         junit: false,

@@ -34,7 +34,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::{
-    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, harness_dir, probes, scratch, templates,
+    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, harness_dir, probes, scratch, targets, templates,
 };
 
 /// Refusal code: a build tool or compiler is not installed.
@@ -76,8 +76,11 @@ pub struct GenOptions {
     pub iterations: u32,
     /// Warm-up points (default 1).
     pub warmup: u32,
-    /// Findings to add a probe for.
+    /// Findings to add a probe for; each is also declared a target of the harness.
     pub probe_findings: Vec<FindingId>,
+    /// Declare this many of the next pending queue entries of the runtime as targets
+    /// (`--next`); `None` declares none.
+    pub next: Option<usize>,
     /// Derive probes from census candidates.
     pub auto_probes: bool,
     /// Go/JVM package (directory or name) for driver mode.
@@ -1397,6 +1400,79 @@ fn cmd_text(c: &CommandSpec, hdir: &Path) -> String {
     clip(&c.argv.join(" ").replace(&h, "<H>"), 160)
 }
 
+/// The findings a harness is generated to reach: the `--probe` findings, then (with
+/// `--next`) the next pending entries of the runtime's queue, at most [`MAX_TARGETS`] in all.
+/// The second value says so when `--next` found nothing to declare.
+fn resolve_targets(
+    ctx: &ToolCtx,
+    opts: &GenOptions,
+) -> Result<(Vec<FindingId>, Option<String>), Refusal> {
+    use dla_core::harness::MAX_TARGETS;
+    let rt = opts.lang;
+    let mut ids: Vec<FindingId> = Vec::new();
+    for f in &opts.probe_findings {
+        if !ids.contains(f) {
+            ids.push(f.clone());
+        }
+    }
+    let mut note = None;
+    if let Some(n) = opts.next {
+        if n > MAX_TARGETS || ids.len() + n > MAX_TARGETS {
+            return Err(refuse(
+                codes::TOO_MANY_TARGETS,
+                format!(
+                    "{} target(s) were asked for (--probe {} and --next {n}); one harness declares at most {MAX_TARGETS}",
+                    ids.len() + n,
+                    ids.len()
+                ),
+                format!("at most {MAX_TARGETS} targets per harness"),
+                format!(
+                    "dla harness gen --lang {} --driver --next {}",
+                    rt.as_str(),
+                    MAX_TARGETS.saturating_sub(ids.len()).max(1)
+                ),
+            ));
+        }
+        let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
+            .map_err(|e| e.to_refusal())?;
+        let batch = dla_core::queue::queues(&view, ctx.worker.as_deref())
+            .into_iter()
+            .find(|q| q.runtime == rt.as_str())
+            .map(|q| q.batch)
+            .unwrap_or_default();
+        let before = ids.len();
+        for f in batch {
+            if ids.len() - before >= n {
+                break;
+            }
+            if !ids.contains(&f) {
+                ids.push(f);
+            }
+        }
+        if ids.len() == before {
+            note = Some(format!(
+                "--next: no pending candidate of {} is waiting for a measurement, so none was declared",
+                rt.as_str()
+            ));
+        }
+    }
+    if ids.len() > MAX_TARGETS {
+        return Err(refuse(
+            codes::TOO_MANY_TARGETS,
+            format!(
+                "{} targets were asked for with --probe; one harness declares at most {MAX_TARGETS}",
+                ids.len()
+            ),
+            format!("at most {MAX_TARGETS} targets per harness"),
+            format!(
+                "dla harness gen --lang {} --driver --probe <F> ...   (at most {MAX_TARGETS}), then again for the rest",
+                rt.as_str()
+            ),
+        ));
+    }
+    Ok((ids, note))
+}
+
 /// Removes a half-written harness directory when generation fails.
 struct Cleanup {
     dir: PathBuf,
@@ -1491,6 +1567,10 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             format!("dla workload discover --lang {lang}"),
         ));
     }
+
+    // The targets: `--probe` findings, then the next pending queue entries. Refused before
+    // anything is created.
+    let (asked_ids, next_note) = resolve_targets(ctx, opts)?;
 
     // Tools first: nothing is created when one is missing.
     if rt == Runtime::Jvm {
@@ -1720,7 +1800,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         rt,
         opts.driver,
         opts.auto_probes,
-        &opts.probe_findings,
+        &asked_ids,
         go_dir.as_deref(),
     )?;
     gaps.extend(derived.notes.iter().cloned());
@@ -1730,7 +1810,6 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     )?;
 
     let manifest = HarnessManifest {
-        targets: Vec::new(),
         schema_version: dla_core::harness::HARNESS_SCHEMA_VERSION,
         id: id.clone(),
         runtime: rt,
@@ -1757,6 +1836,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             vec![KeyMode::Native]
         },
         probes: derived.probes.clone(),
+        targets: derived.targets.iter().map(|a| a.id.clone()).collect(),
         agent: agent_kind,
         detectors: det.on.clone(),
         tools,
@@ -1770,6 +1850,37 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         captures: vec![],
     };
     manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
+
+    // What each declared target needs, printed and written above the driver's first hook.
+    let described = if derived.targets.is_empty() {
+        Vec::new()
+    } else {
+        targets::describe(ctx, &ctx.ledger()?, &derived.targets, &derived.probes)
+    };
+    let mut block_in: Option<String> = None;
+    if !described.is_empty() {
+        write(
+            &hdir.join("targets.json"),
+            &(serde_json::to_string_pretty(&json!({
+                "harness": id,
+                "targets": described.iter().map(targets::Target::json).collect::<Vec<_>>(),
+                "general": targets::GENERAL,
+            }))
+            .unwrap_or_default()
+                + "\n"),
+        )?;
+        if let Some(info) = driver_info.as_ref().filter(|i| !i.edit.is_empty()) {
+            let file = hdir.join(&info.edit);
+            if targets::write_block(&file, &id, &described).map_err(|e| io_refusal(&file, e))? {
+                block_in = Some(info.edit.clone());
+                // The copies placed in the scratch project now carry the block too.
+                for (src, dest) in &info.sync {
+                    let to = work.join(dest);
+                    fs::copy(src, &to).map_err(|e| io_refusal(&to, e))?;
+                }
+            }
+        }
+    }
 
     let points = opts.warmup + opts.iterations;
     let mut result = json!({
@@ -1817,6 +1928,37 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         ctx.pointer(&format!("harness/{id}/{PROBES}")),
     ];
     let mut summary = result;
+    if let Value::Object(m) = &mut summary {
+        if !described.is_empty() {
+            m.insert(
+                "targets".into(),
+                json!(
+                    described
+                        .iter()
+                        .map(|t| json!({
+                            "finding": t.id,
+                            "site": t.site,
+                            "holder": t.holder,
+                            "owner": t.owner,
+                            "probe": t.probe.is_some(),
+                            "to_do": clip(&t.instruction, 90),
+                        }))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            m.insert(
+                "targets_full".into(),
+                json!(match &block_in {
+                    Some(f) => format!("the comment block at the top of {}", ctx.pointer(&format!("harness/{id}/{f}"))),
+                    None => ctx.pointer(&format!("harness/{id}/targets.json")),
+                }),
+            );
+            artifacts.push(ctx.pointer(&format!("harness/{id}/targets.json")));
+        }
+        if let Some(n) = &next_note {
+            m.insert("next_note".into(), json!(n));
+        }
+    }
     if let (Some(info), Value::Object(m)) = (&driver_info, &mut summary) {
         if info.spec.junit.is_some() {
             let driver_file = ctx.pointer(&format!(
@@ -1852,6 +1994,10 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             "next".into(),
             json!(if junit.is_some() {
                 format!("dla harness run {id}")
+            } else if opts.driver && !described.is_empty() {
+                format!(
+                    "fill the hooks so that each unit reaches the targets listed in the driver, then dla harness run {id} --mode both"
+                )
             } else if opts.driver {
                 format!("fill the hooks, then dla harness run {id} --mode both")
             } else {

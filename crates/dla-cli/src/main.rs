@@ -150,6 +150,13 @@ fn dispatch(cli: Cli) -> Res<Output> {
     let ctx = || Ctx::resolve(project_root(project)?, run_arg, worker_arg);
     match cli.command {
         Command::Run(c) => run::dispatch(project, ctx, c).map(Output::Json),
+        Command::Ledger(ledger_cmd::LedgerCmd::List(a)) => {
+            ledger_cmd::list(&ctx()?, a).map(|stdout| Output::Raw {
+                stdout,
+                stderr: String::new(),
+                code: 0,
+            })
+        }
         Command::Ledger(c) => ledger_cmd::dispatch(&ctx()?, data, c).map(Output::Json),
         Command::Report => {
             let r = report::run(&ctx()?)?;

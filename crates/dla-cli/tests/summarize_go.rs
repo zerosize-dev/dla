@@ -606,3 +606,330 @@ fn the_harness_types_needed_text_follows_the_runtime_the_dumps_name() {
         );
     }
 }
+
+// ---- the x axis of a capture series: the bytes allocated when each profile was taken
+
+fn varint(mut v: u64, out: &mut Vec<u8>) {
+    loop {
+        let b = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(b);
+            return;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+fn field_varint(num: u32, v: u64, out: &mut Vec<u8>) {
+    varint(u64::from(num) << 3, out);
+    varint(v, out);
+}
+
+fn field_bytes(num: u32, b: &[u8], out: &mut Vec<u8>) {
+    varint(u64::from(num) << 3 | 2, out);
+    varint(b.len() as u64, out);
+    out.extend_from_slice(b);
+}
+
+/// One stack of a synthetic heap profile: function, cumulative allocated bytes and bytes
+/// still in use (objects are a fixed 100 bytes each).
+struct Stack {
+    function: &'static str,
+    alloc: u64,
+    inuse: u64,
+}
+
+/// A bare (not gzipped) pprof heap profile with `alloc_space` and `inuse_space` (and,
+/// unless `no_alloc`, the two object counts and `alloc_space`), written at `time_ns`.
+fn heap_profile(stacks: &[Stack], time_ns: u64, no_alloc: bool) -> Vec<u8> {
+    let mut strings: Vec<String> = vec![String::new()];
+    let s = |t: &str, strings: &mut Vec<String>| -> u64 {
+        if let Some(i) = strings.iter().position(|x| x == t) {
+            return i as u64;
+        }
+        strings.push(t.to_owned());
+        (strings.len() - 1) as u64
+    };
+    let kinds: &[(&str, &str)] = if no_alloc {
+        &[("inuse_objects", "count"), ("inuse_space", "bytes")]
+    } else {
+        &[
+            ("alloc_objects", "count"),
+            ("alloc_space", "bytes"),
+            ("inuse_objects", "count"),
+            ("inuse_space", "bytes"),
+        ]
+    };
+    let mut body = Vec::new();
+    for (k, u) in kinds {
+        let (k, u) = (s(k, &mut strings), s(u, &mut strings));
+        let mut m = Vec::new();
+        field_varint(1, k, &mut m);
+        field_varint(2, u, &mut m);
+        field_bytes(1, &m, &mut body);
+    }
+    for (i, st) in stacks.iter().enumerate() {
+        let id = i as u64 + 1;
+        let vals: Vec<u64> = if no_alloc {
+            vec![st.inuse / 100, st.inuse]
+        } else {
+            vec![st.alloc / 100, st.alloc, st.inuse / 100, st.inuse]
+        };
+        let mut m = Vec::new();
+        let mut l = Vec::new();
+        varint(id, &mut l);
+        field_bytes(1, &l, &mut m);
+        let mut v = Vec::new();
+        vals.iter().for_each(|x| varint(*x, &mut v));
+        field_bytes(2, &v, &mut m);
+        field_bytes(2, &m, &mut body);
+        // The function, in a project file, and its location.
+        let (n, f) = (
+            s(st.function, &mut strings),
+            s("/w/reservd/internal/reserve/wait.go", &mut strings),
+        );
+        let mut fm = Vec::new();
+        field_varint(1, id, &mut fm);
+        field_varint(2, n, &mut fm);
+        field_varint(4, f, &mut fm);
+        field_bytes(5, &fm, &mut body);
+        let mut lm = Vec::new();
+        field_varint(1, id, &mut lm);
+        field_varint(2, 11 + id, &mut lm);
+        let mut loc = Vec::new();
+        field_varint(1, id, &mut loc);
+        field_bytes(4, &lm, &mut loc);
+        field_bytes(4, &loc, &mut body);
+    }
+    field_varint(9, time_ns, &mut body);
+    for t in &strings {
+        field_bytes(6, t.as_bytes(), &mut body);
+    }
+    body
+}
+
+const LEAK: &str = "example.com/reservd/internal/reserve.awaitConfirm";
+const FLAT: &str = "example.com/reservd/internal/reserve.config";
+const CHURN: &str = "example.com/reservd/internal/reserve.scratch";
+
+/// Four captures of runs of 1, 4, 6 and 9 units of work, each profile written at the
+/// given share of its run (the last in-run sample of a command-mode run), `unit` bytes
+/// allocated per unit by the leak stack and `churn` by the churn stack. `kept(work)` is
+/// what the leak stack still holds after `work` units of the run.
+fn captures(
+    shares: [f64; 4],
+    kept: impl Fn(f64) -> f64,
+    flat_inuse: u64,
+    no_alloc_at: impl Fn(usize) -> bool,
+) -> Vec<Vec<u8>> {
+    let runs = [1.0_f64, 4.0, 6.0, 9.0];
+    (0..4)
+        .map(|i| {
+            let work = 440.0 * runs[i] * shares[i];
+            let stacks = [
+                Stack {
+                    function: LEAK,
+                    alloc: (work * 8_000.0) as u64,
+                    inuse: kept(work) as u64,
+                },
+                Stack {
+                    function: FLAT,
+                    alloc: 50_000,
+                    inuse: flat_inuse,
+                },
+                Stack {
+                    function: CHURN,
+                    alloc: (work * 20_000.0) as u64,
+                    inuse: 0,
+                },
+            ];
+            heap_profile(
+                &stacks,
+                1_700_000_000_000_000_000 + (i as u64) * 1_000_000_000,
+                no_alloc_at(i),
+            )
+        })
+        .collect()
+}
+
+fn put_all(p: &Project, files: &[Vec<u8>]) -> Vec<String> {
+    files
+        .iter()
+        .enumerate()
+        .map(|(i, b)| p.put(&format!("in/h{i}.pb"), b))
+        .collect()
+}
+
+fn series_of(p: &Project, v: &Value) -> Value {
+    let id = v["series"].as_str().unwrap_or_else(|| panic!("{v}"));
+    serde_json::from_str(
+        &fs::read_to_string(p.run_dir.join("series").join(format!("{id}.json"))).unwrap(),
+    )
+    .unwrap()
+}
+
+fn passed_names(v: &Value) -> Vec<String> {
+    v["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn limitations(p: &Project, series: &Value) -> String {
+    series["limitations"].to_string()
+        + &p.evidence("growth-series")
+            .iter()
+            .map(|e| e["limitations"].to_string())
+            .collect::<String>()
+}
+
+#[test]
+fn a_linear_leak_profiled_at_different_shares_of_its_runs_passes_on_the_allocated_bytes_axis() {
+    let p = Project::new();
+    // The profile of each point is the last in-run sample: at 67 %, 87 %, 100 % and 82 %
+    // of the work of runs of 1, 4, 6 and 9 units. The leak keeps 5000 bytes per unit.
+    let files = captures([0.67, 0.87, 1.0, 0.82], |w| w * 5_000.0, 90_000, |_| false);
+    let files = put_all(&p, &files);
+    let (_, v) = summarize(&p, "alloc-stack-diff", "go-pprof-heap", &files);
+    assert_eq!(v["gate"], "pass", "{v}");
+    let names = passed_names(&v);
+    assert!(
+        names.iter().any(|n| n.contains("awaitConfirm")),
+        "the leak's stack must pass: {v}"
+    );
+    assert!(
+        !names.iter().any(|n| n.contains("reserve.config")),
+        "a flat stack must not pass: {v}"
+    );
+    let s = series_of(&p, &v);
+    assert_eq!(s["axis"], "allocated-bytes", "{s}");
+    // x is the sum of alloc_space of the profile: strictly increasing, in bytes.
+    let xs: Vec<f64> = s["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pt| pt["x"].as_f64().unwrap())
+        .collect();
+    assert_eq!(xs.len(), 4);
+    assert!(xs.windows(2).all(|w| w[0] < w[1]), "{xs:?}");
+    let work: f64 = 440.0 * 0.67;
+    assert_eq!(
+        xs[0],
+        (work * 8_000.0).trunc() + 50_000.0 + (work * 20_000.0).trunc()
+    );
+    let lims = limitations(&p, &s);
+    assert!(lims.contains("bytes the process had allocated"), "{lims}");
+    // The evidence says the axis too, and its slope is per allocated byte (a fraction).
+    let e = p.evidence("growth-series").pop().unwrap();
+    assert_eq!(e["result"]["axis"], "allocated-bytes", "{e}");
+    let col = e["result"]["passed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| {
+            c["column"]
+                .as_str()
+                .is_some_and(|n| n.contains("awaitConfirm"))
+        })
+        .unwrap_or_else(|| panic!("{e}"));
+    let slope = col["slope"].as_f64().unwrap();
+    assert!(
+        (slope - 5_000.0 / (8_000.0 + 20_000.0)).abs() < 0.01,
+        "kept bytes per allocated byte: {slope}"
+    );
+    // `dla trend` on the same series reads the same x: the half-split of the leak's
+    // column is the ratio of its rates per allocated byte (near 1 for a linear leak), not
+    // the ratio of its steps per capture.
+    let t = ok(p.path(), &["trend", v["series"].as_str().unwrap()]);
+    let trend: Value = serde_json::from_str(
+        &fs::read_to_string(
+            p.run_dir
+                .join("trend")
+                .join(format!("{}.json", t["trend"].as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let col = trend["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| {
+            c["name"]
+                .as_str()
+                .is_some_and(|n| n.contains("awaitConfirm"))
+                && c["kind"] == "gauge"
+        })
+        .unwrap_or_else(|| panic!("{trend}"));
+    let ratio = col["halves"]["ratio"].as_f64().unwrap();
+    assert!((0.8..=1.25).contains(&ratio), "half-split ratio {ratio}");
+}
+
+#[test]
+fn without_alloc_totals_the_axis_is_the_capture_number_and_a_limitation_says_why() {
+    // A capture with no alloc_space at all.
+    let p = Project::new();
+    let files = captures([1.0; 4], |w| w * 5_000.0, 90_000, |i| i == 2);
+    let files = put_all(&p, &files);
+    let (_, v) = summarize(&p, "alloc-stack-diff", "go-pprof-heap", &files);
+    let s = series_of(&p, &v);
+    assert_eq!(s["axis"], "dump", "{s}");
+    let xs: Vec<f64> = s["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pt| pt["x"].as_f64().unwrap())
+        .collect();
+    assert_eq!(xs, [1.0, 2.0, 3.0, 4.0]);
+    let lims = limitations(&p, &s);
+    assert!(lims.contains("x is the capture number"), "{lims}");
+    assert!(
+        lims.contains("capture 3 has no positive alloc_space total"),
+        "{lims}"
+    );
+    assert_eq!(v["gate"], "pass", "evenly spaced captures still pass: {v}");
+
+    // Totals that do not increase in capture order: the third profile allocated less than
+    // the second.
+    let q = Project::new();
+    let files = captures([1.0, 1.0, 0.3, 1.0], |w| w * 5_000.0, 90_000, |_| false);
+    let files = put_all(&q, &files);
+    let (_, v) = summarize(&q, "alloc-stack-diff", "go-pprof-heap", &files);
+    let s = series_of(&q, &v);
+    assert_eq!(s["axis"], "dump", "{s}");
+    let lims = limitations(&q, &s);
+    assert!(
+        lims.contains("do not strictly increase from capture 2 to 3"),
+        "{lims}"
+    );
+    assert!(lims.contains("x is the capture number"), "{lims}");
+}
+
+#[test]
+fn a_flat_stack_and_a_plateau_in_x_still_fail_the_gate() {
+    let p = Project::new();
+    // The leak stack stops growing after 4 units of work: a plateau in x. The flat stack
+    // never grows. Neither passes; the plateau is a plateau on the allocated-bytes axis.
+    let files = captures(
+        [0.67, 0.87, 1.0, 0.82],
+        |w| (w * 5_000.0).min(4.0 * 440.0 * 5_000.0 * 0.9),
+        90_000,
+        |_| false,
+    );
+    let files = put_all(&p, &files);
+    let (_, v) = summarize(&p, "alloc-stack-diff", "go-pprof-heap", &files);
+    let names = passed_names(&v);
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("awaitConfirm") || n.contains("reserve.config")),
+        "{v}"
+    );
+    let s = series_of(&p, &v);
+    assert_eq!(s["axis"], "allocated-bytes", "{s}");
+    let reasons = v["reasons"].to_string();
+    assert!(reasons.contains("nothing grows"), "{reasons}");
+}

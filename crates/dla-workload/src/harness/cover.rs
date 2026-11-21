@@ -385,6 +385,14 @@ fn python_entries(
 /// `(project-relative file, function name)` pairs with a positive count in the
 /// `NODE_V8_COVERAGE` files of `cov_dir`.
 fn node_functions(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String)> {
+    node_function_lines(cov_dir, work)
+        .into_iter()
+        .map(|(f, n, _)| (f, n))
+        .collect()
+}
+
+/// [`node_functions`] with the 1-based line each function starts at.
+fn node_function_lines(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String, u32)> {
     let mut out = BTreeSet::new();
     let Ok(rd) = fs::read_dir(cov_dir) else {
         return out;
@@ -418,6 +426,7 @@ fn node_functions(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String)> {
             if rel.starts_with("node_modules/") || rel.contains("/node_modules/") {
                 continue;
             }
+            let source = fs::read_to_string(work.join(&rel)).unwrap_or_default();
             for f in script
                 .get("functions")
                 .and_then(Value::as_array)
@@ -433,7 +442,19 @@ fn node_functions(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String)> {
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0);
                 if !name.is_empty() && count > 0.0 {
-                    out.insert((rel.clone(), name.to_owned()));
+                    let offset = f
+                        .get("ranges")
+                        .and_then(Value::as_array)
+                        .and_then(|r| r.first())
+                        .and_then(|r| r.get("startOffset"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as usize;
+                    let line = source.chars().take(offset).filter(|c| *c == '\n').count() + 1;
+                    out.insert((
+                        rel.clone(),
+                        name.to_owned(),
+                        u32::try_from(line).unwrap_or(u32::MAX),
+                    ));
                 }
             }
         }
@@ -444,6 +465,15 @@ fn node_functions(cov_dir: &Path, work: &Path) -> BTreeSet<(String, String)> {
 /// `(path as printed, function name)` pairs with coverage above 0.0% in the Go profiles
 /// of `cov_dir`, read with `go tool cover -func` run in `work`.
 fn go_functions(cov_dir: &Path, work: &Path) -> (BTreeSet<(String, String)>, Vec<String>) {
+    let (lines, notes) = go_function_lines(cov_dir, work);
+    (lines.into_iter().map(|(p, n, _)| (p, n)).collect(), notes)
+}
+
+/// [`go_functions`] with the line each function starts at.
+fn go_function_lines(
+    cov_dir: &Path,
+    work: &Path,
+) -> (BTreeSet<(String, String, u32)>, Vec<String>) {
     let mut out = BTreeSet::new();
     let mut notes = Vec::new();
     let Ok(rd) = fs::read_dir(cov_dir) else {
@@ -489,11 +519,11 @@ fn go_functions(cov_dir: &Path, work: &Path) -> (BTreeSet<(String, String)>, Vec
             let pct: f64 = pct.trim_end_matches('%').parse().unwrap_or(0.0);
             // `path/file.go:33:`
             let loc = loc.trim_end_matches(':');
-            let Some((path, _line)) = loc.rsplit_once(':') else {
+            let Some((path, line)) = loc.rsplit_once(':') else {
                 continue;
             };
             if pct > 0.0 {
-                out.insert((path.to_owned(), name.to_owned()));
+                out.insert((path.to_owned(), name.to_owned(), line.parse().unwrap_or(0)));
             }
         }
     }
@@ -609,6 +639,113 @@ pub fn exercised(
     res
 }
 
+/// What ran, as the verdicts of `dla trend` read it: `{runtime, kind, functions, classes,
+/// sources, note}`. `kind` is `functions` (Python 3.12+, Node, Go: file, name and the line
+/// the function starts at), `classes` (JVM: the loaded classes) or `none` (nothing can tell:
+/// Rust, native, Python before 3.12, a run that wrote no coverage). Bounded.
+pub fn executed_record(
+    runtime: Runtime,
+    dump_cov: &[DumpCoverage],
+    hdir: &Path,
+    cov_dir: &Path,
+    work: &Path,
+) -> Value {
+    const CAP: usize = 40_000;
+    let work = work.canonicalize().unwrap_or_else(|_| work.to_path_buf());
+    let mut functions: Vec<Value> = Vec::new();
+    let mut classes: Vec<String> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
+    let mut kind = "none";
+    let mut note = String::new();
+    match runtime {
+        Runtime::Python => {
+            let (items, notes) = dump_items(dump_cov, hdir);
+            note = notes.join("; ");
+            let reported = dump_cov
+                .iter()
+                .any(|c| c.kind.as_deref() == Some("functions"));
+            if !items.is_empty() || reported {
+                kind = "functions";
+            } else if note.is_empty() {
+                note = "the Python agent reported no executed functions (sys.monitoring needs Python 3.12 or newer)".into();
+            }
+            for item in &items {
+                let Some((left, right)) = item.rsplit_once('@') else {
+                    continue;
+                };
+                let Some((_, qualname)) = left.split_once(':') else {
+                    continue;
+                };
+                let (file, line) = right
+                    .rsplit_once(':')
+                    .map_or((right, 0), |(f, l)| (f, l.parse().unwrap_or(0)));
+                let Some(file) = relative_to(&work, file) else {
+                    continue;
+                };
+                functions.push(serde_json::json!({
+                    "file": file, "name": qualname.replace(".<locals>", ""), "line": line
+                }));
+            }
+        }
+        Runtime::Node => {
+            let fns = node_function_lines(cov_dir, &work);
+            if fns.is_empty() {
+                note = "no NODE_V8_COVERAGE data was written to cov/".into();
+            } else {
+                kind = "functions";
+            }
+            for (file, name, line) in fns {
+                functions.push(serde_json::json!({"file": file, "name": name, "line": line}));
+            }
+        }
+        Runtime::Go => {
+            let (fns, notes) = go_function_lines(cov_dir, &work);
+            note = notes.join("; ");
+            if fns.is_empty() {
+                if note.is_empty() {
+                    note = "no Go coverage profile was written to cov/".into();
+                }
+            } else {
+                kind = "functions";
+            }
+            for (file, name, line) in fns {
+                functions.push(serde_json::json!({"file": file, "name": name, "line": line}));
+            }
+        }
+        Runtime::Jvm => {
+            let (items, notes) = dump_items(dump_cov, hdir);
+            note = notes.join("; ");
+            if items.is_empty() {
+                if note.is_empty() {
+                    note = "the JVM agent reported no loaded classes".into();
+                }
+            } else {
+                kind = "classes";
+                classes = items.into_iter().collect();
+            }
+            sources = dump_cov
+                .iter()
+                .flat_map(|c| c.sources.iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+        }
+        Runtime::Rust | Runtime::Native => {
+            note = "the allocator shim sees allocations, not calls".into();
+        }
+    }
+    functions.truncate(CAP);
+    classes.truncate(CAP);
+    sources.truncate(CAP);
+    serde_json::json!({
+        "runtime": runtime.as_str(), "kind": kind, "functions": functions,
+        "classes": classes, "sources": sources, "note": note,
+    })
+}
+
+/// File the run's [`executed_record`] is written to, before the run's own record names it.
+pub const EXECUTED_FILE: &str = "executed.json";
+
 /// Writes the run's coverage into `coverage.json`: the worker's iterations and the
 /// exercised entry points. When nothing usable ran, every discovered entry point that is
 /// not already exercised gets `not_exercisable = reason`.
@@ -639,6 +776,11 @@ pub fn record(
             work,
             ..
         } => {
+            let record = executed_record(runtime, dump_cov, hdir, cov_dir, work);
+            let _ = fs::write(
+                hdir.join(EXECUTED_FILE),
+                serde_json::to_string(&record).unwrap_or_default(),
+            );
             let ex = exercised(runtime, &discovered, dump_cov, hdir, cov_dir, work);
             agent_blind = runtime == Runtime::Python
                 && ex

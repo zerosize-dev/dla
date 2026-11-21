@@ -2591,6 +2591,7 @@ fn run_loaded(
         "tool": out.tool.map(NativeTool::as_str),
         "captures": out.captures,
         "ffi_sites": out.ffi_sites.iter().map(ffi_site_json).collect::<Vec<_>>(),
+        "driver_digest": dla_core::harness::driver_digest(&ctx.run_dir, &manifest.id),
     });
     let first = out
         .series
@@ -2602,6 +2603,12 @@ fn run_loaded(
     let raw_path = ctx.run_dir.join(&raw_rel);
     let text = serde_json::to_string_pretty(&full).unwrap_or_default() + "\n";
     fs::write(&raw_path, text).map_err(|e| io_refusal(&raw_path, e))?;
+    // What this run executed, named by the run's first series (`dla trend` reads it).
+    let hdir_of_run = ctx.run_dir.join("harness").join(&manifest.id);
+    let executed = hdir_of_run.join(cover::EXECUTED_FILE);
+    if executed.is_file() {
+        let _ = fs::rename(&executed, hdir_of_run.join(format!("executed-{first}.json")));
+    }
 
     let hits = &out.detectors;
     let ids: Vec<&str> = out.series.iter().map(String::as_str).collect();

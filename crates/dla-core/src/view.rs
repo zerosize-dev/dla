@@ -165,6 +165,9 @@ pub enum BlockingKind {
     Run,
     /// A protected file no longer matches the seal `dla` wrote.
     Integrity,
+    /// A runtime's measurement queue is open: ranked candidates still need a workload that
+    /// reaches them.
+    Queue,
 }
 
 /// One thing that must be dispositioned, with the command that does it.
@@ -284,6 +287,35 @@ fn resolve_args(reason: crate::finding::UnresolvedReason) -> String {
     format!("--as unresolved --reason {reason} --remedy \"<text>\"")
 }
 
+/// The item of an open queue: how many candidates wait, how much budget is left, which ones
+/// are next and the command that targets them.
+pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
+    let (left, total) = q.minutes.unwrap_or((0, 0));
+    let next: Vec<String> = q.batch.iter().map(ToString::to_string).collect();
+    let next = if next.is_empty() {
+        String::new()
+    } else {
+        format!(" Next batch: {}.", next.join(", "))
+    };
+    BlockingItem {
+        kind: BlockingKind::Queue,
+        id: q.runtime.clone(),
+        description: format!(
+            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}",
+            q.pending.len(),
+            q.runtime
+        ),
+        fix: if q.in_flight.is_some() && q.batch.is_empty() {
+            q.command.clone()
+        } else {
+            format!(
+                "{}, fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, dla trend S<n>",
+                q.batch_command
+            )
+        },
+    }
+}
+
 /// The fix text for a run that is aborted or incomplete, by the reason it was stamped.
 fn incomplete_fix(view: &RunView) -> String {
     let reason = view.state.incomplete_reason.as_deref().unwrap_or("");
@@ -312,6 +344,22 @@ pub fn status(view: &RunView) -> ReportStatus {
     let mut step_cache = std::collections::BTreeMap::new();
     let mut only_runtime = None;
 
+    // The measurement queue: one item per runtime with an open queue leads the list, and a
+    // pending candidate's fix is the batch command, never the close.
+    let queues = crate::queue::queues(view, None);
+    for q in queues.iter().filter(|q| q.open()) {
+        blocking.push(queue_item(q));
+    }
+    let queue_on = view.state.queue && view.run_dir.is_some();
+    let ranked: std::collections::BTreeMap<_, _> = if queue_on {
+        crate::queue::ranked(view)
+            .into_iter()
+            .map(|r| (r.id.clone(), r))
+            .collect()
+    } else {
+        std::collections::BTreeMap::new()
+    };
+
     for f in view.ledger.findings() {
         // A duplicate merged into another worker's finding is counted there.
         if view.ledger.merged_into(&f.id).is_some() {
@@ -328,11 +376,23 @@ pub fn status(view: &RunView) -> ReportStatus {
             let reason = view.ledger.supported_reason(&f.id);
             // Where the ledger would refuse that close for an unrun, unbuilt or missing
             // harness, the fix is the step that clears the rule.
-            let fix =
-                crate::gate::open_finding_step(view, f, reason, &mut step_cache, &mut only_runtime)
-                    .unwrap_or_else(|| {
-                        format!("dla ledger resolve {} {}", f.id, resolve_args(reason))
-                    });
+            let step =
+                crate::gate::open_finding_step(view, f, reason, &mut step_cache, &mut only_runtime);
+            let pending_in = ranked
+                .get(&f.id)
+                .filter(|r| r.state == FindingState::Candidate)
+                .and_then(|r| r.runtime.as_ref())
+                .and_then(|rt| queues.iter().find(|q| &q.runtime == rt && q.open()))
+                .filter(|q| q.pending.contains(&f.id));
+            let fix = if let Some(q) = pending_in {
+                q.command.clone()
+            } else if let Some(step) = step {
+                step
+            } else if queue_on && f.state == FindingState::Candidate {
+                "dla ledger close-rest".to_owned()
+            } else {
+                format!("dla ledger resolve {} {}", f.id, resolve_args(reason))
+            };
             blocking.push(BlockingItem {
                 kind: BlockingKind::Finding,
                 id: f.id.to_string(),

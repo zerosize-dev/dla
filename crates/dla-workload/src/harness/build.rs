@@ -411,14 +411,26 @@ pub fn build_series(
     let warm = params.warmup as usize;
     if t.cols.len() > MAX_COLUMNS {
         let mut excess = t.cols.len() - MAX_COLUMNS;
-        let mut ranked: Vec<(Class, f64, String)> = t
+        // The probe column of a declared target ranks above everything else: it goes last.
+        let mut ranked: Vec<(bool, Class, f64, String)> = t
             .cols
             .iter()
-            .map(|(name, a)| (classify(name), growth(&a.vals, warm), name.clone()))
+            .map(|(name, a)| {
+                let declared = a
+                    .finding
+                    .as_ref()
+                    .is_some_and(|f| manifest.targets.contains(f));
+                (declared, classify(name), growth(&a.vals, warm), name.clone())
+            })
             .collect();
-        ranked.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        ranked.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then(a.2.total_cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+        });
         let mut dropped: BTreeMap<&'static str, usize> = BTreeMap::new();
-        for (class, _, name) in ranked {
+        for (_, class, _, name) in ranked {
             if excess == 0 {
                 break;
             }
