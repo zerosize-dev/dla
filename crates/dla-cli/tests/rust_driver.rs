@@ -557,3 +557,55 @@ fn a_command_mode_rust_run_with_capture_alloc_leaves_stacks_and_the_command() {
     );
     assert!(!sum["tied"].as_array().unwrap().is_empty(), "{sum}");
 }
+
+/// Two holders written from one function that also allocates the growing block.
+fn pair(dir: &Path) {
+    write(
+        dir,
+        "Cargo.toml",
+        "[package]\nname = \"pairy\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    write(
+        dir,
+        "src/lib.rs",
+        "use std::sync::Mutex;\n\nstatic KEPT_A: Mutex<Vec<Box<[u8; 64]>>> = Mutex::new(Vec::new());\nstatic KEPT_B: Mutex<Vec<u64>> = Mutex::new(Vec::new());\n\npub fn leak_pair(key: u64) {\n    let b = Box::new([key as u8; 64]);\n    KEPT_A.lock().unwrap().push(b);\n    KEPT_B.lock().unwrap().push(key);\n}\n",
+    );
+}
+
+#[test]
+fn two_findings_in_the_function_of_a_stack_are_both_named_and_no_single_command_is_preferred() {
+    if !have_alloc_tools() {
+        return;
+    }
+    let r = Run::of(pair);
+    let (a, b) = (r.id_at("src/lib.rs:3"), r.id_at("src/lib.rs:4"));
+    r.ok(&["harness", "gen", "--lang", "rust", "--driver", "--next"]);
+    r.fill("H1", "pairy::leak_pair(key);");
+    let out = r.ok(&[
+        "harness",
+        "run",
+        "H1",
+        "--mode",
+        "fresh",
+        "--capture",
+        "alloc",
+    ]);
+    let args = stack_diff_args(&out);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let sum = r.ok(&args);
+    assert_eq!(sum["gate"], "pass", "{sum}");
+    assert_eq!(sum["tied"], serde_json::json!([]), "{sum}");
+    let mut named: Vec<&str> = sum["same_function"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    named.sort_unstable();
+    let mut want = vec![a.as_str(), b.as_str()];
+    want.sort_unstable();
+    assert_eq!(named, want, "{sum}");
+    let next = sum["next"][0].as_str().unwrap();
+    assert!(next.contains(&a) && next.contains(&b), "{next}");
+    assert!(!next.starts_with("dla ledger annotate"), "{next}");
+}

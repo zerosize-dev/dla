@@ -97,6 +97,7 @@ async function main() {
 // keep-alive sockets and timers of the units must not hold it until the kill. process.exit()
 // still writes the coverage data (NODE_V8_COVERAGE) and runs the agent's exit handler.
 function finish(code) {
+  if (process.env.DLA_MUT_X !== '0') { process.exitCode = code; return; } /*MUT_EXIT*/
   const exit = () => process.exit(code);
   try {
     process.stdout.write('', () => process.stderr.write('', exit));

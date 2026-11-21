@@ -1475,9 +1475,7 @@ fn next_commands(
                     || "<growth evidence from dla trend>".to_owned(),
                     |e| e.to_string(),
                 );
-                if can_test
-                    && let Some(w) = workload_evidence(ledger, harness)
-                {
+                if can_test && let Some(w) = workload_evidence(ledger, harness) {
                     next.push(format!("dla ledger test {root} --evidence {w}"));
                 }
                 if root_f.holder.is_none() {
@@ -1560,6 +1558,88 @@ mod tests {
             ..root.clone()
         };
         assert_eq!(growth_evidence(&l, &other), Some(last(&l)));
+    }
+
+    #[test]
+    fn a_root_closed_as_static_only_gets_refute_test_and_confirm_in_that_order() {
+        use dla_core::{
+            NewEvidence, NewFinding, Origin,
+            evidence::{Authority, EvidenceCoverage, Source, Tool},
+            finding::UnresolvedReason,
+            state::{RunState, now_utc},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        RunState::init("/p", None, 3600, None, now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let ev = |kind: EvidenceKind, result: Value| NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Static,
+            kind,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        };
+        let last = |l: &Ledger| l.evidence().last().unwrap().evidence_id.clone();
+        l.add_evidence(ev(
+            EvidenceKind::CensusHolder,
+            serde_json::json!({"lang": "rust"}),
+        ))
+        .unwrap();
+        let census = last(&l);
+        l.add_evidence(ev(
+            EvidenceKind::Workload,
+            serde_json::json!({"harness": "H1", "mode": "driver"}),
+        ))
+        .unwrap();
+        let workload = last(&l);
+        l.add_evidence(ev(
+            EvidenceKind::GrowthSeries,
+            serde_json::json!({"gate": "pass", "passed": [
+                {"column": "stack:f (src/lib.rs:6)", "finding": "F1", "site": "src/lib.rs:3"}]}),
+        ))
+        .unwrap();
+        let growth = last(&l);
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![census.clone()]);
+        nf.site = Some("src/lib.rs:3".into());
+        l.add_finding(nf).unwrap();
+        let root: FindingId = "F1".parse().unwrap();
+        l.transition(
+            &root,
+            FindingState::SuspectedStaticOnly,
+            Some(UnresolvedReason::NotExercised),
+            Some("x".into()),
+            vec![census.clone()],
+            "t",
+        )
+        .unwrap();
+        let mut sib = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![census]);
+        sib.sibling_of = Some(root.clone());
+        sib.hypothesis = Some("N-WARM".into());
+        sib.refute_if = Some("keeps growing".into());
+        l.add_finding(sib).unwrap();
+        let f = l.finding(&root).unwrap().clone();
+        let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4);
+        let at = |needle: &str| next.iter().position(|n| n.starts_with(needle));
+        let refute = at("dla ledger refute F1.n1").unwrap_or(usize::MAX);
+        let test = at(&format!("dla ledger test F1 --evidence {workload}")).unwrap_or(usize::MAX);
+        let confirm =
+            at(&format!("dla ledger confirm F1 --evidence {growth}")).unwrap_or(usize::MAX);
+        assert!(
+            refute < test && test < confirm && confirm < next.len(),
+            "{next:?}"
+        );
     }
 
     #[test]
