@@ -25,6 +25,10 @@ const MATERIAL: f64 = 0.01;
 pub const MIN_BYTE_RISE: f64 = 32.0 * 1024.0;
 /// Fewest points of an extra window the gauge test accepts.
 const MIN_GAUGE_POINTS: usize = 3;
+/// Fewest rises the extra window would have shown, had the growth gone on at the rate of the
+/// main window, for a plateau to stand against a purge that kept the growth: with one or two
+/// expected a slow stair can sit between two steps; three means a step missing is no accident.
+pub const MIN_EXPECTED_RISES: f64 = 3.0;
 
 /// Keeps four significant digits so the evidence stays small.
 pub fn round(x: f64) -> f64 {
@@ -203,6 +207,56 @@ pub fn plateau(
         noise: Some(nz),
         verdict,
     }
+}
+
+/// How often the main window rose, and what that makes of its plateau window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rises {
+    /// Separate rises of the main window.
+    pub count: u32,
+    /// Rises the extra window would have held at that rate: `count * extra span / main span`.
+    pub expected: f64,
+    /// Points of the extra window that would reach [`MIN_EXPECTED_RISES`] (none without a rise).
+    pub points_needed: Option<u32>,
+}
+
+/// The separate rises of `main`: points that set a new maximum by more than `noise`, counted
+/// from `start` (the column at the end of the warm-up; the first main point when there is none).
+pub fn count_rises(main: &[Point], start: Option<f64>, noise: f64) -> u32 {
+    let mut ys = main.iter().map(|p| p.1);
+    let Some(mut max) = start.or_else(|| ys.next()) else {
+        return 0;
+    };
+    let mut n = 0;
+    for y in ys {
+        if y > max + noise {
+            n += 1;
+        }
+        max = max.max(y);
+    }
+    n
+}
+
+/// The rises of the main window against the length of the extra window.
+pub fn rises(main: &[Point], extra: &[Point], start: Option<f64>, noise: f64) -> Option<Rises> {
+    let (m0, m1) = (main.first()?, main.last()?);
+    let (e0, e1) = (extra.first()?, extra.last()?);
+    let (main_span, extra_span) = (m1.0 - m0.0, e1.0 - e0.0);
+    if main_span <= 0.0 || extra_span <= 0.0 {
+        return None;
+    }
+    let count = count_rises(main, start, noise);
+    let expected = f64::from(count) * extra_span / main_span;
+    let per_point = extra_span / (extra.len() - 1) as f64;
+    let points_needed = (count > 0).then(|| {
+        let span = MIN_EXPECTED_RISES * main_span / f64::from(count);
+        ((span / per_point).ceil() as u32 + 1).max(extra.len() as u32)
+    });
+    Some(Rises {
+        count,
+        expected,
+        points_needed,
+    })
 }
 
 impl Plateau {
@@ -389,12 +443,16 @@ pub fn gc(pre: &[(f64, f64)], post: &[(f64, f64)], reference: f64) -> Option<Gc>
 /// A purge that released the growth, or a pre-GC twin that carries it, favors a non-leak
 /// cause (the memory is allocator or collector headroom). Otherwise a plateau favors
 /// non-leak, growth that continues favors leak, and when the plateau test could not
-/// decide a purge that kept the growth favors leak. A plateau together with a retained
-/// purge is a contradiction and is inconclusive.
+/// decide a purge that kept the growth favors leak. A purge that kept the growth says only
+/// that the growth is not headroom, not that it goes on: a plateau together with it stands when
+/// the main window's rises, scaled to the extra window (`expected_rises`), say at least
+/// [`MIN_EXPECTED_RISES`] more would have shown; below that, or with no count (`None`), the
+/// plateau window may be too short to have shown one and the two are inconclusive.
 pub fn combine(
     plateau: PlateauVerdict,
     purge: Option<&Purge>,
     gc: Option<Gc>,
+    expected_rises: Option<f64>,
 ) -> (Favors, Vec<String>) {
     let released = purge.filter(|p| p.verdict == PurgeVerdict::Released);
     let headroom = gc.is_some_and(|g| g.headroom);
@@ -419,8 +477,12 @@ pub fn combine(
         return (Favors::NonLeak, seen);
     }
     match plateau {
-        // A plateau never overrides a purge that kept the growth: the two disagree.
-        PlateauVerdict::Plateau if purge.is_some_and(|p| p.verdict == PurgeVerdict::Retained) => {
+        // A plateau window too short to have shown another rise does not override a purge
+        // that kept the growth.
+        PlateauVerdict::Plateau
+            if purge.is_some_and(|p| p.verdict == PurgeVerdict::Retained)
+                && expected_rises.is_none_or(|e| e < MIN_EXPECTED_RISES) =>
+        {
             (Favors::Inconclusive, Vec::new())
         }
         PlateauVerdict::Plateau => (
@@ -692,13 +754,64 @@ mod tests {
     #[test]
     fn a_released_purge_beats_continuing_growth() {
         let p = purge("trim", Some(100.0), Some(30.0), Some(20.0), 0.0);
-        let (f, s) = combine(PlateauVerdict::Continues, Some(&p), None);
+        let (f, s) = combine(PlateauVerdict::Continues, Some(&p), None, None);
         assert_eq!(f, Favors::NonLeak);
         assert_eq!(s, ["N-ALLOC"]);
         let g = purge("gc", Some(100.0), Some(30.0), Some(20.0), 0.0);
         assert_eq!(
-            combine(PlateauVerdict::Plateau, Some(&g), None).1,
+            combine(PlateauVerdict::Plateau, Some(&g), None, None).1,
             ["N-HEADROOM", "N-WARM", "N-HWM"]
+        );
+    }
+
+    fn line(ys: &[f64]) -> Vec<Point> {
+        ys.iter()
+            .enumerate()
+            .map(|(i, &y)| (1000.0 * i as f64, y))
+            .collect()
+    }
+
+    #[test]
+    fn the_rises_of_a_window_are_the_new_maxima_over_the_noise() {
+        // A ramp: every point sets a new maximum by 100, over a noise of 10.
+        let ramp = line(&[100.0, 200.0, 300.0, 400.0, 500.0, 600.0]);
+        assert_eq!(count_rises(&ramp, Some(0.0), 10.0), 6);
+        // From the first point itself when nothing precedes it.
+        assert_eq!(count_rises(&ramp, None, 10.0), 5);
+        // One step, then flat with jitter under the noise.
+        let step = line(&[100.0, 100.0, 500.0, 505.0, 497.0, 503.0]);
+        assert_eq!(count_rises(&step, Some(100.0), 10.0), 1);
+        // A dip and a return to the old level is no rise; nothing rises on a flat line.
+        let dip = line(&[500.0, 300.0, 500.0, 500.0]);
+        assert_eq!(count_rises(&dip, Some(500.0), 10.0), 0);
+        assert_eq!(count_rises(&[], Some(1.0), 10.0), 0);
+        // The expectation scales with the windows: 6 rises over 5000 of x; an extra window of
+        // 2500 (6 points of 500) expects 3 and is just long enough.
+        let main = line(&[100.0, 200.0, 300.0, 400.0, 500.0, 600.0]);
+        let extra: Vec<Point> = (0..6).map(|i| (6000.0 + 500.0 * i as f64, 600.0)).collect();
+        let r = rises(&main, &extra, Some(0.0), 10.0).unwrap();
+        assert_eq!(r.count, 6);
+        assert!((r.expected - 3.0).abs() < 1e-9, "{r:?}");
+        assert_eq!(r.points_needed, Some(6));
+        // Without a rise there is nothing to scale.
+        let flat = line(&[100.0; 6]);
+        let r = rises(&flat, &extra, Some(100.0), 10.0).unwrap();
+        assert_eq!((r.count, r.expected, r.points_needed), (0, 0.0, None));
+    }
+
+    #[test]
+    fn a_retained_purge_holds_a_plateau_back_only_while_its_window_is_short() {
+        let kept = purge("trim", Some(100.0), Some(99.0), Some(20.0), 0.0);
+        let held = |e| combine(PlateauVerdict::Plateau, Some(&kept), None, e);
+        assert_eq!(held(Some(2.9)), (Favors::Inconclusive, Vec::new()));
+        assert_eq!(held(None), (Favors::Inconclusive, Vec::new()));
+        let (f, s) = held(Some(MIN_EXPECTED_RISES));
+        assert_eq!(f, Favors::NonLeak);
+        assert_eq!(s, ["N-WARM", "N-HWM"]);
+        // Growth that continues is still a leak, whatever the count says.
+        assert_eq!(
+            combine(PlateauVerdict::Continues, Some(&kept), None, Some(9.0)).0,
+            Favors::Leak
         );
     }
 
@@ -707,23 +820,23 @@ mod tests {
         let kept = purge("trim", Some(100.0), Some(99.0), Some(20.0), 0.0);
         // A plateau never overrides a purge that kept the growth: they disagree.
         assert_eq!(
-            combine(PlateauVerdict::Plateau, Some(&kept), None),
+            combine(PlateauVerdict::Plateau, Some(&kept), None, None),
             (Favors::Inconclusive, Vec::new())
         );
         assert_eq!(
-            combine(PlateauVerdict::Plateau, None, None).0,
+            combine(PlateauVerdict::Plateau, None, None, None).0,
             Favors::NonLeak
         );
         assert_eq!(
-            combine(PlateauVerdict::Continues, Some(&kept), None).0,
+            combine(PlateauVerdict::Continues, Some(&kept), None, None).0,
             Favors::Leak
         );
         assert_eq!(
-            combine(PlateauVerdict::NotRun, Some(&kept), None).0,
+            combine(PlateauVerdict::NotRun, Some(&kept), None, None).0,
             Favors::Leak
         );
         assert_eq!(
-            combine(PlateauVerdict::Inconclusive, None, None).0,
+            combine(PlateauVerdict::Inconclusive, None, None, None).0,
             Favors::Inconclusive
         );
     }

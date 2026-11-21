@@ -161,6 +161,15 @@ non-heap finding the primary is `jvm.nonheap_used`, which must plateau together 
   at most a fifth of the growth favors `leak`. In between is inconclusive. `--purge auto` picks the
   runtime's own purge (JVM `trim-native-heap`, Go `free-os-memory`, Python `trim` and `gc`, Node
   `gc`, Rust and native `trim`).
+  A purge that kept the growth says the growth is held memory, not allocator or collector
+  headroom; it does not say the growth goes on. A plateau with such a purge stands (favors
+  `non-leak`, N-WARM and N-HWM, and the result's `note` says the growth is held) when the main
+  window rose often enough that the extra window would have shown at least 3 more rises had the
+  growth gone on (rises = points that set a new maximum by more than the noise unit, counted
+  from the end of the warm-up; expected = rises x extra span / main span). Below 3 the plateau
+  window may be too short for a slow stair and the result is `inconclusive`; the `next` line
+  names how many extra points would reach 3, and the doubled `--extra` it prints converges.
+  Growth that continues still favors `leak` and a purge that released it `non-leak`.
 - **GC test**, when `.pre_gc` twins exist. A pre-GC series that passes the gate or shows a
   sawtooth while the post-GC series is flat favors `non-leak` and supports N-HEADROOM.
 - **Overall verdict.** Bound to a finding it is that finding's column verdict. Unbound, it is

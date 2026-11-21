@@ -137,6 +137,11 @@ struct ColumnResult {
     gc: Option<Gc>,
     favors: Favors,
     supports: Vec<String>,
+    /// What a purge that kept the growth left of a plateau, in words (the rises of the main
+    /// window against the extra window), when it had to be weighed.
+    note: Option<String>,
+    /// Points of the extra window that would let a held-back plateau stand.
+    points_needed: Option<u32>,
 }
 
 impl ColumnResult {
@@ -155,6 +160,9 @@ impl ColumnResult {
             m.insert("gc".into(), g.to_json());
         }
         m.insert("favors".into(), json!(self.favors));
+        if let Some(n) = &self.note {
+            m.insert("note".into(), json!(n));
+        }
         Value::Object(m)
     }
 
@@ -270,8 +278,41 @@ fn test_column(
     let contradicts = !((pick::PURGE_CANNOT_CONTRADICT.contains(&name)
         || pick::purge_cannot_release(name))
         && plateau.verdict == PlateauVerdict::Plateau);
-    let (favors, supports) =
-        judge::combine(plateau.verdict, purge.as_ref().filter(|_| contradicts), gc);
+    // A purge that kept the growth says the growth is not headroom, not that it goes on: the
+    // plateau stands when the main window's rises, scaled to the extra window, say another
+    // would have shown (gauges only; a counter keeps its own rule).
+    let kept = contradicts
+        && plateau.verdict == PlateauVerdict::Plateau
+        && purge
+            .as_ref()
+            .is_some_and(|p| p.verdict == PurgeVerdict::Retained);
+    let rises = (kept && !counter)
+        .then(|| judge::rises(main, extra, warm_end(series, idx), plateau.noise?))
+        .flatten();
+    let (favors, supports) = judge::combine(
+        plateau.verdict,
+        purge.as_ref().filter(|_| contradicts),
+        gc,
+        rises.map(|r| r.expected),
+    );
+    let note = rises.map(|r| {
+        let main_part = format!(
+            "the purge kept the growth (held memory, not allocator or collector headroom); the main window rose {} time(s), so {:.1} rise(s) were expected in the extra window",
+            r.count, r.expected
+        );
+        if favors == Favors::NonLeak {
+            format!(
+                "{main_part}, none showed (at least {} are needed): the plateau stands",
+                judge::MIN_EXPECTED_RISES
+            )
+        } else {
+            let need = r.points_needed.map_or_else(
+                || "the main window shows no rise to scale from".to_owned(),
+                |n| format!("an extra window of {n} points would expect {}", judge::MIN_EXPECTED_RISES),
+            );
+            format!("{main_part}; too few to call the plateau ({need})")
+        }
+    });
     Some(ColumnResult {
         name: name.to_owned(),
         voting,
@@ -280,6 +321,8 @@ fn test_column(
         gc,
         favors,
         supports,
+        note,
+        points_needed: rises.and_then(|r| r.points_needed),
     })
 }
 
@@ -1311,6 +1354,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             extra,
         ),
     };
+    let next = say_how_long_a_held_plateau_needs(next, favors, &results, &picked);
     let mut out = Map::new();
     out.insert("ok".into(), json!(true));
     out.insert("command".into(), json!("alloc-test"));
@@ -1399,6 +1443,35 @@ fn workload_evidence(ledger: &Ledger, harness: &str) -> Option<EvidenceId> {
         .filter(|e| e.result.get("harness").and_then(Value::as_str) == Some(harness))
         .last()
         .map(|e| e.evidence_id.clone())
+}
+
+/// When a voting plateau was held back only because its window was too short to have shown
+/// another rise (see [`judge::combine`]), the doubled `--extra` of the printed command says how
+/// many extra points would reach the expectation.
+fn say_how_long_a_held_plateau_needs(
+    mut next: Vec<String>,
+    favors: Favors,
+    results: &[ColumnResult],
+    picked: &pick::Picked,
+) -> Vec<String> {
+    if favors != Favors::Inconclusive {
+        return next;
+    }
+    let needed = results
+        .iter()
+        .filter(|r| match &picked.primary {
+            Some(p) => &r.name == p,
+            None => r.voting,
+        })
+        .filter(|r| r.favors == Favors::Inconclusive)
+        .filter_map(|r| r.points_needed)
+        .max();
+    if let (Some(n), Some(cmd)) = (needed, next.iter_mut().find(|c| c.contains("--extra"))) {
+        cmd.push_str(&format!(
+            "   (the main window rose too few times for a plateau of this length to stand against the purge that kept the growth: {n} extra points would)"
+        ));
+    }
+    next
 }
 
 fn next_commands(
@@ -1658,6 +1731,8 @@ mod tests {
             gc: None,
             favors,
             supports: vec![format!("{name} supports")],
+            note: None,
+            points_needed: None,
         };
         let picked = pick::Picked {
             tested: vec!["jvm.nonheap_used".into(), "jvm.nmt.symbol".into()],
@@ -1712,6 +1787,8 @@ mod tests {
             gc: None,
             favors,
             supports: vec![],
+            note: None,
+            points_needed: None,
         }
     }
 
@@ -3080,6 +3157,87 @@ mod tests {
         }
         let (_, results, _) = unbound_run(s, &["go.total"]);
         let r = results.iter().find(|r| r.name == "go.total").unwrap();
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Continues, "{r:?}");
+        assert_eq!(r.favors, Favors::Leak, "{r:?}");
+    }
+
+    /// `os.rss_anon` on a flat 500 MB process: 2 warm-up points at 10 MB, 6 main points
+    /// `main` and the extra points `extra`, a purge that gives nothing back.
+    fn held_run(main: [f64; 6], extra: &[f64]) -> ColumnResult {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("os.rss_anon")];
+        let ys: Vec<f64> = [10e6, 10e6]
+            .into_iter()
+            .chain(main)
+            .chain(extra.iter().copied())
+            .collect();
+        s.points = ys
+            .iter()
+            .enumerate()
+            .map(|(i, &y)| Point {
+                x: 1000.0 * (i as f64 + 1.0),
+                t_ms: i as u64,
+                values: vec![Some(500e6), Some(y)],
+            })
+            .collect();
+        let (_, mut results, _) = unbound_run(s, &["os.rss_anon"]);
+        let at = results
+            .iter()
+            .position(|r| r.name == "os.rss_anon")
+            .unwrap();
+        results.swap_remove(at)
+    }
+
+    #[test]
+    fn a_ramp_then_flat_with_a_retained_purge_reads_non_leak_and_says_the_growth_is_held() {
+        let r = held_run(
+            [12e6, 14e6, 16e6, 18e6, 20e6, 22e6],
+            &[22e6, 22.001e6, 22e6, 22.001e6, 22e6, 22.001e6],
+        );
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(
+            r.purge.as_ref().unwrap().verdict,
+            PurgeVerdict::Retained,
+            "{r:?}"
+        );
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        assert_eq!(r.supports, ["N-WARM", "N-HWM"]);
+        let note = r.note.as_deref().unwrap();
+        assert!(
+            note.contains("held memory, not allocator or collector headroom"),
+            "{note}"
+        );
+        assert!(note.contains("rose 6 time(s)"), "{note}");
+    }
+
+    #[test]
+    fn a_stair_that_rose_twice_reads_inconclusive_until_the_extra_window_doubles() {
+        let main = [10e6, 10e6, 14e6, 14e6, 18e6, 18e6];
+        let flat = |n: usize| -> Vec<f64> { (0..n).map(|i| 18e6 + 1e3 * (i % 2) as f64).collect() };
+        // Two rises over a main window as long as the extra window: two are expected, three
+        // are needed.
+        let r = held_run(main, &flat(6));
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        let n = r.points_needed.unwrap();
+        assert_eq!(n, 9, "{r:?}");
+        let note = r.note.as_deref().unwrap();
+        assert!(note.contains("9 points"), "{note}");
+        // The doubled window expects 4.4 and the same flat series reads non-leak.
+        let r = held_run(main, &flat(12));
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        // A single step needs far more (16 points): the number says so.
+        let r = held_run([10e6, 10e6, 10e6, 18e6, 18e6, 18e6], &flat(6));
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        assert_eq!(r.points_needed, Some(16), "{r:?}");
+    }
+
+    #[test]
+    fn continuing_growth_with_a_retained_purge_still_reads_leak() {
+        let r = held_run(
+            [12e6, 14e6, 16e6, 18e6, 20e6, 22e6],
+            &[24e6, 26e6, 28e6, 30e6, 32e6, 34e6],
+        );
         assert_eq!(r.plateau.verdict, PlateauVerdict::Continues, "{r:?}");
         assert_eq!(r.favors, Favors::Leak, "{r:?}");
     }
