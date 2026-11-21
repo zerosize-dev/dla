@@ -291,9 +291,9 @@ pub fn is_unit_rule(rule: &str) -> bool {
 pub fn lifetime_of(f: &Finding, facts: Option<Lifetime>) -> Lifetime {
     facts.unwrap_or(match f.holder {
         Some(Holder::StaticGlobal) => Lifetime::Process,
-        Some(
-            Holder::ContainerField | Holder::RegistrationTable | Holder::ClosureContinuation,
-        ) => Lifetime::Object,
+        Some(Holder::ContainerField | Holder::RegistrationTable | Holder::ClosureContinuation) => {
+            Lifetime::Object
+        }
         _ => Lifetime::Unit,
     })
 }
@@ -497,17 +497,15 @@ fn owner_scope(f: &Finding) -> Option<(String, String)> {
 /// reaches both: the same file and the same owner path up to the last segment, and either
 /// fields of an instance (the same struct or class), or module-level and static holders that
 /// share a function that writes to them.
-pub fn same_owner(
-    a: (&Finding, Option<&Annotation>),
-    b: (&Finding, Option<&Annotation>),
-) -> bool {
+pub fn same_owner(a: (&Finding, Option<&Annotation>), b: (&Finding, Option<&Annotation>)) -> bool {
     let (Some(sa), Some(sb)) = (owner_scope(a.0), owner_scope(b.0)) else {
         return false;
     };
     if sa != sb || a.0.id == b.0.id {
         return false;
     }
-    let life = |x: (&Finding, Option<&Annotation>)| lifetime_of(x.0, x.1.and_then(|a| a.facts.lifetime));
+    let life =
+        |x: (&Finding, Option<&Annotation>)| lifetime_of(x.0, x.1.and_then(|a| a.facts.lifetime));
     match (life(a), life(b)) {
         (Lifetime::Object, Lifetime::Object) => true,
         (Lifetime::Process, Lifetime::Process) => {
@@ -689,8 +687,18 @@ mod tests {
     fn facts_ann(f: impl FnOnce(&mut HolderFacts)) -> Annotation {
         let mut a = Annotation::default();
         f(&mut a.facts);
-        a.writers = a.facts.writer_sites.iter().map(|s| s.site.clone()).collect();
-        a.removers = a.facts.remover_sites.iter().map(|s| s.site.clone()).collect();
+        a.writers = a
+            .facts
+            .writer_sites
+            .iter()
+            .map(|s| s.site.clone())
+            .collect();
+        a.removers = a
+            .facts
+            .remover_sites
+            .iter()
+            .map(|s| s.site.clone())
+            .collect();
         a
     }
 
@@ -699,7 +707,10 @@ mod tests {
     }
 
     fn names(f: &Finding, a: &Annotation) -> Vec<&'static str> {
-        contributions(f, Some(a)).into_iter().map(|(n, _)| n).collect()
+        contributions(f, Some(a))
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect()
     }
 
     fn weight(name: &str) -> i32 {
@@ -714,11 +725,20 @@ mod tests {
         }
         // The three changes from the research table, and a few that must keep their size.
         assert_eq!(
-            [weight("rule_dla"), weight("rule_strong"), weight("life_process")],
+            [
+                weight("rule_dla"),
+                weight("rule_strong"),
+                weight("life_process")
+            ],
             [15, 45, 20]
         );
         assert_eq!(weight("noncontainer"), -80);
-        let f = finding("detector:dla/jvm-unbounded-collection", &[], Some(Holder::StaticGlobal), "pkg/a.py:1");
+        let f = finding(
+            "detector:dla/jvm-unbounded-collection",
+            &[],
+            Some(Holder::StaticGlobal),
+            "pkg/a.py:1",
+        );
         let a = facts_ann(|h| {
             h.container = Some(ContainerClass::Container);
             let mut w = site("pkg/a.py:5", SiteKind::Insert, 0, "put");
@@ -733,7 +753,10 @@ mod tests {
         // The three largest contributions, by size.
         let why = why(&f, Some(&a), 3);
         assert_eq!(why.len(), 3);
-        assert!(why.windows(2).all(|w| w[0].1.abs() >= w[1].1.abs()), "{why:?}");
+        assert!(
+            why.windows(2).all(|w| w[0].1.abs() >= w[1].1.abs()),
+            "{why:?}"
+        );
     }
 
     #[test]
@@ -745,41 +768,174 @@ mod tests {
             w
         };
         let cases: Vec<(&str, Finding, Annotation)> = vec![
-            ("rule_dla", finding("detector:dla/jvm-unbounded-collection", &[], Some(Holder::ContainerField), "pkg/a.py:1"), Annotation::default()),
-            ("rule_strong", finding("detector:dla/go-ticker-no-stop", &[], Some(Holder::ContainerField), "pkg/a.py:1"), Annotation::default()),
-            ("known_leak", finding("known-leak:x", &[], None, "pkg/a.py:1"), Annotation::default()),
-            ("multi_origin", finding("census", &["detector:x/y"], None, "pkg/a.py:1"), Annotation::default()),
-            ("tier5", finding("growth-series", &[], None, "pkg/a.py:1"), Annotation::default()),
-            ("life_process", census_holder(Holder::StaticGlobal), Annotation::default()),
+            (
+                "rule_dla",
+                finding(
+                    "detector:dla/jvm-unbounded-collection",
+                    &[],
+                    Some(Holder::ContainerField),
+                    "pkg/a.py:1",
+                ),
+                Annotation::default(),
+            ),
+            (
+                "rule_strong",
+                finding(
+                    "detector:dla/go-ticker-no-stop",
+                    &[],
+                    Some(Holder::ContainerField),
+                    "pkg/a.py:1",
+                ),
+                Annotation::default(),
+            ),
+            (
+                "known_leak",
+                finding("known-leak:x", &[], None, "pkg/a.py:1"),
+                Annotation::default(),
+            ),
+            (
+                "multi_origin",
+                finding("census", &["detector:x/y"], None, "pkg/a.py:1"),
+                Annotation::default(),
+            ),
+            (
+                "tier5",
+                finding("growth-series", &[], None, "pkg/a.py:1"),
+                Annotation::default(),
+            ),
+            (
+                "life_process",
+                census_holder(Holder::StaticGlobal),
+                Annotation::default(),
+            ),
             ("life_object", base(), Annotation::default()),
-            ("container", base(), facts_ann(|h| h.container = Some(ContainerClass::Container))),
-            ("registry", base(), facts_ann(|h| h.container = Some(ContainerClass::Registry))),
-            ("noncontainer", base(), facts_ann(|h| h.container = Some(ContainerClass::NotContainer))),
-            ("weak", base(), facts_ann(|h| h.bound = Some(Bound::WeakKeys))),
-            ("bounded", base(), facts_ann(|h| h.bound = Some(Bound::Bounded))),
-            ("cache_unbounded", base(), facts_ann(|h| h.bound = Some(Bound::UnboundedCache))),
+            (
+                "container",
+                base(),
+                facts_ann(|h| h.container = Some(ContainerClass::Container)),
+            ),
+            (
+                "registry",
+                base(),
+                facts_ann(|h| h.container = Some(ContainerClass::Registry)),
+            ),
+            (
+                "noncontainer",
+                base(),
+                facts_ann(|h| h.container = Some(ContainerClass::NotContainer)),
+            ),
+            (
+                "weak",
+                base(),
+                facts_ann(|h| h.bound = Some(Bound::WeakKeys)),
+            ),
+            (
+                "bounded",
+                base(),
+                facts_ann(|h| h.bound = Some(Bound::Bounded)),
+            ),
+            (
+                "cache_unbounded",
+                base(),
+                facts_ann(|h| h.bound = Some(Bound::UnboundedCache)),
+            ),
             ("literal_table", base(), facts_ann(|h| h.literal = true)),
-            ("key_type_bounded", base(), facts_ann(|h| h.key_bounded = true)),
+            (
+                "key_type_bounded",
+                base(),
+                facts_ann(|h| h.key_bounded = true),
+            ),
             ("pool_type", base(), facts_ann(|h| h.pool = true)),
-            ("w_grow", base(), facts_ann(|h| h.writer_sites = vec![ins(false)])),
+            (
+                "w_grow",
+                base(),
+                facts_ann(|h| h.writer_sites = vec![ins(false)]),
+            ),
             ("w_none", base(), Annotation::default()),
-            ("w_reassign_only", base(), facts_ann(|h| h.writer_sites = vec![site("pkg/a.py:5", SiteKind::Reassign, 0, "set")])),
-            ("w_runtime", base(), facts_ann(|h| h.writer_sites = vec![ins(false)])),
-            ("w_startup_all", base(), facts_ann(|h| h.writer_sites = vec![ins(true)])),
-            ("w_param_flow", base(), facts_ann(|h| { let mut w = ins(false); w.param = true; h.writer_sites = vec![w]; })),
-            ("w_const_only", base(), facts_ann(|h| { let mut w = ins(false); w.constant = true; h.writer_sites = vec![w]; })),
-            ("w_exported", base(), facts_ann(|h| { let mut w = ins(false); w.exported = true; h.writer_sites = vec![w]; })),
-            ("growth_unmatched", base(), facts_ann(|h| h.writer_sites = vec![ins(false)])),
+            (
+                "w_reassign_only",
+                base(),
+                facts_ann(|h| {
+                    h.writer_sites = vec![site("pkg/a.py:5", SiteKind::Reassign, 0, "set")]
+                }),
+            ),
+            (
+                "w_runtime",
+                base(),
+                facts_ann(|h| h.writer_sites = vec![ins(false)]),
+            ),
+            (
+                "w_startup_all",
+                base(),
+                facts_ann(|h| h.writer_sites = vec![ins(true)]),
+            ),
+            (
+                "w_param_flow",
+                base(),
+                facts_ann(|h| {
+                    let mut w = ins(false);
+                    w.param = true;
+                    h.writer_sites = vec![w];
+                }),
+            ),
+            (
+                "w_const_only",
+                base(),
+                facts_ann(|h| {
+                    let mut w = ins(false);
+                    w.constant = true;
+                    h.writer_sites = vec![w];
+                }),
+            ),
+            (
+                "w_exported",
+                base(),
+                facts_ann(|h| {
+                    let mut w = ins(false);
+                    w.exported = true;
+                    h.writer_sites = vec![w];
+                }),
+            ),
+            (
+                "growth_unmatched",
+                base(),
+                facts_ann(|h| h.writer_sites = vec![ins(false)]),
+            ),
             ("r_none", base(), Annotation::default()),
-            ("r_holder_level", base(), facts_ann(|h| h.remover_sites = vec![site("pkg/a.py:9", SiteKind::Delete, 0, "drop")])),
-            ("recv_local", base(), facts_ann(|h| h.receiver = Some(Receiver::Local))),
-            ("recv_outer", base(), facts_ann(|h| h.receiver = Some(Receiver::Outer))),
-            ("owner_percall", base(), facts_ann(|h| h.owner_creation = Some(OwnerCreation::PerCall))),
-            ("owner_startup", base(), facts_ann(|h| h.owner_creation = Some(OwnerCreation::StartUp))),
+            (
+                "r_holder_level",
+                base(),
+                facts_ann(|h| {
+                    h.remover_sites = vec![site("pkg/a.py:9", SiteKind::Delete, 0, "drop")]
+                }),
+            ),
+            (
+                "recv_local",
+                base(),
+                facts_ann(|h| h.receiver = Some(Receiver::Local)),
+            ),
+            (
+                "recv_outer",
+                base(),
+                facts_ann(|h| h.receiver = Some(Receiver::Outer)),
+            ),
+            (
+                "owner_percall",
+                base(),
+                facts_ann(|h| h.owner_creation = Some(OwnerCreation::PerCall)),
+            ),
+            (
+                "owner_startup",
+                base(),
+                facts_ann(|h| h.owner_creation = Some(OwnerCreation::StartUp)),
+            ),
         ];
         for (name, f, a) in cases {
             let c = contributions(&f, Some(&a));
-            let got = c.iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name} missing in {c:?}"));
+            let got = c
+                .iter()
+                .find(|(n, _)| *n == name)
+                .unwrap_or_else(|| panic!("{name} missing in {c:?}"));
             assert_eq!(got.1, weight(name), "{name}");
             assert!(WEIGHTS.iter().any(|(n, _)| *n == name));
         }
@@ -806,7 +962,12 @@ mod tests {
         let mut reg = site("pkg/r.py:20", SiteKind::Insert, 0, "register_listener");
         reg.param = true;
         let rule_field = (
-            finding("detector:dla/jvm-unbounded-collection", &[], Some(Holder::ContainerField), "pkg/r.py:3"),
+            finding(
+                "detector:dla/jvm-unbounded-collection",
+                &[],
+                Some(Holder::ContainerField),
+                "pkg/r.py:3",
+            ),
             facts_ann(|h| {
                 h.container = Some(ContainerClass::Container);
                 h.lifetime = Some(Lifetime::Object);
@@ -875,18 +1036,31 @@ mod tests {
             assert!(init < score(f, Some(a)), "{init}");
         }
         let n = names(&in_init.0, &in_init.1);
-        assert!(n.contains(&"w_startup_all") && n.contains(&"w_const_only") && !n.contains(&"w_runtime"), "{n:?}");
+        assert!(
+            n.contains(&"w_startup_all")
+                && n.contains(&"w_const_only")
+                && !n.contains(&"w_runtime"),
+            "{n:?}"
+        );
     }
 
     #[test]
     fn a_rule_hit_without_census_facts_keeps_a_neutral_score_and_old_annotations_still_count() {
-        let f = finding("detector:dla/jvm-unbounded-collection", &[], None, "pkg/a.py:1");
+        let f = finding(
+            "detector:dla/jvm-unbounded-collection",
+            &[],
+            None,
+            "pkg/a.py:1",
+        );
         assert!(score(&f, None) > 0);
         // An annotation made by hand: writers and removers as plain `file:line` strings.
         let by_hand = ann(1, 0);
         let c = census_holder(Holder::ContainerField);
         let n = names(&c, &by_hand);
-        assert!(n.contains(&"w_grow") && n.contains(&"r_none") && !n.contains(&"w_none"), "{n:?}");
+        assert!(
+            n.contains(&"w_grow") && n.contains(&"r_none") && !n.contains(&"w_none"),
+            "{n:?}"
+        );
     }
 
     #[test]

@@ -66,7 +66,10 @@ fn build(name: &str, member_access: bool) -> Option<Patterns> {
     Some(Patterns {
         writer_call: call(W_PREFIX, W_EXACT)?,
         remover_call: call(R_PREFIX, R_EXACT)?,
-        assign: Regex::new(&format!(r"{pre}({CHAIN})\s*([-+*|&^]?)=(?:[^=>~]|$)\s*(.*)$")).ok()?,
+        assign: Regex::new(&format!(
+            r"{pre}({CHAIN})\s*([-+*|&^]?)=(?:[^=>~]|$)\s*(.*)$"
+        ))
+        .ok()?,
         remover_fn,
         writer_fn,
         chan_send: Regex::new(&format!(r"{pre}\s*<-")).ok()?,

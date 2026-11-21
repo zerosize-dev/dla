@@ -2722,6 +2722,31 @@ fn run_loaded(
     mut manifest: HarnessManifest,
     opts: &RunOptions,
 ) -> Result<(StageOutcome, bool), Refusal> {
+    // An entry-path harness says what a caller varies per unit before it runs: the line is
+    // what the trigger of the findings it targets is judged by.
+    let varies = dla_core::harness::varies_line(&ctx.run_dir, &manifest.id);
+    if manifest.is_entry_path() && varies.is_none() {
+        return Err(Refusal::new(
+            dla_core::error::codes::VARIES_MISSING,
+            format!(
+                "harness {} is an entry-path harness and harness/{}/driver/{} is empty or still the placeholder",
+                manifest.id,
+                manifest.id,
+                dla_core::harness::VARIES_FILE
+            ),
+            format!(
+                "one line in harness/{}/driver/{}: what a caller varies per unit",
+                manifest.id,
+                dla_core::harness::VARIES_FILE
+            ),
+            format!(
+                "write one line in harness/{}/driver/{} (for example: the request path, a different one per unit), then dla harness run {} --mode both",
+                manifest.id,
+                dla_core::harness::VARIES_FILE,
+                manifest.id
+            ),
+        ));
+    }
     let out = run_points(ctx, &manifest, opts)?;
     let partial = !out.partial.is_empty();
     let captured = !opts.capture.is_empty() || opts.tool.is_some();
@@ -2777,6 +2802,8 @@ fn run_loaded(
         "captures": out.captures,
         "ffi_sites": out.ffi_sites.iter().map(ffi_site_json).collect::<Vec<_>>(),
         "driver_digest": dla_core::harness::driver_digest(&ctx.run_dir, &manifest.id),
+        "purpose": manifest.purpose.map(|p| p.as_str()),
+        "varies": varies,
         dla_core::harness::RUN_DEPENDENCY_ENV: out.dependency_env,
         "env_reused": out.env_reused,
     });
@@ -3447,6 +3474,7 @@ mod tests_support {
     pub fn manifest() -> HarnessManifest {
         HarnessManifest {
             sibling_of: Default::default(),
+            purpose: None,
             targets: Vec::new(),
             schema_version: 1,
             id: "H1".into(),

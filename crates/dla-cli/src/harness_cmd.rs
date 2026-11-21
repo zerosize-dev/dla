@@ -85,6 +85,14 @@ pub struct GenArgs {
     /// in all). The driver lists each target with its writers, removers and what to do.
     #[arg(long, value_name = "N", num_args = 0..=1)]
     next: Option<Option<usize>>,
+    /// An entry-path harness: a hook driver whose units call only the project's public entry
+    /// points with data a caller controls, for these leak-side findings (comma-separated or
+    /// repeated, at most 8, each one that grew in some harness). Its target block gives the
+    /// callers chain of each writer function and where the key comes from; write the one line
+    /// of VARIES.txt (what a caller varies per unit) before `dla harness run`. Needs --driver;
+    /// excludes --probe and --next (refused with the fix).
+    #[arg(long, value_name = "F[,F2,..]", value_delimiter = ',', value_parser = parse_enum::<FindingId>)]
+    entry: Vec<FindingId>,
     /// Probes derived from the census candidates: auto (default) or none.
     #[arg(long, default_value = "auto", value_parser = parse_enum::<ProbesChoice>)]
     probes: ProbesChoice,
@@ -205,6 +213,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                     })
                 }),
                 probe_findings: g.probe,
+                entry: g.entry,
                 auto_probes: g.probes == ProbesChoice::Auto,
                 package: g.package,
                 junit: g.junit,

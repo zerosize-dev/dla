@@ -60,6 +60,7 @@ mod strict;
 pub mod timebudget;
 pub mod toolctx;
 pub mod trend;
+pub mod trigger;
 pub mod vendored;
 pub mod verify;
 pub mod version;

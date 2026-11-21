@@ -31,6 +31,7 @@
 
 pub mod anchor;
 pub mod ast;
+pub mod callers;
 pub mod classfile;
 pub mod events;
 pub mod jvm_class;

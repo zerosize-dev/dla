@@ -86,6 +86,16 @@ string_enum! {
 }
 
 string_enum! {
+    /// What a harness was generated for, when that is more than reaching its targets.
+    pub enum HarnessPurpose {
+        /// A hook driver whose units call only the project's public entry points with data a
+        /// caller controls (`dla harness gen --driver --entry`): growth in it shows that a
+        /// caller can make new keys reach the holder.
+        EntryPath = "entry-path",
+    }
+}
+
+string_enum! {
     /// What measures the process.
     pub enum AgentKind {
         /// JVM premain agent.
@@ -288,6 +298,10 @@ pub struct HarnessManifest {
     /// [`MAX_TARGETS`]. A target may have no probe of its own.
     #[serde(default)]
     pub targets: Vec<FindingId>,
+    /// What the harness was generated for: `entry-path` for a driver whose units call the
+    /// project's public entry points. Absent for every other harness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<HarnessPurpose>,
     /// Targets that `--next` added because they hold state of the same owner as an earlier
     /// target (fields of one struct or class): the added finding, and the target it came
     /// with. Absent for a target asked for by rank or by `--probe`.
@@ -496,6 +510,46 @@ impl HarnessManifest {
     }
 }
 
+impl HarnessManifest {
+    /// True for an entry-path harness (`dla harness gen --driver --entry`).
+    pub fn is_entry_path(&self) -> bool {
+        self.purpose == Some(HarnessPurpose::EntryPath)
+    }
+}
+
+/// The file in the driver directory of an entry-path harness that says, in one line, what a
+/// caller varies per unit.
+pub const VARIES_FILE: &str = "VARIES.txt";
+/// What the first line of an unfilled [`VARIES_FILE`] starts with.
+pub const VARIES_PLACEHOLDER: &str = "DLA-VARIES-PLACEHOLDER";
+/// The longest `varies` line kept.
+pub const VARIES_MAX: usize = 300;
+
+/// The text `dla harness gen --entry` writes in [`VARIES_FILE`].
+pub fn varies_template() -> String {
+    format!(
+        "{VARIES_PLACEHOLDER}: replace this whole line with one line that says what a caller varies per unit (for example: the request path, a different one per unit)\n"
+    )
+}
+
+/// The one line of `harness/<id>/driver/VARIES.txt` that says what a caller varies per
+/// unit: its first line that is not empty and not a `#` comment, cut to [`VARIES_MAX`]
+/// characters. `None` when the file is missing or empty, or still holds the placeholder.
+pub fn varies_line(run_dir: &Path, id: &str) -> Option<String> {
+    let path = HarnessManifest::dir_in(run_dir, id)
+        .join("driver")
+        .join(VARIES_FILE);
+    let text = fs::read_to_string(path).ok()?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))?;
+    if line.starts_with(VARIES_PLACEHOLDER) {
+        return None;
+    }
+    Some(line.chars().take(VARIES_MAX).collect())
+}
+
 /// A digest of the files under `harness/<id>/driver/`: their relative paths and contents,
 /// sorted by path. `None` when there is no driver directory. Two runs of a driver whose
 /// digests differ ran different code.
@@ -541,6 +595,9 @@ pub struct RunRecord {
     pub first: String,
     /// The digest of the driver directory when the run started.
     pub driver_digest: Option<String>,
+    /// What a caller varies per unit, from the `VARIES.txt` of an entry-path harness when
+    /// the run started.
+    pub varies: Option<String>,
 }
 
 /// The run record of harness `id` that wrote `series`.
@@ -569,6 +626,10 @@ pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord
                 first: first.to_owned(),
                 driver_digest: doc
                     .get("driver_digest")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                varies: doc
+                    .get("varies")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
             });
@@ -936,6 +997,7 @@ mod tests {
     fn manifest() -> HarnessManifest {
         HarnessManifest {
             sibling_of: Default::default(),
+            purpose: None,
             targets: Vec::new(),
             schema_version: 1,
             id: "H2".into(),

@@ -22,7 +22,12 @@ fn entries(files: &[(&str, &str)], rt: Runtime) -> Vec<CensusEntry> {
 fn entry<'e>(es: &'e [CensusEntry], owner_end: &str) -> &'e CensusEntry {
     es.iter()
         .find(|e| e.owner.ends_with(owner_end))
-        .unwrap_or_else(|| panic!("no entry {owner_end}: {:?}", es.iter().map(|e| &e.owner).collect::<Vec<_>>()))
+        .unwrap_or_else(|| {
+            panic!(
+                "no entry {owner_end}: {:?}",
+                es.iter().map(|e| &e.owner).collect::<Vec<_>>()
+            )
+        })
 }
 
 const GO_SERVER: &str = "package health\n\ntype Server struct {\n\tstatusMap map[string]int\n\tupdates   map[string]map[int]chan int\n}\n\nfunc NewServer() *Server {\n\treturn &Server{statusMap: map[string]int{}}\n}\n\nfunc (s *Server) Set(service string, st int) {\n\ts.statusMap[service] = st\n\ts.updates[service][st] = nil\n}\n\nfunc (s *Server) Watch(service string, c chan int) {\n\ts.updates[service] = make(map[int]chan int)\n\ts.updates[service][1] = c\n}\n\nfunc (s *Server) Done(service string, st int) {\n\tdelete(s.updates[service], st)\n}\n";
@@ -68,7 +73,10 @@ fn go_a_site_knows_its_function_its_initialiser_and_its_parameters() {
     let n = entry(&es, "byName");
     let s = &n.facts.writer_sites[0];
     assert_eq!(s.function.as_deref(), Some("Register"));
-    assert!(s.param && s.exported && !s.init && !s.startup && !s.constant, "{s:?}");
+    assert!(
+        s.param && s.exported && !s.init && !s.startup && !s.constant,
+        "{s:?}"
+    );
     assert_eq!(n.facts.lifetime, Some(Lifetime::Process));
 }
 
@@ -76,8 +84,14 @@ fn go_a_site_knows_its_function_its_initialiser_and_its_parameters() {
 fn go_an_unexported_holder_is_not_written_from_another_package_by_name() {
     let es = entries(
         &[
-            ("a/a.go", "package a\n\nvar items = map[string]int{}\n\nfunc Add(k string) {\n\titems[k] = 1\n}\n"),
-            ("b/b.go", "package b\n\nvar items = map[string]int{}\n\nfunc Add(k string) {\n\titems[k] = 2\n}\n"),
+            (
+                "a/a.go",
+                "package a\n\nvar items = map[string]int{}\n\nfunc Add(k string) {\n\titems[k] = 1\n}\n",
+            ),
+            (
+                "b/b.go",
+                "package b\n\nvar items = map[string]int{}\n\nfunc Add(k string) {\n\titems[k] = 2\n}\n",
+            ),
         ],
         Runtime::Go,
     );
@@ -104,7 +118,10 @@ fn go_a_pointer_that_is_only_assigned_as_a_whole_is_not_a_container_and_has_no_w
     // graph ties to them), but with no writers, so no tier of the queue takes them.
     let cur = entry(&es, "p.current");
     assert_eq!(cur.facts.container, Some(ContainerClass::NotContainer));
-    assert!(cur.writers.is_empty() && cur.facts.writer_sites.is_empty(), "{cur:?}");
+    assert!(
+        cur.writers.is_empty() && cur.facts.writer_sites.is_empty(),
+        "{cur:?}"
+    );
     let mu = entry(&es, "p.mu");
     assert_eq!(mu.facts.container, Some(ContainerClass::NotContainer));
     // A real container keeps its writer.
@@ -126,38 +143,64 @@ fn go_bounds_literal_tables_pools_and_owner_creation() {
     let files = [("p/p.go", src)];
     let es = entries(&files, Runtime::Go);
     assert!(entry(&es, "p.bufs").facts.pool);
-    assert_eq!(entry(&es, "p.bufs").facts.container, Some(ContainerClass::NotContainer));
+    assert_eq!(
+        entry(&es, "p.bufs").facts.container,
+        Some(ContainerClass::NotContainer)
+    );
     assert!(entry(&es, "p.table").facts.literal);
     assert_eq!(entry(&es, "p.ring").facts.bound, Some(Bound::Bounded));
     assert_eq!(entry(&es, "p.free").facts.bound, Some(Bound::None));
     // A literal table that something inserts into is not only read.
     let written = "package p\n\nvar table = map[string]int{\"a\": 1}\n\nfunc Add(k string) {\n\ttable[k] = 1\n}\n";
     let es = entries(&[("p/w.go", written)], Runtime::Go);
-    assert!(!entry(&es, "p.table").facts.literal);
+    assert!(!entry(&es, "w.table").facts.literal);
 }
 
 #[test]
 fn go_the_owner_type_is_made_per_call_or_only_at_start_up() {
     let per_call = "package p\n\ntype Registry struct {\n\tsubs []int\n}\n\nfunc Handle() {\n\tr := &Registry{}\n\t_ = r\n}\n";
     let es = entries(&[("p/q.go", per_call)], Runtime::Go);
-    assert_eq!(entry(&es, "Registry.subs").facts.owner_creation, Some(OwnerCreation::PerCall));
+    assert_eq!(
+        entry(&es, "Registry.subs").facts.owner_creation,
+        Some(OwnerCreation::PerCall)
+    );
     let start_up = "package p\n\ntype Registry struct {\n\tsubs []int\n}\n\nfunc New() *Registry { return &Registry{} }\n\nfunc main() {\n\tr := New()\n\t_ = r\n}\n";
     let es = entries(&[("p/s.go", start_up)], Runtime::Go);
-    assert_eq!(entry(&es, "Registry.subs").facts.owner_creation, Some(OwnerCreation::StartUp));
+    assert_eq!(
+        entry(&es, "Registry.subs").facts.owner_creation,
+        Some(OwnerCreation::StartUp)
+    );
 }
 
-const JAVA_A: &str = "package a;\n\nimport java.util.*;\n\npublic class A {\n  private final Map<String, String> resolved = new HashMap<>();\n  private static final Map<String, String> CACHE = new WeakHashMap<>();\n  private final List<String> items;\n\n  public A() {\n    this.items = new ArrayList<>();\n    items.add(\"first\");\n  }\n\n  public void put(String k, String v) {\n    resolved.put(k, v);\n    CACHE.put(k, v);\n    items.add(k);\n  }\n\n  void evict(String k) {\n    resolved.remove(k);\n    items.clear();\n  }\n}\n";
-const JAVA_B: &str = "package a;\n\nimport java.util.*;\n\nclass B {\n  private final Map<String, String> resolved = new HashMap<>();\n\n  void put(String k, String v) {\n    resolved.put(k, v);\n  }\n}\n";
+const JAVA_A: &str = "package a;\n\nimport java.util.*;\n\npublic class A {\n  private final Map<String, String> resolved = new HashMap<>();\n  private static final Map<String, String> CACHE = new WeakHashMap<>();\n  private final List<String> items;\n\n  public A() {\n    this.items = new ArrayList<>();\n    items.add(\"first\");\n  }\n\n  public void put(String k, String v) {\n    resolved.put(k, v);\n    CACHE.put(k, v);\n    items.add(k);\n  }\n\n  void evict(String k) {\n    resolved.remove(k);\n    items.clear();\n  }\n\n  private static final Map<String, String> SHARED = new HashMap<>();\n\n  void share(String k) {\n    SHARED.put(k, k);\n  }\n}\n";
+const JAVA_B: &str = "package a;\n\nimport java.util.*;\n\nclass B {\n  private final Map<String, String> resolved = new HashMap<>();\n\n  void put(String k, String v) {\n    resolved.put(k, v);\n  }\n\n  private static final Map<String, String> SHARED = new HashMap<>();\n\n  void share(String k) {\n    SHARED.put(k, k);\n  }\n}\n";
 
 #[test]
 fn java_private_holders_ignore_a_same_named_variable_in_another_file() {
-    let es = entries(&[("src/a/A.java", JAVA_A), ("src/a/B.java", JAVA_B)], Runtime::Jvm);
+    let es = entries(
+        &[("src/a/A.java", JAVA_A), ("src/a/B.java", JAVA_B)],
+        Runtime::Jvm,
+    );
     let a = entry(&es, "A.resolved");
     assert_eq!(a.writers, ["src/a/A.java:16"], "{a:?}");
     assert_eq!(a.facts.private, Some(true));
     assert_eq!(a.removers, ["src/a/A.java:22"]);
     let b = entry(&es, "B.resolved");
     assert_eq!(b.writers, ["src/a/B.java:9"]);
+    // A private static field is found by name across the project: the same name in another
+    // file's own private field is not a writer of it.
+    let line = |text: &str| text.lines().position(|l| l.contains("SHARED.put")).unwrap() + 1;
+    let (sa, sb) = (entry(&es, "A.SHARED"), entry(&es, "B.SHARED"));
+    assert_eq!(
+        sa.writers,
+        [format!("src/a/A.java:{}", line(JAVA_A))],
+        "{sa:?}"
+    );
+    assert_eq!(
+        sb.writers,
+        [format!("src/a/B.java:{}", line(JAVA_B))],
+        "{sb:?}"
+    );
 }
 
 #[test]
@@ -188,7 +231,10 @@ fn java_a_constructor_assignment_is_initialisation_not_removal() {
 fn java_weak_and_bounded_types_and_owner_creation() {
     let es = entries(&[("src/a/A.java", JAVA_A)], Runtime::Jvm);
     assert_eq!(entry(&es, "A.CACHE").facts.bound, Some(Bound::WeakKeys));
-    assert_eq!(entry(&es, "A.CACHE").facts.lifetime, Some(Lifetime::Process));
+    assert_eq!(
+        entry(&es, "A.CACHE").facts.lifetime,
+        Some(Lifetime::Process)
+    );
     assert_eq!(entry(&es, "A.resolved").facts.bound, Some(Bound::None));
     let lru = "package a;\n\nimport java.util.*;\n\nclass L {\n  static final Map<String, String> M = new LinkedHashMap<>(16, 0.75f, true) {\n    protected boolean removeEldestEntry(Map.Entry e) { return size() > 10; }\n  };\n}\n";
     let es = entries(&[("src/a/L.java", lru)], Runtime::Jvm);
@@ -196,7 +242,11 @@ fn java_weak_and_bounded_types_and_owner_creation() {
     let owner = "package a;\n\nimport java.util.*;\n\nclass Reg {\n  private final List<String> subs = new ArrayList<>();\n  void add(String s) { subs.add(s); }\n}\n\nclass Use {\n  static void each(String s) {\n    new Reg().add(s);\n  }\n}\n";
     let es = entries(&[("src/a/Reg.java", owner)], Runtime::Jvm);
     let r = entry(&es, "Reg.subs");
-    assert_eq!(r.facts.owner_creation, Some(OwnerCreation::PerCall), "{r:?}");
+    assert_eq!(
+        r.facts.owner_creation,
+        Some(OwnerCreation::PerCall),
+        "{r:?}"
+    );
 }
 
 const PY: &str = "import functools\nfrom weakref import WeakValueDictionary\n\n_CACHE = {}\n_LOG = None\ntable = {\"a\": 1, \"b\": 2}\nREFS = WeakValueDictionary()\n\n\ndef remember(key, value):\n    _CACHE[key] = value\n\n\ndef forget(key):\n    del _CACHE[key]\n\n\n@functools.lru_cache(maxsize=None)\ndef parse(x):\n    return x\n\n\n@functools.lru_cache(maxsize=64)\ndef small(x):\n    return x\n\n\n@functools.cache\ndef big(x):\n    return x\n\n\nclass Hub:\n    def __init__(self):\n        self.subs = []\n        self.subs.append(1)\n\n    def add(self, fn):\n        self.subs.append(fn)\n";
@@ -209,18 +259,27 @@ fn python_module_container_sites_and_bounds() {
     assert_eq!(c.facts.lifetime, Some(Lifetime::Process));
     assert_eq!(c.facts.private, Some(true));
     let w = &c.facts.writer_sites[0];
-    assert_eq!((w.kind, w.depth, w.function.as_deref()), (SiteKind::Insert, 0, Some("remember")));
+    assert_eq!(
+        (w.kind, w.depth, w.function.as_deref()),
+        (SiteKind::Insert, 0, Some("remember"))
+    );
     assert!(w.param && w.exported && !w.init, "{w:?}");
     // `del _CACHE[key]` deletes a key of the holder itself.
     let d = &c.facts.remover_sites[0];
     assert_eq!((d.kind, d.depth), (SiteKind::Delete, 0), "{d:?}");
     assert_eq!(entry(&es, "m.REFS").facts.bound, Some(Bound::WeakValues));
     assert!(entry(&es, "m.table").facts.literal);
-    assert_eq!(entry(&es, "m.parse").facts.bound, Some(Bound::UnboundedCache));
+    assert_eq!(
+        entry(&es, "m.parse").facts.bound,
+        Some(Bound::UnboundedCache)
+    );
     assert_eq!(entry(&es, "m.small").facts.bound, Some(Bound::Bounded));
     assert_eq!(entry(&es, "m.big").facts.bound, Some(Bound::UnboundedCache));
     // A cache decorator is a container whose key is the call's arguments.
-    assert_eq!(entry(&es, "m.parse").facts.container, Some(ContainerClass::Container));
+    assert_eq!(
+        entry(&es, "m.parse").facts.container,
+        Some(ContainerClass::Container)
+    );
 }
 
 #[test]
@@ -228,14 +287,27 @@ fn python_init_writers_and_a_private_name_in_another_module() {
     let es = entries(
         &[
             ("app/m.py", PY),
-            ("app/n.py", "_CACHE = {}\n\n\ndef other(k):\n    _CACHE[k] = 1\n"),
+            (
+                "app/n.py",
+                "_CACHE = {}\n\n\ndef other(k):\n    _CACHE[k] = 1\n",
+            ),
         ],
         Runtime::Python,
     );
     let subs = entry(&es, "Hub.subs");
-    let init = subs.facts.writer_sites.iter().find(|s| s.site.ends_with(":36")).unwrap();
+    let init = subs
+        .facts
+        .writer_sites
+        .iter()
+        .find(|s| s.site.ends_with(":36"))
+        .unwrap();
     assert!(init.init && init.startup, "{init:?}");
-    let add = subs.facts.writer_sites.iter().find(|s| s.site.ends_with(":39")).unwrap();
+    let add = subs
+        .facts
+        .writer_sites
+        .iter()
+        .find(|s| s.site.ends_with(":39"))
+        .unwrap();
     assert!(!add.init && add.param, "{add:?}");
     assert_eq!(subs.facts.lifetime, Some(Lifetime::Object));
     let m = entry(&es, "m._CACHE");
@@ -256,19 +328,45 @@ const JS: &str = "'use strict';\nconst cache = new Map();\nconst _hidden = new M
 
 #[test]
 fn javascript_sites_params_constants_and_module_level() {
-    let es = entries(&[("src/a.js", JS), ("src/b.js", "const cache = new Map();\ncache.set('x', 2);\n")], Runtime::Node);
+    let es = entries(
+        &[
+            ("src/a.js", JS),
+            ("src/b.js", "const cache = new Map();\ncache.set('x', 2);\n"),
+        ],
+        Runtime::Node,
+    );
     let c = entries_by(&es, "a.cache");
-    let put = c.facts.writer_sites.iter().find(|s| s.site.ends_with(":7")).unwrap();
+    let put = c
+        .facts
+        .writer_sites
+        .iter()
+        .find(|s| s.site.ends_with(":7"))
+        .unwrap();
     assert!(put.param && !put.init && put.exported, "{put:?}");
-    let top = c.facts.writer_sites.iter().find(|s| s.site.ends_with(":22")).unwrap();
+    let top = c
+        .facts
+        .writer_sites
+        .iter()
+        .find(|s| s.site.ends_with(":22"))
+        .unwrap();
     assert!(top.init && top.startup && top.constant, "{top:?}");
     assert_eq!(c.facts.private, Some(true));
     assert!(c.writers.iter().all(|w| w.starts_with("src/a.js")), "{c:?}");
     assert_eq!(entries_by(&es, "a.open").facts.private, Some(false));
     let subs = entries_by(&es, "Hub.subs");
-    let add = subs.facts.writer_sites.iter().find(|s| s.site.ends_with(":18")).unwrap();
+    let add = subs
+        .facts
+        .writer_sites
+        .iter()
+        .find(|s| s.site.ends_with(":18"))
+        .unwrap();
     assert!(add.param && !add.init, "{add:?}");
-    let ctor = subs.facts.writer_sites.iter().find(|s| s.site.ends_with(":15")).unwrap();
+    let ctor = subs
+        .facts
+        .writer_sites
+        .iter()
+        .find(|s| s.site.ends_with(":15"))
+        .unwrap();
     assert!(ctor.init, "{ctor:?}");
 }
 

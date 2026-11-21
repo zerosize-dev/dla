@@ -81,7 +81,11 @@ impl Run {
 
     fn ok(&self, args: &[&str]) -> Value {
         let o = command(self.dir.path()).args(args).output().unwrap();
-        assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stdout));
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stdout)
+        );
         serde_json::from_slice(&o.stdout).unwrap_or(Value::Null)
     }
 
@@ -112,7 +116,10 @@ fn ledger_list_prints_the_score_and_why_in_descending_order() {
     let rows = r.list();
     let ranked: Vec<&Value> = rows.iter().filter(|l| l["rank"].is_number()).collect();
     assert!(ranked.len() >= 12, "{rows:?}");
-    let scores: Vec<i64> = ranked.iter().map(|l| l["score"].as_i64().unwrap()).collect();
+    let scores: Vec<i64> = ranked
+        .iter()
+        .map(|l| l["score"].as_i64().unwrap())
+        .collect();
     assert!(scores.windows(2).all(|w| w[0] >= w[1]), "{scores:?}");
     // The field a public method fills with its caller's key is first (ties keep ledger order).
     assert_eq!(ranked[0]["site"], "shop/a_reg.py:3", "{ranked:?}");
@@ -120,14 +127,21 @@ fn ledger_list_prints_the_score_and_why_in_descending_order() {
     assert_eq!(why.len(), 3, "{why:?}");
     for w in why {
         let w = w.as_str().unwrap();
-        assert!(w.contains(' ') && (w.contains('+') || w.contains('-')), "{w}");
+        assert!(
+            w.contains(' ') && (w.contains('+') || w.contains('-')),
+            "{w}"
+        );
     }
     assert!(
-        why.iter().any(|w| w.as_str().unwrap().starts_with("w_grow +")),
+        why.iter()
+            .any(|w| w.as_str().unwrap().starts_with("w_grow +")),
         "{why:?}"
     );
     // The field only the constructor fills is behind the ten that a method fills.
-    let cold = ranked.iter().position(|l| l["site"] == "shop/a_reg.py:4").unwrap();
+    let cold = ranked
+        .iter()
+        .position(|l| l["site"] == "shop/a_reg.py:4")
+        .unwrap();
     assert_eq!(cold, 11, "{scores:?}");
     assert!(ranked[cold]["score"].as_i64() < ranked[0]["score"].as_i64());
     // The tier is printed as before.
@@ -145,14 +159,20 @@ fn next_brings_the_fields_of_one_struct_into_the_same_batch() {
         .iter()
         .find(|t| t["site"] == "shop/a_reg.py:4")
         .unwrap_or_else(|| panic!("{targets:?}"));
-    let hot = targets.iter().find(|t| t["site"] == "shop/a_reg.py:3").unwrap();
+    let hot = targets
+        .iter()
+        .find(|t| t["site"] == "shop/a_reg.py:3")
+        .unwrap();
     assert_eq!(cold["sibling_of"], hot["finding"], "{cold}");
     assert!(hot["sibling_of"].is_null());
     let manifest: Value = serde_json::from_str(
         &fs::read_to_string(r.run_dir.join("harness/H1/harness.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(manifest["sibling_of"][cold["finding"].as_str().unwrap()], hot["finding"]);
+    assert_eq!(
+        manifest["sibling_of"][cold["finding"].as_str().unwrap()],
+        hot["finding"]
+    );
     assert_eq!(manifest["targets"].as_array().unwrap().len(), 9);
     assert_eq!(manifest["sibling_of"].as_object().unwrap().len(), 1);
     let driver = fs::read_to_string(r.run_dir.join("harness/H1/driver/dla_harness.py")).unwrap();
@@ -165,13 +185,19 @@ fn next_brings_the_fields_of_one_struct_into_the_same_batch() {
     );
     // The status and the queue's next batch show the same nine, none of them left to declare.
     let st = r.ok(&["run", "status"]);
-    assert_eq!(st["queue"]["python"]["next"].as_array().unwrap().len(), 3, "{st}");
+    assert_eq!(
+        st["queue"]["python"]["next"].as_array().unwrap().len(),
+        3,
+        "{st}"
+    );
 }
 
 #[test]
 fn next_with_a_count_takes_that_many_by_rank_and_the_siblings_of_them() {
     let r = Run::new();
-    r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next", "1"]);
+    r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--next", "1",
+    ]);
     let targets = r.targets();
     // F1 by rank is the hot field; its sibling is the cold one, whatever its rank.
     assert_eq!(targets.len(), 2, "{targets:?}");

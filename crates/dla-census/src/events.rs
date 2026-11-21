@@ -94,10 +94,7 @@ fn balanced(text: &str, start: usize, open: u8, close: u8) -> (&str, usize) {
 /// The `[..]` and `.get(..)` steps after a holder name: how many, and where they end.
 fn postfix(text: &str, pos: usize) -> (Vec<(bool, String)>, usize) {
     static CALL: OnceLock<Regex> = OnceLock::new();
-    let call = re(
-        &CALL,
-        r"^\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)\s*\(",
-    );
+    let call = re(&CALL, r"^\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)\s*\(");
     let mut steps = Vec::new();
     let mut i = pos;
     loop {
@@ -140,10 +137,7 @@ pub fn events(line: &str, name: &str) -> Vec<Event> {
         &FNSTYLE,
         r"\b(append|delete|close|free|clearTimeout|clearInterval|clearImmediate|del)\b\s*\(?\s*[\w.*&\[\]]*$",
     );
-    let assign = re(
-        &ASSIGN,
-        r"^\s*(?:\?\.|\.)?\s*([-+*|&^]?)=([^=>~].*|)$",
-    );
+    let assign = re(&ASSIGN, r"^\s*(?:\?\.|\.)?\s*([-+*|&^]?)=([^=>~].*|)$");
     let send = re(&SEND, r"^\s*<-");
     let own_append = Regex::new(&format!(
         r"^(?:append\(|.*\bappend\(\s*{n}\b|{n}\s*[+|]|.*\+\s*{n}\b)",
@@ -263,7 +257,11 @@ pub fn events(line: &str, name: &str) -> Vec<Event> {
                 out.push(Event {
                     kind,
                     depth: 0,
-                    args: if kind == Ev::Grow { rhs.clone() } else { String::new() },
+                    args: if kind == Ev::Grow {
+                        rhs.clone()
+                    } else {
+                        String::new()
+                    },
                     rhs,
                 });
             }
@@ -287,14 +285,91 @@ pub fn idents(text: &str) -> Vec<String> {
 }
 
 const KEYWORDS: &[&str] = &[
-    "if", "else", "for", "while", "switch", "case", "return", "new", "var", "let", "const", "final",
-    "static", "public", "private", "protected", "class", "interface", "func", "def", "self", "cls",
-    "this", "super", "null", "nil", "None", "True", "False", "true", "false", "int", "long",
-    "string", "String", "bool", "boolean", "byte", "char", "float", "double", "void", "in", "is",
-    "not", "and", "or", "await", "async", "try", "catch", "finally", "throw", "throws", "import",
-    "from", "as", "with", "yield", "go", "defer", "chan", "map", "range", "type", "struct",
-    "package", "fmt", "make", "len", "cap", "append", "delete", "del", "typeof", "instanceof",
-    "function", "export", "extends", "implements", "break", "continue", "do", "goto", "select",
+    "if",
+    "else",
+    "for",
+    "while",
+    "switch",
+    "case",
+    "return",
+    "new",
+    "var",
+    "let",
+    "const",
+    "final",
+    "static",
+    "public",
+    "private",
+    "protected",
+    "class",
+    "interface",
+    "func",
+    "def",
+    "self",
+    "cls",
+    "this",
+    "super",
+    "null",
+    "nil",
+    "None",
+    "True",
+    "False",
+    "true",
+    "false",
+    "int",
+    "long",
+    "string",
+    "String",
+    "bool",
+    "boolean",
+    "byte",
+    "char",
+    "float",
+    "double",
+    "void",
+    "in",
+    "is",
+    "not",
+    "and",
+    "or",
+    "await",
+    "async",
+    "try",
+    "catch",
+    "finally",
+    "throw",
+    "throws",
+    "import",
+    "from",
+    "as",
+    "with",
+    "yield",
+    "go",
+    "defer",
+    "chan",
+    "map",
+    "range",
+    "type",
+    "struct",
+    "package",
+    "fmt",
+    "make",
+    "len",
+    "cap",
+    "append",
+    "delete",
+    "del",
+    "typeof",
+    "instanceof",
+    "function",
+    "export",
+    "extends",
+    "implements",
+    "break",
+    "continue",
+    "do",
+    "goto",
+    "select",
 ];
 
 #[cfg(test)]
@@ -302,7 +377,10 @@ mod tests {
     use super::*;
 
     fn one(line: &str, name: &str) -> Vec<(Ev, u8)> {
-        events(line, name).iter().map(|e| (e.kind, e.depth)).collect()
+        events(line, name)
+            .iter()
+            .map(|e| (e.kind, e.depth))
+            .collect()
     }
 
     #[test]
@@ -322,7 +400,10 @@ mod tests {
         assert_eq!(one("m = make(map[string]int)", "m"), [(Ev::Reset, 0)]);
         assert_eq!(one("m = other", "m"), [(Ev::Reassign, 0)]);
         assert_eq!(one("m = append(m, x)", "m").first(), Some(&(Ev::Grow, 0)));
-        assert_eq!(one("this.items = new ArrayList<>()", "items"), [(Ev::Reset, 0)]);
+        assert_eq!(
+            one("this.items = new ArrayList<>()", "items"),
+            [(Ev::Reset, 0)]
+        );
     }
 
     #[test]

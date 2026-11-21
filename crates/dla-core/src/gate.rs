@@ -168,15 +168,21 @@ fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
         for b in base.iter().filter(|b| b.kind == BlockingKind::Queue) {
             out.0.push(from_blocking(b.clone()));
         }
+        for b in base.iter().filter(|b| b.kind == BlockingKind::Trigger) {
+            out.0.push(from_blocking(b.clone()));
+        }
         coverage_contradiction_items(view, &mut out);
     }
     for b in base {
         let keep = is_final
             || match b.kind {
                 BlockingKind::Run | BlockingKind::ChecklistItem | BlockingKind::Integrity => true,
-                BlockingKind::Finding | BlockingKind::OpenItem | BlockingKind::Queue => false,
+                BlockingKind::Finding
+                | BlockingKind::OpenItem
+                | BlockingKind::Queue
+                | BlockingKind::Trigger => false,
             };
-        if keep && !(is_final && b.kind == BlockingKind::Queue) {
+        if keep && !(is_final && matches!(b.kind, BlockingKind::Queue | BlockingKind::Trigger)) {
             out.0.push(from_blocking(b));
         }
     }
@@ -2272,6 +2278,7 @@ fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
     for b in status(view).blocking {
         let keep = match b.kind {
             BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
+            BlockingKind::Trigger => target == GateTarget::Final && mine(&b.id),
             BlockingKind::ChecklistItem | BlockingKind::Integrity | BlockingKind::Queue => false,
             BlockingKind::Run => true,
         };

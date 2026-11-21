@@ -223,7 +223,14 @@ impl HolderFacts {
                 if other.$f.is_some() { self.$f = other.$f; }
             )*};
         }
-        take!(container, bound, lifetime, private, receiver, owner_creation);
+        take!(
+            container,
+            bound,
+            lifetime,
+            private,
+            receiver,
+            owner_creation
+        );
         self.literal |= other.literal;
         self.pool |= other.pool;
         self.key_bounded |= other.key_bounded;

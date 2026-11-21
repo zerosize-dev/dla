@@ -168,6 +168,9 @@ pub enum BlockingKind {
     /// A runtime's measurement queue is open: ranked candidates still need a workload that
     /// reaches them.
     Queue,
+    /// A confirmed or strong leak-side finding grew when a harness fed it new keys, and
+    /// nothing shows that a caller of the public API can do that.
+    Trigger,
 }
 
 /// One thing that must be dispositioned, with the command that does it.
@@ -360,6 +363,9 @@ pub fn status(view: &RunView) -> ReportStatus {
     for q in queues.iter().filter(|q| q.open()) {
         blocking.push(queue_item(q));
     }
+    // Right after the queue: a leak that grew under direct injection and whose trigger is
+    // not checked.
+    blocking.extend(crate::trigger::items(view));
     let queue_on = view.state.queue && view.run_dir.is_some();
     let ranked: std::collections::BTreeMap<_, _> = if queue_on {
         crate::queue::ranked(view)

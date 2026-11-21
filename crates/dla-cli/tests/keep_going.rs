@@ -280,6 +280,7 @@ fn junit_manifest(r: &Run, id: &str) {
 fn harness_manifest_with(r: &Run, id: &str, mode: HarnessMode, tools: &[&str]) {
     HarnessManifest {
         sibling_of: Default::default(),
+        purpose: None,
         targets: Vec::new(),
         schema_version: 1,
         id: id.into(),

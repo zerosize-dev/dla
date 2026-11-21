@@ -69,6 +69,7 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
     let ranked = queue::ranked(&view);
     let ix = Index::of(&view);
     let queues = queue::queues(&view, ctx.worker.as_deref());
+    let triggers = dla_core::trigger::Triggers::of(&view);
     let mut order: Vec<&FindingId> = ranked.iter().map(|r| &r.id).collect();
     let in_rank: std::collections::BTreeSet<&FindingId> = order.iter().copied().collect();
     let others: Vec<FindingId> = view
@@ -126,6 +127,9 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
                 m.insert(h, json!(v.map(Verdict::as_str)));
             }
             e["harnesses"] = Value::Object(m);
+        }
+        if dla_core::trigger::is_subject(&view, f) {
+            e["trigger"] = json!(triggers.trigger(id).name());
         }
         if let Some(Standing::Settled(why)) = standing {
             e["settled_by"] = json!(match why {

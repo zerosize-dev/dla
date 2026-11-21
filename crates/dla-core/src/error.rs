@@ -133,6 +133,11 @@ pub mod codes {
     pub const TARGET_PENDING: &str = "target-pending";
     /// A harness was asked to declare more targets than the limit.
     pub const TOO_MANY_TARGETS: &str = "too-many-targets";
+    /// `--entry` named a finding that is not a leak-side finding that grew in some harness.
+    pub const ENTRY_NOT_GROWN: &str = "entry-not-grown";
+    /// `dla harness run` was asked to run an entry-path harness whose `VARIES.txt` is empty or
+    /// still the placeholder.
+    pub const VARIES_MISSING: &str = "varies-missing";
 }
 
 /// A rule-based refusal: what was refused, what is missing, the command that fixes it.

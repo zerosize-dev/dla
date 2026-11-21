@@ -29,6 +29,7 @@ pub fn render_markdown(view: &RunView) -> String {
     let st = gate_status(view);
     let mut out = String::new();
     QUEUE.with(|q| *q.borrow_mut() = dla_core::queue::ReportFacts::of(view));
+    TRIGGERS.with(|t| *t.borrow_mut() = dla_core::trigger::ReportFacts::of(view));
 
     out.push_str("# DLA report\n\n");
     let _ = writeln!(out, "Run: {}\n", code(&view.state.run_id));
@@ -47,6 +48,7 @@ pub fn render_markdown(view: &RunView) -> String {
     checklist(&mut out, view);
     evidence_index(&mut out, view);
     QUEUE.with(|q| *q.borrow_mut() = None);
+    TRIGGERS.with(|t| *t.borrow_mut() = None);
     out
 }
 
@@ -225,6 +227,13 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    /// The trigger facts of the report being rendered (`None` outside `render_markdown`, and
+    /// for a view without a run directory).
+    static TRIGGERS: std::cell::RefCell<Option<dla_core::trigger::ReportFacts>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// How a closed finding was targeted, for its section or table row.
 fn targeted_text(id: &dla_core::FindingId) -> Option<String> {
     QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.targeted(id)))
@@ -244,7 +253,12 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let _ = writeln!(out, "Time: {}\n", dla_core::timebudget::report_line(view));
     let _ = writeln!(out, "Entry: {}\n", entry_line(view));
     let _ = writeln!(out, "Scope: {}\n", scope_line(view));
-    let _ = writeln!(out, "{}\n", findings_line(c));
+    let mut line = findings_line(c);
+    if let Some(clause) = TRIGGERS.with(|t| t.borrow().as_ref().and_then(|f| f.clause())) {
+        line.push_str("; ");
+        line.push_str(&clause);
+    }
+    let _ = writeln!(out, "{line}\n");
     let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
     let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
     if let Some(line) = QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.line())) {
@@ -650,13 +664,25 @@ fn findings(out: &mut String, view: &RunView) {
         .collect();
     // Stable: inside a state the ledger order stays; inside suspected_static_only the
     // tier decides first.
+    // Confirmed and strong leaks lead, those a caller of the public API was shown to trigger
+    // first.
+    let triggered = |f: &Finding| {
+        TRIGGERS.with(|t| t.borrow().as_ref().is_some_and(|t| t.reproduced(&f.id)))
+    };
     list.sort_by_key(|f| {
         let (tier, multi) = if f.state == FindingState::SuspectedStaticOnly {
             (static_tier(view, f), dla_core::rank::multi_origin_key(f))
         } else {
             (0, 0)
         };
-        (rank(f.state), tier, multi)
+        let top = matches!(f.state, FindingState::Confirmed | FindingState::Strong);
+        (
+            u8::from(!top),
+            u8::from(top && !triggered(f)),
+            rank(f.state),
+            tier,
+            multi,
+        )
     });
     if list.is_empty() {
         let explained = view
@@ -928,6 +954,13 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(g) = growth_line(view, f) {
         let _ = writeln!(out, "- Growth: {g}");
+    }
+    if let Some(t) = TRIGGERS.with(|t| {
+        t.borrow()
+            .as_ref()
+            .and_then(|t| t.line(&f.id).map(str::to_owned))
+    }) {
+        let _ = writeln!(out, "- Trigger: {}", inline(&t));
     }
     if let Some(x) = explained_by(view, f) {
         let _ = writeln!(out, "- {x}");

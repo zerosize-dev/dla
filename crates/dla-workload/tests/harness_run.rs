@@ -163,6 +163,7 @@ fn manifest(
 ) -> HarnessManifest {
     HarnessManifest {
         sibling_of: Default::default(),
+        purpose: None,
         targets: Vec::new(),
         schema_version: 1,
         id: "H1".into(),
