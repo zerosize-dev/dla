@@ -147,6 +147,31 @@ One process, one `checkpoint` record per round (`x` = units completed), the last
 and, with the tag, the goleak report (the ticker is stopped first). Because the file lives in the
 package under test, the hooks can use unexported identifiers and package variables; `GoVar` probes are
 read by the optional `probes` hook (below), which fills the `probes` list of every checkpoint.
+A Go `--next` batch is one package (the best-ranked pending candidate and the pending candidates of its
+package directory), and the driver is generated in that directory, so a test file of it reads every
+unexported name of the targets; `dla harness gen --next --package <dir>` picks the directory. The
+header of the target block names the package.
+
+### Field probes and `dlaTrack`
+
+A target whose holder is a field of a struct type (`container-field`, `registry-field`; census owner
+`<pkg path>.<file>.<Type>.<field>`) gets a probe in `probes.json`:
+`{"id":"P1","finding":"F7","target":{"kind":"go-field","package_dir":"health","type_name":"Server","field":"updates"}}`.
+The engine (shared by both templates) reads them from the file `DLA_HARNESS_PROBES` names, so the model
+writes no probe code: `dlaTrack(v any)` registers an object (a pointer to a struct, or a struct) in
+`dlaSetup`, or in `dlaUnit` for an object created later. At every non-tick checkpoint, for each field
+probe, the engine sums the size of the named field over the tracked objects whose struct type has that
+name (generic instances count by the name before `[`) and writes a probe record
+(`id`, `name` = `Type.field`, `path` = `<dir>.<Type>.<field>`, `size`); the series column is
+`probe:<dir>.<Type>.<field>`. The size is `Len()` of a map, slice, array, chan or string, found by
+reflection (`Len` works on an unexported field; no `unsafe`); a pointer or interface field is followed
+one level (nil is 0); a `sync.Map` or any type with no length gives no size and an `error` text. With no
+tracked object of the type the record carries `error`: "no tracked object of type T: call dlaTrack(<your
+T>) in setup"; `dla trend` then reads the target `not_loaded` with that reason. The engine holds the
+tracked objects (`dlaTracked`), which keeps them alive for the rest of the process: track only
+long-lived objects. A field probe is only in the package the driver is in; the entry-path harness
+(`--entry`) uses the same driver and the same probes. The fields are read between rounds, never while a
+unit runs.
 
 ### Placeholders
 
@@ -168,7 +193,7 @@ Run-time environment of the driver: `DLA_KEY_MODE` (`fresh` uses `key = i`, `rep
 | `DLA-HOOK setup` | `func dlaSetup()` | construct the services/caches/pools; keep them in package-level variables; `dlaT` is the running `*testing.T` |
 | `DLA-HOOK unit` | `func dlaUnit(i, key int)` | one unit of the workload for `key`; derive ids and payloads from `key` so a repeated key reproduces an earlier request |
 
-| `DLA-HOOK probes` (optional) | `func dlaProbes() []map[string]any` | one `dlaProbe(id, name, path, size)` per probed package variable (`GoVar`); `size` is its entry count; leave `return nil` when there are none |
+| `DLA-HOOK probes` (optional) | `func dlaProbes() []map[string]any` | one `dlaProbe(id, name, path, size)` per probed package variable (`GoVar`); `size` is its entry count; leave `return nil` when there are none. Struct-field probes need no code here: `dlaTrack(obj)` in `dlaSetup` |
 
 The hooks are `dlaSetup`/`dlaUnit` (not `setup`/`unit`) so they cannot collide with identifiers of
 the package under test.

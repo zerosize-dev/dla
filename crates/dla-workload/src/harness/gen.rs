@@ -1462,7 +1462,7 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             .find(|q| q.runtime == rt.as_str());
         let mut skipped: Vec<String> = Vec::new();
         let (batch, sib) = match queue {
-            Some(q) if rt == Runtime::Rust => {
+            Some(q) if rt == Runtime::Go => {
                 let (b, s, p) = go_batch(ctx, opts, &view, &q, n, &ids, &mut skipped)?;
                 go_package = p;
                 (b, s)
@@ -1515,6 +1515,13 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
     Ok((ids, note, siblings, go_package))
 }
 
+/// A Go batch: its candidates, the siblings among them, and the package directory.
+type GoBatch = (
+    Vec<FindingId>,
+    std::collections::BTreeMap<FindingId, FindingId>,
+    Option<String>,
+);
+
 /// A reason a Go package directory cannot hold the driver, or `None` when it can (or when
 /// `go` cannot be asked): a driver is a test file of the package, so the directory needs a
 /// non-test Go file that builds on this platform, and `go list` must read it.
@@ -1556,14 +1563,7 @@ fn go_batch(
     n: usize,
     probed: &[FindingId],
     skipped: &mut Vec<String>,
-) -> Result<
-    (
-        Vec<FindingId>,
-        std::collections::BTreeMap<FindingId, FindingId>,
-        Option<String>,
-    ),
-    Refusal,
-> {
+) -> Result<GoBatch, Refusal> {
     use dla_core::queue::{go_package_dir, package_label};
     let packages = q.packages(view);
     let named = opts.package.as_deref().map(|p| {
@@ -1589,7 +1589,8 @@ fn go_batch(
                     ),
                     "a package directory with a pending candidate",
                     if list.is_empty() {
-                        "dla run status   (no candidate of go is waiting for a measurement)".to_owned()
+                        "dla run status   (no candidate of go is waiting for a measurement)"
+                            .to_owned()
                     } else {
                         format!(
                             "dla harness gen --lang go --driver --next --package <dir>   (packages with a pending candidate, best-ranked first: {}), or --next alone for the best-ranked one",
@@ -2252,10 +2253,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     if let (Some(info), Value::Object(m)) = (&driver_info, &mut summary) {
         if let Some(dir) = &info.go_dir {
             // Go: the driver is a test file of this package.
-            m.insert(
-                "package".into(),
-                json!(dla_core::queue::package_label(dir)),
-            );
+            m.insert("package".into(), json!(dla_core::queue::package_label(dir)));
         }
         if info.spec.junit.is_some() {
             let driver_file = ctx.pointer(&format!(

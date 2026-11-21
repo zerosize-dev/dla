@@ -879,6 +879,16 @@ fn cap_for_partial(
     }
 }
 
+/// A bound finding whose size probe was never read: a non-leak verdict (from columns that
+/// cannot see a step-growing container) is dropped; a leak verdict stands.
+fn cap_for_unread_probe(favors: Favors, supports: Vec<String>) -> (Favors, Vec<String>) {
+    if favors == Favors::NonLeak {
+        (Favors::Inconclusive, Vec::new())
+    } else {
+        (favors, supports)
+    }
+}
+
 fn key_mode(m: &HarnessManifest) -> KeyMode {
     match m.mode {
         HarnessMode::Driver => KeyMode::Fresh,
@@ -892,6 +902,54 @@ fn bad_harness_id(id: &str) -> Failure {
         "a harness ID such as H1",
         "dla alloc-test H1",
     )
+}
+
+/// The column whose reading decided the verdict: the bound finding's column, else the first
+/// voting column. A size probe (`probe:<path>`) decides by its own rise over the extra window,
+/// never by the whole-process byte columns, which a container that grows in steps leaves flat
+/// between two steps.
+fn decided_by(picked: &pick::Picked) -> Option<String> {
+    picked
+        .primary
+        .clone()
+        .or_else(|| picked.voting.first().cloned())
+}
+
+/// When `finding` has a Go field probe in the harness and the series has no column for it, the
+/// limitation that says so (and why), else `None`.
+fn unread_field_probe(
+    manifest: &HarnessManifest,
+    series: &SeriesFile,
+    finding: &Finding,
+) -> Option<String> {
+    use dla_core::harness::ProbeTarget;
+    let root = finding.root_id();
+    manifest.probes.iter().find_map(|p| {
+        let ProbeTarget::GoField {
+            package_dir,
+            type_name,
+            field,
+        } = &p.target
+        else {
+            return None;
+        };
+        if p.finding.as_ref() != Some(&root) && p.finding.as_ref() != Some(&finding.id) {
+            return None;
+        }
+        let path = format!("{package_dir}.{type_name}.{field}");
+        if series.column_index(&format!("probe:{path}")).is_some() {
+            return None;
+        }
+        let why = series
+            .limitations
+            .iter()
+            .find_map(|l| l.strip_prefix(&format!("probe {path}: ")))
+            .unwrap_or("it was never read");
+        Some(format!(
+            "size probe {} ({path}) of {root} has no readings ({why}), so the whole-process columns decide in its place, and a container that grows in steps reads flat between two steps there: the result cannot favour non-leak; call dlaTrack(<your {type_name}>) in setup of the driver and run again",
+            p.id
+        ))
+    })
 }
 
 /// Runs `dla alloc-test`.
@@ -1089,6 +1147,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         Some(Drift::Classes(note)) => limitations.push(note.clone()),
         None => {}
     }
+    // A Go field probe of the bound finding that was never read (nothing tracked, or a field
+    // with no length): the whole-process columns that decided in its place cannot show a
+    // step-growing container growing, so they never favour non-leak.
+    let unread = bound
+        .as_ref()
+        .and_then(|f| unread_field_probe(&manifest, &series, f));
+    let (favors, supports) = match &unread {
+        Some(note) => {
+            limitations.push(note.clone());
+            cap_for_unread_probe(favors, supports)
+        }
+        None => (favors, supports),
+    };
     // A run the deadline cut short measured less than it planned: whatever its columns
     // say, it never favours non-leak (and never confirms) on its own.
     let (favors, supports) = cap_for_partial(&partial, favors, supports);
@@ -1116,6 +1187,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         "favors": favors,
         "supports": supports,
         "primary": picked.primary,
+        "decided_by": decided_by(&picked),
         "limitations": limitations,
         "columns": results.iter().map(|r| {
             let mut v = r.to_json();
@@ -1244,6 +1316,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     out.insert("supports".into(), json!(supports));
     out.insert("finding".into(), json!(a.finding));
     out.insert("basis".into(), json!(picked.basis));
+    out.insert("decided_by".into(), json!(decided_by(&picked)));
     out.insert("purge".into(), json!(purge_kind));
     if !env_reused.is_empty() {
         out.insert("env_reused".into(), json!(env_reused));
@@ -2948,5 +3021,53 @@ mod tests {
             "{:?}",
             j.limitations
         );
+    }
+    fn go_field_manifest(finding: &str) -> HarnessManifest {
+        serde_json::from_value(json!({
+            "id": "H1", "runtime": "go", "mode": "driver", "scratch": "harness/H1/work",
+            "run": {"argv": ["go", "test"], "cwd": "."}, "warmup": 2, "iterations": 6,
+            "step": 100, "key_modes": ["fresh"], "agent": "driver-go", "timeout_secs": 300,
+            "probes": [{"id": "P1", "finding": finding,
+                "target": {"kind": "go-field", "package_dir": "health",
+                           "type_name": "Server", "field": "statusMap"}}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_unread_size_probe_turns_non_leak_inconclusive_and_leaves_a_leak() {
+        let (f, s) = cap_for_unread_probe(Favors::NonLeak, vec!["N-WARM".into()]);
+        assert_eq!((f, s.len()), (Favors::Inconclusive, 0));
+        let (f, s) = cap_for_unread_probe(Favors::Leak, vec!["leak".into()]);
+        assert_eq!((f, s.len()), (Favors::Leak, 1));
+        assert_eq!(
+            cap_for_unread_probe(Favors::Inconclusive, vec![]).0,
+            Favors::Inconclusive
+        );
+    }
+
+    #[test]
+    fn a_go_field_probe_without_readings_bars_a_non_leak_verdict_and_says_why() {
+        let f = Finding::candidate(
+            FindingId::new(3),
+            dla_core::Origin::parse("residual").unwrap(),
+            vec![],
+        );
+        let m = go_field_manifest("F3");
+        // The series has no column for the probe: the note names it and the way out.
+        let mut s = series(&[]);
+        s.limitations.push(
+            "probe health.Server.statusMap: no tracked object of type Server: call dlaTrack(<your Server>) in setup"
+                .to_owned(),
+        );
+        let note = unread_field_probe(&m, &s, &f).unwrap();
+        assert!(note.contains("P1 (health.Server.statusMap)"), "{note}");
+        assert!(note.contains("no tracked object of type Server"), "{note}");
+        assert!(note.contains("cannot favour non-leak"), "{note}");
+        // With the column in the series, or for another finding, there is nothing to say.
+        let mut read = series(&[]);
+        read.columns[1] = col("probe:health.Server.statusMap");
+        assert!(unread_field_probe(&m, &read, &f).is_none());
+        assert!(unread_field_probe(&go_field_manifest("F9"), &s, &f).is_none());
     }
 }

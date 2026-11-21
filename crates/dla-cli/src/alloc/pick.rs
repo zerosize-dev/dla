@@ -205,8 +205,11 @@ fn tied(
             .and_then(|t| t.columns.iter().find(|c| c.name == name))
             .is_some_and(|c| c.gate == GateVerdict::Pass)
     };
+    // A size probe reads the holder of the finding itself, so it leads: a step-growing
+    // container reads flat between two steps in a whole-process column, never in its own
+    // size. Inside each group the columns that passed the gate in the trend come first.
     let order = |mut v: Vec<String>| {
-        v.sort_by_key(|n| !passes(n));
+        v.sort_by_key(|n| (!n.starts_with("probe:"), !passes(n)));
         v.truncate(MAX_TIED);
         v
     };
@@ -548,6 +551,28 @@ mod tests {
         let mut f = non_heap_finding();
         f.region = Some(Region::Heap);
         f
+    }
+
+    #[test]
+    fn a_size_probe_of_the_finding_decides_before_the_columns_that_passed_the_trend() {
+        // The finding has a size probe and a process column tied to it; the trend passed the
+        // process column only. The probe reads the holder itself and decides.
+        let mut s = series_of(&["go.heap_live", "probe:health.Server.statusMap"]);
+        let f = heap_finding();
+        for c in &mut s.columns {
+            c.finding = Some(f.id.clone());
+        }
+        let ledger = Ledger::from_text("").unwrap();
+        let t = trend(&["go.heap_live"]);
+        let p = pick(&s, &ledger, Some(&f), &[], Some(&t), "H1").unwrap();
+        assert_eq!(
+            p.primary.as_deref(),
+            Some("probe:health.Server.statusMap"),
+            "{}",
+            p.basis
+        );
+        assert_eq!(p.voting, ["probe:health.Server.statusMap"]);
+        assert!(p.basis.contains("its probe column"), "{}", p.basis);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use dla_core::{
 };
 use serde_json::{Value, json};
 
-use super::{ResolveArgs, ResolveAs, open, resolve_finding};
+use super::{Loaded, ResolveArgs, ResolveAs, open, resolve_finding};
 use crate::{ctx::Ctx, fail::Res, parse::parse_enum};
 
 /// Findings `dla ledger list` prints by default.
@@ -249,6 +249,13 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         ranked.iter().map(|r| (&r.id, r)).collect();
     let ix = Index::of(&view);
     let queues = queue::queues(&view, ctx.worker.as_deref());
+    // Loaded once: the refusals of `resolve` read these for every finding instead of loading
+    // the run again.
+    let loaded = Loaded {
+        view: &view,
+        ranked: &ranked,
+        queues: &queues,
+    };
     let mut only: Option<Option<String>> = None;
     let mine = |f: &Finding| {
         ctx.worker
@@ -324,7 +331,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             evidence: Vec::new(),
             note: None,
         };
-        match resolve_finding(ctx, &mut ledger, f.id.clone(), args) {
+        match resolve_finding(ctx, &mut ledger, f.id.clone(), args, Some(&loaded)) {
             Ok(_) => closed.push(Closed1 {
                 id: f.id.to_string(),
                 to,

@@ -711,6 +711,34 @@
             "package_dir",
             "name"
           ]
+        },
+        {
+          "description": "A field of a Go struct type, read by reflection from the objects the driver registers\nwith `dlaTrack` (the engine sums the field's length over the tracked objects of the\ntype).",
+          "type": "object",
+          "properties": {
+            "field": {
+              "description": "Field name.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "go-field"
+            },
+            "package_dir": {
+              "description": "Package directory.",
+              "type": "string"
+            },
+            "type_name": {
+              "description": "The struct type's name.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "package_dir",
+            "type_name",
+            "field"
+          ]
         }
       ]
     },

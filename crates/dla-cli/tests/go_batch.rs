@@ -200,10 +200,7 @@ fn a_next_batch_is_the_candidates_of_one_package_and_the_driver_is_in_it() {
     let r = Run::new(true);
     // Rank order: health Server.updates, store sessions, health Server.statusMap, store
     // Index.byID. The batch is the top candidate's package, not the first four of the queue.
-    let (updates, status) = (
-        r.id_at("health/server.go:8"),
-        r.id_at("health/server.go:7"),
-    );
+    let (updates, status) = (r.id_at("health/server.go:8"), r.id_at("health/server.go:7"));
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["go"]["package"], "health", "{st}");
     assert!(
@@ -223,7 +220,9 @@ fn a_next_batch_is_the_candidates_of_one_package_and_the_driver_is_in_it() {
     assert_eq!(m["targets"], serde_json::json!([updates, status]));
     let argv = m["run"]["argv"].as_array().unwrap();
     assert_eq!(argv.last().unwrap(), "./health", "{m}");
-    let placed = r.run_dir.join("harness/H1/work/health/zz_dla_driver_test.go");
+    let placed = r
+        .run_dir
+        .join("harness/H1/work/health/zz_dla_driver_test.go");
     let text = fs::read_to_string(&placed).unwrap();
     assert!(text.starts_with("// Code generated"), "{text}");
     assert!(text.contains("package health\n"), "{text}");
@@ -248,7 +247,14 @@ fn next_with_package_takes_the_candidates_of_that_package() {
     let r = Run::new(true);
     let (sessions, by_id) = (r.id_at("store/store.go:3"), r.id_at("store/store.go:8"));
     let out = r.ok(&[
-        "harness", "gen", "--lang", "go", "--driver", "--next", "--package", "store",
+        "harness",
+        "gen",
+        "--lang",
+        "go",
+        "--driver",
+        "--next",
+        "--package",
+        "store",
     ]);
     assert_eq!(targets(&out), [sessions, by_id], "{out}");
     assert_eq!(out["summary"]["package"], "store", "{out}");
@@ -259,7 +265,14 @@ fn next_with_package_takes_the_candidates_of_that_package() {
     );
     // A package with no pending candidate is refused with the packages that have some.
     let o = r.run(&[
-        "harness", "gen", "--lang", "go", "--driver", "--next", "--package", "cmd/app",
+        "harness",
+        "gen",
+        "--lang",
+        "go",
+        "--driver",
+        "--next",
+        "--package",
+        "cmd/app",
     ]);
     assert_ne!(o.code, 0, "{}", o.text);
     let fix = o.json["error"]["fix"].as_str().unwrap();

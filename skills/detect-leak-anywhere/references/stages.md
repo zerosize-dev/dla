@@ -123,7 +123,9 @@ A whole-process column (`os.*`, `cgroup.*`, `fd.*`, `jvm.*`, `go.*`, `node.*`, `
 `metric:*/total`) is never tied to a finding, whatever evidence a finding cites: no one holder explains it.
 A JVM type-count column (`jvm.class:<type>.count`) that ties to no finding (a generic type such as `byte[]`
 never ties) is accounted for the same way. `dla trend` and the gate print `dla gap S<n> --residual` for it
-until the series has a gap row; after that they point to its open item instead. A type count tied only to undispositioned findings still needs their disposition.
+until the series has a gap row; after that they point to its open item instead. When more than three
+series have no row the gate prints `dla gap --residual --all` instead: it writes the row of every series that has
+none, as the single command does, and prints the series above their threshold with their open items. A type count tied only to undispositioned findings still needs their disposition.
 The classify gate does not ask for it. The final gate accounts for it through the residual rows: run `dla gap
 S<n> --residual`; the column is covered when the rows of its region are under their threshold, or over it with
 a resolved open item. A resolved open item that names the column and its trend also covers it.
@@ -272,7 +274,9 @@ under the run directory and need tier 1.
      holders only when they share a writer function), up to 16 targets in all: a driver that exercises an
      owner reaches all of its state. The added ones carry `sibling_of` (the target they came with) in
      `summary.targets`, `harness.json` and the driver's block, and `dla run status` lists them in its
-     next batch. `--probe` keeps its limit of 8. It prints the targets in
+     next batch. `--probe` keeps its limit of 8. A Go batch is one package: the best-ranked candidate and
+     the pending candidates of its package directory, the driver written into that package
+     (`--next --package <dir>` picks the package; `references/go.md`). It prints the targets in
      `summary.targets` and writes them as a comment block at the top of the driver file above the first
      `DLA-HOOK`. A JVM project with JUnit tests and no driver support keeps its generation command
      (`dla harness gen --lang jvm --junit --next`).

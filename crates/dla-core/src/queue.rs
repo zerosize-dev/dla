@@ -473,7 +473,7 @@ impl RuntimeQueue {
         n: usize,
     ) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
         let free: Vec<&FindingId> = self.declarable.iter().collect();
-        if self.runtime == "never-go" {
+        if self.runtime == GO {
             return match go_packages(view, &free).first() {
                 Some(p) => package_batch(view, &free, n, p),
                 None => (Vec::new(), BTreeMap::new()),
@@ -586,7 +586,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                         .is_none_or(|h| !ix.declared_by.get(*p).is_some_and(|v| v.contains(h)))
                 })
                 .collect();
-            let (batch, siblings, package) = if runtime == "never-go" {
+            let (batch, siblings, package) = if runtime == GO {
                 match go_packages(view, &free).into_iter().next() {
                     Some(p) => {
                         let (b, s) = package_batch(view, &free, MAX_BATCH, &p);
@@ -1248,6 +1248,16 @@ mod tests {
         assert!(q.batch.contains(&FindingId::new(9)), "{:?}", q.batch);
         assert!(!q.batch.contains(&FindingId::new(10)), "{:?}", q.batch);
         assert_eq!(q.siblings[&FindingId::new(9)], FindingId::new(1));
+    }
+
+    #[test]
+    fn a_go_site_names_its_package_directory() {
+        assert_eq!(go_package_dir("health/server.go:49"), "health");
+        assert_eq!(go_package_dir("./a/b/c.go:7"), "a/b");
+        assert_eq!(go_package_dir("main.go:3"), "");
+        assert_eq!(go_package_dir("a\\b.go:3"), "a");
+        assert_eq!(package_label(""), ".");
+        assert_eq!(package_label("health"), "health");
     }
 
     #[test]

@@ -721,6 +721,32 @@ fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
     })
 }
 
+/// More series than this without a residual row make the gate name `dla gap --residual --all`.
+const ALL_ROWS_FROM: usize = 3;
+
+/// The series whose trend has a non-flat whole-process column or per-type count (which the
+/// residual rows account for) and that have no residual row of their own.
+fn series_without_row(view: &RunView) -> BTreeSet<&str> {
+    let has_row = |series: &str| {
+        view.coverage.as_ref().is_some_and(|c| {
+            c.residual
+                .iter()
+                .any(|r| r.series.as_deref() == Some(series))
+        })
+    };
+    view.trends
+        .iter()
+        .filter(|t| !view.gap_series.contains(&t.series))
+        .filter(|t| {
+            t.columns
+                .iter()
+                .any(|c| non_flat(c) && (is_whole_process(&c.name) || is_type_count(&c.name)))
+        })
+        .map(|t| t.series.as_str())
+        .filter(|s| !has_row(s))
+        .collect()
+}
+
 /// The fix for a whole-process column (or per-type count) that the residual accounting of
 /// `series` does not yet cover. Before the series has a gap row, `dla gap` writes it. Once
 /// it has one, running `dla gap` again only reopens or keeps items, so the fix lists the
@@ -729,12 +755,20 @@ fn residual_fix(view: &RunView, series: &str, c: &ColumnTrend) -> String {
     let gap = format!(
         "dla gap {series} --residual   (rows under the threshold, or over it with a resolved open item, account for the column)"
     );
+    // Many series without a row: one command writes them all.
+    let missing = series_without_row(view);
+    let all = (missing.len() > ALL_ROWS_FROM).then(|| {
+        format!(
+            "dla gap --residual --all   (writes the residual row of each of the {} series that have none, as dla gap <S> --residual does for one; rows under the threshold, or over it with a resolved open item, account for a column)",
+            missing.len()
+        )
+    });
     let Some(cov) = &view.coverage else {
-        return gap;
+        return all.unwrap_or(gap);
     };
     let rows = column_rows(cov, series, c);
     if rows.is_empty() {
-        return gap;
+        return all.unwrap_or(gap);
     }
     let open: Vec<(String, Region)> = rows
         .iter()
@@ -2396,5 +2430,45 @@ mod in_run_column_tests {
         assert_eq!(rows[0].region, Region::Heap);
         // A column of no known region (the default arm) would be judged against every row.
         assert_eq!(column_rows(&cov, "S1", &trend_of("zz.unknown")).len(), 2);
+    }
+
+    fn view_with_series(n: u32, with_row: &[&str]) -> RunView {
+        let mut cov = CoverageManifest::new(None);
+        cov.residual = with_row
+            .iter()
+            .map(|s| ResidualRow {
+                series: Some((*s).to_owned()),
+                ..row(Region::Heap, 1.0)
+            })
+            .collect();
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, crate::Ledger::from_text("").unwrap(), Some(cov));
+        view.trends = (1..=n)
+            .map(|i| TrendReport {
+                schema_version: 1,
+                id: format!("T{i}"),
+                series: format!("S{i}"),
+                thresholds: dla_stats::GateThresholds::default(),
+                columns: vec![trend_of("os.rss")],
+                targets: vec![],
+            })
+            .collect();
+        view
+    }
+
+    #[test]
+    fn more_than_three_series_without_a_residual_row_name_the_one_command() {
+        let col = trend_of("os.rss");
+        let view = view_with_series(5, &[]);
+        let fix = residual_fix(&view, "S2", &col);
+        assert!(fix.starts_with("dla gap --residual --all"), "{fix}");
+        assert!(fix.contains("5 series"), "{fix}");
+        // Three or fewer: the command of the series; rows already written do not count.
+        let view = view_with_series(3, &[]);
+        assert!(residual_fix(&view, "S2", &col).starts_with("dla gap S2 --residual"));
+        let view = view_with_series(6, &["S1", "S2", "S3"]);
+        let fix = residual_fix(&view, "S4", &col);
+        assert!(fix.starts_with("dla gap S4 --residual"), "{fix}");
     }
 }

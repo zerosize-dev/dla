@@ -10,9 +10,34 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   `DLA_ARGS`. `os.Exit(0)` is recovered and counted as a normal end; a non-zero exit leaves only
   tick records. Pass a larger `-timeout` for long runs (the default is 10 minutes).
 - Driver mode (`dla harness gen --lang go --driver [--package <dir>]`): a test inside the package
-  under test, so hooks reach unexported identifiers and package variables. Probes of package
-  variables work only here. Fill `dlaSetup`, `dlaUnit` and, optionally, `dlaProbes`. An optional
-  goleak check runs only when `go.uber.org/goleak` resolves offline.
+  under test, so hooks reach unexported identifiers and package variables. Probes work only here.
+  Fill `dlaSetup`, `dlaUnit` and, optionally, `dlaProbes`. An optional goleak check runs only when
+  `go.uber.org/goleak` resolves offline.
+- A `--next` batch of a Go queue is one package: the best-ranked pending candidate and the other
+  pending candidates whose site is in the same package directory (8 at most, then the same-owner
+  siblings, 16 in all). The driver is written into that package directory, because a Go test file
+  reads only the unexported names of its own package; `harness.json` runs `go test ... ./<dir>`,
+  and `dla run status` (`queue.go.package`) and the `--next` output (`summary.package`) name the
+  package. `--next --package <dir>` takes the pending candidates of that directory (refused with the
+  packages that have some when none is pending there). A directory that cannot hold the driver (no
+  non-test Go file, `go list` fails, or no file builds here) is named in `summary.next_note` and the
+  next package by rank is taken; its candidates stay pending, not targeted.
+- Probes. A package variable is read by the `dlaProbes` hook (`GoVar`). A struct field
+  (`container-field`, `registry-field`, in the driver's package) gets a `go-field` probe in
+  `probes.json`, read with no code of yours: pass the object that holds it to `dlaTrack(obj)` in
+  `dlaSetup` (or in `dlaUnit` for an object made later), one line per type
+  (`dlaTrack(<the Server your setup built>)`; the target block says so per probe). At every
+  checkpoint the engine sums, over the tracked objects whose struct type has that name, the length of
+  the field by reflection (map, slice, array, chan, string; a pointer or interface field is followed
+  one level; no `unsafe`). The engine holds what you track, so track long-lived objects only. Verdicts
+  of `dla trend`: `grew` or `constant` (the size column through the growth gate) when read;
+  `not_loaded` when it never was, with the reason: "no tracked object of type T: call
+  dlaTrack(<your T>) in setup" (nothing tracked, so the target is not measured, not `executed`), or
+  "type sync.Map has no length ... size unknown" (a `sync.Map` or a struct has no size to read).
+  `dla alloc-test --finding F` decides by the size probe of F when it has one: a size that keeps
+  rising through the extra rounds is a leak, a flat one non-leak; the output names the column
+  (`decided_by`), and a probe that was never read keeps the result from favouring non-leak (a
+  container that grows in steps reads flat between two steps in the whole-process columns).
 - What the dump measures (after two `runtime.GC()`): `go.heap_live`, `go.heap_objects`, `go.total`,
   `go.released`, `go.stacks`, `go.goroutines`, the `os.*` set, and the goroutine profile grouped by
   `created by` file:line (`go.goroutines@file:line`). Coverage comes from `go test -coverprofile`: command mode instruments every point; a driver run measures without instrumentation and then runs the driver once more for one round (no warm-up, no captures, no sampler) with `-coverprofile` and `-coverpkg` over the whole module, or every module of a `go.work` workspace (`go list -m`), so the driver package need not be the package of the target. Its profile goes to `cov/` as `p1-<mode>-cover.out`, `executed-<S>.json` lists the functions it covers and a target without a probe reads `executed` or `not_executed`; a failed coverage process is a limitation line and the targets read `unknown`.
