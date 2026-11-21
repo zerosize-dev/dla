@@ -149,8 +149,10 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     };
     let sized_by_worker =
         worker.is_some_and(|w| view.state.budget.settled_workers.iter().any(|x| x == w));
-    if report.ok
-        && settles
+    // Sweep and census having run is enough to size it, whether this check passes or not
+    // (the core's own budget only: a worker's check follows the rule above).
+    let ready = worker.is_none() && crate::scope::sweep_and_census_ran(view.coverage.as_ref());
+    if ((report.ok && settles) || ready)
         && view.state.budget.auto
         && !view.state.budget.settled
         && !sized_by_worker

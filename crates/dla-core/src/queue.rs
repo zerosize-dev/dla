@@ -468,8 +468,10 @@ pub fn priority(v: Verdict) -> u8 {
 pub enum Closed {
     /// The run was started with `--queue off`.
     Off,
-    /// The budget is at or under the floor.
+    /// The budget is at or under the floor (and only then).
     Floor,
+    /// The run is over: aborted, or stamped incomplete and not going on. Time may be left.
+    Over,
     /// The workload is recorded as blocked.
     Blocked,
     /// No pending candidate is left.
@@ -482,6 +484,7 @@ impl Closed {
         match self {
             Self::Off => "the run was started with --queue off",
             Self::Floor => "the budget is at the floor",
+            Self::Over => "the run is stamped incomplete or aborted",
             Self::Blocked => "intake.workload records a blocker",
             Self::Empty => "no candidate is waiting for a measurement",
         }
@@ -823,7 +826,16 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
             let closed = if !view.state.queue {
                 Some(Closed::Off)
             } else if budget.is_none() {
-                Some(Closed::Floor)
+                // `budget_over_floor` is also `None` for a run that is over, whatever time is
+                // left: the queue then says so and not that the floor was reached.
+                if matches!(
+                    view.state.status,
+                    crate::state::RunStatus::Aborted | crate::state::RunStatus::Incomplete
+                ) {
+                    Some(Closed::Over)
+                } else {
+                    Some(Closed::Floor)
+                }
             } else if blocked {
                 Some(Closed::Blocked)
             } else if pending.is_empty() {
@@ -1386,6 +1398,25 @@ mod tests {
         record("H1", "S3", &["S3"]);
         run.trend("T3", "S3", &[(1, Verdict::Constant)]);
         assert!(pending_of(&run.reload()).is_empty());
+    }
+
+    #[test]
+    fn floor_is_the_reason_only_when_the_time_left_is_at_the_floor() {
+        use crate::state::RunStatus;
+        let (_run, view) = Run::new(1);
+        // Time left and the run going: open.
+        assert!(queues(&view, None)[0].open());
+        // A run stamped incomplete or aborted with most of its time left is over, not at the
+        // floor.
+        for status in [RunStatus::Incomplete, RunStatus::Aborted] {
+            let mut over = view.clone();
+            over.state.status = status;
+            assert_eq!(queues(&over, None)[0].closed, Some(Closed::Over));
+        }
+        // No time left on a run that is going: the floor.
+        let mut late = view.clone();
+        late.state.budget.deadline = crate::state::now_utc() - chrono::Duration::minutes(1);
+        assert_eq!(queues(&late, None)[0].closed, Some(Closed::Floor));
     }
 
     #[test]

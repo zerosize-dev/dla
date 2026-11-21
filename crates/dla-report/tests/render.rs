@@ -353,6 +353,23 @@ fn a_run_with_no_listed_entry_points_does_not_read_as_zero_of_zero() {
 }
 
 #[test]
+fn a_stamp_the_run_went_on_from_stays_in_its_history_not_its_status() {
+    let mut v = view("complete", None);
+    v.state.stop_stamps.push(dla_core::state::StopStamp {
+        stamped_at: "2026-01-01T10:00:00Z".parse().unwrap(),
+        reason: "r".into(),
+        lifted_at: Some("2026-01-01T10:05:00Z".parse().unwrap()),
+    });
+    let md = render_markdown(&v);
+    assert!(
+        md.contains("\nHistory: stamped incomplete by the stop hook at 10:00:00Z and lifted at 10:05:00Z when work went on\n"),
+        "{md}"
+    );
+    assert!(!md.contains("run is incomplete"), "{md}");
+    assert!(!render_markdown(&view("complete", None)).contains("History:"));
+}
+
+#[test]
 fn many_residual_rows_are_bounded_in_the_header_and_complete_in_a_section() {
     let mut rows = Vec::new();
     for n in 1..=48 {

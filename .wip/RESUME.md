@@ -416,3 +416,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Machine load is about 30 (F's flake loops with extra load, R's cargo builds): real-run timings are slow.
 - Builders running: R (Rust allocation stacks), F (flake analysis), P3 pass 7.
 - Not rerun yet: grpc-go (wait for pass 7: census speed and the stop hook), spring-data-commons (focus rule is in; could run now, but the machine is overloaded: start it when F's loops end).
+
+## State at 15:24 UTC, 2026-11-21 (after context compaction)
+- R follow-up reported (u41/report2.md): Rust harness runs now leave allocation stacks (`harness run H --mode fresh --capture alloc`: four extra runs of the driver under the native shim). Real check on the tokio-util copy: `stack:new (src/sync/cancellation_token.rs:144)`, 1320 blocks / 95040 bytes over three steps = 72 bytes per unit, tied to F6 through the recorded writer at :144 (existing strict rule). This is the documented leak (72-byte object allocated in CancellationToken::new).
+- I did NOT accept R's same-function tie fallback (tie.rs `findings_in_rust_function`): the tie rule stays strict (owner's open question 2). Sent R three corrections (resumed agent a61db0f8f10fd6ebb, report to u41/report3.md): (1) fallback becomes a hint with the exact `ledger annotate F --writer site` command; (2) alloc-test `growth_evidence` must print evidence that `ledger confirm` accepts as tied (it printed the whole-process E36, refused growth-not-tied); (3) trend must not repeat the capture hint on the capture run's own series.
+- Still running: F (flake, u43), P3 pass 7 (u45), real run axios-3 (started 13:54; at 15:21 it was on H7 = http-adapter batch F25-F27, F10).
+- To verify when R reports: rerun `cargo test -j 2 -p dla-cli --test rust_driver`, one mutation of the hint path and one of growth_evidence, read the diff of tie.rs / shim_groups.rs / alloc_cmd.rs growth_evidence.

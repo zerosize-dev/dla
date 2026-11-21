@@ -937,3 +937,30 @@ fn an_unknown_verdict_does_not_settle_and_is_explained() {
     assert!(record.contains(WHAT), "{}", record.len());
     assert!(r.report().contains(&format!("H1 unknown ({WHAT})")));
 }
+
+#[test]
+fn a_stamped_run_with_time_left_closes_not_exercised_and_the_close_lifts_the_stamp() {
+    let r = Run::new(&["--budget", "3h"]);
+    dla_core::RunState::update(&r.run_dir, |s| {
+        s.stamp_stop(format!(
+            "{} 3 stop attempts with no ledger change: F1",
+            dla_core::gate::STOP_BLOCKED_REASON
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["closed"], "over", "{st}");
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert!(out["closed"].as_u64().unwrap() >= 3, "{out}");
+    assert_eq!(out["reason"]["time_budget"], 0, "{out}");
+    assert_eq!(out["reason"]["not_exercised"], out["closed"], "{out}");
+    // The close wrote to the ledger: the run goes on, the stamp is lifted and kept in the
+    // history.
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["status"], "active", "{st}");
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["stop_stamps"].as_array().unwrap().len(), 1, "{state}");
+    assert!(state["stop_stamps"][0]["lifted_at"].is_string(), "{state}");
+}

@@ -33,15 +33,42 @@ pub(crate) const R_PREFIX: &str = "remove|delete|clear|pop|poll|drain|evict|unre
 pub(crate) const R_EXACT: &str = "take|discard|off|close|free|stop|reset|truncate|shift|splice|swap_remove|unlink|kill|cache_clear|Delete|Close|Stop|Swap|Clear|Pop";
 const EMPTY_RHS: &str = r"^(?:nil|None|null|undefined|NULL|nullptr|0|false|\[\s*\]|\{\s*\}|\x22\x22|(?:Vec|HashMap|HashSet|BTreeMap|BTreeSet|VecDeque|dict|list|set|deque|Map|Set|Array)(?:::new)?(?:<[^>]*>)?\(\s*\)|new\s+(?:Map|Set|Array|WeakMap|WeakSet|[A-Z]\w*)(?:<[^>]*>)?\(\s*\)|make\([^)]*\)|None\s*;?)\s*[;,]?\s*(?://.*|#.*)?$";
 
+/// A regex compiled when a line first needs it: compiling is the costly part of a census, and
+/// most of the seven patterns of a holder are never asked about a line (a pattern that needs
+/// `<-` or `=` is not tried on a line without one).
+#[derive(Clone)]
+struct Lazy {
+    src: std::sync::Arc<str>,
+    re: std::sync::Arc<std::sync::OnceLock<Option<Regex>>>,
+}
+
+impl Lazy {
+    fn new(src: String) -> Self {
+        Self {
+            src: src.into(),
+            re: Default::default(),
+        }
+    }
+
+    /// The regex, or `None` when the pattern does not compile.
+    fn get(&self) -> Option<&Regex> {
+        self.re.get_or_init(|| Regex::new(&self.src).ok()).as_ref()
+    }
+
+    fn is_match(&self, l: &str) -> bool {
+        self.get().is_some_and(|r| r.is_match(l))
+    }
+}
+
 #[derive(Clone)]
 struct Patterns {
-    writer_call: Regex,
-    remover_call: Regex,
-    assign: Regex,
-    remover_fn: Regex,
-    writer_fn: Option<Regex>,
-    chan_send: Regex,
-    chan_recv: Regex,
+    writer_call: Lazy,
+    remover_call: Lazy,
+    assign: Lazy,
+    remover_fn: Lazy,
+    writer_fn: Lazy,
+    chan_send: Lazy,
+    chan_recv: Lazy,
 }
 
 fn build(name: &str, member_access: bool) -> Option<Patterns> {
@@ -53,27 +80,23 @@ fn build(name: &str, member_access: bool) -> Option<Patterns> {
     };
     let sep = r"\s*(?:\.|->|::|\?\.)\s*";
     let call = |prefix: &str, exact: &str| {
-        Regex::new(&format!(
+        Lazy::new(format!(
             r"{pre}{CHAIN}{sep}(?:(?:{prefix})\w*|(?:{exact}))\s*(?:\(|<)"
         ))
-        .ok()
     };
-    let remover_fn = Regex::new(&format!(
+    let remover_fn = Lazy::new(format!(
         r"\b(?:delete|free|close|clearInterval|clearTimeout|clearImmediate|cancel|release|drop|unlink|remove|destroy|kill|abort|shutdown|dispose|join|pthread_\w*)\w*\s*\(\s*[^)\n]*{pre}|\bdel\s+[^\n]*{pre}"
-    ))
-    .ok()?;
-    let writer_fn = Regex::new(&format!(r"\bappend\(\s*[\w.*&\[\]]*{pre}")).ok();
+    ));
     Some(Patterns {
-        writer_call: call(W_PREFIX, W_EXACT)?,
-        remover_call: call(R_PREFIX, R_EXACT)?,
-        assign: Regex::new(&format!(
+        writer_call: call(W_PREFIX, W_EXACT),
+        remover_call: call(R_PREFIX, R_EXACT),
+        assign: Lazy::new(format!(
             r"{pre}({CHAIN})\s*([-+*|&^]?)=(?:[^=>~]|$)\s*(.*)$"
-        ))
-        .ok()?,
+        )),
         remover_fn,
-        writer_fn,
-        chan_send: Regex::new(&format!(r"{pre}\s*<-")).ok()?,
-        chan_recv: Regex::new(&format!(r"<-\s*[\w.*&]*{pre}")).ok()?,
+        writer_fn: Lazy::new(format!(r"\bappend\(\s*[\w.*&\[\]]*{pre}")),
+        chan_send: Lazy::new(format!(r"{pre}\s*<-")),
+        chan_recv: Lazy::new(format!(r"<-\s*[\w.*&]*{pre}")),
     })
 }
 
@@ -82,10 +105,79 @@ pub(crate) fn empty_rhs() -> &'static Regex {
     R.get_or_init(|| Regex::new(EMPTY_RHS).expect("static pattern"))
 }
 
-/// Source lines with comments blanked, kept per file.
+/// Source lines with comments blanked, kept per file, with an index of the lines each word
+/// occurs on.
 struct Code<'a> {
     file: &'a SourceFile,
     lines: Vec<String>,
+    /// Hash of an ASCII word (a run of letters, digits and `_`) to the 1-based lines of this
+    /// file that hold a word of that hash, ascending. A hash collision only adds a line the
+    /// per-line test then rejects.
+    words: HashMap<u64, Vec<u32>>,
+    /// Lines with a non-ASCII byte, ascending: the regexes' `\b` is Unicode-aware, so such a
+    /// line is always looked at.
+    wild: Vec<u32>,
+}
+
+fn word_hash(w: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    w.hash(&mut h);
+    h.finish()
+}
+
+impl<'a> Code<'a> {
+    fn new(file: &'a SourceFile) -> Self {
+        let lines: Vec<String> = file
+            .text
+            .lines()
+            .map(|l| strip_comment(file.lang, l))
+            .collect();
+        let mut words: HashMap<u64, Vec<u32>> = HashMap::new();
+        let mut wild = Vec::new();
+        for (i, l) in lines.iter().enumerate() {
+            let ln = u32::try_from(i + 1).unwrap_or(u32::MAX);
+            if !l.is_ascii() {
+                wild.push(ln);
+                continue;
+            }
+            for w in l
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty())
+            {
+                let v = words.entry(word_hash(w)).or_default();
+                if v.last() != Some(&ln) {
+                    v.push(ln);
+                }
+            }
+        }
+        Self {
+            file,
+            lines,
+            words,
+            wild,
+        }
+    }
+
+    /// The lines (1-based, ascending) a pattern built around `name` can match: every line
+    /// when `name` is not a plain word, else the lines holding that word and the non-ASCII
+    /// lines. Every pattern contains the name as a whole word, so no other line can match.
+    fn candidates(&self, name: &str) -> Vec<u32> {
+        let plain =
+            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        if !plain {
+            return (1..=u32::try_from(self.lines.len()).unwrap_or(u32::MAX)).collect();
+        }
+        let mut v: Vec<u32> = self
+            .words
+            .get(&word_hash(name))
+            .cloned()
+            .unwrap_or_default();
+        v.extend_from_slice(&self.wild);
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
 }
 
 fn strip_comment(lang: Lang, l: &str) -> String {
@@ -119,14 +211,7 @@ fn dir_of(rel: &str) -> &str {
 
 /// Finds writers and removers for every raw holder, in the same order.
 pub fn find(raws: &[Raw], files: &[SourceFile]) -> Vec<Usage> {
-    let code: Vec<Code> = files
-        .iter()
-        .filter(|f| !f.is_test)
-        .map(|f| Code {
-            file: f,
-            lines: f.text.lines().map(|l| strip_comment(f.lang, l)).collect(),
-        })
-        .collect();
+    let code: Vec<Code> = files.iter().filter(|f| !f.is_test).map(Code::new).collect();
     let mut cache: HashMap<(String, bool), Option<Patterns>> = HashMap::new();
     let mut out = Vec::with_capacity(raws.len());
     for r in raws {
@@ -142,6 +227,43 @@ pub fn find(raws: &[Raw], files: &[SourceFile]) -> Vec<Usage> {
             Scope::Project if name.len() == 1 => &Scope::File,
             other => other,
         };
+        // The lines of the scope that hold the name (no pattern can match another line), in
+        // file order. A holder with none needs no patterns: compiling them is the costly
+        // part, so it waits for the first line that needs them.
+        let mut hits: Vec<(&Code, u32)> = Vec::new();
+        for c in &code {
+            let in_scope = match scope {
+                Scope::Project => true,
+                Scope::Dir(d) => dir_of(&c.file.rel) == d,
+                Scope::File | Scope::Lines(..) => c.file.rel == r.file,
+            };
+            if !in_scope {
+                continue;
+            }
+            let (lo, hi) = match scope {
+                Scope::Lines(a, b) => (*a, *b),
+                _ => (1, u32::MAX),
+            };
+            for ln in c.candidates(name) {
+                let l = &c.lines[(ln - 1) as usize];
+                if ln < lo || ln > hi || l.trim().is_empty() {
+                    continue;
+                }
+                // Every pattern of `Patterns` contains the holder's name literally, so a line
+                // without it matches none: the substring test replaces seven regex searches.
+                if !l.contains(name) {
+                    continue;
+                }
+                if c.file.rel == r.file && ln == r.line {
+                    continue;
+                }
+                hits.push((c, ln));
+            }
+        }
+        if hits.is_empty() {
+            out.push(Usage::default());
+            continue;
+        }
         let pats = cache
             .entry((name.to_owned(), r.member_access))
             .or_insert_with(|| build(name, r.member_access))
@@ -161,35 +283,15 @@ pub fn find(raws: &[Raw], files: &[SourceFile]) -> Vec<Usage> {
             None
         };
         let mut u = Usage::default();
-        for c in &code {
-            let in_scope = match scope {
-                Scope::Project => true,
-                Scope::Dir(d) => dir_of(&c.file.rel) == d,
-                Scope::File | Scope::Lines(..) => c.file.rel == r.file,
+        for (c, ln) in hits {
+            let l = &c.lines[(ln - 1) as usize];
+            let jvm_same_file =
+                c.file.rel == r.file && matches!(c.file.lang, Lang::Java | Lang::Kotlin);
+            let p = match (&bare, jvm_same_file) {
+                (Some(b), true) => b,
+                _ => p,
             };
-            if !in_scope {
-                continue;
-            }
-            let (lo, hi) = match scope {
-                Scope::Lines(a, b) => (*a, *b),
-                _ => (1, u32::MAX),
-            };
-            for (i, l) in c.lines.iter().enumerate() {
-                let ln = u32::try_from(i + 1).unwrap_or(u32::MAX);
-                if ln < lo || ln > hi || l.trim().is_empty() {
-                    continue;
-                }
-                if c.file.rel == r.file && ln == r.line {
-                    continue;
-                }
-                let jvm_same_file =
-                    c.file.rel == r.file && matches!(c.file.lang, Lang::Java | Lang::Kotlin);
-                let p = match (&bare, jvm_same_file) {
-                    (Some(b), true) => b,
-                    _ => p,
-                };
-                classify(p, l, &mut u, &format!("{}:{ln}", c.file.rel));
-            }
+            classify(p, l, &mut u, &format!("{}:{ln}", c.file.rel));
         }
         u.writers.truncate(MAX_SITES);
         u.removers.truncate(MAX_SITES);
@@ -199,12 +301,19 @@ pub fn find(raws: &[Raw], files: &[SourceFile]) -> Vec<Usage> {
 }
 
 fn classify(p: &Patterns, l: &str, u: &mut Usage, site: &str) {
+    // Each pattern needs a literal the line must hold (`<-` for a channel, `=` for an
+    // assignment, `append(`, a `(` for a remover function or `del`); a line without it
+    // cannot match, so the pattern is neither compiled nor run.
+    let arrow = l.contains("<-");
     let mut writer = p.writer_call.is_match(l)
-        || p.chan_send.is_match(l)
-        || p.writer_fn.as_ref().is_some_and(|w| w.is_match(l));
-    let mut remover =
-        p.remover_call.is_match(l) || p.remover_fn.is_match(l) || p.chan_recv.is_match(l);
-    if let Some(c) = p.assign.captures(l) {
+        || (arrow && p.chan_send.is_match(l))
+        || (l.contains("append(") && p.writer_fn.is_match(l));
+    let mut remover = p.remover_call.is_match(l)
+        || ((l.contains('(') || l.contains("del")) && p.remover_fn.is_match(l))
+        || (arrow && p.chan_recv.is_match(l));
+    if l.contains('=')
+        && let Some(c) = p.assign.get().and_then(|r| r.captures(l))
+    {
         let chain = c.get(1).map_or("", |m| m.as_str());
         let op = c.get(2).map_or("", |m| m.as_str());
         let rhs = c.get(3).map_or("", |m| m.as_str()).trim();
@@ -248,6 +357,32 @@ mod tests {
             "o".into(),
         )
         .tracking(name, scope, member)
+    }
+
+    #[test]
+    fn the_word_index_finds_what_a_scan_of_every_line_finds() {
+        // Lines with non-ASCII text are always looked at; a name that is not a plain word
+        // (`$cache`) is looked for on every line; a longer word holding the name is not a use.
+        let f = file(
+            "a/reg.py",
+            "_L = {}\n\ndef sub(t, l):\n    s = \"caf\u{e9}\"; _L.setdefault(t, []).append(l)\n\ndef other():\n    _LX.put(1)\n    x_L.put(2)\n\ndef reset():\n    _L.clear()\n",
+        );
+        let u = find(&[raw("_L", "a/reg.py", 1, Scope::Project, false)], &[f]);
+        assert_eq!(u[0].writers, ["a/reg.py:4"], "{u:?}");
+        assert_eq!(u[0].removers, ["a/reg.py:11"], "{u:?}");
+        let decl = file(
+            "a/Svc.java",
+            "class Svc {\n    static Map $cache = new HashMap();\n}\n",
+        );
+        let user = file(
+            "b/Use.java",
+            "class Use {\n    void f(Object k) {\n        Svc.$cache.put(k, k);\n        Svc.cache.put(k, k);\n    }\n}\n",
+        );
+        let u = find(
+            &[raw("$cache", "a/Svc.java", 2, Scope::Project, true)],
+            &[decl, user],
+        );
+        assert_eq!(u[0].writers, ["b/Use.java:3"], "{u:?}");
     }
 
     #[test]

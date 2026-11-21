@@ -38,6 +38,11 @@ const MAX_INPUT: u64 = 32 * 1024 * 1024;
 /// session stop and stamps the run (or the worker) instead.
 pub const STOP_LIMIT: u32 = 3;
 
+/// How long a registered `dla` command may keep the stop hook from counting a stop attempt:
+/// the same command running for longer than this is taken for hung, and the hook goes back
+/// to counting attempts and stamping.
+pub const RUNNING_COMMAND_LIMIT_SECS: i64 = 30 * 60;
+
 /// The longest block reason handed back to the model, in bytes.
 const MAX_REASON: usize = 1000;
 
@@ -865,11 +870,42 @@ fn stop(project_arg: Option<&Path>, input: &Input, subagent: bool) -> Result<Hoo
     stop_core(&found)
 }
 
+/// The `dla` command of the run that is still running (registered, its process alive and the
+/// same one, started less than [`RUNNING_COMMAND_LIMIT_SECS`] ago), as the block reason that
+/// tells the model to wait for it. `worker` limits it to that worker's commands.
+fn running_command(run_dir: &Path, worker: Option<&str>) -> Option<String> {
+    let state = RunState::load(run_dir).ok()?;
+    let now = state::now_utc();
+    let p = state.processes.iter().find(|p| {
+        p.kind == dla_core::state::ProcessKind::Command
+            && p.stopped_at.is_none()
+            && worker.is_none_or(|w| p.worker.as_deref() == Some(w))
+            && (now - p.started_at).num_seconds() < RUNNING_COMMAND_LIMIT_SECS
+            && dla_core::proc::is_alive(p.pid)
+            && (p.start_time.is_none()
+                || dla_core::proc::identity_matches(
+                    p,
+                    dla_sample::os::process_start_time(p.pid).as_deref(),
+                ))
+    })?;
+    let minutes = (now - p.started_at).num_seconds().max(0) / 60;
+    Some(format!(
+        "dla: `{}` of this run is still running (pid {}, started {}, {minutes} min ago). Wait for it to finish, then read its output and go on; this stop attempt is not counted.",
+        p.command,
+        p.pid,
+        p.started_at.format("%H:%M:%SZ"),
+    ))
+}
+
 fn stop_core(found: &Found) -> Result<HookOut, String> {
     let view = RunView::load(&found.run_dir).map_err(|e| format!("cannot load the run: {e}"))?;
     let missing = gate::missing(&view, GateTarget::Final, None);
     if missing.is_empty() {
         return Ok(HookOut::allow());
+    }
+    // A command of the run is still working: the run is not stalled. Nothing is counted.
+    if let Some(reason) = running_command(&found.run_dir, None) {
+        return Ok(HookOut::block(&reason));
     }
     let digest = digest_of(&view, &missing, None);
     let ids: Vec<String> = missing.iter().take(5).map(|m| m.id.clone()).collect();
@@ -882,8 +918,7 @@ fn stop_core(found: &Found) -> Result<HookOut, String> {
         s.stop_blocks = n;
         s.stop_block_digest = Some(digest.clone());
         if n >= STOP_LIMIT {
-            s.status = RunStatus::Incomplete;
-            s.incomplete_reason = Some(format!(
+            s.stamp_stop(format!(
                 "{} {STOP_LIMIT} stop attempts with no ledger change: {}",
                 gate::STOP_BLOCKED_REASON,
                 ids.join(", ")
@@ -915,6 +950,9 @@ fn stop_worker(found: &Found, worker: &str) -> Result<HookOut, String> {
     let missing = gate::missing(&view, GateTarget::Final, Some(worker));
     if missing.is_empty() {
         return Ok(HookOut::allow());
+    }
+    if let Some(reason) = running_command(&found.run_dir, Some(worker)) {
+        return Ok(HookOut::block(&reason));
     }
     let digest = digest_of(&view, &missing, Some(worker));
     // Release the slice lock before the state update.

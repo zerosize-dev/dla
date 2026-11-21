@@ -111,6 +111,10 @@ string_enum! {
         Container = "container",
         /// A profiler.
         Profiler = "profiler",
+        /// A `dla` command of the run (census, sweep, harness run, trend, alloc-test,
+        /// report...), registered for its lifetime so that the stop hook can see that the
+        /// run is still working. Never killed by `dla run abort`.
+        Command = "command",
     }
 }
 
@@ -331,6 +335,18 @@ fn default_role() -> ProcessRole {
     ProcessRole::Started
 }
 
+/// One time the stop hook stamped the run incomplete.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct StopStamp {
+    /// When the hook let the stop through and stamped the run.
+    pub stamped_at: DateTime<Utc>,
+    /// The reason it wrote.
+    pub reason: String,
+    /// When a state-changing command lifted the stamp because the run went on, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifted_at: Option<DateTime<Utc>>,
+}
+
 /// One worker registered by `dla run dispatch`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct WorkerEntry {
@@ -436,6 +452,10 @@ pub struct RunState {
     /// Digest (ledger length plus hash of the missing-item ids) of the last failing stop attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_block_digest: Option<String>,
+    /// Stamps the stop hook put on the run and whether work went on afterwards (oldest
+    /// first). The status says what the run is now; this says what it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop_stamps: Vec<StopStamp>,
     /// The same counter for each worker's SubagentStop hook, by worker name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub worker_stop: BTreeMap<String, StopCounter>,
@@ -542,6 +562,7 @@ impl RunState {
             worker_stages_passed: BTreeMap::new(),
             stop_blocks: 0,
             stop_block_digest: None,
+            stop_stamps: Vec::new(),
             worker_stop: BTreeMap::new(),
             queue: true,
         })
@@ -603,6 +624,51 @@ impl RunState {
         if let Some(n) = next {
             self.stage = n;
         }
+    }
+
+    /// Stamps the run incomplete the way the stop hook does: the status, the reason and one
+    /// entry of [`Self::stop_stamps`].
+    pub fn stamp_stop(&mut self, reason: String) {
+        self.status = RunStatus::Incomplete;
+        self.stop_stamps.push(StopStamp {
+            stamped_at: now_utc(),
+            reason: reason.clone(),
+            lifted_at: None,
+        });
+        self.incomplete_reason = Some(reason);
+    }
+
+    /// Lifts a stamp the stop hook put on the run (not one the merge or an abort put): the
+    /// run is going again. The counters start over and the stamp's entry gets the time.
+    /// Returns whether a stamp was lifted.
+    pub fn lift_stop_stamp(&mut self) -> bool {
+        let stamped = self.status == RunStatus::Incomplete
+            && self
+                .incomplete_reason
+                .as_deref()
+                .is_some_and(|r| r.starts_with(crate::gate::STOP_BLOCKED_REASON));
+        if !stamped {
+            return false;
+        }
+        self.status = RunStatus::Active;
+        let reason = self.incomplete_reason.take().unwrap_or_default();
+        self.stop_blocks = 0;
+        self.stop_block_digest = None;
+        let now = now_utc();
+        match self
+            .stop_stamps
+            .iter_mut()
+            .rev()
+            .find(|s| s.lifted_at.is_none())
+        {
+            Some(s) => s.lifted_at = Some(now),
+            None => self.stop_stamps.push(StopStamp {
+                stamped_at: now,
+                reason,
+                lifted_at: Some(now),
+            }),
+        }
+        true
     }
 
     /// Sizes an `auto` budget from `estimate`: the deadline becomes

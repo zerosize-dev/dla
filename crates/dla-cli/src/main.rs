@@ -30,6 +30,7 @@ mod report;
 mod run;
 mod sample_cmd;
 mod schema_cmd;
+mod scope;
 mod stage;
 mod summarize;
 mod summarize_cmd;
@@ -142,7 +143,83 @@ enum Output {
     },
 }
 
+/// What `dla <command>` does around the command itself (see `scope`): registers a command that
+/// can take long, settles an `auto` budget once sweep and census have run, lifts a stop-hook
+/// stamp when the command wrote to the ledger.
 fn dispatch(cli: Cli) -> Res<Output> {
+    let around = Around::before(&cli);
+    let out = dispatch_command(cli);
+    if let Some(a) = around {
+        a.after();
+    }
+    out
+}
+
+/// The run a command works on, and what was done before it for [`Around::after`].
+struct Around {
+    ctx: Ctx,
+    ledger_before: u64,
+    _registered: Option<scope::Registered>,
+}
+
+impl Around {
+    fn before(cli: &Cli) -> Option<Self> {
+        let name = match &cli.command {
+            Command::Census(_) => "dla census",
+            Command::Sweep(_) => "dla sweep",
+            Command::Harness(harness_cmd::HarnessCmd::Run(_)) => "dla harness run",
+            Command::Trend(_) => "dla trend",
+            Command::AllocTest(_) => "dla alloc-test",
+            Command::Report => "dla report",
+            Command::Gap(_) => "dla gap",
+            Command::Intervene(_) => "dla intervene",
+            _ => "",
+        };
+        // Commands that start or end a run, the hooks (they run on every tool call and must
+        // not touch the run) and the schema command have no run to look after.
+        let skip = matches!(
+            &cli.command,
+            Command::Run(run::RunCmd::Init(_) | run::RunCmd::Abort(_))
+                | Command::Consent(_)
+                | Command::Schema(_)
+                | Command::Install(_)
+                | Command::Gate(
+                    gate_cmd::GateCmd::StopHook(_)
+                        | gate_cmd::GateCmd::ReadHook
+                        | gate_cmd::GateCmd::WriteHook
+                        | gate_cmd::GateCmd::BashHook
+                )
+        );
+        if skip {
+            return None;
+        }
+        let ctx = Ctx::resolve(
+            project_root(cli.project.as_deref()).ok()?,
+            cli.run.as_deref(),
+            cli.worker.as_deref(),
+        )
+        .ok()?;
+        // `dla gate check` settles the budget itself and prints that it did.
+        if !matches!(&cli.command, Command::Gate(_)) {
+            scope::settle_auto_budget(&ctx);
+        }
+        let ledger_before = scope::ledger_mark(&ctx.run_dir);
+        let registered = (!name.is_empty())
+            .then(|| scope::register(&ctx, name))
+            .flatten();
+        Some(Self {
+            ctx,
+            ledger_before,
+            _registered: registered,
+        })
+    }
+
+    fn after(self) {
+        scope::lift_stamp_if_the_ledger_grew(&self.ctx, self.ledger_before);
+    }
+}
+
+fn dispatch_command(cli: Cli) -> Res<Output> {
     let project = cli.project.as_deref();
     let run_arg = cli.run.as_deref();
     let data = cli.data.as_ref();

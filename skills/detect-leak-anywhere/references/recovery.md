@@ -93,7 +93,10 @@ slice, `state.json`, `coverage.json`, `report.md`) whose length or hash differs 
 The Stop hook blocks the end of the turn while `dla gate check --final` fails. It blocks the first two
 stop attempts; at the third attempt with no change in the ledger it lets the stop through, stamps the run
 INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts with no ledger change"
-and the missing ids, and the report says so.
+and the missing ids, and the report says so. While a `dla` command of the run (census, sweep, harness run,
+trend, alloc-test, report, gap, intervene) is still running, a stop attempt is blocked with the command named
+and is not counted (a command running longer than 30 minutes is taken for hung). A stamped run that goes on
+(a command writes to the ledger) has the stamp lifted; the report keeps it in its `History:` line.
 - A `harness_not_run` item means a generated harness was never run, or never built: run it (`dla harness run H<n>`; for one that did not build, fix the build error first; a run refused for time is not a run), or record why it cannot run on `intake.workload`, and ask the user first when only they can unblock it.
 - A `coverage_contradiction` item means iterations ran and no entry point was exercised: fill the DLA-HOOK bodies of the driver harness so it calls one and run it again; when the harness that produced the zero is a command harness or a JUnit repeat (no hooks), make a driver (`dla harness gen --lang <rt> --driver`), fill its hooks and run the harness it prints; when the harness did not build, fix the build error first; or record on `intake.workload` why it cannot. A `budget_left_unrevisited` item means findings were closed while the budget could still measure them: run the command in its fix, or record the blocker on `intake.workload`.
 - A `queue` item leads the list while a runtime still has pending ranked candidates: run its batch command (`dla harness gen --lang <rt> --driver --next`, fill the hooks, `dla harness run H<n> --mode both`, `dla trend S<n>`); once the queue is empty or closed, `dla ledger close-rest`.

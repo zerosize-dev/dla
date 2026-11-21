@@ -252,6 +252,9 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
         let _ = writeln!(out, "{w}\n");
     }
     let _ = writeln!(out, "Time: {}\n", dla_core::timebudget::report_line(view));
+    if let Some(line) = history_line(view) {
+        let _ = writeln!(out, "History: {line}\n");
+    }
     let _ = writeln!(out, "Entry: {}\n", entry_line(view));
     let _ = writeln!(out, "Scope: {}\n", scope_line(view));
     let mut line = findings_line(c);
@@ -265,6 +268,26 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     if let Some(line) = QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.line())) {
         let _ = writeln!(out, "Queue: {line}\n");
     }
+}
+
+/// The times the stop hook stamped the run incomplete and the run went on, for the report's
+/// history: the status says what the run is now, this what it was. `None` without a stamp.
+fn history_line(view: &RunView) -> Option<String> {
+    let lifted: Vec<String> = view
+        .state
+        .stop_stamps
+        .iter()
+        .filter_map(|s| {
+            s.lifted_at.map(|l| {
+                format!(
+                    "stamped incomplete by the stop hook at {} and lifted at {} when work went on",
+                    s.stamped_at.format("%H:%M:%SZ"),
+                    l.format("%H:%M:%SZ")
+                )
+            })
+        })
+        .collect();
+    (!lifted.is_empty()).then(|| lifted.join("; "))
 }
 
 /// The `Findings:` line. The leak hypotheses and the non-leak explanations (the `N-*`
