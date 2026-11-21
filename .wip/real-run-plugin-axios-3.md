@@ -31,3 +31,13 @@ node.listeners@lib/adapters/http.js:924 (slope 1.0, candidates F23, F22, F24), :
 
 ## Fix
 Brief wip-notes/short-series-brief.md (S1 to S6), builder N (agent a747f7bdc3d1ef293), scratch u46.
+
+## Hand flow to confirmed (same run dir, 13:23 binary, after the run ended)
+harness run H1 --mode fresh (default) -> trend S24 passes node.listeners@lib/adapters/http.js:924 ->
+ledger add --sibling-of F23 (printed) -> alloc-test H1 --finding F23: favors leak, decided_by
+node.listeners@lib/adapters/http.js:924, evidence E142, 5 min -> ledger refute F23.n1 --evidence E142 (printed) ->
+ledger confirm F23 --evidence E141 refused (illegal-transition from suspected_static_only; fix text names ledger test) ->
+ledger test F23 --evidence E139 -> ledger confirm F23 --evidence E141: confirmed.
+Defect seen: alloc-test prints only the refute line when the root is already closed as
+suspected_static_only (next_commands skips test/confirm for a dispositioned root).
+Ledger tail: u36/axios-3/hand-flow-ledger-tail.txt

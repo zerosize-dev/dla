@@ -29,7 +29,12 @@ pub fn finish(
     extra: Value,
     result: Result<StageOutcome, dla_core::Refusal>,
 ) -> Res<Value> {
-    let out = result?;
+    let mut out = result?;
+    // `_attention` sorts first: what the next step must read first leads the output.
+    let attention = out
+        .summary
+        .as_object_mut()
+        .and_then(|m| m.remove("_attention"));
     let mut v = json!({
         "ok": true,
         "command": command,
@@ -41,6 +46,9 @@ pub fn finish(
     });
     if let (Value::Object(m), Value::Object(e)) = (&mut v, extra) {
         m.extend(e);
+    }
+    if let (Value::Object(m), Some(a)) = (&mut v, attention) {
+        m.insert("_attention".into(), a);
     }
     Ok(v)
 }

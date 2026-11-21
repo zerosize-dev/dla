@@ -343,11 +343,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         out.insert("passed_more".into(), json!(passed.len() - 8));
     }
     out.insert("failed".into(), json!(cols.len() - passed.len()));
-    let short_cols = if short::is_short(&main.series, &th) {
-        short::columns(&cols, &th)
-    } else {
-        Vec::new()
-    };
+    let short_cols = short::columns(&cols, &th);
     if !short_cols.is_empty() {
         out.insert("short".into(), short::json_list(&short_cols));
     }
@@ -419,8 +415,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
         next.insert(0, entry);
     }
-    if short::is_short(&main.series, &th) {
-        let (n, need) = short::points(&main.series, &th);
+    let counter_evidence = evidence
+        .iter()
+        .find(|(k, _)| *k == EvidenceKind::UnitCountSeries)
+        .or_else(|| evidence.first())
+        .map(|(_, e)| e.to_string());
+    if let Some(entry) = detector_entry(ctx, &ledger, &main.series, counter_evidence.as_deref()) {
+        next.insert(0, entry);
+    }
+    if !short_cols.is_empty() || short::is_short(&main.series, &th) {
         let rerun = main
             .series
             .source
@@ -429,11 +432,63 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             .map(|h| format!("dla harness run {h} --mode {}", mode_name(&main.series)));
         next.insert(
             0,
-            short::next_line(&ledger, &short_cols, n, need, rerun.as_deref()),
+            short::next_line(
+                &ledger,
+                &short_cols,
+                short::points(&main.series, &th),
+                short::is_short(&main.series, &th),
+                rerun.as_deref(),
+            ),
         );
     }
     out.insert("next".into(), json!(next));
     Ok(Value::Object(out))
+}
+
+/// The `next` entry for a runtime detector hit of the run that wrote `series` whose registration
+/// site is known: the hit, the site, the finding at the site, and what to do with it. `None`
+/// when the run had no such hit.
+fn detector_entry(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    series: &dla_core::SeriesFile,
+    evidence: Option<&str>,
+) -> Option<String> {
+    let h = series.source.harness.as_deref()?;
+    let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
+    let hit = rec
+        .detectors
+        .iter()
+        .find(|d| d["site"].as_str().is_some_and(|s| !s.is_empty()))?;
+    let site = hit["site"].as_str()?;
+    let text: String = hit["text"].as_str().unwrap_or("").chars().take(110).collect();
+    let held = hit["sites"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|s| s["count"].as_u64())
+        .map_or(String::new(), |c| format!(" ({c} registered there)"));
+    let at: Vec<FindingId> = ledger
+        .findings()
+        .filter(|f| f.site.as_deref() == Some(site))
+        .map(|f| f.id.clone())
+        .collect();
+    let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
+    let head = format!("DETECTOR HIT at {site}{held}: {text}");
+    Some(match at.first() {
+        Some(f) if m.targets.contains(f) || m.probes.iter().any(|p| p.finding.as_ref() == Some(f)) => format!(
+            "{head}; finding {f} is a target of {h}: follow the ledger lines for the column node.listeners@{site} below, or if it did not pass, measure at full length"
+        ),
+        Some(f) => format!(
+            "{head}; finding {f} holds it but {h} did not target it: dla harness gen --lang {} --driver --probe {f}   # then copy the filled hooks of {h} into it: they already reach this site",
+            m.runtime.as_str()
+        ),
+        None => {
+            let e = evidence.unwrap_or("<evidence>");
+            format!(
+                "{head}; no finding at that site: dla ledger add --origin growth-series --evidence {e} --site {site} --holder registration-table   # the column node.listeners@{site} then ties to it"
+            )
+        }
+    })
 }
 
 /// The first `next` entry of a hook-driver series of the measurement queue that missed some

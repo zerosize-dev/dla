@@ -619,6 +619,10 @@ pub struct RunRecord {
     /// What a caller varies per unit, from the `VARIES.txt` of an entry-path harness when
     /// the run started.
     pub varies: Option<String>,
+    /// The detector hits of the run (`lib`, `text`, `site`, `sites`, `count`), as written.
+    pub detectors: Vec<Value>,
+    /// The limitation lines of the run.
+    pub limitations: Vec<String>,
 }
 
 /// The run record of harness `id` that wrote `series`.
@@ -650,6 +654,18 @@ pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord
                     .and_then(Value::as_str)
                     .map(str::to_owned),
                 varies: doc.get("varies").and_then(Value::as_str).map(str::to_owned),
+                detectors: doc
+                    .get("detectors")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                limitations: doc
+                    .get("limitations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect(),
             });
         }
     }
@@ -858,9 +874,21 @@ pub struct DumpDetector {
     /// The log line or message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    /// Where it was raised.
+    /// Where it was raised (for a registration warning: the site holding most listeners).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
+    /// Sites that hold what the hit is about, with counts, most first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sites: Option<Vec<DetectorSite>>,
+}
+
+/// A site and how many of the things a detector hit counts it holds.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+pub struct DetectorSite {
+    /// `file:line`.
+    pub site: String,
+    /// Count held there.
+    pub count: u64,
 }
 
 /// One JSON line of `out/<pid>.jsonl`. Only `dla_harness` and `phase` are required.

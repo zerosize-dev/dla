@@ -90,13 +90,17 @@ pub fn json_list(short: &[&ColumnTrend]) -> Value {
     )
 }
 
-/// The first `next` line of a short series. `rerun` is the command that measures at full
-/// length (without `--iterations`), when the series came from a harness.
+/// The first `next` line for columns the gate could not judge. `series_short` says the whole
+/// series has too few points (the command then asks for the default length); otherwise only
+/// some columns do (a column that entered late has nulls before): the command asks for
+/// `--iterations` = the series' measured points + what the weakest shown column lacks.
+/// `rerun` is the command base (`dla harness run <H> --mode <mode>`) when the series came
+/// from a harness.
 pub fn next_line(
     ledger: &Ledger,
     short: &[&ColumnTrend],
-    n: usize,
-    need: usize,
+    (n, need): (usize, usize),
+    series_short: bool,
     rerun: Option<&str>,
 ) -> String {
     let strongest: Vec<String> = short
@@ -126,12 +130,28 @@ pub fn next_line(
     } else {
         format!("rising: {}", strongest.join("; "))
     };
+    if series_short {
+        let tail = match rerun {
+            Some(cmd) => format!("{cmd}   # full length, then dla trend"),
+            None => "measure with more points, then dla trend".to_owned(),
+        };
+        return format!(
+            "SERIES TOO SHORT: {n} points after warm-up, the gate needs {need}, so nothing can pass and no target is settled by it; {what}. Run {tail}"
+        );
+    }
+    let lacking = short
+        .iter()
+        .take(3)
+        .map(|c| (c.n as usize).min(n))
+        .min()
+        .unwrap_or(n);
+    let wanted = n + need.saturating_sub(lacking);
     let tail = match rerun {
-        Some(cmd) => format!("{cmd}   # full length, then dla trend"),
-        None => "measure with more points, then dla trend".to_owned(),
+        Some(cmd) => format!("{cmd} --iterations {wanted}   # then dla trend"),
+        None => format!("measure {wanted} points, then dla trend"),
     };
     format!(
-        "SERIES TOO SHORT: {n} points after warm-up, the gate needs {need}, so nothing can pass and no target is settled by it; {what}. Run {tail}"
+        "COLUMN TOO SHORT: a column has {lacking} points, the gate needs {need} (it appeared late), so it cannot pass; {what}. Run {tail}"
     )
 }
 
@@ -173,15 +193,58 @@ mod tests {
     }
 
     #[test]
+    fn a_late_column_in_a_full_length_series_asks_for_enough_iterations() {
+        let th = GateThresholds::default();
+        // 8 measured points; the class column has nulls at the first two.
+        let pts: Vec<(f64, f64)> = (3..=8)
+            .map(|i| (f64::from(i) * 10.0, f64::from(i) * 100.0))
+            .collect();
+        let a = analyze(&pts, None, true, &th);
+        let mut c = column("jvm.class:K.count", &[1., 2., 3.], true, None);
+        c.n = a.n;
+        c.sen = a.sen;
+        c.rise = a.rise;
+        c.gate = a.gate;
+        c.gate_failed = a.gate_failed;
+        assert_eq!(c.n, 6);
+        let list = [c];
+        let found = columns(&list, &th);
+        assert_eq!(found.len(), 1);
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dla_core::Ledger::create(dir.path()).unwrap();
+        let line = next_line(
+            &ledger,
+            &found,
+            (8, 8),
+            false,
+            Some("dla harness run H1 --mode fresh"),
+        );
+        assert!(
+            line.starts_with("COLUMN TOO SHORT: a column has 6 points"),
+            "{line}"
+        );
+        assert!(line.contains("--iterations 10"), "{line}");
+    }
+
+    #[test]
     fn only_the_columns_that_fail_for_the_count_alone_are_listed_site_columns_first() {
         let th = GateThresholds::default();
         let cols = vec![
             column("node.heap_used", &[10., 20., 30., 40.], false, None),
             column("node.listeners", &[10., 20., 30., 40.], true, None),
-            column("node.listeners@a.js:3", &[1., 2., 3., 4.], true, Some("a.js:3")),
+            column(
+                "node.listeners@a.js:3",
+                &[1., 2., 3., 4.],
+                true,
+                Some("a.js:3"),
+            ),
             column("os.rss", &[5., 5., 5., 5.], false, None),
         ];
-        assert!(cols[0].gate_failed == ["n < 8"], "{:?}", cols[0].gate_failed);
+        assert!(
+            cols[0].gate_failed == ["n < 8"],
+            "{:?}",
+            cols[0].gate_failed
+        );
         let s = columns(&cols, &th);
         let names: Vec<&str> = s.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(

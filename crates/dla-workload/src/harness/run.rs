@@ -1107,6 +1107,8 @@ impl PointEnv<'_> {
             set("DLA_STEP", m.step.to_string());
             set("DLA_WARMUP", m.warmup.to_string());
             set("DLA_ROUNDS", self.rounds.to_string());
+            // Drivers fit their rounds into the process's time limit.
+            set("DLA_TIME_LIMIT_SECS", timeout.as_secs().to_string());
             if !m.run.env.iter().any(|(k, _)| k == "DLA_REPEAT") {
                 set("DLA_REPEAT", DEFAULT_REPEAT.to_string());
             }
@@ -1770,7 +1772,7 @@ fn run_command_mode(
                     .detectors
                     .iter()
                     .flatten()
-                    .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "label": label})),
+                    .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "sites": d.sites, "label": label})),
             );
         }
         if k <= manifest.warmup {
@@ -1947,7 +1949,7 @@ fn run_driver_mode(
                 .detectors
                 .iter()
                 .flatten()
-                .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "label": label})),
+                .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "sites": d.sites, "label": label})),
         );
         let sites = if i == last || rec.raw_sites.is_some() {
             sites_of(rec, paths)
@@ -3469,6 +3471,18 @@ fn run_loaded(
     if !out.env_reused.is_empty() {
         summary["env_reused"] = json!(out.env_reused);
     }
+    let planned = manifest.warmup + opts.iterations.unwrap_or(manifest.iterations) + opts.extra;
+    let attention = attention_lines(
+        &manifest,
+        &out,
+        planned,
+        &ledger,
+        &hdir_of_run.join(format!("executed-{first}.json")),
+    );
+    if !attention.is_empty() {
+        // `dla` prints it as the first key of the output.
+        summary["_attention"] = json!(attention);
+    }
     Ok((
         StageOutcome {
             evidence: vec![ev.to_string()],
@@ -3478,6 +3492,88 @@ fn run_loaded(
         },
         partial,
     ))
+}
+
+/// What the first bytes of `dla harness run` say, at most 3 lines of under about 160 characters,
+/// each starting with what to do: a detector hit with its site, a series too short for the gate
+/// (or one the process did not finish) and a driver that lowered its step or found the unit too
+/// slow, and coverage data that was not written.
+pub fn attention_lines(
+    manifest: &HarnessManifest,
+    out: &RunOutput,
+    planned: u32,
+    ledger: &dla_core::Ledger,
+    executed: &Path,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let first_series = out.series.first().map(String::as_str).unwrap_or("S<n>");
+    if let Some(hit) = out
+        .detectors
+        .iter()
+        .find(|d| d["site"].as_str().is_some_and(|s| !s.is_empty()))
+    {
+        let site = hit["site"].as_str().unwrap_or("");
+        let held = hit["sites"][0]["count"]
+            .as_u64()
+            .map_or(String::new(), |c| format!(" ({c} registered)"));
+        let finding = ledger
+            .findings()
+            .find(|f| f.site.as_deref() == Some(site))
+            .map_or(String::new(), |f| format!(", finding {}", f.id));
+        lines.push(clip(
+            &format!(
+                "READ THE DETECTOR HIT: listeners pile up at {site}{held}{finding}; dla trend {first_series} shows the rising column"
+            ),
+            160,
+        ));
+    }
+    let need = dla_stats::GateThresholds::default().min_points;
+    let measured = out.points.saturating_sub(manifest.warmup);
+    if out.tool.is_none() && !out.series.is_empty() && measured < need {
+        let cut = out.points < planned;
+        let mode = out.modes.first().map_or("fresh", |m| m.as_str());
+        lines.push(clip(
+            &format!(
+                "SERIES TOO SHORT ({measured} points after warm-up, the gate needs {need}{}): run dla harness run {} --mode {mode} without --iterations, then dla trend",
+                if cut { "; the process was cut" } else { "" },
+                manifest.id
+            ),
+            160,
+        ));
+    } else if out.tool.is_none() && out.points < planned && !out.series.is_empty() {
+        lines.push(clip(
+            &format!(
+                "PROCESS CUT: {} of {planned} points arrived; give the harness more time (--timeout) or a cheaper unit before trusting the series",
+                out.points
+            ),
+            160,
+        ));
+    }
+    if let Some(l) = out.limitations.iter().find(|l| {
+        l.starts_with("the driver lowered its step") || l.starts_with("the unit is too slow")
+    }) {
+        lines.push(clip(&format!("DRIVER STEP: {l}"), 160));
+    }
+    if let Ok(text) = fs::read_to_string(executed)
+        && let Ok(doc) = serde_json::from_str::<Value>(&text)
+        && doc["kind"] == "none"
+        && let Some(note) = doc["note"].as_str().filter(|n| !n.is_empty())
+    {
+        let killed = out.exits.iter().any(|(_, c)| c.is_none());
+        lines.push(clip(
+            &format!(
+                "NO COVERAGE DATA: {note}{}; targets read unknown",
+                if killed {
+                    " (a process was killed before it could write it)"
+                } else {
+                    ""
+                }
+            ),
+            160,
+        ));
+    }
+    lines.truncate(3);
+    lines
 }
 
 #[cfg(test)]

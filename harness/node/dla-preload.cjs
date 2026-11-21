@@ -1617,8 +1617,25 @@ function checkpoint(x, last = false) {
 }
 
 /** Record a library detector hit (for example a MaxListenersExceededWarning) in the next dump. */
-function detector(lib, text, site = null) {
-  detectors.push({ lib, text: String(text).slice(0, 400), site });
+function detector(lib, text, site = null, sites = null) {
+  const hit = { lib, text: String(text).slice(0, 400), site };
+  if (sites !== null) hit.sites = sites;
+  detectors.push(hit);
+}
+
+/**
+ * Where the listeners of the event a MaxListenersExceededWarning names were registered: the
+ * emitter's own records by project site, most first (at most 5).
+ */
+function warnedSites(warning) {
+  const rec = attached(warning.emitter, LISTENER_REC);
+  if (rec === undefined || warning.type === undefined) return null;
+  const list = rec.get(typeKey(warning.type));
+  if (list === undefined) return null;
+  const counts = new Map();
+  for (const entry of list) if (entry.site !== null) bump(counts, entry.site, 1);
+  const ordered = [...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 5);
+  return ordered.length === 0 ? null : ordered.map(([site, count]) => ({ site, count }));
 }
 
 function iterFromEnv() {
@@ -1638,7 +1655,15 @@ function init() {
   installProbes();
   process.on('warning', (warning) => {
     try {
-      if (warning && warning.name === 'MaxListenersExceededWarning') detector('node', `${warning.name}: ${warning.message}`);
+      if (warning && warning.name === 'MaxListenersExceededWarning') {
+        let sites = null;
+        try {
+          sites = warnedSites(warning);
+        } catch (_) {
+          sites = null;
+        }
+        detector('node', `${warning.name}: ${warning.message}`, sites === null ? null : sites[0].site, sites);
+      }
     } catch (_) {
       // ignore
     }
@@ -1663,4 +1688,10 @@ try {
   // the target runs unmeasured rather than broken
 }
 
-module.exports = { checkpoint, dump, detector, active: ACTIVE };
+/** A line for the limitations of every following record (the driver says what it changed). */
+function note(text) {
+  const line = String(text);
+  if (!probeLimitations.includes(line)) probeLimitations.push(line);
+}
+
+module.exports = { checkpoint, dump, detector, note, active: ACTIVE };
