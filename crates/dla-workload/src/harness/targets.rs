@@ -293,7 +293,9 @@ pub fn add_entry_facts(project: &Path, rt: dla_core::runtime::Runtime, targets: 
         let mut fns: Vec<(Func, Option<usize>, bool)> = Vec::new();
         let mut add = |f: Option<Func>, line: Option<usize>, all: bool| {
             if let Some(f) = f.filter(|f| f.name != "<module>")
-                && !fns.iter().any(|(g, _, _)| g.file == f.file && g.name == f.name)
+                && !fns
+                    .iter()
+                    .any(|(g, _, _)| g.file == f.file && g.name == f.name)
             {
                 fns.push((f, line, all));
             }
@@ -500,7 +502,9 @@ pub fn block(harness: &str, targets: &[Target], prefix: Option<&str>) -> String 
             "Entry-path harness {harness}: show whether a caller of the project's public API can make new keys reach these holders (they grew when a driver fed them keys directly)"
         )
     } else {
-        format!("Targets of harness {harness}: make every unit reach these, with a new key per unit")
+        format!(
+            "Targets of harness {harness}: make every unit reach these, with a new key per unit"
+        )
     }];
     for t in targets {
         lines.extend(t.lines());

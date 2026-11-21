@@ -403,3 +403,22 @@ fn java_a_head_assigned_a_local_built_from_the_old_head_is_a_chain_that_grows() 
     assert!(e.writers.is_empty(), "{e:?}");
     assert_eq!(e.facts.container, Some(ContainerClass::NotContainer));
 }
+
+#[test]
+fn python_and_go_a_head_that_a_node_was_linked_to_is_a_chain_that_grows() {
+    let py = "_newest = None\n\n\ndef parse(line):\n    global _newest\n    record = Record(line)\n    if _newest is not None:\n        record.previous = _newest\n    _newest = record\n    return record\n";
+    let es = entries(&[("a/p.py", py)], Runtime::Python);
+    let e = entry(&es, "p._newest");
+    assert_eq!(e.writers, ["a/p.py:9"], "{e:?}");
+    assert_eq!(e.facts.writer_sites[0].kind, SiteKind::Insert);
+    let go = "package p\n\ntype Node struct {\n\tnext *Node\n\tv    int\n}\n\ntype Registry struct {\n\thead *Node\n}\n\nfunc (s *Registry) Push(v int) {\n\tn := &Node{v: v}\n\tn.next = s.head\n\ts.head = n\n}\n";
+    let es = entries(&[("p/s.go", go)], Runtime::Go);
+    let e = entry(&es, "Registry.head");
+    assert_eq!(e.writers, ["p/s.go:15"], "{e:?}");
+    assert_eq!(e.facts.writer_sites[0].kind, SiteKind::Insert);
+    // A local that is not linked to the old head makes no chain.
+    let flat = "_current = None\n\n\ndef set_it(v):\n    global _current\n    item = Item(v)\n    item.name = v\n    _current = item\n";
+    let es = entries(&[("a/q.py", flat)], Runtime::Python);
+    let e = entry(&es, "q._current");
+    assert!(e.writers.is_empty(), "{e:?}");
+}

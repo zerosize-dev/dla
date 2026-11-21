@@ -86,7 +86,14 @@ impl Run {
     }
 
     /// A series of harness `h`, its run record and its trend report.
-    fn run(&self, series: &str, h: &str, digest: &str, varies: Option<&str>, read: Option<&[(u32, Verdict)]>) {
+    fn run(
+        &self,
+        series: &str,
+        h: &str,
+        digest: &str,
+        varies: Option<&str>,
+        read: Option<&[(u32, Verdict)]>,
+    ) {
         let text = json!({
             "id": series, "source": {"kind": "harness", "harness": h},
             "axis": "n", "columns": [], "points": []
@@ -99,7 +106,11 @@ impl Run {
             rec["varies"] = json!(v);
         }
         std::fs::write(
-            self.dir.path().join("harness").join(h).join(format!("run-{series}.json")),
+            self.dir
+                .path()
+                .join("harness")
+                .join(h)
+                .join(format!("run-{series}.json")),
             rec.to_string(),
         )
         .unwrap();
@@ -187,10 +198,22 @@ fn two_entry_path_harnesses_with_different_drivers_and_no_growth_find_no_trigger
     run.harness("H1", Kind::Hooks, &[1]);
     run.run("S1", "H1", "aa", None, Some(&[(1, Verdict::Grew)]));
     run.harness("H2", Kind::Entry, &[1]);
-    run.run("S2", "H2", "bb", Some("paths"), Some(&[(1, Verdict::Constant)]));
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("paths"),
+        Some(&[(1, Verdict::Constant)]),
+    );
     assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
     run.harness("H3", Kind::Entry, &[1]);
-    run.run("S3", "H3", "cc", Some("methods and bodies"), Some(&[(1, Verdict::Executed)]));
+    run.run(
+        "S3",
+        "H3",
+        "cc",
+        Some("methods and bodies"),
+        Some(&[(1, Verdict::Executed)]),
+    );
     assert_eq!(
         run.triggers().trigger(&f(1)),
         Trigger::NotFound {
@@ -209,9 +232,21 @@ fn the_same_driver_twice_does_not_count() {
     run.run("S1", "H1", "aa", None, Some(&[(1, Verdict::Grew)]));
     // Two harnesses whose drivers have one digest.
     run.harness("H2", Kind::Entry, &[1]);
-    run.run("S2", "H2", "bb", Some("paths"), Some(&[(1, Verdict::Constant)]));
+    run.run(
+        "S2",
+        "H2",
+        "bb",
+        Some("paths"),
+        Some(&[(1, Verdict::Constant)]),
+    );
     run.harness("H3", Kind::Entry, &[1]);
-    run.run("S3", "H3", "bb", Some("paths"), Some(&[(1, Verdict::Constant)]));
+    run.run(
+        "S3",
+        "H3",
+        "bb",
+        Some("paths"),
+        Some(&[(1, Verdict::Constant)]),
+    );
     assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);
     // One harness run twice with an edited driver is one harness.
     let run = Run::new(1);
@@ -264,10 +299,14 @@ fn a_repeated_series_says_nothing_about_new_keys() {
     run.run("S1", "H1", "aa", Some("a"), Some(&[(1, Verdict::Constant)]));
     run.harness("H2", Kind::Entry, &[1]);
     run.run("S2", "H2", "bb", Some("b"), Some(&[(1, Verdict::Constant)]));
-    assert!(matches!(run.triggers().trigger(&f(1)), Trigger::NotFound { .. }));
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::NotFound { .. }
+    ));
     // H2's only read series reused its keys: H2 does not count.
     let p = run.dir.path().join("series/S2.json");
-    let mut doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
     doc["source"]["mode"] = json!("repeated");
     std::fs::write(&p, doc.to_string()).unwrap();
     assert_eq!(run.triggers().trigger(&f(1)), Trigger::Unchecked);

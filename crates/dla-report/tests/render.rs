@@ -339,6 +339,50 @@ fn coverage_gaps_blind_spots_and_residual() {
 }
 
 #[test]
+fn a_run_with_no_listed_entry_points_does_not_read_as_zero_of_zero() {
+    let mut cov = coverage();
+    let w = cov.workers.get_mut("jvm").unwrap();
+    w.entry_points = Default::default();
+    w.iterations = Some(3520);
+    let md = render_markdown(&view("incomplete", Some(cov)));
+    assert!(
+        md.contains("Coverage: jvm 3520 iterations, entry points not enumerated (none listed for this runtime)\n"),
+        "{md}"
+    );
+    assert!(!md.contains("0 of 0"), "{md}");
+}
+
+#[test]
+fn many_residual_rows_are_bounded_in_the_header_and_complete_in_a_section() {
+    let mut rows = Vec::new();
+    for n in 1..=48 {
+        let above = n == 4 || n == 9;
+        rows.push(json!({
+            "series": format!("S{n}"), "region": "heap",
+            "total_slope": 1304.199053030303, "attributed_slope": 0.0,
+            "residual": if above { 1304.199053030303 } else { 12.345678 },
+            "unit": "bytes/iteration", "threshold": 326.04976325757576,
+            "open_item": if above { json!(format!("O{n}")) } else { json!(null) },
+        }));
+    }
+    let mut cov = coverage();
+    cov.residual = serde_json::from_value(json!(rows)).unwrap();
+    let md = render_markdown(&view("incomplete", Some(cov)));
+    let header = md.lines().find(|l| l.starts_with("Residual: ")).unwrap();
+    assert!(header.len() < 600, "{header}");
+    assert!(
+        header.contains("S4 heap 1304.199 bytes/iteration") || header.contains("S4 heap 1304.1991"),
+        "{header}"
+    );
+    assert!(header.contains("see O4") && header.contains("see O9"), "{header}");
+    assert!(header.contains("46 series below threshold"), "{header}");
+    assert!(!header.contains("1304.199053030303"), "{header}");
+    // Every row is in a body section.
+    let at = md.find("## Residual by series").unwrap();
+    assert_eq!(md[at..].matches("unattributed of").count() >= 48, true, "{md}");
+}
+
+#[test]
 fn evidence_limitations_and_unknowns_carry_ids() {
     let md = render_markdown(&view("complete", None));
     assert!(md.contains("- E2: partial coverage (40 of 100 examined)"));

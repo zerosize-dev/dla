@@ -418,7 +418,10 @@ class Router:
         p.sites[0].origins,
         [(
             "h".to_owned(),
-            vec!["self.routes.get(path)".to_owned(), "Handler(404)".to_owned()]
+            vec![
+                "self.routes.get(path)".to_owned(),
+                "Handler(404)".to_owned()
+            ]
         )]
     );
 }
@@ -463,7 +466,7 @@ def run_app(logger_class=Logger):
     assert_eq!(names(&hops[0]), ["run_app"]);
     assert!(hops[0].callers[0].by_reference);
     // A function that is called is not followed by its mentions.
-    let src = "def f():\n    pass\n\n\ndef g():\n    f()\n\n\nTABLE = [f]\n";
+    let src = "def fetch():\n    pass\n\n\ndef g():\n    fetch()\n\n\nTABLE = [fetch]\n";
     let files = [file("m.py", src)];
     let ix = Index::build(&files);
     let f = ix.function_at("m.py", 2).unwrap();
@@ -486,24 +489,41 @@ class App:
             if not self._legacy:
                 h = sink(h)
             else:
-                h = other(h)
+                h = sink(h)
         return sink(request)
 ";
     let files = [file("a.py", src)];
     let ix = Index::build(&files);
     let sink = ix.function_at("a.py", 2).unwrap();
     let p = ix.provenance(&files, &sink, None, true);
-    assert_eq!(p.sites.len(), 2);
-    // Innermost condition first; the else branch is no guard; a call outside every `if` has none.
-    assert_eq!(p.sites[0].guards, ["not self._legacy", "self._run_middlewares"]);
-    assert!(p.sites[1].guards.is_empty(), "{:?}", p.sites[1].guards);
+    assert_eq!(p.sites.len(), 3);
+    // Innermost condition first; the else branch is not under the condition of its `if`; a call
+    // outside every `if` has none.
+    assert_eq!(
+        p.sites[0].guards,
+        ["not self._legacy", "self._run_middlewares"]
+    );
+    assert_eq!(p.sites[1].guards, ["self._run_middlewares"]);
+    assert!(p.sites[2].guards.is_empty(), "{:?}", p.sites[2].guards);
     // Go and JavaScript read their `if` too.
-    let go = [file("w.go", "package w\n\nfunc sink(h int) {}\n\nfunc handle(h int) {\n\tif enabled(h) {\n\t\tsink(h)\n\t}\n}\n")];
+    let go = [file(
+        "w.go",
+        "package w\n\nfunc sink(h int) {}\n\nfunc handle(h int) {\n\tif enabled(h) {\n\t\tsink(h)\n\t}\n}\n",
+    )];
     let ix = Index::build(&go);
     let sink = ix.function_at("w.go", 3).unwrap();
-    assert_eq!(ix.provenance(&go, &sink, None, true).sites[0].guards, ["enabled(h)"]);
-    let js = [file("w.js", "function sink(h) {}\nfunction handle(h) {\n  if (h.ok) {\n    sink(h);\n  }\n}\n")];
+    assert_eq!(
+        ix.provenance(&go, &sink, None, true).sites[0].guards,
+        ["enabled(h)"]
+    );
+    let js = [file(
+        "w.js",
+        "function sink(h) {}\nfunction handle(h) {\n  if (h.ok) {\n    sink(h);\n  }\n}\n",
+    )];
     let ix = Index::build(&js);
     let sink = ix.function_at("w.js", 1).unwrap();
-    assert_eq!(ix.provenance(&js, &sink, None, true).sites[0].guards, ["h.ok"]);
+    assert_eq!(
+        ix.provenance(&js, &sink, None, true).sites[0].guards,
+        ["h.ok"]
+    );
 }

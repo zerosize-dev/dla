@@ -44,6 +44,7 @@ pub fn render_markdown(view: &RunView) -> String {
     explained(&mut out, view);
     merged_duplicates(&mut out, view);
     ruled_out(&mut out, view);
+    residual_section(&mut out, view);
     blind_spots(&mut out, view);
     checklist(&mut out, view);
     evidence_index(&mut out, view);
@@ -515,6 +516,15 @@ fn coverage_line(coverage: Option<&CoverageManifest>) -> String {
                 Some(n) if exercised == 0 && n > 1 => format!(", {n} project classes loaded"),
                 _ => String::new(),
             };
+            // No entry point is listed for the runtime (`dla workload discover` did not run, or
+            // found none for a library): "0 of 0" would read as nothing covered, and nothing
+            // was enumerated to be covered.
+            if discovered == 0 {
+                return format!(
+                    "{} {iterations}, entry points not enumerated (none listed for this runtime){project}",
+                    inline(name)
+                );
+            }
             format!(
                 "{} {iterations}, {exercised} of {discovered} entry points exercised{project}",
                 inline(name)
@@ -539,17 +549,64 @@ fn residual_line(coverage: Option<&CoverageManifest>) -> String {
     if cov.residual.is_empty() {
         return "not measured".to_owned();
     }
-    cov.residual
+    if cov.residual.len() <= RESIDUAL_HEADER_ROWS {
+        return cov
+            .residual
+            .iter()
+            .map(residual_row)
+            .collect::<Vec<_>>()
+            .join("; ");
+    }
+    // Many series: the header names the ones above their threshold (with the open item that
+    // covers each) and counts the rest; every row is in the section `## Residual by series`.
+    let (above, below): (Vec<&ResidualRow>, Vec<&ResidualRow>) =
+        cov.residual.iter().partition(|r| r.residual > r.threshold);
+    let mut parts: Vec<String> = above
         .iter()
-        .map(residual_row)
-        .collect::<Vec<_>>()
-        .join("; ")
+        .take(RESIDUAL_HEADER_ROWS)
+        .map(|r| residual_row(r))
+        .collect();
+    if above.len() > RESIDUAL_HEADER_ROWS {
+        parts.push(format!(
+            "{} more above threshold",
+            above.len() - RESIDUAL_HEADER_ROWS
+        ));
+    }
+    if !below.is_empty() {
+        parts.push(format!("{} series below threshold", below.len()));
+    }
+    format!(
+        "{} measured; {} (all rows: section Residual by series)",
+        plural_n(cov.residual.len() as u64, "row"),
+        parts.join("; ")
+    )
+}
+
+/// Residual rows the header line spells out one by one.
+const RESIDUAL_HEADER_ROWS: usize = 3;
+
+/// `## Residual by series`: every row, when the header line only summarizes them.
+fn residual_section(out: &mut String, view: &RunView) {
+    let Some(cov) = &view.coverage else { return };
+    if cov.residual.len() <= RESIDUAL_HEADER_ROWS {
+        return;
+    }
+    out.push_str("## Residual by series\n\n");
+    for r in &cov.residual {
+        let _ = writeln!(out, "- {}", residual_row(r));
+    }
+    out.push('\n');
 }
 
 fn residual_row(r: &ResidualRow) -> String {
+    let series = r.series.as_deref().map_or(String::new(), |s| format!("{s} "));
     let mut s = format!(
-        "{} {} {} unattributed of {} total (threshold {})",
-        r.region, r.residual, r.unit, r.total_slope, r.threshold
+        "{series}{} {} {} unattributed of {} total (threshold {})",
+        r.region,
+        num(r.residual),
+        r.unit,
+        num(r.total_slope),
+        num(r.threshold)
     );
     if r.residual > r.threshold {
         s.push_str(" ABOVE THRESHOLD");
@@ -666,9 +723,8 @@ fn findings(out: &mut String, view: &RunView) {
     // tier decides first.
     // Confirmed and strong leaks lead, those a caller of the public API was shown to trigger
     // first.
-    let triggered = |f: &Finding| {
-        TRIGGERS.with(|t| t.borrow().as_ref().is_some_and(|t| t.reproduced(&f.id)))
-    };
+    let triggered =
+        |f: &Finding| TRIGGERS.with(|t| t.borrow().as_ref().is_some_and(|t| t.reproduced(&f.id)));
     list.sort_by_key(|f| {
         let (tier, multi) = if f.state == FindingState::SuspectedStaticOnly {
             (static_tier(view, f), dla_core::rank::multi_origin_key(f))

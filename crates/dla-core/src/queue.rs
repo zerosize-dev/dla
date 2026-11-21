@@ -551,9 +551,17 @@ pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
 
 /// What the report says about the queue: its header line and, per finding, how it was
 /// targeted.
+///
+/// The header line counts every finding the queue took when it was built, whatever its state
+/// now: a leak-side, non-sibling, non-duplicate finding of an eligible tier (1 to 4) in any
+/// state. A finding that grew and was then taken under test, confirmed or refuted still
+/// counts as targeted and, by its best verdict, as grew; the line is a record of the
+/// measurement the queue did, not of the candidates still open.
 #[derive(Debug)]
 pub struct ReportFacts {
     ranks: BTreeMap<FindingId, (Option<usize>, u8)>,
+    /// The findings the header line counts.
+    counted: Vec<FindingId>,
     index: Index,
     queue_on: bool,
 }
@@ -566,8 +574,20 @@ impl ReportFacts {
             .into_iter()
             .map(|r| (r.id, (r.rank, r.tier)))
             .collect();
+        let counted = view
+            .ledger
+            .findings()
+            .filter(|f| {
+                !f.id.is_sibling()
+                    && f.polarity() == Polarity::Leak
+                    && view.ledger.merged_into(&f.id).is_none()
+                    && rank::eligible_tier(rank::tier(f, view.ledger.annotation(&f.id)))
+            })
+            .map(|f| f.id.clone())
+            .collect();
         Some(Self {
             ranks,
+            counted,
             index: Index::of(view),
             queue_on: view.state.queue,
         })
@@ -581,12 +601,7 @@ impl ReportFacts {
                     .to_owned(),
             );
         }
-        let ranked: Vec<&FindingId> = self
-            .ranks
-            .iter()
-            .filter(|(_, (rank, _))| rank.is_some())
-            .map(|(id, _)| id)
-            .collect();
+        let ranked: Vec<&FindingId> = self.counted.iter().collect();
         if ranked.is_empty() {
             return None;
         }
@@ -808,6 +823,60 @@ mod tests {
         run.series("S1", "H1");
         run.trend("T1", "S1", &[(1, Verdict::Grew), (2, Verdict::Constant)]);
         assert_eq!(pending_of(&run.reload()), ["F2", "F3"]);
+    }
+
+    #[test]
+    fn the_queue_line_counts_a_finding_that_left_the_candidate_state() {
+        let (run, _) = Run::new(3);
+        run.harness(&manifest("H1", &[1, 2, 3], true));
+        run.series("S1", "H1");
+        run.trend(
+            "T1",
+            "S1",
+            &[
+                (1, Verdict::Grew),
+                (2, Verdict::Executed),
+                (3, Verdict::Constant),
+            ],
+        );
+        let line = |run: &Run| ReportFacts::of(&run.reload()).unwrap().line().unwrap();
+        let before = line(&run);
+        assert_eq!(
+            before,
+            "3 of 3 ranked candidates targeted in 1 harness: grew 1, executed 1, not reached 1; 0 not targeted"
+        );
+        // F1 grew and was taken under test (later: confirmed); it still counts, as grew.
+        let mut l = Ledger::load(run.dir.path()).unwrap();
+        let mut ev = evidence("python");
+        ev.kind = EvidenceKind::Workload;
+        ev.authority = Authority::Test;
+        ev.result = json!({"harness": "H1", "mode": "driver", "runtime": "python"});
+        l.add_evidence(ev).unwrap();
+        let mut sib = NewFinding::new(
+            Origin::parse("hypothesis").unwrap(),
+            vec![crate::EvidenceId::new(1)],
+        );
+        sib.sibling_of = Some(FindingId::new(1));
+        sib.hypothesis = Some("N-WARM".into());
+        sib.refute_if = Some("keeps growing".into());
+        l.add_finding(sib).unwrap();
+        l.transition(
+            &FindingId::new(1),
+            FindingState::UnderTest,
+            None,
+            None,
+            vec![crate::EvidenceId::new(2)],
+            "t",
+        )
+        .unwrap();
+        assert!(!in_universe(
+            RunView::load(run.dir.path())
+                .unwrap()
+                .ledger
+                .finding(&FindingId::new(1))
+                .unwrap()
+        ));
+        assert_eq!(line(&run), before);
     }
 
     #[test]

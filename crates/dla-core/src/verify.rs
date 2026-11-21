@@ -33,6 +33,15 @@ pub fn agrees_site(finding: Option<&str>, verifier: Option<&str>) -> bool {
     }
 }
 
+/// [`agrees_site`], or the verifier's site is another site the finding itself records for its
+/// holder: a writer or a remover (`known`), each compared with the same tolerance. A finding's
+/// site is where the holder is declared and a verifier reading the bundle often names the line
+/// that writes it; both are the same place for this check.
+pub fn agrees_site_among(finding: Option<&str>, verifier: Option<&str>, known: &[String]) -> bool {
+    agrees_site(finding, verifier)
+        || verifier.is_some_and(|v| known.iter().any(|k| agrees_site(Some(k), Some(v))))
+}
+
 /// Whether the verifier's holder is the finding's. A finding without a holder agrees
 /// with nothing.
 pub fn agrees_holder(finding: Option<Holder>, verifier: Holder) -> bool {
@@ -69,9 +78,10 @@ pub fn record(
     label: String,
     bundle: String,
     archetypes_on: bool,
+    known_sites: &[String],
 ) -> Verification {
     Verification {
-        agrees_site: agrees_site(finding.site.as_deref(), site.as_deref()),
+        agrees_site: agrees_site_among(finding.site.as_deref(), site.as_deref(), known_sites),
         agrees_holder: agrees_holder(finding.holder, holder),
         agrees_label: agrees_label(finding, &label, archetypes_on),
         finding: finding.id.clone(),

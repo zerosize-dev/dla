@@ -194,7 +194,8 @@ fn one_line(s: &str) -> String {
 }
 
 fn field_text(n: Node<'_>, field: &str, src: &str) -> Option<String> {
-    n.child_by_field_name(field).map(|c| text(c, src).to_owned())
+    n.child_by_field_name(field)
+        .map(|c| text(c, src).to_owned())
 }
 
 fn line_of(n: Node<'_>) -> usize {
@@ -223,7 +224,10 @@ fn is_class_kind(lang: Lang, kind: &str) -> bool {
         Lang::Python => kind == "class_definition",
         Lang::Java => matches!(
             kind,
-            "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration"
+            "class_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
+                | "record_declaration"
         ),
         Lang::Go => false,
         _ => matches!(kind, "class_declaration" | "class"),
@@ -367,7 +371,9 @@ impl<'a> Walker<'a> {
         let name = name.filter(|s| !s.is_empty())?;
         let outer_class = self.enclosing_class();
         let nested_in_fn = self.in_function().is_some();
-        let class_name = receiver.clone().or_else(|| outer_class.map(|(c, _)| c.to_owned()));
+        let class_name = receiver
+            .clone()
+            .or_else(|| outer_class.map(|(c, _)| c.to_owned()));
         let full = match (&class_name, nested_in_fn && outer_class.is_none()) {
             (Some(c), false) => format!("{c}.{name}"),
             (_, true) => format!("{}.{name}", self.in_function().map_or("", |f| &f.name)),
@@ -399,9 +405,9 @@ impl<'a> Walker<'a> {
 
     fn java_public(&self, n: Node<'_>) -> bool {
         let mut cur = n.walk();
-        let has_public = n
-            .children(&mut cur)
-            .any(|c| c.kind() == "modifiers" && text(c, self.src).split_whitespace().any(|w| w == "public"));
+        let has_public = n.children(&mut cur).any(|c| {
+            c.kind() == "modifiers" && text(c, self.src).split_whitespace().any(|w| w == "public")
+        });
         has_public
             || n.parent()
                 .and_then(|p| p.parent())
@@ -495,7 +501,9 @@ impl<'a> Walker<'a> {
                     }
                 }
                 (_, "required_parameter" | "optional_parameter") => {
-                    out.extend(field_text(c, "pattern", src).filter(|p| !p.starts_with(['{', '['])));
+                    out.extend(
+                        field_text(c, "pattern", src).filter(|p| !p.starts_with(['{', '['])),
+                    );
                 }
                 (_, "assignment_pattern") => {
                     out.extend(field_text(c, "left", src).filter(|p| !p.starts_with(['{', '['])));
@@ -510,10 +518,22 @@ impl<'a> Walker<'a> {
     fn record_call(&mut self, n: Node<'_>) {
         let src = self.src;
         let (callee_node, args_node) = match (self.lang, n.kind()) {
-            (Lang::Java, "method_invocation") => (n.child_by_field_name("name"), n.child_by_field_name("arguments")),
-            (Lang::Java, _) => (n.child_by_field_name("type"), n.child_by_field_name("arguments")),
-            (_, "new_expression") => (n.child_by_field_name("constructor"), n.child_by_field_name("arguments")),
-            _ => (n.child_by_field_name("function"), n.child_by_field_name("arguments")),
+            (Lang::Java, "method_invocation") => (
+                n.child_by_field_name("name"),
+                n.child_by_field_name("arguments"),
+            ),
+            (Lang::Java, _) => (
+                n.child_by_field_name("type"),
+                n.child_by_field_name("arguments"),
+            ),
+            (_, "new_expression") => (
+                n.child_by_field_name("constructor"),
+                n.child_by_field_name("arguments"),
+            ),
+            _ => (
+                n.child_by_field_name("function"),
+                n.child_by_field_name("arguments"),
+            ),
         };
         let (Some(callee_node), Some(args_node)) = (callee_node, args_node) else {
             return;
@@ -594,8 +614,10 @@ fn guards_of(n: Node<'_>, src: &str) -> Vec<String> {
             break;
         }
         if matches!(p.kind(), "if_statement" | "elif_clause" | "if_expression")
-            && let (Some(cond), Some(body)) =
-                (p.child_by_field_name("condition"), p.child_by_field_name("consequence"))
+            && let (Some(cond), Some(body)) = (
+                p.child_by_field_name("condition"),
+                p.child_by_field_name("consequence"),
+            )
             && body.id() == child.id()
         {
             let text = one_line(unparen(text(cond, src)));
@@ -688,15 +710,13 @@ impl Index {
                     if after.starts_with('(') || defines {
                         continue;
                     }
-                    let func = self
-                        .function_at(&file.rel, n)
-                        .unwrap_or_else(|| Func {
-                            file: file.rel.clone(),
-                            line: 1,
-                            name: "<module>".to_owned(),
-                            public: false,
-                            params: Vec::new(),
-                        });
+                    let func = self.function_at(&file.rel, n).unwrap_or_else(|| Func {
+                        file: file.rel.clone(),
+                        line: 1,
+                        name: "<module>".to_owned(),
+                        public: false,
+                        params: Vec::new(),
+                    });
                     // The function itself, and a function of the same name.
                     if func.file == f.file && func.name == f.name {
                         continue;
@@ -740,7 +760,10 @@ impl Index {
             let is_name = !expr.is_empty()
                 && expr.chars().all(|c| c.is_alphanumeric() || c == '_')
                 && !expr.chars().next().is_some_and(|c| c.is_ascii_digit())
-                && !matches!(expr.as_str(), "None" | "True" | "False" | "nil" | "null" | "self" | "this");
+                && !matches!(
+                    expr.as_str(),
+                    "None" | "True" | "False" | "nil" | "null" | "self" | "this"
+                );
             if !is_name || out.iter().any(|(n, _)| n == expr) {
                 continue;
             }
@@ -813,17 +836,16 @@ impl Index {
             .map(|(f, c)| &self.files[*f].calls[*c])
             .collect();
         v.sort_by(|a, b| {
-            (!a.caller.public, &a.caller.file, a.line).cmp(&(!b.caller.public, &b.caller.file, b.line))
+            (!a.caller.public, &a.caller.file, a.line).cmp(&(
+                !b.caller.public,
+                &b.caller.file,
+                b.line,
+            ))
         });
         v
     }
 
-    fn hop(
-        &self,
-        files: &[SourceFile],
-        of: &[Func],
-        seen: &mut BTreeSet<(String, String)>,
-    ) -> Hop {
+    fn hop(&self, files: &[SourceFile], of: &[Func], seen: &mut BTreeSet<(String, String)>) -> Hop {
         let mut by_caller: Vec<Caller> = Vec::new();
         for f in of {
             let before = by_caller.len();
@@ -854,8 +876,12 @@ impl Index {
             }
         }
         by_caller.sort_by(|a, b| {
-            (!a.func.public, a.by_reference, &a.func.file, a.line)
-                .cmp(&(!b.func.public, b.by_reference, &b.func.file, b.line))
+            (!a.func.public, a.by_reference, &a.func.file, a.line).cmp(&(
+                !b.func.public,
+                b.by_reference,
+                &b.func.file,
+                b.line,
+            ))
         });
         let more = by_caller.len().saturating_sub(MAX_PER_HOP);
         by_caller.truncate(MAX_PER_HOP);
@@ -905,7 +931,13 @@ impl Index {
                 let f = files.iter().find(|f| f.rel == func.file)?;
                 Some(statement_identifiers(f, l))
             })
-            .map(|ids| func.params.iter().filter(|p| ids.contains(*p)).cloned().collect())
+            .map(|ids| {
+                func.params
+                    .iter()
+                    .filter(|p| ids.contains(*p))
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
         };
         let mut sites = Vec::new();
@@ -957,7 +989,10 @@ pub fn statement_identifiers(f: &SourceFile, line: usize) -> BTreeSet<String> {
     };
     let indent = text_line.len() - text_line.trim_start().len();
     let mut node = tree.root_node().descendant_for_point_range(
-        Point { row, column: indent },
+        Point {
+            row,
+            column: indent,
+        },
         Point {
             row,
             column: text_line.trim_end().len().max(indent),
@@ -966,7 +1001,11 @@ pub fn statement_identifiers(f: &SourceFile, line: usize) -> BTreeSet<String> {
     let mut stmt = None;
     while let Some(n) = node {
         let k = n.kind();
-        if is_function_kind(f.lang, k) || is_class_kind(f.lang, k) || k == "module" || k == "program" {
+        if is_function_kind(f.lang, k)
+            || is_class_kind(f.lang, k)
+            || k == "module"
+            || k == "program"
+        {
             break;
         }
         if k.ends_with("_statement")

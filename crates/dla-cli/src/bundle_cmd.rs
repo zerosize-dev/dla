@@ -613,6 +613,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: BundleArgs) -> 
 
 type Built = (String, usize, usize, Vec<String>, Vec<String>);
 
+/// The result of writing one file of the bundle.
+type Written = Result<(), Failure>;
+
 /// At most this many entry-path harnesses go into a bundle.
 const MAX_ENTRY_HARNESSES: usize = 2;
 /// Largest driver file copied for an entry-path harness.
@@ -645,7 +648,9 @@ fn without_target_block(text: &str) -> String {
         "//"
     };
     let mut out: String = lines[..start].concat();
-    out.push_str(&format!("{pad}{marker} (the generated target block is not part of the bundle)\n"));
+    out.push_str(&format!(
+        "{pad}{marker} (the generated target block is not part of the bundle)\n"
+    ));
     out.push_str(&lines[end..].concat());
     out
 }
@@ -659,7 +664,7 @@ fn entry_path_files(
     tc: &ToolCtx,
     id: &FindingId,
     needles: &Needles,
-    write: &dyn Fn(&str, &[u8]) -> Result<(), Failure>,
+    write: &dyn Fn(&str, &[u8]) -> Written,
 ) -> Result<Vec<Value>, Failure> {
     let Ok(view) = dla_core::RunView::load(&tc.run_dir) else {
         return Ok(Vec::new());
@@ -1090,10 +1095,19 @@ mod tests {
     fn the_generated_target_block_is_cut_out_of_a_driver() {
         let text = "import os\n\ndef setup():\n    # Entry-path harness H5: show whether\n    # F1 at a.py:3: holder static/global\n    #   writers: a.py:9 (put)\n    # DLA-HOOK setup: build\n    x = 1\n";
         let out = without_target_block(text);
-        assert!(out.contains("    # (the generated target block is not part of the bundle)\n"), "{out}");
-        assert!(!out.contains("F1 at a.py:3") && !out.contains("writers:"), "{out}");
+        assert!(
+            out.contains("    # (the generated target block is not part of the bundle)\n"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("F1 at a.py:3") && !out.contains("writers:"),
+            "{out}"
+        );
         // The hook comment, which is not part of the block's run, stays.
-        assert!(out.contains("# DLA-HOOK setup: build") && out.contains("x = 1"), "{out}");
+        assert!(
+            out.contains("# DLA-HOOK setup: build") && out.contains("x = 1"),
+            "{out}"
+        );
         // No block: unchanged.
         assert_eq!(without_target_block("a = 1\n"), "a = 1\n");
     }

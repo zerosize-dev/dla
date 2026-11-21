@@ -167,7 +167,12 @@ impl Triggers {
                     .and_then(|f| f.source.mode)
                     != Some(crate::series::KeyMode::Repeated),
                 verdicts: report
-                    .map(|r| r.targets.iter().map(|v| (v.finding.clone(), v.verdict)).collect())
+                    .map(|r| {
+                        r.targets
+                            .iter()
+                            .map(|v| (v.finding.clone(), v.verdict))
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 declared: m.targets.iter().cloned().collect(),
             });
@@ -199,7 +204,9 @@ impl Triggers {
                 continue;
             };
             if let Some(id) = m.targets.iter().find(|id| id.to_string() == f) {
-                self.writer.entry(id.clone()).or_insert_with(|| w.to_owned());
+                self.writer
+                    .entry(id.clone())
+                    .or_insert_with(|| w.to_owned());
             }
         }
     }
@@ -246,7 +253,10 @@ impl Triggers {
         if let Some(r) = self.runs.iter().filter(|r| r.entry).find(grew) {
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
-                varies: r.varies.clone().unwrap_or_else(|| "not recorded".to_owned()),
+                varies: r
+                    .varies
+                    .clone()
+                    .unwrap_or_else(|| "not recorded".to_owned()),
             };
         }
         if let Some(r) = self.runs.iter().filter(|r| r.own_workload).find(grew) {
@@ -269,7 +279,9 @@ impl Triggers {
             if !runs.iter().any(|(h, _)| *h == r.harness) && digests.insert(r.digest.as_str()) {
                 runs.push((
                     r.harness.clone(),
-                    r.varies.clone().unwrap_or_else(|| "not recorded".to_owned()),
+                    r.varies
+                        .clone()
+                        .unwrap_or_else(|| "not recorded".to_owned()),
                 ));
             }
         }
@@ -300,7 +312,9 @@ impl Triggers {
             .map(|r| {
                 (
                     r.harness.clone(),
-                    r.varies.clone().unwrap_or_else(|| "not recorded".to_owned()),
+                    r.varies
+                        .clone()
+                        .unwrap_or_else(|| "not recorded".to_owned()),
                 )
             })
             .collect()
@@ -353,7 +367,9 @@ pub fn items(view: &RunView) -> Vec<BlockingItem> {
     // (finding, runtime) of every finding that needs an entry-path run.
     let mut open: Vec<(FindingId, String)> = Vec::new();
     for f in view.ledger.findings() {
-        if !is_subject(view, f) || t.trigger(&f.id) != Trigger::Unchecked || !t.grew_in_a_harness(&f.id)
+        if !is_subject(view, f)
+            || t.trigger(&f.id) != Trigger::Unchecked
+            || !t.grew_in_a_harness(&f.id)
         {
             continue;
         }

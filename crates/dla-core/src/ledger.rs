@@ -3079,8 +3079,8 @@ impl Ledger {
     }
 
     /// Core mode: records what a verifier concluded about `finding` from its bundle.
-    /// The agreement with the finding's site (same file, within 3 lines, or both none)
-    /// and holder is computed here; a disagreement also opens an open item naming both
+    /// The agreement with the finding's site (same file, within 3 lines of the site or of one
+    /// of its recorded writers or removers, or both none) and holder is computed here; a disagreement also opens an open item naming both
     /// values. Returns the verification line and the open item line, if any.
     #[allow(clippy::too_many_arguments)]
     pub fn verify(
@@ -3145,6 +3145,9 @@ impl Ledger {
             }
             _ => {}
         }
+        let known: Vec<String> = self.index.annotations.get(finding).map_or_else(Vec::new, |a| {
+            a.writers.iter().chain(&a.removers).cloned().collect()
+        });
         let v = verify::record(
             f,
             site,
@@ -3153,6 +3156,7 @@ impl Ledger {
             label.to_owned(),
             bundle.to_owned(),
             matches!(archetypes, Archetypes::On(_)),
+            &known,
         );
         let mut batch = vec![Pending::new(Record::Verification(v.clone()))];
         if !verify::agrees(&v) {

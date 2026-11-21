@@ -139,6 +139,8 @@ pub fn events(line: &str, name: &str) -> Vec<Event> {
     );
     let assign = re(&ASSIGN, r"^\s*(?:\?\.|\.)?\s*([-+*|&^]?)=([^=>~].*|)$");
     let send = re(&SEND, r"^\s*<-");
+    static RECV: OnceLock<Regex> = OnceLock::new();
+    let recv = re(&RECV, r"<-\s*[\w.*&]*$");
     let own_append = Regex::new(&format!(
         r"^(?:append\(|.*\bappend\(\s*{n}\b|{n}\s*[+|]|.*\+\s*{n}\b)",
         n = regex::escape(name)
@@ -181,6 +183,17 @@ pub fn events(line: &str, name: &str) -> Vec<Event> {
                     rhs: String::new(),
                 });
             }
+            continue;
+        }
+        // `v := <-s.jobs`: a receive takes an element out of a channel holder. The channel of a
+        // timer (`<-tick.C`) is read, not emptied: the name is followed by a field.
+        if recv.is_match(pre) && !rest.trim_start().starts_with(['.', '[']) {
+            out.push(Event {
+                kind: Ev::Remove,
+                depth: 0,
+                args: String::new(),
+                rhs: String::new(),
+            });
             continue;
         }
         if send.is_match(rest) {
@@ -285,6 +298,14 @@ pub fn holds_itself(value: &str, name: &str) -> bool {
             Some(b')' | b',' | b'}' | b']') | None
         )
     })
+}
+
+/// True when `value` is the holder's own value or holds it (see [`holds_itself`]): what a
+/// node's link field is set to when the node is about to become the new head.
+pub fn links_to(value: &str, name: &str) -> bool {
+    let v = value.trim().trim_end_matches(';').trim();
+    let tail = v.rsplit(['.', '>']).next().unwrap_or(v);
+    tail == name || holds_itself(value, name)
 }
 
 /// The identifiers of a text, without keywords and string literals.
@@ -440,5 +461,12 @@ mod tests {
         assert_eq!(one("n = n * 2", "n"), [(Ev::Reassign, 0)]);
         assert!(holds_itself("wrap(a, a)", "a"));
         assert!(!holds_itself("a", "a"));
+    }
+
+    #[test]
+    fn a_receive_empties_a_channel_holder_and_reading_a_timer_channel_does_not() {
+        assert_eq!(one("v := <-s.jobs", "jobs"), [(Ev::Remove, 0)]);
+        assert_eq!(one("s.jobs <- v", "jobs"), [(Ev::Grow, 0)]);
+        assert!(one("case <-tick.C:", "tick").is_empty());
     }
 }

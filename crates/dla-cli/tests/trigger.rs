@@ -168,7 +168,10 @@ impl Run {
 
     fn varies(&self, h: &str, line: &str) {
         fs::write(
-            self.run_dir.join("harness").join(h).join("driver/VARIES.txt"),
+            self.run_dir
+                .join("harness")
+                .join(h)
+                .join("driver/VARIES.txt"),
             format!("{line}\n"),
         )
         .unwrap();
@@ -189,7 +192,12 @@ impl Run {
     fn stop_reason(&self) -> String {
         let away = tempfile::tempdir().unwrap();
         let mut c = Command::cargo_bin("dla").unwrap();
-        for var in ["DLA_RUN", "DLA_WORKER", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"] {
+        for var in [
+            "DLA_RUN",
+            "DLA_WORKER",
+            "CLAUDE_SESSION_ID",
+            "CLAUDE_CODE_SESSION_ID",
+        ] {
             c.env_remove(var);
         }
         let input = json!({
@@ -233,15 +241,21 @@ impl Run {
         ]);
         let a = self.ok(&["alloc-test", "H1", "--finding", f]);
         assert_eq!(a["favors"], "leak", "{a}");
-        for cmd in a["next"].as_array().unwrap().iter().filter_map(Value::as_str) {
+        for cmd in a["next"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+        {
             if cmd.starts_with("dla ledger refute") || cmd.starts_with("dla ledger test") {
                 let words: Vec<&str> = cmd.split_whitespace().skip(1).collect();
                 self.ok(&words);
             }
         }
-        let confirmed = growth.iter().filter_map(Value::as_str).any(|ev| {
-            self.run(&["ledger", "confirm", f, "--evidence", ev]).code == 0
-        });
+        let confirmed = growth
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|ev| self.run(&["ledger", "confirm", f, "--evidence", ev]).code == 0);
         assert!(confirmed, "{f} was not confirmed by {growth:?}");
     }
 }
@@ -263,11 +277,27 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     let (cache, table) = (r.id_at("app/router.py:11"), r.id_at("app/sessions.py:1"));
 
     // `--entry` asks for a finding that grew in some harness, a hook driver, at most 8.
-    let e = r.refused(&["harness", "gen", "--lang", "python", "--driver", "--entry", &cache]);
+    let e = r.refused(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", &cache,
+    ]);
     assert_eq!(e["code"], "entry-not-grown", "{e}");
-    assert!(e["fix"].as_str().unwrap().contains(&format!("--probe {cache}")), "{e}");
+    assert!(
+        e["fix"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("--probe {cache}")),
+        "{e}"
+    );
     let ids: Vec<String> = (1..=9).map(|n| format!("F{n}")).collect();
-    let e = r.refused(&["harness", "gen", "--lang", "python", "--driver", "--entry", &ids.join(",")]);
+    let e = r.refused(&[
+        "harness",
+        "gen",
+        "--lang",
+        "python",
+        "--driver",
+        "--entry",
+        &ids.join(","),
+    ]);
     assert_eq!(e["code"], "too-many-targets", "{e}");
     let e = r.refused(&["harness", "gen", "--lang", "python", "--entry", &cache]);
     assert_eq!(e["code"], "invalid-value", "{e}");
@@ -275,7 +305,10 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
         "harness", "gen", "--lang", "python", "--driver", "--entry", &cache, "--probe", &table,
     ]);
     assert_eq!(e["code"], "invalid-value", "{e}");
-    assert!(!r.run_dir.join("harness").exists() || fs::read_dir(r.run_dir.join("harness")).unwrap().count() == 0);
+    assert!(
+        !r.run_dir.join("harness").exists()
+            || fs::read_dir(r.run_dir.join("harness")).unwrap().count() == 0
+    );
 
     // The direct driver grows both holders.
     let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
@@ -288,9 +321,18 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| (v["finding"].as_str().unwrap(), v["verdict"].as_str().unwrap()))
+        .map(|v| {
+            (
+                v["finding"].as_str().unwrap(),
+                v["verdict"].as_str().unwrap(),
+            )
+        })
         .collect();
-    assert_eq!(verdicts, [(cache.as_str(), "grew"), (table.as_str(), "grew")], "{t}");
+    assert_eq!(
+        verdicts,
+        [(cache.as_str(), "grew"), (table.as_str(), "grew")],
+        "{t}"
+    );
     assert!(t["targets"][0].get("trigger").is_none(), "{t}");
     let growth = t["evidence"].as_array().unwrap().clone();
     r.confirm(&cache, &workload, &growth);
@@ -303,7 +345,9 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     assert_eq!(st["blocking"][0]["kind"], "trigger", "{st}");
     let fix = st["blocking"][0]["fix"].as_str().unwrap();
     assert!(
-        fix.starts_with(&format!("dla harness gen --lang python --driver --entry {cache},{table}, fill")),
+        fix.starts_with(&format!(
+            "dla harness gen --lang python --driver --entry {cache},{table}, fill"
+        )),
         "{fix}"
     );
     let _ = r.run(&["gate", "check", "--final"]);
@@ -314,7 +358,13 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     assert_eq!(missing[0]["kind"], "trigger", "{missing:?}");
     assert_eq!(missing[1]["kind"], "trigger", "{missing:?}");
     // `run status` clips long fixes; the gate file has them whole.
-    assert!(missing[0]["fix"].as_str().unwrap().starts_with(fix.trim_end_matches("...")), "{fix}");
+    assert!(
+        missing[0]["fix"]
+            .as_str()
+            .unwrap()
+            .starts_with(fix.trim_end_matches("...")),
+        "{fix}"
+    );
     let stop = r.stop_reason();
     assert!(
         stop.contains(&format!("{cache} grew when the harness fed it new keys; whether a caller of the public API can do that is not shown")),
@@ -323,9 +373,20 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     assert_eq!(r.row(&cache)["trigger"], "unchecked");
 
     // The entry-path harness: its block, its refusal without a varies line, its run.
-    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--entry", &format!("{cache},{table}")]);
+    let g = r.ok(&[
+        "harness",
+        "gen",
+        "--lang",
+        "python",
+        "--driver",
+        "--entry",
+        &format!("{cache},{table}"),
+    ]);
     assert_eq!(g["summary"]["purpose"], "entry-path", "{g}");
-    let m: Value = serde_json::from_str(&fs::read_to_string(r.run_dir.join("harness/H2/harness.json")).unwrap()).unwrap();
+    let m: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H2/harness.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(m["purpose"], "entry-path");
     let block = fs::read_to_string(r.driver("H2")).unwrap();
     for want in [
@@ -357,14 +418,20 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     // Item: the harness exists and has not run.
     let st = r.status();
     assert!(
-        st["blocking"][0]["fix"].as_str().unwrap().starts_with("fill the hooks and VARIES.txt of H2"),
+        st["blocking"][0]["fix"]
+            .as_str()
+            .unwrap()
+            .starts_with("fill the hooks and VARIES.txt of H2"),
         "{st}"
     );
     let line = "the request path: a different unknown path per unit (the router rejects it)";
     r.varies("H2", line);
     let ran = r.ok(&["harness", "run", "H2", "--mode", "both"]);
     let first = ran["summary"]["series"][0].as_str().unwrap().to_owned();
-    let record: Value = serde_json::from_str(&fs::read_to_string(r.run_dir.join(format!("harness/H2/run-{first}.json"))).unwrap()).unwrap();
+    let record: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join(format!("harness/H2/run-{first}.json"))).unwrap(),
+    )
+    .unwrap();
     assert_eq!(record["varies"], line);
     assert_eq!(record["purpose"], "entry-path");
     let t = r.ok(&["trend", &first]);
@@ -375,13 +442,22 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
         .map(|v| {
             (
                 v["finding"].as_str().unwrap(),
-                (v["verdict"].as_str().unwrap(), v["trigger"].as_str().unwrap()),
+                (
+                    v["verdict"].as_str().unwrap(),
+                    v["trigger"].as_str().unwrap(),
+                ),
             )
         })
         .collect();
     assert_eq!(by[cache.as_str()], ("grew", "reproduced"), "{t}");
     assert_eq!(by[table.as_str()], ("constant", "unchecked"), "{t}");
-    assert!(t["trigger_next"].as_str().unwrap().contains(&format!("--entry {table}")), "{t}");
+    assert!(
+        t["trigger_next"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("--entry {table}")),
+        "{t}"
+    );
 
     // One entry-path harness without growth: the item asks for a second, different one.
     let st = r.status();
@@ -392,27 +468,50 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     assert_eq!(st["blocking"][0]["kind"], "trigger", "{st}");
     assert_eq!(st["blocking"][0]["id"], table);
     assert!(
-        st["blocking"][0]["fix"].as_str().unwrap().starts_with("write a second, different entry-path harness"),
+        st["blocking"][0]["fix"]
+            .as_str()
+            .unwrap()
+            .starts_with("write a second, different entry-path harness"),
         "{st}"
     );
-    assert!(r.stop_reason().contains("did not grow in the entry-path harness H2"));
+    assert!(
+        r.stop_reason()
+            .contains("did not grow in the entry-path harness H2")
+    );
     assert_eq!(r.row(&cache)["trigger"], "reproduced");
     let md = r.report();
-    assert!(md.contains(&format!("- Trigger: reproduced through the public API in H2 (varies: {line})")), "{md}");
-    assert!(md.contains("- Trigger: not checked (the entry-path harness H2 did not grow it"), "{md}");
+    assert!(
+        md.contains(&format!(
+            "- Trigger: reproduced through the public API in H2 (varies: {line})"
+        )),
+        "{md}"
+    );
+    assert!(
+        md.contains("- Trigger: not checked (the entry-path harness H2 did not grow it"),
+        "{md}"
+    );
 
     // A second entry-path harness with another driver: no trigger found, the item is gone.
-    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--entry", &table]);
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", &table,
+    ]);
     assert_eq!(g["summary"]["harness"], "H3", "{g}");
     r.fill("H3", ENTRY_SETUP, ENTRY_UNIT_2);
-    r.varies("H3", "known and unknown session keys, and a missing key (None)");
+    r.varies(
+        "H3",
+        "known and unknown session keys, and a missing key (None)",
+    );
     let ran = r.ok(&["harness", "run", "H3", "--mode", "both"]);
     let t = r.ok(&["trend", ran["summary"]["series"][0].as_str().unwrap()]);
     assert_eq!(t["targets"][0]["trigger"], "not_found", "{t}");
     let st = r.status();
     assert_eq!(st["triggers"][&table]["trigger"], "not_found", "{st}");
     assert!(
-        st["blocking"].as_array().unwrap().iter().all(|b| b["kind"] != "trigger"),
+        st["blocking"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["kind"] != "trigger"),
         "{st}"
     );
     assert_eq!(r.row(&table)["trigger"], "not_found");
@@ -423,7 +522,9 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     );
     let findings = md.lines().find(|l| l.starts_with("Findings:")).unwrap();
     assert!(
-        findings.ends_with("reproduced through the public API 1, no trigger found 1, trigger not checked 0"),
+        findings.ends_with(
+            "reproduced through the public API 1, no trigger found 1, trigger not checked 0"
+        ),
         "{findings}"
     );
     // The reproduced one is listed first.
@@ -435,24 +536,40 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
     let dir = r.dir.path().join(b["dir"].as_str().unwrap());
     let driver = fs::read_to_string(dir.join("entry-path/H2/dla_harness.py")).unwrap();
     assert!(driver.contains("dispatch('/missing/'"), "{driver}");
-    assert!(driver.contains("the generated target block is not part of the bundle"), "{driver}");
-    for hidden in ["Entry-path harness", "app/router.py:11", "writer function", "Targets of harness"] {
+    assert!(
+        driver.contains("the generated target block is not part of the bundle"),
+        "{driver}"
+    );
+    for hidden in [
+        "Entry-path harness",
+        "app/router.py:11",
+        "writer function",
+        "Targets of harness",
+    ] {
         assert!(!driver.contains(hidden), "{hidden} in the bundled driver");
     }
     assert_eq!(
-        fs::read_to_string(dir.join("entry-path/H2/VARIES.txt")).unwrap().trim(),
+        fs::read_to_string(dir.join("entry-path/H2/VARIES.txt"))
+            .unwrap()
+            .trim(),
         line
     );
-    let verdict: Value = serde_json::from_str(&fs::read_to_string(dir.join("entry-path/H2/verdict.json")).unwrap()).unwrap();
+    let verdict: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("entry-path/H2/verdict.json")).unwrap())
+            .unwrap();
     assert_eq!(verdict["verdict"], "grew");
     assert_eq!(verdict["varies"], line);
-    let index: Value = serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+    let index: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
     assert_eq!(index["entry_path"][0]["harness"], "H2");
     // The bundle of the other one holds both entry-path harnesses, each without growth.
     let b = r.ok(&["bundle", &table]);
     let dir = r.dir.path().join(b["dir"].as_str().unwrap());
     for h in ["H2", "H3"] {
-        let v: Value = serde_json::from_str(&fs::read_to_string(dir.join(format!("entry-path/{h}/verdict.json"))).unwrap()).unwrap();
+        let v: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(format!("entry-path/{h}/verdict.json"))).unwrap(),
+        )
+        .unwrap();
         assert_ne!(v["verdict"], "grew", "{h}");
     }
 }
@@ -461,7 +578,9 @@ fn the_trigger_is_reproduced_for_one_holder_and_not_found_for_the_other() {
 fn with_the_queue_off_the_trigger_is_not_asked_and_the_report_says_so() {
     let r = Run::new(&["--budget", "3h", "--queue", "off"]);
     let (cache, table) = (r.id_at("app/router.py:11"), r.id_at("app/sessions.py:1"));
-    let g = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--probe", &cache, "--probe", &table]);
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--probe", &cache, "--probe", &table,
+    ]);
     let workload = g["evidence"][0].as_str().unwrap().to_owned();
     r.fill("H1", CACHE_SETUP, DIRECT_UNIT);
     r.ok(&["harness", "run", "H1", "--mode", "both"]);
@@ -469,11 +588,26 @@ fn with_the_queue_off_the_trigger_is_not_asked_and_the_report_says_so() {
     let growth = t["evidence"].as_array().unwrap().clone();
     r.confirm(&cache, &workload, &growth);
     let st = r.status();
-    assert!(st["blocking"].as_array().unwrap().iter().all(|b| b["kind"] != "trigger"), "{st}");
+    assert!(
+        st["blocking"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["kind"] != "trigger"),
+        "{st}"
+    );
     assert_eq!(st["triggers"][&cache]["trigger"], "unchecked");
-    assert_eq!(st["triggers"][&cache]["not_checked"], "the run was started with --queue off");
+    assert_eq!(
+        st["triggers"][&cache]["not_checked"],
+        "the run was started with --queue off"
+    );
     let md = r.report();
-    assert!(md.contains("- Trigger: not checked (the run was started with --queue off)"), "{md}");
+    assert!(
+        md.contains("- Trigger: not checked (the run was started with --queue off)"),
+        "{md}"
+    );
     // `--entry` still works when asked for.
-    r.ok(&["harness", "gen", "--lang", "python", "--driver", "--entry", &cache]);
+    r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--entry", &cache,
+    ]);
 }

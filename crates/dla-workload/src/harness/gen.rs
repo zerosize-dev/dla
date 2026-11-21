@@ -1542,8 +1542,8 @@ fn entry_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<Vec<FindingId>, Ref
             ),
         ));
     }
-    let view =
-        dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).map_err(|e| e.to_refusal())?;
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
+        .map_err(|e| e.to_refusal())?;
     let triggers = dla_core::trigger::Triggers::of(&view);
     for id in &ids {
         let measure = format!(
@@ -1568,7 +1568,9 @@ fn entry_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<Vec<FindingId>, Ref
         if f.polarity() != dla_core::finding::Polarity::Leak {
             return Err(refuse(
                 codes::ENTRY_NOT_GROWN,
-                format!("--entry {id}: it is a non-leak explanation; only a leak-side finding has a trigger"),
+                format!(
+                    "--entry {id}: it is a non-leak explanation; only a leak-side finding has a trigger"
+                ),
                 format!("a leak-side finding that grew in a harness, not {id}"),
                 "dla ledger list   (the leak-side findings, with their harnesses)",
             ));
@@ -1576,7 +1578,9 @@ fn entry_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<Vec<FindingId>, Ref
         if !triggers.grew_in_a_harness(id) {
             return Err(refuse(
                 codes::ENTRY_NOT_GROWN,
-                format!("--entry {id}: it has not grown in any harness yet; the trigger is asked for a holder that grows when a harness feeds it keys"),
+                format!(
+                    "--entry {id}: it has not grown in any harness yet; the trigger is asked for a holder that grows when a harness feeds it keys"
+                ),
                 format!("a trend of a harness in which {id} has the verdict grew"),
                 measure,
             ));

@@ -628,10 +628,7 @@ pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord
                     .get("driver_digest")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
-                varies: doc
-                    .get("varies")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                varies: doc.get("varies").and_then(Value::as_str).map(str::to_owned),
             });
         }
     }

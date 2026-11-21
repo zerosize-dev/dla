@@ -604,8 +604,19 @@ fn trigger_json(view: &RunView) -> serde_json::Map<String, Value> {
             more += 1;
             continue;
         }
-        let mut v = serde_json::to_value(t.trigger(&f.id)).unwrap_or(Value::Null);
-        if let Some(why) = (t.trigger(&f.id) == dla_core::trigger::Trigger::Unchecked)
+        use dla_core::trigger::Trigger;
+        let trig = t.trigger(&f.id);
+        let mut v = match &trig {
+            Trigger::Reproduced { harness, varies } => {
+                json!({"trigger": trig.name(), "harness": harness, "varies": varies})
+            }
+            Trigger::NotFound { runs } => json!({
+                "trigger": trig.name(),
+                "harnesses": runs.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(", "),
+            }),
+            Trigger::Unchecked => json!({"trigger": trig.name()}),
+        };
+        if let Some(why) = (trig == Trigger::Unchecked)
             .then(|| dla_core::trigger::unchecked_because(view))
             .flatten()
         {

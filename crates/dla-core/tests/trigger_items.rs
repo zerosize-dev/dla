@@ -9,8 +9,9 @@ use std::path::Path;
 
 use common::*;
 use dla_core::{
-    FindingId, FindingState as S, Ledger, RunState, RunView, gate, status,
+    FindingId, FindingState as S, Ledger, RunState, RunView, gate,
     state::now_utc,
+    status,
     trend::{TargetVerdict, TrendReport, Verdict},
     view::BlockingKind,
 };
@@ -49,7 +50,9 @@ fn ran(dir: &Path, series: &str, h: &str, digest: &str, verdict: Verdict) {
     std::fs::create_dir_all(dir.join("series")).unwrap();
     std::fs::write(dir.join(format!("series/{series}.json")), text.to_string()).unwrap();
     std::fs::write(
-        dir.join("harness").join(h).join(format!("run-{series}.json")),
+        dir.join("harness")
+            .join(h)
+            .join(format!("run-{series}.json")),
         json!({"series": [series], "driver_digest": digest, "varies": format!("{h} varies")})
             .to_string(),
     )
@@ -129,12 +132,18 @@ fn after_one_entry_path_harness_without_growth_the_fix_asks_for_a_second_one() {
     harness(dir.path(), "H2", true);
     // Generated, not run: fill and run it.
     let it = items(dir.path());
-    assert!(it[0].fix.starts_with("fill the hooks and VARIES.txt of H2"), "{}", it[0].fix);
+    assert!(
+        it[0].fix.starts_with("fill the hooks and VARIES.txt of H2"),
+        "{}",
+        it[0].fix
+    );
     ran(dir.path(), "S2", "H2", "bb", Verdict::Constant);
     let it = items(dir.path());
     assert_eq!(it.len(), 1);
     assert!(
-        it[0].description.contains("did not grow in the entry-path harness H2 (varies: H2 varies)"),
+        it[0]
+            .description
+            .contains("did not grow in the entry-path harness H2 (varies: H2 varies)"),
         "{}",
         it[0].description
     );
@@ -143,7 +152,11 @@ fn after_one_entry_path_harness_without_growth_the_fix_asks_for_a_second_one() {
         "{}",
         it[0].fix
     );
-    assert!(it[0].fix.contains("the rejected-input paths"), "{}", it[0].fix);
+    assert!(
+        it[0].fix.contains("the rejected-input paths"),
+        "{}",
+        it[0].fix
+    );
 }
 
 #[test]

@@ -69,7 +69,11 @@ impl Run {
                 .map(|f| json!({"finding": f, "writer_functions": [w]}))
                 .collect();
             std::fs::write(
-                self.dir.path().join("harness").join(id).join("targets.json"),
+                self.dir
+                    .path()
+                    .join("harness")
+                    .join(id)
+                    .join("targets.json"),
                 json!({"harness": id, "targets": t}).to_string(),
             )
             .unwrap();
@@ -182,7 +186,9 @@ fn no_trigger_found_after_two_different_entry_path_harnesses_says_what_was_tried
         "{md}"
     );
     assert!(
-        findings_line(&md).ends_with("reproduced through the public API 0, no trigger found 1, trigger not checked 1"),
+        findings_line(&md).ends_with(
+            "reproduced through the public API 0, no trigger found 1, trigger not checked 1"
+        ),
         "{}",
         findings_line(&md)
     );
@@ -218,7 +224,9 @@ fn a_trigger_that_was_not_checked_says_why() {
         st.budget.deadline = now_utc() + chrono::TimeDelta::seconds(100);
     });
     assert!(
-        floor.contains("- Trigger: not checked (not enough time was left: the budget was at the floor)"),
+        floor.contains(
+            "- Trigger: not checked (not enough time was left: the budget was at the floor)"
+        ),
         "{floor}"
     );
     // Nothing grew in a harness for F3.
@@ -248,7 +256,11 @@ fn a_trigger_with_one_entry_path_harness_without_growth_says_what_is_missing() {
 #[test]
 fn a_view_without_a_run_directory_says_nothing_about_triggers() {
     let st = RunState::init("/p", None, 3600, None, now_utc()).unwrap();
-    let md = render_markdown(&RunView::new(st, Ledger::from_text(&ledger_text()).unwrap(), None));
+    let md = render_markdown(&RunView::new(
+        st,
+        Ledger::from_text(&ledger_text()).unwrap(),
+        None,
+    ));
     assert!(!md.contains("Trigger:"), "{md}");
     assert!(!findings_line(&md).contains("by trigger"));
 }

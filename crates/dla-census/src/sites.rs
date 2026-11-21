@@ -1440,8 +1440,9 @@ fn analyse_one(proj: &Project<'_>, raw: &Raw, usage: &Usage) -> Option<Analysis>
     })
 }
 
-/// True when the holder is assigned a local variable that the function built from the holder's
-/// own value earlier (`ctx = new Ctx(.., latest); latest = ctx;`): the same chain as
+/// True when the holder is assigned a local variable that the function made hold the holder's
+/// own value earlier: built from it (`ctx = new Ctx(.., latest); latest = ctx;`) or linked to
+/// it (`node.previous = latest; latest = node;`). Either is the chain of
 /// `latest = new Ctx(.., latest)`, one hop away.
 fn wraps_itself_through_a_local(
     fc: &FileCtx,
@@ -1468,12 +1469,23 @@ fn wraps_itself_through_a_local(
     {
         return false;
     }
-    let Ok(def) = Regex::new(&format!(r"\b{}\s*:?=([^=].*)$", regex::escape(var))) else {
+    let v = regex::escape(var);
+    let (Ok(built), Ok(linked)) = (
+        Regex::new(&format!(r"\b{v}\s*:?=([^=].*)$")),
+        Regex::new(&format!(
+            r"\b{v}\s*(?:\.|->)\s*[A-Za-z_$][\w$]*\s*=([^=].*)$"
+        )),
+    ) else {
         return false;
     };
     (outer.start..line).any(|l| {
-        def.captures(&fc.statement(l))
+        let st = fc.statement(l);
+        built
+            .captures(&st)
             .is_some_and(|c| crate::events::holds_itself(&c[1], name))
+            || linked
+                .captures(&st)
+                .is_some_and(|c| crate::events::links_to(&c[1], name))
     })
 }
 
