@@ -9,6 +9,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   (appended). It does nothing without `DLA_HARNESS_OUT`, in worker threads, and in
   npm/npx/yarn/pnpm/corepack, so `npm run <script>` measures the script's `node` process.
   Driver mode uses `dla-harness.cjs` with the usual hooks: `projectRequire(file)` for CommonJS, `await projectImport(file)` for ES modules (`.mjs`, or `.js` under `"type": "module"`). Both files are `.cjs`, so they load in any package type.
+- `dla harness run` prints `_attention` first (a detector hit with its site, a short or cut series, a lowered step, missing coverage). `dla trend` lists columns that fail only for their point count in `short`: measure longer before reading "nothing grew". The driver ends by itself and lowers its step to fit the time limit.
 - What the agent wraps: timers (`setInterval`, `setTimeout`, clear and close variants) and
   EventEmitter/EventTarget listeners, each attributed to the first project stack frame. A
   `once` listener that fired or an aborted-signal listener is not counted.

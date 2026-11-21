@@ -225,6 +225,26 @@
     "phase"
   ],
   "$defs": {
+    "DetectorSite": {
+      "description": "A site and how many of the things a detector hit counts it holds.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Count held there.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "site": {
+          "description": "`file:line`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "site",
+        "count"
+      ]
+    },
     "DumpCapture": {
       "description": "One file an agent wrote next to a dump record (`DLA_CAPTURE`).",
       "type": "object",
@@ -333,11 +353,21 @@
           ]
         },
         "site": {
-          "description": "Where it was raised.",
+          "description": "Where it was raised (for a registration warning: the site holding most listeners).",
           "type": [
             "string",
             "null"
           ]
+        },
+        "sites": {
+          "description": "Sites that hold what the hit is about, with counts, most first.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DetectorSite"
+          }
         },
         "text": {
           "description": "The log line or message.",

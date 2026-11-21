@@ -890,10 +890,11 @@ fn running_command(run_dir: &Path, worker: Option<&str>) -> Option<String> {
     })?;
     let minutes = (now - p.started_at).num_seconds().max(0) / 60;
     Some(format!(
-        "dla: `{}` of this run is still running (pid {}, started {}, {minutes} min ago). Wait for it to finish, then read its output and go on; this stop attempt is not counted.",
+        "dla: `{}` of this run is still running (pid {}, started {}, {minutes} min ago). Wait for it in one command (`while kill -0 {} 2>/dev/null; do sleep 5; done`), then read its output and go on; this stop attempt is not counted.",
         p.command,
         p.pid,
         p.started_at.format("%H:%M:%SZ"),
+        p.pid,
     ))
 }
 

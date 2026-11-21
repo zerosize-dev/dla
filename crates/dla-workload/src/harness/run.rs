@@ -3599,6 +3599,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_attention_lines_lead_with_a_detector_hit_a_short_series_and_missing_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dla_core::Ledger::create(dir.path()).unwrap();
+        let m = tests_support::manifest();
+        let executed = dir.path().join("executed-S1.json");
+        fs::write(
+            &executed,
+            json!({"kind": "none", "note": "no NODE_V8_COVERAGE data was written to cov/"})
+                .to_string(),
+        )
+        .unwrap();
+        let out = RunOutput {
+            series: vec!["S1".into()],
+            points: 5,
+            modes: vec![KeyMode::Fresh],
+            exits: vec![("p1-fresh".into(), None)],
+            detectors: vec![json!({"lib": "node", "text": "MaxListenersExceededWarning: 11 error listeners", "site": "src/a.js:9", "sites": [{"site": "src/a.js:9", "count": 11}]})],
+            limitations: vec!["the driver lowered its step from 90 to 30 units per round after round 1: slow".into()],
+            ..RunOutput::default()
+        };
+        let lines = attention_lines(&m, &out, 9, &ledger, &executed);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].starts_with("READ THE DETECTOR HIT") && lines[0].contains("src/a.js:9 (11 registered)"), "{lines:?}");
+        assert!(lines[1].starts_with("SERIES TOO SHORT (4 points after warm-up, the gate needs 8; the process was cut)"), "{lines:?}");
+        assert!(lines[2].starts_with("DRIVER STEP"), "{lines:?}");
+        assert!(lines.iter().all(|l| l.len() <= 160));
+        // Nothing to say: no lines.
+        let quiet = RunOutput {
+            series: vec!["S1".into()],
+            points: 9,
+            modes: vec![KeyMode::Fresh],
+            ..RunOutput::default()
+        };
+        assert!(attention_lines(&m, &quiet, 9, &ledger, &dir.path().join("none.json")).is_empty());
+        // Without room for three lines, coverage is the one left out.
+        let cov_only = RunOutput {
+            exits: vec![("p1-fresh".into(), None)],
+            ..quiet
+        };
+        let l = attention_lines(&m, &cov_only, 9, &ledger, &executed);
+        assert!(l[0].starts_with("NO COVERAGE DATA") && l[0].contains("killed"), "{l:?}");
+    }
+
+    #[test]
     fn a_phase_note_keeps_the_first_line_and_bounds_it() {
         let dir = tempfile::tempdir().unwrap();
         let dump = dir.path().join("p1.jsonl");

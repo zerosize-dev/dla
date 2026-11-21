@@ -321,7 +321,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     }
     out.insert("evidence".into(), json!(ev));
     let all: Vec<&ColumnTrend> = cols.iter().collect();
-    let passed = summary::passing(&all);
+    let mut passed = summary::passing(&all);
+    // The column of a detector hit's registration site leads: its finding is the one the
+    // ledger lines below should name.
+    if let Some(site) = detector_site(ctx, &main.series) {
+        passed.sort_by_key(|c| c.site.as_deref() != Some(site.as_str()));
+    }
     out.insert(
         "passed".into(),
         Value::Array(
@@ -445,6 +450,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     Ok(Value::Object(out))
 }
 
+/// The registration site of the first detector hit with one, in the run that wrote `series`.
+fn detector_site(ctx: &Ctx, series: &dla_core::SeriesFile) -> Option<String> {
+    let h = series.source.harness.as_deref()?;
+    let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
+    rec.detectors
+        .iter()
+        .find_map(|d| d["site"].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
+}
+
 /// The `next` entry for a runtime detector hit of the run that wrote `series` whose registration
 /// site is known: the hit, the site, the finding at the site, and what to do with it. `None`
 /// when the run had no such hit.
@@ -461,7 +475,6 @@ fn detector_entry(
         .iter()
         .find(|d| d["site"].as_str().is_some_and(|s| !s.is_empty()))?;
     let site = hit["site"].as_str()?;
-    let text: String = hit["text"].as_str().unwrap_or("").chars().take(110).collect();
     let held = hit["sites"]
         .as_array()
         .and_then(|a| a.first())
@@ -473,19 +486,19 @@ fn detector_entry(
         .map(|f| f.id.clone())
         .collect();
     let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
-    let head = format!("DETECTOR HIT at {site}{held}: {text}");
+    let head = format!("DETECTOR HIT (listeners added at {site}{held})");
     Some(match at.first() {
         Some(f) if m.targets.contains(f) || m.probes.iter().any(|p| p.finding.as_ref() == Some(f)) => format!(
-            "{head}; finding {f} is a target of {h}: follow the ledger lines for the column node.listeners@{site} below, or if it did not pass, measure at full length"
+            "{head}: finding {f} is a target of {h}; follow the ledger lines for node.listeners@{site}, at full length"
         ),
         Some(f) => format!(
-            "{head}; finding {f} holds it but {h} did not target it: dla harness gen --lang {} --driver --probe {f}   # then copy the filled hooks of {h} into it: they already reach this site",
+            "{head}: dla harness gen --lang {} --driver --probe {f}   # {f} holds it, {h} did not target it; copy the hooks of {h}",
             m.runtime.as_str()
         ),
         None => {
             let e = evidence.unwrap_or("<evidence>");
             format!(
-                "{head}; no finding at that site: dla ledger add --origin growth-series --evidence {e} --site {site} --holder registration-table   # the column node.listeners@{site} then ties to it"
+                "{head}: dla ledger add --origin growth-series --evidence {e} --site {site} --holder registration-table   # no finding there; node.listeners@{site} then ties to it"
             )
         }
     })

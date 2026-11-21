@@ -163,6 +163,21 @@ module instance as the preloaded one when the path is identical) and calls `chec
 after every round; the agent then writes no `exit` record. The loop yields to the event loop
 (`setImmediate`) at the end of each round so timers and I/O callbacks run.
 
+The driver ends the process by itself once its last checkpoint is written (`process.exit` after the
+standard streams are flushed): servers, keep-alive sockets and timers a unit leaves open do not hold
+it until the kill, and `NODE_V8_COVERAGE` data is still written. It also fits its rounds into the
+process's time limit (`DLA_TIME_LIMIT_SECS`, set by `dla harness run` from the harness's
+`timeout_secs`): after each round it computes the time per unit, and when the rounds left would not
+fit (15 percent and 5 s of margin) it lowers the step of the rounds left, never below 10 units
+(fewer units make the per-round collection and the heap noise swamp a leak of one entry per unit).
+It says so with `dla.note(...)` (a limitation line of every following record; the run prints it as
+`DRIVER STEP`). The x axis stays the cumulative unit count. If even 10 units per round do not fit,
+the note says the unit is too slow for a series and to make it cheaper.
+
+A `MaxListenersExceededWarning` becomes a detector hit with `site` (the project site holding most of
+the listeners of that event on that emitter) and `sites` (up to 5, with counts), read from the
+agent's own registration records.
+
 ### Placeholders
 
 | Placeholder | Where | Meaning |

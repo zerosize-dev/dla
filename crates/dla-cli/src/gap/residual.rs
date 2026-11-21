@@ -460,6 +460,9 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     for (c, a) in calcs.iter().zip(&actions) {
         match a {
             Action::Open(id) => {
+                let advice = capture_advice(src, c.region)
+                    .map(|a| format!("attribute it first: {a}; then "))
+                    .unwrap_or_default();
                 let what = if c.region == Region::NonHeap
                     && let Some(h) = src.source.harness.as_deref()
                 {
@@ -470,7 +473,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
                     )
                 } else {
                     format!(
-                        "add a hypothesis (dla ledger add --origin residual --evidence {ev} ...) or record it unresolved"
+                        "{advice}add a hypothesis (dla ledger add --origin residual --evidence {ev} ...) or record it unresolved"
                     )
                 };
                 let text = format!(
@@ -517,9 +520,14 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
                         h,
                     ));
                 }
-                _ => next.push(format!(
-                    "{id}: dla ledger add --origin residual --evidence {ev} ...   or   dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\"   (it was measured, so the reason is inconclusive)"
-                )),
+                _ => {
+                    if let Some(a) = capture_advice(src, c.region) {
+                        next.push(format!("{id}: {a}"));
+                    }
+                    next.push(format!(
+                        "{id}: dla ledger add --origin residual --evidence {ev} ...   or   dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\"   (it was measured, so the reason is inconclusive)"
+                    ));
+                }
             }
         }
     }
@@ -546,6 +554,31 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     }))
 }
 
+/// The raw capture that can attribute the residual of `region` for the harness that wrote
+/// `src`, as the command to run, or `None` when the runtime's agent writes none (Python and Go
+/// harnesses have no `--capture`; Rust and native ones use `--tool`).
+fn capture_advice(src: &dla_core::SeriesFile, region: Region) -> Option<String> {
+    use dla_core::runtime::Runtime;
+    let h = src.source.harness.as_deref()?;
+    let (kinds, what) = match (src.source.runtime?, region) {
+        (Runtime::Node, Region::Heap) => (
+            "alloc,heap",
+            "allocation stacks name the site, snapshots the types",
+        ),
+        (Runtime::Node, _) => ("nonheap", "active resources by type and creation site"),
+        (Runtime::Jvm, Region::Heap) => ("histogram", "the class histogram names the types"),
+        (Runtime::Jvm, _) => ("nonheap", "the native memory categories"),
+        _ => return None,
+    };
+    let mode = match src.source.mode.map(|m| m.as_str()) {
+        Some("native") | None => String::new(),
+        Some(m) => format!(" --mode {m}"),
+    };
+    Some(format!(
+        "dla harness run {h}{mode} --capture {kinds}   # {what}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,6 +592,22 @@ mod tests {
             Some(Region::Heap)
         );
         assert_eq!(item_region("something else in heap (S1)"), None);
+    }
+
+    #[test]
+    fn a_residual_names_the_capture_that_can_attribute_it() {
+        use crate::trend_cmd::analysis::testutil::{Col, series};
+        use dla_core::runtime::Runtime;
+        let mut s = series("S2", 1, vec![Col::gauge("node.heap_used", &[1.0, 2.0])]);
+        s.source.runtime = Some(Runtime::Node);
+        s.source.mode = Some(dla_core::series::KeyMode::Fresh);
+        assert_eq!(
+            capture_advice(&s, Region::Heap).unwrap(),
+            "dla harness run H1 --mode fresh --capture alloc,heap   # allocation stacks name the site, snapshots the types"
+        );
+        assert!(capture_advice(&s, Region::NonHeap).unwrap().contains("--capture nonheap"));
+        s.source.runtime = Some(Runtime::Go);
+        assert!(capture_advice(&s, Region::Heap).is_none());
     }
 
     #[test]

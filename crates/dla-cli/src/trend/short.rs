@@ -132,11 +132,11 @@ pub fn next_line(
     };
     if series_short {
         let tail = match rerun {
-            Some(cmd) => format!("{cmd}   # full length, then dla trend"),
-            None => "measure with more points, then dla trend".to_owned(),
+            Some(cmd) => format!("{cmd}   # full length"),
+            None => "measure with more points".to_owned(),
         };
         return format!(
-            "SERIES TOO SHORT: {n} points after warm-up, the gate needs {need}, so nothing can pass and no target is settled by it; {what}. Run {tail}"
+            "SERIES TOO SHORT ({n} of {need} points, nothing can pass): {tail}, then dla trend; {what}"
         );
     }
     let lacking = short
@@ -147,11 +147,11 @@ pub fn next_line(
         .unwrap_or(n);
     let wanted = n + need.saturating_sub(lacking);
     let tail = match rerun {
-        Some(cmd) => format!("{cmd} --iterations {wanted}   # then dla trend"),
-        None => format!("measure {wanted} points, then dla trend"),
+        Some(cmd) => format!("{cmd} --iterations {wanted}"),
+        None => format!("measure {wanted} points"),
     };
     format!(
-        "COLUMN TOO SHORT: a column has {lacking} points, the gate needs {need} (it appeared late), so it cannot pass; {what}. Run {tail}"
+        "COLUMN TOO SHORT (a column has {lacking} of {need} points, it appeared late): {tail}, then dla trend; {what}"
     )
 }
 

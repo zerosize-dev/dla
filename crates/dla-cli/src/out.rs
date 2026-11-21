@@ -45,7 +45,8 @@ fn size(v: &Value) -> usize {
 /// values are cut only as a last step (hashes and paths stay whole): `ok` and `evidence`
 /// say what happened, `raw`, `summaries`, `artifacts` and `files` say where the full
 /// output is.
-const PROTECTED: [&str; 8] = [
+const PROTECTED: [&str; 9] = [
+    "_attention",
     "ok",
     "evidence",
     "raw",

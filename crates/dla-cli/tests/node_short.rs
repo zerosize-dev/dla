@@ -223,7 +223,7 @@ fn a_short_run_speaks_and_the_full_run_ties_the_site_column_to_its_finding() {
     let t = dla(&run.project, &["trend", "S1"]);
     let next0 = t.json["next"][0].as_str().unwrap();
     assert!(
-        next0.starts_with("SERIES TOO SHORT: 4 points after warm-up, the gate needs 8"),
+        next0.starts_with("SERIES TOO SHORT (4 of 8 points, nothing can pass): dla harness run H1 --mode fresh"),
         "{next0}"
     );
     assert!(next0.contains("dla harness run H1 --mode fresh"), "{next0}");
@@ -238,7 +238,7 @@ fn a_short_run_speaks_and_the_full_run_ties_the_site_column_to_its_finding() {
     );
     let next1 = t.json["next"][1].as_str().unwrap();
     assert!(
-        next1.starts_with("DETECTOR HIT at ") && next1.contains(SITE),
+        next1.starts_with("DETECTOR HIT (listeners added at ") && next1.contains(SITE),
         "{next1}"
     );
     for v in t.json["targets"].as_array().unwrap() {
