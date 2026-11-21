@@ -54,6 +54,16 @@ and cover only files under `DLA_PROJECT`.
     `__self__`; objects of `logging`, `threading`, `asyncio`, `concurrent`, `multiprocessing`,
     `socket`, `ssl` are counted but not followed.
   - A module in the probe that is the running `__main__` is found through `__main__.__spec__`.
+  - A probe never imports. A module is read only when the workload has already imported it (it is in
+    `sys.modules` when the checkpoint runs); importing runs the module's top level, which can start a
+    server or block, and changes the state under measurement. A module that is not loaded gives a probe
+    record with an `error` and no values (so no column) and one limitation line naming up to five such
+    modules. A module-level `lru_cache` function is read as a `PyGlobal`: its `size` is `currsize`.
+- `phase`: the agent writes what the process is doing to `<DLA_HARNESS_OUT>.phase` (one line, overwritten):
+  `start-up: the program's own code before its first hook or checkpoint` (the imports of a driver, or the workload of a command) from the moment it loads, `hook setup` and
+  `hook unit (round r of n ...)` from the driver (`sitecustomize.mark_phase`), and
+  `checkpoint record at x=...: probes` with `checkpoint: probe P3 (pymodule m)` while a checkpoint reads a
+  probe. `dla harness run` appends the last line to the note of a point it killed at its timeout.
 - `purge`: `trim` calls `malloc_trim(0)` through ctypes (glibc only) and records `os.*` before and
   after, `before` being the record's own reading; ctypes and libc are loaded and `malloc_trim`
   called once at start-up in every process on Linux (the purge is asked only of the process of the

@@ -13,8 +13,11 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - What the dump measures (after `gc.collect()` twice): `py.traced`, `py.traced_peak`,
   `py.gc_objects`, `py.gc_collections`, the `os.*` set, top-20 types by count with
   `sys.getsizeof`, and probes of module-level containers, `lru_cache` wrappers (`currsize`) and
-  class attributes (`PyModule`, `PyGlobal`, `PyAttr`). `values_pre_gc` shows cyclic garbage waiting
-  for the collector.
+  class attributes (`PyModule`, `PyGlobal`, `PyAttr`; a module-level `lru_cache` function is a
+  `PyGlobal`). A probe reads only modules the workload already imported and never imports one: a
+  module that is not in `sys.modules` at the checkpoint has no column and a limitation line. The agent
+  writes its current phase to `<dump file>.phase` for a run killed at its timeout.
+  `values_pre_gc` shows cyclic garbage waiting for the collector.
 - Frozen garbage: after a `gc.freeze()` call the record has `py.gc_frozen@<file:line>` (objects in the
   permanent generation, per call site; the shares sum to `gc.get_freeze_count()`), and a limitation line
   says that `py.gc_objects` and the type counts leave those objects out. Signature of the leak: `py.traced`

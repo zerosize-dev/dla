@@ -48,6 +48,15 @@ use crate::{
     version::{Artifact, UpgradeError, upgrade},
 };
 
+/// True when annotation `a` joins a rule hit of DLA to a finding the census raised: what the
+/// rule declares then replaces the census value (the census value stays in the note).
+fn declares_over_census(f: &Finding, a: &FindingAnnotation) -> bool {
+    f.origin.as_str() == "census"
+        && a.also_origin
+            .as_ref()
+            .is_some_and(|o| o.as_str().starts_with("detector:dla/"))
+}
+
 /// Tools whose growth evidence may back a holder change: the HPROF reader and the V8
 /// heap snapshot reader.
 const HOLDER_EVIDENCE_TOOLS: [&str; 2] = ["dla-hprof", "dla-v8-snapshot"];
@@ -853,6 +862,8 @@ impl Index {
             && a.owner.is_none()
             && a.region.is_none()
             && a.site.is_none()
+            && a.also_origin.is_none()
+            && a.also_supports.is_empty()
         {
             return Err(Refusal::new(
                 codes::EMPTY_ANNOTATION,
@@ -870,6 +881,14 @@ impl Index {
         let f = self.require_finding(&a.finding, "annotation")?;
         if version >= 5 && !a.evidence.is_empty() {
             self.check_annotation_evidence(a)?;
+        }
+        if !a.also_supports.is_empty() {
+            self.check_worker_evidence(&a.also_supports)?;
+            self.require_evidence(
+                &a.also_supports,
+                &format!("annotation of {}", a.finding),
+                "cite evidence of this run (dla run status lists the IDs)",
+            )?;
         }
         let conflicts = [
             (
@@ -889,6 +908,9 @@ impl Index {
             if let (Some(have), Some(want)) = (have, want)
                 && have != want
             {
+                if declares_over_census(f, a) && matches!(field, "holder" | "owner" | "region") {
+                    continue;
+                }
                 if field == "holder" && version >= 5 && !a.evidence.is_empty() {
                     self.check_holder_change(a, f)?;
                     continue;
@@ -1514,8 +1536,10 @@ impl Index {
             }
             Record::FindingAnnotated(a) => {
                 if let Some(f) = self.findings.get_mut(&a.finding) {
+                    let declared = declares_over_census(f, a);
                     match (f.holder, a.holder) {
                         (None, h) => f.holder = h,
+                        (Some(_), Some(new)) if declared => f.holder = Some(new),
                         // The check let this pass: the change is backed by evidence.
                         (Some(old), Some(new)) if version >= 5 && old != new => {
                             f.holder = Some(new);
@@ -1531,12 +1555,27 @@ impl Index {
                         }
                         _ => {}
                     }
-                    f.region = f.region.or(a.region);
+                    f.region = if declared {
+                        a.region.or(f.region)
+                    } else {
+                        f.region.or(a.region)
+                    };
                     if f.site.is_none() {
                         f.site.clone_from(&a.site);
                     }
-                    if f.owner.is_none() {
+                    if f.owner.is_none() || (declared && a.owner.is_some()) {
                         f.owner.clone_from(&a.owner);
+                    }
+                    if let Some(o) = &a.also_origin
+                        && *o != f.origin
+                        && !f.also_origins.contains(o)
+                    {
+                        f.also_origins.push(o.clone());
+                    }
+                    for e in &a.also_supports {
+                        if !f.supports.contains(e) {
+                            f.supports.push(e.clone());
+                        }
                     }
                 }
                 let slot = self.annotations.entry(a.finding.clone()).or_default();
@@ -2706,6 +2745,11 @@ impl Ledger {
         annotation.finding = self.own_finding_id(&annotation.finding);
         annotation.evidence = annotation
             .evidence
+            .iter()
+            .map(|e| self.own_evidence_id(e))
+            .collect();
+        annotation.also_supports = annotation
+            .also_supports
             .iter()
             .map(|e| self.own_evidence_id(e))
             .collect();

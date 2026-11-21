@@ -58,6 +58,7 @@ mod strict;
 pub mod timebudget;
 pub mod toolctx;
 pub mod trend;
+pub mod vendored;
 pub mod verify;
 pub mod version;
 pub mod view;

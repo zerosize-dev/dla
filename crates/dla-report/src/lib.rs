@@ -406,7 +406,56 @@ fn scope_line(view: &RunView) -> String {
     } else {
         format!("; build logic not read: {}", build_logic.join(", "))
     };
-    format!("{head}; excluded: {excluded}; out of scope: {out_of_scope}{build_logic}")
+    let left_out = left_out_text(view);
+    format!("{head}; excluded: {excluded}; out of scope: {out_of_scope}{build_logic}{left_out}")
+}
+
+/// What the static stages left out by default (vendored directories, generated files, the
+/// runtimes whose whole code base lies there) and what the user brought back. Empty when
+/// neither applies.
+fn left_out_text(view: &RunView) -> String {
+    let mut out = String::new();
+    if let Some(l) = view.coverage.as_ref().map(|c| &c.left_out)
+        && !l.is_empty()
+    {
+        let mut parts: Vec<String> = l
+            .directories
+            .iter()
+            .map(|d| {
+                format!(
+                    "{} ({}, {})",
+                    code(&d.path),
+                    d.reason.as_str(),
+                    plural_n(d.files, "file")
+                )
+            })
+            .collect();
+        if l.generated_files > 0 {
+            parts.push(format!("{} generated", plural_n(l.generated_files, "file")));
+        }
+        for r in &l.emptied_runtimes {
+            parts.push(format!(
+                "no {} code is analysed, all of it is in left-out paths",
+                inline(&r.runtime)
+            ));
+        }
+        out.push_str(&format!(
+            "; left out by default: {} (`dla run init --include <path>` brings a path back)",
+            parts.join(", ")
+        ));
+    }
+    if !view.state.include.is_empty() {
+        out.push_str(&format!(
+            "; brought back: {}",
+            view.state
+                .include
+                .iter()
+                .map(|p| code(p))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    out
 }
 
 /// The iterations run and entry points exercised per worker, or `not measured` when the
@@ -567,10 +616,15 @@ fn static_tier(view: &RunView, f: &Finding) -> u8 {
     if origin.starts_with("known-leak:") {
         return 1;
     }
-    if origin.starts_with("detector:") {
-        return 3;
-    }
-    if origin == "census" {
+    // A site raised by a rule or analyzer and by the census is one finding: it ranks as the
+    // better of the two.
+    let census = origin == "census" || f.also_origins.iter().any(|o| o.as_str() == "census");
+    let detector = origin.starts_with("detector:")
+        || f.also_origins
+            .iter()
+            .any(|o| o.as_str().starts_with("detector:"));
+    let detector_tier = if detector { 3 } else { 5 };
+    if census {
         let (writers, removers) = view
             .ledger
             .annotation(&f.id)
@@ -596,10 +650,20 @@ fn static_tier(view: &RunView, f: &Finding) -> u8 {
                     )
                 ))
         {
-            return 4;
+            return 4.min(detector_tier);
         }
     }
-    5
+    detector_tier
+}
+
+/// The origin cell of a table row: the origin, then the other origins that raised the site.
+fn origins_cell(f: &Finding) -> String {
+    let mut cell = code_cell(f.origin.as_str());
+    for o in &f.also_origins {
+        cell.push_str(", ");
+        cell.push_str(&code_cell(o.as_str()));
+    }
+    cell
 }
 
 fn findings(out: &mut String, view: &RunView) {
@@ -708,7 +772,7 @@ fn static_table(out: &mut String, rows: &[&Finding]) {
             out,
             "| {} | {} | {} | {} | {} |",
             f.id,
-            code_cell(f.origin.as_str()),
+            origins_cell(f),
             f.holder.map_or_else(|| DASH.to_owned(), |h| h.to_string()),
             place.map_or_else(|| DASH.to_owned(), code_cell),
             f.reason.map_or_else(|| DASH.to_owned(), |r| r.to_string()),
@@ -866,6 +930,10 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     let _ = writeln!(out, "- State: {}", f.state_label());
     let _ = writeln!(out, "- Origin: {}", code(f.origin.as_str()));
+    if !f.also_origins.is_empty() {
+        let also: Vec<String> = f.also_origins.iter().map(|o| code(o.as_str())).collect();
+        let _ = writeln!(out, "- Also raised by: {}", also.join(", "));
+    }
     if let Some(l) = label_line(view, f) {
         let _ = writeln!(out, "- {l}");
     }
@@ -1397,6 +1465,38 @@ mod tests {
             c.state = st;
             assert_eq!(label(&c), "UNCLASSIFIED", "{st}");
         }
+    }
+
+    #[test]
+    fn a_site_raised_by_a_rule_and_the_census_shows_both_origins_and_ranks_as_the_better() {
+        let mut f = Finding::candidate(
+            "F1".parse().unwrap(),
+            Origin::parse("detector:dla/python-unbounded-cache").unwrap(),
+            vec!["E1".parse().unwrap()],
+        );
+        f.state = FindingState::SuspectedStaticOnly;
+        f.site = Some("a.py:3".into());
+        let view = RunView::new(
+            RunState::init("/p", None, 60, None, now_utc()).unwrap(),
+            Ledger::from_text("").unwrap(),
+            None,
+        );
+        // A rule hit alone ranks 3; with a census entry that has no writers it still ranks 3.
+        assert_eq!(static_tier(&view, &f), 3);
+        f.also_origins.push(Origin::parse("census").unwrap());
+        assert_eq!(static_tier(&view, &f), 3);
+        let mut section = String::new();
+        finding_section(&mut section, &view, &f);
+        assert!(
+            section.contains(
+                "- Origin: `detector:dla/python-unbounded-cache`\n- Also raised by: `census`\n"
+            ),
+            "{section}"
+        );
+        assert_eq!(
+            origins_cell(&f),
+            "`detector:dla/python-unbounded-cache`, `census`"
+        );
     }
 
     #[test]

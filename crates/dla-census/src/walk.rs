@@ -5,17 +5,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dla_core::runtime::Runtime;
+use dla_core::{runtime::Runtime, vendored::Defaults};
 
 use crate::{model::SourceFile, parse::Lang};
 
-/// Directories never descended into.
+/// Directories never descended into. Vendored directories, `site-packages` and virtual
+/// environments are not here: [`Defaults`] decides them, so that `--include` can bring them
+/// back.
 const SKIP_DIRS: &[&str] = &[
     ".git",
     ".dla",
     "target",
     "build",
-    "node_modules",
     "venv",
     ".venv",
     "env",
@@ -24,8 +25,6 @@ const SKIP_DIRS: &[&str] = &[
     "__pycache__",
     ".gradle",
     ".idea",
-    "site-packages",
-    "vendor",
     ".mypy_cache",
     ".pytest_cache",
 ];
@@ -35,11 +34,27 @@ const MAX_FILE_BYTES: u64 = 2_000_000;
 
 /// Every file under `root`, as sorted `/`-separated relative paths, for which
 /// `keep(name)` holds. When `through_build_dirs` is set, build output directories are
-/// searched too (class files live there).
+/// searched too (class files live there). Vendored directories and generated files are left
+/// out ([`Defaults`] without `--include`).
 pub fn list_files(
     root: &Path,
     through_build_dirs: bool,
     keep: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    list_files_with(
+        root,
+        through_build_dirs,
+        keep,
+        &Defaults::for_project(root, &[]),
+    )
+}
+
+/// [`list_files`] with explicit default exclusions (the run's `--include` paths).
+pub fn list_files_with(
+    root: &Path,
+    through_build_dirs: bool,
+    keep: &dyn Fn(&str) -> bool,
+    defaults: &Defaults,
 ) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];
@@ -55,14 +70,15 @@ pub fn list_files(
             };
             if ft.is_dir() {
                 let build_dir = matches!(name.as_str(), "target" | "build" | "out" | "dist");
-                let always = matches!(name.as_str(), ".git" | ".dla" | "node_modules");
+                let always = matches!(name.as_str(), ".git" | ".dla");
                 if always
+                    || defaults.prune_dir(&child_rel).is_some()
                     || (SKIP_DIRS.contains(&name.as_str()) && !(through_build_dirs && build_dir))
                 {
                     continue;
                 }
                 stack.push((e.path(), child_rel));
-            } else if ft.is_file() && keep(&child_rel) {
+            } else if ft.is_file() && keep(&child_rel) && defaults.walk_file(&child_rel).is_none() {
                 out.push(child_rel);
             }
         }
@@ -102,15 +118,23 @@ pub fn is_test_path(rel: &str) -> bool {
 /// All source files of a runtime under `root`, read into memory. Unreadable and
 /// oversized files are skipped.
 pub fn source_files(root: &Path, runtime: Runtime) -> Vec<SourceFile> {
-    source_files_in(root, runtime, &|_| true).0
+    source_files_in(root, runtime, &|_| true, &Defaults::for_project(root, &[])).0
 }
 
 /// Number of non-test source files of `runtime` under `root` that `in_scope` rejects
 /// (names only; nothing is read).
-pub fn count_out_of_scope(root: &Path, runtime: Runtime, in_scope: &dyn Fn(&str) -> bool) -> u64 {
-    let rels = list_files(root, false, &|rel| {
-        Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime)
-    });
+pub fn count_out_of_scope(
+    root: &Path,
+    runtime: Runtime,
+    in_scope: &dyn Fn(&str) -> bool,
+    defaults: &Defaults,
+) -> u64 {
+    let rels = list_files_with(
+        root,
+        false,
+        &|rel| Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime),
+        defaults,
+    );
     rels.iter()
         .filter(|r| !dla_core::paths::is_build_logic(r) && !in_scope(r) && !is_test_path(r))
         .count() as u64
@@ -118,10 +142,13 @@ pub fn count_out_of_scope(root: &Path, runtime: Runtime, in_scope: &dyn Fn(&str)
 
 /// Number of non-test source files of `runtime` under `root` that are build logic
 /// (`*.gradle.kts`, `buildSrc/**`): they are never read (names only).
-pub fn count_build_logic(root: &Path, runtime: Runtime) -> u64 {
-    let rels = list_files(root, false, &|rel| {
-        Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime)
-    });
+pub fn count_build_logic(root: &Path, runtime: Runtime, defaults: &Defaults) -> u64 {
+    let rels = list_files_with(
+        root,
+        false,
+        &|rel| Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime),
+        defaults,
+    );
     rels.iter()
         .filter(|r| dla_core::paths::is_build_logic(r) && !is_test_path(r))
         .count() as u64
@@ -134,10 +161,14 @@ pub fn source_files_in(
     root: &Path,
     runtime: Runtime,
     in_scope: &dyn Fn(&str) -> bool,
+    defaults: &Defaults,
 ) -> (Vec<SourceFile>, u64) {
-    let rels = list_files(root, false, &|rel| {
-        Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime)
-    });
+    let rels = list_files_with(
+        root,
+        false,
+        &|rel| Lang::from_path(Path::new(rel)).is_some_and(|l| l.runtime() == runtime),
+        defaults,
+    );
     let mut out = Vec::new();
     let mut skipped = 0u64;
     for rel in rels {
@@ -200,6 +231,35 @@ mod tests {
         ] {
             assert!(!is_test_path(p), "{p}");
         }
+    }
+
+    #[test]
+    fn vendored_and_generated_sources_are_not_listed_unless_brought_back() {
+        let t = tempfile::tempdir().unwrap();
+        let deep = format!(
+            "{}/* Generated by Cython, mentioned deep inside */\n",
+            "int n;\n".repeat(30)
+        );
+        for (f, text) in [
+            ("app/a.c", "int a;\n"),
+            ("app/_fast.c", "/* Generated by Cython 3.0.10 */\nint g;\n"),
+            ("app/notes.c", deep.as_str()),
+            ("vendor/llhttp/p.c", "int p;\n"),
+            ("third_party/z/z.c", "int z;\n"),
+            ("lib/node_modules/m/m.c", "int m;\n"),
+            ("svc/x.pb.cc", "int q;\n"),
+        ] {
+            let p = t.path().join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        }
+        let c = |r: &str| r.ends_with(".c") || r.ends_with(".cc");
+        assert_eq!(list_files(t.path(), false, &c), ["app/a.c", "app/notes.c"]);
+        let back = Defaults::for_project(t.path(), &["vendor/llhttp".into(), "app/_fast.c".into()]);
+        assert_eq!(
+            list_files_with(t.path(), false, &c, &back),
+            ["app/_fast.c", "app/a.c", "app/notes.c", "vendor/llhttp/p.c"]
+        );
     }
 
     #[test]

@@ -400,6 +400,10 @@ pub struct RunState {
     /// Investigation scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
+    /// Paths brought back into the static stages although they are vendored or generated
+    /// code, which is left out by default (`dla run init --include`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
     /// Processes DLA started.
     #[serde(default)]
     pub processes: Vec<ProcessRecord>,
@@ -519,6 +523,7 @@ impl RunState {
                 extensions: Vec::new(),
             },
             scope,
+            include: Vec::new(),
             processes: Vec::new(),
             redaction_salt: hex::encode(salt),
             report: None,

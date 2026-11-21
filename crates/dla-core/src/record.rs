@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     checklist::ChecklistAnswer,
     evidence::EvidenceRecord,
-    finding::{ExplanationTag, Finding, FindingState, Holder, Region, UnresolvedReason},
+    finding::{ExplanationTag, Finding, FindingState, Holder, Origin, Region, UnresolvedReason},
     ids::{EvidenceId, FindingId, OpenItemId},
 };
 
@@ -112,6 +112,13 @@ pub struct FindingAnnotation {
     /// The holder this annotation replaced; written by the ledger, an audit trail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced_holder: Option<Holder>,
+    /// Another origin that raised the same site (a DLA rule or analyzer hit and the census
+    /// entry of one site are one finding); the finding lists it in `also_origins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub also_origin: Option<Origin>,
+    /// The evidence of that other origin; it joins the finding's `supports`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_supports: Vec<EvidenceId>,
 }
 
 impl FindingAnnotation {
@@ -128,6 +135,8 @@ impl FindingAnnotation {
             site: None,
             evidence: Vec::new(),
             replaced_holder: None,
+            also_origin: None,
+            also_supports: Vec::new(),
         }
     }
 }

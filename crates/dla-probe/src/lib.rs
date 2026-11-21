@@ -125,8 +125,10 @@ pub fn run_with(
     }
     let stage = ctx.stage_dir("probe")?;
     let tmp = ctx.tmp_dir()?;
-    let tree = scan::Tree::walk(&ctx.project);
+    let defaults = ctx.static_scope()?.defaults;
+    let tree = scan::Tree::walk_with(&ctx.project, &defaults);
     let mut detected = scan::detect(&tree);
+    let left_out = tree.left_out_for(&detected);
     if let Some(rt) = opts.runtime {
         detected.retain(|d| d.probe.runtime == rt);
     }
@@ -162,6 +164,7 @@ pub fn run_with(
             .contains(&Runtime::Go)
             .then(|| go_toolchain::probe(&ctx.project, opts.tool_timeout)),
         known_leaks,
+        left_out,
     };
 
     let report_name = report_file(ctx.worker.as_deref());
@@ -267,7 +270,8 @@ fn summarize(r: &ProbeReport) -> Summary {
     let runners: Vec<&str> = r.test_runners.iter().map(|t| t.name.as_str()).collect();
     let libs: Vec<&str> = r.libraries.iter().map(|l| l.library.as_str()).collect();
     let flags: usize = r.libraries.iter().map(|l| l.harness_flags.len()).sum();
-    let evidence_result = json!({
+    let left_out = left_out_lines(r);
+    let mut evidence_result = json!({
         "runtimes": runtimes,
         "tools_found": present,
         "tools_missing": missing,
@@ -279,6 +283,9 @@ fn summarize(r: &ProbeReport) -> Summary {
         "go": go_summary(r),
         "known_leaks": known_leak_ids(r),
     });
+    if !left_out.is_empty() {
+        evidence_result["left_out"] = json!(left_out);
+    }
     let counts = json!({
         "runtimes": runtimes,
         "tools_found": present.len(),
@@ -288,7 +295,7 @@ fn summarize(r: &ProbeReport) -> Summary {
         "builds": builds,
         "known_leaks": r.known_leaks.iter().filter(|k| k.verdict != dla_core::probe::Verdict::False).count(),
     });
-    let cli = json!({
+    let mut cli = json!({
         "runtimes": runtimes,
         "tools_found": present,
         "tools_missing": missing,
@@ -305,11 +312,29 @@ fn summarize(r: &ProbeReport) -> Summary {
             "container": !r.privilege.container.is_empty(),
         },
     });
+    if !left_out.is_empty() {
+        cli["left_out"] = json!(left_out);
+        cli["left_out_note"] = json!(LEFT_OUT_NOTE);
+    }
     Summary {
         evidence_result,
         counts,
         cli,
     }
+}
+
+/// What the probe tells a reader about the paths it left out.
+pub const LEFT_OUT_NOTE: &str = "vendored directories and generated files are not analysed by default; dla run init --include <path> brings a path back";
+
+/// The left-out lines of a report, at most 20 (the rest counted in a last line).
+fn left_out_lines(r: &ProbeReport) -> Vec<String> {
+    let mut lines = r.left_out.lines();
+    if lines.len() > 20 {
+        let more = lines.len() - 19;
+        lines.truncate(19);
+        lines.push(format!("... and {more} more (see probe.json)"));
+    }
+    lines
 }
 
 /// The Go toolchain facts as a small JSON object (`null` for a project with no Go).
@@ -341,6 +366,7 @@ const SONAR_REASON: &str = "server-only: S5164 and S2095 are evaluated on a Sona
 
 fn record_coverage(ctx: &ToolCtx, r: &ProbeReport) -> Result<(), Refusal> {
     CoverageManifest::update(&ctx.run_dir, |m| {
+        m.left_out = r.left_out.clone();
         for t in &r.tools {
             // The built-in rules are always available; their row says that a sweep ran
             // (the stage gate reads it), so only `dla sweep` writes it.

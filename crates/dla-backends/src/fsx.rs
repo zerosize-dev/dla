@@ -6,6 +6,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use dla_core::vendored::Defaults;
+
 /// Directories no analysis descends into.
 pub const SKIP_DIRS: [&str; 12] = [
     ".git",
@@ -161,7 +163,8 @@ pub fn skipped(name: &str) -> bool {
 }
 
 /// Every file under `root` (relative `/` paths, sorted) for which `keep(rel)` holds,
-/// without descending into [`SKIP_DIRS`]. At most `limit` files.
+/// without descending into [`SKIP_DIRS`]. At most `limit` files. (Source discovery that
+/// must leave vendored and generated code out uses [`walk_defaults`].)
 pub fn walk(root: &Path, limit: usize, keep: &dyn Fn(&str) -> bool) -> Vec<String> {
     walk_with(root, limit, &skipped, keep)
 }
@@ -173,6 +176,18 @@ pub fn walk_with(
     limit: usize,
     skip: &dyn Fn(&str) -> bool,
     keep: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    walk_defaults(root, limit, skip, keep, None)
+}
+
+/// [`walk_with`] that also leaves out what `defaults` leaves out (vendored directories,
+/// generated files), when given.
+pub fn walk_defaults(
+    root: &Path,
+    limit: usize,
+    skip: &dyn Fn(&str) -> bool,
+    keep: &dyn Fn(&str) -> bool,
+    defaults: Option<&Defaults>,
 ) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), String::new())];
@@ -189,10 +204,11 @@ pub fn walk_with(
                 format!("{rel}/{name}")
             };
             if ft.is_dir() {
-                if !skip(&name) {
+                if !skip(&name) && defaults.is_none_or(|d| d.prune_dir(&r).is_none()) {
                     stack.push((e.path(), r));
                 }
-            } else if ft.is_file() && keep(&r) {
+            } else if ft.is_file() && keep(&r) && defaults.is_none_or(|d| d.walk_file(&r).is_none())
+            {
                 out.push(r);
                 if out.len() >= limit {
                     out.sort();
@@ -207,12 +223,23 @@ pub fn walk_with(
 
 /// Files of `root` whose extension is one of `exts` (without the dot).
 pub fn files_with_ext(root: &Path, exts: &[&str]) -> Vec<String> {
-    walk(root, 200_000, &|r| {
-        Path::new(r)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| exts.contains(&e))
-    })
+    files_with_ext_in(root, exts, None)
+}
+
+/// [`files_with_ext`] that also leaves out what `defaults` leaves out, when given.
+pub fn files_with_ext_in(root: &Path, exts: &[&str], defaults: Option<&Defaults>) -> Vec<String> {
+    walk_defaults(
+        root,
+        200_000,
+        &skipped,
+        &|r| {
+            Path::new(r)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| exts.contains(&e))
+        },
+        defaults,
+    )
 }
 
 /// Build-output directory names: skipped only where they really are outputs.

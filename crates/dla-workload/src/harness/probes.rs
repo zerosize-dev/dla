@@ -314,19 +314,40 @@ pub fn census_entries(ctx: &ToolCtx, rt: Runtime) -> Vec<CensusEntry> {
         .unwrap_or_default()
 }
 
-fn finding_for_site(ledger: &Ledger, site: &str) -> Option<FindingId> {
-    ledger
-        .findings()
-        .find(|f| f.origin.as_str() == "census" && f.site.as_deref() == Some(site))
-        .map(|f| f.id.clone())
+/// The census finding of every site, keyed by file and anchor line (a decorator line and
+/// its `def` line are one site). A finding that a rule raised first and the census joined
+/// (`also_origins`) counts as the census finding of its site; a finding merged into another
+/// does not.
+fn census_findings(ctx: &ToolCtx, ledger: &Ledger) -> impl Fn(&str) -> Option<FindingId> + use<> {
+    let anchor = dla_census::anchor::site_anchor(&ctx.project);
+    let key = move |site: &str| -> Option<(String, u32)> {
+        let (file, line) = site.rsplit_once(':')?;
+        let line: u32 = line.parse().ok()?;
+        Some((file.to_owned(), anchor.of(file, line)))
+    };
+    let mut by_site: std::collections::HashMap<(String, u32), FindingId> =
+        std::collections::HashMap::new();
+    for f in ledger.findings() {
+        let census =
+            f.origin.as_str() == "census" || f.also_origins.iter().any(|o| o.as_str() == "census");
+        if census
+            && f.parent.is_none()
+            && ledger.merged_into(&f.id).is_none()
+            && let Some(k) = f.site.as_deref().and_then(&key)
+        {
+            by_site.entry(k).or_insert_with(|| f.id.clone());
+        }
+    }
+    move |site: &str| key(site).and_then(|k| by_site.get(&k).cloned())
 }
 
 /// Census candidates of `rt` joined with their findings.
 fn candidates(ctx: &ToolCtx, ledger: &Ledger, rt: Runtime) -> Vec<Cand> {
+    let finding_for_site = census_findings(ctx, ledger);
     census_entries(ctx, rt)
         .into_iter()
         .map(|e| Cand {
-            finding: finding_for_site(ledger, &e.site),
+            finding: finding_for_site(&e.site),
             owner: e.owner,
             kind: e.kind,
             site: e.site,
@@ -387,7 +408,9 @@ fn targets_for(
                 .unwrap_or(&c.owner)
                 .to_owned();
             match c.kind.as_str() {
-                "module-global" | "module-pointer" if !rest.contains('.') => {
+                // A cached module-level function is read as a global: the wrapper's size is
+                // its `currsize`.
+                "module-global" | "module-pointer" | "cache-decorator" if !rest.contains('.') => {
                     specific.push(ProbeTarget::PyGlobal {
                         module: m.clone(),
                         name: rest,
@@ -453,7 +476,29 @@ pub fn derive(
         Vec::new()
     };
     let known = census_entries(ctx, rt);
+    let anchor = dla_census::anchor::site_anchor(&ctx.project);
+    let same_site = |a: &str, b: &str| -> bool {
+        a == b
+            || match (a.rsplit_once(':'), b.rsplit_once(':')) {
+                (Some((fa, la)), Some((fb, lb))) => match (la.parse::<u32>(), lb.parse::<u32>()) {
+                    (Ok(la), Ok(lb)) => fa == fb && anchor.of(fa, la) == anchor.of(fb, lb),
+                    _ => false,
+                },
+                _ => false,
+            }
+    };
+    let mut asked: Vec<FindingId> = Vec::new();
     for id in extra {
+        if let Some(canonical) = ledger.merged_into(id) {
+            return Err(Refusal::new(
+                codes::INVALID_VALUE,
+                format!(
+                    "--probe {id}: {id} is a duplicate of {canonical} (one site, one finding), so the probe belongs to {canonical}"
+                ),
+                format!("the finding that stands for the site: {canonical}"),
+                format!("dla harness gen --lang {} --probe {canonical}", rt.as_str()),
+            ));
+        }
         let f = ledger.finding(id).ok_or_else(|| {
             Refusal::new(
                 codes::UNKNOWN_FINDING,
@@ -487,15 +532,16 @@ pub fn derive(
             .or_else(|| {
                 known
                     .iter()
-                    .find(|e| e.site == site)
+                    .find(|e| same_site(&e.site, &site))
                     .map(|e| e.owner.clone())
             })
             .unwrap_or_default();
         let kind = known
             .iter()
-            .find(|e| e.site == site)
+            .find(|e| same_site(&e.site, &site))
             .map_or_else(String::new, |e| e.kind.clone());
-        if let Some(c) = cands.iter_mut().find(|c| c.site == site) {
+        asked.push(id.clone());
+        if let Some(c) = cands.iter_mut().find(|c| same_site(&c.site, &site)) {
             c.finding = Some(id.clone());
         } else {
             cands.push(Cand {
@@ -524,6 +570,55 @@ pub fn derive(
                 None => modules.push((t, vec![c])),
             }
         }
+    }
+    // A finding asked for with --probe that gets no target of its own is said, never dropped.
+    for id in &asked {
+        let Some(c) = cands.iter().find(|c| c.finding.as_ref() == Some(id)) else {
+            continue;
+        };
+        let (own, module) = targets_for(&ctx.project, rt, c, driver, go_dir);
+        if !own.is_empty() {
+            continue;
+        }
+        if module.is_empty() {
+            let (why, fix) = match rt {
+                Runtime::Go if !driver => (
+                    "go command mode has no package-variable probes".to_owned(),
+                    format!("dla harness gen --lang go --driver --probe {id}"),
+                ),
+                Runtime::Go => (
+                    format!(
+                        "its holder {} ({}) is not a package variable",
+                        if c.owner.is_empty() {
+                            "<none>"
+                        } else {
+                            &c.owner
+                        },
+                        if c.kind.is_empty() {
+                            "no census entry"
+                        } else {
+                            &c.kind
+                        }
+                    ),
+                    "dla harness gen --lang go --driver --probes auto".to_owned(),
+                ),
+                _ => (
+                    format!("{} harnesses have no probe for its holder", rt.as_str()),
+                    format!("dla harness gen --lang {} --probes auto", rt.as_str()),
+                ),
+            };
+            return Err(Refusal::new(
+                codes::INVALID_VALUE,
+                format!("--probe {id}: {why}, so no probe can be derived from it"),
+                format!("a finding whose holder a {} probe can read", rt.as_str()),
+                fix,
+            ));
+        }
+        out.notes.push(format!(
+            "--probe {id}: it has no probe target of its own ({}{}); its module is probed as a whole and the columns that carry its site are tied to it when the trend runs",
+            if c.kind.is_empty() { "no census entry for its site" } else { &c.kind },
+            if c.owner.is_empty() { String::new() } else { format!(" on {}", c.owner) }
+        ));
     }
     if rt == Runtime::Go && !driver && !cands.is_empty() {
         out.notes.push(
@@ -759,7 +854,10 @@ pub fn resolve_site(
     let Some(site) = resolve_in(&ctx.project, manifest.runtime, &entries, probe_path) else {
         return (None, None);
     };
-    let finding = ctx.ledger().ok().and_then(|l| finding_for_site(&l, &site));
+    let finding = ctx
+        .ledger()
+        .ok()
+        .and_then(|l| census_findings(ctx, &l)(&site));
     (Some(site), finding)
 }
 

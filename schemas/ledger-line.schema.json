@@ -599,6 +599,13 @@
       "description": "One hypothesis about a leak and everything known about it.",
       "type": "object",
       "properties": {
+        "also_origins": {
+          "description": "Other origins that raised the same site (a DLA rule or analyzer hit and the census\nentry of one site are one finding); set when an annotation joins them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Origin"
+          }
+        },
         "amplifiers": {
           "description": "Factors that worsen the leak.",
           "type": "array",
@@ -786,6 +793,24 @@
       "description": "Writers and removers found for a finding's holder, and its holder, owner, region and\nsite when none is recorded yet. It does not change the finding's state; the report lists\nthe sites under the finding.",
       "type": "object",
       "properties": {
+        "also_origin": {
+          "description": "Another origin that raised the same site (a DLA rule or analyzer hit and the census\nentry of one site are one finding); the finding lists it in `also_origins`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "also_supports": {
+          "description": "The evidence of that other origin; it joins the finding's `supports`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceId"
+          }
+        },
         "evidence": {
           "description": "Growth evidence that backs a change of a holder already set (schema 5): a heap-graph\n`growth-series` with a passing column tied to the finding whose `holder_kind` is\n`holder`.",
           "type": "array",

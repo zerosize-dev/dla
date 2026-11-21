@@ -2,7 +2,7 @@
 //! libraries.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -13,13 +13,14 @@ use dla_core::{
 };
 use regex::Regex;
 
+use dla_core::vendored::{Defaults, DirReason, EmptiedRuntime, Excluded, LeftOut, LeftOutDir};
+
 /// Directory names never entered.
 pub const SKIP_DIRS: &[&str] = &[
     ".git",
     ".dla",
     "target",
     "build",
-    "node_modules",
     "venv",
     ".venv",
     "out",
@@ -30,7 +31,6 @@ pub const SKIP_DIRS: &[&str] = &[
     ".mypy_cache",
     ".pytest_cache",
     ".idea",
-    "site-packages",
 ];
 
 const MAX_FILES: usize = 100_000;
@@ -46,13 +46,42 @@ pub struct Tree {
     pub files: Vec<String>,
     /// True when the walk stopped at the file limit.
     pub truncated: bool,
+    /// What the default exclusions left out of the walk (vendored directories and
+    /// generated files); the runtimes whose code base this empties are added by
+    /// [`Tree::left_out_for`].
+    pub left_out: LeftOut,
+    /// Left-out files per runtime: source files, build files, and where they lie.
+    left_files: BTreeMap<Runtime, LeftCount>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct LeftCount {
+    sources: u64,
+    builds: u64,
+    under: BTreeSet<String>,
+}
+
+/// Most files counted below one left-out directory (a `node_modules` can hold millions).
+const MAX_COUNTED: u64 = 1_000_000;
+
 impl Tree {
-    /// Walks `root`, skipping [`SKIP_DIRS`] and symlinks.
+    /// Walks `root` with the default exclusions (no `--include`), skipping [`SKIP_DIRS`] and
+    /// symlinks.
+    #[cfg(test)]
     pub fn walk(root: &Path) -> Tree {
+        Self::walk_with(root, &Defaults::for_project(root, &[]))
+    }
+
+    /// Walks `root`, skipping [`SKIP_DIRS`], symlinks and what `defaults` leaves out. What
+    /// is left out is counted (not read) in [`Tree::left_out`].
+    pub fn walk_with(root: &Path, defaults: &Defaults) -> Tree {
         let mut files = Vec::new();
         let mut truncated = false;
+        let mut dirs: BTreeMap<String, (DirReason, u64)> = BTreeMap::new();
+        let mut generated = 0u64;
+        let mut generated_by: BTreeSet<String> = BTreeSet::new();
+        let mut left_files: BTreeMap<Runtime, LeftCount> = BTreeMap::new();
+        let mut prebuilt: Vec<String> = Vec::new();
         let mut stack = vec![(root.to_path_buf(), String::new())];
         'outer: while let Some((dir, rel)) = stack.pop() {
             let Ok(rd) = fs::read_dir(&dir) else { continue };
@@ -67,7 +96,28 @@ impl Tree {
                     format!("{rel}/{name}")
                 };
                 if ft.is_dir() {
-                    if !SKIP_DIRS.contains(&name.as_str()) {
+                    if let Some((path, reason)) = defaults.prune_dir(&child_rel) {
+                        let mut n = 0u64;
+                        count_files(&e.path(), &child_rel, &mut |f| {
+                            n += 1;
+                            // A prebuilt addon the project loads from a vendored directory
+                            // is a boundary of the project, not code to analyse: keep it
+                            // visible to the boundary detection.
+                            if f.ends_with(".node") {
+                                prebuilt.push(f.to_owned());
+                            }
+                            if let Some((rt, role)) = classify(f) {
+                                let c = left_files.entry(rt).or_default();
+                                match role {
+                                    Role::Source => c.sources += 1,
+                                    Role::Build => c.builds += 1,
+                                }
+                                c.under.insert(path.clone());
+                            }
+                        });
+                        let slot = dirs.entry(path).or_insert((reason, 0));
+                        slot.1 += n;
+                    } else if !SKIP_DIRS.contains(&name.as_str()) {
                         stack.push((e.path(), child_rel));
                     }
                 } else if ft.is_file() {
@@ -75,16 +125,73 @@ impl Tree {
                         truncated = true;
                         break 'outer;
                     }
+                    if let Some(left) = defaults.walk_file(&child_rel) {
+                        let cls = classify(&child_rel);
+                        let under = match left {
+                            Excluded::Generated(marker) => {
+                                // Only source files are read for a marker, and counted.
+                                generated += 1;
+                                generated_by.insert(marker.to_owned());
+                                "generated files".to_owned()
+                            }
+                            Excluded::Dir { path, reason } => {
+                                dirs.entry(path.clone()).or_insert((reason, 0)).1 += 1;
+                                path
+                            }
+                        };
+                        if let Some((rt, role)) = cls {
+                            let c = left_files.entry(rt).or_default();
+                            match role {
+                                Role::Source => c.sources += 1,
+                                Role::Build => c.builds += 1,
+                            }
+                            c.under.insert(under);
+                        }
+                        continue;
+                    }
                     files.push(child_rel);
                 }
             }
         }
+        files.extend(prebuilt);
         files.sort();
+        let left_out = LeftOut {
+            directories: dirs
+                .into_iter()
+                .map(|(path, (reason, files))| LeftOutDir {
+                    path,
+                    reason,
+                    files,
+                })
+                .collect(),
+            generated_files: generated,
+            generated_by: generated_by.into_iter().take(4).collect(),
+            emptied_runtimes: Vec::new(),
+        };
         Tree {
             root: root.to_path_buf(),
             files,
             truncated,
+            left_out,
+            left_files,
         }
+    }
+
+    /// [`Tree::left_out`] with the runtimes the exclusions emptied: those with files left out
+    /// that `detected` does not report (every source file of them lies in a left-out path).
+    pub fn left_out_for(&self, detected: &[Detected]) -> LeftOut {
+        let mut out = self.left_out.clone();
+        for (rt, c) in &self.left_files {
+            let has = c.sources > 0 || (*rt != Runtime::Native && c.builds > 0);
+            if has && !detected.iter().any(|d| d.probe.runtime == *rt) {
+                out.emptied_runtimes.push(EmptiedRuntime {
+                    runtime: rt.as_str().to_owned(),
+                    files: c.sources + c.builds,
+                    under: c.under.iter().take(3).cloned().collect(),
+                });
+            }
+        }
+        out
     }
 
     /// A tree over an explicit file list (tests).
@@ -96,6 +203,29 @@ impl Tree {
         }
         let bytes = fs::read(&p).ok()?;
         Some(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+/// Calls `f` with the project-relative path of every file under `dir` (whose own
+/// project-relative path is `rel`); symlinks are not followed; stops at [`MAX_COUNTED`].
+fn count_files(dir: &Path, rel: &str, f: &mut dyn FnMut(&str)) {
+    let mut n = 0u64;
+    let mut stack = vec![(dir.to_path_buf(), rel.to_owned())];
+    while let Some((d, r)) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            let child = format!("{r}/{}", e.file_name().to_string_lossy());
+            if ft.is_dir() {
+                stack.push((e.path(), child));
+            } else if ft.is_file() {
+                n += 1;
+                f(&child);
+                if n >= MAX_COUNTED {
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -648,6 +778,92 @@ mod tests {
             ("src/__pycache__/q.py", ""),
         ]);
         assert_eq!(t.files, vec!["a.py"]);
+    }
+
+    #[test]
+    fn vendored_and_generated_code_does_not_make_a_runtime() {
+        let (_d, t) = tree(&[
+            ("pyproject.toml", "[project]\nname = \"a\"\n"),
+            ("a/main.py", "x = 1\n"),
+            ("a/_fast.c", "/* Generated by Cython 3.0 */\nint x;\n"),
+            ("a/_fast.h", "#ifndef F\n#define F\n#endif\n"),
+            ("vendor/llhttp/package.json", "{}"),
+            ("vendor/llhttp/src/p.c", "int p;\n"),
+            ("vendor/llhttp/src/a.js", "x\n"),
+            ("third_party/zlib/z.c", "int z;\n"),
+            ("node_modules/m/i.js", "x\n"),
+            ("svc/api.pb.go", "package svc\n"),
+        ]);
+        let d = detect(&t);
+        let rts: Vec<_> = d.iter().map(|d| d.probe.runtime).collect();
+        assert_eq!(rts, [Runtime::Python], "{rts:?}");
+        assert_eq!(d[0].probe.source_files, 1);
+        assert_eq!(
+            t.files.iter().filter(|f| f.starts_with("vendor")).count(),
+            0
+        );
+        let l = t.left_out_for(&d);
+        let dirs: Vec<(&str, u64)> = l
+            .directories
+            .iter()
+            .map(|d| (d.path.as_str(), d.files))
+            .collect();
+        assert_eq!(
+            dirs,
+            [("node_modules", 1), ("third_party", 1), ("vendor", 3)],
+            "{l:?}"
+        );
+        assert_eq!(
+            l.generated_files, 3,
+            "the C file, its header and the .pb.go"
+        );
+        let emptied: Vec<&str> = l
+            .emptied_runtimes
+            .iter()
+            .map(|r| r.runtime.as_str())
+            .collect();
+        assert_eq!(emptied, ["go", "node", "native"], "{l:?}");
+        assert!(
+            l.lines()
+                .iter()
+                .any(|x| x.starts_with("vendor: vendored directory, 3 files"))
+        );
+    }
+
+    #[test]
+    fn included_paths_come_back_into_the_walk() {
+        let d = tempfile::tempdir().unwrap();
+        for (p, c) in [
+            ("vendor/llhttp/package.json", "{}"),
+            ("vendor/llhttp/src/a.js", "x\n"),
+            ("vendor/other/o.js", "x\n"),
+        ] {
+            let path = d.path().join(p);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, c).unwrap();
+        }
+        let none = Tree::walk(d.path());
+        assert!(none.files.is_empty());
+        let t = Tree::walk_with(
+            d.path(),
+            &Defaults::for_project(d.path(), &["vendor/llhttp".to_owned()]),
+        );
+        assert_eq!(
+            t.files,
+            ["vendor/llhttp/package.json", "vendor/llhttp/src/a.js"]
+        );
+        let det = detect(&t);
+        assert_eq!(det.len(), 1);
+        let l = t.left_out_for(&det);
+        assert_eq!(
+            l.directories
+                .iter()
+                .map(|d| (d.path.as_str(), d.files))
+                .collect::<Vec<_>>(),
+            [("vendor", 1)],
+            "what is not included stays named"
+        );
+        assert!(l.emptied_runtimes.is_empty());
     }
 
     #[test]

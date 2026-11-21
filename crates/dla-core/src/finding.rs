@@ -376,6 +376,10 @@ pub struct Finding {
     /// Class of repair.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_class: Option<RepairClass>,
+    /// Other origins that raised the same site (a DLA rule or analyzer hit and the census
+    /// entry of one site are one finding); set when an annotation joins them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_origins: Vec<Origin>,
     /// Evidence supporting the finding.
     #[serde(default)]
     pub supports: Vec<EvidenceId>,
@@ -412,6 +416,7 @@ impl Finding {
             site: None,
             amplifiers: Vec::new(),
             repair_class: None,
+            also_origins: Vec::new(),
             supports,
             contradicts: Vec::new(),
             siblings: Vec::new(),

@@ -46,6 +46,9 @@ pub struct Job<'a> {
     pub timeout: Duration,
     /// The run's scope (`None`: everything is in scope).
     pub scope: Option<Scope>,
+    /// The default exclusions of vendored and generated code (with the paths the user
+    /// brought back).
+    pub defaults: dla_core::vendored::Defaults,
     /// Backends of this sweep that already ran (not blocked, not missing), in order; the
     /// server-only Sonar row names them.
     pub ran: Vec<String>,
@@ -55,6 +58,23 @@ impl Job<'_> {
     /// The project root.
     pub fn project(&self) -> &std::path::Path {
         &self.ctx.project
+    }
+
+    /// Files of the project (relative `/` paths, sorted) for which `keep` holds, without
+    /// build output, vendored directories or generated files (unless brought back).
+    pub fn walk(&self, limit: usize, keep: &dyn Fn(&str) -> bool) -> Vec<String> {
+        crate::fsx::walk_defaults(
+            self.project(),
+            limit,
+            &crate::fsx::skipped,
+            keep,
+            Some(&self.defaults),
+        )
+    }
+
+    /// Source files of the project with one of `exts`, left-out code excluded.
+    pub fn files_with_ext(&self, exts: &[&str]) -> Vec<String> {
+        crate::fsx::files_with_ext_in(self.project(), exts, Some(&self.defaults))
     }
 
     /// The rule identifiers of the rows, in table order.
@@ -69,7 +89,7 @@ impl Job<'_> {
 
     /// Whether a project-relative path (`/` separators) is inside the run's scope.
     pub fn in_scope(&self, rel: &str) -> bool {
-        self.scope.as_ref().is_none_or(|s| s.includes(rel))
+        self.scope.as_ref().is_none_or(|s| s.includes(rel)) && self.defaults.excluded(rel).is_none()
     }
 
     /// Whether a walk or a build unit rooted at the project-relative directory `rel_dir`

@@ -2934,3 +2934,120 @@ fn a_known_pace_refuses_before_the_first_point() {
         "no point was started"
     );
 }
+
+/// A project whose module `blocker` never returns from its import (it stands for an example
+/// script that starts a server at import) and whose module `loaded` is imported by `app.py`.
+fn write_blocking_project(fx: &Fx, app: &str) {
+    fs::write(fx.work.join("blocker.py"), "import time\ntime.sleep(300)\n").unwrap();
+    fs::write(fx.work.join("loaded.py"), "CACHE = []\n").unwrap();
+    fs::write(fx.work.join("app.py"), app).unwrap();
+}
+
+fn py_manifest(fx: &Fx, probes: Vec<ProbeSpec>, timeout: u64) -> HarnessManifest {
+    let mut m = manifest(
+        Runtime::Python,
+        &["python3", "app.py", "{n}"],
+        vec![(s("PYTHONPATH"), fx.agent.to_string_lossy().into_owned())],
+        50,
+    );
+    m.agent = AgentKind::PySitecustomize;
+    m.iterations = 3;
+    m.timeout_secs = timeout;
+    m.probes = probes;
+    m
+}
+
+fn module_probe(id: &str, module: &str) -> ProbeSpec {
+    ProbeSpec {
+        id: s(id),
+        finding: None,
+        target: ProbeTarget::PyModule { module: s(module) },
+        site: None,
+    }
+}
+
+#[test]
+fn a_python_module_probe_never_imports_a_module_the_workload_did_not_load() {
+    if !have(&["python3"]) {
+        return;
+    }
+    let fx = fixture("", &["python"], &[1]);
+    write_blocking_project(
+        &fx,
+        "import sys\nimport loaded\nloaded.CACHE.extend(range(int(sys.argv[1])))\n",
+    );
+    let m = py_manifest(
+        &fx,
+        vec![module_probe("P1", "blocker"), module_probe("P2", "loaded")],
+        40,
+    );
+    write_manifest(&fx, &m);
+    let started = std::time::Instant::now();
+    let out = run_points(&fx.ctx, &m, &RunOptions::default()).unwrap();
+    assert!(
+        started.elapsed().as_secs() < 30,
+        "the run finished without waiting for the blocking module ({:?})",
+        started.elapsed()
+    );
+    let series = load(&fx, &out, 0);
+    assert_eq!(series.points.len(), 4, "every point was measured");
+    let names: Vec<&str> = series.columns.iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"probe:loaded.CACHE"), "{names:?}");
+    assert!(
+        names.iter().all(|n| !n.contains("blocker")),
+        "a module that was not loaded has no column: {names:?}"
+    );
+    let said = out
+        .limitations
+        .iter()
+        .any(|l| l.contains("blocker") && l.contains("not loaded"));
+    assert!(
+        said,
+        "the limitation names the module: {:?}",
+        out.limitations
+    );
+}
+
+#[test]
+fn a_python_point_killed_at_its_timeout_says_what_it_was_doing() {
+    if !have(&["python3"]) {
+        return;
+    }
+    let fx = fixture("", &["python"], &[1]);
+    // The workload itself never returns from its imports: the agent's last record is its start.
+    write_blocking_project(&fx, "import blocker\n");
+    let m = py_manifest(&fx, vec![], 3);
+    write_manifest(&fx, &m);
+    let said = match run_points(&fx.ctx, &m, &RunOptions::default()) {
+        Ok(out) => out.limitations.join("\n"),
+        Err(e) => format!("{} {} {}", e.message, e.missing, e.fix),
+    };
+    assert!(said.contains("did not finish in 3 s"), "{said}");
+    assert!(
+        said.contains(
+            "it was killed in: start-up: the program's own code before its first hook or checkpoint"
+        ),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_point_of_another_runtime_that_times_out_says_it_knows_no_phase() {
+    if !have(&["sh"]) {
+        return;
+    }
+    let fx = fixture("", &[], &[1]);
+    let mut m = manifest(Runtime::Native, &["sh", "-c", "sleep 30"], vec![], 50);
+    m.iterations = 2;
+    m.timeout_secs = 2;
+    write_manifest(&fx, &m);
+    let said = match run_points(&fx.ctx, &m, &RunOptions::default()) {
+        Ok(out) => out.limitations.join("\n"),
+        Err(e) => format!("{} {} {}", e.message, e.missing, e.fix),
+    };
+    assert!(said.contains("did not finish in 2 s"), "{said}");
+    assert!(
+        said.contains("the agent recorded no phase, so where it was stuck is not known"),
+        "{said}"
+    );
+}

@@ -37,6 +37,10 @@
         "$ref": "#/$defs/KnownLeakVerdict"
       }
     },
+    "left_out": {
+      "description": "What was left out of the walk by default: vendored directories, generated files, and\nthe runtimes whose whole code base lies in such places (`dla run init --include`\nbrings a path back).",
+      "$ref": "#/$defs/LeftOut"
+    },
     "libraries": {
       "description": "Libraries and the harness flags they imply.",
       "type": "array",
@@ -194,6 +198,54 @@
         }
       ]
     },
+    "DirReason": {
+      "description": "Why a directory is left out.",
+      "oneOf": [
+        {
+          "description": "Named like a vendored directory.",
+          "type": "string",
+          "const": "vendored"
+        },
+        {
+          "description": "Holds `pyvenv.cfg`.",
+          "type": "string",
+          "const": "virtual-env"
+        },
+        {
+          "description": "Listed in `.gitmodules`.",
+          "type": "string",
+          "const": "submodule"
+        }
+      ]
+    },
+    "EmptiedRuntime": {
+      "description": "A runtime whose whole code base is left out.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "Source and build files of it that are left out.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "runtime": {
+          "description": "The runtime.",
+          "type": "string"
+        },
+        "under": {
+          "description": "Where they are (at most a few left-out paths).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "runtime",
+        "files",
+        "under"
+      ]
+    },
     "FfiBoundary": {
       "description": "A foreign-function boundary between two runtimes found in the sources.",
       "type": "object",
@@ -307,6 +359,64 @@
         "id",
         "verdict",
         "why"
+      ]
+    },
+    "LeftOut": {
+      "description": "What the default exclusions left out of a project.",
+      "type": "object",
+      "properties": {
+        "directories": {
+          "description": "One entry per left-out directory (not nested in another).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LeftOutDir"
+          }
+        },
+        "emptied_runtimes": {
+          "description": "Runtimes that would have been reported but whose every source file is left out.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EmptiedRuntime"
+          }
+        },
+        "generated_by": {
+          "description": "Which markers were seen (at most a few names).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generated_files": {
+          "description": "Generated source files, left out one by one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "LeftOutDir": {
+      "description": "One left-out directory, as the probe and the report name it.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "Files under it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "path": {
+          "description": "Project-relative directory.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it is left out.",
+          "$ref": "#/$defs/DirReason"
+        }
+      },
+      "required": [
+        "path",
+        "reason",
+        "files"
       ]
     },
     "LibraryProbe": {

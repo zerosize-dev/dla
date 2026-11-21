@@ -37,10 +37,12 @@ def unit(i, key):
 
 
 def main():
+    dla.mark_phase("hook setup (the project imports and the objects under test)")
     setup()
     total = WARMUP + ROUNDS
     done = 0
     for round_no in range(1, total + 1):
+        dla.mark_phase(f"hook unit (round {round_no} of {total}, units {done + 1} to {done + STEP})")
         for _ in range(STEP):
             done += 1
             unit(done, done % REPEAT if REPEATED else done)

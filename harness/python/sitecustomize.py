@@ -52,6 +52,19 @@ def _env(name):
     return value if value else None
 
 
+def mark_phase(text):
+    """Records what the process is doing in `<DLA_HARNESS_OUT>.phase` (one line, overwritten), so
+    that a point killed at its timeout can say where it was stuck. Never raises."""
+    out = _env("DLA_HARNESS_OUT")
+    if out is None or not _ACTIVE:
+        return
+    try:
+        with open(out + ".phase", "w", encoding="utf-8") as fh:
+            fh.write(f"{text} (at {int((time.monotonic() - _T0) * 1000)} ms)\n")
+    except BaseException:
+        pass
+
+
 def _is_tool_process():
     """True for packaging/venv tool runs, which are never measured."""
     argv = list(getattr(sys, "orig_argv", None) or sys.argv)
@@ -350,14 +363,19 @@ def _record(probe_id, name, path, value, error=None):
 
 
 def _find_module(name):
+    """The module the workload has already imported, or None. A probe never imports: importing
+    runs the module's top level, which can start a server or block, and it would change the
+    state under measurement."""
+    if not isinstance(name, str) or not name:
+        return None
     mod = sys.modules.get(name)
     if mod is not None:
         return mod
     main = sys.modules.get("__main__")
     spec = getattr(main, "__spec__", None)
-    if spec is not None and spec.name == name:
+    if spec is not None and getattr(spec, "name", None) == name:
         return main
-    return importlib.import_module(name)
+    return None
 
 
 def _is_stdlib_instance(value):
@@ -424,6 +442,7 @@ def _probes(limitations):
     if isinstance(specs, dict):
         specs = specs.get("probes", [])
     out = []
+    not_loaded = []
     deadline = time.monotonic() + _PROBE_DEADLINE_S
     for spec in specs:
         try:
@@ -433,10 +452,12 @@ def _probes(limitations):
             if not kind.startswith("py"):
                 continue  # another runtime's probe
             modname = target.get("module")
-            try:
-                mod = _find_module(modname)
-            except BaseException as exc:
-                out.append(_record(probe_id, modname, modname, None, f"module not importable: {exc!r}"))
+            mark_phase(f"checkpoint: probe {probe_id} ({kind} {modname})")
+            mod = _find_module(modname)
+            if mod is None:
+                if str(modname) not in not_loaded:
+                    not_loaded.append(str(modname))
+                out.append(_record(probe_id, modname, modname, None, "module not loaded by the workload at this checkpoint (a probe never imports it)"))
                 continue
             if kind == "pymodule":
                 out.extend(_module_probes(probe_id, modname, mod, deadline))
@@ -448,6 +469,11 @@ def _probes(limitations):
                 out.append(_record(probe_id, qual, f"{modname}.{qual}", _resolve(mod, qual)))
         except BaseException as exc:
             out.append({"id": spec.get("id") if isinstance(spec, dict) else None, "name": None, "path": None, "size": None, "reachable": None, "bytes": None, "error": repr(exc)})
+    if not_loaded:
+        shown = ", ".join(not_loaded[:5]) + (f" and {len(not_loaded) - 5} more" if len(not_loaded) > 5 else "")
+        limitations.append(
+            f"{len(not_loaded)} probed module(s) were not loaded by the workload and were not imported, so they have no column: {shown}"
+        )
     if time.monotonic() > deadline:
         limitations.append(f"probe walk stopped after {_PROBE_DEADLINE_S:.0f} s")
     return out
@@ -1164,6 +1190,8 @@ def _freeze_record(rec, limitations):
 def _build(phase, x, last):
     limitations = []
     tick = phase == "tick"
+    if not tick:
+        mark_phase(f"{phase} record at x={x}: reading the process")
     rec = {
         "dla_harness": 1,
         "phase": phase,
@@ -1214,10 +1242,12 @@ def _build(phase, x, last):
         types_full = _types_top(objs, _TYPES_TOP if _CAPTURE_ON and "histogram" in _CAPTURE_KINDS else 20)
         rec["types"] = types_full[:20]
         if _CAPTURE_ON:
+            mark_phase(f"{phase} record at x={x}: raw captures")
             captures = _capture_now(phase, x, last, types_full, objs, limitations)
             if captures:
                 rec["captures"] = captures
         del objs, types_full
+        mark_phase(f"{phase} record at x={x}: probes")
         rec["probes"] = _probes(limitations)
         # A driver writes no `exit` record, so its last checkpoint carries the section, and so do
         # the first, second, fourth, eighth... (a driver cut off by its timeout never writes the
@@ -1298,6 +1328,7 @@ def _ticker(interval):
 def _init():
     if not _ACTIVE:
         return
+    mark_phase("start-up: the program's own code before its first hook or checkpoint (the imports of a driver, or the workload of a command)")
     _preload_trim()
     _start_tracemalloc()
     if _CAPTURE_ON and "nonheap" in _CAPTURE_KINDS:

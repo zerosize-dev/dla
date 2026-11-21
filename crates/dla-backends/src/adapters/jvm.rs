@@ -220,7 +220,8 @@ pub fn errorprone(job: &Job) -> Outcome {
         );
     }
     // Build logic (buildSrc) is not part of the measured process.
-    let all_sources: Vec<String> = fsx::files_with_ext(job.project(), &["java"])
+    let all_sources: Vec<String> = job
+        .files_with_ext(&["java"])
         .into_iter()
         .filter(|s| !dla_core::paths::is_build_logic(s))
         .collect();
@@ -478,7 +479,7 @@ pub fn spotbugs(job: &Job) -> Outcome {
         .collect();
     let batches = fsx::conflict_free_batches(&groups);
     let jars = project_jars(job.project(), 500);
-    let sources = fsx::files_with_ext(job.project(), &["java", "kt", "scala", "groovy"]);
+    let sources = job.files_with_ext(&["java", "kt", "scala", "groovy"]);
     let mut hits = Vec::new();
     let mut unresolved = 0;
     let mut recs = Vec::new();
@@ -718,9 +719,7 @@ pub fn detekt(job: &Job) -> Outcome {
     let v2 = java_major(&version).is_some_and(|m| m >= 2);
     // Build logic (`buildSrc`, `*.gradle.kts`) is excluded from the analysis below, so it
     // does not make the backend applicable.
-    if !has_detekt_sources(&fsx::files_with_ext(job.project(), &["kt"]), |f| {
-        job.in_scope(f)
-    }) {
+    if !has_detekt_sources(&job.files_with_ext(&["kt"]), |f| job.in_scope(f)) {
         return not_applicable(version, "no Kotlin sources");
     }
     let ids = job.rule_ids();
