@@ -1357,22 +1357,39 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
 
 /// The growth evidence a `confirm` of `root` should cite: the newest passing one tied to it.
 fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
-    ledger
-        .evidence()
-        .filter(|e| {
+    let growth = || {
+        ledger.evidence().filter(|e| {
             matches!(
                 e.kind,
                 EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
             )
         })
+    };
+    // The newest one `ledger confirm` accepts: a passing column tied to the finding by the
+    // predicate the ledger uses (`tied_to_owner`).
+    let tied = growth()
         .filter_map(|e| {
             let g = GrowthSummary::from_result(&e.result)?;
             (g.passed_gate()
-                && g.best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
-                    .is_some())
+                && g.passed.iter().any(|c| {
+                    c.tied_to_owner(&root.id, root.site.as_deref(), root.owner.as_deref())
+                }))
             .then(|| e.evidence_id.clone())
         })
-        .last()
+        .last();
+    // Else the newest passing one, as before (its first column stands in for the tie).
+    tied.or_else(|| {
+        growth()
+            .filter_map(|e| {
+                let g = GrowthSummary::from_result(&e.result)?;
+                (g.passed_gate()
+                    && g
+                        .best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
+                        .is_some())
+                .then(|| e.evidence_id.clone())
+            })
+            .last()
+    })
 }
 
 /// The newest `workload` evidence of harness `harness`.
@@ -1486,6 +1503,57 @@ mod tests {
     use dla_core::series::{
         Axis, Column, ColumnScope, Point, SeriesRegion, SeriesSource, SeriesSourceKind,
     };
+
+    #[test]
+    fn the_growth_evidence_to_confirm_with_is_the_newest_tied_one_not_a_newer_whole_process_one() {
+        use dla_core::{
+            NewEvidence, NewFinding, Origin,
+            evidence::{Authority, EvidenceCoverage, Source, Tool},
+            state::{RunState, now_utc},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        RunState::init("/p", None, 3600, None, now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let ev = |result: Value| NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Static,
+            kind: EvidenceKind::GrowthSeries,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        };
+        l.add_evidence(ev(serde_json::json!({"n": 1}))).unwrap();
+        let last = |l: &Ledger| l.evidence().last().unwrap().evidence_id.clone();
+        let base = last(&l);
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![base]);
+        nf.site = Some("src/lib.rs:3".into());
+        l.add_finding(nf).unwrap();
+        // The tied stack evidence, then a newer whole-process trend that ties to nothing.
+        l.add_evidence(ev(serde_json::json!({"gate": "pass", "passed": [
+            {"column": "stack:f (src/lib.rs:6)", "finding": "F1", "site": "src/lib.rs:3"}]})))
+            .unwrap();
+        let tied = last(&l);
+        l.add_evidence(ev(serde_json::json!({"gate": "pass", "passed": [
+            {"column": "native.live_blocks"}]})))
+            .unwrap();
+        let root = l.finding(&"F1".parse().unwrap()).unwrap().clone();
+        assert_eq!(growth_evidence(&l, &root), Some(tied));
+        // Without a tied one the newest passing evidence is still named, as before.
+        let other = Finding { id: "F9".parse().unwrap(), site: None, owner: None, ..root.clone() };
+        assert_eq!(growth_evidence(&l, &other), Some(last(&l)));
+    }
 
     #[test]
     fn a_growing_required_column_holds_back_the_plateau_of_the_primary() {
