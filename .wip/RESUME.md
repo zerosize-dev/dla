@@ -548,3 +548,11 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - LOCAL BENCH CHECK DONE for N's per-site tie rule (u53/dyn-*.out): node- 12/12, go- 8/8, python- 9/9 pass. Task 68 done.
 - Running: P3 pass 10 (growth rule vs bench driver; will run dla-bench dynamic --only rust- and native-).
 - NEXT: verify pass 10; local checks; third CI snapshot; freeze third build; tokio-4, spring-5, grpc-5; commit to main when CI is green (commit-message-3.txt needs two more lines: per-site tie rule, choices recipe, part-of route).
+
+## State at 21:10 UTC, 2026-11-21
+- P3 PASS 10 REPORTED AND CHECKED (u49/report.md; my logs u47/verify-p10.log, verify-p10m.log): grown.rs: a passed column also points at the leak-side finding whose file:line equals the column's site (resolve and gate agree); `ledger duplicate F --of G` offered when G of the same harness has an alloc-test that favoured leak and duplicate::check accepts the pair; bench driver (bench/runner/src/dynamic/policy.rs) follows the printed route (duplicate when offered, else sibling, ledger test, alloc-test, then the alloc-test's next lines). grown_chain 9 pass; bench policy test passes; MUT_G2 failed a_column_points_at_the_finding_at_its_site...; restored. P3's bench: rust- 8/9 + 1 xfail, native- 9/9. Task 69 done.
+- LOCAL PRE-CI on the tree: fmt clean, clippy workspace clean, schema ok, test_grade OK, skill_text 14.
+- THIRD FROZEN BUILD: snapshot 89bc8a8a249d38f1e945e577bcc3bac1fb64dcdb (pushed WITHOUT [skip ci]; CI waiter bzq5j3ssu, logs u54/ci). Binary /root/dla-real/bin/dla = u54/bin/dla; plugin refreshed. Contains everything checked to date (also brief M choices, N per-site tie, pass 10).
+- REAL RUNS STARTED 21:10 UTC on the third frozen build: tokio-4 (waiter bx289903h), spring-5 (--warm-m2; waiter bnsh78dwh). grpc-5 after one of them ends.
+- commit-message-3.txt updated (choices, per-site tie, duplicate route, two libraries confirmed). Commit 89bc8a8 to main when its CI is green.
+- Disk 5.4 GB after pruning (deleted u50/u52 tokio copies, bench logs, go build cache).
