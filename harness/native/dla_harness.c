@@ -39,8 +39,47 @@ static void setup(void)
     abort();
 }
 
+/* DLA-CHOICE-BEGIN */
+static unsigned long choice_n[8]; /* the n of each slot seen so far */
+static char choices_note[160];
+
+/* Choice number slot of n options, from the digits of key in mixed radix. Deterministic, no
+   allocation and no state beyond the n of each slot (8 slots): the combinations of the slots used
+   in order 0, 1, 2, ... all occur within n0*n1*... keys and repeat evenly. */
+static unsigned long dla_choice(unsigned long key, unsigned slot, unsigned long n)
+{
+    unsigned long div = 1;
+    for (unsigned j = 0; j < slot && j < 8; j++)
+        div *= choice_n[j] ? choice_n[j] : 1;
+    if (slot < 8)
+        choice_n[slot] = n;
+    return n ? (key / div) % n : 0;
+}
+
+static void choices_report(unsigned long done)
+{
+    unsigned slots = 0;
+    unsigned long product = 1;
+    for (unsigned j = 0; j < 8; j++)
+        if (choice_n[j]) {
+            slots++;
+            product *= choice_n[j];
+        }
+    if (slots == 0)
+        return;
+    unsigned long took = product < done ? product : done;
+    if (product > took)
+        snprintf(choices_note, sizeof choices_note, "the units took %lu combinations of %u choices (of %lu possible)", took,
+                 slots, product);
+    else
+        snprintf(choices_note, sizeof choices_note, "the units took %lu combinations of %u choices", took, slots);
+}
+/* DLA-CHOICE-END */
+
 static void unit(unsigned long i, unsigned long key)
 {
+    /* Choices: dla_choice(key, slot, n) is choice number slot of n options, taken from the digits of key in mixed radix (all combinations of the slots occur within n1*n2*... keys). */
+    /* Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence. */
     /* DLA-HOOK unit: perform exactly one unit of the workload for key (derive ids/names/payloads from key so a repeated key reproduces an earlier request); i is the 1-based unit number */
     (void)i;
     (void)key;
@@ -193,6 +232,15 @@ static void checkpoint(unsigned long done, int last, char **argv)
 #endif
     if (lim != NULL)
         json_str(f, lim);
+    if (last && choices_note[0] != 0) {
+        int any = lim != NULL;
+#if !(defined(__GLIBC__) && __GLIBC_PREREQ(2, 33))
+        any = 1;
+#endif
+        if (any)
+            fprintf(f, ",");
+        json_str(f, choices_note);
+    }
     fprintf(f, "]}\n");
     fclose(f);
 }
@@ -216,6 +264,8 @@ int main(int argc, char **argv)
             done++;
             unit(done, repeated ? done % repeat : done);
         }
+        if (round == total)
+            choices_report(done);
         checkpoint(done, round == total, argv);
     }
     return 0;

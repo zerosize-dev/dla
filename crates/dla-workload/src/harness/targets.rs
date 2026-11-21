@@ -792,8 +792,13 @@ pub const ENTRY_RULES: [&str; 6] = [
     "- write one line in VARIES.txt next to the driver: what a caller varies per unit; dla harness run refuses the harness until it is written",
 ];
 
-/// The line of a broad batch's block about targets whose code does not run.
-pub const BROAD_NOTE: &str = "A target whose code does not run in this harness comes back in a small harness of its own; reach as many as one unit naturally can.";
+/// The line of a broad batch's block about targets whose code does not run, and the helper
+/// that takes order and depth from the key.
+pub fn broad_note(helper: &str) -> String {
+    format!(
+        "A target whose code does not run in this harness comes back in a small harness of its own; reach as many as one unit naturally can. The driver has {helper}(key, slot, n), choice number slot of n options taken from the key: let order and depth come from the key rather than from one fixed sequence."
+    )
+}
 
 /// The lines of a focus harness's block, above its targets: what the harness is, what to do,
 /// the way out for a target no driver can reach, and per target where it was missed and why.
@@ -827,16 +832,30 @@ const SECOND_LOOK_TODOS: [&str; 5] = [
     "  - one long-lived object reused across units next to a fresh one per unit",
 ];
 
+/// The recipe of the choices of a second look, general to any project.
+const SECOND_LOOK_RECIPE: [&str; 5] = [
+    "  - slot 0, depth: how deep to derive when objects of the type are made from objects of the same type (1 to 3; a child of a child needs 3)",
+    "  - slot 1, ending: which object of the chain gets the ending call (cancel, close, abort, shutdown, remove, unsubscribe): none, the first, a middle one, the last",
+    "  - slot 2, release of the intermediates: at once (a temporary), before the ending call, after it",
+    "  - slot 3, the order of the remaining releases (forward or reversed)",
+    "  - slot 4, success or failure where the API has one (complete or fail half-way)",
+];
+
 /// The lines of a second-look harness's block, above its targets.
 pub fn second_look_notes(
     missed: &std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
     asked: &[Asked],
+    helper: &str,
 ) -> Vec<String> {
     let mut out = vec![
         "Second look: one flat run of one driver settled these targets (their code ran and their holder stayed flat), and budget is left. A flat reading of one arbitrary unit says that unit does not leak; a leak that needs a sequence stays hidden. This harness needs a DIFFERENT driver: dla harness run refuses hooks equal to an earlier harness's, and a VARIES.txt line per target (what this driver does that the first did not).".to_owned(),
         "To vary, at least some of:".to_owned(),
     ];
     out.extend(SECOND_LOOK_TODOS.iter().map(|l| (*l).to_owned()));
+    out.push(format!(
+        "Write the unit as CHOICES, not as one fixed sequence: a fixed sequence runs one case for every unit, and a leak that needs another order never shows. The driver has {helper}(key, slot, n): choice number slot of n options, from the digits of the key in mixed radix (every combination of the slots occurs within n0*n1*... units). Take at least two choices with it ({helper} is checked by dla harness run), for the owner type of each target:"
+    ));
+    out.extend(SECOND_LOOK_RECIPE.iter().map(|l| (*l).to_owned()));
     for a in asked {
         if let Some(m) = missed.get(&a.id) {
             out.push(format!(

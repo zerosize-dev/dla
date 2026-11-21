@@ -3267,6 +3267,25 @@ fn run_loaded(
                 ),
             ));
         }
+        // The unit takes its sequence from the key: at least two calls of the choice helper in
+        // the driver's code (not in comments, not its definition). A fixed sequence runs one
+        // case for every unit.
+        let helper = dla_core::harness::choice_helper(manifest.runtime);
+        let calls = dla_core::harness::choice_calls(&ctx.run_dir, &manifest.id, helper);
+        if calls < 2 {
+            return Err(Refusal::new(
+                dla_core::error::codes::INVALID_VALUE,
+                format!(
+                    "the unit of harness {} calls {helper}(key, slot, n) {calls} time(s) (calls outside comments and the helper's own definition are counted): a second look takes at least two choices from the key, because a fixed sequence runs one case for every unit",
+                    manifest.id
+                ),
+                format!("at least two {helper}(key, slot, n) calls in the unit"),
+                format!(
+                    "write the unit as choices, as the recipe in the driver's block says: {helper}(key, 0, 3) for the depth of derivation, {helper}(key, 1, 4) for which object gets the ending call, {helper}(key, 2, 3) for when the intermediates are released, {helper}(key, 3, 2) for the order of releases, {helper}(key, 4, 2) for success or failure; then dla harness run {} --mode both",
+                    manifest.id
+                ),
+            ));
+        }
     }
     let out = run_points(ctx, &manifest, opts)?;
     let partial = !out.partial.is_empty();
@@ -3471,6 +3490,15 @@ fn run_loaded(
     {
         m.remove("points");
         m.remove("series");
+    }
+    // A driver whose units took choices from the key says how many combinations they took.
+    if let Some(line) = out
+        .series
+        .first()
+        .and_then(|s| dla_core::series::SeriesFile::load(&ctx.run_dir, s).ok())
+        .and_then(|s| dla_core::series::choices_line(&s).map(str::to_owned))
+    {
+        summary["choices"] = json!(line);
     }
     if !out.ffi_sites.is_empty() {
         summary["ffi"] = json!(

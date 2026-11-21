@@ -518,3 +518,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - BRIEF M STARTED: G resumed (a349aef413818803c), wip-notes/choices-brief.md, scratch u52: choice-from-key helper in all driver templates, recipe in the second-look block, refusal of a second-look unit with fewer than two choices, combination count.
 - Running: axios-5 (waiter b7od4bt89), CI on 167233a (waiter bvy4qn016), G brief M.
 - Commit message for main drafted: wip-notes/commit-message-3.txt (use with commit-snapshot-tree.sh 167233aec6d5f0317efa84c90efe2ca3b1fa7fcc when CI is green).
+
+## State at 19:33 UTC, 2026-11-21
+- G REPORTED brief M (u52/report.md) and it is checked (my logs u47/verify-m.log, verify-m2.log): choice helper in all six driver templates (dla_choice Python/C, dlaChoice Node/Go, choice JVM/Rust; mixed-radix digits of the key; 8-entry array of n per slot); second-look block gives the five-slot recipe; harness run refuses a second-look unit with fewer than two helper calls (dla_core::harness::choice_calls); "the units took N combinations of K choices" in run summary.choices and trend choices. Tests: 7 template helper tests, second_look.rs; MUT_M1 (refusal off) failed second_look; restored. Task 67 done. NOT in the second frozen build (167233a).
+- G's real tree (u52/tokio2): second-look unit written from the recipe lines only (depth, ending, when, order, polled) took 144 combinations; native.live_bytes 92552 -> 465760 (106 B/unit); alloc-stack-diff ties to F6 with child_token (:218) and new (:144); alloc-test favours leak; refute, test, confirm all accepted: F6 confirmed.
+- axios-5 at 19:33: the model follows the detector/site finding: "F27's test favored a leak, reading lib/adapters/http.js:924"; alloc-tests of F14, F18, F25, F26, F28 running.
+- CI on 167233a: run 44938127014 in progress.
+- NEXT: axios-5 result; CI result -> commit 167233a tree to main (commit-message-3.txt) and push; then third frozen build (with brief M) for tokio-4 and spring-5, grpc-5.

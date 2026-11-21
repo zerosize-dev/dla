@@ -41,7 +41,37 @@ async function setup() {
   throw new Error('DLA-HOOK setup has not been filled in');
 }
 
+// DLA-CHOICE-BEGIN
+const CHOICE_N = [0, 0, 0, 0, 0, 0, 0, 0]; // the n of each slot seen so far: the radix of the later slots and the report
+
+// Choice number `slot` of `n` options, from the digits of `key` in mixed radix. Deterministic, no
+// allocation and no state beyond the n of each slot (8 slots): the combinations of the slots used
+// in order 0, 1, 2, ... all occur within n0*n1*... keys and repeat evenly.
+function dlaChoice(key, slot, n) {
+  let div = 1;
+  for (let j = 0; j < slot && j < 8; j += 1) div *= CHOICE_N[j] || 1;
+  if (slot < 8) CHOICE_N[slot] = n;
+  return Math.floor(key / div) % n;
+}
+
+function choicesNote(done) {
+  let slots = 0;
+  let product = 1;
+  for (const n of CHOICE_N) {
+    if (n) {
+      slots += 1;
+      product *= n;
+    }
+  }
+  if (slots === 0) return null;
+  const took = Math.min(product, done);
+  return `the units took ${took} combinations of ${slots} choices${product > took ? ` (of ${product} possible)` : ''}`;
+}
+// DLA-CHOICE-END
+
 async function unit(i, key) {
+  // Choices: `dlaChoice(key, slot, n)` is choice number `slot` of `n` options, taken from the digits of `key` in mixed radix (all combinations of the slots occur within n1*n2*... keys).
+  // Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence.
   // DLA-HOOK unit: perform exactly one unit of the workload for this key (derive request ids/names/payloads from key so a repeated key reproduces an earlier request)
   throw new Error('DLA-HOOK unit has not been filled in');
 }
@@ -94,6 +124,10 @@ async function main() {
     }
     // let timers and I/O callbacks run between rounds, as they would in a long-lived process
     await new Promise((resolve) => setImmediate(resolve));
+    if (round === total) {
+      const line = choicesNote(done);
+      if (line) dla.note(line);
+    }
     dla.checkpoint(done, round === total);
     if (round < total) fit(round + 1, 0);
   }

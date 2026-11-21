@@ -610,6 +610,70 @@ pub fn second_look_varies_template(targets: &[FindingId]) -> String {
         .collect()
 }
 
+/// The name of the choice helper in the driver template of `rt`: `dla_choice(key, slot, n)` is
+/// choice number `slot` of `n` options from the digits of `key` in mixed radix.
+pub fn choice_helper(rt: Runtime) -> &'static str {
+    match rt {
+        Runtime::Python | Runtime::Native => "dla_choice",
+        Runtime::Node | Runtime::Go => "dlaChoice",
+        Runtime::Jvm | Runtime::Rust => "choice",
+    }
+}
+
+/// How many calls of the choice helper the driver files of harness `id` hold: lines that are
+/// not comments and not a definition (`def`, `fn`, `function`, `func`, `static`, `pub`,
+/// `private`), occurrences of the helper name followed by `(` and not part of a longer name.
+/// A unit that takes at least two choices from the key has at least two.
+pub fn choice_calls(run_dir: &Path, id: &str, helper: &str) -> usize {
+    let dir = HarnessManifest::dir_in(run_dir, id).join("driver");
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        if e.file_name() == VARIES_FILE {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(e.path()) else {
+            continue;
+        };
+        n += choice_calls_in(&text, helper);
+    }
+    n
+}
+
+/// [`choice_calls`] over one text.
+pub fn choice_calls_in(text: &str, helper: &str) -> usize {
+    let needle = format!("{helper}(");
+    let mut n = 0;
+    for line in text.lines() {
+        let l = line.trim();
+        if ["#", "//", "/*", "*"].iter().any(|c| l.starts_with(c))
+            || [
+                "def ",
+                "fn ",
+                "function ",
+                "func ",
+                "static ",
+                "pub ",
+                "private ",
+            ]
+            .iter()
+            .any(|d| l.starts_with(d))
+        {
+            continue;
+        }
+        let mut from = 0;
+        while let Some(at) = line[from..].find(&needle) {
+            let i = from + at;
+            let before = line[..i].chars().next_back();
+            if !before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                n += 1;
+            }
+            from = i + needle.len();
+        }
+    }
+    n
+}
+
 /// The code of the driver files of harness `id` with comments and whitespace removed: what
 /// two drivers are compared by (the generated block and the model's comments are not code).
 /// `None` when there is no driver directory.

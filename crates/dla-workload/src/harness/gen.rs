@@ -2308,11 +2308,15 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             let file = hdir.join(&info.edit);
             let mut notes = info.block_notes.clone();
             if manifest.is_second_look() {
-                notes.extend(targets::second_look_notes(&focus.missed, &derived.targets));
+                notes.extend(targets::second_look_notes(
+                    &focus.missed,
+                    &derived.targets,
+                    dla_core::harness::choice_helper(rt),
+                ));
             } else if manifest.is_focus() {
                 notes.extend(targets::focus_notes(&focus.missed, &derived.targets));
             } else if opts.next.is_some() && !manifest.is_entry_path() {
-                notes.push(targets::BROAD_NOTE.to_owned());
+                notes.push(targets::broad_note(dla_core::harness::choice_helper(rt)));
             }
             if targets::write_block_with(&file, &id, &described, &notes)
                 .map_err(|e| io_refusal(&file, e))?

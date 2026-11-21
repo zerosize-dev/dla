@@ -44,8 +44,48 @@ def setup():
     raise NotImplementedError("DLA-HOOK setup has not been filled in")
 
 
+# DLA-CHOICE-BEGIN
+_CHOICE_N = [0, 0, 0, 0, 0, 0, 0, 0]  # the n of each slot seen so far: the radix of the later slots and the report
+
+
+def dla_choice(key, slot, n):
+    """Choice number `slot` of `n` options, from the digits of `key` in mixed radix.
+
+    Deterministic, no allocation and no state beyond the n of each slot (8 slots): the
+    combinations of the slots used in order 0, 1, 2, ... all occur within n0*n1*... keys and
+    repeat evenly. Call it with the same n for a slot in every unit.
+    """
+    div = 1
+    j = 0
+    while j < slot and j < 8:
+        div *= _CHOICE_N[j] or 1
+        j += 1
+    if slot < 8:
+        _CHOICE_N[slot] = n
+    return (key // div) % n
+
+
+def _choices_note(done):
+    slots = 0
+    product = 1
+    for n in _CHOICE_N:
+        if n:
+            slots += 1
+            product *= n
+    if slots == 0:
+        return None
+    took = min(product, done)
+    more = f" (of {product} possible)" if product > took else ""
+    return f"the units took {took} combinations of {slots} choices{more}"
+
+
+# DLA-CHOICE-END
+
+
 def unit(i, key):
     """One unit of work for `key` (i is the 1-based unit number)."""
+    # Choices: `dla_choice(key, slot, n)` is choice number `slot` of `n` options, taken from the digits of `key` in mixed radix (all combinations of the slots occur within n1*n2*... keys).
+    # Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence.
     # DLA-HOOK unit: perform exactly one unit of the workload for this key (derive request ids/names/payloads from key so a repeated key reproduces an earlier request)
     raise NotImplementedError("DLA-HOOK unit has not been filled in")
 
@@ -97,6 +137,8 @@ def main():
             unit(done, done % REPEAT if REPEATED else done)
             if n == min(MIN_STEP, STEP):
                 fit(round_no, n)
+        if round_no == total and (line := _choices_note(done)):
+            dla.note(line)
         dla.checkpoint(done, last=round_no == total)
         if round_no < total:
             fit(round_no + 1, 0)

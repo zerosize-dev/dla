@@ -740,8 +740,53 @@ func dlaSetup() {
 	panic("DLA-HOOK setup has not been filled in")
 }
 
+// DLA-CHOICE-BEGIN
+var dlaChoiceN [8]int // the n of each slot seen so far: the radix of the later slots and the report
+
+// dlaChoice is choice number slot of n options, from the digits of key in mixed radix.
+// Deterministic, no allocation and no state beyond the n of each slot (8 slots): the combinations
+// of the slots used in order 0, 1, 2, ... all occur within n0*n1*... keys and repeat evenly.
+func dlaChoice(key, slot, n int) int {
+	div := 1
+	for j := 0; j < slot && j < 8; j++ {
+		if dlaChoiceN[j] > 0 {
+			div *= dlaChoiceN[j]
+		}
+	}
+	if slot >= 0 && slot < 8 {
+		dlaChoiceN[slot] = n
+	}
+	return (key / div) % n
+}
+
+func dlaChoicesNote(done int) string {
+	slots, product := 0, 1
+	for _, n := range dlaChoiceN {
+		if n > 0 {
+			slots++
+			product *= n
+		}
+	}
+	if slots == 0 {
+		return ""
+	}
+	took := product
+	if done < took {
+		took = done
+	}
+	more := ""
+	if product > took {
+		more = " (of " + dlastrconv.Itoa(product) + " possible)"
+	}
+	return "the units took " + dlastrconv.Itoa(took) + " combinations of " + dlastrconv.Itoa(slots) + " choices" + more
+}
+
+// DLA-CHOICE-END
+
 // dlaUnit performs one unit of work for key (i is the 1-based unit number).
 func dlaUnit(i, key int) {
+	// Choices: dlaChoice(key, slot, n) is choice number slot of n options, taken from the digits of key in mixed radix (all combinations of the slots occur within n1*n2*... keys).
+	// Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence.
 	// DLA-HOOK unit: perform exactly one unit of the workload for this key (derive request ids/names/payloads from key so a repeated key reproduces an earlier request)
 	panic("DLA-HOOK unit has not been filled in")
 }
@@ -839,6 +884,9 @@ func TestDLADriver(t *dlatesting.T) {
 		}
 		last := round == total
 		if last {
+			if line := dlaChoicesNote(done); line != "" {
+				dlaNotes = append(dlaNotes, line)
+			}
 			stop()
 			if dlaGoleakCheck != nil {
 				if report := dlaGoleakCheck(); report != "" {

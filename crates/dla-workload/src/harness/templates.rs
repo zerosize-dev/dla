@@ -180,4 +180,133 @@ mod tests {
         assert!(hooks(JVM_JUNIT_DRIVER).is_empty());
         assert!(hooks(NATIVE_DRIVER).contains(&"state".to_owned()));
     }
+    /// The text between `DLA-CHOICE-BEGIN` and `DLA-CHOICE-END` of a template.
+    fn choice_block(template: &str) -> &str {
+        let a = template.find("DLA-CHOICE-BEGIN").expect("begin marker");
+        let a = a + template[a..].find('\n').expect("line end") + 1;
+        let b = template.find("DLA-CHOICE-END").expect("end marker");
+        let b = template[..b].rfind('\n').expect("line start");
+        &template[a..b]
+    }
+
+    /// Runs `program` (a file `name` in a temp dir) through `cmd`; `None` when the tool is
+    /// missing. The program prints the number of distinct (slot 0, slot 1) pairs over 8 keys
+    /// (2 x 4 options) and whether a second pass gave the same answers.
+    fn run_choice_program(name: &str, program: &str, steps: &[&[&str]]) -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(name), program).unwrap();
+        let mut last = String::new();
+        for step in steps {
+            let out = std::process::Command::new(step[0])
+                .args(&step[1..])
+                .current_dir(dir.path())
+                .output()
+                .ok()?;
+            assert!(
+                out.status.success(),
+                "{step:?}: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            last = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        }
+        Some(last)
+    }
+
+    const WALKED: &str = "pairs=8 stable=true";
+
+    #[test]
+    fn the_python_choice_helper_walks_every_combination_of_two_slots_in_n1_times_n2_keys() {
+        let prog = format!(
+            "{}\nseen = set()\nfirst = []\nfor rep in range(2):\n    got = []\n    for key in range(8):\n        got.append((dla_choice(key, 0, 2), dla_choice(key, 1, 4)))\n    if rep == 0:\n        first = got\n        seen = set(got)\nprint(f'pairs={{len(seen)}} stable={{str(got == first).lower()}}')\n",
+            choice_block(PY_DRIVER)
+        );
+        if let Some(out) = run_choice_program("c.py", &prog, &[&["python3", "c.py"]]) {
+            assert_eq!(out, WALKED);
+        }
+    }
+
+    #[test]
+    fn the_node_choice_helper_walks_every_combination_of_two_slots_in_n1_times_n2_keys() {
+        let prog = format!(
+            "{}\nlet first = null; let seen = new Set(); let stable = true;\nfor (let rep = 0; rep < 2; rep += 1) {{ const got = []; for (let key = 0; key < 8; key += 1) got.push(dlaChoice(key, 0, 2) + ',' + dlaChoice(key, 1, 4)); if (rep === 0) {{ first = got.join(';'); seen = new Set(got); }} else stable = got.join(';') === first; }}\nconsole.log(`pairs=${{seen.size}} stable=${{stable}}`);\n",
+            choice_block(NODE_DRIVER)
+        );
+        if let Some(out) = run_choice_program("c.cjs", &prog, &[&["node", "c.cjs"]]) {
+            assert_eq!(out, WALKED);
+        }
+    }
+
+    #[test]
+    fn the_go_choice_helper_walks_every_combination_of_two_slots_in_n1_times_n2_keys() {
+        let prog = format!(
+            "package main\n\nimport (\n\t\"fmt\"\n\tdlastrconv \"strconv\"\n)\n\n{}\nfunc main() {{\n\tseen := map[[2]int]bool{{}}\n\tvar first [8][2]int\n\tstable := true\n\tfor rep := 0; rep < 2; rep++ {{\n\t\tfor key := 0; key < 8; key++ {{\n\t\t\tp := [2]int{{dlaChoice(key, 0, 2), dlaChoice(key, 1, 4)}}\n\t\t\tif rep == 0 {{\n\t\t\t\tfirst[key] = p\n\t\t\t\tseen[p] = true\n\t\t\t}} else if first[key] != p {{\n\t\t\t\tstable = false\n\t\t\t}}\n\t\t}}\n\t}}\n\t_ = dlaChoicesNote(1)\n\tfmt.Printf(\"pairs=%d stable=%v\\n\", len(seen), stable)\n}}\n",
+            choice_block(GO_DRIVER)
+        );
+        if let Some(out) = run_choice_program("c.go", &prog, &[&["go", "run", "c.go"]]) {
+            assert_eq!(out, WALKED);
+        }
+    }
+
+    #[test]
+    fn the_rust_choice_helper_walks_every_combination_of_two_slots_in_n1_times_n2_keys() {
+        let prog = format!(
+            "use std::sync::atomic::{{AtomicU64, Ordering::Relaxed}};\n{}\nfn main() {{\n    let mut first = Vec::new();\n    let mut stable = true;\n    let mut seen = std::collections::BTreeSet::new();\n    for rep in 0..2 {{\n        for key in 0..8u64 {{\n            let p = (choice(key, 0, 2), choice(key, 1, 4));\n            if rep == 0 {{ first.push(p); seen.insert(p); }} else if first[key as usize] != p {{ stable = false; }}\n        }}\n    }}\n    let _ = choices_note(1);\n    println!(\"pairs={{}} stable={{stable}}\", seen.len());\n}}\n",
+            choice_block(RUST_DRIVER)
+        );
+        if let Some(out) = run_choice_program(
+            "c.rs",
+            &prog,
+            &[&["rustc", "--edition", "2024", "-o", "c", "c.rs"], &["./c"]],
+        ) {
+            assert_eq!(out, WALKED);
+        }
+    }
+
+    #[test]
+    fn the_c_choice_helper_walks_every_combination_of_two_slots_in_n1_times_n2_keys() {
+        let prog = format!(
+            "#include <stdio.h>\n{}\nint main(void) {{\n    int seen[2][4] = {{{{0}}}};\n    unsigned long first[8][2];\n    int stable = 1, pairs = 0;\n    for (int rep = 0; rep < 2; rep++)\n        for (unsigned long key = 0; key < 8; key++) {{\n            unsigned long a = dla_choice(key, 0, 2), b = dla_choice(key, 1, 4);\n            if (rep == 0) {{ first[key][0] = a; first[key][1] = b; if (!seen[a][b]++) pairs++; }}\n            else if (first[key][0] != a || first[key][1] != b) stable = 0;\n        }}\n    choices_report(12);\n    printf(\"pairs=%d stable=%s\\n\", pairs, stable ? \"true\" : \"false\");\n    return 0;\n}}\n",
+            choice_block(NATIVE_DRIVER)
+        );
+        if let Some(out) = run_choice_program("c.c", &prog, &[&["cc", "-o", "c", "c.c"], &["./c"]])
+        {
+            assert_eq!(out, WALKED);
+        }
+    }
+
+    #[test]
+    fn the_jvm_choice_helper_walks_every_combination_of_two_slots_in_n1_times_n2_keys() {
+        let prog = format!(
+            "import java.util.*;\npublic class C {{\n{}\n    public static void main(String[] a) {{\n        Set<String> seen = new HashSet<>();\n        String[] first = new String[8];\n        boolean stable = true;\n        for (int rep = 0; rep < 2; rep++)\n            for (int key = 0; key < 8; key++) {{\n                String p = choice(key, 0, 2) + \",\" + choice(key, 1, 4);\n                if (rep == 0) {{ first[key] = p; seen.add(p); }} else if (!first[key].equals(p)) stable = false;\n            }}\n        choicesNote(12);\n        System.out.println(\"pairs=\" + seen.size() + \" stable=\" + stable);\n    }}\n}}\n",
+            choice_block(JVM_DRIVER)
+        );
+        if let Some(out) = run_choice_program("C.java", &prog, &[&["java", "C.java"]]) {
+            assert_eq!(out, WALKED);
+        }
+    }
+
+    #[test]
+    fn the_rust_driver_uses_no_let_chain() {
+        // The driver builds in the project's own edition: let chains need 2024 (a real run of
+        // the choice helper failed to build on a 2021 crate).
+        assert!(
+            !RUST_DRIVER.contains("&& let "),
+            "let chain in the Rust driver"
+        );
+    }
+
+    #[test]
+    fn a_choice_call_is_counted_outside_comments_and_definitions_only() {
+        use dla_core::harness::choice_calls_in;
+        let text = "def dla_choice(key, slot, n):\n    pass\n# dla_choice(key, 0, 2)\ndef unit(i, key):\n    a = dla_choice(key, 0, 3)\n    b = x.dla_choice(key, 1, 2) + my_dla_choice(key, 2, 2)\n    return dla_choice(key, 1, 2)\n";
+        assert_eq!(choice_calls_in(text, "dla_choice"), 3);
+        assert_eq!(
+            choice_calls_in(
+                "fn choice(k: u64) {}\n// choice(1)\nlet a = choice(k, 0, 2);",
+                "choice"
+            ),
+            1
+        );
+    }
 }

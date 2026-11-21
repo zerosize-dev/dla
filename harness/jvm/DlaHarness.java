@@ -19,11 +19,50 @@ public final class @@DLA_CLASS@@ {
         throw new UnsupportedOperationException("DLA-HOOK setup has not been filled in");
     }
 
+    // DLA-CHOICE-BEGIN
+    private static final int[] CHOICE_N = new int[8]; // the n of each slot seen so far
+
+    /**
+     * Choice number {@code slot} of {@code n} options, from the digits of {@code key} in mixed radix.
+     * Deterministic, no allocation and no state beyond the n of each slot (8 slots): the
+     * combinations of the slots used in order 0, 1, 2, ... all occur within n0*n1*... keys.
+     */
+    static int choice(int key, int slot, int n) {
+        long div = 1;
+        for (int j = 0; j < slot && j < 8; j++) {
+            div *= Math.max(CHOICE_N[j], 1);
+        }
+        if (slot < 8) {
+            CHOICE_N[slot] = n;
+        }
+        return (int) ((key / div) % n);
+    }
+
+    private static String choicesNote(int done) {
+        int slots = 0;
+        long product = 1;
+        for (int n : CHOICE_N) {
+            if (n > 0) {
+                slots++;
+                product *= n;
+            }
+        }
+        if (slots == 0) {
+            return null;
+        }
+        long took = Math.min(product, done);
+        return "the units took " + took + " combinations of " + slots + " choices"
+            + (product > took ? " (of " + product + " possible)" : "");
+    }
+    // DLA-CHOICE-END
+
     /**
      * One unit of work for the given key: the same call a request/job/event would make.
      * i is the 1-based unit number; key is already mapped for the key mode.
      */
     static void unit(int i, int key) throws Exception {
+        // Choices: choice(key, slot, n) is choice number slot of n options, taken from the digits of key in mixed radix (all combinations of the slots occur within n1*n2*... keys).
+        // Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence.
         // DLA-HOOK unit: perform exactly one unit of the workload for this key (derive request ids/names/payloads from key so a repeated key reproduces an earlier request)
         throw new UnsupportedOperationException("DLA-HOOK unit has not been filled in");
     }
@@ -108,6 +147,12 @@ public final class @@DLA_CLASS@@ {
                 unit(i, repeated ? i % repeat : i);
                 if (k + 1 == Math.min(MIN_STEP, stepDefault)) {
                     fit(round, total, k + 1);
+                }
+            }
+            if (round == total) {
+                String line = choicesNote(done);
+                if (line != null) {
+                    DlaDump.addLimitations(java.util.List.of(line));
                 }
             }
             DlaDump.checkpoint(done, round == total);

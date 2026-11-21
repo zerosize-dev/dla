@@ -250,6 +250,16 @@ pub struct SeriesFile {
     pub limitations: Vec<String>,
 }
 
+/// The line a driver's units leave about their choices ("the units took 72 combinations of 3
+/// choices"), when the series carries one.
+pub fn choices_line(series: &SeriesFile) -> Option<&str> {
+    series
+        .limitations
+        .iter()
+        .map(String::as_str)
+        .find(|l| l.starts_with("the units took ") && l.contains(" combinations of "))
+}
+
 /// The number in an ID such as `S3` or `T12`, or `None` when `id` is not `<prefix><n>`.
 pub fn numbered(prefix: char, id: &str) -> Option<u32> {
     let digits = id.strip_prefix(prefix)?;

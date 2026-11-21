@@ -454,6 +454,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         );
     }
     out.insert("next".into(), json!(next));
+    if let Some(line) = dla_core::series::choices_line(&main.series) {
+        out.insert("choices".into(), json!(line));
+    }
     Ok(Value::Object(out))
 }
 

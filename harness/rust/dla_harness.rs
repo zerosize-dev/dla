@@ -110,7 +110,46 @@ fn setup() -> State {
     todo!("DLA-HOOK setup has not been filled in")
 }
 
+// DLA-CHOICE-BEGIN
+static CHOICE_N: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8]; // the n of each slot seen so far
+
+/// Choice number `slot` of `n` options, from the digits of `key` in mixed radix. Deterministic, no
+/// allocation and no state beyond the n of each slot (8 slots): the combinations of the slots used
+/// in order 0, 1, 2, ... all occur within n0*n1*... keys and repeat evenly.
+fn choice(key: u64, slot: usize, n: u64) -> u64 {
+    let mut div = 1u64;
+    let mut j = 0;
+    while j < slot && j < 8 {
+        div = div.saturating_mul(CHOICE_N[j].load(Relaxed).max(1));
+        j += 1;
+    }
+    if slot < 8 {
+        CHOICE_N[slot].store(n, Relaxed);
+    }
+    (key / div) % n.max(1)
+}
+
+fn choices_note(done: u64) -> Option<String> {
+    let (mut slots, mut product) = (0u64, 1u64);
+    for n in &CHOICE_N {
+        let n = n.load(Relaxed);
+        if n > 0 {
+            slots += 1;
+            product = product.saturating_mul(n);
+        }
+    }
+    if slots == 0 {
+        return None;
+    }
+    let took = product.min(done);
+    let more = if product > took { format!(" (of {product} possible)") } else { String::new() };
+    Some(format!("the units took {took} combinations of {slots} choices{more}"))
+}
+// DLA-CHOICE-END
+
 fn unit(state: &mut State, i: u64, key: u64) {
+    // Choices: `choice(key, slot, n)` is choice number `slot` of `n` options, taken from the digits of `key` in mixed radix (all combinations of the slots occur within n1*n2*... keys).
+    // Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence.
     // DLA-HOOK unit: perform exactly one unit of the workload for `key` (derive request ids/names/payloads from `key` so a repeated key reproduces an earlier request); `i` is the 1-based unit number
     let _ = (state, i, key);
     todo!("DLA-HOOK unit has not been filled in")
@@ -358,6 +397,12 @@ fn main() {
             unit(&mut state, done, key);
             if n == MIN_STEP.min(step_default) {
                 fit(limit, started, loop_start, round, total, n, done, &mut step, &mut warned);
+            }
+        }
+        // Nested rather than a let chain: the driver must build on every edition.
+        if round == total {
+            if let Some(line) = choices_note(done) {
+                note(line);
             }
         }
         checkpoint(&state, started, done, round == total);
