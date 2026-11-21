@@ -151,7 +151,7 @@ rank, the minutes left and the fix.
   `unit` of the driver so each unit reaches the listed targets with a new key, `dla harness run H<n>
   --mode both`, `dla trend S<n>`, read `targets`. Never answer the refusal with another reason, a blocker
   reason you do not have, or a loop of `ledger resolve` calls.
-- When the queue is empty or closed, `dla ledger close-rest` closes the rest. `dla ledger list` shows each
+- When the queue is empty or closed, `dla ledger close-rest` closes the rest (`inconclusive` for a candidate a declared harness measured with verdict `constant`, `changed` or `executed`, else `not_exercised`, or `time_budget` at the floor). `dla ledger list` shows each
   candidate's queue status (`pending`, `settled`, `not-eligible`); never read `ledger.jsonl` by hand.
 - When no driver can be built or run for the runtime (no toolchain, the build fails, a privilege was
   declined): `dla ledger resolve intake.workload --status unresolved --reason

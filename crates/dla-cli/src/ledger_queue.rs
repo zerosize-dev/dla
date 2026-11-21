@@ -212,8 +212,9 @@ fn default_remedy(
             "its probe never loaded: the workload did not import its module".to_owned()
         }
         Some(Verdict::NotExecuted) => "its code did not run".to_owned(),
-        Some(Verdict::Executed | Verdict::Unknown) => {
-            "its code ran and showed no growth".to_owned()
+        Some(Verdict::Executed) => "its code ran and showed no growth".to_owned(),
+        Some(Verdict::Unknown) => {
+            "whether its code ran is not known: no coverage data for this run".to_owned()
         }
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
         Some(Verdict::Grew) => "its holder grew".to_owned(),
@@ -280,18 +281,23 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             ));
             continue;
         }
+        // A finding that was measured and left undecided is `inconclusive`, at the budget
+        // floor too; one nothing reached is `not_exercised`, or `time_budget` at the floor.
+        let measured = ledger.supported_reason(&f.id) == UnresolvedReason::Inconclusive;
         let static_evidence = f
             .supports
             .iter()
             .filter_map(|e| view.ledger.evidence_by_id(e))
             .any(|e| matches!(e.kind, EvidenceKind::StaticHit | EvidenceKind::CensusHolder));
-        let (to, disposition) = if static_evidence {
+        let (to, disposition) = if static_evidence && !measured {
             ("suspected_static_only", ResolveAs::SuspectedStaticOnly)
         } else {
             ("unresolved", ResolveAs::Unresolved)
         };
-        // The queue closed because the budget reached the floor: that is what time_budget says.
-        let reason = if q.is_some_and(|q| q.closed == Some(Closed::Floor)) {
+        let reason = if measured {
+            UnresolvedReason::Inconclusive
+        } else if q.is_some_and(|q| q.closed == Some(Closed::Floor)) {
+            // The queue closed because the budget reached the floor: that is what time_budget says.
             UnresolvedReason::TimeBudget
         } else {
             UnresolvedReason::NotExercised
@@ -362,6 +368,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                     "suspected_static_only": count("suspected_static_only"),
                     "unresolved": count("unresolved"),
                     "not_exercised": by_reason(UnresolvedReason::NotExercised),
+                    "inconclusive": by_reason(UnresolvedReason::Inconclusive),
                     "time_budget": by_reason(UnresolvedReason::TimeBudget),
                     "left_open": left.len(),
                     "ids": ids.join(","),
@@ -387,6 +394,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         },
         "reason": {
             "not_exercised": by_reason(UnresolvedReason::NotExercised),
+            "inconclusive": by_reason(UnresolvedReason::Inconclusive),
             "time_budget": by_reason(UnresolvedReason::TimeBudget),
         },
         "left_open": left.len(),

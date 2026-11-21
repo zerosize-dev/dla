@@ -570,6 +570,87 @@ pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord
     None
 }
 
+/// The variables a harness run records and a rerun puts back when its own environment lacks
+/// them: the paths its dependencies were found through. Nothing else is ever recorded (no
+/// token, no `PATH`).
+pub const DEPENDENCY_ENV: [&str; 8] = [
+    "PYTHONPATH",
+    "NODE_PATH",
+    "CLASSPATH",
+    "GOFLAGS",
+    "GOWORK",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "VIRTUAL_ENV",
+];
+
+/// The key of the run record that holds the dependency variables the run used.
+pub const RUN_DEPENDENCY_ENV: &str = "dependency_env";
+
+/// The values of [`DEPENDENCY_ENV`] that are set in this process's environment.
+pub fn current_dependency_env() -> BTreeMap<String, String> {
+    DEPENDENCY_ENV
+        .iter()
+        .filter_map(|k| Some(((*k).to_owned(), std::env::var(k).ok()?)))
+        .collect()
+}
+
+/// The dependency variables of the latest successful run of harness `id` (an edited clone of
+/// a harness: of the harness it was cloned from) that are unset in this process's
+/// environment, with the values that run used. A variable set here, even to an empty
+/// string, is not listed: the current environment wins.
+pub fn dependency_env_to_reuse(run_dir: &Path, id: &str) -> Vec<(String, String)> {
+    let dir = HarnessManifest::dir_in(run_dir, id);
+    let Some(recorded) = latest_dependency_env(&dir).or_else(|| {
+        let from = fs::read_to_string(dir.join(CLONE_MARKER)).ok()?;
+        latest_dependency_env(&HarnessManifest::dir_in(run_dir, from.trim()))
+    }) else {
+        return Vec::new();
+    };
+    DEPENDENCY_ENV
+        .iter()
+        .filter(|k| std::env::var_os(k).is_none())
+        .filter_map(|k| Some(((*k).to_owned(), recorded.get(*k)?.clone())))
+        .collect()
+}
+
+/// The `dependency_env` of the newest `run-<first series>.json` in a harness directory (the
+/// one with the newest modification time; the larger series number breaks a tie).
+fn latest_dependency_env(dir: &Path) -> Option<BTreeMap<String, String>> {
+    let mut newest: Option<((std::time::SystemTime, u32), Value)> = None;
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(first) = name
+            .strip_prefix("run-")
+            .and_then(|r| r.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let Ok(text) = fs::read_to_string(e.path()) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let at = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let key = (at, numbered('S', first).unwrap_or(0));
+        if newest.as_ref().is_none_or(|(k, _)| key > *k) {
+            newest = Some((key, doc));
+        }
+    }
+    let (_, doc) = newest?;
+    let map = doc.get(RUN_DEPENDENCY_ENV)?.as_object()?;
+    Some(
+        map.iter()
+            .filter(|(k, _)| DEPENDENCY_ENV.contains(&k.as_str()))
+            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+            .collect(),
+    )
+}
+
 /// The harness ID a `workload` evidence `result` names in `harness`, if any.
 pub fn harness_id_of(result: &Value) -> Option<&str> {
     result

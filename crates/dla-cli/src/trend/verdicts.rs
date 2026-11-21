@@ -216,20 +216,8 @@ fn enclosing_function(project: &Path, site: &str) -> Option<(String, Func)> {
     let src = fs::read_to_string(project.join(&file)).ok()?;
     let tree = parse(lang, &src).ok()?;
     let row = line.checked_sub(1)?;
-    let text = src.lines().nth(row)?;
-    let indent = text.len() - text.trim_start().len();
-    // The range ends where the line does: a range that reaches past the end of the last
-    // line of a function is not inside it.
-    let mut node = tree.root_node().descendant_for_point_range(
-        dla_census::parse::tree_sitter::Point {
-            row,
-            column: indent,
-        },
-        dla_census::parse::tree_sitter::Point {
-            row,
-            column: text.trim_end().len().max(indent),
-        },
-    );
+    src.lines().nth(row)?;
+    let mut node = super::candidates::node_at_line(&tree, &src, row);
     let mut found: Option<Func> = None;
     while let Some(n) = node {
         let name_of = |n: dla_census::parse::tree_sitter::Node<'_>| {
@@ -638,6 +626,23 @@ mod tests {
         let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
         assert!(v[0].detail.contains("Cart.add"), "{}", v[0].detail);
+    }
+
+    #[test]
+    fn the_function_around_the_last_line_is_found_with_a_trailing_comment_too() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("a.py"),
+            "class Cart:\n    def add(self, k, v):\n        self.n = 1\n        self.items[k] = v  # last\n",
+        )
+        .unwrap();
+        for line in [3, 4] {
+            let (file, func) = enclosing_function(dir.path(), &format!("a.py:{line}")).unwrap();
+            assert_eq!(
+                (file.as_str(), func.name.as_str(), func.lo),
+                ("a.py", "Cart.add", 2)
+            );
+        }
     }
 
     #[test]

@@ -218,6 +218,11 @@ pub struct RunOutput {
     /// or kept later points from starting. The series it wrote is partial and never
     /// refutes anything.
     pub partial: Vec<String>,
+    /// The dependency variables (`PYTHONPATH`...) the run's processes used, as the run
+    /// record keeps them: this environment's values, and the ones taken from the last run.
+    pub dependency_env: BTreeMap<String, String>,
+    /// Of those, the names that were unset here and taken from the last run of the harness.
+    pub env_reused: Vec<String>,
 }
 
 fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<String>) -> Refusal {
@@ -300,6 +305,62 @@ fn merged_env(spec_env: &[(String, String)], tokens: &[(&str, String)]) -> Vec<(
 }
 
 // ---------------------------------------------------------------------------------------
+// Dependency variables of the last run
+
+thread_local! {
+    /// The harness and the dependency variables (`dla_core::harness::DEPENDENCY_ENV`) the
+    /// last successful run of it used and this environment lacks: every process the run on
+    /// this thread starts gets them.
+    static ENV_REUSE: RefCell<Option<(String, Vec<(String, String)>)>> = const { RefCell::new(None) };
+}
+
+/// Holds [`ENV_REUSE`] for the length of one `run_points`.
+struct EnvReuseGuard;
+
+impl EnvReuseGuard {
+    fn set(harness: &str, vars: Vec<(String, String)>) -> Self {
+        ENV_REUSE.with(|r| *r.borrow_mut() = Some((harness.to_owned(), vars)));
+        Self
+    }
+}
+
+impl Drop for EnvReuseGuard {
+    fn drop(&mut self) {
+        ENV_REUSE.with(|r| *r.borrow_mut() = None);
+    }
+}
+
+/// `env` with the reused dependency variables put in: a variable the spec sets too keeps its
+/// own value and takes the reused one as the inherited value it merges with (as
+/// [`merged_env`] does with a set one). Returns the variables that were put in, and the
+/// harness they come from.
+fn with_reused_env(env: &[(String, String)]) -> (Vec<(String, String)>, Option<(String, Vec<String>)>) {
+    let Some((harness, vars)) = ENV_REUSE.with(|r| r.borrow().clone()) else {
+        return (env.to_vec(), None);
+    };
+    if vars.is_empty() {
+        return (env.to_vec(), None);
+    }
+    let mut out = env.to_vec();
+    for (k, old) in &vars {
+        match out.iter_mut().find(|(ek, _)| ek == k) {
+            Some((_, cur)) => {
+                if let Merge::Prepend(sep) | Merge::Append(sep) = merge_rule(k) {
+                    let joined = match merge_rule(k) {
+                        Merge::Append(_) => format!("{old}{sep}{cur}"),
+                        _ => format!("{cur}{sep}{old}"),
+                    };
+                    *cur = joined;
+                }
+            }
+            None => out.push((k.clone(), old.clone())),
+        }
+    }
+    let names = vars.into_iter().map(|(k, _)| k).collect();
+    (out, Some((harness, names)))
+}
+
+// ---------------------------------------------------------------------------------------
 // Running one process
 
 struct ExecSpec<'a> {
@@ -345,7 +406,16 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
     if let Some(dir) = spec.log.parent() {
         fs::create_dir_all(dir).map_err(|e| io_refusal(dir, e))?;
     }
-    let log = File::create(&spec.log).map_err(|e| io_refusal(&spec.log, e))?;
+    let mut log = File::create(&spec.log).map_err(|e| io_refusal(&spec.log, e))?;
+    let (env, reused) = with_reused_env(&spec.env);
+    if let Some((harness, names)) = &reused {
+        use std::io::Write as _;
+        let _ = writeln!(
+            log,
+            "dla: reused from the last run of {harness}: {} (not set in this environment)",
+            names.join(", ")
+        );
+    }
     let log2 = match &spec.stderr_log {
         Some(p) => File::create(p).map_err(|e| io_refusal(p, e))?,
         None => log.try_clone().map_err(|e| io_refusal(&spec.log, e))?,
@@ -358,7 +428,7 @@ fn exec(ctx: &ToolCtx, spec: &ExecSpec<'_>) -> Result<ExecResult, Refusal> {
     let mut cmd = Command::new(&program_path);
     cmd.args(args)
         .current_dir(&spec.cwd)
-        .envs(spec.env.iter().map(|(k, v)| (k, v)))
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log2));
@@ -1978,10 +2048,16 @@ pub fn run_points(
     };
     let (asked, opts) = (opts.capture, &masked);
     let paths = Paths::new(ctx, manifest)?;
+    let reuse = dla_core::harness::dependency_env_to_reuse(&ctx.run_dir, &manifest.id);
+    let mut dependency_env = dla_core::harness::current_dependency_env();
+    dependency_env.extend(reuse.iter().cloned());
     let mut out = RunOutput {
         gaps: manifest.gaps.clone(),
+        env_reused: reuse.iter().map(|(k, _)| k.clone()).collect(),
+        dependency_env,
         ..RunOutput::default()
     };
+    let _reuse = EnvReuseGuard::set(&manifest.id, reuse);
     let _signals = SignalGuard::install(ctx);
     build_once(ctx, manifest, &paths, &mut out)?;
     if let Some(tool) = opts.tool {
@@ -2592,6 +2668,8 @@ fn run_loaded(
         "captures": out.captures,
         "ffi_sites": out.ffi_sites.iter().map(ffi_site_json).collect::<Vec<_>>(),
         "driver_digest": dla_core::harness::driver_digest(&ctx.run_dir, &manifest.id),
+        dla_core::harness::RUN_DEPENDENCY_ENV: out.dependency_env,
+        "env_reused": out.env_reused,
     });
     let first = out
         .series
@@ -2767,6 +2845,9 @@ fn run_loaded(
         |s| format!("dla trend {s}"),
     );
     summary["next"] = json!(next);
+    if !out.env_reused.is_empty() {
+        summary["env_reused"] = json!(out.env_reused);
+    }
     Ok((
         StageOutcome {
             evidence: vec![ev.to_string()],

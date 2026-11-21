@@ -269,7 +269,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
             kind,
             "dla",
             env!("CARGO_PKG_VERSION"),
-            summary::summarize(&trend_id, &main.series, group, &signal),
+            summary::summarize(&trend_id, &main.series, group, &target_verdicts, &signal),
         );
         spec.authority = authority;
         spec.raw = Some(raw.clone());

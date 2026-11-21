@@ -573,8 +573,14 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
             .unwrap()
             .to_owned()
     };
-    assert_eq!(state_of(&registry), "suspected_static_only(not_exercised)");
-    assert_eq!(state_of(&bounded), "suspected_static_only(not_exercised)");
+    // Their probes were read and stayed at one value: measured and undecided, not "not
+    // exercised", whatever static evidence they also have.
+    assert_eq!(state_of(&registry), "unresolved(inconclusive)");
+    assert_eq!(state_of(&bounded), "unresolved(inconclusive)");
+    assert_eq!(out["reason"]["inconclusive"], 2, "{out}");
+    // The test file's finding was never targeted.
+    assert_eq!(state_of(&tests_f), "unresolved(not_exercised)");
+    assert_eq!(out["reason"]["not_exercised"], 1, "{out}");
     // The remedy names what was tried and what to do.
     let ledger = fs::read_to_string(r.run_dir.join("ledger.jsonl")).unwrap();
     assert!(
@@ -659,4 +665,146 @@ fn the_stop_hook_leads_with_the_queue_item() {
     let finding = reason.find("finding F1").unwrap_or(usize::MAX);
     assert!(queue < finding, "{reason}");
     assert!(reason.contains(BATCH), "{reason}");
+}
+
+impl Run {
+    /// One new finding per `(verdict, declared)` at a test-file site (never held back by the
+    /// queue), each with a growth record of `dla trend` that gives it that target verdict.
+    /// The records are written into the ledger as `dla trend` writes them.
+    fn add_verdicts(&self, verdicts: &[(&str, bool)]) -> Vec<String> {
+        let r = self;
+        let cases = verdicts;
+        let mut ids = Vec::new();
+        for (i, _) in cases.iter().enumerate() {
+            let o = r.ok(&[
+                "ledger",
+                "add",
+                "--origin",
+                "census",
+                "--evidence",
+                "E1",
+                "--site",
+                &format!("tests/t{i}.py:4"),
+            ]);
+            ids.push(o["id"].as_str().unwrap().to_owned());
+        }
+        let path = r.run_dir.join("ledger.jsonl");
+        let text = fs::read_to_string(&path).unwrap();
+        let mut seq = text.lines().count();
+        let mut n = text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter_map(|v| {
+                v["evidence_id"]
+                    .as_str()?
+                    .strip_prefix('E')?
+                    .parse::<u32>()
+                    .ok()
+            })
+            .max()
+            .unwrap();
+        let mut add = String::new();
+        for ((verdict, declared), id) in cases.iter().zip(&ids) {
+            seq += 1;
+            n += 1;
+            add.push_str(&format!(
+            r#"{{"schema_version":7,"seq":{seq},"ts":"2026-01-02T03:09:00Z","type":"evidence","evidence_id":"E{n}","source":{{"repo":{{"commit":"abc"}}}},"tool":{{"name":"dla","version":"1"}},"authority":"test","kind":"growth-series","result":{{"trend":"T1","series":"S1","n":8,"passed":[],"failed":1,"failed_beyond_process":0,"gate":"fail","targets":[{{"finding":"{id}","verdict":"{verdict}","declared":{declared}}}]}}}}"#
+        ));
+            add.push('\n');
+        }
+        let mut all = text;
+        if !all.ends_with('\n') {
+            all.push('\n');
+        }
+        all.push_str(&add);
+        fs::write(&path, all).unwrap();
+
+        ids
+    }
+}
+
+/// `dla ledger close-rest` names what happened: a candidate whose target verdict read its
+/// code or holder (`constant`, `changed`, `executed`) from a harness that declared it is
+/// measured and undecided (`inconclusive`), one nothing reached (`not_executed`,
+/// `not_loaded`, `unknown`, or a verdict of an automatic probe) is `not_exercised`.
+#[test]
+fn close_rest_says_inconclusive_for_a_measured_candidate_and_not_exercised_for_the_rest() {
+    let r = Run::new(&["--budget", "3h"]);
+    // The queue holds nothing back: every ranked candidate gets a blocker answer first.
+    r.ok(&[
+        "ledger",
+        "resolve",
+        "intake.workload",
+        "--status",
+        "unresolved",
+        "--reason",
+        "build_fails",
+        "--remedy",
+        "no harness here",
+    ]);
+    let cases: [(&str, bool, &str); 7] = [
+        ("constant", true, "unresolved(inconclusive)"),
+        ("changed", true, "unresolved(inconclusive)"),
+        ("executed", true, "unresolved(inconclusive)"),
+        ("not_executed", true, "unresolved(not_exercised)"),
+        ("not_loaded", true, "unresolved(not_exercised)"),
+        ("unknown", true, "unresolved(not_exercised)"),
+        // An automatic probe's candidate that no harness declared.
+        ("constant", false, "unresolved(not_exercised)"),
+    ];
+    let ids = r.add_verdicts(&cases.map(|(v, d, _)| (v, d)));
+    let path = r.run_dir.join("ledger.jsonl");
+    // The fix the gate prints for a finding follows the same rule.
+    let missing = r.missing();
+    let fix_of = |id: &str| {
+        missing
+            .iter()
+            .find(|m| m["finding"] == id || m["id"] == id)
+            .unwrap_or_else(|| panic!("no item for {id}: {missing:?}"))["fix"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert!(fix_of(&ids[0]).contains("--reason inconclusive"), "{missing:?}");
+    assert!(!fix_of(&ids[3]).contains("inconclusive"), "{missing:?}");
+
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert_eq!(out["reason"]["inconclusive"], 3, "{out}");
+    // The four above and the project's own three, which no harness reached.
+    assert_eq!(out["reason"]["not_exercised"], 7, "{out}");
+    assert_eq!(out["reason"]["time_budget"], 0, "{out}");
+    let (_, lines) = r.list();
+    for ((verdict, declared, want), id) in cases.iter().zip(&ids) {
+        let got = lines.iter().find(|l| l["id"] == id.as_str()).unwrap()["state"]
+            .as_str()
+            .unwrap();
+        assert_eq!(got, *want, "{verdict} declared {declared}");
+    }
+    let record = fs::read_to_string(&path).unwrap();
+    assert!(record.contains("\"inconclusive\":3"), "{record}");
+}
+
+#[test]
+fn at_the_budget_floor_a_measured_candidate_is_inconclusive_not_time_budget() {
+    let r = Run::new(&["--budget", "90s"]);
+    let ids = r.add_verdicts(&[("constant", true), ("not_executed", true)]);
+    let bounded = r.id_at("shop/reg.py:9");
+    r.ok(&[
+        "ledger",
+        "resolve",
+        &bounded,
+        "--as",
+        "suspected_static_only",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "x",
+    ]);
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert_eq!(out["reason"]["inconclusive"], 1, "{out}");
+    let (_, lines) = r.list();
+    let state = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["state"].clone();
+    assert_eq!(state(&ids[0]), "unresolved(inconclusive)");
+    // What nothing reached keeps the floor's reason.
+    assert_eq!(state(&ids[1]), "unresolved(time_budget)");
 }

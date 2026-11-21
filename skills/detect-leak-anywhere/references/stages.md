@@ -497,7 +497,9 @@ evidence. A candidate that no harness reached is neither confirmed nor refuted, 
 empty or closed, `dla ledger close-rest [--remedy "<text>"]` dispositions every open candidate that is
 not pending in an open queue, through the rules of `dla ledger resolve`: `suspected_static_only` when
 the finding has static evidence, else `unresolved`, with reason `not_exercised` (`time_budget` when the
-queue closed at the floor), and a remedy built from the finding's history ("targeted in H2 and H3, its
+queue closed at the floor), except a finding a harness that declared it measured (verdict `constant`,
+`changed` or `executed`): that one is `unresolved` with `inconclusive`, at the floor too, and the counts
+it prints list `inconclusive` beside the other two; and a remedy built from the finding's history ("targeted in H2 and H3, its
 holder did not change: write a unit that adds a new key to <owner>"; "ranked 143 (tier 4), not
 targeted: dla harness gen --driver --probe F143") unless you give one. It prints counts by
 disposition and the ids it left open, with the batch command; it never touches findings under test.
