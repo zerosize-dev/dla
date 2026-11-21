@@ -606,7 +606,8 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
     assert_eq!(o.code, 0, "{}", o.text);
     let left = r.missing();
     assert!(
-        left.iter().all(|m| m["kind"] != "queue" && m["kind"] != "finding"),
+        left.iter()
+            .all(|m| m["kind"] != "queue" && m["kind"] != "finding"),
         "{left:?}"
     );
 

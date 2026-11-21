@@ -256,3 +256,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Research agent R (Sonnet, read-only, scratch u30, brief wip-notes/rank2-research-brief.md) is measuring generic static signals for a better order, with the bench fixtures as a guard against fitting.
 - Agent A: follow-up "order captures by bytes allocated" in progress (report appended to u26/report.md). After it: Go driver-mode harness writes no cover profile.
 - Agent Q1: still tracing a refuted-count difference on python-report-memo-bounded before reporting.
+
+## State 2026-11-21 03:22 UTC
+- REAL RUN aiohttp-2 (queue build): F8 `aiohttp/web_app.py:82` (the documented leak) and F9 `aiohttp/web_log.py:61` CONFIRMED about 5 minutes in; the agent goes on with batches H2, H3 (close-rest closed 104 non-ranked, 81 pending). Run still going (budget up to 3 h, timeout 9000 s).
+- Q1 reported (report only in its hand-back message; could not write report.md). Its build = u28/Q1/bench/dla (02:08; last source edit 01:47). My checks so far: Python and Go `harness gen --driver --next` write the target block; clippy/fmt/schema/grader/skill_text running (scratch u31).
+- Follow-up list (after the queue is committed): (a) `trend/candidates.rs::enclosing` uses an end column past the line end, so a site on the last line of a function matches no function; (b) Python census lists TypeVar assignments as holders; (c) the agent had to re-export PYTHONPATH for `dla alloc-test` after `dla harness run` (the harness does not remember the environment of its dependencies); (d) ranking second step (agent R); (e) Go driver-mode cover profile (agent A next); (f) #50 macOS assertion message; (g) a blocker on `intake.workload` closes the queue of every runtime, not one.
