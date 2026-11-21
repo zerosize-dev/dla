@@ -556,3 +556,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - REAL RUNS STARTED 21:10 UTC on the third frozen build: tokio-4 (waiter bx289903h), spring-5 (--warm-m2; waiter bnsh78dwh). grpc-5 after one of them ends.
 - commit-message-3.txt updated (choices, per-site tie, duplicate route, two libraries confirmed). Commit 89bc8a8 to main when its CI is green.
 - Disk 5.4 GB after pruning (deleted u50/u52 tokio copies, bench logs, go build cache).
+
+## State at 21:34 UTC, 2026-11-21
+- REAL RUN tokio-4 FINISHED (23 min): COMPLETE, no leak; second look 7 (grew 0); the model used choices but skipped the "release of the intermediates" slot (notes real-run-plugin-tokio-4.md, evidence u36/tokio-4).
+- M2 SENT to G (resumed a349aef413818803c): second-look unit hook generated as a skeleton with named slot variables; harness run refuses an unused slot; explicit give-up form (at most two), listed in run and trend. Task 70.
+- Running: spring-5 (waiter bnsh78dwh), CI on 89bc8a8 (waiter bzq5j3ssu), G M2.
+- grpc-5 not started yet (start when spring-5 ends, or now if load allows: load is low; Go run needs about 2 GB disk; 5 GB free).
