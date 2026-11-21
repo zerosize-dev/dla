@@ -44,6 +44,8 @@ mod against;
 pub(crate) mod analysis;
 #[path = "trend/candidates.rs"]
 mod candidates;
+#[path = "trend/short.rs"]
+mod short;
 #[path = "trend/summary.rs"]
 mod summary;
 #[path = "trend/verdicts.rs"]
@@ -219,6 +221,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         ledger: &ledger,
         series: &main.series,
         columns: &cols,
+        too_short: short::is_short(&main.series, &th).then(|| short::points(&main.series, &th)),
     });
 
     // Persist the full report first: the evidence points at it.
@@ -340,6 +343,14 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         out.insert("passed_more".into(), json!(passed.len() - 8));
     }
     out.insert("failed".into(), json!(cols.len() - passed.len()));
+    let short_cols = if short::is_short(&main.series, &th) {
+        short::columns(&cols, &th)
+    } else {
+        Vec::new()
+    };
+    if !short_cols.is_empty() {
+        out.insert("short".into(), short::json_list(&short_cols));
+    }
     if !target_verdicts.is_empty() {
         let (declared, rest): (Vec<_>, Vec<_>) = target_verdicts.iter().partition(|v| v.declared);
         out.insert(
@@ -407,6 +418,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     let mut next = next;
     if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
         next.insert(0, entry);
+    }
+    if short::is_short(&main.series, &th) {
+        let (n, need) = short::points(&main.series, &th);
+        let rerun = main
+            .series
+            .source
+            .harness
+            .as_deref()
+            .map(|h| format!("dla harness run {h} --mode {}", mode_name(&main.series)));
+        next.insert(
+            0,
+            short::next_line(&ledger, &short_cols, n, need, rerun.as_deref()),
+        );
     }
     out.insert("next".into(), json!(next));
     Ok(Value::Object(out))

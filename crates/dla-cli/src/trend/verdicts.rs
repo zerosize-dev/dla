@@ -31,6 +31,8 @@ pub struct Inputs<'a> {
     pub series: &'a SeriesFile,
     /// The analysed columns, with their candidates.
     pub columns: &'a [ColumnTrend],
+    /// `(points, needed)` when the series has fewer points after warm-up than the gate needs.
+    pub too_short: Option<(usize, usize)>,
 }
 
 /// The verdicts of the series, declared targets first. Empty for a series that no harness
@@ -54,6 +56,14 @@ pub fn compute(inp: &Inputs<'_>) -> Vec<TargetVerdict> {
         .filter(|(f, _)| inp.ledger.finding(f).is_some())
         .map(|(f, declared)| {
             let mut v = one(inp, &m, &f);
+            // "The code ran and no column passed" says nothing about a series the gate could
+            // not judge: unknown does not settle the target.
+            if let Some((n, need)) = inp.too_short
+                && v.verdict == Verdict::Executed
+            {
+                v.verdict = Verdict::Unknown;
+                v.detail = format!("series too short: {n} points, {need} needed");
+            }
             v.declared = declared;
             v
         })
@@ -550,7 +560,17 @@ mod tests {
         s: &Scene,
         m: &HarnessManifest,
         cols: Vec<Col>,
+        matcher_fill: impl FnMut(&mut Vec<ColumnTrend>),
+    ) -> Vec<TargetVerdict> {
+        verdicts_with(s, m, cols, matcher_fill, None)
+    }
+
+    fn verdicts_with(
+        s: &Scene,
+        m: &HarnessManifest,
+        cols: Vec<Col>,
         mut matcher_fill: impl FnMut(&mut Vec<ColumnTrend>),
+        too_short: Option<(usize, usize)>,
     ) -> Vec<TargetVerdict> {
         m.save(s.dir.path()).unwrap();
         let file = series("S1", 1, cols);
@@ -566,6 +586,7 @@ mod tests {
             ledger: &s.ledger,
             series: &file,
             columns: &analysed,
+            too_short,
         })
     }
 
@@ -656,6 +677,25 @@ mod tests {
         let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
         assert!(v[0].detail.contains("Cart.add"), "{}", v[0].detail);
+    }
+
+    #[test]
+    fn a_short_series_never_settles_a_target_as_executed() {
+        let s = scene();
+        write_run(
+            &s,
+            json!({"kind": "functions", "functions": [{"file": "a.py", "name": "Cart.add", "line": 5}]}),
+        );
+        let m = manifest(json!([]), &["F1"]);
+        let v = verdicts_with(
+            &s,
+            &m,
+            vec![Col::gauge("os.rss", &[5.0; 4])],
+            |_| {},
+            Some((4, 8)),
+        );
+        assert_eq!(v[0].verdict, Verdict::Unknown, "{v:?}");
+        assert_eq!(v[0].detail, "series too short: 4 points, 8 needed");
     }
 
     #[test]
