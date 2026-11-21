@@ -5,17 +5,17 @@ Worker name and runtime id: `node`. Facts from `harness/node/README.md` and `doc
 Archetype rows (what to look for, how to confirm, how to rule out): read `references/node-archetypes.md` only after `dla gate check --stage classify` passes.
 
 ## Harness
-- Command mode (Node 18+): `dla-preload.js` is loaded through `NODE_OPTIONS=--require ...`
+- Command mode (Node 18+): `dla-preload.cjs` is loaded through `NODE_OPTIONS=--require ...`
   (appended). It does nothing without `DLA_HARNESS_OUT`, in worker threads, and in
   npm/npx/yarn/pnpm/corepack, so `npm run <script>` measures the script's `node` process.
-  Driver mode uses `dla-harness.js` with the usual hooks.
+  Driver mode uses `dla-harness.cjs` with the usual hooks: `projectRequire(file)` for CommonJS, `await projectImport(file)` for ES modules (`.mjs`, or `.js` under `"type": "module"`). Both files are `.cjs`, so they load in any package type.
 - What the agent wraps: timers (`setInterval`, `setTimeout`, clear and close variants) and
   EventEmitter/EventTarget listeners, each attributed to the first project stack frame. A
   `once` listener that fired or an aborted-signal listener is not counted.
 - What the dump measures (after `gc()` twice; the agent enables `gc` itself if needed):
   `node.heap_used`, `node.heap_total`, `node.external`, `node.array_buffers`, native contexts,
   `node.malloced_memory`, `node.active.<Type>`, `node.timers`, `node.listeners` (grouped by
-  `file:line`), the `os.*` set, and module-binding probes (`NodeModule`, `NodeBinding`; CommonJS only).
+  `file:line`), the `os.*` set, and module-binding probes (`NodeModule`, `NodeBinding`; ES modules need Node 22.15+ or 23.5+, else the probe says so).
   A probe whose root the agent cannot enter (a function, a leaf or opaque value, or an instance of a class
   with no own keys, as a class with only `#private` fields has) writes no `probe:` column and says so in a
   limitation; it never reads as a flat line. Such a finding is ruled on by the whole-process columns and a
@@ -72,7 +72,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   Holders inside `node:` modules are not tracked; when the only holders that grow strictly are those, the
   result says so in `reasons` and `needed` points at the project's own registration or at a probe or
   allocation stack, not at another snapshot.
-- `alloc-<n>.heapprofile`: `dla summarize alloc-stack-diff`. Frames of `dla-preload.js` and builtins are
+- `alloc-<n>.heapprofile`: `dla summarize alloc-stack-diff`. Frames of `dla-preload.cjs` and builtins are
   skipped. A `<script>.map` next to a bundled script is applied.
 - `resources.json`: `dla summarize non-heap`. A group `Timeout@src/heartbeat.js:15` ties to the finding
   at that site. `getActiveResourcesInfo` totals are metrics and tie to nothing.
@@ -92,7 +92,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   files also backs this correction when its passing `Timeout` or listener group is tied to F by the
   creation site, and only the finding's own site: a group tied through a writer's site is refused
   (the output prints the command, and `observed_holder` names the finding).
-- ES module probes are not supported (CommonJS only); closure variables cannot be inspected.
+- ES-module probes read live bindings through `module.registerHooks` (Node 22.15+ or 23.5+); closure variables cannot be inspected.
 - Heap analysis tools lag new Node releases.
 - `--capture nonheap` uses `async_hooks`; promise-heavy targets can run up to about 10x slower.
 - `scripts.json` next to the snapshots is informational; no adapter reads it.

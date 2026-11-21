@@ -94,6 +94,10 @@ pub struct GenOptions {
     /// JVM, JUnit repeat: classes (`pkg.Class`) or methods (`pkg.Class#method`) to run, instead
     /// of the workload's test class.
     pub tests: Vec<String>,
+    /// Rust driver: crate features the driver build enables (`--features a,b`).
+    pub features: Vec<String>,
+    /// Rust driver: the driver build leaves the crate's default features out.
+    pub no_default_features: bool,
 }
 
 fn refuse(
@@ -1358,6 +1362,8 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
                 join_rel(&join_rel(cwd, "src/bin"), "dla_harness.rs"),
             ));
             out.spec.crate_dir = cwd.to_owned();
+            out.spec.features.clone_from(&d.opts.features);
+            out.spec.no_default_features = d.opts.no_default_features;
             if !rust_dhat_available() {
                 out.gaps.push(
                     "dhat-rs not available offline: counting-allocator driver used".to_owned(),
@@ -1804,6 +1810,29 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             format!("dla harness gen --lang jvm --junit --tests {t}"),
         ));
     }
+    if (!opts.features.is_empty() || opts.no_default_features)
+        && !(rt == Runtime::Rust && opts.driver)
+    {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            "--features and --no-default-features apply to the build of a Rust driver",
+            "--lang rust --driver",
+            "dla harness gen --lang rust --driver --features a,b",
+        ));
+    }
+    if let Some(f) = opts.features.iter().find(|f| {
+        f.is_empty()
+            || !f
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-/:+".contains(c))
+    }) {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            format!("--features {f:?} is not a crate feature name"),
+            "feature names of the crate, comma-separated",
+            "dla harness gen --lang rust --driver --features a,b",
+        ));
+    }
     if opts.iterations == 0 {
         return Err(refuse(
             codes::INVALID_VALUE,
@@ -2172,6 +2201,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             &siblings,
         )
     };
+    if rt == Runtime::Rust {
+        targets::add_feature_gates(&ctx.project, &mut described, &opts.features);
+    }
     if manifest.is_entry_path() {
         targets::add_entry_facts(&ctx.project, rt, &mut described);
         write(
@@ -2225,6 +2257,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         "files": copied.files,
         "ffi": ffi_info.as_ref().map(|f| format!("{}:{}", f.kind, f.library.as_deref().unwrap_or("?"))),
         "purpose": manifest.purpose.map(|p| p.as_str()),
+        "features": (!opts.features.is_empty()).then(|| opts.features.join(",")),
+        "no_default_features": opts.no_default_features.then_some(true),
     });
     let skipped_sources: u64 = copied.out_of_scope_sources.values().sum();
     if let Value::Object(m) = &mut result {
@@ -2260,18 +2294,37 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 json!(
                     described
                         .iter()
-                        .map(|t| json!({
-                            "finding": t.id,
-                            "site": t.site,
-                            "holder": t.holder,
-                            "owner": t.owner,
-                            "probe": t.probe.is_some(),
-                            "sibling_of": t.sibling_of,
-                            "to_do": clip(&t.instruction, 90),
-                        }))
+                        .map(|t| {
+                            let mut j = json!({
+                                "finding": t.id,
+                                "site": t.site,
+                                "holder": t.holder,
+                                "owner": t.owner,
+                                "probe": t.probe.is_some(),
+                                "sibling_of": t.sibling_of,
+                                "to_do": clip(&t.instruction, 90),
+                            });
+                            if let (Some(g), Value::Object(o)) = (&t.feature_gate, &mut j) {
+                                o.insert("feature_gate".into(), json!(g.text()));
+                            }
+                            j
+                        })
                         .collect::<Vec<_>>()
                 ),
             );
+            let gated: Vec<String> = described
+                .iter()
+                .filter_map(|t| {
+                    let g = t.feature_gate.as_ref().filter(|g| !g.enabled)?;
+                    Some(format!("{} at {}: {}", t.id, t.site, g.text()))
+                })
+                .collect();
+            if !gated.is_empty() {
+                m.insert(
+                    "feature_note".into(),
+                    json!(format!("note: {}", gated.join("; "))),
+                );
+            }
             m.insert(
                 "targets_full".into(),
                 json!(match &block_in {
@@ -2474,5 +2527,28 @@ mod detector_tests {
             detectors(&ctx, Runtime::Node).on,
             ["MaxListenersExceededWarning"]
         );
+    }
+}
+
+#[cfg(test)]
+mod node_module_tests {
+    use super::*;
+
+    #[test]
+    fn a_module_package_is_found_from_the_workload_directory_upwards() {
+        let t = tempfile::tempdir().unwrap();
+        let work = t.path();
+        fs::create_dir_all(work.join("sub/deep")).unwrap();
+        assert!(!node_module_package(work, "sub/deep"), "no package.json");
+        assert_eq!(node_module_note(work, ".", None), None);
+        fs::write(work.join("package.json"), "{\"type\": \"module\"}").unwrap();
+        assert!(node_module_package(work, "."));
+        assert!(node_module_package(work, "sub/deep"));
+        let note = node_module_note(work, "sub", None).unwrap();
+        assert!(note.contains("projectImport"), "{note}");
+        // The nearest package.json decides: a CommonJS sub-package inside a module package.
+        fs::write(work.join("sub/package.json"), "{\"type\": \"commonjs\"}").unwrap();
+        assert!(!node_module_package(work, "sub/deep"));
+        assert!(node_module_package(work, "."));
     }
 }

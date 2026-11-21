@@ -1,7 +1,10 @@
 //! The targets of a harness: what `dla harness gen` prints for each finding a harness was
 //! generated to reach, and the comment block it writes at the top of the driver.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use dla_census::parse::{
     Lang, parse,
@@ -71,6 +74,163 @@ pub struct Target {
     pub sibling_of: Option<FindingId>,
     /// What an entry-path harness adds: the callers chain and where the key comes from.
     pub entry: Option<Entry>,
+    /// Rust: the crate features that gate the module of the site (`#[cfg(feature = "x")]` on a
+    /// `mod` declaration), read by [`feature_gate`]; `None` when no declaration gates it.
+    pub feature_gate: Option<FeatureGate>,
+}
+
+/// The crate features a Rust site lies behind, and whether the driver build enables them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureGate {
+    /// The features named by the `#[cfg(feature = "..")]` attributes of the `mod` declarations
+    /// from the crate root down to the site's module.
+    pub features: Vec<String>,
+    /// Every one of them is among the features the harness is built with.
+    pub enabled: bool,
+}
+
+impl FeatureGate {
+    /// `behind feature x: generate with --features x`, or what the build already does.
+    pub fn text(&self) -> String {
+        let list = self.features.join(",");
+        let plural = if self.features.len() > 1 {
+            "features"
+        } else {
+            "feature"
+        };
+        if self.enabled {
+            format!(
+                "behind {plural} {}: the driver is built with --features {list}",
+                self.features.join(", ")
+            )
+        } else {
+            format!(
+                "behind {plural} {}: generate with --features {list} (this harness is built without {})",
+                self.features.join(", "),
+                if self.features.len() > 1 {
+                    "them"
+                } else {
+                    "it"
+                }
+            )
+        }
+    }
+}
+
+/// The features that gate the module a Rust file belongs to, read with a plain line scan of
+/// the `mod` declarations from the file up to the crate root (`lib.rs`, `main.rs`): a
+/// `#[cfg(feature = "x")]` attribute on the line or lines right above `mod name;` (also inside
+/// `all(..)` and `any(..)`) names `x`. `file` is project-relative.
+///
+/// It does not see: a module declared with `#[path = ".."]`, in a macro or inline
+/// (`mod name { .. }`), a gate on the item itself instead of its module, `cfg_attr`, a `not(..)`
+/// gate (skipped, not read as a requirement), a target-specific or platform gate, and a feature
+/// another feature turns on (the gate names the feature written in the attribute).
+pub fn feature_gate(project: &Path, file: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut current = Path::new(file).to_path_buf();
+    for _ in 0..12 {
+        let stem = current
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        if stem == "lib" || stem == "main" {
+            break;
+        }
+        let dir = current.parent().map(Path::to_path_buf).unwrap_or_default();
+        let (name, decl_dir) = if stem == "mod" {
+            (
+                dir.file_name().and_then(|s| s.to_str()).map(str::to_owned),
+                dir.parent().map(Path::to_path_buf).unwrap_or_default(),
+            )
+        } else {
+            (Some(stem), dir.clone())
+        };
+        let Some(name) = name else { break };
+        // Where `mod name;` can be written: the file of the directory that holds the module.
+        let mut parents: Vec<PathBuf> = ["lib.rs", "main.rs", "mod.rs"]
+            .iter()
+            .map(|f| decl_dir.join(f))
+            .collect();
+        if let (Some(dn), Some(up)) = (
+            decl_dir.file_name().and_then(|s| s.to_str()),
+            decl_dir.parent(),
+        ) {
+            parents.push(up.join(format!("{dn}.rs")));
+        }
+        let mut next = None;
+        for p in parents {
+            let Ok(text) = fs::read_to_string(project.join(&p)) else {
+                continue;
+            };
+            if let Some(features) = mod_gate(&text, &name) {
+                for f in features {
+                    if !found.contains(&f) {
+                        found.push(f);
+                    }
+                }
+                next = Some(p);
+                break;
+            }
+        }
+        let Some(p) = next else { break };
+        current = p;
+    }
+    found.sort();
+    found
+}
+
+/// The features of the `cfg` attributes right above `mod <name>;` in `text`; `None` when no such
+/// declaration is in it.
+fn mod_gate(text: &str, name: &str) -> Option<Vec<String>> {
+    let decl = regex::Regex::new(&format!(
+        r"^\s*(pub(\([^)]*\))?\s+)?mod\s+{}\s*;",
+        regex::escape(name)
+    ))
+    .ok()?;
+    let feature = regex::Regex::new(r#"feature\s*=\s*"([^"]+)""#).ok()?;
+    let mut attrs: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("#[") {
+            attrs.push(t);
+            continue;
+        }
+        if t.starts_with("//") || t.is_empty() {
+            continue;
+        }
+        if decl.is_match(line) {
+            let mut out = Vec::new();
+            for a in &attrs {
+                if a.starts_with("#[cfg(") && !a.contains("not(") {
+                    out.extend(feature.captures_iter(a).map(|c| c[1].to_owned()));
+                }
+            }
+            return Some(out);
+        }
+        attrs.clear();
+    }
+    None
+}
+
+/// Sets the feature gate of each Rust target from the module of its site; `enabled` are the
+/// features the harness build has.
+pub fn add_feature_gates(project: &Path, targets: &mut [Target], enabled: &[String]) {
+    for t in targets {
+        let file = t.site.rsplit_once(':').map_or(t.site.as_str(), |(f, _)| f);
+        if !file.ends_with(".rs") {
+            continue;
+        }
+        let features = feature_gate(project, file);
+        if !features.is_empty() {
+            let on = features.iter().all(|f| enabled.contains(f));
+            t.feature_gate = Some(FeatureGate {
+                features,
+                enabled: on,
+            });
+        }
+    }
 }
 
 /// What `dla harness gen --entry` says about a target besides what every harness says.
@@ -229,6 +389,11 @@ fn instruction(kind: &str, holder: &str, owner: &str, site: &str) -> String {
 /// The general line printed once after the targets.
 pub const GENERAL: &str = "use the project's public API the way a caller would; in fresh mode a unit must never reuse an earlier unit's key";
 
+/// What a unit covers of the objects it touches, in every driver block: a leak that needs a
+/// derived object, a cancel or a drop in another order is not reached by a unit that only
+/// creates and uses.
+pub const LIFE: &str = "a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)";
+
 /// Describes every declared target of a harness.
 pub fn describe(
     ctx: &ToolCtx,
@@ -264,6 +429,7 @@ pub fn describe(
                 instruction: instruction(&a.kind, &holder, &owner, &a.site),
                 sibling_of: siblings.get(&a.id).cloned(),
                 entry: None,
+                feature_gate: None,
             }
         })
         .collect()
@@ -454,6 +620,9 @@ impl Target {
         if let Some(e) = &self.entry {
             out.extend(e.lines.iter().cloned());
         }
+        if let Some(g) = &self.feature_gate {
+            out.push(format!("  {}", g.text()));
+        }
         out.push(match &self.probe {
             Some(p) => format!("  probe reads: {p}"),
             None => "  no probe: tied by allocation stacks or type counts".to_owned(),
@@ -483,6 +652,7 @@ impl Target {
             "instruction": self.instruction,
             "sibling_of": self.sibling_of,
             "writer_functions": self.entry.as_ref().map(|e| &e.writer_functions),
+            "feature_gate": self.feature_gate.as_ref().map(FeatureGate::text),
         })
     }
 }
@@ -492,11 +662,12 @@ const ENTRY_INSTRUCTION: &str =
     "reach it through the project's public entry points, with data a caller controls";
 
 /// The rules of an entry-path unit, as printed in the block.
-pub const ENTRY_RULES: [&str; 5] = [
+pub const ENTRY_RULES: [&str; 6] = [
     "Rules of an entry-path unit:",
     "- call only the project's public entry points (the functions, endpoints, commands or messages a user of the project calls), with the objects under test built once in setup",
     "- per unit vary only data that a caller or a remote peer controls (ids, names, paths, methods, headers, bodies, file names, message contents), including inputs the project rejects (unknown paths, unsupported methods, malformed input): error paths often build objects per call",
     "- never create new functions, classes, handlers, loggers or configuration per unit unless a real program does so per request, and if you do, say so in the varies line",
+    "- a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)",
     "- write one line in VARIES.txt next to the driver: what a caller varies per unit; dla harness run refuses the harness until it is written",
 ];
 
@@ -532,6 +703,7 @@ pub fn block_with(
         lines.extend(ENTRY_RULES.iter().map(|l| (*l).to_owned()));
     } else {
         lines.push(format!("In general: {GENERAL}"));
+        lines.push(format!("Also: {LIFE}"));
     }
     lines
         .iter()
@@ -613,6 +785,7 @@ mod tests {
             ),
             sibling_of: None,
             entry: None,
+            feature_gate: None,
         }
     }
 
@@ -635,6 +808,9 @@ mod tests {
         ));
         assert!(text.contains("call pkg.web_app._build with arguments that differ for every unit (derive them from key)"));
         assert!(text.contains("never reuse an earlier unit's key"));
+        assert!(text.contains(
+            "    # Also: a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)\n"
+        ));
         assert!(text.starts_with("\"\"\"Fill"), "{text}");
     }
 
@@ -704,6 +880,7 @@ mod tests {
             instruction: "make every unit reach a writer".into(),
             sibling_of: None,
             entry: None,
+            feature_gate: None,
         }
     }
 
@@ -732,6 +909,10 @@ mod tests {
             assert!(b.contains(want), "{want}\n{b}");
         }
         assert!(!b.contains("In general:"), "{b}");
+        assert!(
+            b.contains("# - a unit covers the life of the objects it touches"),
+            "{b}"
+        );
         // A harness that is not entry-path keeps its block.
         let plain = block("H5", &[writer_target()], Some("#"));
         assert!(plain.contains("In general:") && !plain.contains("Rules of an entry-path unit"));
@@ -746,5 +927,142 @@ mod tests {
         let lines = t[0].entry.as_ref().unwrap().lines.join("\n");
         assert!(lines.contains("callers: not computed"), "{lines}");
         assert!(lines.contains("key from: not computed"), "{lines}");
+    }
+
+    fn crate_tree(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (rel, text) in files {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, text).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_module_declared_behind_a_feature_names_it_down_the_tree() {
+        let dir = crate_tree(&[
+            (
+                "src/lib.rs",
+                "pub mod plain;
+
+#[cfg(feature = \"rt\")]\n#[doc(hidden)]
+pub mod task;
+
+#[cfg(not(feature = \"rt\"))]
+mod fallback;
+#[cfg(all(feature = \"io\", unix))]
+mod sys;
+",
+            ),
+            (
+                "src/plain.rs",
+                "pub static A: u8 = 0;
+",
+            ),
+            (
+                "src/task/mod.rs",
+                "#[cfg(feature = \"time\")]
+mod pinned;
+mod open;
+",
+            ),
+            (
+                "src/task/pinned.rs",
+                "pub static B: u8 = 0;
+",
+            ),
+            (
+                "src/task/open.rs",
+                "pub static C: u8 = 0;
+",
+            ),
+            (
+                "src/fallback.rs",
+                "pub static D: u8 = 0;
+",
+            ),
+            (
+                "src/sys.rs",
+                "pub static E: u8 = 0;
+",
+            ),
+            (
+                "src/bin/tool.rs",
+                "fn main() {}
+",
+            ),
+        ]);
+        let gate = |f: &str| feature_gate(dir.path(), f);
+        assert!(gate("src/plain.rs").is_empty());
+        assert_eq!(gate("src/task/mod.rs"), ["rt"]);
+        // Two declarations down: the features of both, sorted.
+        assert_eq!(gate("src/task/pinned.rs"), ["rt", "time"]);
+        assert_eq!(gate("src/task/open.rs"), ["rt"]);
+        // A `not(..)` gate is not read as a requirement; `all(..)` names its feature.
+        assert!(gate("src/fallback.rs").is_empty());
+        assert_eq!(gate("src/sys.rs"), ["io"]);
+        // A file nothing declares (a binary) has no gate.
+        assert!(gate("src/bin/tool.rs").is_empty());
+        assert!(gate("src/lib.rs").is_empty());
+    }
+
+    #[test]
+    fn a_module_file_beside_its_parent_is_found_by_the_parent_name() {
+        let dir = crate_tree(&[
+            (
+                "src/lib.rs",
+                "#[cfg(feature = \"net\")]\nmod net;
+",
+            ),
+            (
+                "src/net.rs",
+                "mod tcp;
+",
+            ),
+            (
+                "src/net/tcp.rs",
+                "pub static T: u8 = 0;
+",
+            ),
+        ]);
+        assert_eq!(feature_gate(dir.path(), "src/net/tcp.rs"), ["net"]);
+    }
+
+    #[test]
+    fn the_gate_line_says_what_to_generate_with_or_what_the_build_has() {
+        let dir = crate_tree(&[
+            (
+                "src/lib.rs",
+                "#[cfg(feature = \"rt\")]\nmod task;
+",
+            ),
+            (
+                "src/task.rs",
+                "pub static A: u8 = 0;
+",
+            ),
+        ]);
+        let mut t = target();
+        t.site = "src/task.rs:1".into();
+        let mut list = [t];
+        add_feature_gates(dir.path(), &mut list, &[]);
+        let b = block("H1", &list, Some("//"));
+        assert!(
+            b.contains("//   behind feature rt: generate with --features rt (this harness is built without it)"),
+            "{b}"
+        );
+        add_feature_gates(dir.path(), &mut list, &["rt".to_owned()]);
+        let b = block("H1", &list, Some("//"));
+        assert!(
+            b.contains("//   behind feature rt: the driver is built with --features rt"),
+            "{b}"
+        );
+        // A site that is not Rust is left alone.
+        let mut py = target();
+        py.site = "pkg/a.py:3".into();
+        let mut list = [py];
+        add_feature_gates(dir.path(), &mut list, &[]);
+        assert!(list[0].feature_gate.is_none());
     }
 }

@@ -288,7 +288,7 @@ under the run directory and need tier 1.
      key derives from `key`; `registration-table`: register through the public API once per unit and
      release only what a normal caller of that API releases; any other holder: make every unit run the
      code at the site. Read the writers' code and call them through the project's public API the way a
-     caller would. In fresh mode a unit never reuses an earlier unit's key.
+     caller would. In fresh mode a unit never reuses an earlier unit's key. A unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key).
   3. Replace the body of `setup` (import the project, build what the units need) and of `unit` (one
      unit for this `key`, reaching every target in the block) in the driver file. Keep the comments.
   4. `dla harness run H<n> --mode both`, then `dla trend S<n>`. The output lists `targets` (the first 8
@@ -303,10 +303,12 @@ under the run directory and need tier 1.
      must change shape). `executed` (no probe, its code ran) settles the candidate after a driver run. `unknown`
      (no probe and no coverage data: native, Python before 3.12, a Rust or Go run whose coverage
      process failed) does not: the run has no coverage data, so whether its code ran is not known: run a
-     second, different driver, or one with a size reading. A Go driver run does not belong to that list:
-     after its measured process `dla` runs the driver once more for one round in a short coverage process
-     (`-coverprofile` over the whole module or every module of the workspace), so a Go target without a
-     probe reads `executed` or `not_executed`, and `not_executed` keeps it open. A candidate settles when a verdict is `grew`
+     second, different driver, or one with a size reading. A Go or Rust driver run does not belong to that
+     list: after its measured process `dla` runs the driver once more for one round in a short coverage
+     process (Go: `-coverprofile` over the whole module or every module of the workspace; Rust: the driver
+     built again with `-C instrument-coverage` into `cov-build/`, read with the `llvm-profdata` and `llvm-cov`
+     of the toolchain), so a Go or Rust target without a probe reads `executed` or `not_executed`, and
+     `not_executed` keeps it open. A candidate settles when a verdict is `grew`
      or `changed`, or after one driver run with `executed`, or after two driver runs
      whose driver files differ, whatever the verdicts (an `unknown` run counts as one of the two). A fixed command (command mode, JUnit) settles only
      by `grew` or `changed`.

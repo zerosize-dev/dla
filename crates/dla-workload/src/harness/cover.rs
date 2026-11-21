@@ -911,8 +911,8 @@ pub fn record(
                 serde_json::to_string(&record).unwrap_or_default(),
             );
             let ex = exercised(runtime, &discovered, dump_cov, hdir, cov_dir, work);
-            rust_blind = runtime == Runtime::Rust
-                && ex.limitations.iter().any(|l| l == NO_RUST_COVERAGE);
+            rust_blind =
+                runtime == Runtime::Rust && ex.limitations.iter().any(|l| l == NO_RUST_COVERAGE);
             agent_blind = runtime == Runtime::Python
                 && ex
                     .limitations
@@ -1594,5 +1594,66 @@ mod tests {
         );
         assert!(ex.entries.is_empty());
         assert!(ex.limitations[0].contains("not measured"));
+    }
+
+    #[test]
+    fn rust_export_gives_the_project_functions_that_ran_with_demangled_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().canonicalize().unwrap();
+        let file = work.join("src/lib.rs");
+        let export = json!({"data": [{"functions": [
+            {"name": "_RNvCsf5ZMXhcg4hk_4calc8remember", "count": 3,
+             "filenames": [file.to_string_lossy()], "regions": [[6, 1, 8, 2, 3, 0, 0, 0]]},
+            {"name": "_RNvCsf5ZMXhcg4hk_4calc10note_other", "count": 0,
+             "filenames": [file.to_string_lossy()], "regions": [[10, 1, 12, 2, 0, 0, 0, 0]]},
+            {"name": "_RNvCsf5ZMXhcg4hk_3dep4wake", "count": 9,
+             "filenames": ["/home/u/.cargo/registry/src/dep/lib.rs"], "regions": [[1, 1, 2, 2, 9, 0, 0, 0]]},
+        ]}]});
+        let fns = rust_export_functions(&export, &work);
+        assert_eq!(
+            fns,
+            [json!({"file": "src/lib.rs", "name": "calc::remember", "line": 6})]
+        );
+    }
+
+    #[test]
+    fn rust_functions_in_cov_give_entries_and_the_executed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let cov = dir.path().join("cov");
+        fs::create_dir_all(&cov).unwrap();
+        fs::write(
+            cov.join("p1-fresh-cover.rust.json"),
+            json!({"functions": [{"file": "src/lib.rs", "name": "calc::Cache::put", "line": 6}]})
+                .to_string(),
+        )
+        .unwrap();
+        let ex = exercised(
+            Runtime::Rust,
+            &d(&["src/lib.rs::Cache.put", "src/lib.rs::Cache.drop_all"]),
+            &[],
+            dir.path(),
+            &cov,
+            dir.path(),
+        );
+        assert_eq!(ex.entries.len(), 1, "{ex:?}");
+        assert!(ex.entries.contains("src/lib.rs::Cache.put"));
+        assert!(ex.limitations.is_empty(), "{ex:?}");
+        let rec = executed_record(Runtime::Rust, &[], dir.path(), &cov, dir.path());
+        assert_eq!(rec["kind"], "functions", "{rec}");
+        assert_eq!(rec["functions"][0]["line"], 6);
+        // Without the file: no coverage, said once.
+        let empty = dir.path().join("none");
+        fs::create_dir_all(&empty).unwrap();
+        let ex = exercised(
+            Runtime::Rust,
+            &d(&["src/lib.rs::f"]),
+            &[],
+            dir.path(),
+            &empty,
+            dir.path(),
+        );
+        assert!(ex.entries.is_empty() && ex.limitations[0].contains("no Rust coverage data"));
+        let rec = executed_record(Runtime::Rust, &[], dir.path(), &empty, dir.path());
+        assert_eq!(rec["kind"], "none");
     }
 }

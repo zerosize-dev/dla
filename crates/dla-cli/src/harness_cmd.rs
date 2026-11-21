@@ -109,6 +109,14 @@ pub struct GenArgs {
     /// `pkg.Class#method(java.lang.String,int)`.
     #[arg(long, value_name = "CLASS[#METHOD],..")]
     tests: Vec<String>,
+    /// Rust driver: crate features the driver build enables, comma-separated or repeated
+    /// (`cargo build --features a,b`). A target in a module the crate gates behind a feature
+    /// says so in its block.
+    #[arg(long, value_name = "A[,B,..]", value_delimiter = ',')]
+    features: Vec<String>,
+    /// Rust driver: build without the crate's default features.
+    #[arg(long)]
+    no_default_features: bool,
 }
 
 /// Splits `--tests` on commas that are not inside the parentheses of a parameter list.
@@ -218,6 +226,8 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 package: g.package,
                 junit: g.junit,
                 tests: g.tests.iter().flat_map(|t| split_selectors(t)).collect(),
+                features: g.features,
+                no_default_features: g.no_default_features,
             };
             stage::finish(
                 "harness gen",

@@ -28,6 +28,21 @@ of live bytes) and writes one `checkpoint` record per round (`x` = units complet
 The driver needs no dependencies. Because it counts allocations itself, it measures only what the
 Rust allocator sees; C libraries linked into the process allocate outside it (visible in `os.*`).
 
+### Features and coverage
+
+`dla harness gen --lang rust --driver --features a,b [--no-default-features]` adds them to the `cargo build` of the
+driver (the command in `harness.json` keeps them). A target whose module the crate declares behind
+`#[cfg(feature = "x")]` gets the line "behind feature x: generate with --features x" in the block; the reader is a line
+scan of the `mod` declarations up to `lib.rs` (not seen: `#[path]`, macro or inline modules, a gate on the item,
+`cfg_attr`, a feature another feature enables).
+
+`dla harness run` then builds the driver once more with `RUSTFLAGS=-C instrument-coverage` into
+`harness/H<n>/cov-build/`, runs it for one round of `step` units (no warm-up, no captures, no sampler) with
+`LLVM_PROFILE_FILE` in `cov/`, merges the `.profraw` with `llvm-profdata` and exports the functions that ran with
+`llvm-cov export` into `cov/p1-<mode>-cover.rust.json` (file, demangled name, start line; dependencies and the standard
+library left out). The tools are the toolchain's (`<sysroot>/lib/rustlib/<host>/bin`, component `llvm-tools`), else
+those on PATH when their LLVM major version is the one rustc reports. The measured points are not instrumented.
+
 ### dhat-rs variant
 
 `dla harness gen` does not generate this variant yet; it records a gap when `dhat` does not resolve

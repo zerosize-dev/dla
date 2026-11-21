@@ -96,6 +96,8 @@ fn driver_opts(workload: Option<&str>) -> GenOptions {
         package: None,
         junit: false,
         tests: Vec::new(),
+        features: Vec::new(),
+        no_default_features: false,
     }
 }
 

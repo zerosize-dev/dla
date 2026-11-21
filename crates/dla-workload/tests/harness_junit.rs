@@ -116,6 +116,8 @@ fn junit_opts() -> GenOptions {
         package: None,
         junit: true,
         tests: Vec::new(),
+        features: Vec::new(),
+        no_default_features: false,
     }
 }
 

@@ -2085,7 +2085,10 @@ fn rustc_host_llvm(cwd: &Path, env: &[(String, String)]) -> Option<(String, Opti
     }
     let out = cmd.output().ok().filter(|o| o.status.success())?;
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    let host = text.lines().find_map(|l| l.strip_prefix("host: "))?.to_owned();
+    let host = text
+        .lines()
+        .find_map(|l| l.strip_prefix("host: "))?
+        .to_owned();
     let llvm = text
         .lines()
         .find_map(|l| l.strip_prefix("LLVM version: "))
@@ -2114,8 +2117,9 @@ fn llvm_tool_major(tool: &Path) -> Option<u32> {
 /// when their LLVM major version is the one rustc was built with. `Err` is the limitation text.
 fn rust_llvm_tools(cwd: &Path, env: &[(String, String)]) -> Result<(PathBuf, PathBuf), String> {
     let exe = if cfg!(windows) { ".exe" } else { "" };
-    let (host, llvm) = rustc_host_llvm(cwd, env)
-        .ok_or_else(|| "rustc did not report its host: coverage tools were not looked for".to_owned())?;
+    let (host, llvm) = rustc_host_llvm(cwd, env).ok_or_else(|| {
+        "rustc did not report its host: coverage tools were not looked for".to_owned()
+    })?;
     let mut sysroot = Command::new("rustc");
     sysroot
         .args(["--print", "sysroot"])
@@ -2320,9 +2324,9 @@ fn rust_cover_point(
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| {
-            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                n.starts_with(&label) && n.ends_with(".profraw")
-            })
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&label) && n.ends_with(".profraw"))
         })
         .collect();
     if profraws.is_empty() {

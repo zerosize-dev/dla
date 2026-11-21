@@ -842,6 +842,10 @@ pub struct DriverSpec {
     pub goleak: bool,
     /// Rust: crate directory, relative to the scratch copy (the workload's cwd).
     pub crate_dir: String,
+    /// Rust: crate features the driver build enables (`--features a,b`).
+    pub features: Vec<String>,
+    /// Rust: the driver build leaves the crate's default features out.
+    pub no_default_features: bool,
     /// JVM: run the project's own JUnit 5 tests in a loop (no hooks, see [`JunitSpec`]).
     pub junit: Option<JunitSpec>,
     /// JVM: the project's Gradle or Maven build resolves the driver's class path (the main
@@ -1171,12 +1175,21 @@ pub fn plan_driver(
         Runtime::Rust => {
             let target = layout.work.join("target");
             let exe = format!("dla_harness{}", if cfg!(windows) { ".exe" } else { "" });
+            let mut build_argv: Vec<String> =
+                ["cargo", "build", "--release", "--bin", "dla_harness"]
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect();
+            if spec.no_default_features {
+                build_argv.push("--no-default-features".to_owned());
+            }
+            if !spec.features.is_empty() {
+                build_argv.push("--features".to_owned());
+                build_argv.push(spec.features.join(","));
+            }
             Plan {
                 build: Some(CommandSpec {
-                    argv: ["cargo", "build", "--release", "--bin", "dla_harness"]
-                        .iter()
-                        .map(|s| (*s).to_owned())
-                        .collect(),
+                    argv: build_argv,
                     cwd: cwd.to_owned(),
                     env: vec![
                         (

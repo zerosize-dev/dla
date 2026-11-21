@@ -1035,8 +1035,14 @@ mod tests {
         assert_eq!(pending_of(&run.reload()), ["F2", "F3"]);
         let q = queues(&run.reload(), None).remove(0);
         assert_eq!(q.no_coverage, [FindingId::new(2)]);
-        assert!(steps(&q, "R").contains("F2 read `unknown`"), "{}", steps(&q, "R"));
-        assert!(steps(&q, "R").contains("run a second, different driver, or one with a size reading"));
+        assert!(
+            steps(&q, "R").contains("F2 read `unknown`"),
+            "{}",
+            steps(&q, "R")
+        );
+        assert!(
+            steps(&q, "R").contains("run a second, different driver, or one with a size reading")
+        );
     }
 
     #[test]
@@ -1052,7 +1058,11 @@ mod tests {
             let digest = crate::harness::driver_digest(run.dir.path(), "H1").unwrap();
             let text = json!({"series": [series], "driver_digest": digest});
             std::fs::write(
-                run.dir.path().join("harness").join("H1").join(format!("run-{series}.json")),
+                run.dir
+                    .path()
+                    .join("harness")
+                    .join("H1")
+                    .join(format!("run-{series}.json")),
                 text.to_string(),
             )
             .unwrap();
@@ -1077,9 +1087,15 @@ mod tests {
         run.trend("T1", "S1", &[(1, Verdict::Unknown)]);
         let facts = ReportFacts::of(&run.reload()).unwrap();
         let t = facts.targeted(&FindingId::new(1)).unwrap();
-        assert!(t.contains("H1 unknown (the run has no coverage data"), "{t}");
+        assert!(
+            t.contains("H1 unknown (the run has no coverage data"),
+            "{t}"
+        );
         let line = facts.line().unwrap();
-        assert!(line.contains("no coverage data 1") && !line.contains("executed"), "{line}");
+        assert!(
+            line.contains("no coverage data 1") && !line.contains("executed"),
+            "{line}"
+        );
     }
 
     #[test]

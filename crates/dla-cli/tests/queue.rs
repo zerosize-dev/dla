@@ -411,6 +411,7 @@ fn next_declares_the_targets_prints_them_and_writes_the_block_in_the_driver() {
         "probe reads: size of shop.reg.Registry._by_key",
         "make every unit reach a writer so that it adds an entry whose key derives from the unit's key",
         "never reuse an earlier unit's key",
+        "a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)",
     ] {
         assert!(driver.contains(needle), "{needle}\n{driver}");
     }
@@ -900,10 +901,17 @@ fn an_unknown_verdict_does_not_settle_and_is_explained() {
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["pending"], 2, "{st}");
     let item = st["blocking"][0]["description"].as_str().unwrap();
-    assert!(item.contains("had a driver run with no coverage data"), "{item}");
+    assert!(
+        item.contains("had a driver run with no coverage data"),
+        "{item}"
+    );
     let o = r.close(&registry, "not_exercised");
     assert_eq!(o.json["error"]["code"], "target-pending", "{}", o.text);
-    assert!(o.json["error"]["fix"].as_str().unwrap().contains(WHAT), "{}", o.text);
+    assert!(
+        o.json["error"]["fix"].as_str().unwrap().contains(WHAT),
+        "{}",
+        o.text
+    );
     let (_, lines) = r.list();
     let line = lines.iter().find(|l| l["id"] == registry.as_str()).unwrap();
     assert_eq!(line["verdict_note"], WHAT, "{line}");

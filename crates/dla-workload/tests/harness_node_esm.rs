@@ -113,7 +113,11 @@ fn esm_project(fx: &Fx) {
     let work = &fx.work;
     // The original project's package.json: the harness directory (agent and driver) sits below it.
     write(&fx.ctx.project, "package.json", "{\"type\":\"module\"}\n");
-    write(work, "package.json", "{\"name\":\"shop\",\"type\":\"module\"}\n");
+    write(
+        work,
+        "package.json",
+        "{\"name\":\"shop\",\"type\":\"module\"}\n",
+    );
     write(
         work,
         "src/store.js",
@@ -326,7 +330,11 @@ fn es_module_probe_without_register_hooks_says_which_node_is_needed() {
         "no-hooks.cjs",
         "require('module').registerHooks = undefined;\n",
     );
-    let options = format!("{} {}", require(&fx, "no-hooks.cjs"), require(&fx, "dla-preload.cjs"));
+    let options = format!(
+        "{} {}",
+        require(&fx, "no-hooks.cjs"),
+        require(&fx, "dla-preload.cjs")
+    );
     let mut m = manifest(options);
     m.probes = store_probes();
     let (out, series) = run_it(&fx, &m, &["ordersById", "recentLimit", "Store"]);
@@ -351,12 +359,7 @@ fn commonjs_project_is_measured_unchanged() {
     let fx = fixture();
     cjs_project(&fx.work);
     let mut m = manifest(require(&fx, "dla-preload.cjs"));
-    m.probes = vec![probe(
-        "P1",
-        ProbeTarget::NodeModule {
-            file: s("load.js"),
-        },
-    )];
+    m.probes = vec![probe("P1", ProbeTarget::NodeModule { file: s("load.js") })];
     let (out, series) = run_it(&fx, &m, &["ordersById", "recentLimit"]);
     assert!(
         has(&series, "probe:load.js:ordersById.size"),
@@ -383,12 +386,7 @@ fn a_harness_with_the_old_js_agent_name_still_runs() {
     )
     .unwrap();
     let mut m = manifest(require(&fx, "dla-preload.js"));
-    m.probes = vec![probe(
-        "P1",
-        ProbeTarget::NodeModule {
-            file: s("load.js"),
-        },
-    )];
+    m.probes = vec![probe("P1", ProbeTarget::NodeModule { file: s("load.js") })];
     let (_out, series) = run_it(&fx, &m, &["ordersById", "recentLimit"]);
     assert!(passes(&series, "probe:load.js:ordersById.size"));
     assert!(passes(&series, "node.listeners@load.js:11"));

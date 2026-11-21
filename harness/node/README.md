@@ -2,8 +2,13 @@
 
 | File | Role |
 |---|---|
-| `dla-preload.js` | agent; loaded with `NODE_OPTIONS=--require <abs path>/dla-preload.js` |
-| `dla-harness.js` | loop driver template |
+| `dla-preload.cjs` | agent; loaded with `NODE_OPTIONS=--require <abs path>/dla-preload.cjs` |
+| `dla-harness.cjs` | loop driver template |
+
+Both are `.cjs`: CommonJS in any package, so they load in a project whose package.json says
+`"type": "module"` (a `.js` file there would be an ES module and die on `require`). A harness
+directory written by an older version names them `.js`; `dla harness run` uses the names recorded in
+`harness.json`, so it keeps running (in a CommonJS package).
 
 ## Run
 
@@ -11,7 +16,7 @@ Command mode (Node 18+; tested on 22):
 
 ```
 cd <scratch project root>
-NODE_OPTIONS="--require <harness dir>/dla-preload.js" \
+NODE_OPTIONS="--require <harness dir>/dla-preload.cjs" \
 DLA_HARNESS_OUT=... DLA_HARNESS_PROBES=... DLA_PROJECT=<scratch project root> \
 NODE_V8_COVERAGE=<harness dir>/cov node load.js --iterations N
 ```
@@ -43,8 +48,16 @@ missing. Without any `gc` the dump says so in `limitations` and `gc_forced` is f
   `node_modules` and the agent), as `relative/file.js:line`. Registrations with no project frame count
   in the totals only.
 - `Module.prototype._compile` of the probed files: an accessor is appended inside the module wrapper
-  so `const`/`let`/`class` bindings are reachable. CommonJS only; an ES module probe reports
-  `error: "module has no probe accessor ..."`.
+  so `const`/`let`/`class` bindings are reachable (CommonJS).
+- `module.registerHooks()` (synchronous in-thread hooks, Node 22.15+ and 23.5+) for ES modules: a `load`
+  hook appends one statement after the last line of a probed ES module (no line of the module moves,
+  so listener and timer sites keep their `file:line`) that hands the agent a function reading the
+  module's live top-level bindings (`globalThis.__dlaEsm(import.meta.url, fn)`). The probes then read
+  `const`/`let`/`class` bindings at each checkpoint exactly as for CommonJS: a `Map`/`Set`/array/object
+  with its `size`, one level of own properties, a class's static fields. Instance fields are reached
+  through the object that holds them. On a Node without `registerHooks` the probe of an ES-module
+  binding reports `error: "module-level bindings of ES modules need Node 22.15+ or 23.5+ ..."` and a
+  limitation line; nothing else changes.
 
 ## What the dump records
 
@@ -110,7 +123,7 @@ Sampling starts at agent load (`HeapProfiler.startSampling`, interval `DLA_HEAPP
 bytes, default 8192, live objects only: a forced gc runs before each profile is read). A profile
 covers the objects allocated in its window that are still alive when it is read: a driver's
 profile 2 does not hold what profile 1 held. The profile can show the agent's own frames
-(`dla-preload.js`); attribute to the nearest project frame.
+(`dla-preload.cjs`); attribute to the nearest project frame.
 
 `resources.json`:
 
@@ -144,7 +157,7 @@ for about 30 ms per MB of heap.
 
 ## Driver
 
-`NODE_OPTIONS="--require <harness dir>/dla-preload.js" node <harness dir>/dla-harness.js` from the
+`NODE_OPTIONS="--require <harness dir>/dla-preload.cjs" node <harness dir>/dla-harness.cjs` from the
 scratch project root. The driver requires the agent (`DLA_AGENT` or the file next to it, the same
 module instance as the preloaded one when the path is identical) and calls `checkpoint(done, last)`
 after every round; the agent then writes no `exit` record. The loop yields to the event loop
@@ -154,10 +167,10 @@ after every round; the agent then writes no `exit` record. The loop yields to th
 
 | Placeholder | Where | Meaning |
 |---|---|---|
-| `@@DLA_STEP@@` | `dla-harness.js` | units per round (default for `DLA_STEP`) |
-| `@@DLA_WARMUP@@` | `dla-harness.js` | warm-up rounds (default for `DLA_WARMUP`) |
-| `@@DLA_ROUNDS@@` | `dla-harness.js` | measured rounds (default for `DLA_ROUNDS`) |
-| `@@DLA_REPEAT@@` | `dla-harness.js` | repeated key space size (default for `DLA_REPEAT`) |
+| `@@DLA_STEP@@` | `dla-harness.cjs` | units per round (default for `DLA_STEP`) |
+| `@@DLA_WARMUP@@` | `dla-harness.cjs` | warm-up rounds (default for `DLA_WARMUP`) |
+| `@@DLA_ROUNDS@@` | `dla-harness.cjs` | measured rounds (default for `DLA_ROUNDS`) |
+| `@@DLA_REPEAT@@` | `dla-harness.cjs` | repeated key space size (default for `DLA_REPEAT`) |
 
 Environment read at run time: `DLA_KEY_MODE` (`fresh`|`repeated`), `DLA_AGENT` (absolute path of the
 agent when the driver is not next to it), plus the agent variables above.
@@ -166,5 +179,5 @@ agent when the driver is not next to it), plus the agent variables above.
 
 | Hook | Signature | Fill with |
 |---|---|---|
-| `DLA-HOOK setup` | `async function setup()` | load the project modules with `projectRequire('src/x.js')` and build the objects under test; keep them in `state` |
+| `DLA-HOOK setup` | `async function setup()` | load the project modules with `projectRequire('src/x.js')` (CommonJS) or `await projectImport('src/x.js')` (ES module: `.mjs`, or `.js` in a `"type": "module"` package; a dynamic `import()` of the file URL) and build the objects under test; keep them in `state` |
 | `DLA-HOOK unit` | `async function unit(i, key)` | one unit of the workload for `key`; derive ids from `key` so a repeated key reproduces an earlier request; may return a promise |

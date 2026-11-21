@@ -8,7 +8,7 @@ lists its placeholders and hooks:
 |---|---|
 | `jvm/` | `DlaAgent.java` (premain agent), `DlaDump.java` (dump and probe code), `DlaHarness.java` (driver), `DlaJUnitHarness.java` (JUnit repeat driver, no hooks), `dla-junit-build.sh` and `dla-junit.init.gradle` (the build step that resolves the class path: test mode for the JUnit repeat, main mode for a driver on a Gradle or Maven project), `MANIFEST.MF` |
 | `python/` | `sitecustomize.py` (agent), `dla_harness.py` (driver), `test_dla_harness.py` (pytest-memray variant) |
-| `node/` | `dla-preload.js` (agent), `dla-harness.js` (driver) |
+| `node/` | `dla-preload.cjs` (agent), `dla-harness.cjs` (driver) |
 | `go/` | `zz_dla_harness_test.go.tmpl` (command mode), `zz_dla_driver_test.go.tmpl` (driver), `zz_dla_goleak_test.go.tmpl` (optional goleak check) |
 | `native/` | `dla_alloc_shim.c` (allocator shim for Rust and native programs), `dla_harness.c` (C driver) |
 | `rust/` | `dla_harness.rs` (driver for crates with a library target) |

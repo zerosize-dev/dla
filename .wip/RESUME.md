@@ -368,3 +368,11 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Working tree vs main now: P3 pass 5 (trigger unmeasured, close-rest speed, gap --residual --all; checked by me) and the in-progress edits of builders G (Go batches), N (Node ES modules), R (Rust coverage, unknown rule, features, life-of-objects rule).
 - REAL RUN spring-4 started 10:18 (JVM, combined build, warm Maven home); waiter bzlzi5w5q.
 - Tasks: #53 ranking done (committed); #56 G, #58 N, #59 R in progress; #49 open until the other projects' leaks are found.
+
+## State 2026-11-21 11:02 UTC (container clock)
+- REAL RUN spring-4 FINISHED (39 min, INCOMPLETE, nothing confirmed): notes wip-notes/real-run-plugin-spring-4.md; evidence and the whole run directory in scratch u36/spring-4/ (my timing run added one trend record T13 for S8 to that copy). The documented holder F135 was a declared target of two batches of nine; the model wrote code for two or three targets per batch and never called its writer; the two-drivers rule settled it. `dla trend` takes about 62 s per series on that ledger.
+- THE COMMON CAUSE of grpc-2 and spring-4: big batches plus the two-drivers rule let targets be settled without an attempt. PLANNED FIX (not started; to give to G after its report, since it rewrites the same batch code): a target that a big batch declared and whose code did not run goes into a small harness of its own (at most three targets, block names the writer functions to call); only an executed verdict, such a focused harness, or an explicit waiver with a reason settles it; `--next` serves missed targets by rank before new ones.
+- P3 pass 6 STARTED (agent a8249474e4d24c8ca, brief wip-notes/pass6-brief.md, scratch u42): speed of trend and the other loop commands on the spring-4 run copy.
+- Builders running: G (Go batches, u38), N (Node ES modules, u40), R (Rust coverage, unknown rule, features, life-of-objects rule, u41), P3 pass 6 (u42).
+- Disk fell to 1.8 GB; `bash wip-notes/prune-superseded.sh` freed 1.9 GB of old test binaries in target/debug/build (3.6 GB free). Run it again when free space is under 3 GB.
+- CI on main c5abcd4: waiter bfghaofwg (output scratch u36/ci-main).

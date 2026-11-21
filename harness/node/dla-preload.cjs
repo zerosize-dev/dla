@@ -879,7 +879,7 @@ function runProbes(limitations) {
         continue;
       }
       const mod = Module._cache[spec.abs];
-      if (false) {
+      if (mod === undefined && !hasRegisterHooks() && isEsmFile(spec.abs)) {
         const note = `module-level bindings of ES modules need Node 22.15+ or 23.5+ (module.registerHooks); this is Node ${process.versions.node}`;
         out.push({ id: spec.id, name: spec.name || spec.file, path: spec.file, size: null, reachable: null, bytes: null, error: note });
         if (!limitations.includes(note)) limitations.push(note);
