@@ -108,6 +108,16 @@
       "description": "Run-relative path of the scratch copy, for example `harness/H2/work`.",
       "type": "string"
     },
+    "sibling_of": {
+      "description": "Targets that `--next` added because they hold state of the same owner as an earlier\ntarget (fields of one struct or class): the added finding, and the target it came\nwith. Absent for a target asked for by rank or by `--probe`.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^([a-z0-9-]+/)?F[1-9][0-9]*(\\.n[1-9][0-9]*)?$": {
+          "$ref": "#/$defs/FindingId"
+        }
+      }
+    },
     "step": {
       "description": "Command mode: `n_k = step * k`; driver mode: units per round.",
       "type": "integer",

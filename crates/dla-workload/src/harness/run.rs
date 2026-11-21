@@ -307,18 +307,21 @@ fn merged_env(spec_env: &[(String, String)], tokens: &[(&str, String)]) -> Vec<(
 // ---------------------------------------------------------------------------------------
 // Dependency variables of the last run
 
+/// `(name, value)` pairs of environment variables.
+type EnvPairs = Vec<(String, String)>;
+
 thread_local! {
     /// The harness and the dependency variables (`dla_core::harness::DEPENDENCY_ENV`) the
     /// last successful run of it used and this environment lacks: every process the run on
     /// this thread starts gets them.
-    static ENV_REUSE: RefCell<Option<(String, Vec<(String, String)>)>> = const { RefCell::new(None) };
+    static ENV_REUSE: RefCell<Option<(String, EnvPairs)>> = const { RefCell::new(None) };
 }
 
 /// Holds [`ENV_REUSE`] for the length of one `run_points`.
 struct EnvReuseGuard;
 
 impl EnvReuseGuard {
-    fn set(harness: &str, vars: Vec<(String, String)>) -> Self {
+    fn set(harness: &str, vars: EnvPairs) -> Self {
         ENV_REUSE.with(|r| *r.borrow_mut() = Some((harness.to_owned(), vars)));
         Self
     }
@@ -334,7 +337,7 @@ impl Drop for EnvReuseGuard {
 /// own value and takes the reused one as the inherited value it merges with (as
 /// [`merged_env`] does with a set one). Returns the variables that were put in, and the
 /// harness they come from.
-fn with_reused_env(env: &[(String, String)]) -> (Vec<(String, String)>, Option<(String, Vec<String>)>) {
+fn with_reused_env(env: &[(String, String)]) -> (EnvPairs, Option<(String, Vec<String>)>) {
     let Some((harness, vars)) = ENV_REUSE.with(|r| r.borrow().clone()) else {
         return (env.to_vec(), None);
     };

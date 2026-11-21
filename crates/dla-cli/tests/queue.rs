@@ -765,7 +765,10 @@ fn close_rest_says_inconclusive_for_a_measured_candidate_and_not_exercised_for_t
             .unwrap()
             .to_owned()
     };
-    assert!(fix_of(&ids[0]).contains("--reason inconclusive"), "{missing:?}");
+    assert!(
+        fix_of(&ids[0]).contains("--reason inconclusive"),
+        "{missing:?}"
+    );
     assert!(!fix_of(&ids[3]).contains("inconclusive"), "{missing:?}");
 
     let out = r.ok(&["ledger", "close-rest"]);

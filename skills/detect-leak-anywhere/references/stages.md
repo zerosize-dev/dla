@@ -209,21 +209,38 @@ decorator line and its `def`) share the finding that was raised first, which the
 (`Also raised by` in the report; `joined_sites` in the stage output) and holds the census holder, owner,
 writers and removers and the rule's message in its notes; two rules at one site stay two findings.
 `dla workload discover` lists tests, entry points and dev servers a loop could run.
-Census writers and removers are name-matched leads: for each holder open the source, find the code
-that adds to it and the code that removes from it, and record `dla ledger annotate F<n> --writer
+Census writers and removers are leads found by name, then read in the syntax tree (Go, Java, Python,
+JavaScript, TypeScript; Rust, C and Kotlin keep the name matches): a site in another file that only
+matches the name of a holder private to its file, class or package is dropped, and each remaining site
+says what it does (insert, reassign, reset or delete, on the holder or on an element of it), in which
+function, whether that is an initialiser or runs only at start-up, whether the key or value comes from
+a parameter, and whether the function is public. The entry also says whether the holder is a real
+container, registry-like or not a container, bounded, weak or an unbounded cache decorator, and
+whether it lives for the process, the object or the unit. For each holder open the source, find the
+code that adds to it and the code that removes from it, and record `dla ledger annotate F<n> --writer
 file:line --remover file:line --note "<text>"` (both flags repeat). Annotating changes no state. A
 holder with writers and no remover is the lead for stage 4.
 
 End of the stage: `dla ledger list` prints one JSON line per finding in rank order: `id`, `state`,
-`tier`, `rank` among the eligible, origin(s), `site`, `holder`, `owner`, the counts of writers and
+`tier`, `rank` among the eligible, `score`, `why` (the three signals with the largest part in the
+score, as `name +points`), origin(s), `site`, `holder`, `owner`, the counts of writers and
 removers, and the queue status (`pending`, `settled` with its verdicts per harness, `not-eligible`),
 then totals. `--state candidate` narrows it, `--limit N` (default 40) and `--all` widen it; it only
 reads. Never read `ledger.jsonl` by hand. Tiers 1 to 4 are eligible for the measurement queue and
 5 and 6 are not: 1 a `known-leak:*` or `detector:dla/*` origin; 2 a census holder with writers, no
 remover and holder `registration-table`, `container-field` or `static/global`; 3 any other
 `detector:*` origin; 4 a census holder with writers; 5 the rest; 6 a site in test, example,
-benchmark or documentation code (whatever else holds). In a tier, a finding with more than one origin
-comes first, then ledger order. Siblings (`N-*`) and duplicates are not ranked.
+benchmark, example, mock, fake, stub, sample or demo code (whatever else holds). Inside the eligible
+tiers the order is the `score`, highest first: a sum of named weights (`rule_dla` 15 and `rule_strong`
+45 more when the holder lives for the process or the rule is about a timer, task, listener or cache,
+`known_leak` 60; `life_process` 20, `container` 20, `noncontainer` -80, `bounded` -14; `w_grow` 25 for
+an insert at depth 0 or 1, `w_runtime` 20 for an insert in a function that can run many times,
+`w_startup_all` -30 when every writer runs only at start-up, `w_param_flow` 15 for a key from a
+parameter; `growth_unmatched` 25 when an insert has no delete or reset at its depth or above, as when
+only inner entries are deleted; and the rest of the table in `crates/dla-core/src/rank.rs`). Ties keep
+the tier, then a finding with more than one origin first, then ledger order. A holder the census could
+not read (Rust, C, Kotlin, an older ledger) has no facts and scores only from what is known.
+Siblings (`N-*`) and duplicates are not ranked.
 
 ## 4. Classify growth
 
@@ -250,7 +267,12 @@ under the run directory and need tier 1.
   blocked, empty). While a queue is open, work it in batches of at most 8 targets:
   1. `dla harness gen --lang <rt> --driver --next` (the command in `queue`; `--next N` takes fewer).
      It declares the next pending candidates as targets of the harness, same as `--probe F<n>` for each
-     (at most 8 targets per harness, more is refused `too-many-targets`), prints them in
+     (at most 8 targets by rank per harness, more is refused `too-many-targets`), then also every
+     other pending candidate of the same owner (fields of one struct or class, same file; module-level
+     holders only when they share a writer function), up to 16 targets in all: a driver that exercises an
+     owner reaches all of its state. The added ones carry `sibling_of` (the target they came with) in
+     `summary.targets`, `harness.json` and the driver's block, and `dla run status` lists them in its
+     next batch. `--probe` keeps its limit of 8. It prints the targets in
      `summary.targets` and writes them as a comment block at the top of the driver file above the first
      `DLA-HOOK`. A JVM project with JUnit tests and no driver support keeps its generation command
      (`dla harness gen --lang jvm --junit --next`).

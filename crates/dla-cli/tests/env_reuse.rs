@@ -185,10 +185,15 @@ fn a_rerun_without_the_variable_gets_the_value_of_the_last_run_and_says_so() {
     // The same command typed without it works and names what it took.
     fs::remove_file(r.dir.path().join("mark")).unwrap();
     let again = ok_with(&r, &[], &["harness", "run", "H1", "--mode", "both"]);
-    assert_eq!(again["summary"]["env_reused"], serde_json::json!(["PYTHONPATH"]), "{again}");
+    assert_eq!(
+        again["summary"]["env_reused"],
+        serde_json::json!(["PYTHONPATH"]),
+        "{again}"
+    );
     assert!(r.mark().contains("deps"), "{}", r.mark());
     assert!(
-        r.logs().contains("dla: reused from the last run of H1: PYTHONPATH"),
+        r.logs()
+            .contains("dla: reused from the last run of H1: PYTHONPATH"),
         "{}",
         r.logs()
     );
@@ -198,7 +203,10 @@ fn a_rerun_without_the_variable_gets_the_value_of_the_last_run_and_says_so() {
         r.record_of(series)["dependency_env"]["PYTHONPATH"],
         deps.to_string_lossy().as_ref()
     );
-    assert_eq!(r.record_of(series)["env_reused"], serde_json::json!(["PYTHONPATH"]));
+    assert_eq!(
+        r.record_of(series)["env_reused"],
+        serde_json::json!(["PYTHONPATH"])
+    );
 
     // A value set in the environment wins, and is the one recorded next.
     fs::remove_file(r.dir.path().join("mark")).unwrap();
@@ -242,13 +250,21 @@ fn alloc_test_reuses_the_environment_of_the_last_run_too() {
     };
     fs::remove_file(r.dir.path().join("mark")).unwrap();
     let a = dla_with(&r, &[], &["alloc-test", "H1", "--finding", &f]);
-    assert_eq!(a.json["env_reused"], serde_json::json!(["PYTHONPATH"]), "{}", a.text);
+    assert_eq!(
+        a.json["env_reused"],
+        serde_json::json!(["PYTHONPATH"]),
+        "{}",
+        a.text
+    );
     assert!(r.mark().contains("deps"), "{}", r.mark());
 }
 
 fn ledger_list(r: &Run) -> (Value, Vec<Value>) {
     let o = r.ok_text(&["ledger", "list", "--all"]);
-    let mut lines: Vec<Value> = o.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let mut lines: Vec<Value> = o
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
     let totals = lines.remove(0);
     (totals, lines)
 }

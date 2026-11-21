@@ -4,21 +4,102 @@
   "description": "A process-lifetime holder: something that can keep objects, threads or handles\nalive for as long as the process runs.",
   "type": "object",
   "properties": {
+    "bound": {
+      "description": "How its size is limited.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Bound"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "container": {
+      "description": "Container, registry-like, or not a container.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContainerClass"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "holder": {
       "description": "Holder class in the ledger vocabulary.",
       "$ref": "#/$defs/Holder"
+    },
+    "key_bounded": {
+      "description": "Its key type is bounded by the program (a class, an enum, a type descriptor).",
+      "type": "boolean"
     },
     "kind": {
       "description": "What kind of declaration it is (for example `static-field`, `module-global`,\n`singleton-field`, `registry`, `spawn`, `handle`).",
       "type": "string"
     },
+    "lifetime": {
+      "description": "Process, object or unit.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Lifetime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "literal": {
+      "description": "The holder is a literal or immutable table that is only read.",
+      "type": "boolean"
+    },
     "owner": {
       "description": "Qualified name of the owning field or container.",
       "type": "string"
     },
+    "owner_creation": {
+      "description": "How instances of the owner type are created, where the census can tell.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OwnerCreation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pool": {
+      "description": "The holder is a pool type (`sync.Pool`).",
+      "type": "boolean"
+    },
+    "private": {
+      "description": "The holder cannot be named outside its file, class or package.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "receiver": {
+      "description": "Registrations: where the receiver comes from.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Receiver"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "region": {
       "description": "Memory region.",
       "$ref": "#/$defs/Region"
+    },
+    "remover_sites": {
+      "description": "The remover sites, one per entry of `removers`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SiteFact"
+      }
     },
     "removers": {
       "description": "Heuristic `file:line` sites that remove from it.",
@@ -31,6 +112,17 @@
     "site": {
       "description": "Declaration, spawn or acquire site, `file:line` (project-relative).",
       "type": "string"
+    },
+    "unit": {
+      "description": "The entry is the creation site of a unit (timer, task, goroutine, thread, handle):\nthe creation is the growth.",
+      "type": "boolean"
+    },
+    "writer_sites": {
+      "description": "The writer sites, one per entry of `writers`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SiteFact"
+      }
     },
     "writers": {
       "description": "Heuristic `file:line` sites that add to it.",
@@ -49,6 +141,56 @@
     "owner"
   ],
   "$defs": {
+    "Bound": {
+      "description": "How a holder's size is limited.",
+      "oneOf": [
+        {
+          "description": "No limit declared.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Weak keys: an entry goes when its key is collected.",
+          "type": "string",
+          "const": "weak_keys"
+        },
+        {
+          "description": "Weak values: an entry goes when its value is collected.",
+          "type": "string",
+          "const": "weak_values"
+        },
+        {
+          "description": "A size limit: LRU with a size, ring, bounded channel, `maxsize=` given.",
+          "type": "string",
+          "const": "bounded"
+        },
+        {
+          "description": "A cache decorator without a size (`lru_cache(None)`, `functools.cache`).",
+          "type": "string",
+          "const": "unbounded_cache"
+        }
+      ]
+    },
+    "ContainerClass": {
+      "description": "What kind of thing a holder is.",
+      "oneOf": [
+        {
+          "description": "A real container: map, set, list, slice, queue, deque, cache type, `sync.Map`, a\nchannel used as a queue.",
+          "type": "string",
+          "const": "container"
+        },
+        {
+          "description": "Registry-like: named or typed as a registry, listener table or handler table.",
+          "type": "string",
+          "const": "registry"
+        },
+        {
+          "description": "Not a container: a scalar, a pointer or struct reassigned as a whole, a logger, a\nfunction value, a type variable, a pool type, a literal or immutable table.",
+          "type": "string",
+          "const": "not_container"
+        }
+      ]
+    },
     "Holder": {
       "description": "What holds the leaked memory.",
       "oneOf": [
@@ -94,6 +236,56 @@
         }
       ]
     },
+    "Lifetime": {
+      "description": "How long a holder lives.",
+      "oneOf": [
+        {
+          "description": "Static, package or module variable, class variable.",
+          "type": "string",
+          "const": "process"
+        },
+        {
+          "description": "Field of an instance.",
+          "type": "string",
+          "const": "object"
+        },
+        {
+          "description": "Created per call: local, closure, timer or task or handle creation site.",
+          "type": "string",
+          "const": "unit"
+        }
+      ]
+    },
+    "OwnerCreation": {
+      "description": "How instances of a holder's owner type come to exist.",
+      "oneOf": [
+        {
+          "description": "Created inside functions that can run many times.",
+          "type": "string",
+          "const": "per_call"
+        },
+        {
+          "description": "Created only at start-up (initialisers and what only they call).",
+          "type": "string",
+          "const": "start_up"
+        }
+      ]
+    },
+    "Receiver": {
+      "description": "Where a registration's receiver comes from.",
+      "oneOf": [
+        {
+          "description": "A local of the enclosing function: it dies with the call.",
+          "type": "string",
+          "const": "local"
+        },
+        {
+          "description": "A parameter or a field: it outlives the call.",
+          "type": "string",
+          "const": "outer"
+        }
+      ]
+    },
     "Region": {
       "description": "Which memory region grows.",
       "oneOf": [
@@ -111,6 +303,84 @@
           "description": "Runtime-internal non-heap memory.",
           "type": "string",
           "const": "non-heap"
+        }
+      ]
+    },
+    "SiteFact": {
+      "description": "One writer or remover site with what the syntax tree says of it.",
+      "type": "object",
+      "properties": {
+        "const": {
+          "description": "The key is a literal or a named constant.",
+          "type": "boolean"
+        },
+        "depth": {
+          "description": "0 when the operation is on the holder itself, 1 or more when it is on an element of\nit (`delete(s.updates[k], x)` and `s.updates[k][x] = v` are depth 1).",
+          "type": "integer",
+          "format": "uint8",
+          "default": 0,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "exported": {
+          "description": "The enclosing function is part of the public surface.",
+          "type": "boolean"
+        },
+        "function": {
+          "description": "The enclosing function or method.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "init": {
+          "description": "The enclosing function is an initialiser: Go `init` or a package-level `var =`, a\nconstructor or factory of the owner type, a static initialiser, Python module top\nlevel or `__init__`, JS module top level or constructor.",
+          "type": "boolean"
+        },
+        "kind": {
+          "description": "What the site does.",
+          "$ref": "#/$defs/SiteKind"
+        },
+        "param": {
+          "description": "The inserted key or value derives from a parameter of the enclosing function.",
+          "type": "boolean"
+        },
+        "site": {
+          "description": "`file:line` (project-relative); the same string as in `writers` or `removers`.",
+          "type": "string"
+        },
+        "startup": {
+          "description": "The site runs only at start-up: it is in an initialiser, or every caller of its\nfunction (up to three calls up) is one. Read where the callers can be found.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "site",
+        "kind"
+      ]
+    },
+    "SiteKind": {
+      "description": "What a writer or remover site does to its holder.",
+      "oneOf": [
+        {
+          "description": "Keyed write, put, computeIfAbsent, setdefault, Store, add, append, push, offer,\nregister.",
+          "type": "string",
+          "const": "insert"
+        },
+        {
+          "description": "The variable itself is assigned.",
+          "type": "string",
+          "const": "reassign"
+        },
+        {
+          "description": "Assigned a fresh empty container, or cleared.",
+          "type": "string",
+          "const": "reset"
+        },
+        {
+          "description": "Remove, delete, pop, evict.",
+          "type": "string",
+          "const": "delete"
         }
       ]
     }

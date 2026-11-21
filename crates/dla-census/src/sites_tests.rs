@@ -96,19 +96,39 @@ fn go_another_struct_s_field_of_the_same_name_is_not_a_writer() {
     assert_eq!(hub.writers, ["p/p.go:12"], "{hub:?}");
 }
 
+/// The sites the census of `rt` left out as holders that are not containers.
+fn not_listed(files: &[(&str, &str)], rt: Runtime) -> Vec<String> {
+    let (_d, ctx) = project(files);
+    census(&ctx, rt).unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(ctx.run_dir.join(format!("census/{}.json", rt.as_str()))).unwrap(),
+    )
+    .unwrap();
+    raw["not_listed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["site"].as_str().unwrap().to_owned())
+        .collect()
+}
+
 #[test]
-fn go_a_pointer_that_is_only_assigned_as_a_whole_is_not_a_container() {
-    let src = "package p\n\ntype Config struct{ n int }\n\nvar current *Config\n\nfunc Set(c *Config) {\n\tcurrent = c\n}\n";
-    let es = entries(&[("p/p.go", src)], Runtime::Go);
-    let e = entry(&es, "p.current");
-    assert_eq!(e.facts.container, Some(ContainerClass::NotContainer));
-    assert!(e.writers.is_empty() && e.facts.writer_sites.is_empty(), "{e:?}");
-    // A field wrapped around its own value is a chain that grows: its writer stays.
+fn go_a_pointer_that_is_only_assigned_as_a_whole_is_not_a_container_and_not_listed() {
+    let src = "package p\n\ntype Config struct{ n int }\n\nvar current *Config\nvar mu sync.Mutex\nvar items = map[string]int{}\n\nfunc Set(c *Config) {\n\tcurrent = c\n}\n\nfunc Add(k string) {\n\titems[k] = 1\n}\n";
+    let files = [("p/p.go", src)];
+    let es = entries(&files, Runtime::Go);
+    // The pointer is only reassigned and the mutex is no container: neither is a holder.
+    assert!(es.iter().all(|e| !e.owner.ends_with("p.current") && !e.owner.ends_with("p.mu")), "{es:?}");
+    assert_eq!(not_listed(&files, Runtime::Go), ["p/p.go:5", "p/p.go:6"]);
+    // A real container stays.
+    assert!(entry(&es, "p.items").facts.container == Some(ContainerClass::Container));
+    // A field wrapped around its own value is a chain that grows: it stays, with its writer.
     let chain = "package p\n\ntype Poller struct {\n\tctx context.Context\n}\n\nfunc (p *Poller) Lookup(s string) {\n\tp.ctx = trace.Start(p.ctx, s)\n}\n";
     let es = entries(&[("p/c.go", chain)], Runtime::Go);
     let e = entry(&es, "Poller.ctx");
     assert_eq!(e.writers, ["p/c.go:8"], "{e:?}");
     assert_eq!(e.facts.writer_sites[0].kind, SiteKind::Insert);
+    assert_eq!(e.facts.container, Some(ContainerClass::NotContainer));
 }
 
 #[test]

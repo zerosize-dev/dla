@@ -339,4 +339,18 @@ mod tests {
         assert_eq!(u[0].writers, ["p/poller.go:2"], "{u:?}");
         assert!(u[0].removers.is_empty(), "{u:?}");
     }
+
+    #[test]
+    fn an_element_assigned_a_made_container_is_a_writer_and_the_holder_reset_is_a_remover() {
+        let f = file(
+            "p/s.go",
+            "func (s *S) Watch(k string) {\n\ts.updates[k] = make(map[int]int)\n}\nfunc (s *S) Drop() {\n\ts.updates = make(map[string]map[int]int)\n}\n",
+        );
+        let u = find(
+            &[raw("updates", "p/s.go", 99, Scope::Dir("p".into()), true)],
+            &[f],
+        );
+        assert_eq!(u[0].writers, ["p/s.go:2"], "{u:?}");
+        assert_eq!(u[0].removers, ["p/s.go:5"], "{u:?}");
+    }
 }
