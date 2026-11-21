@@ -440,9 +440,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 .collect();
             let batch_command = batch_command(view, &runtime);
             let command = match (&in_flight, batch.is_empty()) {
-                (Some(h), true) => format!(
-                    "fill the DLA-HOOK bodies of {h} so each unit reaches the targets listed in its driver with a new key, dla harness run {h} --mode both, dla trend S<n>"
-                ),
+                (Some(h), true) => format!("dla harness run {h} --mode both"),
                 _ => batch_command.clone(),
             };
             let closed = if !view.state.queue {
@@ -487,6 +485,125 @@ pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
         "{}. Fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. If no driver can be built or run for {}, record why: dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" (that closes the queue of the runtime)",
         q.command, q.runtime
     )
+}
+
+/// What the report says about the queue: its header line and, per finding, how it was
+/// targeted.
+#[derive(Debug)]
+pub struct ReportFacts {
+    ranks: BTreeMap<FindingId, (Option<usize>, u8)>,
+    index: Index,
+    queue_on: bool,
+}
+
+impl ReportFacts {
+    /// The facts of a view loaded from disk; `None` for a view without a run directory.
+    pub fn of(view: &RunView) -> Option<Self> {
+        view.run_dir.as_ref()?;
+        let ranks = ranked(view)
+            .into_iter()
+            .map(|r| (r.id, (r.rank, r.tier)))
+            .collect();
+        Some(Self {
+            ranks,
+            index: Index::of(view),
+            queue_on: view.state.queue,
+        })
+    }
+
+    /// The `Queue:` header line, or `None` when nothing was ranked for measurement.
+    pub fn line(&self) -> Option<String> {
+        if !self.queue_on {
+            return Some(
+                "off: candidates the workloads did not reach were closed without a targeted workload"
+                    .to_owned(),
+            );
+        }
+        let ranked: Vec<&FindingId> = self
+            .ranks
+            .iter()
+            .filter(|(_, (rank, _))| rank.is_some())
+            .map(|(id, _)| id)
+            .collect();
+        if ranked.is_empty() {
+            return None;
+        }
+        let mut harnesses: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let (mut grew, mut changed, mut executed, mut missed, mut unread) = (0, 0, 0, 0, 0);
+        let mut targeted = 0;
+        for id in &ranked {
+            let t = self.index.targeted_in(id);
+            if t.is_empty() {
+                continue;
+            }
+            targeted += 1;
+            harnesses.extend(t.iter().map(|(h, _)| h.clone()));
+            match self.index.best_verdict(id) {
+                Some(Verdict::Grew) => grew += 1,
+                Some(Verdict::Changed) => changed += 1,
+                Some(Verdict::Executed | Verdict::Unknown) => executed += 1,
+                Some(Verdict::Constant | Verdict::NotExecuted | Verdict::NotLoaded) => missed += 1,
+                None => unread += 1,
+            }
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for (n, what) in [
+            (grew, "grew"),
+            (changed, "changed"),
+            (executed, "executed"),
+            (missed, "not reached"),
+            (unread, "not read yet"),
+        ] {
+            if n > 0 {
+                parts.push(format!("{what} {n}"));
+            }
+        }
+        let in_h = if harnesses.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " in {} harness{}",
+                harnesses.len(),
+                if harnesses.len() == 1 { "" } else { "es" }
+            )
+        };
+        let verdicts = if parts.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", parts.join(", "))
+        };
+        Some(format!(
+            "{targeted} of {} ranked candidates targeted{in_h}{verdicts}; {} not targeted",
+            ranked.len(),
+            ranked.len() - targeted
+        ))
+    }
+
+    /// How a closed finding was targeted: `Targeted: H2 constant, H3 not executed` or
+    /// `Not targeted (rank 143)`. `None` when the queue was off.
+    pub fn targeted(&self, id: &FindingId) -> Option<String> {
+        if !self.queue_on {
+            return None;
+        }
+        let t = self.index.targeted_in(id);
+        if t.is_empty() {
+            return Some(match self.ranks.get(id) {
+                Some((Some(rank), _)) => format!("Not targeted (rank {rank})"),
+                Some((None, tier)) => format!("Not targeted (tier {tier}, not ranked for measurement)"),
+                None => "Not targeted".to_owned(),
+            });
+        }
+        let list: Vec<String> = t
+            .iter()
+            .map(|(h, v)| {
+                format!(
+                    "{h} {}",
+                    v.map_or("not run".to_owned(), |v| v.as_str().replace('_', " "))
+                )
+            })
+            .collect();
+        Some(format!("Targeted: {}", list.join(", ")))
+    }
 }
 
 #[cfg(test)]

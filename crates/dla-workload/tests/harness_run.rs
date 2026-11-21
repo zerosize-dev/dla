@@ -161,7 +161,6 @@ fn manifest(
     env: Vec<(String, String)>,
     step: u64,
 ) -> HarnessManifest {
-    targets: Vec::new(),
     HarnessManifest {
         targets: Vec::new(),
         schema_version: 1,

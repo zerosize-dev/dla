@@ -617,6 +617,54 @@ mod tests {
         }
     }
 
+    /// 70 probes, the first of them the probe of a finding the harness declared a target:
+    /// its column never grows, so by growth it would be the first to go at the cap of 64.
+    fn capped(declared: &[&str]) -> (Vec<String>, Vec<String>) {
+        let mut m = manifest(Runtime::Python);
+        m.probes = (1..=70)
+            .map(|i| dla_core::harness::ProbeSpec {
+                id: format!("P{i}"),
+                finding: (i == 1).then(|| "F9".parse().unwrap()),
+                target: dla_core::harness::ProbeTarget::PyGlobal {
+                    module: "m".into(),
+                    name: format!("v{i}"),
+                },
+                site: None,
+            })
+            .collect();
+        m.targets = declared.iter().map(|d| d.parse().unwrap()).collect();
+        let pts: Vec<PointInput> = (1..=4)
+            .map(|k| {
+                let probes: Vec<Value> = (1..=70)
+                    .map(|i| {
+                        let size = if i == 1 { 1.0 } else { f64::from(k * i) };
+                        json!({"id": format!("P{i}"), "path": format!("m.v{i}"), "size": size})
+                    })
+                    .collect();
+                pt(
+                    f64::from(k) * 100.0,
+                    json!({"dla_harness":1,"phase":"exit","pid":1,"runtime":"python",
+                        "values":{"os.rss": 5e6}, "probes": probes}),
+                )
+            })
+            .collect();
+        let s = build_series(&ctx(), &m, &params(), &pts);
+        (
+            s.columns.iter().map(|c| c.name.clone()).collect(),
+            s.limitations.clone(),
+        )
+    }
+
+    #[test]
+    fn the_probe_column_of_a_declared_target_is_never_dropped_by_the_cap() {
+        let (names, limits) = capped(&[]);
+        assert!(!names.contains(&"probe:m.v1".to_owned()), "dropped by growth: {names:?}");
+        assert!(limits.iter().any(|l| l.contains("dropped")), "{limits:?}");
+        let (names, _) = capped(&["F9"]);
+        assert_eq!(names.len(), MAX_COLUMNS, "{}", names.len());
+        assert!(names.contains(&"probe:m.v1".to_owned()), "{names:?}");
+    }
+
     #[test]
     fn values_groups_probes_and_pre_gc_become_catalog_columns() {
         let pts: Vec<PointInput> = (1..=4)

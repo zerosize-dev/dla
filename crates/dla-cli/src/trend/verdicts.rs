@@ -102,7 +102,14 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
         return make(
             Verdict::Grew,
             Some(&c.name),
-            format!("column {} passed the growth gate ({:?} shape)", c.name, c.shape),
+            format!(
+                "column {} passed the growth gate ({} shape)",
+                c.name,
+                serde_json::to_value(c.shape)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            ),
         );
     }
     // The probe columns of the finding.
@@ -134,7 +141,7 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
                     Verdict::Changed,
                     Some(&c.name),
                     format!(
-                        "probe {} went from {} to {} over {} points but did not pass the growth gate",
+                        "{} went from {} to {} over {} points but did not pass the growth gate",
                         c.name,
                         num(v[0]),
                         num(v[v.len() - 1]),
@@ -149,7 +156,7 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
                 Verdict::Constant,
                 Some(&name),
                 format!(
-                    "probe {name} stayed {} over {n} points: every unit used the same key or never reached a writer",
+                    "{name} stayed {} over {n} points: every unit used the same key or never reached a writer",
                     num(value)
                 ),
             ),
@@ -205,15 +212,15 @@ fn enclosing_function(project: &Path, site: &str) -> Option<(String, Func)> {
     let src = fs::read_to_string(project.join(&file)).ok()?;
     let tree = parse(lang, &src).ok()?;
     let row = line.checked_sub(1)?;
-    let indent = src
-        .lines()
-        .nth(row)
-        .map_or(0, |l| l.len() - l.trim_start().len());
+    let text = src.lines().nth(row)?;
+    let indent = text.len() - text.trim_start().len();
+    // The range ends where the line does: a range that reaches past the end of the last
+    // line of a function is not inside it.
     let mut node = tree.root_node().descendant_for_point_range(
         dla_census::parse::tree_sitter::Point { row, column: indent },
         dla_census::parse::tree_sitter::Point {
             row,
-            column: usize::MAX / 2,
+            column: text.trim_end().len().max(indent),
         },
     );
     let mut found: Option<Func> = None;
@@ -445,4 +452,217 @@ pub fn counts(list: &[TargetVerdict]) -> serde_json::Map<String, Value> {
         *e = Value::from(e.as_u64().unwrap_or(0) + 1);
     }
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trend_cmd::analysis::{
+        analyze_series,
+        testutil::{Col, rising, series},
+    };
+    use dla_core::{
+        EvidenceId, Ledger, NewEvidence, NewFinding, Origin,
+        evidence::{Authority, EvidenceCoverage, EvidenceKind, Source, Tool},
+    };
+    use dla_stats::GateThresholds;
+    use serde_json::json;
+
+    const PY: &str = "CACHE = {}\n\n\nclass Cart:\n    def add(self, k):\n        CACHE[k] = 1\n\n\ndef other():\n    return 1\n";
+
+    struct Scene {
+        dir: tempfile::TempDir,
+        ledger: Ledger,
+    }
+
+    fn scene() -> Scene {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.py"), PY).unwrap();
+        let mut ledger = Ledger::from_text("").unwrap();
+        ledger
+            .add_evidence(NewEvidence {
+                source: Source::Repo {
+                    commit: "c".into(),
+                    path: None,
+                },
+                tool: Tool {
+                    name: "t".into(),
+                    version: "1".into(),
+                },
+                authority: Authority::Static,
+                kind: EvidenceKind::CensusHolder,
+                result: json!({}),
+                raw: None,
+                coverage: EvidenceCoverage::default(),
+                limitations: vec![],
+                unknowns: vec![],
+            })
+            .unwrap();
+        // F1: the cache at line 1, written in Cart.add (line 6). F2: a site in `other`.
+        for (site, writers) in [("a.py:1", vec!["a.py:6".to_owned()]), ("a.py:10", vec![])] {
+            let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
+            nf.site = Some(site.into());
+            let id = ledger.add_finding(nf).unwrap();
+            if !writers.is_empty() {
+                let f = ledger.findings().last().unwrap().id.clone();
+                let _ = id;
+                ledger.annotate(&f, writers, vec![], Some("n".into())).unwrap();
+            }
+        }
+        Scene { dir, ledger }
+    }
+
+    fn manifest(probes: serde_json::Value, targets: &[&str]) -> HarnessManifest {
+        serde_json::from_value(json!({
+            "id": "H1", "runtime": "python", "mode": "driver", "scratch": "x",
+            "run": {"argv": ["x"], "cwd": "."}, "warmup": 1, "iterations": 8, "step": 1,
+            "key_modes": ["fresh"], "probes": probes, "targets": targets,
+            "agent": "driver-python", "timeout_secs": 60,
+        }))
+        .unwrap()
+    }
+
+    fn verdicts(s: &Scene, m: &HarnessManifest, cols: Vec<Col>, mut matcher_fill: impl FnMut(&mut Vec<ColumnTrend>)) -> Vec<TargetVerdict> {
+        m.save(s.dir.path()).unwrap();
+        let file = series("S1", 1, cols);
+        let mut analysed = analyze_series(&file, &(0..file.columns.len()).collect::<Vec<_>>(), &GateThresholds::default());
+        matcher_fill(&mut analysed);
+        compute(&Inputs {
+            project: s.dir.path(),
+            run_dir: s.dir.path(),
+            ledger: &s.ledger,
+            series: &file,
+            columns: &analysed,
+        })
+    }
+
+    fn py_probe(id: &str, finding: &str, name: &str) -> serde_json::Value {
+        json!({"id": id, "finding": finding, "target": {"kind": "py-global", "module": "a", "name": name}, "site": "a.py:1"})
+    }
+
+    fn tie(cols: &mut [ColumnTrend], f: u32) {
+        for c in cols {
+            c.finding = Some(FindingId::new(f));
+        }
+    }
+
+    #[test]
+    fn grew_when_a_tied_column_passed_the_gate() {
+        let s = scene();
+        let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
+        let v = verdicts(&s, &m, vec![Col::counter("probe:a.CACHE", &rising(1.0, 9.0))], |c| tie(c, 1));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].verdict, Verdict::Grew);
+        assert_eq!(v[0].column.as_deref(), Some("probe:a.CACHE"));
+        assert!(v[0].declared);
+    }
+
+    #[test]
+    fn changed_when_the_probe_moved_but_did_not_pass() {
+        let s = scene();
+        let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
+        let wobble = [1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0];
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &wobble)], |c| tie(c, 1));
+        assert_eq!(v[0].verdict, Verdict::Changed, "{v:?}");
+        assert!(v[0].detail.contains("did not pass the growth gate"), "{}", v[0].detail);
+    }
+
+    #[test]
+    fn constant_when_the_probe_never_moved() {
+        let s = scene();
+        let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &[1.0; 9])], |c| tie(c, 1));
+        assert_eq!(v[0].verdict, Verdict::Constant, "{v:?}");
+        assert!(
+            v[0].detail.contains("stayed 1 over 8 points: every unit used the same key or never reached a writer"),
+            "{}",
+            v[0].detail
+        );
+    }
+
+    #[test]
+    fn not_loaded_when_the_probe_has_no_column() {
+        let s = scene();
+        let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
+        let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::NotLoaded, "{v:?}");
+        assert!(v[0].detail.contains("a.CACHE"), "{}", v[0].detail);
+    }
+
+    fn write_run(s: &Scene, doc: serde_json::Value) {
+        let h = s.dir.path().join("harness/H1");
+        fs::create_dir_all(&h).unwrap();
+        fs::write(h.join("run-S1.json"), json!({"series": ["S1"]}).to_string()).unwrap();
+        fs::write(h.join("executed-S1.json"), doc.to_string()).unwrap();
+    }
+
+    #[test]
+    fn executed_when_the_function_of_a_writer_ran() {
+        let s = scene();
+        // The writer at a.py:6 is Cart.add (starts at line 5).
+        write_run(&s, json!({"kind": "functions", "functions": [{"file": "a.py", "name": "Cart.add", "line": 5}]}));
+        let m = manifest(json!([]), &["F1"]);
+        let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
+        assert!(v[0].detail.contains("Cart.add"), "{}", v[0].detail);
+    }
+
+    #[test]
+    fn not_executed_when_no_enclosing_function_ran() {
+        let s = scene();
+        write_run(&s, json!({"kind": "functions", "functions": [{"file": "a.py", "name": "other", "line": 9}]}));
+        let m = manifest(json!([]), &["F1"]);
+        let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::NotExecuted, "{v:?}");
+        assert!(v[0].detail.contains("was not executed"), "{}", v[0].detail);
+    }
+
+    #[test]
+    fn unknown_without_coverage_data() {
+        let s = scene();
+        // No coverage record at all (a Go driver run writes no profile).
+        let m = manifest(json!([]), &["F1"]);
+        let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::Unknown, "{v:?}");
+        assert!(v[0].detail.contains("no coverage data for this run"), "{}", v[0].detail);
+        // A record that says nothing could be measured is unknown too, never not_executed.
+        write_run(&s, json!({"kind": "none", "note": "no Go coverage profile was written to cov/"}));
+        let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::Unknown, "{v:?}");
+        assert!(v[0].detail.contains("no coverage data for this run"), "{}", v[0].detail);
+    }
+
+    #[test]
+    fn unknown_when_no_function_encloses_the_site() {
+        let s = scene();
+        // F1's site is the module-level dict but it has a writer; F2's site is in `other`.
+        // Drop the writer by asking about a finding whose site is top level and unwritten.
+        let mut l = s.ledger.clone();
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
+        nf.site = Some("a.py:1".into());
+        let _ = l.add_finding(nf);
+        let s2 = Scene { dir: s.dir, ledger: l };
+        write_run(&s2, json!({"kind": "functions", "functions": []}));
+        let m = manifest(json!([]), &["F3"]);
+        let v = verdicts(&s2, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::Unknown, "{v:?}");
+    }
+
+    #[test]
+    fn a_class_loaded_is_executed_for_a_jvm_run() {
+        let s = scene();
+        fs::write(s.dir.path().join("Cart.java"), "package shop;\nclass Cart {}\n").unwrap();
+        let mut l = s.ledger.clone();
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
+        nf.site = Some("Cart.java:2".into());
+        l.add_finding(nf).unwrap();
+        let s2 = Scene { dir: s.dir, ledger: l };
+        let m = manifest(json!([]), &["F3"]);
+        write_run(&s2, json!({"kind": "classes", "classes": ["shop.Other"], "sources": []}));
+        let v = verdicts(&s2, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::NotExecuted, "{v:?}");
+        write_run(&s2, json!({"kind": "classes", "classes": ["shop.Cart$Inner"], "sources": []}));
+        let v = verdicts(&s2, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
+        assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
+    }
 }

@@ -28,6 +28,7 @@ const DASH: &str = "\u{2014}";
 pub fn render_markdown(view: &RunView) -> String {
     let st = gate_status(view);
     let mut out = String::new();
+    QUEUE.with(|q| *q.borrow_mut() = dla_core::queue::ReportFacts::of(view));
 
     out.push_str("# DLA report\n\n");
     let _ = writeln!(out, "Run: {}\n", code(&view.state.run_id));
@@ -45,6 +46,7 @@ pub fn render_markdown(view: &RunView) -> String {
     blind_spots(&mut out, view);
     checklist(&mut out, view);
     evidence_index(&mut out, view);
+    QUEUE.with(|q| *q.borrow_mut() = None);
     out
 }
 
@@ -217,6 +219,17 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 // ---------------------------------------------------------------- sections
 
+thread_local! {
+    /// The queue facts of the report being rendered (`None` outside `render_markdown`).
+    static QUEUE: std::cell::RefCell<Option<dla_core::queue::ReportFacts>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// How a closed finding was targeted, for its section or table row.
+fn targeted_text(id: &dla_core::FindingId) -> Option<String> {
+    QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.targeted(id)))
+}
+
 fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let c = &st.counts;
     if st.complete {
@@ -234,6 +247,9 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     let _ = writeln!(out, "{}\n", findings_line(c));
     let _ = writeln!(out, "Residual: {}\n", residual_line(view.coverage.as_ref()));
     let _ = writeln!(out, "Coverage: {}\n", coverage_line(view.coverage.as_ref()));
+    if let Some(line) = QUEUE.with(|q| q.borrow().as_ref().and_then(|f| f.line())) {
+        let _ = writeln!(out, "Queue: {line}\n");
+    }
 }
 
 /// The `Findings:` line. The leak hypotheses and the non-leak explanations (the `N-*`
@@ -723,12 +739,24 @@ fn static_table(out: &mut String, rows: &[&Finding]) {
     {
         let _ = writeln!(out, "Remedy for all of them: {}\n", inline(r));
     }
-    out.push_str("| ID | Origin | Holder | Owner or site | Reason |\n|---|---|---|---|---|\n");
+    let targeted = QUEUE.with(|q| q.borrow().is_some());
+    if targeted {
+        out.push_str(
+            "| ID | Origin | Holder | Owner or site | Reason | Targeted |\n|---|---|---|---|---|---|\n",
+        );
+    } else {
+        out.push_str("| ID | Origin | Holder | Owner or site | Reason |\n|---|---|---|---|---|\n");
+    }
     for f in rows {
         let place = f.owner.as_deref().or(f.site.as_deref());
+        let tail = if targeted {
+            format!(" {} |", targeted_text(&f.id).map_or_else(|| DASH.to_owned(), |t| inline(&t)))
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
-            "| {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} |{tail}",
             f.id,
             origins_cell(f),
             f.holder.map_or_else(|| DASH.to_owned(), |h| h.to_string()),
@@ -981,6 +1009,13 @@ fn finding_section(out: &mut String, view: &RunView, f: &Finding) {
     }
     if let Some(r) = f.reason {
         let _ = writeln!(out, "- Reason: {r}");
+    }
+    if matches!(
+        f.state,
+        FindingState::SuspectedStaticOnly | FindingState::Unresolved
+    ) && let Some(t) = targeted_text(&f.id)
+    {
+        let _ = writeln!(out, "- {t}");
     }
     if let Some(r) = &f.remedy {
         let _ = writeln!(out, "- Remedy: {}", inline(r));

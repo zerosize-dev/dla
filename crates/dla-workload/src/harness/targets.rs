@@ -76,15 +76,15 @@ fn enclosing_name(project: &Path, site: &str) -> Option<String> {
     let src = fs::read_to_string(project.join(file)).ok()?;
     let tree = parse(lang, &src).ok()?;
     let row = line.checked_sub(1)?;
-    let indent = src
-        .lines()
-        .nth(row)
-        .map_or(0, |l| l.len() - l.trim_start().len());
+    let text = src.lines().nth(row)?;
+    let indent = text.len() - text.trim_start().len();
+    // The range ends where the line does: a range that reaches past the end of the last
+    // line of a function is not inside it.
     let mut node: Option<Node<'_>> = tree.root_node().descendant_for_point_range(
         Point { row, column: indent },
         Point {
             row,
-            column: usize::MAX / 2,
+            column: text.trim_end().len().max(indent),
         },
     );
     let name_of = |n: Node<'_>| {

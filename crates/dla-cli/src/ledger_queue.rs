@@ -47,10 +47,6 @@ pub struct CloseRestArgs {
     remedy: Option<String>,
 }
 
-fn verdict_text(v: Option<Verdict>) -> String {
-    v.map_or_else(|| "not run".to_owned(), |v| v.as_str().replace('_', " "))
-}
-
 /// The queue status of a finding as `ledger list` prints it.
 fn status_of(
     r: &queue::Ranked,

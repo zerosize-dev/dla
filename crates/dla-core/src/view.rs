@@ -305,8 +305,11 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             q.pending.len(),
             q.runtime
         ),
-        fix: if q.in_flight.is_some() && q.batch.is_empty() {
-            q.command.clone()
+        fix: if let (Some(h), true) = (&q.in_flight, q.batch.is_empty()) {
+            format!(
+                "fill the hooks of {h} so each unit reaches the targets listed in its driver with a new key, {}, dla trend S<n>",
+                q.command
+            )
         } else {
             format!(
                 "{}, fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, dla trend S<n>",
