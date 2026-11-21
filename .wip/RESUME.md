@@ -440,3 +440,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - NOT ACCEPTED in pass 7: a stamped run with time left still shows the queue closed (`over`) and close-rest closes all pending candidates (as not_exercised) before the stamp lifts. Sent pass 7b to P3 (resumed a8249474e4d24c8ca): a stop-hook stamp does not close the queue; any working command lifts the stamp before its work; run status shows the going-run queue and next command; close-rest leaves pending candidates; aborted unchanged.
 - My own edit: gate_hooks.rs running-command message now gives `while kill -0 <pid> ...` as the one-command wait.
 - Running: P3 pass 7b, N brief S (u46), F (u43, in its after-change sweeps).
+
+## State at 16:14 UTC, 2026-11-21
+- P3 PASS 7b REPORTED AND CHECKED (u45/report.md, my log u47/verify-p7b.log): a stop-hook stamp no longer closes the queue (`RunState::stop_stamped`, budget_over_floor treats it as a going run; `over` only for aborted/merge); any working command lifts the stamp before its work (`works_on_the_run` in main.rs; not run/gate/report/bundle/consent/schema/install/ledger list); run status shows the going-run queue plus a `stop_stamp` field; close-rest leaves pending candidates. gate_hooks 41, queue 15, budget_settle 2 pass; MUT_Q1 (report lifts) made 2 tests fail; restored. Task 61 done.
+- Spring-4 evidence re-read: no hidden signal of the documented leak (class counts grew because the driver made a fresh class per unit; TypedPropertyPaths never loaded).
+- Running: N brief S (u46), F (u43).
