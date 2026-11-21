@@ -86,6 +86,38 @@ session's CLAUDE variables. First run: aiohttp 3.10.10 (`/root/dla-real/aiohttp-
 repositories can be cloned through the git proxy (`git clone https://github.com/...`).
 /root/dla-real does not survive a new container; the transcripts' findings go into notes here.
 
+State at 01:25 UTC on 2026-11-21.
+THE CAUSE OF THE OWNER'S EMPTY RUNS IS FOUND (`real-run-plugin-aiohttp-1.md`): a real plugin
+run on aiohttp 3.10.10 ended after 309 s: one generic workload, then all 187 candidates closed
+`unresolved not_exercised` in a shell loop with 2 h 55 min of budget left, because `dla run
+status` and the final gate print that command as the fix of every candidate and every
+"measure before you close" rule is per runtime, never per candidate (`queue-survey.md`). The
+fix is the measurement queue, designed in `queue-brief.md` (ranking, declared targets,
+verdict per target after a run, pending/settled, `target-pending` refusal, `dla ledger list`,
+`dla ledger close-rest`, `dla harness gen --next`, `dla run init --queue on|off`; dla-bench
+dynamic passes `--queue off`). Two Sonnet agents build it: Q1 the code (report
+`u28/Q1/report.md`), Q2 the skill text, bench wiring and documents (`u28/Q2/report.md`).
+After both report: verify myself (their test commands, static both modes, full dynamic), then
+real plugin runs with `real-run-driver.py` on aiohttp 3.10.10 (must find
+`aiohttp/web_app.py:82`), grpc-go v1.84.0 and spring-data-commons 4.1.1. A static ranking of
+the saved candidate lists puts the aiohttp leak in tier 1 (6 candidates) but the grpc-go leak
+(`health.server.Server.updates`, writers and removers) behind 145 others and the spring one
+(`TypedPropertyPaths.resolved`) behind 282: ranking needs a second step (keyed holders whose
+keys come from callers) after the queue works.
+Pass 1: all five side-by-side reruns of go-header-index and go-ticker-legacy passed with the
+share rule; CI runs on snapshot `b54a4be` (tree hash of `git diff HEAD | sha256sum`:
+`ca49507edeafeb34`). When green, commit THAT tree (not the working tree, which other agents are
+editing) on `main` with plumbing: temporary index, `git read-tree b54a4be`, remove `.wip`,
+`git write-tree`, `git commit-tree -p main -F commit-message.txt`, update `refs/heads/main`,
+`git reset -q` (index only), push `main` and the dev branch. Then preview.3 only after the
+queue is in (a release without it would behave as the owner saw).
+A second chance failure showed in the Go reruns and is on `main` since `fbcd6b2`: the in-run
+heap profile is taken at a different share of each run and the capture axis is the capture
+number, so a linear leak reads as a plateau now and then (go-ticker-legacy, half-split ratio
+0.476 against the 0.5 threshold). A Sonnet agent fixes it (`go-capture-axis-brief.md`, report
+`u26/report.md`): axis = bytes allocated when the profile was taken (sum of `alloc_space`).
+A second real plugin run (grpc-go, `/root/dla-real/grpc-1`) is in progress.
+
 ## Code state
 - `main` (and `dev/wonderful-mccarthy-algc5s`) is at `fbcd6b2` "Find four more kinds of leak;
   move four parked fixtures back", on top of `4aae86f` (the chance failures of the dynamic
