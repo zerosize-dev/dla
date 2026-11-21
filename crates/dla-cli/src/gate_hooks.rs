@@ -723,7 +723,11 @@ fn check_read(input: &Input, tool: &str, found: &Found) -> Option<String> {
 /// missing items. A worker's digest counts its own slice only, so a sibling's writes do not
 /// reset its counter.
 fn digest_of(view: &RunView, missing: &[Missing], worker: Option<&str>) -> String {
-    let mut ids: Vec<String> = missing
+    // Over the actions: a trend that finishes in the background adds columns that wait on an
+    // open item and changes nothing the model must do, so it does not restart the count.
+    let acts = gate::actions(missing);
+    let mut ids: Vec<String> = acts
+        .list
         .iter()
         .map(|m| format!("{}:{}", m.kind, m.id))
         .collect();
@@ -735,7 +739,15 @@ fn digest_of(view: &RunView, missing: &[Missing], worker: Option<&str>) -> Strin
         .map(|s| s.lines)
         .sum();
     let mut h = Sha256::new();
-    h.update(format!("{}:{slice_lines}:", view.ledger.lines().len()));
+    // The ledger's own length counts what the model decided (findings, answers, moves, open
+    // items), not the evidence the commands in the background write.
+    let decided = view
+        .ledger
+        .lines()
+        .iter()
+        .filter(|l| !matches!(l.record, dla_core::Record::Evidence(_)))
+        .count();
+    h.update(format!("{decided}:{slice_lines}:"));
     h.update(ids.join(","));
     hex::encode(h.finalize())
 }
@@ -813,10 +825,18 @@ fn block_reason(
         Some(w) => format!("dla --worker {w} gate check --final"),
         None => "dla gate check --final".to_owned(),
     };
+    // The model reads the count: it is the number of actions, not of everything that waits.
+    let acts = gate::actions(missing);
+    let missing = acts.list.as_slice();
     let mut s = format!(
-        "dla: {} item(s) are still missing before this {} can stop.",
+        "dla: {} item(s) are still missing before this {} can stop{}.",
         missing.len(),
-        if worker.is_some() { "worker" } else { "run" }
+        if worker.is_some() { "worker" } else { "run" },
+        if acts.dependents > 0 {
+            format!(" ({} more wait on them)", acts.dependents)
+        } else {
+            String::new()
+        }
     );
     if let Some(st) = state {
         s.push('\n');

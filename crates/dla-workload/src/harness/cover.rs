@@ -1601,13 +1601,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let work = dir.path().canonicalize().unwrap();
         let file = work.join("src/lib.rs");
+        // A dependency's file: an absolute path outside the scratch copy on every OS (a path
+        // that starts with "/" is not absolute on Windows).
+        let dep_dir = tempfile::tempdir().unwrap();
+        let dep = dep_dir.path().canonicalize().unwrap().join("registry/src/dep/lib.rs");
         let export = json!({"data": [{"functions": [
             {"name": "_RNvCsf5ZMXhcg4hk_4calc8remember", "count": 3,
              "filenames": [file.to_string_lossy()], "regions": [[6, 1, 8, 2, 3, 0, 0, 0]]},
             {"name": "_RNvCsf5ZMXhcg4hk_4calc10note_other", "count": 0,
              "filenames": [file.to_string_lossy()], "regions": [[10, 1, 12, 2, 0, 0, 0, 0]]},
             {"name": "_RNvCsf5ZMXhcg4hk_3dep4wake", "count": 9,
-             "filenames": ["/home/u/.cargo/registry/src/dep/lib.rs"], "regions": [[1, 1, 2, 2, 9, 0, 0, 0]]},
+             "filenames": [dep.to_string_lossy()], "regions": [[1, 1, 2, 2, 9, 0, 0, 0]]},
         ]}]});
         let fns = rust_export_functions(&export, &work);
         assert_eq!(

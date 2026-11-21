@@ -119,11 +119,17 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     let mut report = gate::evaluate(&view, target, worker);
     let file = list_file(target, worker);
     report.pointer = ctx.pointer(&file);
+    // The full list stays in the file, unabridged; the count the reports lead with is the number
+    // of actions, and `actions` is the list grouped the way the output shows it.
+    let acts = gate::actions(&all);
     let full = json!({
         "ok": report.ok,
         "stage": report.stage,
         "worker": worker,
-        "missing_total": all.len(),
+        "missing_total": acts.list.len(),
+        "missing_dependents": acts.dependents,
+        "missing_items": all.len(),
+        "actions": acts.list,
         "missing": all,
         "checked_at": dla_core::state::now_utc(),
     });
@@ -230,13 +236,18 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     Ok(GateOut::Raw {
         stdout: crate::out::bound(out).to_string(),
         stderr: format!(
-            "dla gate check --{}: {} item(s) missing.{first}",
+            "dla gate check --{}: {} item(s) missing{}.{first}",
             if matches!(target, GateTarget::Final) {
                 "final".to_owned()
             } else {
                 format!("stage {}", target.name())
             },
             report.missing_total,
+            if report.missing_dependents > 0 {
+                format!(" (and {} more that wait on them)", report.missing_dependents)
+            } else {
+                String::new()
+            },
         ),
         code: 2,
     })

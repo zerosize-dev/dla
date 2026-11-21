@@ -69,8 +69,12 @@ pub struct GateReport {
     pub ok: bool,
     /// The stage name, or `final`.
     pub stage: String,
-    /// Number of missing items in total.
+    /// Number of actions that are missing: items that wait for the same thing count once.
     pub missing_total: usize,
+    /// How many further items wait on those actions (whole-process columns on an open item,
+    /// candidates on the queue, findings with one fix). The full list is in the stored file.
+    #[serde(default)]
+    pub missing_dependents: usize,
     /// The first [`SHOWN_MISSING`] items; the full list is in `<run>/gate/<stage>.json`.
     pub missing: Vec<Missing>,
     /// Where the full list is.
@@ -100,14 +104,112 @@ pub fn pointer_for(target: GateTarget) -> String {
     format!("gate/{}.json", target.name())
 }
 
+/// The missing items as actions: items that wait for the same thing are one line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actions {
+    /// One item per action, most urgent first: the measurement queue, findings whose column
+    /// grew, triggers, open items, the rest. A line that stands for others says how many
+    /// wait on it and names three of them.
+    pub list: Vec<Missing>,
+    /// How many items were folded into the lines of `list`.
+    pub dependents: usize,
+}
+
+/// Open item ids (`O13`, `jvm/O1`) named in a fix text.
+fn open_items_named(fix: &str) -> Vec<String> {
+    fix.split(|c: char| !(c.is_ascii_alphanumeric() || c == '/'))
+        .filter(|w| {
+            let n = w.rsplit('/').next().unwrap_or("");
+            n.len() > 1 && n.starts_with('O') && n[1..].bytes().all(|b| b.is_ascii_digit())
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Groups `all` into actions. A whole-process column or residual row whose fix names an open
+/// item that is itself listed waits on that open item; a finding whose fix is the batch
+/// command of a listed queue item waits on the queue; the rest with the same kind and fix are
+/// one action. Nothing is dropped: the full list stays in the stored gate file.
+pub fn actions(all: &[Missing]) -> Actions {
+    let mut list: Vec<(Missing, Vec<String>)> = Vec::new();
+    let mut place: Vec<usize> = Vec::new();
+    // Primary lines first: queue and open items (the lines others wait on) and every item that
+    // is neither a column, a residual row nor a finding.
+    for m in all {
+        if !matches!(m.kind.as_str(), "trend_column" | "residual" | "finding") {
+            list.push((m.clone(), Vec::new()));
+            place.push(list.len() - 1);
+        }
+    }
+    let find = |list: &[(Missing, Vec<String>)], pred: &dyn Fn(&Missing) -> bool| {
+        list.iter().position(|(m, _)| pred(m))
+    };
+    for m in all
+        .iter()
+        .filter(|m| matches!(m.kind.as_str(), "trend_column" | "residual" | "finding"))
+    {
+        let mut target: Option<usize> = None;
+        if m.kind != "finding" {
+            for o in open_items_named(&m.fix) {
+                target = find(&list, &|x| x.kind == "open_item" && x.id == o);
+                if target.is_some() {
+                    break;
+                }
+            }
+        } else {
+            target = find(&list, &|x| {
+                x.kind == "queue" && !m.fix.is_empty() && x.fix.starts_with(m.fix.as_str())
+            });
+        }
+        if target.is_none() {
+            target = find(&list, &|x| x.kind == m.kind && x.fix == m.fix);
+        }
+        match target {
+            Some(i) => list[i].1.push(m.id.clone()),
+            None => list.push((m.clone(), Vec::new())),
+        }
+    }
+    let rank = |m: &Missing| match m.kind.as_str() {
+        "queue" => 0,
+        "growth" => 1,
+        "finding" if m.fix.contains("alloc-test") => 1,
+        "trigger" => 2,
+        "open_item" => 3,
+        _ => 4,
+    };
+    list.sort_by_key(|(m, _)| rank(m));
+    let dependents = list.iter().map(|(_, d)| d.len()).sum();
+    Actions {
+        list: list
+            .into_iter()
+            .map(|(mut m, deps)| {
+                if !deps.is_empty() {
+                    let ex: Vec<&str> = deps.iter().take(3).map(String::as_str).collect();
+                    m.description = format!(
+                        "{} (+{} waiting on it: {}{})",
+                        m.description,
+                        deps.len(),
+                        ex.join(", "),
+                        if deps.len() > 3 { ", ..." } else { "" }
+                    );
+                }
+                m
+            })
+            .collect(),
+        dependents,
+    }
+}
+
 /// Evaluates a gate on `view`. `worker` limits the check to one worker's slice.
 pub fn evaluate(view: &RunView, target: GateTarget, worker: Option<&str>) -> GateReport {
     let all = missing(view, target, worker);
+    let acts = actions(&all);
     GateReport {
         ok: all.is_empty(),
         stage: target.name().to_owned(),
-        missing_total: all.len(),
-        missing: all.into_iter().take(SHOWN_MISSING).collect(),
+        missing_total: acts.list.len(),
+        missing_dependents: acts.dependents,
+        missing: acts.list.into_iter().take(SHOWN_MISSING).collect(),
         pointer: pointer_for(target),
     }
 }
