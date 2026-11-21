@@ -65,4 +65,12 @@ Smaller fixes from the same runs
   a runtime with no listed entry points says so and no longer reads "0 of 0".
 - A verifier that names a recorded writer or remover of the holder agrees on the site.
 
-@@REAL_RUN_RESULT@@
+Checked on real libraries with a build of this tree made before the last report fixes (the
+plugin run by a model that was not told the cause): on the Python HTTP library the documented leak grew in the first batch, was
+confirmed, reproduced through the public API by an entry-path harness the model wrote (a
+server with a middleware and a client sending requests to unknown paths and with unsupported
+methods), and the blind verifier agreed on site, holder and label; the three other holders
+that grew under direct drivers are reported as "no trigger found" or "trigger not checked".
+On the Go RPC library the documented holder was a target of the first batch but its code
+never ran: a Go batch puts one driver in one package for targets of several, and struct
+fields have no size probe. That is the next change.
