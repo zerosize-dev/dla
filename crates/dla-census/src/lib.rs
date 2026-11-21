@@ -47,7 +47,7 @@ use std::{collections::BTreeMap, fs};
 
 use dla_core::{
     CoverageManifest, EvidenceId, FindingAnnotation, Refusal,
-    census::{CensusEntry, ContainerClass},
+    census::CensusEntry,
     coverage::BackendCoverage,
     error::Error,
     evidence::{CoverageStatus, EvidenceCoverage, EvidenceKind},
@@ -82,40 +82,12 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
     found.raws.retain(|r| inside(&r.file));
     let usages = usage::find(&found.raws, &files);
     let analysed = sites::analyse(&found.raws, &usages, &files);
-    // Sites a DLA rule already named: a holder that is not a container stays listed there.
-    let named_by_rule: std::collections::HashSet<String> = ctx
-        .ledger()?
-        .findings()
-        .filter(|f| {
-            std::iter::once(&f.origin)
-                .chain(&f.also_origins)
-                .any(|o| o.as_str().starts_with("detector:dla/"))
-        })
-        .filter_map(|f| f.site.clone())
-        .collect();
-    let mut not_listed: Vec<Value> = Vec::new();
     let entries: Vec<CensusEntry> = found
         .raws
         .iter()
         .zip(&usages)
         .zip(analysed)
-        .filter_map(|((r, u), a)| {
-            // A holder that is not a container and that nothing inserts into (a scalar, a
-            // logger, a function value, a pool, a pointer or struct that is only reassigned
-            // as a whole) is not listed, unless a DLA rule names its site.
-            let site = format!("{}:{}", r.file, r.line);
-            if let Some(a) = &a
-                && !a.facts.unit
-                && a.facts.container == Some(ContainerClass::NotContainer)
-                && !a.facts.writer_sites.iter().any(|w| w.kind.adds())
-                && !named_by_rule.contains(&site)
-            {
-                not_listed.push(json!({"site": site, "owner": r.owner, "kind": r.kind}));
-                return None;
-            }
-            Some((r, u, a))
-        })
-        .map(|(r, u, a)| {
+        .map(|((r, u), a)| {
             // A holder the syntax-tree pass read has its sites re-read there: the ones that
             // only matched the name of a holder private to another file are gone, and each
             // survivor says what it does. Others keep the census's name matches.
@@ -136,7 +108,6 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
         })
         .collect();
 
-    let not_listed_n = not_listed.len();
     let stage = ctx.stage_dir("census")?;
     let raw_name = format!("census/{}.json", lang.as_str());
     let by_holder = count_by(entries.iter().map(|e| e.holder.as_str().to_owned()));
@@ -148,7 +119,6 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
         "class_files": found.classes,
         "class_files_unreadable": found.unreadable,
         "usage": "writers and removers are name matches read in the syntax tree; facts are per holder and per site",
-        "not_listed": not_listed,
         "by_holder": by_holder,
         "by_kind": by_kind,
         "entries": entries,
@@ -247,7 +217,6 @@ pub fn census(ctx: &ToolCtx, lang: Runtime) -> Result<StageOutcome, Refusal> {
                     "source": found.source,
                     "holders": enumerated,
                     "by_holder": by_holder,
-                    "not_listed": not_listed_n,
                     "annotated": annotated,
                     "joined_sites": writer.joined(),
                     "files": files.iter().filter(|f| !f.is_test).count(),

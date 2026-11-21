@@ -486,15 +486,16 @@ fn go_function_lines(
         .collect();
     files.sort();
     for f in files {
-        let res = Command::new("go")
-            .args(["tool", "cover", "-func"])
+        let mut cmd = Command::new("go");
+        cmd.args(["tool", "cover", "-func"])
             .arg(&f)
             .current_dir(work)
-            .env("GOPROXY", "off")
-            .env("GOFLAGS", "-mod=mod")
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output();
+            .env("GOPROXY", "off");
+        // `-mod=mod` is refused in workspace mode.
+        if !work.join("go.work").is_file() {
+            cmd.env("GOFLAGS", "-mod=mod");
+        }
+        let res = cmd.stdin(Stdio::null()).stderr(Stdio::null()).output();
         let Ok(o) = res else {
             notes.push("go is not on PATH: Go coverage profiles were not read".to_owned());
             return (out, notes);

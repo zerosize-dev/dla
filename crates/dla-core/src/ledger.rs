@@ -233,7 +233,7 @@ impl Index {
 
 /// Everything recorded about a finding's writers and removers, merged over all
 /// `finding_annotated` lines in ledger order without duplicates.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Annotation {
     /// Sites that add to the holder.
     pub writers: Vec<String>,
@@ -245,6 +245,22 @@ pub struct Annotation {
     pub holder_changes: Vec<HolderChange>,
     /// What the census recorded of the holder and of its writer and remover sites.
     pub facts: crate::census::HolderFacts,
+}
+
+/// Prints the fields every ledger of an older version has; the census facts only when there
+/// are some, so that an annotation made before they existed prints as it always did.
+impl std::fmt::Debug for Annotation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("Annotation");
+        d.field("writers", &self.writers)
+            .field("removers", &self.removers)
+            .field("notes", &self.notes)
+            .field("holder_changes", &self.holder_changes);
+        if !self.facts.is_empty() {
+            d.field("facts", &self.facts);
+        }
+        d.finish()
+    }
 }
 
 /// A holder replaced by an evidence-backed annotation (schema 5).

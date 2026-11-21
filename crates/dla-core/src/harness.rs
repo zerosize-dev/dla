@@ -818,9 +818,9 @@ pub struct HarnessDump {
     /// Readings taken just before the forced collection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_pre_gc: Option<BTreeMap<String, Option<f64>>>,
-    /// Readings taken while the workload ran (Go command mode): the floor of the
-    /// after-collection readings of the last third of the run. Absent when no sample ended
-    /// before the exit record.
+    /// Readings taken while the workload ran (Go command mode): the floor envelope of the
+    /// after-collection readings, read at three quarters of the run time. Absent when no sample
+    /// ended before the exit record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_in_run: Option<BTreeMap<String, Option<f64>>>,
     /// How the in-run readings were taken.
@@ -869,10 +869,10 @@ pub struct DumpInRun {
     /// Samples that ended before the exit path started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<u32>,
-    /// Samples that ended in the last third of the run (the window the reading is taken from).
+    /// Samples that ended in the last third of the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_samples: Option<u32>,
-    /// Milliseconds since the process started at which the reported sample ended.
+    /// Milliseconds since the process started at which the reading stands (three quarters of the run).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reading_ms: Option<f64>,
     /// Milliseconds since the process started when the sampler was stopped.
@@ -881,7 +881,7 @@ pub struct DumpInRun {
     /// Milliseconds spent inside samples (collection, reading, profile).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent_ms: Option<f64>,
-    /// The statistic the reading is: `floor-last-third`.
+    /// The statistic the reading is: `floor-at-three-quarters`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statistic: Option<String>,
 }

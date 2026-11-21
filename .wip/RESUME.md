@@ -280,3 +280,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - A resumed with two jobs (scratch u34): (1) Go driver runs write a cover profile (targets read executed/not_executed, not unknown); (2) the in-run column spike of go-header-index: measure, then fix the sampler.
 - Working tree vs main now: only P3 (close reasons, env reuse, enclosing) and V2 (census facts, score, sibling batches) edits, both in progress.
 - Real run aiohttp-2 still working the queue (30 pending at 04:12).
+
+## State 2026-11-21 05:20 UTC
+- Real run aiohttp-2 FINISHED (notes: real-run-plugin-aiohttp-2.md; report, ledger and two drivers kept in scratch u31/aiohttp-2): documented leak F8 confirmed about 5 minutes in, queue worked to the end (89 of 90 ranked targeted in 15 harnesses), but the blind verifier DISAGREED on both confirmed findings ("the harness varies the key on every unit") and the final answer said neither is a leak real use would trigger. Cause: nothing reproduces a grown holder through the public entry path.
+- Agent T (Sonnet, brief wip-notes/trigger-brief.md, scratch u35) started: the trigger step (entry-path harness, callers chain, VARIES.txt, trigger status, gate item, report, verifier bundle, skill).
+- Report defects from that run still to hand out (to P3 when it reports): the Queue line leaves out findings that left the candidate state; the Residual header has one clause per series with unrounded floats; "Coverage: 0 of 0 entry points" for hook drivers; the final gate wants a residual row per series (176 items, cleared by a shell loop); verifier site disagreement that is only declaration vs writer line.
+- Disk fell to 1 GB: deleted target/release, target/x86_64-pc-windows-msvc, target/aarch64-apple-darwin, the Go build cache and the harness work copies of aiohttp-2. Do not use a shell variable inside an rm path again (I did once for the harness work dirs): literal paths only.
+- Running agents: A (Go driver coverage, then in-run spike; u34), P3 (three fixes; u32), V2 (ranking; u33), T (trigger; u35). CI on main 6a7ee29 not checked yet.

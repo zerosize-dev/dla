@@ -15,16 +15,19 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   goleak check runs only when `go.uber.org/goleak` resolves offline.
 - What the dump measures (after two `runtime.GC()`): `go.heap_live`, `go.heap_objects`, `go.total`,
   `go.released`, `go.stacks`, `go.goroutines`, the `os.*` set, and the goroutine profile grouped by
-  `created by` file:line (`go.goroutines@file:line`). Coverage comes from `go test -coverprofile`.
+  `created by` file:line (`go.goroutines@file:line`). Coverage comes from `go test -coverprofile`: command mode instruments every point; a driver run measures without instrumentation and then runs the driver once more for one round (no warm-up, no captures, no sampler) with `-coverprofile` and `-coverpkg` over the whole module, or every module of a `go.work` workspace (`go list -m`), so the driver package need not be the package of the target. Its profile goes to `cov/` as `p1-<mode>-cover.out`, `executed-<S>.json` lists the functions it covers and a target without a probe reads `executed` or `not_executed`; a failed coverage process is a limitation line and the targets read `unknown`.
 - Command mode also measures while the workload runs. The record above is written after `main`
   returned, when state owned by locals of the workload (a request loop filling an index, a slice
   built in `run()`) is already dead: that series reads flat and the heap profile is empty although
   the heap grew by megabytes. A sampler goroutine forces one collection per sample (the first at 2 ms,
   each next one 15 % later than the last ended, never more than a quarter of the elapsed time spent
-  in samples) and the exit record adds `go.heap_live.in_run` and `go.heap_objects.in_run`: the lowest
-  after-collection reading among the samples of the last third of the run (a floor, not a maximum: the
-  maximum of noisy readings rises with their number). Read it as a lower bound of the live heap while the
-  workload ran; on the leaks measured it was 65 to 87 % of the true growth. The base `go.*` columns keep
+  in samples) and the exit record adds `go.heap_live.in_run` and `go.heap_objects.in_run`: the floor
+  of the after-collection readings (the lowest reading at or after each sample, not a maximum: the
+  maximum of noisy readings rises with their number) read at three quarters of the run time by
+  interpolation, so every point of a series stands at the same share of its work wherever the
+  geometric schedule put its last sample; when no sample ended after that time the floor of the last
+  samples is continued to it and a limitation says so. Read it as a lower bound of the live heap while
+  the workload ran. The base `go.*` columns keep
   their meaning (read after `main`, after two collections), and driver mode has no in-run column.
   `dla alloc-test --finding` on a heap finding takes `go.heap_live.in_run` as its heap column only when
   the latest trend passed it through the gate and `go.heap_live` did not pass or rose by less than a
@@ -34,7 +37,7 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   With `--capture alloc` the heap profile of a point is the one of the last sample (role "taken in the
   run at <ms> ms"), in place of the exit profile; goroutine captures stay at exit. Limitation lines say
   when it did not work: no sample ended before exit (a workload shorter than 2 ms, or `DLA_INRUN=off`), the
-  reading is from the first half of the run (the time budget allowed few collections of a heap this
+  reading is continued to three quarters of the run because no sample ended after that time (the time budget allowed few collections of a heap this
   size), or no profile was taken in the run (the exit profile is then written, without state owned by
   locals). The in-run profile of a point is written at a different share of each run (somewhere between
   about two thirds and the whole of the work), so `dla summarize alloc-stack-diff` does not use the

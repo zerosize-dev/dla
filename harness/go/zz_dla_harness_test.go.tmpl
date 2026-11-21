@@ -583,10 +583,15 @@ func dlaCapture(phase string, notes *[]string) []map[string]any {
 //   - Time budget: a sample starts only when the time spent inside samples so far is at most a
 //     quarter of the elapsed time. Measured cost: +2 to +3 % of the run time on runs of 8 to 100
 //     seconds, +16 % on a one-second run of a pointer-heavy heap (60 MB of small objects).
-//   - Statistic: the lowest after-collection reading of the last third of the run. The maximum of
-//     noisy readings grows with their number and the last reading carries the whole transient of
-//     a workload with batches in flight; the floor does not rise on a flat workload, reads 65 to
-//     87 % of the true growth of a leak, and is a lower bound of the live heap while it ran.
+//   - Statistic: the floor envelope of the readings (the lowest reading at or after each sample), read at
+//     three quarters of the run time by interpolation between the samples around that time. The
+//     maximum of noisy readings grows with their number and the last reading carries the whole
+//     transient of a workload with batches in flight; the floor does not rise on a flat workload and
+//     is a lower bound of the live heap while it ran. The reading is taken at one share of the run, not
+//     at the sample nearest to it: the geometric schedule puts the last sample at a different share of
+//     each run (63 to 96 % in measured runs, 40 % under load), and a series over n whose points stand
+//     at different shares of their work is not linear in n. When no sample ended after that time the
+//     floor of the last four samples is continued to it (a note says so).
 //   - A sample that ends after main() returned is dropped (it would read a dead heap): the exit
 //     path sets the finished flag under the mutex, then waits for the goroutine.
 //   - DLA_INRUN=off switches the sampler off.
@@ -594,7 +599,8 @@ const (
 	dlaInRunFirstMs = 2.0       // first sample, ms since process start
 	dlaInRunRatio   = 1.15      // next sample at ratio x the end of the last
 	dlaInRunBudget  = 0.25      // share of the elapsed time samples may take
-	dlaInRunWindow  = 2.0 / 3.0 // the reading comes from samples ended at or after this share of the run
+	dlaInRunWindow  = 2.0 / 3.0 // only used to count the samples of the last third of the run (window_samples)
+	dlaInRunAt      = 0.75      // the floor envelope of the samples is read at this share of the run time
 )
 
 type dlaSample struct{ endMs, live, objects float64 }
@@ -692,9 +698,50 @@ func dlaStartSampler() func() {
 	}
 }
 
-// dlaInRunReading is the reading of the exit record: the sample with the lowest go.heap_live among
-// those that ended in the last third of the run (the later one on a tie; the last sample when the
-// window holds none), with the figures that say how it was taken.
+// dlaEnvelopeAt is the floor envelope of one metric at time t: the readings are replaced by the lowest
+// reading at or after each of them (so a transient high is ignored and the curve never falls), and the
+// envelope is read at t by linear interpolation between the samples that bracket it. Before the first
+// sample it is the first reading. After the last sample it continues the slope of the envelope over
+// its last four points (never below zero) when t is at most four times the last sample's time, and
+// else stays at the last reading. The second result says which: "interpolated", "extrapolated" or "last".
+func dlaEnvelopeAt(ts, ys []float64, t float64) (float64, string) {
+	n := len(ts)
+	env := make([]float64, n)
+	low := ys[n-1]
+	for i := n - 1; i >= 0; i-- {
+		if ys[i] < low {
+			low = ys[i]
+		}
+		env[i] = low
+	}
+	if t <= ts[0] {
+		return env[0], "interpolated"
+	}
+	for i := 1; i < n; i++ {
+		if t <= ts[i] {
+			f := (t - ts[i-1]) / (ts[i] - ts[i-1])
+			return env[i-1] + f*(env[i]-env[i-1]), "interpolated"
+		}
+	}
+	from := n - 4
+	if from < 0 {
+		from = 0
+	}
+	if n-1 == from || ts[n-1] <= 0 || t > 4*ts[n-1] || ts[n-1] == ts[from] {
+		return env[n-1], "last"
+	}
+	slope := (env[n-1] - env[from]) / (ts[n-1] - ts[from])
+	if slope < 0 {
+		slope = 0
+	}
+	return env[n-1] + slope*(t-ts[n-1]), "extrapolated"
+}
+
+// dlaInRunReading is the reading of the exit record: the floor envelope of the samples' go.heap_live and
+// go.heap_objects, read at three quarters of the run (dlaInRunAt), with the figures that say how it
+// was taken. A sample is taken wherever the geometric schedule falls, so its own time is a different
+// share of each run; reading the envelope at one share of the run puts every point of a series at
+// the same share of its work, which is what a series over n needs.
 func dlaInRunReading(notes *[]string) (map[string]float64, map[string]any) {
 	dlaSampleMu.Lock()
 	defer dlaSampleMu.Unlock()
@@ -708,27 +755,38 @@ func dlaInRunReading(notes *[]string) (map[string]float64, map[string]any) {
 		return nil, nil
 	}
 	end := dlaSampleEndMs
-	pick, window := len(dlaSamples)-1, 0
-	first := true
+	at := dlaInRunAt * end
+	ts := make([]float64, len(dlaSamples))
+	live := make([]float64, len(dlaSamples))
+	objects := make([]float64, len(dlaSamples))
 	for i, s := range dlaSamples {
-		if s.endMs < dlaInRunWindow*end {
-			continue
-		}
-		window++
-		if first || s.live <= dlaSamples[pick].live {
-			pick, first = i, false
+		ts[i], live[i], objects[i] = s.endMs, s.live, s.objects
+	}
+	l, how := dlaEnvelopeAt(ts, live, at)
+	o, _ := dlaEnvelopeAt(ts, objects, at)
+	vals := map[string]float64{"go.heap_live": l, "go.heap_objects": o}
+	window := 0
+	for _, t := range ts {
+		if t >= dlaInRunWindow*end {
+			window++
 		}
 	}
-	chosen := dlaSamples[pick]
-	vals := map[string]float64{"go.heap_live": chosen.live, "go.heap_objects": chosen.objects}
+	keep := len(ts)
+	if keep > 48 {
+		keep = 48
+	}
 	info := map[string]any{
-		"samples": len(dlaSamples), "window_samples": window, "reading_ms": chosen.endMs,
-		"end_ms": end, "spent_ms": dlaSampleSpent, "statistic": "floor-last-third",
+		"samples": len(dlaSamples), "window_samples": window, "reading_ms": at,
+		"end_ms": end, "spent_ms": dlaSampleSpent, "statistic": "floor-at-three-quarters", "how": how,
+		"last_sample_ms": ts[len(ts)-1], "sample_ms": ts[len(ts)-keep:], "sample_live": live[len(live)-keep:],
 	}
-	if end-chosen.endMs > end/2 {
-		*notes = append(*notes, "go command mode: the in-run reading is from "+dlastrconv.FormatFloat(chosen.endMs, 'f', 0, 64)+" ms of a "+dlastrconv.FormatFloat(end, 'f', 0, 64)+" ms run ("+dlastrconv.Itoa(len(dlaSamples))+" samples; the time budget of the sampler allows few collections of a heap this size); it understates the state at the end")
+	switch how {
+	case "extrapolated":
+		*notes = append(*notes, "go command mode: no sample ended after "+dlastrconv.FormatFloat(at, 'f', 0, 64)+" ms of a "+dlastrconv.FormatFloat(end, 'f', 0, 64)+" ms run (the last ended at "+dlastrconv.FormatFloat(ts[len(ts)-1], 'f', 0, 64)+" ms, "+dlastrconv.Itoa(len(dlaSamples))+" samples; the time budget of the sampler allows few collections of a heap this size): the in-run reading continues the floor of the last samples to that time")
+	case "last":
+		*notes = append(*notes, "go command mode: no sample ended near "+dlastrconv.FormatFloat(at, 'f', 0, 64)+" ms of a "+dlastrconv.FormatFloat(end, 'f', 0, 64)+" ms run (the last ended at "+dlastrconv.FormatFloat(ts[len(ts)-1], 'f', 0, 64)+" ms, "+dlastrconv.Itoa(len(dlaSamples))+" samples): the in-run reading is the last one and understates the state at that time")
 	}
-	*notes = append(*notes, "go.*.in_run: the lowest after-collection reading of the last third of the run (floor), a lower bound of the live heap while the workload ran; the base go.* columns are read after main returned")
+	*notes = append(*notes, "go.*.in_run: the floor (the lowest reading at or after each sample) of the after-collection readings taken while the workload ran, read at three quarters of the run time, a lower bound of the live heap while it ran; the base go.* columns are read after main returned")
 	return vals, info
 }
 

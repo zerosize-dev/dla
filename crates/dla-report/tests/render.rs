@@ -1051,7 +1051,7 @@ mod ranking {
             md.contains("Suspected, static-only findings are ordered"),
             "{md}"
         );
-        assert!(md.contains("such as a holder with no writers."), "{md}");
+        assert!(md.contains("a sum of named weights"), "{md}");
         assert!(
             !md.contains("none of them was exercised") && !md.contains("most were not measured"),
             "{md}"

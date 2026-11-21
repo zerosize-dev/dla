@@ -96,33 +96,22 @@ fn go_another_struct_s_field_of_the_same_name_is_not_a_writer() {
     assert_eq!(hub.writers, ["p/p.go:12"], "{hub:?}");
 }
 
-/// The sites the census of `rt` left out as holders that are not containers.
-fn not_listed(files: &[(&str, &str)], rt: Runtime) -> Vec<String> {
-    let (_d, ctx) = project(files);
-    census(&ctx, rt).unwrap();
-    let raw: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(ctx.run_dir.join(format!("census/{}.json", rt.as_str()))).unwrap(),
-    )
-    .unwrap();
-    raw["not_listed"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v["site"].as_str().unwrap().to_owned())
-        .collect()
-}
-
 #[test]
-fn go_a_pointer_that_is_only_assigned_as_a_whole_is_not_a_container_and_not_listed() {
+fn go_a_pointer_that_is_only_assigned_as_a_whole_is_not_a_container_and_has_no_writers() {
     let src = "package p\n\ntype Config struct{ n int }\n\nvar current *Config\nvar mu sync.Mutex\nvar items = map[string]int{}\n\nfunc Set(c *Config) {\n\tcurrent = c\n}\n\nfunc Add(k string) {\n\titems[k] = 1\n}\n";
-    let files = [("p/p.go", src)];
-    let es = entries(&files, Runtime::Go);
-    // The pointer is only reassigned and the mutex is no container: neither is a holder.
-    assert!(es.iter().all(|e| !e.owner.ends_with("p.current") && !e.owner.ends_with("p.mu")), "{es:?}");
-    assert_eq!(not_listed(&files, Runtime::Go), ["p/p.go:5", "p/p.go:6"]);
-    // A real container stays.
-    assert!(entry(&es, "p.items").facts.container == Some(ContainerClass::Container));
-    // A field wrapped around its own value is a chain that grows: it stays, with its writer.
+    let es = entries(&[("p/p.go", src)], Runtime::Go);
+    // The pointer is only reassigned and the mutex is no container: still holders (a heap
+    // graph ties to them), but with no writers, so no tier of the queue takes them.
+    let cur = entry(&es, "p.current");
+    assert_eq!(cur.facts.container, Some(ContainerClass::NotContainer));
+    assert!(cur.writers.is_empty() && cur.facts.writer_sites.is_empty(), "{cur:?}");
+    let mu = entry(&es, "p.mu");
+    assert_eq!(mu.facts.container, Some(ContainerClass::NotContainer));
+    // A real container keeps its writer.
+    let items = entry(&es, "p.items");
+    assert_eq!(items.facts.container, Some(ContainerClass::Container));
+    assert_eq!(items.writers, ["p/p.go:14"]);
+    // A field wrapped around its own value is a chain that grows: its writer stays.
     let chain = "package p\n\ntype Poller struct {\n\tctx context.Context\n}\n\nfunc (p *Poller) Lookup(s string) {\n\tp.ctx = trace.Start(p.ctx, s)\n}\n";
     let es = entries(&[("p/c.go", chain)], Runtime::Go);
     let e = entry(&es, "Poller.ctx");
@@ -132,18 +121,29 @@ fn go_a_pointer_that_is_only_assigned_as_a_whole_is_not_a_container_and_not_list
 }
 
 #[test]
-fn go_bounds_pools_literal_tables_and_owner_creation() {
-    let src = "package p\n\nvar bufs = sync.Pool{}\nvar table = map[string]int{\"a\": 1, \"b\": 2}\nvar ring = make(chan int, 16)\nvar free = make(chan int)\n\ntype Hub struct {\n\tsubs []int\n}\n\nfunc New() *Hub { return &Hub{} }\n\nfunc main() {\n\th := New()\n\t_ = h\n}\n";
-    let es = entries(&[("p/p.go", src)], Runtime::Go);
+fn go_bounds_literal_tables_pools_and_owner_creation() {
+    let src = "package p\n\nvar bufs = sync.Pool{}\nvar table = map[string]int{\"a\": 1, \"b\": 2}\nvar ring = make(chan int, 16)\nvar free = make(chan int)\n";
+    let files = [("p/p.go", src)];
+    let es = entries(&files, Runtime::Go);
     assert!(entry(&es, "p.bufs").facts.pool);
+    assert_eq!(entry(&es, "p.bufs").facts.container, Some(ContainerClass::NotContainer));
     assert!(entry(&es, "p.table").facts.literal);
     assert_eq!(entry(&es, "p.ring").facts.bound, Some(Bound::Bounded));
     assert_eq!(entry(&es, "p.free").facts.bound, Some(Bound::None));
-    let per_call = "package p\n\ntype Hub struct {\n\tsubs []int\n}\n\nfunc Handle() {\n\th := &Hub{}\n\t_ = h\n}\n";
-    let es2 = entries(&[("p/q.go", per_call)], Runtime::Go);
-    let h = es2.iter().find(|e| e.owner.ends_with("Hub.subs"));
-    // `Hub` is not long-lived here, so it is not listed at all.
-    assert!(h.is_none() || h.unwrap().facts.owner_creation == Some(OwnerCreation::PerCall));
+    // A literal table that something inserts into is not only read.
+    let written = "package p\n\nvar table = map[string]int{\"a\": 1}\n\nfunc Add(k string) {\n\ttable[k] = 1\n}\n";
+    let es = entries(&[("p/w.go", written)], Runtime::Go);
+    assert!(!entry(&es, "p.table").facts.literal);
+}
+
+#[test]
+fn go_the_owner_type_is_made_per_call_or_only_at_start_up() {
+    let per_call = "package p\n\ntype Registry struct {\n\tsubs []int\n}\n\nfunc Handle() {\n\tr := &Registry{}\n\t_ = r\n}\n";
+    let es = entries(&[("p/q.go", per_call)], Runtime::Go);
+    assert_eq!(entry(&es, "Registry.subs").facts.owner_creation, Some(OwnerCreation::PerCall));
+    let start_up = "package p\n\ntype Registry struct {\n\tsubs []int\n}\n\nfunc New() *Registry { return &Registry{} }\n\nfunc main() {\n\tr := New()\n\t_ = r\n}\n";
+    let es = entries(&[("p/s.go", start_up)], Runtime::Go);
+    assert_eq!(entry(&es, "Registry.subs").facts.owner_creation, Some(OwnerCreation::StartUp));
 }
 
 const JAVA_A: &str = "package a;\n\nimport java.util.*;\n\npublic class A {\n  private final Map<String, String> resolved = new HashMap<>();\n  private static final Map<String, String> CACHE = new WeakHashMap<>();\n  private final List<String> items;\n\n  public A() {\n    this.items = new ArrayList<>();\n    items.add(\"first\");\n  }\n\n  public void put(String k, String v) {\n    resolved.put(k, v);\n    CACHE.put(k, v);\n    items.add(k);\n  }\n\n  void evict(String k) {\n    resolved.remove(k);\n    items.clear();\n  }\n}\n";
@@ -195,10 +195,8 @@ fn java_weak_and_bounded_types_and_owner_creation() {
     assert_eq!(entry(&es, "L.M").facts.bound, Some(Bound::Bounded));
     let owner = "package a;\n\nimport java.util.*;\n\nclass Reg {\n  private final List<String> subs = new ArrayList<>();\n  void add(String s) { subs.add(s); }\n}\n\nclass Use {\n  static void each(String s) {\n    new Reg().add(s);\n  }\n}\n";
     let es = entries(&[("src/a/Reg.java", owner)], Runtime::Jvm);
-    let r = es.iter().find(|e| e.owner.ends_with("Reg.subs"));
-    if let Some(r) = r {
-        assert_eq!(r.facts.owner_creation, Some(OwnerCreation::PerCall), "{r:?}");
-    }
+    let r = entry(&es, "Reg.subs");
+    assert_eq!(r.facts.owner_creation, Some(OwnerCreation::PerCall), "{r:?}");
 }
 
 const PY: &str = "import functools\nfrom weakref import WeakValueDictionary\n\n_CACHE = {}\n_LOG = None\ntable = {\"a\": 1, \"b\": 2}\nREFS = WeakValueDictionary()\n\n\ndef remember(key, value):\n    _CACHE[key] = value\n\n\ndef forget(key):\n    del _CACHE[key]\n\n\n@functools.lru_cache(maxsize=None)\ndef parse(x):\n    return x\n\n\n@functools.lru_cache(maxsize=64)\ndef small(x):\n    return x\n\n\n@functools.cache\ndef big(x):\n    return x\n\n\nclass Hub:\n    def __init__(self):\n        self.subs = []\n        self.subs.append(1)\n\n    def add(self, fn):\n        self.subs.append(fn)\n";

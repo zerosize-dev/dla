@@ -1890,6 +1890,9 @@ fn run_driver_mode(
     if let Some(s) = &res.sampler {
         run.limitations.extend(s.limitations.iter().cloned());
     }
+    if manifest.runtime == dla_core::runtime::Runtime::Go && !res.timed_out {
+        go_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
+    }
     let file: DumpFile = dumps::read_dumps(&dump);
     if file.bad_lines > 0 {
         run.limitations.push(format!(
@@ -1959,6 +1962,109 @@ fn run_driver_mode(
         .warmup
         .min(u32::try_from(run.points.len()).unwrap_or(0));
     Ok(run)
+}
+
+/// The module paths a Go coverage profile should cover: `go list -m` in the harness's
+/// working directory (every module of a `go.work` workspace, one pattern each), as
+/// `<module>/...`; `./...` when the go command cannot say. The driver package is rarely the
+/// package of a target, so the patterns name the modules, not the driver's package.
+fn go_coverpkg(spec: &ExecSpec<'_>) -> String {
+    let mut cmd = std::process::Command::new("go");
+    cmd.args(["list", "-m"])
+        .current_dir(&spec.cwd)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
+    let modules: Vec<String> = cmd
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.contains(' '))
+                .map(|m| format!("{m}/..."))
+                .collect()
+        })
+        .unwrap_or_default();
+    if modules.is_empty() {
+        "-coverpkg=./...".to_owned()
+    } else {
+        format!("-coverpkg={}", modules.join(","))
+    }
+}
+
+/// A Go driver run measures without coverage instrumentation, so the points are the
+/// uninstrumented program's. What the driver's hooks reach is read from one more, short
+/// process: the same driver for one round of `step` units, no warm-up, no captures, no
+/// sampler, built with `-coverprofile` and `-coverpkg` over the whole module (or every module of
+/// the workspace). Its profile goes to `cov/` like a command-mode one, and `dla trend` and
+/// the entry-point coverage read it from there. Its failure is a limitation, never a refusal.
+fn go_cover_point(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    mode: KeyMode,
+    timeout: Duration,
+    run: &mut ModeRun,
+) -> Result<(), Refusal> {
+    let label = format!("p1-{}-cover", mode.as_str());
+    let pe = PointEnv {
+        manifest,
+        paths,
+        label: label.clone(),
+        mode,
+        n: manifest.step,
+        purge: None,
+        rounds: 1,
+        capture: None,
+        dumps: 0,
+    };
+    let dump = pe.dump_path();
+    if let Some(d) = dump.parent() {
+        fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
+    }
+    fs::create_dir_all(&paths.cov).map_err(|e| io_refusal(&paths.cov, e))?;
+    let profile = paths.cov.join(format!("{label}.out"));
+    let _ = fs::remove_file(&profile);
+    let mut spec = pe.exec_spec(timeout, "", &[("DLA_WARMUP", "0".to_owned())]);
+    let Some(at) = spec.argv.iter().position(|a| a == "test") else {
+        return Ok(());
+    };
+    let pkgs = go_coverpkg(&spec);
+    spec.argv.splice(
+        at + 1..at + 1,
+        [
+            "-coverprofile".to_owned(),
+            profile.to_string_lossy().into_owned(),
+            pkgs,
+        ],
+    );
+    spec.sample = false;
+    let command = spec.argv.join(" ");
+    spec.command = &command;
+    let res = exec(ctx, &spec)?;
+    run.logs.push(paths.rel(ctx, &spec.log));
+    let log_rel = paths.rel(ctx, &spec.log);
+    if let Some(e) = &res.spawn_error {
+        run.limitations
+            .push(format!("the coverage run {label} did not start: {e}"));
+    } else if res.timed_out {
+        run.limitations.push(format!(
+            "the coverage run {label} did not finish in {} s and was killed (log {log_rel}): which entry points ran is not known",
+            timeout.as_secs()
+        ));
+    } else if res.code != Some(0) {
+        run.limitations.push(format!(
+            "the coverage run {label} exited with {} (log {log_rel}): which entry points ran may be incomplete",
+            res.code
+                .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------

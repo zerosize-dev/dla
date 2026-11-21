@@ -296,7 +296,10 @@ under the run directory and need tier 1.
      target or reused a key: read `detail`, fix the unit, `dla harness run H<n> --mode both` once more
      (the same harness, or a new one with `dla harness gen ... --driver --probe F<n>` when the driver
      must change shape). `executed` and `unknown` (no probe, or no coverage data: Rust, native, Python
-     before 3.12) settle the candidate after a driver run. A candidate settles when a verdict is `grew`
+     before 3.12) settle the candidate after a driver run. A Go driver run does not belong to that list:
+     after its measured process `dla` runs the driver once more for one round in a short coverage process
+     (`-coverprofile` over the whole module or every module of the workspace), so a Go target without a
+     probe reads `executed` or `not_executed`, and `not_executed` keeps it open. A candidate settles when a verdict is `grew`
      or `changed`, or after one driver run with `executed` or `unknown`, or after two driver runs
      whose driver files differ, whatever the verdicts. A fixed command (command mode, JUnit) settles only
      by `grew` or `changed`.

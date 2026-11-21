@@ -53,7 +53,7 @@ prints the workload's stdout; keep it in the harness log.
 - `tick` records every `DLA_TICK_MS` (when set): no forced collection, the metrics, OS values and
   the goroutine groups. The profile stops the world for a moment, so keep the interval above ~100 ms.
 - `detectors`: goleak output (driver mode, tag `dlagoleak`).
-- Coverage comes from `go test -coverprofile` with `-coverpkg=./...`; the dump carries none.
+- Coverage comes from `go test -coverprofile`; the dump carries none. Command mode runs every point with `-coverprofile <cov>/<label>.out -coverpkg=./...`. A driver run keeps its measured process uninstrumented and runs the driver once more afterwards, one round of `DLA_STEP` units with `DLA_WARMUP=0`, no captures and no sampler, with `-coverprofile <cov>/p1-<mode>-cover.out` and `-coverpkg` naming every module of `go list -m` (`<module>/...`, one per workspace module, `./...` when the go command cannot say), so the driver package need not be the package of the target. `go tool cover -func` reads the profiles (without `GOFLAGS=-mod=mod` in a workspace, which Go refuses there).
 
 ## The in-run sampler
 
@@ -71,15 +71,22 @@ the deferred function.
 - A sample: `runtime.GC()` once, `runtime/metrics`, and with alloc capture the heap profile into memory
   (newest kept). A sample that ends after the exit path started is dropped: it would read a dead heap.
   The sampler never panics into the workload.
-- The reading: the sample with the lowest `go.heap_live` among those that ended at or after two thirds
-  of the run time (the later one on a tie; the last sample when the window is empty). Not the maximum
-  (it rises with the number of samples) and not the last sample (it carries the transient of batches in
-  flight): the floor is flat on a flat workload and rises with a leak, at 65 to 87 % of its true slope.
+- The reading: the floor envelope of the samples (each sample's reading replaced by the lowest reading at
+  or after it), read at three quarters of the run time by interpolation between the samples around that
+  time. Not the maximum (it rises with the number of samples) and not the last sample (it carries the
+  transient of batches in flight): the floor is flat on a flat workload and rises with a leak. It is read
+  at one share of the run, not at the sample nearest to it: the geometric schedule puts the last
+  sample at a different share of each run (63 to 96 % in measured runs of `go-header-index`, 40 % in
+  one under load), so the nearest sample put the points of a series over `n` at different shares of
+  their work and one point could fall below the one before it. When no sample ended after three
+  quarters of the run, the floor of the last four samples is continued to that time (never below
+  zero slope, at most four times the last sample's time; otherwise the last reading is kept) and a
+  limitation says so.
 - Record fields: `values_in_run` (`go.heap_live`, `go.heap_objects` of that sample) and `in_run`
-  (`samples`, `window_samples`, `reading_ms`, `end_ms`, `spent_ms`, `statistic`). The series gets
+  (`samples`, `window_samples` (samples that ended in the last third), `reading_ms` (the time the reading stands at), `end_ms`, `spent_ms`, `statistic` = `floor-at-three-quarters`, `how` = `interpolated`, `extrapolated` or `last`, `last_sample_ms`, and `sample_ms`/`sample_live` for the last 48 samples). The series gets
   `go.heap_live.in_run` and `go.heap_objects.in_run` (bytes, gauge, heap, after GC, no baseline).
   Existing columns are unchanged.
-- `limitations`: no sample ended before exit; the reading is from the first half of the run; a runtime
+- `limitations`: no sample ended before exit; no sample ended after three quarters of the run (the floor of the last samples is continued, or the last reading kept); a runtime
   metric is unavailable; alloc capture without an in-run profile (the exit profile is written); and,
   whenever a reading exists, that it is a floor and a lower bound.
 - `DLA_INRUN=off` switches the sampler off. Driver mode has no sampler: its checkpoints are taken
