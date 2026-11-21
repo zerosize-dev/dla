@@ -525,3 +525,10 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - axios-5 at 19:33: the model follows the detector/site finding: "F27's test favored a leak, reading lib/adapters/http.js:924"; alloc-tests of F14, F18, F25, F26, F28 running.
 - CI on 167233a: run 44938127014 in progress.
 - NEXT: axios-5 result; CI result -> commit 167233a tree to main (commit-message-3.txt) and push; then third frozen build (with brief M) for tokio-4 and spring-5, grpc-5.
+
+## State at 19:45 UTC, 2026-11-21
+- REAL RUN axios-5 FINISHED (49 min, cost 1.97): COMPLETE, and THE DOCUMENTED LEAK IS CONFIRMED (F27, lib/adapters/http.js:924) (notes real-run-plugin-axios-5.md, evidence u36/axios-5).
+- Real-project score on current code: aiohttp found, grpc-go found, axios found; tokio-util found by hand-driven second look with the choices recipe (real rerun tokio-4 pending the third frozen build); spring not rerun; Jetty, Pillow never run.
+- New defect from axios-5: per-site count columns tie through the receiver's writer line (:717, 20 candidates) -> F14 and F18 confirmed without a column at their site. N resumed (a747f7bdc3d1ef293) to tighten: own site only. Task 68.
+- CI on 167233a (run 44938127014): in progress at 19:33; waiter bvy4qn016.
+- NEXT: CI green -> commit 167233a to main (commit-message-3.txt). When N reports: verify, third frozen build (brief M + N's tie rule), tokio-4, spring-5, grpc-5.
