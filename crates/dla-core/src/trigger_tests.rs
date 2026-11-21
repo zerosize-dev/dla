@@ -214,15 +214,68 @@ fn two_entry_path_harnesses_with_different_drivers_and_no_growth_find_no_trigger
         Some("methods and bodies"),
         Some(&[(1, Verdict::Executed)]),
     );
+    // H3 ran but nothing measured the holder there: no evidence either way.
+    assert_eq!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Unmeasured {
+            runs: vec![
+                ("H2".into(), "constant".into()),
+                ("H3".into(), "executed".into())
+            ]
+        }
+    );
+    // A third harness that measured it flat gives "no trigger found" with H2.
+    run.harness("H4", Kind::Entry, &[1]);
+    run.run(
+        "S4",
+        "H4",
+        "dd",
+        Some("methods and bodies"),
+        Some(&[(1, Verdict::Constant)]),
+    );
     assert_eq!(
         run.triggers().trigger(&f(1)),
         Trigger::NotFound {
             runs: vec![
                 ("H2".into(), "paths".into()),
-                ("H3".into(), "methods and bodies".into())
+                ("H4".into(), "methods and bodies".into())
             ]
         }
     );
+}
+
+#[test]
+fn runs_that_did_not_measure_the_holder_are_not_checked_whatever_the_verdict() {
+    for other in [Verdict::Executed, Verdict::Unknown, Verdict::NotExecuted] {
+        let run = Run::new(1);
+        run.harness("H1", Kind::Entry, &[1]);
+        run.run("S1", "H1", "aa", Some("a"), Some(&[(1, other)]));
+        run.harness("H2", Kind::Entry, &[1]);
+        run.run("S2", "H2", "bb", Some("b"), Some(&[(1, other)]));
+        let name = other.as_str();
+        assert_eq!(
+            run.triggers().trigger(&f(1)),
+            Trigger::Unmeasured {
+                runs: vec![("H1".into(), name.into()), ("H2".into(), name.into())]
+            },
+            "{name}"
+        );
+    }
+    // A later run of H1 with a size reading is the one that counts for H1.
+    let run = Run::new(1);
+    run.harness("H1", Kind::Entry, &[1]);
+    run.run("S1", "H1", "aa", Some("a"), Some(&[(1, Verdict::Executed)]));
+    run.harness("H2", Kind::Entry, &[1]);
+    run.run("S2", "H2", "bb", Some("b"), Some(&[(1, Verdict::Constant)]));
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::Unmeasured { .. }
+    ));
+    run.run("S3", "H1", "aa", Some("a"), Some(&[(1, Verdict::Constant)]));
+    assert!(matches!(
+        run.triggers().trigger(&f(1)),
+        Trigger::NotFound { .. }
+    ));
 }
 
 #[test]

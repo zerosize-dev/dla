@@ -614,6 +614,12 @@ fn trigger_json(view: &RunView) -> serde_json::Map<String, Value> {
                 "trigger": trig.name(),
                 "harnesses": runs.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(", "),
             }),
+            Trigger::Unmeasured { runs } => json!({
+                "trigger": trig.name(),
+                "harnesses": runs.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(", "),
+                "verdicts": runs.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join(", "),
+                "not_checked": "the entry-path harnesses ran but nothing measured the holder there",
+            }),
             Trigger::Unchecked => json!({"trigger": trig.name()}),
         };
         if let Some(why) = (trig == Trigger::Unchecked)
@@ -646,6 +652,9 @@ fn queue_json(queues: &[dla_core::queue::RuntimeQueue]) -> Value {
         });
         if let Some(c) = q.closed {
             e["closed"] = json!(c);
+        }
+        if let Some(p) = &q.package {
+            e["package"] = json!(dla_core::queue::package_label(p));
         }
         m.insert(q.runtime.clone(), e);
     }

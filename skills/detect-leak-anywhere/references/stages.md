@@ -327,8 +327,12 @@ under the run directory and need tier 1.
   - `reproduced`: the finding has `grew` in the trend of an entry-path harness, or in a harness that runs
     the project's own workload (a fixed command or a JUnit repeat). The trigger text is the VARIES line.
   - `not_found`: two entry-path harnesses with different drivers targeted it, ran, were read with `dla
-    trend`, and it grew in neither. After the first without growth write a second, different one (other
-    entry points, other inputs, the rejected-input paths); the same driver twice does not count.
+    trend`, and measured the holder flat in both (verdict `constant`). After the first without growth
+    write a second, different one (other entry points, other inputs, the rejected-input paths); the same
+    driver twice does not count.
+  - `unmeasured`: two such runs, but at least one verdict is not `constant` (nothing read the holder's
+    size there: `executed`, `unknown`...). That is no evidence either way: the report says "not checked".
+    After one such run the item's fix asks for a size reading (a probe of the holder) and a rerun first.
   - `unchecked`: it grew only in drivers that are not entry-path.
   While the queue was on and more than the floor of the budget is left, a confirmed or strong leak-side
   finding that is `unchecked` gives an item of kind `trigger` in `dla run status`, the final gate and the

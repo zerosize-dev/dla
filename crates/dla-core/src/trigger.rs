@@ -290,8 +290,7 @@ impl Triggers {
             if picked.len() == 2 {
                 break;
             }
-            if !picked.iter().any(|p| p.harness == r.harness) && digests.insert(r.digest.as_str())
-            {
+            if !picked.iter().any(|p| p.harness == r.harness) && digests.insert(r.digest.as_str()) {
                 picked.push(r);
             }
         }

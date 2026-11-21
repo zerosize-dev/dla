@@ -197,6 +197,13 @@ fn probe_text(project: &Path, a: &Asked, probes: &[ProbeSpec]) -> Option<String>
         ProbeTarget::GoVar { package_dir, name } => {
             format!("package variable {package_dir}.{name}")
         }
+        ProbeTarget::GoField {
+            package_dir,
+            type_name,
+            field,
+        } => format!(
+            "length of field {field} of {type_name} (package {package_dir}), read by reflection from the objects you pass to dlaTrack: in dlaSetup write dlaTrack(<the {type_name} your setup built>)"
+        ),
     })
 }
 
@@ -496,6 +503,17 @@ pub const ENTRY_RULES: [&str; 5] = [
 /// The comment block for a driver, above the first hook. `prefix` is the line comment
 /// marker (`#` or `//`); `None` wraps each line in `/* */`.
 pub fn block(harness: &str, targets: &[Target], prefix: Option<&str>) -> String {
+    block_with(harness, targets, prefix, &[])
+}
+
+/// [`block`] with `notes`: lines about the driver itself (the Go package it is in), placed
+/// right under the first line.
+pub fn block_with(
+    harness: &str,
+    targets: &[Target],
+    prefix: Option<&str>,
+    notes: &[String],
+) -> String {
     let entry = targets.iter().any(|t| t.entry.is_some());
     let mut lines = vec![if entry {
         format!(
@@ -506,6 +524,7 @@ pub fn block(harness: &str, targets: &[Target], prefix: Option<&str>) -> String 
             "Targets of harness {harness}: make every unit reach these, with a new key per unit"
         )
     }];
+    lines.extend(notes.iter().cloned());
     for t in targets {
         lines.extend(t.lines());
     }
@@ -528,6 +547,16 @@ pub fn block(harness: &str, targets: &[Target], prefix: Option<&str>) -> String 
 /// reads `DLA-HOOK <name>:` in a comment), with that line's indentation. Returns false when
 /// the file has no such line.
 pub fn write_block(path: &Path, harness: &str, targets: &[Target]) -> std::io::Result<bool> {
+    write_block_with(path, harness, targets, &[])
+}
+
+/// [`write_block`] with the driver notes of [`block_with`].
+pub fn write_block_with(
+    path: &Path,
+    harness: &str,
+    targets: &[Target],
+    notes: &[String],
+) -> std::io::Result<bool> {
     let text = fs::read_to_string(path)?;
     let prefix = match path.extension().and_then(|e| e.to_str()) {
         Some("py") => Some("#"),
@@ -549,7 +578,7 @@ pub fn write_block(path: &Path, harness: &str, targets: &[Target]) -> std::io::R
         return Ok(false);
     };
     let pad = &text[offset..offset + indent];
-    let body: String = block(harness, targets, prefix)
+    let body: String = block_with(harness, targets, prefix, notes)
         .lines()
         .map(|l| format!("{pad}{l}\n"))
         .collect();

@@ -21,6 +21,9 @@ use crate::{
     view::RunView,
 };
 
+/// The runtime name of Go queues, whose batches are one package each.
+const GO: &str = "go";
+
 /// The most candidates one batch (`dla harness gen --next`) takes by rank.
 pub const MAX_BATCH: usize = MAX_TARGETS;
 /// The most candidates one batch declares once the siblings of its candidates are added.
@@ -59,6 +62,63 @@ pub fn with_siblings(
         }
     }
     (batch, siblings)
+}
+
+/// The package directory of a Go site (`health/server.go:49` -> `health`; a file at the
+/// project root -> the empty string).
+pub fn go_package_dir(site: &str) -> String {
+    let file = match site.rsplit_once(':') {
+        Some((f, l)) if !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()) => f,
+        _ => site,
+    };
+    let file = file.replace('\\', "/");
+    let file = file.strip_prefix("./").unwrap_or(&file);
+    file.rsplit_once('/').map_or("", |(d, _)| d).to_owned()
+}
+
+/// How a package directory is named in output (`.` for the project root).
+pub fn package_label(dir: &str) -> &str {
+    if dir.is_empty() { "." } else { dir }
+}
+
+/// The package directory of a finding of a Go queue, from its site.
+fn package_of(view: &RunView, id: &FindingId) -> Option<String> {
+    view.ledger
+        .finding(id)
+        .and_then(|f| f.site.as_deref())
+        .map(go_package_dir)
+}
+
+/// The package directories of `pending` in rank order, each once, by its best-ranked member.
+pub fn go_packages(view: &RunView, pending: &[&FindingId]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in pending {
+        if let Some(p) = package_of(view, f)
+            && !out.contains(&p)
+        {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// The batch of a Go queue: the pending candidates whose site is in the package directory
+/// `package`, in rank order, the first `head` (at most [`MAX_BATCH`]) and then the
+/// same-owner siblings up to [`MAX_BATCH_WITH_SIBLINGS`] (see [`with_siblings`]). A Go test
+/// file reads the unexported names of its own package only, so the candidates of one batch
+/// are the ones one driver can reach and probe.
+pub fn package_batch(
+    view: &RunView,
+    pending: &[&FindingId],
+    head: usize,
+    package: &str,
+) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
+    let inside: Vec<&FindingId> = pending
+        .iter()
+        .filter(|f| package_of(view, f).is_some_and(|p| p == package))
+        .copied()
+        .collect();
+    with_siblings(view, &inside, head)
 }
 
 /// States a ranked finding can be in: the queue's universe. A closed finding keeps its
@@ -380,6 +440,9 @@ pub struct RuntimeQueue {
     /// The candidates `batch` holds because of their owner, each with the earlier candidate
     /// it came with.
     pub siblings: BTreeMap<FindingId, FindingId>,
+    /// Go: the package directory every candidate of `batch` is in (`""` is the project
+    /// root); `None` for other runtimes and for an empty batch.
+    pub package: Option<String>,
     /// The pending candidates no unrun harness declares, in rank order: what a batch is taken
     /// from.
     pub declarable: Vec<FindingId>,
@@ -410,7 +473,34 @@ impl RuntimeQueue {
         n: usize,
     ) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
         let free: Vec<&FindingId> = self.declarable.iter().collect();
+        if self.runtime == "never-go" {
+            return match go_packages(view, &free).first() {
+                Some(p) => package_batch(view, &free, n, p),
+                None => (Vec::new(), BTreeMap::new()),
+            };
+        }
         with_siblings(view, &free, n)
+    }
+
+    /// Go: the package directories of the declarable candidates, in the rank order of their
+    /// best candidate. Empty for other runtimes.
+    pub fn packages(&self, view: &RunView) -> Vec<String> {
+        if self.runtime != GO {
+            return Vec::new();
+        }
+        let free: Vec<&FindingId> = self.declarable.iter().collect();
+        go_packages(view, &free)
+    }
+
+    /// Go: the batch of the declarable candidates in the package directory `package`.
+    pub fn batch_in_package(
+        &self,
+        view: &RunView,
+        n: usize,
+        package: &str,
+    ) -> (Vec<FindingId>, BTreeMap<FindingId, FindingId>) {
+        let free: Vec<&FindingId> = self.declarable.iter().collect();
+        package_batch(view, &free, n, package)
     }
 
     /// The rank and tier of a pending candidate.
@@ -496,7 +586,18 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                         .is_none_or(|h| !ix.declared_by.get(*p).is_some_and(|v| v.contains(h)))
                 })
                 .collect();
-            let (batch, siblings) = with_siblings(view, &free, MAX_BATCH);
+            let (batch, siblings, package) = if runtime == "never-go" {
+                match go_packages(view, &free).into_iter().next() {
+                    Some(p) => {
+                        let (b, s) = package_batch(view, &free, MAX_BATCH, &p);
+                        (b, s, Some(p))
+                    }
+                    None => (Vec::new(), BTreeMap::new(), None),
+                }
+            } else {
+                let (b, s) = with_siblings(view, &free, MAX_BATCH);
+                (b, s, None)
+            };
             let declarable: Vec<FindingId> = free.iter().map(|f| (*f).clone()).collect();
             let batch_command = batch_command(view, &runtime);
             let command = match (&in_flight, batch.is_empty()) {
@@ -522,6 +623,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 pending_rank,
                 batch,
                 siblings,
+                package,
                 declarable,
                 in_flight,
                 batch_command,

@@ -276,8 +276,9 @@ for the verdict. For dynamic findings it prints:
   checked 0`); the findings section lists the reproduced ones first. `Trigger: reproduced through the
   public API in H5 (varies: <text>)` is a leak that real use can make grow. `Trigger: not found: it grows
   when the harness passes new keys to <writer function>; two workloads through the public API did not
-  grow it (H5: <varies>; H6: <varies>)` is an unbounded holder with no trigger found. `Trigger: not
-  checked (<why>)` says why: queue off, the time at the floor, a blocker, or no entry-path harness yet;
+  grow it (H5: <varies>; H6: <varies>)` is an unbounded holder with no trigger found (both runs measured the holder flat). `Trigger: not
+  checked: the entry-path harnesses H7 and H9 ran, but nothing measured the holder there (verdicts: ...)`
+  is no evidence either way. `Trigger: not checked (<why>)` says why: queue off, the time at the floor, a blocker, or no entry-path harness yet;
 - a `Queue:` line after `Coverage:`: how many of the ranked candidates were targeted by a workload and
   how they came out (`Queue: 24 of 121 ranked candidates targeted in 3 harnesses: grew 1, changed 3,
   executed 14, not reached 6; 97 not targeted`). "Not reached" is a candidate whose unit never reached

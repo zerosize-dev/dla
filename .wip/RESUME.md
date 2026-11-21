@@ -332,3 +332,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - REAL RUN grpc-2 FINISHED (23 min, INCOMPLETE, the documented leak closed unexercised): notes in wip-notes/real-run-plugin-grpc-2.md. Causes: Go batch driver in one main package for targets of 7 packages; no probes for struct fields; alloc-test read a step-growing map as plateau; trigger "not found" on unmeasured runs; close-rest slow; the model gave up with 157 of 180 minutes left.
 - NEW BUILDERS (both Sonnet, editing the working tree on top of the combined tree): G = agent a349aef413818803c, brief wip-notes/go-batch-brief.md, scratch u38 (Go batches one package each, field size probes via dlaTrack, alloc-test with a rising size probe, real-tree check on grpc-go health). P3 pass 5 = agent a8249474e4d24c8ca, brief wip-notes/pass5-brief.md, scratch u39 (trigger not_found only when measured flat, close-rest speed, `gap --residual --all`).
 - REAL RUN aiohttp-3 still going (waiter b91j9cllw).
+
+## State 2026-11-21 09:02 UTC (container clock)
+- Static bench on the combined tree's binary (scratch u36/bin, = snapshot 3b0cc2d): 64/64 in both modes; versus the u23 baselines only the five known analyzer differences (node-signal-compose-22/-24 eslint, python-report-memo and -bounded ruff/pylint, rust-ledger-sync rapx).
+- Dynamic bench (full, --parallel 2) started 09:02 as background task bp5cy0fq9: outputs scratch u36/dynamic.json, dynamic.out, dynamic.logs. Compare outcome fields with u23/dynamic.json; rerun a failed fixture alone before judging (the machine is loaded: two builders, one real run).
+- Commit message draft: wip-notes/commit-message-2.txt (the last line @@REAL_RUN_RESULT@@ is to be replaced by what aiohttp-3 shows).

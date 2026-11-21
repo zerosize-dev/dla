@@ -14,6 +14,7 @@
 //! | Python | `module-global`, `module-pointer` owner `a.b.NAME` | `PyGlobal`; `class-attr`, `cache-decorator` -> `PyAttr`; `PyModule` for every module with a candidate |
 //! | Node | any holder in a file | `NodeModule` for the file, with the file's top-level names |
 //! | Go | package variable | `GoVar`, driver mode only |
+//! | Go | `container-field`, `registry-field` owner `<pkg>.<file>.<Type>.<field>` | `GoField`, driver mode only, in the package the driver is in; read by reflection from the objects the driver passes to `dlaTrack` |
 //! | Rust, native | | none (the allocator shim groups by call site) |
 //!
 //! # Site resolution
@@ -375,6 +376,11 @@ fn jvm_class_of(owner: &str) -> Option<(&str, &str)> {
     owner.rsplit_once('.')
 }
 
+/// Census kinds of a Go struct field that holds entries (a probe reads its length).
+fn go_field_kind(kind: &str) -> bool {
+    matches!(kind, "container-field" | "registry-field")
+}
+
 /// Targets for one candidate, specific ones first.
 fn targets_for(
     project: &Path,
@@ -430,14 +436,27 @@ fn targets_for(
             file: file.to_owned(),
         }),
         Runtime::Go => {
+            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             if driver && c.kind == "package-var" {
-                let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
                 if go_dir.is_none_or(|g| g == dir)
                     && let Some((_, name)) = c.owner.rsplit_once('.')
                 {
                     specific.push(ProbeTarget::GoVar {
                         package_dir: dir.to_owned(),
                         name: name.to_owned(),
+                    });
+                }
+            } else if driver && go_field_kind(&c.kind) && go_dir.is_none_or(|g| g == dir) {
+                // `<pkg path>.<file>.<Type>.<field>`: the last two segments.
+                let mut parts = c.owner.rsplitn(3, '.');
+                if let (Some(field), Some(type_name)) = (parts.next(), parts.next())
+                    && !field.is_empty()
+                    && !type_name.is_empty()
+                {
+                    specific.push(ProbeTarget::GoField {
+                        package_dir: dir.to_owned(),
+                        type_name: type_name.to_owned(),
+                        field: field.to_owned(),
                     });
                 }
             }
@@ -611,8 +630,15 @@ pub fn derive(
                 Runtime::Go if !driver => {
                     "go command mode has no package-variable probes".to_owned()
                 }
+                Runtime::Go if go_field_kind(&c.kind) => format!(
+                    "its holder {} ({}) is in package {}, and the driver is in {}: a test file reads only the package it is in, so the field cannot be probed from this driver",
+                    c.owner,
+                    c.kind,
+                    site_file(&c.site).rsplit_once('/').map_or(".", |(d, _)| d),
+                    go_dir.unwrap_or(".")
+                ),
                 Runtime::Go => format!(
-                    "its holder {} ({}) is not a package variable",
+                    "its holder {} ({}) is neither a package variable nor a struct field with a length",
                     if c.owner.is_empty() {
                         "<none>"
                     } else {

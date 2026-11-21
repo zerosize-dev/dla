@@ -18,6 +18,7 @@ import (
 	dlajson "encoding/json"
 	dlaos "os"
 	dlafilepath "path/filepath"
+	dlareflect "reflect"
 	dlaruntime "runtime"
 	dladebug "runtime/debug"
 	dlametrics "runtime/metrics"
@@ -272,8 +273,13 @@ func dlaBuild(phase string, x *int, last bool) map[string]any {
 			rec["purge"] = map[string]any{"kind": purge}
 		}
 	}
-	if dlaProbeHook != nil && !tick {
-		rec["probes"] = dlaProbeHook()
+	if !tick {
+		fieldProbes := dlaFieldProbeRecords(&notes)
+		if dlaProbeHook != nil {
+			rec["probes"] = append(dlaProbeHook(), fieldProbes...)
+		} else if len(fieldProbes) > 0 {
+			rec["probes"] = fieldProbes
+		}
 	}
 	if len(dlaDetectors) > 0 && !tick {
 		rec["detectors"] = dlaDetectors
@@ -565,6 +571,146 @@ func dlaCapture(phase string, notes *[]string) []map[string]any {
 	return out
 }
 
+// Field probes. dlaTrack registers an object the model built, so that every checkpoint can read
+// the size of a probed struct field of it by reflection (Len() of a map, slice, array, chan or
+// string; a pointer or interface field is followed one level; a sync.Map or a type with no
+// length is reported as size unknown). The engine HOLDS the tracked objects: tracking keeps an
+// object alive for the rest of the process, so track only long-lived objects (the services built
+// in setup), never one object per unit. The probes come from the go-field entries of the
+// probes.json named by DLA_HARNESS_PROBES (an object with a probes array, or the array itself). No unsafe: reflection reads Len() of an unexported field.
+
+var (
+	dlaTrackMu   dlasync.Mutex
+	dlaTracked   []any
+	dlaFieldSpec []dlaFieldProbe
+	dlaFieldRead bool
+)
+
+type dlaFieldProbe struct{ id, dir, typ, field string }
+
+// dlaTrack registers v (a pointer to a struct, or a struct) for the field probes.
+func dlaTrack(v any) {
+	if v == nil {
+		return
+	}
+	dlaTrackMu.Lock()
+	dlaTracked = append(dlaTracked, v)
+	dlaTrackMu.Unlock()
+}
+
+func dlaLoadFieldProbes(notes *[]string) []dlaFieldProbe {
+	if dlaFieldRead {
+		return dlaFieldSpec
+	}
+	dlaFieldRead = true
+	path := dlaEnv("DLA_HARNESS_PROBES")
+	if path == "" {
+		return nil
+	}
+	b, err := dlaos.ReadFile(path)
+	if err != nil {
+		*notes = append(*notes, "probes.json unreadable: "+err.Error())
+		return nil
+	}
+	type spec struct {
+		ID     string `json:"id"`
+		Target struct {
+			Kind       string `json:"kind"`
+			PackageDir string `json:"package_dir"`
+			TypeName   string `json:"type_name"`
+			Field      string `json:"field"`
+		} `json:"target"`
+	}
+	var list []spec
+	var doc struct {
+		Probes []spec `json:"probes"`
+	}
+	if err := dlajson.Unmarshal(b, &doc); err == nil {
+		list = doc.Probes
+	} else if err := dlajson.Unmarshal(b, &list); err != nil {
+		*notes = append(*notes, "probes.json unreadable: "+err.Error())
+		return nil
+	}
+	for _, p := range list {
+		if p.Target.Kind == "go-field" {
+			dlaFieldSpec = append(dlaFieldSpec, dlaFieldProbe{p.ID, p.Target.PackageDir, p.Target.TypeName, p.Target.Field})
+		}
+	}
+	return dlaFieldSpec
+}
+
+// dlaFieldSize is the entry count of a field, or the reason it has none.
+func dlaFieldSize(f dlareflect.Value) (int, string) {
+	if f.Kind() == dlareflect.Ptr || f.Kind() == dlareflect.Interface {
+		if f.IsNil() {
+			return 0, ""
+		}
+		f = f.Elem()
+	}
+	switch f.Kind() {
+	case dlareflect.Map, dlareflect.Slice, dlareflect.Array, dlareflect.Chan, dlareflect.String:
+		return f.Len(), ""
+	}
+	return 0, "type " + f.Type().String() + " has no length (a sync.Map or a struct): size unknown"
+}
+
+// dlaFieldProbeRecords reads every field probe over the tracked objects of its type.
+func dlaFieldProbeRecords(notes *[]string) []map[string]any {
+	specs := dlaLoadFieldProbes(notes)
+	if len(specs) == 0 {
+		return nil
+	}
+	dlaTrackMu.Lock()
+	objs := append([]any(nil), dlaTracked...)
+	dlaTrackMu.Unlock()
+	out := []map[string]any{}
+	for _, p := range specs {
+		size, found, problem := 0, 0, ""
+		for _, o := range objs {
+			v := dlareflect.ValueOf(o)
+			for v.Kind() == dlareflect.Ptr || v.Kind() == dlareflect.Interface {
+				if v.IsNil() {
+					break
+				}
+				v = v.Elem()
+			}
+			if v.Kind() != dlareflect.Struct {
+				continue
+			}
+			name := v.Type().Name()
+			if i := dlastrings.IndexByte(name, '['); i >= 0 {
+				name = name[:i]
+			}
+			if name != p.typ {
+				continue
+			}
+			f := v.FieldByName(p.field)
+			if !f.IsValid() {
+				continue
+			}
+			found++
+			n, why := dlaFieldSize(f)
+			if why != "" {
+				problem = why
+				continue
+			}
+			size += n
+		}
+		rec := map[string]any{"id": p.id, "name": p.typ + "." + p.field, "path": p.dir + "." + p.typ + "." + p.field,
+			"size": nil, "reachable": nil, "bytes": nil, "error": nil}
+		switch {
+		case found == 0:
+			rec["error"] = "no tracked object of type " + p.typ + ": call dlaTrack(<your " + p.typ + ">) in setup"
+		case problem != "":
+			rec["error"] = "field " + p.typ + "." + p.field + ": " + problem
+		default:
+			rec["size"] = size
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
 // DLA-ENGINE-END
 
 const (
@@ -590,7 +736,7 @@ func dlaIntEnv(name string, def int) int {
 
 // dlaSetup builds the objects under test once, before the first round.
 func dlaSetup() {
-	// DLA-HOOK setup: construct the services/caches/pools the workload needs and keep them in package-level variables (package-private API is usable here; use dlaT for t.TempDir or t.Fatal)
+	// DLA-HOOK setup: construct the services/caches/pools the workload needs and keep them in package-level variables (package-private API is usable here; use dlaT for t.TempDir or t.Fatal). For every field probe the targets block lists, pass the long-lived object that holds the field to dlaTrack(obj) here (or in dlaUnit for an object created later): the engine reads the field's size from it at every checkpoint
 	panic("DLA-HOOK setup has not been filled in")
 }
 
@@ -601,6 +747,7 @@ func dlaUnit(i, key int) {
 }
 
 // dlaProbes reports package variables for the GoVar probes of probes.json: one record per variable.
+// Struct-field probes (go-field) need no code here: call dlaTrack(obj) in dlaSetup instead.
 func dlaProbes() []map[string]any {
 	// DLA-HOOK probes: return one dlaProbe(id, name, path, size) per probed package variable (id = the probe id from probes.json, path = "<package dir>.<name>", size = len(...) of the map/slice/chan or the entry count); leave the empty list when there are none
 	return nil

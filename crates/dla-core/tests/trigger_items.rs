@@ -160,6 +160,37 @@ fn after_one_entry_path_harness_without_growth_the_fix_asks_for_a_second_one() {
 }
 
 #[test]
+fn after_one_entry_path_run_that_did_not_measure_the_holder_the_fix_says_what_is_missing() {
+    let dir = run();
+    harness(dir.path(), "H1", false);
+    ran(dir.path(), "S1", "H1", "aa", Verdict::Grew);
+    harness(dir.path(), "H2", true);
+    ran(dir.path(), "S2", "H2", "bb", Verdict::Executed);
+    let it = items(dir.path());
+    assert_eq!(it.len(), 1);
+    assert!(
+        it[0].fix.starts_with(
+            "the entry-path harness H2 ran but did not measure F1: give it a size reading (a probe of the holder; for Go track the object, see the driver's hook comment), then run H2 again"
+        ),
+        "{}",
+        it[0].fix
+    );
+    assert!(
+        it[0]
+            .description
+            .contains("nothing measured the holder there (verdict: executed)"),
+        "{}",
+        it[0].description
+    );
+    // The text asks for the second harness only after that.
+    assert!(
+        it[0].fix.contains("a second, different entry-path harness"),
+        "{}",
+        it[0].fix
+    );
+}
+
+#[test]
 fn after_two_different_entry_path_harnesses_without_growth_the_item_is_satisfied() {
     let dir = run();
     harness(dir.path(), "H1", false);

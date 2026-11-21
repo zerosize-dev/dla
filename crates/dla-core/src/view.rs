@@ -305,7 +305,14 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
     let next = if next.is_empty() {
         String::new()
     } else {
-        format!(" Next batch: {}.", next.join(", "))
+        match &q.package {
+            Some(p) => format!(
+                " Next batch (all in package {}): {}.",
+                crate::queue::package_label(p),
+                next.join(", ")
+            ),
+            None => format!(" Next batch: {}.", next.join(", ")),
+        }
     };
     BlockingItem {
         kind: BlockingKind::Queue,

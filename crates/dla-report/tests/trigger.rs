@@ -179,7 +179,7 @@ fn no_trigger_found_after_two_different_entry_path_harnesses_says_what_was_tried
     run.harness("H2", true, &["F3"], Some("Q.push"));
     run.ran("S2", "H2", "bb", &[(3, Verdict::Constant)]);
     run.harness("H3", true, &["F3"], Some("Q.push"));
-    run.ran("S3", "H3", "cc", &[(3, Verdict::Executed)]);
+    run.ran("S3", "H3", "cc", &[(3, Verdict::Constant)]);
     let md = run.report();
     assert!(
         md.contains("- Trigger: not found: it grows when the harness passes new keys to Q.push; two workloads through the public API did not grow it (H2: H2 varies; H3: H3 varies)"),
@@ -188,6 +188,30 @@ fn no_trigger_found_after_two_different_entry_path_harnesses_says_what_was_tried
     assert!(
         findings_line(&md).ends_with(
             "reproduced through the public API 0, no trigger found 1, trigger not checked 1"
+        ),
+        "{}",
+        findings_line(&md)
+    );
+}
+
+#[test]
+fn two_entry_path_runs_that_did_not_measure_the_holder_are_not_checked_not_not_found() {
+    let run = Run::new();
+    run.harness("H1", false, &["F1", "F3"], None);
+    run.ran("S1", "H1", "aa", &[(1, Verdict::Grew), (3, Verdict::Grew)]);
+    run.harness("H7", true, &["F3"], Some("Q.push"));
+    run.ran("S2", "H7", "bb", &[(3, Verdict::Executed)]);
+    run.harness("H9", true, &["F3"], Some("Q.push"));
+    run.ran("S3", "H9", "cc", &[(3, Verdict::Unknown)]);
+    let md = run.report();
+    assert!(
+        md.contains("- Trigger: not checked: the entry-path harnesses H7 and H9 ran, but nothing measured the holder there (verdicts: executed, unknown)"),
+        "{md}"
+    );
+    assert!(!md.contains("did not grow it"), "{md}");
+    assert!(
+        findings_line(&md).ends_with(
+            "reproduced through the public API 0, no trigger found 0, trigger not checked 2"
         ),
         "{}",
         findings_line(&md)

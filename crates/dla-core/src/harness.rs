@@ -237,6 +237,17 @@ pub enum ProbeTarget {
         /// Variable name.
         name: String,
     },
+    /// A field of a Go struct type, read by reflection from the objects the driver registers
+    /// with `dlaTrack` (the engine sums the field's length over the tracked objects of the
+    /// type).
+    GoField {
+        /// Package directory.
+        package_dir: String,
+        /// The struct type's name.
+        type_name: String,
+        /// Field name.
+        field: String,
+    },
 }
 
 /// One holder probe.

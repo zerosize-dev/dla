@@ -957,8 +957,11 @@ struct DriverBuild {
     extra_files: Vec<String>,
     tools: Vec<String>,
     gaps: Vec<String>,
-    /// Go: limit GoVar probes to this directory.
+    /// Go: limit GoVar and GoField probes to this directory.
     go_dir: Option<String>,
+    /// Lines about the driver itself, written under the first line of the target block
+    /// (Go: the package the driver is in).
+    block_notes: Vec<String>,
 }
 
 fn jvm_package_for(
@@ -1124,6 +1127,7 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
         tools: Vec::new(),
         gaps: Vec::new(),
         go_dir: None,
+        block_notes: Vec::new(),
     };
     let driver_rel = |name: &str| format!("{DRIVER}/{name}");
     match rt {
@@ -1260,6 +1264,10 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
                         "dla harness gen --lang go --driver --package <dir>",
                     )
                 })?;
+            out.block_notes.push(format!(
+                "The driver is in package {package} (directory {}): the hooks can read its unexported names and package variables, and no other package's.",
+                dla_core::queue::package_label(&dir)
+            ));
             vars.push(("PACKAGE".into(), package));
             let text = fill_with(templates::GO_DRIVER, &vars)?;
             write(&d.driver.join(templates::GO_DRIVER_FILE), &text)?;
@@ -1410,6 +1418,7 @@ type DeclaredTargets = (
     Vec<FindingId>,
     Option<String>,
     std::collections::BTreeMap<FindingId, FindingId>,
+    Option<String>,
 );
 
 /// The findings a harness is generated to reach: the `--probe` findings, then (with
@@ -1426,6 +1435,9 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
     }
     let mut note = None;
     let mut siblings = std::collections::BTreeMap::new();
+    // Go: the package directory every declared candidate of `--next` is in, and so the one
+    // the driver is generated in.
+    let mut go_package: Option<String> = None;
     if let Some(n) = opts.next {
         if n > MAX_TARGETS || ids.len() + n > MAX_TARGETS {
             return Err(refuse(
@@ -1445,11 +1457,19 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
         }
         let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
             .map_err(|e| e.to_refusal())?;
-        let (batch, sib) = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        let queue = dla_core::queue::queues(&view, ctx.worker.as_deref())
             .into_iter()
-            .find(|q| q.runtime == rt.as_str())
-            .map(|q| q.batch_for(&view, n))
-            .unwrap_or_default();
+            .find(|q| q.runtime == rt.as_str());
+        let mut skipped: Vec<String> = Vec::new();
+        let (batch, sib) = match queue {
+            Some(q) if rt == Runtime::Rust => {
+                let (b, s, p) = go_batch(ctx, opts, &view, &q, n, &ids, &mut skipped)?;
+                go_package = p;
+                (b, s)
+            }
+            Some(q) => q.batch_for(&view, n),
+            None => Default::default(),
+        };
         let before = ids.len();
         // The first `n` by rank, then the siblings of their owners, up to the limit.
         for (k, f) in batch.into_iter().enumerate() {
@@ -1470,6 +1490,13 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
                 rt.as_str()
             ));
         }
+        if !skipped.is_empty() {
+            let mut text = skipped.join("; ");
+            if let Some(n) = note.take() {
+                text = format!("{n}; {text}");
+            }
+            note = Some(text);
+        }
     }
     if ids.len() - siblings.len() > MAX_TARGETS {
         return Err(refuse(
@@ -1485,7 +1512,111 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             ),
         ));
     }
-    Ok((ids, note, siblings))
+    Ok((ids, note, siblings, go_package))
+}
+
+/// A reason a Go package directory cannot hold the driver, or `None` when it can (or when
+/// `go` cannot be asked): a driver is a test file of the package, so the directory needs a
+/// non-test Go file that builds on this platform, and `go list` must read it.
+fn go_package_problem(project: &Path, dir: &str) -> Option<String> {
+    let abs = project.join(dir);
+    let has_file = fs::read_dir(&abs).ok().is_some_and(|rd| {
+        rd.flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.ends_with(".go") && !n.ends_with("_test.go")
+        })
+    });
+    if !has_file {
+        return Some("the directory has no non-test Go file".to_owned());
+    }
+    let out = Command::new("go")
+        .args(["list", "-f", "{{len .GoFiles}}", "."])
+        .current_dir(&abs)
+        .env("GOPROXY", "off")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let first = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        return Some(format!("go list fails there: {}", clip(first.trim(), 160)));
+    }
+    let n = String::from_utf8_lossy(&out.stdout);
+    (n.trim() == "0").then(|| "no Go file of it builds on this platform".to_owned())
+}
+
+/// The batch of a Go `--next`: one package. `--package <dir>` names it; with `--probe` and no
+/// `--package` it is the package of the first `--probe` finding; otherwise the package of the
+/// best-ranked pending candidate that can hold the driver, the ones before it being named in
+/// `skipped` (their candidates stay pending). Returns the package directory with the batch.
+fn go_batch(
+    ctx: &ToolCtx,
+    opts: &GenOptions,
+    view: &dla_core::RunView,
+    q: &dla_core::queue::RuntimeQueue,
+    n: usize,
+    probed: &[FindingId],
+    skipped: &mut Vec<String>,
+) -> Result<
+    (
+        Vec<FindingId>,
+        std::collections::BTreeMap<FindingId, FindingId>,
+        Option<String>,
+    ),
+    Refusal,
+> {
+    use dla_core::queue::{go_package_dir, package_label};
+    let packages = q.packages(view);
+    let named = opts.package.as_deref().map(|p| {
+        let p = p.trim_start_matches("./").trim_end_matches('/');
+        if p == "." { "" } else { p }.to_owned()
+    });
+    let from_probe = || {
+        probed
+            .first()
+            .and_then(|f| view.ledger.finding(f))
+            .and_then(|f| f.site.as_deref())
+            .map(go_package_dir)
+    };
+    if let Some(p) = named.clone().or_else(from_probe) {
+        if !packages.contains(&p) {
+            if named.is_some() {
+                let list: Vec<&str> = packages.iter().take(6).map(|p| package_label(p)).collect();
+                return Err(refuse(
+                    codes::INVALID_VALUE,
+                    format!(
+                        "--next --package {}: no pending candidate of go has its site in that package",
+                        package_label(&p)
+                    ),
+                    "a package directory with a pending candidate",
+                    if list.is_empty() {
+                        "dla run status   (no candidate of go is waiting for a measurement)".to_owned()
+                    } else {
+                        format!(
+                            "dla harness gen --lang go --driver --next --package <dir>   (packages with a pending candidate, best-ranked first: {}), or --next alone for the best-ranked one",
+                            list.join(", ")
+                        )
+                    },
+                ));
+            }
+            return Ok((Vec::new(), Default::default(), Some(p)));
+        }
+        let (b, s) = q.batch_in_package(view, n, &p);
+        return Ok((b, s, Some(p)));
+    }
+    for p in &packages {
+        if let Some(why) = go_package_problem(&ctx.project, p) {
+            let (b, _) = q.batch_in_package(view, n, p);
+            skipped.push(format!(
+                "package {} cannot hold the driver ({why}): its {} best-ranked candidate(s) stay pending and are not targeted, and the next package by rank was taken",
+                package_label(p),
+                b.len()
+            ));
+            continue;
+        }
+        let (b, s) = q.batch_in_package(view, n, p);
+        return Ok((b, s, Some(p.clone())));
+    }
+    Ok((Vec::new(), Default::default(), None))
 }
 
 /// The findings of `--entry`: refused before anything is created unless the harness is a hook
@@ -1692,9 +1823,21 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
 
     // The targets: `--probe` findings, then the next pending queue entries. Refused before
     // anything is created. An entry-path harness declares its `--entry` findings.
-    let (asked_ids, next_note, siblings) = match entry_ids {
+    let (asked_ids, next_note, siblings, go_package) = match entry_ids {
         None => resolve_targets(ctx, opts)?,
-        Some(ids) => (ids, None, std::collections::BTreeMap::new()),
+        Some(ids) => (ids, None, std::collections::BTreeMap::new(), None),
+    };
+    // A Go `--next` batch is one package: the driver is generated in it, as `--package` does.
+    let package_opts;
+    let opts = match go_package {
+        Some(p) if opts.package.is_none() && rt == Runtime::Go => {
+            package_opts = GenOptions {
+                package: Some(p),
+                ..opts.clone()
+            };
+            &package_opts
+        }
+        _ => opts,
     };
 
     // Tools first: nothing is created when one is missing.
@@ -2011,7 +2154,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         )?;
         if let Some(info) = driver_info.as_ref().filter(|i| !i.edit.is_empty()) {
             let file = hdir.join(&info.edit);
-            if targets::write_block(&file, &id, &described).map_err(|e| io_refusal(&file, e))? {
+            if targets::write_block_with(&file, &id, &described, &info.block_notes)
+                .map_err(|e| io_refusal(&file, e))?
+            {
                 block_in = Some(info.edit.clone());
                 // The copies placed in the scratch project now carry the block too.
                 for (src, dest) in &info.sync {
@@ -2105,6 +2250,13 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         }
     }
     if let (Some(info), Value::Object(m)) = (&driver_info, &mut summary) {
+        if let Some(dir) = &info.go_dir {
+            // Go: the driver is a test file of this package.
+            m.insert(
+                "package".into(),
+                json!(dla_core::queue::package_label(dir)),
+            );
+        }
         if info.spec.junit.is_some() {
             let driver_file = ctx.pointer(&format!(
                 "harness/{id}/{DRIVER}/{}.java",

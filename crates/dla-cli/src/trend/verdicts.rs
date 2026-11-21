@@ -186,6 +186,36 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
             dla_core::harness::ProbeTarget::GoVar { package_dir, name } => {
                 format!("{package_dir}.{name}")
             }
+            dla_core::harness::ProbeTarget::GoField {
+                package_dir,
+                type_name,
+                field,
+            } => {
+                // A Go field probe is read from tracked objects: the series says why it
+                // could not be (nothing tracked, or a field with no length).
+                let path = format!("{package_dir}.{type_name}.{field}");
+                let why = inp
+                    .series
+                    .limitations
+                    .iter()
+                    .find_map(|l| l.strip_prefix(&format!("probe {path}: ")))
+                    .map_or_else(
+                        || {
+                            format!(
+                                "no tracked object of type {type_name}: call dlaTrack(<your {type_name}>) in setup"
+                            )
+                        },
+                        str::to_owned,
+                    );
+                return make(
+                    Verdict::NotLoaded,
+                    None,
+                    format!(
+                        "probe {} ({path}) has no column: its size was never read ({why}), so this target is not measured, only possibly executed",
+                        p.id
+                    ),
+                );
+            }
         };
         return make(
             Verdict::NotLoaded,

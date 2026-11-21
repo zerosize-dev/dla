@@ -700,7 +700,7 @@ fn entry_path_files(
             "driver_digest": r.digest,
             "varies": r.varies,
             "verdict": r.verdict.map(|v| v.as_str()),
-            "meaning": "grew: the holder grew when this driver ran; any other verdict: it did not grow",
+            "meaning": "grew: the holder grew when this driver ran; constant: the holder was measured and stayed flat; any other verdict: nothing measured the holder in this run, which is no evidence either way",
         });
         let vname = format!("entry-path/{}/verdict.json", r.harness);
         let mut vv = verdict.clone();

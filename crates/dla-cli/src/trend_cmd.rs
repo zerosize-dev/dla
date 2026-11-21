@@ -425,7 +425,9 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
         return;
     };
     let t = Triggers::of(&view);
-    let (mut reproduced, mut unchecked, mut not_found) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut reproduced, mut unchecked, mut not_found, mut unmeasured) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut unread = Vec::new();
     if let Some(Value::Array(list)) = out.get_mut("targets") {
         for e in list {
             let Some(id) = e["finding"].as_str().map(str::to_owned) else {
@@ -439,11 +441,24 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
             match trig {
                 Trigger::Reproduced { .. } => reproduced.push(id),
                 Trigger::NotFound { .. } => not_found.push(id),
-                Trigger::Unchecked => unchecked.push(id),
+                Trigger::Unmeasured { .. } => unmeasured.push(id),
+                // One run that did not grow it: flat when measured, else not measured at all.
+                Trigger::Unchecked if e["verdict"] == "constant" => unchecked.push(id),
+                Trigger::Unchecked => unread.push(id),
             }
         }
     }
-    let next = if !unchecked.is_empty() {
+    let next = if !unmeasured.is_empty() {
+        format!(
+            "{} ran in two entry-path harnesses but nothing measured the holder there: give the harness a size reading (a probe of the holder), run it again, dla trend; the report says \"not checked\"",
+            unmeasured.join(", ")
+        )
+    } else if !unread.is_empty() {
+        format!(
+            "{} was not measured here (its verdict is not constant): give the harness a size reading (a probe of the holder; for Go track the object, see the driver's hook comment), run it again, dla trend; a flat holder is shown only by a size reading",
+            unread.join(", ")
+        )
+    } else if !unchecked.is_empty() {
         format!(
             "{} did not grow here: dla harness gen --lang {} --driver --entry {} for a second, different driver (other entry points, inputs, rejected-input paths), fill, VARIES.txt, run, trend",
             unchecked.join(", "),
