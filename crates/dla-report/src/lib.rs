@@ -956,10 +956,12 @@ fn growth_line(view: &RunView, f: &Finding) -> Option<String> {
             bare.get_or_insert_with(|| e.evidence_id.clone());
             continue;
         };
+        // The column at the finding's own site is its growth before any other tied column.
         if let Some(c) = summary
             .passed
             .iter()
-            .find(|c| c.tied_to_owner(&f.id, f.site.as_deref(), f.owner.as_deref()))
+            .filter(|c| c.tied_to_owner(&f.id, f.site.as_deref(), f.owner.as_deref()))
+            .min_by_key(|c| f.site.is_none() || c.site.as_deref() != f.site.as_deref())
         {
             return Some(growth_text(c, &summary, &e.evidence_id));
         }

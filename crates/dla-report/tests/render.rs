@@ -1901,3 +1901,19 @@ mod coverage_warning_and_explained {
         assert!(!md.contains("## Explained, not leaks"), "{md}");
     }
 }
+
+#[test]
+fn the_column_at_the_findings_own_site_is_quoted_before_another_tied_column() {
+    // The first passing column lists F1 among its candidates (a column at another line); the
+    // column at F1's own site comes second and is the one the Growth line quotes.
+    let text = dynamic_text().replace(
+        r#""passed":[{"column":"os.rss","region":"process","slope":900.5,"unit":"bytes","shape":"steady"},{"column":"probe:Registry.listeners","region":"heap","site":"src/bus.go:12","finding":"F1","slope":412,"lo":380.25,"p":0.0001,"ratio":1.05,"shape":"steady","unit":"bytes"}]"#,
+        r#""passed":[{"column":"node.listeners@src/other.go:3","site":"src/other.go:3","candidates":["F1"],"slope":7,"unit":"count","shape":"steady"},{"column":"node.listeners@src/bus.go:12","site":"src/bus.go:12","slope":1,"unit":"count","shape":"steady"}]"#,
+    );
+    assert_ne!(text, dynamic_text());
+    let md = render_markdown(&view_of_text(&text));
+    assert!(
+        md.contains("- Growth: `node.listeners@src/bus.go:12` 1 count/n (steady, gate pass, E3)\n"),
+        "{md}"
+    );
+}

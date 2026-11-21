@@ -532,3 +532,8 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - New defect from axios-5: per-site count columns tie through the receiver's writer line (:717, 20 candidates) -> F14 and F18 confirmed without a column at their site. N resumed (a747f7bdc3d1ef293) to tighten: own site only. Task 68.
 - CI on 167233a (run 44938127014): in progress at 19:33; waiter bvy4qn016.
 - NEXT: CI green -> commit 167233a to main (commit-message-3.txt). When N reports: verify, third frozen build (brief M + N's tie rule), tokio-4, spring-5, grpc-5.
+
+## State at 20:03 UTC, 2026-11-21
+- N REPORTED the tie tightening (u46/report.md) and its tests are checked (my logs u47/verify-tie.log, verify-tie2.log): `is_per_site_count` in crates/dla-cli/src/trend/candidates.rs = any column with a site after @ whose base does not start with `native.`; such a column lists and ties only findings whose own site is that line; report `growth_line` quotes the own-site column first. Test a_per_site_count_column_ties_only_to_the_findings_at_its_own_line (MUT_T1 failed it; restored) and the render test pass.
+- LOCAL BENCH CHECK RUNNING (task bz4b0fbdp, outputs u53/dyn-<prefix>.out, binaries u53/bin): `dla-bench dynamic --only node-`, then go-, then python-, because the tie change can take a confirmation away. All must pass before the third frozen build.
+- CI on 167233a: only dynamic acceptance still running at 19:50.
