@@ -470,7 +470,8 @@ pub enum Closed {
     Off,
     /// The budget is at or under the floor (and only then).
     Floor,
-    /// The run is over: aborted, or stamped incomplete and not going on. Time may be left.
+    /// The run is over: aborted, or made incomplete by a merge. A stop-hook stamp is not
+    /// over: the queue is as for a going run. Time may be left.
     Over,
     /// The workload is recorded as blocked.
     Blocked,
@@ -831,7 +832,8 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 if matches!(
                     view.state.status,
                     crate::state::RunStatus::Aborted | crate::state::RunStatus::Incomplete
-                ) {
+                ) && !view.state.stop_stamped()
+                {
                     Some(Closed::Over)
                 } else {
                     Some(Closed::Floor)

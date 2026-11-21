@@ -560,6 +560,11 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     if !triggers.is_empty() {
         out["triggers"] = Value::Object(triggers);
     }
+    if view.state.stop_stamped() {
+        out["stop_stamp"] = json!(
+            "the run carries a stop-hook stamp; the next command that works on it lifts the stamp"
+        );
+    }
     out["next_command"] = json!(queues.iter().find(|q| q.open()).map_or_else(
         || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
         |q| clip_command(&q.command)

@@ -1567,7 +1567,10 @@ pub fn budget_over_floor(
     worker: Option<&str>,
 ) -> Option<(u64, u64)> {
     use crate::state::RunStatus;
-    if matches!(state.status, RunStatus::Aborted | RunStatus::Incomplete) {
+    // An aborted run, or one a merge made incomplete, is over. A stop-hook stamp is not: the
+    // run goes on with the next command that works on it, so the time left decides.
+    if matches!(state.status, RunStatus::Aborted | RunStatus::Incomplete) && !state.stop_stamped()
+    {
         return None;
     }
     let now = crate::state::now_utc();

@@ -638,16 +638,21 @@ impl RunState {
         self.incomplete_reason = Some(reason);
     }
 
+    /// True while the run carries a stamp the stop hook put on it (not one the merge or an
+    /// abort put). Such a run is not over: the next command that works on it lifts the stamp.
+    pub fn stop_stamped(&self) -> bool {
+        self.status == RunStatus::Incomplete
+            && self
+                .incomplete_reason
+                .as_deref()
+                .is_some_and(|r| r.starts_with(crate::gate::STOP_BLOCKED_REASON))
+    }
+
     /// Lifts a stamp the stop hook put on the run (not one the merge or an abort put): the
     /// run is going again. The counters start over and the stamp's entry gets the time.
     /// Returns whether a stamp was lifted.
     pub fn lift_stop_stamp(&mut self) -> bool {
-        let stamped = self.status == RunStatus::Incomplete
-            && self
-                .incomplete_reason
-                .as_deref()
-                .is_some_and(|r| r.starts_with(crate::gate::STOP_BLOCKED_REASON));
-        if !stamped {
+        if !self.stop_stamped() {
             return false;
         }
         self.status = RunStatus::Active;
