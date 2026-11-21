@@ -47,9 +47,13 @@ pub enum Trigger {
         /// `the project's workload <id>`.
         varies: String,
     },
-    /// The holder grew in an entry-path harness whose unit calls the holder's own writer: it
-    /// is a registration the harness fed names to, not a path a caller of the public API was
-    /// shown to take.
+    /// The holder grew in an entry-path harness whose unit calls the holder's own writer, and
+    /// the census says every writer site runs at start-up (an initialiser, or called from one
+    /// with constant keys): it is a registration the harness fed names to, not a path a caller
+    /// of the public API was shown to take. A writer the census does not read as a start-up
+    /// registration (a handler nobody in the project calls, a caller at run time with a key
+    /// from a parameter) is a public entry: calling it is [`Trigger::Reproduced`]. With no
+    /// census facts on the writer the reading is [`Trigger::Unchecked`].
     Direct {
         /// The harness that showed it.
         harness: String,
@@ -57,9 +61,6 @@ pub enum Trigger {
         varies: String,
         /// The writer function the unit calls.
         writer: String,
-        /// The census says every writer site runs at start-up (an initialiser, or called from
-        /// one), so only run-time input that reaches the call makes it a leak.
-        startup: bool,
     },
     /// Two different entry-path drivers measured the holder flat.
     NotFound {
@@ -152,8 +153,9 @@ pub struct Triggers {
     writers_all: BTreeMap<FindingId, Vec<String>>,
     /// `(finding, harness)` whose entry-path driver calls a writer function of the finding.
     direct: BTreeSet<(FindingId, String)>,
-    /// Findings whose census facts say every writer site runs at start-up.
-    startup: BTreeSet<FindingId>,
+    /// The census facts on the writer sites of each entry-path target that has some: whether
+    /// every one runs at start-up (`init` or `startup`). A finding without facts is absent.
+    startup: BTreeMap<FindingId, bool>,
     /// The harnesses that never ran, by finding, for the fix text.
     runtime: BTreeMap<String, String>,
 }
@@ -196,8 +198,9 @@ impl Triggers {
                 .annotation(id)
                 .map(|a| a.facts.writer_sites.as_slice())
                 .unwrap_or_default();
-            if !sites.is_empty() && sites.iter().all(|s| s.startup || s.init) {
-                t.startup.insert(id.clone());
+            if !sites.is_empty() {
+                t.startup
+                    .insert(id.clone(), sites.iter().all(|s| s.startup || s.init));
             }
         }
         let mut latest: BTreeMap<&str, &crate::trend::TrendReport> = BTreeMap::new();
@@ -347,20 +350,43 @@ impl Triggers {
             .any(|r| r.verdicts.get(id) == Some(&Verdict::Grew))
     }
 
+    /// The harness and the writer when the unit of an entry-path harness that made `id` grow
+    /// calls the writer itself and the census has no facts on the writer sites.
+    pub fn direct_without_facts(&self, id: &FindingId) -> Option<(String, String)> {
+        if self.startup.contains_key(id) {
+            return None;
+        }
+        let r = self
+            .runs
+            .iter()
+            .filter(|r| r.entry)
+            .find(|r| r.verdicts.get(id) == Some(&Verdict::Grew))?;
+        self.direct
+            .contains(&(id.clone(), r.harness.clone()))
+            .then(|| (r.harness.clone(), self.writer.get(id).cloned().unwrap_or_default()))
+    }
+
     /// The trigger of `id`.
     pub fn trigger(&self, id: &FindingId) -> Trigger {
         let grew = |r: &&Run| r.verdicts.get(id) == Some(&Verdict::Grew);
         if let Some(r) = self.runs.iter().filter(|r| r.entry).find(grew) {
             if self.direct.contains(&(id.clone(), r.harness.clone())) {
-                return Trigger::Direct {
-                    harness: r.harness.clone(),
-                    varies: r
-                        .varies
-                        .clone()
-                        .unwrap_or_else(|| "not recorded".to_owned()),
-                    writer: self.writer.get(id).cloned().unwrap_or_default(),
-                    startup: self.startup.contains(id),
-                };
+                match self.startup.get(id) {
+                    Some(true) => {
+                        return Trigger::Direct {
+                            harness: r.harness.clone(),
+                            varies: r
+                                .varies
+                                .clone()
+                                .unwrap_or_else(|| "not recorded".to_owned()),
+                            writer: self.writer.get(id).cloned().unwrap_or_default(),
+                        };
+                    }
+                    // The census has no facts on the writer: not checked, neither reading.
+                    None => return Trigger::Unchecked,
+                    // A public entry: the driver calling it is a caller of the public API.
+                    Some(false) => {}
+                }
             }
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
@@ -598,15 +624,9 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
             harness,
             varies,
             writer,
-            startup,
         } => format!(
-            "grown only by calling the registration function itself ({writer}) in {harness} (varies: {}); a leak only if run-time input reaches that call{}",
-            one_line(&varies),
-            if startup {
-                " (the census reads its writers as start-up registrations)"
-            } else {
-                ""
-            }
+            "grown only by calling the registration function itself ({writer}) in {harness} (varies: {}); a leak only if run-time input reaches that call (the census reads its writers as start-up registrations)",
+            one_line(&varies)
         ),
         Trigger::NotFound { runs } => {
             let writer = t
@@ -631,6 +651,12 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
                 "not checked: the entry-path harnesses {} ran, but nothing measured the holder there (verdicts: {})",
                 hs.join(" and "),
                 verdicts.join(", ")
+            )
+        }
+        Trigger::Unchecked if t.direct_without_facts(&f.id).is_some() => {
+            let (h, w) = t.direct_without_facts(&f.id).unwrap_or_default();
+            format!(
+                "not checked: the unit of {h} calls the writer {w} itself, and the census has no facts on its writer sites to say whether it is a start-up registration or an entry a caller of the public API reaches"
             )
         }
         Trigger::Unchecked => {
