@@ -391,7 +391,10 @@ pub fn status(view: &RunView) -> ReportStatus {
                 q.command.clone()
             } else if let Some(step) = step {
                 step
-            } else if queue_on && f.state == FindingState::Candidate {
+            } else if queue_on
+                && f.state == FindingState::Candidate
+                && reason != crate::finding::UnresolvedReason::Inconclusive
+            {
                 "dla ledger close-rest".to_owned()
             } else {
                 format!("dla ledger resolve {} {}", f.id, resolve_args(reason))

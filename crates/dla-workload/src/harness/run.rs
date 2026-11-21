@@ -2607,7 +2607,10 @@ fn run_loaded(
     let hdir_of_run = ctx.run_dir.join("harness").join(&manifest.id);
     let executed = hdir_of_run.join(cover::EXECUTED_FILE);
     if executed.is_file() {
-        let _ = fs::rename(&executed, hdir_of_run.join(format!("executed-{first}.json")));
+        let _ = fs::rename(
+            &executed,
+            hdir_of_run.join(format!("executed-{first}.json")),
+        );
     }
 
     let hits = &out.detectors;

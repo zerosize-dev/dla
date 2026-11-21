@@ -236,13 +236,7 @@ impl Index {
         self.targeted_in(id)
             .into_iter()
             .filter_map(|(_, v)| v)
-            .chain(
-                self.verdicts
-                    .get(id)
-                    .into_iter()
-                    .flatten()
-                    .map(|(_, v)| *v),
-            )
+            .chain(self.verdicts.get(id).into_iter().flatten().map(|(_, v)| *v))
             .min_by_key(|v| priority(*v))
     }
 
@@ -373,7 +367,8 @@ pub fn batch_command(view: &RunView, runtime: &str) -> String {
                 .filter_map(|(_, h)| HarnessManifest::load(d, &h).ok())
                 .filter(|m| m.runtime.as_str() == runtime)
                 .collect();
-            !all.is_empty() && all.iter().all(|m| !m.is_hook_driver())
+            !all.is_empty()
+                && all.iter().all(|m| !m.is_hook_driver())
                 && all
                     .iter()
                     .any(|m| m.tools.iter().any(|t| t == crate::harness::JUNIT_TOOL))
@@ -589,7 +584,9 @@ impl ReportFacts {
         if t.is_empty() {
             return Some(match self.ranks.get(id) {
                 Some((Some(rank), _)) => format!("Not targeted (rank {rank})"),
-                Some((None, tier)) => format!("Not targeted (tier {tier}, not ranked for measurement)"),
+                Some((None, tier)) => {
+                    format!("Not targeted (tier {tier}, not ranked for measurement)")
+                }
                 None => "Not targeted".to_owned(),
             });
         }
@@ -735,7 +732,10 @@ mod tests {
         assert_eq!(pending_of(&view), ["F1", "F2", "F3"]);
         let q = &queues(&view, None)[0];
         assert!(q.open());
-        assert_eq!(q.batch_command, "dla harness gen --lang python --driver --next");
+        assert_eq!(
+            q.batch_command,
+            "dla harness gen --lang python --driver --next"
+        );
         // F1 grew in a trend of an automatic probe: settled by growth alone.
         run.harness(&manifest("H1", &[2], true));
         run.series("S1", "H1");
@@ -760,7 +760,11 @@ mod tests {
         run.trend(
             "T1",
             "S1",
-            &[(1, Verdict::Executed), (2, Verdict::Unknown), (3, Verdict::Executed)],
+            &[
+                (1, Verdict::Executed),
+                (2, Verdict::Unknown),
+                (3, Verdict::Executed),
+            ],
         );
         // F3 was not declared by the harness: its verdict does not settle it.
         assert_eq!(pending_of(&run.reload()), ["F3"]);
@@ -801,7 +805,11 @@ mod tests {
             let digest = crate::harness::driver_digest(run.dir.path(), h).unwrap();
             let text = json!({"series": series, "driver_digest": digest});
             std::fs::write(
-                run.dir.path().join("harness").join(h).join(format!("run-{first}.json")),
+                run.dir
+                    .path()
+                    .join("harness")
+                    .join(h)
+                    .join(format!("run-{first}.json")),
                 text.to_string(),
             )
             .unwrap();
@@ -860,14 +868,19 @@ mod tests {
             ("detector:semgrep/y", "tests/d.py:1"),
             ("detector:semgrep/z", "pkg/e.py:1"),
         ] {
-            let mut nf = NewFinding::new(Origin::parse(origin).unwrap(), vec![crate::EvidenceId::new(1)]);
+            let mut nf = NewFinding::new(
+                Origin::parse(origin).unwrap(),
+                vec![crate::EvidenceId::new(1)],
+            );
             nf.site = Some(site.into());
             l.add_finding(nf).unwrap();
         }
         let view = RunView::load(dir.path()).unwrap();
         let r = ranked(&view);
-        let order: Vec<(String, u8, Option<usize>)> =
-            r.iter().map(|x| (x.id.to_string(), x.tier, x.rank)).collect();
+        let order: Vec<(String, u8, Option<usize>)> = r
+            .iter()
+            .map(|x| (x.id.to_string(), x.tier, x.rank))
+            .collect();
         assert_eq!(
             order,
             [

@@ -361,7 +361,10 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         );
         if !rest.is_empty() {
             let rest: Vec<_> = rest.into_iter().cloned().collect();
-            out.insert("other_targets".into(), Value::Object(verdicts::counts(&rest)));
+            out.insert(
+                "other_targets".into(),
+                Value::Object(verdicts::counts(&rest)),
+            );
         }
     }
     if let Some(k) = &keys {

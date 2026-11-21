@@ -138,6 +138,12 @@ impl Run {
         (totals, lines)
     }
 
+    /// The markdown of `dla report`.
+    fn report(&self) -> String {
+        let o = command(self.dir.path()).arg("report").output().unwrap();
+        String::from_utf8(o.stdout).unwrap()
+    }
+
     fn id_at(&self, site: &str) -> String {
         let (_, lines) = self.list();
         lines
@@ -189,7 +195,14 @@ impl Run {
     fn fill_more(&self, h: &str) {
         let p = self.driver(h);
         let text = fs::read_to_string(&p).unwrap();
-        fs::write(&p, text.replace("def unit(i, key):", "def unit(i, key):\n    # a second attempt")).unwrap();
+        fs::write(
+            &p,
+            text.replace(
+                "def unit(i, key):",
+                "def unit(i, key):\n    # a second attempt",
+            ),
+        )
+        .unwrap();
     }
 }
 
@@ -320,8 +333,20 @@ fn with_the_queue_off_everything_is_as_before() {
     // The refusals that were there before are the only ones: no harness was generated for
     // the entry points the discovery found.
     let o = r.close(&bounded, "not_exercised");
-    assert_eq!(o.json["error"]["code"], "harness-not-generated", "{}", o.text);
+    assert_eq!(
+        o.json["error"]["code"], "harness-not-generated",
+        "{}",
+        o.text
+    );
     assert_eq!(r.close(&bounded, "build_fails").code, 0);
+    assert!(
+        r.report().contains(
+            "\nQueue: off: candidates the workloads did not reach were closed without a targeted workload\n"
+        ),
+        "{}",
+        r.report()
+    );
+    assert!(!r.report().contains("Targeted:") && !r.report().contains("Not targeted"));
     let lines: Vec<String> = fs::read_to_string(r.run_dir.join("ledger.jsonl"))
         .unwrap()
         .lines()
@@ -369,9 +394,10 @@ fn next_declares_the_targets_prints_them_and_writes_the_block_in_the_driver() {
             .starts_with("fill the hooks so that each unit reaches the targets listed in the driver, then dla harness run H1 --mode both"),
         "{s}"
     );
-    let manifest: Value =
-        serde_json::from_str(&fs::read_to_string(r.run_dir.join("harness/H1/harness.json")).unwrap())
-            .unwrap();
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(r.run_dir.join("harness/H1/harness.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(manifest["targets"], serde_json::json!(["F1", "F2", "F3"]));
     let driver = fs::read_to_string(r.driver("H1")).unwrap();
     let block = driver.find("# Targets of harness H1").unwrap();
@@ -393,22 +419,40 @@ fn next_declares_the_targets_prints_them_and_writes_the_block_in_the_driver() {
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["pending"], 3, "{st}");
     assert!(
-        st["next_command"].as_str().unwrap().contains("dla harness run H1 --mode both"),
+        st["next_command"]
+            .as_str()
+            .unwrap()
+            .contains("dla harness run H1 --mode both"),
         "{st}"
     );
     // --next again has nothing to declare and says so.
     let again = r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
-    assert!(again["summary"]["next_note"].as_str().unwrap().contains("none was declared"), "{again}");
+    assert!(
+        again["summary"]["next_note"]
+            .as_str()
+            .unwrap()
+            .contains("none was declared"),
+        "{again}"
+    );
     assert!(again["summary"].get("targets").is_none());
 }
 
 #[test]
 fn more_than_eight_targets_are_refused() {
     let r = Run::new(&["--budget", "3h"]);
-    let o = r.run(&["harness", "gen", "--lang", "python", "--driver", "--next", "9"]);
+    let o = r.run(&[
+        "harness", "gen", "--lang", "python", "--driver", "--next", "9",
+    ]);
     assert_ne!(o.code, 0, "{}", o.text);
     assert_eq!(o.json["error"]["code"], "too-many-targets", "{}", o.text);
-    assert!(o.json["error"]["message"].as_str().unwrap().contains("at most 8"), "{}", o.text);
+    assert!(
+        o.json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at most 8"),
+        "{}",
+        o.text
+    );
     // Nothing was created.
     assert!(!r.run_dir.join("harness/H1").exists());
     // --probe and --next together over the limit.
@@ -442,7 +486,11 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
     let t = lines.iter().find(|l| l["id"] == tests_f.as_str()).unwrap();
     assert_eq!(t["tier"], 6, "{t}");
     assert_eq!(t["queue"], "not-eligible");
-    assert_eq!(lines.last().unwrap()["id"], tests_f.as_str(), "the demoted one is last");
+    assert_eq!(
+        lines.last().unwrap()["id"],
+        tests_f.as_str(),
+        "the demoted one is last"
+    );
 
     r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
     // The driver was not filled: the harness cannot run.
@@ -464,18 +512,26 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
     assert_eq!(verdict(&registry)["verdict"], "constant", "{trend}");
     assert_eq!(verdict(&bounded)["verdict"], "constant", "{trend}");
     assert!(
-        verdict(&registry)["detail"].as_str().unwrap().contains("stayed 1 over 8 points"),
+        verdict(&registry)["detail"]
+            .as_str()
+            .unwrap()
+            .contains("stayed 1 over 8 points"),
         "{trend}"
     );
     // The verdicts are in the stored trend report.
-    let stored: Value = serde_json::from_str(&fs::read_to_string(r.run_dir.join("trend/T1.json")).unwrap()).unwrap();
+    let stored: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir.join("trend/T1.json")).unwrap())
+            .unwrap();
     assert_eq!(stored["targets"].as_array().unwrap().len(), 3);
 
     // The cached one is settled; the constant ones are pending and still cannot be closed.
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["settled"], 1, "{st}");
     assert_eq!(st["queue"]["python"]["pending"], 2, "{st}");
-    assert_eq!(r.close(&registry, "not_exercised").json["error"]["code"], "target-pending");
+    assert_eq!(
+        r.close(&registry, "not_exercised").json["error"]["code"],
+        "target-pending"
+    );
     // The same driver run again settles nothing.
     r.ok(&["harness", "run", "H1", "--mode", "both"]);
     r.ok(&["trend", "S3"]);
@@ -485,7 +541,14 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
     r.fill_more("H1");
     r.ok(&["harness", "run", "H1", "--mode", "both"]);
     let trend = r.ok(&["trend", "S5"]);
-    assert!(trend["targets"].as_array().unwrap().iter().any(|t| t["verdict"] == "constant"), "{trend}");
+    assert!(
+        trend["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["verdict"] == "constant"),
+        "{trend}"
+    );
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["pending"], 0, "{st}");
     assert_eq!(st["queue"]["python"]["open"], false, "{st}");
@@ -496,10 +559,20 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
     let out = r.ok(&["ledger", "close-rest"]);
     assert!(out["closed"].as_u64().unwrap() >= 3, "{out}");
     // The cached one grew: it is left open to test, not closed.
-    let left: Vec<&str> = out["left"].as_array().unwrap().iter().map(|l| l["id"].as_str().unwrap()).collect();
+    let left: Vec<&str> = out["left"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["id"].as_str().unwrap())
+        .collect();
     assert_eq!(left, [cached.as_str()], "{out}");
     let (_, lines) = r.list();
-    let state_of = |id: &str| lines.iter().find(|l| l["id"] == id).unwrap()["state"].as_str().unwrap().to_owned();
+    let state_of = |id: &str| {
+        lines.iter().find(|l| l["id"] == id).unwrap()["state"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
     assert_eq!(state_of(&registry), "suspected_static_only(not_exercised)");
     assert_eq!(state_of(&bounded), "suspected_static_only(not_exercised)");
     // The remedy names what was tried and what to do.
@@ -512,7 +585,44 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         ledger.contains("tier 6 (not ranked for measurement), not targeted: dla harness gen --lang python --driver --probe"),
         "{ledger}"
     );
-    assert!(ledger.contains("\"close_rest\""), "one run-config record lists what was closed");
+    assert!(
+        ledger.contains("\"close_rest\""),
+        "one run-config record lists what was closed"
+    );
+
+    // The one that grew is tested or closed by the caller; then nothing of the queue is left
+    // and the final gate asks for no finding.
+    let o = r.run(&[
+        "ledger",
+        "resolve",
+        &cached,
+        "--as",
+        "suspected_static_only",
+        "--reason",
+        "not_exercised",
+        "--remedy",
+        "x",
+    ]);
+    assert_eq!(o.code, 0, "{}", o.text);
+    let left = r.missing();
+    assert!(
+        left.iter().all(|m| m["kind"] != "queue" && m["kind"] != "finding"),
+        "{left:?}"
+    );
+
+    // The report says how the candidates were targeted, in the header and per finding.
+    let md = r.report();
+    assert!(
+        md.contains(
+            "\nQueue: 3 of 3 ranked candidates targeted in 1 harness: grew 1, not reached 2; 0 not targeted\n"
+        ),
+        "{md}"
+    );
+    assert!(md.contains("- Targeted: H1 constant\n"), "{md}");
+    assert!(
+        md.contains("- Not targeted (tier 6, not ranked for measurement)\n"),
+        "{md}"
+    );
 }
 
 #[test]
@@ -542,7 +652,9 @@ fn the_stop_hook_leads_with_the_queue_item() {
     assert_eq!(v["decision"], "block", "{v}");
     let reason = v["reason"].as_str().unwrap();
     assert!(reason.len() <= 1000, "{} bytes", reason.len());
-    let queue = reason.find("candidate(s) of python are ranked for measurement").unwrap();
+    let queue = reason
+        .find("candidate(s) of python are ranked for measurement")
+        .unwrap();
     let finding = reason.find("finding F1").unwrap_or(usize::MAX);
     assert!(queue < finding, "{reason}");
     assert!(reason.contains(BATCH), "{reason}");

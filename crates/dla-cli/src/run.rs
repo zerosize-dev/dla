@@ -109,9 +109,8 @@ fn run_config_result(
     seconds: u64,
     auto: bool,
     (scope, include): (&Option<Scope>, &[String]),
-    entry: EntryPath,
+    (entry, queue): (EntryPath, bool),
     artifacts: &[String],
-    queue: bool,
 ) -> Res<Value> {
     if session.chars().count() > MAX_SESSION_ID_CHARS {
         return Err(Failure::refuse(
@@ -342,9 +341,8 @@ pub fn init(project_arg: Option<&std::path::Path>, a: InitArgs) -> Res<Value> {
         seconds,
         auto,
         (&scope, &include),
-        entry,
+        (entry, a.queue == QueueSwitch::On),
         &artifacts,
-        a.queue == QueueSwitch::On,
     )?;
     if let Some(sc) = &scope {
         check_scope_dir(&project, sc)?;
@@ -558,15 +556,10 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     if !queues.is_empty() {
         out["queue"] = queue_json(&queues);
     }
-    out["next_command"] = json!(
-        queues
-            .iter()
-            .find(|q| q.open())
-            .map_or_else(
-                || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
-                |q| clip_command(&q.command)
-            )
-    );
+    out["next_command"] = json!(queues.iter().find(|q| q.open()).map_or_else(
+        || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
+        |q| clip_command(&q.command)
+    ));
     let mut truncated = total > shown.len();
     // Add revisit entries one by one while the whole object stays inside the output bound.
     let room = MAX_OUTPUT_BYTES - 1 - 40;

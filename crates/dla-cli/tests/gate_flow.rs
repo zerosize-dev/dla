@@ -101,10 +101,15 @@ impl Run {
 }
 
 fn init(entry: &str) -> Run {
+    init_with(entry, &[])
+}
+
+fn init_with(entry: &str, extra: &[&str]) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let o = base(dir.path())
         .env("DLA_CONSENT_TIERS", "1,2")
         .args(["run", "init", "--session-id", "t", "--entry", entry])
+        .args(extra)
         .output()
         .unwrap();
     let v: Value = serde_json::from_slice(&o.stdout).unwrap();
@@ -128,7 +133,9 @@ fn missing_ids(o: &Out) -> Vec<String> {
 
 #[test]
 fn stages_fail_and_then_pass_through_a_swept_project() {
-    let r = init("repository");
+    // The test closes its candidate without a workload that reaches it: the run is started
+    // with the measurement queue off, which is today's behaviour.
+    let r = init_with("repository", &["--queue", "off"]);
     fs::write(
         r.path().join("app.py"),
         "_seen = []\n_cache = {}\n\ndef handle(req):\n    _seen.append(req)\n    _cache[req] = len(_seen)\n    return len(_seen)\n",

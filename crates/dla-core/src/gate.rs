@@ -2155,7 +2155,8 @@ fn coverage_contradiction_items(view: &RunView, out: &mut Out) {
             format!(
                 "{}. If the driver cannot reach them, record why: dla ledger resolve intake.workload --status unresolved --reason {} --remedy \"<why no entry point can be called>\"",
                 driver_step(view, rt),
-                if view.state.queue && view.run_dir.is_some() {
+                // While the runtime's queue is open only a blocker closes it.
+                if crate::queue::open_queue(view, rt, None).is_some() {
                     "<env_unavailable|tool_missing|build_fails|privilege_declined>"
                 } else {
                     "not_exercised"
@@ -2261,7 +2262,10 @@ fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
     let mut out = Out(Vec::new());
     let mine = |id: &str| id.split_once('/').is_some_and(|(p, _)| p == w);
     if target == GateTarget::Final {
-        for q in crate::queue::queues(view, Some(w)).iter().filter(|q| q.open()) {
+        for q in crate::queue::queues(view, Some(w))
+            .iter()
+            .filter(|q| q.open())
+        {
             out.0.push(from_blocking(crate::view::queue_item(q)));
         }
     }

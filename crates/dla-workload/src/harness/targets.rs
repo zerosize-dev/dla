@@ -81,7 +81,10 @@ fn enclosing_name(project: &Path, site: &str) -> Option<String> {
     // The range ends where the line does: a range that reaches past the end of the last
     // line of a function is not inside it.
     let mut node: Option<Node<'_>> = tree.root_node().descendant_for_point_range(
-        Point { row, column: indent },
+        Point {
+            row,
+            column: indent,
+        },
         Point {
             row,
             column: text.trim_end().len().max(indent),
@@ -177,7 +180,9 @@ fn probe_text(project: &Path, a: &Asked, probes: &[ProbeSpec]) -> Option<String>
         ProbeTarget::NodeBinding { file, name } => format!("{name} in {file}"),
         ProbeTarget::JvmStatic { class, field } => format!("static field {class}.{field}"),
         ProbeTarget::JvmClass { class } => format!("the static fields of {class}"),
-        ProbeTarget::GoVar { package_dir, name } => format!("package variable {package_dir}.{name}"),
+        ProbeTarget::GoVar { package_dir, name } => {
+            format!("package variable {package_dir}.{name}")
+        }
     })
 }
 
@@ -372,7 +377,12 @@ mod tests {
             writers: (vec!["pkg/web_app.py:82 (_build)".into()], 1),
             removers: (vec![], 0),
             probe: Some("size of pkg.web_app._build (cache_info().currsize or len)".into()),
-            instruction: instruction("cache-decorator", "static/global", "pkg.web_app._build", "pkg/web_app.py:82"),
+            instruction: instruction(
+                "cache-decorator",
+                "static/global",
+                "pkg.web_app._build",
+                "pkg/web_app.py:82",
+            ),
         }
     }
 
@@ -390,7 +400,9 @@ mod tests {
         let hook = text.find("    # DLA-HOOK setup:").unwrap();
         let block = text.find("    # Targets of harness H2").unwrap();
         assert!(block < hook, "{text}");
-        assert!(text.contains("    # F8 at pkg/web_app.py:82: holder static/global, owner pkg.web_app._build\n"));
+        assert!(text.contains(
+            "    # F8 at pkg/web_app.py:82: holder static/global, owner pkg.web_app._build\n"
+        ));
         assert!(text.contains("call pkg.web_app._build with arguments that differ for every unit (derive them from key)"));
         assert!(text.contains("never reuse an earlier unit's key"));
         assert!(text.starts_with("\"\"\"Fill"), "{text}");
@@ -399,16 +411,35 @@ mod tests {
     #[test]
     fn a_c_driver_gets_comment_pairs() {
         let b = block("H1", &[target()], None);
-        assert!(b.lines().all(|l| l.starts_with("/* ") && l.ends_with(" */")), "{b}");
+        assert!(
+            b.lines()
+                .all(|l| l.starts_with("/* ") && l.ends_with(" */")),
+            "{b}"
+        );
     }
 
     #[test]
     fn instructions_by_holder_kind() {
-        assert!(instruction("cache-decorator", "static/global", "m.f", "a.py:1").starts_with("call m.f with arguments"));
-        assert!(instruction("", "container-field", "", "a.py:1").starts_with("make every unit reach a writer"));
-        assert!(instruction("", "static/global", "", "a.py:1").starts_with("make every unit reach a writer"));
-        assert!(instruction("", "registration-table", "", "a.py:1").starts_with("register through the public API once per unit"));
-        assert_eq!(instruction("", "thread-local", "", "a.py:9"), "make every unit run the code at a.py:9");
+        assert!(
+            instruction("cache-decorator", "static/global", "m.f", "a.py:1")
+                .starts_with("call m.f with arguments")
+        );
+        assert!(
+            instruction("", "container-field", "", "a.py:1")
+                .starts_with("make every unit reach a writer")
+        );
+        assert!(
+            instruction("", "static/global", "", "a.py:1")
+                .starts_with("make every unit reach a writer")
+        );
+        assert!(
+            instruction("", "registration-table", "", "a.py:1")
+                .starts_with("register through the public API once per unit")
+        );
+        assert_eq!(
+            instruction("", "thread-local", "", "a.py:9"),
+            "make every unit run the code at a.py:9"
+        );
     }
 
     #[test]
@@ -419,8 +450,14 @@ mod tests {
             "CACHE = {}\n\nclass C:\n    def put(self, k):\n        CACHE[k] = 1\n\ndef free(k):\n    CACHE[k] = 2\n",
         )
         .unwrap();
-        assert_eq!(enclosing_name(dir.path(), "a.py:5").as_deref(), Some("C.put"));
-        assert_eq!(enclosing_name(dir.path(), "a.py:8").as_deref(), Some("free"));
+        assert_eq!(
+            enclosing_name(dir.path(), "a.py:5").as_deref(),
+            Some("C.put")
+        );
+        assert_eq!(
+            enclosing_name(dir.path(), "a.py:8").as_deref(),
+            Some("free")
+        );
         assert_eq!(enclosing_name(dir.path(), "a.py:1"), None);
     }
 }

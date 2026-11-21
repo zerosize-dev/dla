@@ -135,7 +135,9 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
             if v.len() < 2 {
                 continue;
             }
-            let (lo, hi) = v.iter().fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
+            let (lo, hi) = v
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(*x), h.max(*x)));
             if lo != hi {
                 return make(
                     Verdict::Changed,
@@ -177,7 +179,9 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
             dla_core::harness::ProbeTarget::PyModule { module } => module.clone(),
             dla_core::harness::ProbeTarget::NodeModule { file } => file.clone(),
             dla_core::harness::ProbeTarget::NodeBinding { file, name } => format!("{file} {name}"),
-            dla_core::harness::ProbeTarget::JvmStatic { class, field } => format!("{class}.{field}"),
+            dla_core::harness::ProbeTarget::JvmStatic { class, field } => {
+                format!("{class}.{field}")
+            }
             dla_core::harness::ProbeTarget::JvmClass { class } => class.clone(),
             dla_core::harness::ProbeTarget::GoVar { package_dir, name } => {
                 format!("{package_dir}.{name}")
@@ -217,7 +221,10 @@ fn enclosing_function(project: &Path, site: &str) -> Option<(String, Func)> {
     // The range ends where the line does: a range that reaches past the end of the last
     // line of a function is not inside it.
     let mut node = tree.root_node().descendant_for_point_range(
-        dla_census::parse::tree_sitter::Point { row, column: indent },
+        dla_census::parse::tree_sitter::Point {
+            row,
+            column: indent,
+        },
         dla_census::parse::tree_sitter::Point {
             row,
             column: text.trim_end().len().max(indent),
@@ -347,10 +354,7 @@ fn coverage_verdict(inp: &Inputs<'_>, f: &FindingId) -> TargetVerdict {
             finding: f.clone(),
             verdict: Verdict::Executed,
             column: None,
-            detail: format!(
-                "function {} at {file}:{} was executed",
-                func.name, func.lo
-            ),
+            detail: format!("function {} at {file}:{} was executed", func.name, func.lo),
             declared: false,
         };
     }
@@ -410,8 +414,7 @@ fn class_verdict(inp: &Inputs<'_>, f: &FindingId, doc: &Value, sites: &[String])
         let dir = package.replace('.', "/");
         let base = file.rsplit('/').next().unwrap_or(&file);
         let by_source = sources.iter().any(|x| {
-            x.rsplit('/').next() == Some(base)
-                && x.rsplit_once('/').map_or("", |(d, _)| d) == dir
+            x.rsplit('/').next() == Some(base) && x.rsplit_once('/').map_or("", |(d, _)| d) == dir
         });
         let by_class = loaded
             .iter()
@@ -500,13 +503,16 @@ mod tests {
             .unwrap();
         // F1: the cache at line 1, written in Cart.add (line 6). F2: a site in `other`.
         for (site, writers) in [("a.py:1", vec!["a.py:6".to_owned()]), ("a.py:10", vec![])] {
-            let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
+            let mut nf =
+                NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
             nf.site = Some(site.into());
             let id = ledger.add_finding(nf).unwrap();
             if !writers.is_empty() {
                 let f = ledger.findings().last().unwrap().id.clone();
                 let _ = id;
-                ledger.annotate(&f, writers, vec![], Some("n".into())).unwrap();
+                ledger
+                    .annotate(&f, writers, vec![], Some("n".into()))
+                    .unwrap();
             }
         }
         Scene { dir, ledger }
@@ -522,10 +528,19 @@ mod tests {
         .unwrap()
     }
 
-    fn verdicts(s: &Scene, m: &HarnessManifest, cols: Vec<Col>, mut matcher_fill: impl FnMut(&mut Vec<ColumnTrend>)) -> Vec<TargetVerdict> {
+    fn verdicts(
+        s: &Scene,
+        m: &HarnessManifest,
+        cols: Vec<Col>,
+        mut matcher_fill: impl FnMut(&mut Vec<ColumnTrend>),
+    ) -> Vec<TargetVerdict> {
         m.save(s.dir.path()).unwrap();
         let file = series("S1", 1, cols);
-        let mut analysed = analyze_series(&file, &(0..file.columns.len()).collect::<Vec<_>>(), &GateThresholds::default());
+        let mut analysed = analyze_series(
+            &file,
+            &(0..file.columns.len()).collect::<Vec<_>>(),
+            &GateThresholds::default(),
+        );
         matcher_fill(&mut analysed);
         compute(&Inputs {
             project: s.dir.path(),
@@ -550,7 +565,12 @@ mod tests {
     fn grew_when_a_tied_column_passed_the_gate() {
         let s = scene();
         let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
-        let v = verdicts(&s, &m, vec![Col::counter("probe:a.CACHE", &rising(1.0, 9.0))], |c| tie(c, 1));
+        let v = verdicts(
+            &s,
+            &m,
+            vec![Col::counter("probe:a.CACHE", &rising(1.0, 9.0))],
+            |c| tie(c, 1),
+        );
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].verdict, Verdict::Grew);
         assert_eq!(v[0].column.as_deref(), Some("probe:a.CACHE"));
@@ -562,19 +582,29 @@ mod tests {
         let s = scene();
         let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
         let wobble = [1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0];
-        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &wobble)], |c| tie(c, 1));
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &wobble)], |c| {
+            tie(c, 1)
+        });
         assert_eq!(v[0].verdict, Verdict::Changed, "{v:?}");
-        assert!(v[0].detail.contains("did not pass the growth gate"), "{}", v[0].detail);
+        assert!(
+            v[0].detail.contains("did not pass the growth gate"),
+            "{}",
+            v[0].detail
+        );
     }
 
     #[test]
     fn constant_when_the_probe_never_moved() {
         let s = scene();
         let m = manifest(json!([py_probe("P1", "F1", "CACHE")]), &["F1"]);
-        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &[1.0; 9])], |c| tie(c, 1));
+        let v = verdicts(&s, &m, vec![Col::gauge("probe:a.CACHE", &[1.0; 9])], |c| {
+            tie(c, 1)
+        });
         assert_eq!(v[0].verdict, Verdict::Constant, "{v:?}");
         assert!(
-            v[0].detail.contains("stayed 1 over 8 points: every unit used the same key or never reached a writer"),
+            v[0].detail.contains(
+                "stayed 1 over 8 points: every unit used the same key or never reached a writer"
+            ),
             "{}",
             v[0].detail
         );
@@ -600,7 +630,10 @@ mod tests {
     fn executed_when_the_function_of_a_writer_ran() {
         let s = scene();
         // The writer at a.py:6 is Cart.add (starts at line 5).
-        write_run(&s, json!({"kind": "functions", "functions": [{"file": "a.py", "name": "Cart.add", "line": 5}]}));
+        write_run(
+            &s,
+            json!({"kind": "functions", "functions": [{"file": "a.py", "name": "Cart.add", "line": 5}]}),
+        );
         let m = manifest(json!([]), &["F1"]);
         let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
@@ -610,7 +643,10 @@ mod tests {
     #[test]
     fn not_executed_when_no_enclosing_function_ran() {
         let s = scene();
-        write_run(&s, json!({"kind": "functions", "functions": [{"file": "a.py", "name": "other", "line": 9}]}));
+        write_run(
+            &s,
+            json!({"kind": "functions", "functions": [{"file": "a.py", "name": "other", "line": 9}]}),
+        );
         let m = manifest(json!([]), &["F1"]);
         let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::NotExecuted, "{v:?}");
@@ -624,12 +660,23 @@ mod tests {
         let m = manifest(json!([]), &["F1"]);
         let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Unknown, "{v:?}");
-        assert!(v[0].detail.contains("no coverage data for this run"), "{}", v[0].detail);
+        assert!(
+            v[0].detail.contains("no coverage data for this run"),
+            "{}",
+            v[0].detail
+        );
         // A record that says nothing could be measured is unknown too, never not_executed.
-        write_run(&s, json!({"kind": "none", "note": "no Go coverage profile was written to cov/"}));
+        write_run(
+            &s,
+            json!({"kind": "none", "note": "no Go coverage profile was written to cov/"}),
+        );
         let v = verdicts(&s, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Unknown, "{v:?}");
-        assert!(v[0].detail.contains("no coverage data for this run"), "{}", v[0].detail);
+        assert!(
+            v[0].detail.contains("no coverage data for this run"),
+            "{}",
+            v[0].detail
+        );
     }
 
     #[test]
@@ -641,7 +688,10 @@ mod tests {
         let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
         nf.site = Some("a.py:1".into());
         let _ = l.add_finding(nf);
-        let s2 = Scene { dir: s.dir, ledger: l };
+        let s2 = Scene {
+            dir: s.dir,
+            ledger: l,
+        };
         write_run(&s2, json!({"kind": "functions", "functions": []}));
         let m = manifest(json!([]), &["F3"]);
         let v = verdicts(&s2, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
@@ -651,17 +701,30 @@ mod tests {
     #[test]
     fn a_class_loaded_is_executed_for_a_jvm_run() {
         let s = scene();
-        fs::write(s.dir.path().join("Cart.java"), "package shop;\nclass Cart {}\n").unwrap();
+        fs::write(
+            s.dir.path().join("Cart.java"),
+            "package shop;\nclass Cart {}\n",
+        )
+        .unwrap();
         let mut l = s.ledger.clone();
         let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![EvidenceId::new(1)]);
         nf.site = Some("Cart.java:2".into());
         l.add_finding(nf).unwrap();
-        let s2 = Scene { dir: s.dir, ledger: l };
+        let s2 = Scene {
+            dir: s.dir,
+            ledger: l,
+        };
         let m = manifest(json!([]), &["F3"]);
-        write_run(&s2, json!({"kind": "classes", "classes": ["shop.Other"], "sources": []}));
+        write_run(
+            &s2,
+            json!({"kind": "classes", "classes": ["shop.Other"], "sources": []}),
+        );
         let v = verdicts(&s2, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::NotExecuted, "{v:?}");
-        write_run(&s2, json!({"kind": "classes", "classes": ["shop.Cart$Inner"], "sources": []}));
+        write_run(
+            &s2,
+            json!({"kind": "classes", "classes": ["shop.Cart$Inner"], "sources": []}),
+        );
         let v = verdicts(&s2, &m, vec![Col::gauge("os.rss", &[5.0; 9])], |_| {});
         assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
     }

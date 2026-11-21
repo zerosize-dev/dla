@@ -78,7 +78,11 @@ pub fn tier(f: &Finding, annotation: Option<&Annotation>) -> u8 {
     if f.site.as_deref().is_some_and(is_non_product_site) {
         return TIER_DEMOTED;
     }
-    let origins = || std::iter::once(&f.origin).chain(&f.also_origins).map(|o| o.as_str());
+    let origins = || {
+        std::iter::once(&f.origin)
+            .chain(&f.also_origins)
+            .map(|o| o.as_str())
+    };
     if origins().any(|o| o.starts_with("known-leak:") || o.starts_with("detector:dla/")) {
         return 1;
     }
@@ -121,8 +125,8 @@ pub const TIER_NOTE: &str = "Suspected, static-only findings are ordered by how 
 mod tests {
     use super::*;
     use crate::{
+        finding::{Finding, Origin},
         ids::FindingId,
-        finding::{Origin, Finding},
     };
 
     fn finding(origin: &str, also: &[&str], holder: Option<Holder>, site: &str) -> Finding {
@@ -235,7 +239,12 @@ mod tests {
             let f = finding("known-leak:x", &[], Some(Holder::StaticGlobal), site);
             assert_eq!(tier(&f, Some(&ann(2, 0))), 6, "{site}");
         }
-        for site in ["pkg/cache.py:5", "src/contest.py:1", "pkg/latest/a.py:1", "a.py"] {
+        for site in [
+            "pkg/cache.py:5",
+            "src/contest.py:1",
+            "pkg/latest/a.py:1",
+            "a.py",
+        ] {
             let f = finding("census", &[], Some(Holder::StaticGlobal), site);
             assert_eq!(tier(&f, Some(&ann(2, 0))), 2, "{site}");
         }

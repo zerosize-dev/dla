@@ -247,10 +247,9 @@ fn probe_of_a_finding_no_probe_can_read_is_a_target_without_a_probe_and_says_why
     // and the manifest says why it has no probe.
     assert_eq!(o.code, 0, "{}", o.text);
     let run_dir = project.join(".dla").join(init["run_id"].as_str().unwrap());
-    let manifest: Value = serde_json::from_str(
-        &fs::read_to_string(run_dir.join("harness/H1/harness.json")).unwrap(),
-    )
-    .unwrap();
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("harness/H1/harness.json")).unwrap())
+            .unwrap();
     assert_eq!(manifest["targets"], serde_json::json!(["F1"]), "{manifest}");
     let gaps = manifest["gaps"].to_string();
     assert!(gaps.contains("--probe F1"), "{gaps}");
@@ -258,8 +257,15 @@ fn probe_of_a_finding_no_probe_can_read_is_a_target_without_a_probe_and_says_why
         gaps.contains("go command mode has no package-variable probes"),
         "{gaps}"
     );
-    assert!(gaps.contains("recorded as a target without a probe"), "{gaps}");
-    assert_eq!(o.json["summary"]["targets"][0]["probe"], false, "{}", o.text);
+    assert!(
+        gaps.contains("recorded as a target without a probe"),
+        "{gaps}"
+    );
+    assert_eq!(
+        o.json["summary"]["targets"][0]["probe"], false,
+        "{}",
+        o.text
+    );
 }
 
 #[test]

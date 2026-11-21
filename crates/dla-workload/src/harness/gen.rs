@@ -34,7 +34,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use super::{
-    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, harness_dir, probes, scratch, targets, templates,
+    AGENT, COV, DRIVER, LOGS, OUT, PROBES, WORK, commands, harness_dir, probes, scratch, targets,
+    templates,
 };
 
 /// Refusal code: a build tool or compiler is not installed.
@@ -1949,7 +1950,10 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             m.insert(
                 "targets_full".into(),
                 json!(match &block_in {
-                    Some(f) => format!("the comment block at the top of {}", ctx.pointer(&format!("harness/{id}/{f}"))),
+                    Some(f) => format!(
+                        "the comment block at the top of {}",
+                        ctx.pointer(&format!("harness/{id}/{f}"))
+                    ),
                     None => ctx.pointer(&format!("harness/{id}/targets.json")),
                 }),
             );

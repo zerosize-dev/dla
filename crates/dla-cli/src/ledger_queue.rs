@@ -15,11 +15,7 @@ use dla_core::{
 use serde_json::{Value, json};
 
 use super::{ResolveArgs, ResolveAs, open, resolve_finding};
-use crate::{
-    ctx::Ctx,
-    fail::Res,
-    parse::parse_enum,
-};
+use crate::{ctx::Ctx, fail::Res, parse::parse_enum};
 
 /// Findings `dla ledger list` prints by default.
 const DEFAULT_LIMIT: usize = 40;
@@ -111,7 +107,12 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             "queue": qs,
         });
         if !f.also_origins.is_empty() {
-            e["also_origins"] = json!(f.also_origins.iter().map(|o| o.as_str()).collect::<Vec<_>>());
+            e["also_origins"] = json!(
+                f.also_origins
+                    .iter()
+                    .map(|o| o.as_str())
+                    .collect::<Vec<_>>()
+            );
         }
         let targeted = ix.targeted_in(id);
         if !targeted.is_empty() {
@@ -162,7 +163,12 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
 }
 
 /// The remedy `close-rest` builds from a finding's history.
-fn default_remedy(f: &Finding, r: Option<&queue::Ranked>, ix: &Index, runtime: Option<&str>) -> String {
+fn default_remedy(
+    f: &Finding,
+    r: Option<&queue::Ranked>,
+    ix: &Index,
+    runtime: Option<&str>,
+) -> String {
     let place = f
         .owner
         .as_deref()
@@ -193,14 +199,22 @@ fn default_remedy(f: &Finding, r: Option<&queue::Ranked>, ix: &Index, runtime: O
     let list = match names.as_slice() {
         [one] => one.clone(),
         [a, b] => format!("{a} and {b}"),
-        more => format!("{} and {}", more[..more.len() - 1].join(", "), more[more.len() - 1]),
+        more => format!(
+            "{} and {}",
+            more[..more.len() - 1].join(", "),
+            more[more.len() - 1]
+        ),
     };
     let best = ix.best_verdict(&f.id);
     let outcome = match best {
         Some(Verdict::Constant) => "its holder did not change".to_owned(),
-        Some(Verdict::NotLoaded) => "its probe never loaded: the workload did not import its module".to_owned(),
+        Some(Verdict::NotLoaded) => {
+            "its probe never loaded: the workload did not import its module".to_owned()
+        }
         Some(Verdict::NotExecuted) => "its code did not run".to_owned(),
-        Some(Verdict::Executed | Verdict::Unknown) => "its code ran and showed no growth".to_owned(),
+        Some(Verdict::Executed | Verdict::Unknown) => {
+            "its code ran and showed no growth".to_owned()
+        }
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
         Some(Verdict::Grew) => "its holder grew".to_owned(),
         None => "no run of it was read with dla trend".to_owned(),
@@ -249,7 +263,13 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         // Pending in an open queue: it waits for a measurement.
         if q.is_some_and(|q| q.open() && q.pending.contains(&f.id)) {
             let cmd = q.map(|q| q.command.clone()).unwrap_or_default();
-            left.push((f.id.to_string(), format!("pending in the {} queue: {cmd}", runtime.unwrap_or_default())));
+            left.push((
+                f.id.to_string(),
+                format!(
+                    "pending in the {} queue: {cmd}",
+                    runtime.unwrap_or_default()
+                ),
+            ));
             continue;
         }
         // A candidate whose column grew is a lead to test, not one to close.
@@ -260,9 +280,11 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             ));
             continue;
         }
-        let static_evidence = f.supports.iter().filter_map(|e| view.ledger.evidence_by_id(e)).any(
-            |e| matches!(e.kind, EvidenceKind::StaticHit | EvidenceKind::CensusHolder),
-        );
+        let static_evidence = f
+            .supports
+            .iter()
+            .filter_map(|e| view.ledger.evidence_by_id(e))
+            .any(|e| matches!(e.kind, EvidenceKind::StaticHit | EvidenceKind::CensusHolder));
         let (to, disposition) = if static_evidence {
             ("suspected_static_only", ResolveAs::SuspectedStaticOnly)
         } else {
@@ -311,8 +333,11 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             "closed": closed.iter().map(|c| json!({"id": c.id, "as": c.to, "reason": c.reason.as_str()})).collect::<Vec<_>>(),
             "left_open": left.iter().map(|(i, w)| json!({"id": i, "why": w})).collect::<Vec<_>>(),
         });
-        std::fs::write(&path, serde_json::to_string_pretty(&full).unwrap_or_default() + "\n")
-            .map_err(|e| dla_core::Error::io(&path, e))?;
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&full).unwrap_or_default() + "\n",
+        )
+        .map_err(|e| dla_core::Error::io(&path, e))?;
         let project = ctx
             .run_dir
             .parent()

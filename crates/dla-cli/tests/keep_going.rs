@@ -1416,7 +1416,7 @@ fn an_open_finding_names_the_harness_step_where_its_close_would_be_refused() {
     // Once a harness ran the close is accepted and the fix is the close.
     ran_attempt(&r, "H1");
     let fix = fix_of(&r);
-    assert!(fix.contains("dla ledger resolve F1"), "{fix}");
+    assert_eq!(fix, "dla ledger close-rest", "{fix}");
 }
 
 #[test]

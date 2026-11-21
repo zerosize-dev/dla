@@ -699,7 +699,9 @@ fn refuse_target_pending(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) ->
         format!(
             "{id} cannot be closed with {reason}: it is ranked {rank} (tier {tier}) among the {runtime} candidates and no workload has reached it; {left} of {total} budget minutes remain."
         ),
-        format!("a workload whose units reach {id} (a harness that targets it, then dla trend), or the blocker of the {runtime} workload recorded"),
+        format!(
+            "a workload whose units reach {id} (a harness that targets it, then dla trend), or the blocker of the {runtime} workload recorded"
+        ),
         dla_core::queue::steps(&q, &view.state.run_id),
     ))
 }

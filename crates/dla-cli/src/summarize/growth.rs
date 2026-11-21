@@ -205,6 +205,9 @@ pub struct XAxis {
     /// Why x is the capture number where an allocated-bytes axis was wanted; written as
     /// a limitation of the series and of the evidence.
     pub fallback: Option<String>,
+    /// A line for the limitations of the series and of the evidence (the order the
+    /// captures were put in).
+    pub note: Option<String>,
 }
 
 /// [`write`] with the x axis chosen by the caller. With allocated-bytes positions the gate
@@ -298,7 +301,11 @@ pub fn write_at(
         columns,
         points,
         events: Vec::new(),
-        limitations: axis_limitations(&plan, xs.is_some(), xaxis.fallback.as_deref()),
+        limitations: axis_limitations(
+            &plan,
+            xs.is_some(),
+            xaxis.fallback.as_deref().or(xaxis.note.as_deref()),
+        ),
     };
     series.save(&tc.run_dir)?;
     let series_rel = format!("series/{id}.json");
@@ -426,7 +433,7 @@ pub fn write_at(
         total: Some(n as u64),
     };
     spec.limitations = plan.limitations.clone();
-    if let Some(why) = &xaxis.fallback {
+    if let Some(why) = xaxis.fallback.as_ref().or(xaxis.note.as_ref()) {
         spec.limitations.push(why.clone());
     }
     spec.limitations.push(format!(

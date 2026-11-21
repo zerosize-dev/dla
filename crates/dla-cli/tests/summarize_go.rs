@@ -687,7 +687,7 @@ fn heap_profile(stacks: &[Stack], time_ns: u64, no_alloc: bool) -> Vec<u8> {
         // The function, in a project file, and its location.
         let (n, f) = (
             s(st.function, &mut strings),
-            s("/w/reservd/internal/reserve/wait.go", &mut strings),
+            s("/w/harness/H1/work/internal/reserve/wait.go", &mut strings),
         );
         let mut fm = Vec::new();
         field_varint(1, id, &mut fm);
@@ -789,6 +789,18 @@ fn limitations(p: &Project, series: &Value) -> String {
 #[test]
 fn a_linear_leak_profiled_at_different_shares_of_its_runs_passes_on_the_allocated_bytes_axis() {
     let p = Project::new();
+    // The leak's allocation site is a finding of the run (the stack's first project frame
+    // is `internal/reserve/wait.go:12`).
+    p.put(
+        "internal/reserve/wait.go",
+        "package reserve\n\n\n\n\n\n\n\n\n\n\nvar pending = make([][]byte, 0)\n".as_bytes(),
+    );
+    let f = p.census_finding(
+        "reserve.pending",
+        "internal/reserve/wait.go:12",
+        "static/global",
+        "heap",
+    );
     // The profile of each point is the last in-run sample: at 67 %, 87 %, 100 % and 82 %
     // of the work of runs of 1, 4, 6 and 9 units. The leak keeps 5000 bytes per unit.
     let files = captures([0.67, 0.87, 1.0, 0.82], |w| w * 5_000.0, 90_000, |_| false);
@@ -804,6 +816,11 @@ fn a_linear_leak_profiled_at_different_shares_of_its_runs_passes_on_the_allocate
         !names.iter().any(|n| n.contains("reserve.config")),
         "a flat stack must not pass: {v}"
     );
+    // The stack evidence states the same tie as the growth column: the allocation-stack
+    // record and the series gate read one axis.
+    assert_eq!(v["tied"], json!([f]), "{v}");
+    let a = p.evidence("alloc-stack").pop().unwrap();
+    assert_eq!(a["result"]["finding"], json!(f), "{a}");
     let s = series_of(&p, &v);
     assert_eq!(s["axis"], "allocated-bytes", "{s}");
     // x is the sum of alloc_space of the profile: strictly increasing, in bytes.
@@ -892,20 +909,76 @@ fn without_alloc_totals_the_axis_is_the_capture_number_and_a_limitation_says_why
     );
     assert_eq!(v["gate"], "pass", "evenly spaced captures still pass: {v}");
 
-    // Totals that do not increase in capture order: the third profile allocated less than
-    // the second.
+    // Two equal totals (the third profile is a copy of the second): no order by bytes
+    // allocated exists, so the capture number stays the axis and the line says why.
     let q = Project::new();
-    let files = captures([1.0, 1.0, 0.3, 1.0], |w| w * 5_000.0, 90_000, |_| false);
+    let mut files = captures([1.0; 4], |w| w * 5_000.0, 90_000, |_| false);
+    files[2] = files[1].clone();
     let files = put_all(&q, &files);
     let (_, v) = summarize(&q, "alloc-stack-diff", "go-pprof-heap", &files);
     let s = series_of(&q, &v);
     assert_eq!(s["axis"], "dump", "{s}");
     let lims = limitations(&q, &s);
     assert!(
-        lims.contains("do not strictly increase from capture 2 to 3"),
+        lims.contains("captures 2 and 3 have the same alloc_space total"),
         "{lims}"
     );
     assert!(lims.contains("x is the capture number"), "{lims}");
+}
+
+#[test]
+fn captures_taken_out_of_work_order_are_put_in_the_order_of_the_bytes_allocated() {
+    let p = Project::new();
+    p.put(
+        "internal/reserve/wait.go",
+        "package reserve\n\n\n\n\n\n\n\n\n\n\nvar pending = make([][]byte, 0)\n".as_bytes(),
+    );
+    let f = p.census_finding(
+        "reserve.pending",
+        "internal/reserve/wait.go:12",
+        "static/global",
+        "heap",
+    );
+    // The figures of a run under load: the profile of the 6-unit point was taken at about
+    // half of its run, so it holds less work than the 4-unit one.
+    let files = captures([0.67, 0.87, 0.5, 0.82], |w| w * 5_000.0, 90_000, |_| false);
+    let files = put_all(&p, &files);
+    let (_, v) = summarize(&p, "alloc-stack-diff", "go-pprof-heap", &files);
+    assert_eq!(v["gate"], "pass", "{v}");
+    assert!(
+        passed_names(&v).iter().any(|n| n.contains("awaitConfirm")),
+        "{v}"
+    );
+    assert_eq!(v["tied"], json!([f]), "{v}");
+    let a = p.evidence("alloc-stack").pop().unwrap();
+    assert_eq!(a["result"]["finding"], json!(f), "{a}");
+    let s = series_of(&p, &v);
+    assert_eq!(s["axis"], "allocated-bytes", "{s}");
+    let xs: Vec<f64> = s["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pt| pt["x"].as_f64().unwrap())
+        .collect();
+    assert!(xs.windows(2).all(|w| w[0] < w[1]), "{xs:?}");
+    let lims = limitations(&p, &s);
+    assert!(
+        lims.contains("captures ordered by bytes allocated: 1, 3, 2, 4"),
+        "{lims}"
+    );
+    // The raw file keeps each capture's number and file.
+    let raw: Value = serde_json::from_str(
+        &fs::read_to_string(p.run_dir.join(v["raw"]["path"].as_str().unwrap())).unwrap(),
+    )
+    .unwrap();
+    let nums: Vec<u64> = raw["captures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["number"].as_u64().unwrap())
+        .collect();
+    assert_eq!(nums, [1, 3, 2, 4]);
+    assert_eq!(raw["captures"][1]["label"], "in/h2.pb");
 }
 
 #[test]
@@ -932,4 +1005,24 @@ fn a_flat_stack_and_a_plateau_in_x_still_fail_the_gate() {
     assert_eq!(s["axis"], "allocated-bytes", "{s}");
     let reasons = v["reasons"].to_string();
     assert!(reasons.contains("nothing grows"), "{reasons}");
+
+    // The same after the captures were put in the order of the bytes allocated.
+    let q = Project::new();
+    let files = captures(
+        [0.67, 0.87, 0.5, 0.82],
+        |w| (w * 5_000.0).min(4.0 * 440.0 * 5_000.0 * 0.9),
+        90_000,
+        |_| false,
+    );
+    let files = put_all(&q, &files);
+    let (_, v) = summarize(&q, "alloc-stack-diff", "go-pprof-heap", &files);
+    let names = passed_names(&v);
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("awaitConfirm") || n.contains("reserve.config")),
+        "{v}"
+    );
+    assert!(v["reasons"].to_string().contains("nothing grows"), "{v}");
+    assert_eq!(series_of(&q, &v)["axis"], "allocated-bytes");
 }

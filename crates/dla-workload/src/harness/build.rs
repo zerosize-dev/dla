@@ -420,7 +420,12 @@ pub fn build_series(
                     .finding
                     .as_ref()
                     .is_some_and(|f| manifest.targets.contains(f));
-                (declared, classify(name), growth(&a.vals, warm), name.clone())
+                (
+                    declared,
+                    classify(name),
+                    growth(&a.vals, warm),
+                    name.clone(),
+                )
             })
             .collect();
         ranked.sort_by(|a, b| {
@@ -658,7 +663,10 @@ mod tests {
     #[test]
     fn the_probe_column_of_a_declared_target_is_never_dropped_by_the_cap() {
         let (names, limits) = capped(&[]);
-        assert!(!names.contains(&"probe:m.v1".to_owned()), "dropped by growth: {names:?}");
+        assert!(
+            !names.contains(&"probe:m.v1".to_owned()),
+            "dropped by growth: {names:?}"
+        );
         assert!(limits.iter().any(|l| l.contains("dropped")), "{limits:?}");
         let (names, _) = capped(&["F9"]);
         assert_eq!(names.len(), MAX_COLUMNS, "{}", names.len());

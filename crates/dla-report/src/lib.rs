@@ -750,7 +750,10 @@ fn static_table(out: &mut String, rows: &[&Finding]) {
     for f in rows {
         let place = f.owner.as_deref().or(f.site.as_deref());
         let tail = if targeted {
-            format!(" {} |", targeted_text(&f.id).map_or_else(|| DASH.to_owned(), |t| inline(&t)))
+            format!(
+                " {} |",
+                targeted_text(&f.id).map_or_else(|| DASH.to_owned(), |t| inline(&t))
+            )
         } else {
             String::new()
         };

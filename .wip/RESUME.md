@@ -243,3 +243,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   every test, "corrected" only when its tests ran, no internal plan names, model names or stale
   byte counts.
 - Unfinished work is snapshotted to `wip/progress` (this branch); `main` gets checked work only.
+
+## State 2026-11-21 03:15 UTC
+- main = d03a00f (pass 1), CI green (run 44850244799). Working tree: queue code (agent Q1, still verifying), queue docs (Q2, done), Go capture axis (agent A: axis = bytes allocated done; follow-up "order captures by bytes allocated" in progress).
+- My check of the queue build on aiohttp 3.10.10 (static stage, copy in scratch u29/aiohttp): `run status` leads with the queue item (92 ranked, F8 = aiohttp/web_app.py:82 is rank 1), `dla ledger list` works, `dla harness gen --lang python --driver --next` declares 8 targets and writes the target block into the driver.
+- Seen, for the next ranking step: the Python census lists TypeVar assignments (`aiohttp.client._RetType`, `aiohttp.helpers._T`) as static/global holders with writers; they take queue slots in tier 2.
+- Next: verify Q1's report (tests, clippy, fmt on tests/queue.rs, schema, static both modes, dynamic), refresh /root/dla-real/plugin and bin, real runs aiohttp-2, grpc-2, spring-4. Then give A the Go driver-mode coverage gap.

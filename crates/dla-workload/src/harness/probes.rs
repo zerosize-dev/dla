@@ -608,7 +608,9 @@ pub fn derive(
         }
         if module.is_empty() {
             let why = match rt {
-                Runtime::Go if !driver => "go command mode has no package-variable probes".to_owned(),
+                Runtime::Go if !driver => {
+                    "go command mode has no package-variable probes".to_owned()
+                }
                 Runtime::Go => format!(
                     "its holder {} ({}) is not a package variable",
                     if c.owner.is_empty() {
