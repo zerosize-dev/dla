@@ -1,0 +1,1 @@
+snapshot for CI: real-run fixes (short series, stamps, census speed, Rust stacks, plateau rule)
