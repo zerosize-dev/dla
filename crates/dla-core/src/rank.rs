@@ -207,6 +207,20 @@ pub fn is_non_product_site(site: &str) -> bool {
         || is_test_file(file)
 }
 
+/// True for a census registration (`holder` registration-table, a registry) with no writer
+/// other than its own site: the call that registers is itself the insert, as when a listener is
+/// added to an object handed in from outside (no other statement "writes" that object).
+fn registration_is_own_writer(f: &Finding, a: &Annotation) -> bool {
+    f.site.is_some()
+        && f.holder == Some(Holder::RegistrationTable)
+        && a.facts.container == Some(ContainerClass::Registry)
+        && a.writers.is_empty()
+        && a.facts.writer_sites.is_empty()
+        && std::iter::once(&f.origin)
+            .chain(&f.also_origins)
+            .any(|o| o.as_str() == "census")
+}
+
 /// The tier of a finding, 1 (strongest) to 6 (demoted), from the finding and its
 /// annotation only.
 pub fn tier(f: &Finding, annotation: Option<&Annotation>) -> u8 {
@@ -222,7 +236,12 @@ pub fn tier(f: &Finding, annotation: Option<&Annotation>) -> u8 {
         return 1;
     }
     let census = origins().any(|o| o == "census");
-    let (writers, removers) = annotation.map_or((0, 0), |a| (a.writers.len(), a.removers.len()));
+    let (writers, removers) = annotation.map_or((0, 0), |a| {
+        (
+            a.writers.len() + usize::from(registration_is_own_writer(f, a)),
+            a.removers.len(),
+        )
+    });
     if census
         && writers > 0
         && removers == 0
@@ -413,6 +432,22 @@ pub fn contributions(f: &Finding, annotation: Option<&Annotation>) -> Vec<(&'sta
         SiteKind::Insert,
         unit_entry,
     );
+    let mut writers = writers;
+    if registration_is_own_writer(f, a)
+        && let Some(site) = &f.site
+    {
+        writers.push(SiteFact {
+            site: site.clone(),
+            kind: SiteKind::Insert,
+            depth: 0,
+            function: None,
+            init: false,
+            startup: false,
+            param: false,
+            constant: false,
+            exported: false,
+        });
+    }
     let removers = sites_of(&facts.remover_sites, &a.removers, SiteKind::Delete, false);
     let inserts: Vec<&SiteFact> = writers
         .iter()
@@ -700,6 +735,55 @@ mod tests {
             constant: false,
             exported: false,
         }
+    }
+
+    /// A listener added to an object handed in from outside: nothing else "writes" it, the
+    /// registration call is the insert; the receiver says whether the object can outlive the call.
+    fn own_registration(receiver: Receiver) -> (Finding, Annotation) {
+        let f = finding(
+            "census",
+            &[],
+            Some(Holder::RegistrationTable),
+            "lib/adapters/http.js:924",
+        );
+        let a = facts_ann(|h| {
+            h.container = Some(ContainerClass::Registry);
+            h.bound = Some(Bound::None);
+            h.lifetime = Some(Lifetime::Object);
+            h.receiver = Some(receiver);
+            h.remover_sites = vec![site(
+                "lib/adapters/http.js:913",
+                SiteKind::Delete,
+                0,
+                "httpAdapter",
+            )];
+        });
+        (f, a)
+    }
+
+    #[test]
+    fn a_registration_on_an_outer_object_is_its_own_writer_and_ranks_above_a_local_one() {
+        let (f, a) = own_registration(Receiver::Outer);
+        // Eligible (tier 4: it has a remover), not tier 5, and no w_none.
+        assert_eq!(tier(&f, Some(&a)), 4);
+        let names: Vec<&str> = contributions(&f, Some(&a)).iter().map(|c| c.0).collect();
+        assert!(
+            !names.contains(&"w_none") && !names.contains(&"tier5"),
+            "{names:?}"
+        );
+        assert!(names.contains(&"w_grow"), "{names:?}");
+        let (fl, al) = own_registration(Receiver::Local);
+        assert!(score(&f, Some(&a)) > score(&fl, Some(&al)));
+        assert!(score(&f, Some(&a)) > 0, "{}", score(&f, Some(&a)));
+        // Without a remover it is tier 2, as any registration with a writer.
+        let mut free = a.clone();
+        free.facts.remover_sites.clear();
+        free.removers.clear();
+        assert_eq!(tier(&f, Some(&free)), 2);
+        // A registration of another holder kind, or one that has a writer of its own elsewhere,
+        // is unchanged.
+        let g = finding("census", &[], Some(Holder::StaticGlobal), "a.js:1");
+        assert_eq!(tier(&g, Some(&a)), 5);
     }
 
     fn facts_ann(f: impl FnOnce(&mut HolderFacts)) -> Annotation {

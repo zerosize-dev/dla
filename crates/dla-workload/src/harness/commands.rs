@@ -528,7 +528,7 @@ fn plan_python(w: &Workload, iter_arg: Option<&str>, layout: &Layout) -> Plan {
 fn node_options(layout: &Layout) -> String {
     format!(
         "--require {}",
-        quote_opt(&abs(&layout.agent.join("dla-preload.js")))
+        quote_opt(&abs(&layout.agent.join("dla-preload.cjs")))
     )
 }
 
@@ -842,6 +842,10 @@ pub struct DriverSpec {
     pub goleak: bool,
     /// Rust: crate directory, relative to the scratch copy (the workload's cwd).
     pub crate_dir: String,
+    /// Rust: crate features the driver build enables (`--features a,b`).
+    pub features: Vec<String>,
+    /// Rust: the driver build leaves the crate's default features out.
+    pub no_default_features: bool,
     /// JVM: run the project's own JUnit 5 tests in a loop (no hooks, see [`JunitSpec`]).
     pub junit: Option<JunitSpec>,
     /// JVM: the project's Gradle or Maven build resolves the driver's class path (the main
@@ -1105,7 +1109,7 @@ pub fn plan_driver(
         }
         Runtime::Node => {
             let mut run = CommandSpec {
-                argv: vec!["node".into(), driver("dla-harness.js")],
+                argv: vec!["node".into(), driver("dla-harness.cjs")],
                 cwd: cwd.to_owned(),
                 env: Vec::new(),
             };
@@ -1113,7 +1117,7 @@ pub fn plan_driver(
             set_env(
                 &mut run,
                 "DLA_AGENT",
-                abs(&layout.agent.join("dla-preload.js")),
+                abs(&layout.agent.join("dla-preload.cjs")),
             );
             set_env(&mut run, "NODE_V8_COVERAGE", "{cov}".to_owned());
             Plan {
@@ -1171,12 +1175,21 @@ pub fn plan_driver(
         Runtime::Rust => {
             let target = layout.work.join("target");
             let exe = format!("dla_harness{}", if cfg!(windows) { ".exe" } else { "" });
+            let mut build_argv: Vec<String> =
+                ["cargo", "build", "--release", "--bin", "dla_harness"]
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect();
+            if spec.no_default_features {
+                build_argv.push("--no-default-features".to_owned());
+            }
+            if !spec.features.is_empty() {
+                build_argv.push("--features".to_owned());
+                build_argv.push(spec.features.join(","));
+            }
             Plan {
                 build: Some(CommandSpec {
-                    argv: ["cargo", "build", "--release", "--bin", "dla_harness"]
-                        .iter()
-                        .map(|s| (*s).to_owned())
-                        .collect(),
+                    argv: build_argv,
                     cwd: cwd.to_owned(),
                     env: vec![
                         (
@@ -1500,7 +1513,7 @@ mod tests {
         assert_eq!(p.run.argv, ["node", "load.js", "--iterations", "{n}"]);
         assert_eq!(
             env(&p.run, "NODE_OPTIONS"),
-            Some("--require /r/harness/H1/agent/dla-preload.js")
+            Some("--require /r/harness/H1/agent/dla-preload.cjs")
         );
         assert_eq!(env(&p.run, "NODE_V8_COVERAGE"), Some("{cov}"));
         let shell = plan(

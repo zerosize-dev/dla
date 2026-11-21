@@ -48,6 +48,10 @@ pub struct GapArgs {
     /// findings explain and write the rest as coverage residual rows and open items.
     #[arg(long)]
     residual: bool,
+    /// With --residual: write the residual row of every series that has none, exactly as
+    /// `dla gap <S> --residual` does for each, and print one bounded summary.
+    #[arg(long, requires = "residual", conflicts_with = "series")]
+    all: bool,
 }
 
 /// Evidence authority of a series: live for a sampled process, dump for a series of
@@ -141,6 +145,9 @@ fn derived_of(tc: &ToolCtx, id: &str) -> Res<Option<SeriesFile>> {
 pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: GapArgs) -> Res<Value> {
     RunState::load(&ctx.run_dir)?;
     let tc = stage::tool_ctx(project, ctx, data);
+    if a.all {
+        return run_all(&tc);
+    }
     let series = pick(&tc, a.series.as_deref())?;
     if a.residual {
         let derived = derived_of(&tc, &series.id)?;
@@ -148,4 +155,76 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: GapArgs) -> Res
     } else {
         split::run(&tc, &series)
     }
+}
+
+/// Series listed by name in the summary of `--residual --all`; the rest are counted.
+const SHOWN: usize = 8;
+
+/// `dla gap --residual --all`: the residual row of every series that has none. Each series goes
+/// through the same code as `dla gap <S> --residual` (including the gap series derived from
+/// it, when there is one); a series with no byte column to total is skipped and named.
+fn run_all(tc: &ToolCtx) -> Res<Value> {
+    let have: std::collections::BTreeSet<String> =
+        dla_core::coverage::CoverageManifest::load(&tc.run_dir)?
+            .map(|m| m.residual.iter().filter_map(|r| r.series.clone()).collect())
+            .unwrap_or_default();
+    let (mut written, mut skipped) = (Vec::new(), Vec::new());
+    let mut above: Vec<Value> = Vec::new();
+    let mut covered = 0usize;
+    for (_, id) in series_ids(&tc.run_dir) {
+        let s = SeriesFile::load(&tc.run_dir, &id)?;
+        if s.source.kind == SeriesSourceKind::Gap {
+            continue;
+        }
+        if have.contains(&id) {
+            covered += 1;
+            continue;
+        }
+        let derived = derived_of(tc, &id)?;
+        match residual::run(tc, &s, derived.as_ref()) {
+            Ok(v) => {
+                for row in v["rows"].as_array().into_iter().flatten() {
+                    let over = row["residual"].as_f64().unwrap_or(0.0)
+                        > row["threshold"].as_f64().unwrap_or(0.0);
+                    if over {
+                        above.push(serde_json::json!({
+                            "series": id,
+                            "region": row["region"],
+                            "open_item": row["open_item"],
+                        }));
+                    }
+                }
+                written.push(id);
+            }
+            Err(f) if f.refusal.code == "residual-unavailable" => skipped.push(id),
+            Err(f) => return Err(f),
+        }
+    }
+    let list = |v: &[String]| -> Vec<String> { v.iter().take(SHOWN).cloned().collect() };
+    let mut out = serde_json::json!({
+        "ok": true,
+        "command": "gap",
+        "residual": true,
+        "all": true,
+        "written": written.len(),
+        "series": list(&written),
+        "already_had_a_row": covered,
+        "no_byte_column": skipped.len(),
+        "above_threshold": above.iter().take(SHOWN).collect::<Vec<_>>(),
+    });
+    if written.len() > SHOWN {
+        out["series_more"] = serde_json::json!(written.len() - SHOWN);
+    }
+    if !skipped.is_empty() {
+        out["skipped"] = serde_json::json!(list(&skipped));
+    }
+    if above.len() > SHOWN {
+        out["above_threshold_more"] = serde_json::json!(above.len() - SHOWN);
+    }
+    out["next"] = serde_json::json!(if above.is_empty() {
+        "no region has unexplained growth over its threshold; dla gate check --final lists what is left".to_owned()
+    } else {
+        "each series above its threshold has an open item: dla ledger resolve <O> --by <F> or --as unresolved --reason inconclusive --remedy \"<text>\"; dla gate check --final prints the fix per item".to_owned()
+    });
+    Ok(out)
 }

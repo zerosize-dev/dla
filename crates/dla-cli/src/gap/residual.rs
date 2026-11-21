@@ -460,6 +460,9 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     for (c, a) in calcs.iter().zip(&actions) {
         match a {
             Action::Open(id) => {
+                let advice = capture_advice(src, c.region)
+                    .map(|a| format!("attribute it first: {a}; then "))
+                    .unwrap_or_default();
                 let what = if c.region == Region::NonHeap
                     && let Some(h) = src.source.harness.as_deref()
                 {
@@ -470,7 +473,7 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
                     )
                 } else {
                     format!(
-                        "add a hypothesis (dla ledger add --origin residual --evidence {ev} ...) or record it unresolved"
+                        "{advice}add a hypothesis (dla ledger add --origin residual --evidence {ev} ...) or record it unresolved"
                     )
                 };
                 let text = format!(
@@ -517,9 +520,14 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
                         h,
                     ));
                 }
-                _ => next.push(format!(
-                    "{id}: dla ledger add --origin residual --evidence {ev} ...   or   dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\"   (it was measured, so the reason is inconclusive)"
-                )),
+                _ => {
+                    if let Some(a) = capture_advice(src, c.region) {
+                        next.push(format!("{id}: {a}"));
+                    }
+                    next.push(format!(
+                        "{id}: dla ledger add --origin residual --evidence {ev} ...   or   dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\"   (it was measured, so the reason is inconclusive)"
+                    ));
+                }
             }
         }
     }
@@ -546,6 +554,64 @@ pub fn run(tc: &ToolCtx, src: &SeriesFile, derived: Option<&SeriesFile>) -> Res<
     }))
 }
 
+/// The `--capture` kinds that attribute the residual of `region` for harnesses of `rt`, with what
+/// they show; `None` when the runtime's agent writes no capture for it (Rust and native harnesses
+/// use `--tool`). Each kind has a `dla summarize` command: heap and histogram snapshots
+/// (`heap-graph`, `type-histogram-diff`), allocation stacks (`alloc-stack-diff`), and
+/// `non-heap` for threads, goroutines, tasks and resources.
+fn capture_kinds(
+    rt: dla_core::runtime::Runtime,
+    region: Region,
+) -> Option<(&'static str, &'static str)> {
+    use dla_core::runtime::Runtime;
+    Some(match (rt, region) {
+        (Runtime::Node, Region::Heap) => (
+            "alloc,heap",
+            "allocation stacks name the site, snapshots the types",
+        ),
+        (Runtime::Node, _) => ("nonheap", "active resources by type and creation site"),
+        (Runtime::Jvm, Region::Heap) => (
+            "histogram,jfr",
+            "the class histogram names the types, flight-recorder stacks the site",
+        ),
+        (Runtime::Jvm, _) => (
+            "nonheap",
+            "the thread, class-loader and native memory reports",
+        ),
+        (Runtime::Go, Region::Heap) => (
+            "alloc",
+            "heap profiles: in-use bytes by allocation stack after a collection",
+        ),
+        (Runtime::Go, _) => (
+            "nonheap",
+            "goroutine dumps by creation site and leak profiles",
+        ),
+        (Runtime::Python, Region::Heap) => (
+            "alloc,histogram",
+            "allocation stacks name the site, type counts the types",
+        ),
+        (Runtime::Python, _) => (
+            "nonheap",
+            "threads, tasks and unclosed resources by creation site",
+        ),
+        _ => return None,
+    })
+}
+
+/// The raw capture that can attribute the residual of `region` for the harness that wrote `src`,
+/// as the command to run, or `None` (see [`capture_kinds`]).
+fn capture_advice(src: &dla_core::SeriesFile, region: Region) -> Option<String> {
+    let h = src.source.harness.as_deref()?;
+    let (kinds, what) = capture_kinds(src.source.runtime?, region)?;
+    let mode = match src.source.mode.map(|m| m.as_str()) {
+        Some("native") | None => String::new(),
+        Some(m) => format!(" --mode {m}"),
+    };
+    Some(format!(
+        "dla harness run {h}{mode} --capture {kinds}   # {what}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,6 +625,57 @@ mod tests {
             Some(Region::Heap)
         );
         assert_eq!(item_region("something else in heap (S1)"), None);
+    }
+
+    #[test]
+    fn a_residual_names_the_capture_that_can_attribute_it() {
+        use crate::trend_cmd::analysis::testutil::{Col, series};
+        use dla_core::runtime::Runtime;
+        let mut s = series("S2", 1, vec![Col::gauge("x.heap_used", &[1.0, 2.0])]);
+        s.source.mode = Some(dla_core::series::KeyMode::Fresh);
+        // every row: (runtime, region, the kinds asked)
+        let rows = [
+            (Runtime::Node, Region::Heap, "alloc,heap"),
+            (Runtime::Node, Region::NonHeap, "nonheap"),
+            (Runtime::Node, Region::OffHeap, "nonheap"),
+            (Runtime::Jvm, Region::Heap, "histogram,jfr"),
+            (Runtime::Jvm, Region::NonHeap, "nonheap"),
+            (Runtime::Jvm, Region::OffHeap, "nonheap"),
+            (Runtime::Go, Region::Heap, "alloc"),
+            (Runtime::Go, Region::NonHeap, "nonheap"),
+            (Runtime::Go, Region::OffHeap, "nonheap"),
+            (Runtime::Python, Region::Heap, "alloc,histogram"),
+            (Runtime::Python, Region::NonHeap, "nonheap"),
+            (Runtime::Python, Region::OffHeap, "nonheap"),
+        ];
+        for (rt, region, kinds) in rows {
+            s.source.runtime = Some(rt);
+            let text = capture_advice(&s, region).unwrap_or_default();
+            assert!(
+                text.starts_with(&format!(
+                    "dla harness run H1 --mode fresh --capture {kinds}   # "
+                )),
+                "{rt:?} {region:?}: {text}"
+            );
+            // The agent of the runtime writes every kind that is asked for.
+            let supported = dla_workload::harness::capture::supported(rt);
+            for k in kinds.split(',') {
+                let ok = match k {
+                    "heap" => supported.heap,
+                    "histogram" => supported.histogram,
+                    "jfr" => supported.jfr,
+                    "nonheap" => supported.nonheap,
+                    "alloc" => supported.alloc,
+                    other => panic!("{other}"),
+                };
+                assert!(ok, "{rt:?} writes no {k} capture");
+            }
+        }
+        // Rust and native harnesses use `--tool`: no capture advice.
+        for rt in [Runtime::Rust, Runtime::Native] {
+            s.source.runtime = Some(rt);
+            assert!(capture_advice(&s, Region::Heap).is_none());
+        }
     }
 
     #[test]

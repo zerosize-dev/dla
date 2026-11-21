@@ -139,6 +139,13 @@
       "format": "uint32",
       "minimum": 0
     },
+    "stop_stamps": {
+      "description": "Stamps the stop hook put on the run and whether work went on afterwards (oldest\nfirst). The status says what the run is now; this says what it was.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StopStamp"
+      }
+    },
     "worker_stages_passed": {
       "description": "The stages each worker passed with `dla --worker <name> gate check --stage <s>`. A\nworker's own checks never touch `stages_passed`: the read hook lets a subagent read\nthe archetype tables once its worker passed `classify` here.",
       "type": "object",
@@ -403,6 +410,11 @@
           "description": "A profiler.",
           "type": "string",
           "const": "profiler"
+        },
+        {
+          "description": "A `dla` command of the run (census, sweep, harness run, trend, alloc-test,\nreport...), registered for its lifetime so that the stop hook can see that the\nrun is still working. Never killed by `dla run abort`.",
+          "type": "string",
+          "const": "command"
         }
       ]
     },
@@ -651,6 +663,33 @@
       },
       "required": [
         "blocks"
+      ]
+    },
+    "StopStamp": {
+      "description": "One time the stop hook stamped the run incomplete.",
+      "type": "object",
+      "properties": {
+        "lifted_at": {
+          "description": "When a state-changing command lifted the stamp because the run went on, if it did.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "reason": {
+          "description": "The reason it wrote.",
+          "type": "string"
+        },
+        "stamped_at": {
+          "description": "When the hook let the stop through and stamped the run.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "stamped_at",
+        "reason"
       ]
     },
     "WorkerEntry": {

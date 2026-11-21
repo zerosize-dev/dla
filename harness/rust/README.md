@@ -28,6 +28,33 @@ of live bytes) and writes one `checkpoint` record per round (`x` = units complet
 The driver needs no dependencies. Because it counts allocations itself, it measures only what the
 Rust allocator sees; C libraries linked into the process allocate outside it (visible in `os.*`).
 
+### Features and coverage
+
+`dla harness gen --lang rust --driver --features a,b [--no-default-features]` adds them to the `cargo build` of the
+driver (the command in `harness.json` keeps them). A target whose module the crate declares behind
+`#[cfg(feature = "x")]`, or inside a `cfg_x! { .. }` block whose `macro_rules!` the crate defines with that attribute, gets
+the line "behind feature x: generate with --features x" in the block; the reader is a line scan of the `mod` declarations
+up to `lib.rs` (not seen: `#[path]`, modules declared in other macros or inline, a gate on the item, `cfg_attr`, a feature
+another feature enables; `any(a, b)` names `a`).
+
+`dla harness run` then builds the driver once more with `RUSTFLAGS=-C instrument-coverage` into
+`harness/H<n>/cov-build/`, runs it for one round of `step` units (no warm-up, no captures, no sampler) with
+`LLVM_PROFILE_FILE` in `cov/`, merges the `.profraw` with `llvm-profdata` and exports the functions that ran with
+`llvm-cov export` into `cov/p1-<mode>-cover.rust.json` (file, demangled name, start line; dependencies and the standard
+library left out). The tools are the toolchain's (`<sysroot>/lib/rustlib/<host>/bin`, component `llvm-tools`), else
+those on PATH when their LLVM major version is the one rustc reports. The measured points are not instrumented.
+
+### Allocation stacks (`--capture alloc`)
+
+`dla harness gen --driver` also builds the allocator shim (`agent/libdlashim.so`, needs `cc`; a missing compiler is not a
+refusal). `dla harness run H<n> --mode fresh --capture alloc` runs the driver four more times, 1 to 4 rounds of `step` units
+without warm-up, with the shim preloaded and narrowed to `dla_harness` (the build is the measured one: `line-tables-only`,
+no frame pointers needed, the shim unwinds with `backtrace`), and leaves `out/p<k>-alloc/dump.jsonl` and the shim's record split out into
+`shim-dump.jsonl`. `dla summarize alloc-stack-diff` reads those files: the first frame inside the project (the driver's own
+file is skipped), demangled by `addr2line -C`. The measured points are not slowed; the extra processes are (about ten times for a
+unit that only allocates). Command mode has the shim in every point already: `--capture alloc` copies the shim dumps to
+`out/p<k>-native/shim-dump.jsonl`.
+
 ### dhat-rs variant
 
 `dla harness gen` does not generate this variant yet; it records a gap when `dhat` does not resolve

@@ -9,7 +9,8 @@
 //! | Python | `module:qualname@file:line` items in the dump | `file::qualname` |
 //! | Node | `NODE_V8_COVERAGE` JSON files in `cov/` | file and function name, count above 0 |
 //! | Go | `-coverprofile` files in `cov/`, read with `go tool cover -func` | file and function name, coverage above 0.0% |
-//! | Rust, native | none | recorded as a blind spot |
+//! | Rust | `cov/*.rust.json`: the functions an instrumented run executed, from `llvm-cov export` | file and function name (demangled) or start line |
+//! | native | none | recorded as a blind spot |
 
 use std::{
     collections::BTreeSet,
@@ -531,6 +532,102 @@ fn go_function_lines(
     (out, notes)
 }
 
+/// Suffix of the file a Rust coverage point leaves in `cov/`: `{"functions": [{file, name,
+/// line}]}` with the functions that ran, project-relative paths and demangled names.
+pub const RUST_COVER_SUFFIX: &str = ".rust.json";
+
+/// The project-owned functions with a nonzero count in a `llvm-cov export` JSON document:
+/// `(file relative to work, demangled name, start line)`. Dependencies, the standard library and
+/// generated code are outside `work` and are left out.
+pub fn rust_export_functions(export: &Value, work: &Path) -> Vec<Value> {
+    let work = work.canonicalize().unwrap_or_else(|_| work.to_path_buf());
+    let mut seen: BTreeSet<(String, String, u64)> = BTreeSet::new();
+    let funcs = export
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|d| d.get("functions").and_then(Value::as_array))
+        .flatten();
+    for f in funcs {
+        if f.get("count").and_then(Value::as_u64).unwrap_or(0) == 0 {
+            continue;
+        }
+        let Some(name) = f.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(file) = f
+            .get("filenames")
+            .and_then(Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(Value::as_str)
+            .and_then(|p| relative_to(&work, p))
+        else {
+            continue;
+        };
+        let line = f
+            .get("regions")
+            .and_then(Value::as_array)
+            .and_then(|r| r.first())
+            .and_then(Value::as_array)
+            .and_then(|r| r.first())
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let name = dla_parsers::native::demangle::demangle_or_raw(name);
+        seen.insert((file, name, line));
+    }
+    seen.into_iter()
+        .map(|(file, name, line)| serde_json::json!({"file": file, "name": name, "line": line}))
+        .collect()
+}
+
+/// `(file, name, line)` of the functions the Rust coverage points of `cov_dir` executed.
+fn rust_function_lines(cov_dir: &Path) -> BTreeSet<(String, String, u32)> {
+    let mut out = BTreeSet::new();
+    let Ok(rd) = fs::read_dir(cov_dir) else {
+        return out;
+    };
+    for e in rd.filter_map(Result::ok) {
+        let p = e.path();
+        if !p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(RUST_COVER_SUFFIX))
+        {
+            continue;
+        }
+        let Some(doc) = fs::read_to_string(&p)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        else {
+            continue;
+        };
+        for f in doc
+            .get("functions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let (Some(file), Some(name)) = (
+                f.get("file").and_then(Value::as_str),
+                f.get("name").and_then(Value::as_str),
+            ) {
+                let line = f.get("line").and_then(Value::as_u64).unwrap_or(0);
+                out.insert((
+                    file.to_owned(),
+                    name.to_owned(),
+                    u32::try_from(line).unwrap_or(0),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Text of the limitation when no Rust coverage point wrote functions.
+const NO_RUST_COVERAGE: &str =
+    "no Rust coverage data was written to cov/ (the instrumented coverage run did not produce it)";
+
 /// The discovered entry points of `runtime` that the coverage data shows ran.
 ///
 /// `dump_cov` are the coverage sections of the measured processes' dump records;
@@ -630,7 +727,25 @@ pub fn exercised(
                 .cloned()
                 .collect();
         }
-        Runtime::Rust | Runtime::Native => {
+        Runtime::Rust => {
+            let fns = rust_function_lines(cov_dir);
+            if fns.is_empty() {
+                res.limitations.push(NO_RUST_COVERAGE.to_owned());
+            }
+            res.entries = discovered
+                .iter()
+                .filter(|id| {
+                    split_entry(id).is_some_and(|(f, n)| {
+                        fns.iter().any(|(p, name, _)| {
+                            (p == f || p.ends_with(&format!("/{f}")))
+                                && (name == n || name.ends_with(&format!("::{n}")))
+                        })
+                    })
+                })
+                .cloned()
+                .collect();
+        }
+        Runtime::Native => {
             res.limitations.push(format!(
                 "exercised entry points are not measured for {}: the allocator shim sees allocations, not calls",
                 runtime.as_str()
@@ -641,9 +756,10 @@ pub fn exercised(
 }
 
 /// What ran, as the verdicts of `dla trend` read it: `{runtime, kind, functions, classes,
-/// sources, note}`. `kind` is `functions` (Python 3.12+, Node, Go: file, name and the line
+/// sources, note}`. `kind` is `functions` (Python 3.12+, Node, Go, Rust: file, name and the line
 /// the function starts at), `classes` (JVM: the loaded classes) or `none` (nothing can tell:
-/// Rust, native, Python before 3.12, a run that wrote no coverage). Bounded.
+/// native, Python before 3.12, a Rust run whose coverage process failed, a run that wrote no
+/// coverage). Bounded.
 pub fn executed_record(
     runtime: Runtime,
     dump_cov: &[DumpCoverage],
@@ -731,7 +847,18 @@ pub fn executed_record(
                 .into_iter()
                 .collect();
         }
-        Runtime::Rust | Runtime::Native => {
+        Runtime::Rust => {
+            let fns = rust_function_lines(cov_dir);
+            if fns.is_empty() {
+                note = NO_RUST_COVERAGE.into();
+            } else {
+                kind = "functions";
+            }
+            for (file, name, line) in fns {
+                functions.push(serde_json::json!({"file": file, "name": name, "line": line}));
+            }
+        }
+        Runtime::Native => {
             note = "the allocator shim sees allocations, not calls".into();
         }
     }
@@ -769,6 +896,7 @@ pub fn record(
     let mut limitations = Vec::new();
     let mut project_classes = None;
     let mut agent_blind = false;
+    let mut rust_blind = false;
     let found = match outcome {
         CoverageOutcome::Ran {
             dump_cov,
@@ -783,6 +911,8 @@ pub fn record(
                 serde_json::to_string(&record).unwrap_or_default(),
             );
             let ex = exercised(runtime, &discovered, dump_cov, hdir, cov_dir, work);
+            rust_blind =
+                runtime == Runtime::Rust && ex.limitations.iter().any(|l| l == NO_RUST_COVERAGE);
             agent_blind = runtime == Runtime::Python
                 && ex
                     .limitations
@@ -801,7 +931,7 @@ pub fn record(
                 m.set_project_classes(worker, n);
             }
             m.add_exercised(worker, found.iter().cloned());
-            if matches!(runtime, Runtime::Rust | Runtime::Native) {
+            if runtime == Runtime::Native || rust_blind {
                 m.add_blind_spot(
                     worker,
                     "the allocator shim does not record which entry points ran",
@@ -1453,7 +1583,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_and_native_measure_nothing_and_say_so() {
+    fn native_measures_nothing_and_says_so() {
         let ex = exercised(
             Runtime::Native,
             &d(&["src/a.c::f"]),
@@ -1464,5 +1594,74 @@ mod tests {
         );
         assert!(ex.entries.is_empty());
         assert!(ex.limitations[0].contains("not measured"));
+    }
+
+    #[test]
+    fn rust_export_gives_the_project_functions_that_ran_with_demangled_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().canonicalize().unwrap();
+        let file = work.join("src/lib.rs");
+        // A dependency's file: an absolute path outside the scratch copy on every OS (a path
+        // that starts with "/" is not absolute on Windows).
+        let dep_dir = tempfile::tempdir().unwrap();
+        let dep = dep_dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("registry/src/dep/lib.rs");
+        let export = json!({"data": [{"functions": [
+            {"name": "_RNvCsf5ZMXhcg4hk_4calc8remember", "count": 3,
+             "filenames": [file.to_string_lossy()], "regions": [[6, 1, 8, 2, 3, 0, 0, 0]]},
+            {"name": "_RNvCsf5ZMXhcg4hk_4calc10note_other", "count": 0,
+             "filenames": [file.to_string_lossy()], "regions": [[10, 1, 12, 2, 0, 0, 0, 0]]},
+            {"name": "_RNvCsf5ZMXhcg4hk_3dep4wake", "count": 9,
+             "filenames": [dep.to_string_lossy()], "regions": [[1, 1, 2, 2, 9, 0, 0, 0]]},
+        ]}]});
+        let fns = rust_export_functions(&export, &work);
+        assert_eq!(
+            fns,
+            [json!({"file": "src/lib.rs", "name": "calc::remember", "line": 6})]
+        );
+    }
+
+    #[test]
+    fn rust_functions_in_cov_give_entries_and_the_executed_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let cov = dir.path().join("cov");
+        fs::create_dir_all(&cov).unwrap();
+        fs::write(
+            cov.join("p1-fresh-cover.rust.json"),
+            json!({"functions": [{"file": "src/lib.rs", "name": "calc::Cache::put", "line": 6}]})
+                .to_string(),
+        )
+        .unwrap();
+        let ex = exercised(
+            Runtime::Rust,
+            &d(&["src/lib.rs::Cache.put", "src/lib.rs::Cache.drop_all"]),
+            &[],
+            dir.path(),
+            &cov,
+            dir.path(),
+        );
+        assert_eq!(ex.entries.len(), 1, "{ex:?}");
+        assert!(ex.entries.contains("src/lib.rs::Cache.put"));
+        assert!(ex.limitations.is_empty(), "{ex:?}");
+        let rec = executed_record(Runtime::Rust, &[], dir.path(), &cov, dir.path());
+        assert_eq!(rec["kind"], "functions", "{rec}");
+        assert_eq!(rec["functions"][0]["line"], 6);
+        // Without the file: no coverage, said once.
+        let empty = dir.path().join("none");
+        fs::create_dir_all(&empty).unwrap();
+        let ex = exercised(
+            Runtime::Rust,
+            &d(&["src/lib.rs::f"]),
+            &[],
+            dir.path(),
+            &empty,
+            dir.path(),
+        );
+        assert!(ex.entries.is_empty() && ex.limitations[0].contains("no Rust coverage data"));
+        let rec = executed_record(Runtime::Rust, &[], dir.path(), &empty, dir.path());
+        assert_eq!(rec["kind"], "none");
     }
 }

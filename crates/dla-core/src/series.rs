@@ -250,6 +250,16 @@ pub struct SeriesFile {
     pub limitations: Vec<String>,
 }
 
+/// The line a driver's units leave about their choices ("the units took 72 combinations of 3
+/// choices"), when the series carries one.
+pub fn choices_line(series: &SeriesFile) -> Option<&str> {
+    series
+        .limitations
+        .iter()
+        .map(String::as_str)
+        .find(|l| l.starts_with("the units took ") && l.contains(" combinations of "))
+}
+
 /// The number in an ID such as `S3` or `T12`, or `None` when `id` is not `<prefix><n>`.
 pub fn numbered(prefix: char, id: &str) -> Option<u32> {
     let digits = id.strip_prefix(prefix)?;
@@ -760,6 +770,21 @@ pub fn column_meta(name: &str) -> ColumnMeta {
         _ if name.starts_with("fd.") => meta(Count, Counter, NonHeap, true, false),
         _ => meta(Bytes, Gauge, Process, false, false),
     }
+}
+
+/// The gate-failure reason of a column whose figure cannot show a leak.
+pub const NOT_GROWTH_REASON: &str = "memory returned to the OS";
+
+/// Why a column can never pass the growth gate, when its meaning says so.
+///
+/// `go.released` is the heap memory the Go runtime has given back to the operating system
+/// (`/memory/classes/heap/released:bytes`). A leak keeps memory in use; the figure rises when
+/// the scavenger returns idle memory, or when a purge does, and it falls when the runtime
+/// reuses that memory. It swings by tens of megabytes on a flat workload, and a rise of it
+/// says nothing of what the program holds. It is recorded and shown (and the gap split reads
+/// it), but never passes as growth: no finding is raised on it and no alloc-test votes by it.
+pub fn not_a_growth_signal(name: &str) -> Option<&'static str> {
+    (name == "go.released").then_some(NOT_GROWTH_REASON)
 }
 
 #[cfg(test)]

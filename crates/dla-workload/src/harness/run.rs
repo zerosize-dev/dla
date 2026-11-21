@@ -1107,6 +1107,8 @@ impl PointEnv<'_> {
             set("DLA_STEP", m.step.to_string());
             set("DLA_WARMUP", m.warmup.to_string());
             set("DLA_ROUNDS", self.rounds.to_string());
+            // Drivers fit their rounds into the process's time limit.
+            set("DLA_TIME_LIMIT_SECS", timeout.as_secs().to_string());
             if !m.run.env.iter().any(|(k, _)| k == "DLA_REPEAT") {
                 set("DLA_REPEAT", DEFAULT_REPEAT.to_string());
             }
@@ -1770,7 +1772,7 @@ fn run_command_mode(
                     .detectors
                     .iter()
                     .flatten()
-                    .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "label": label})),
+                    .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "sites": d.sites, "label": label})),
             );
         }
         if k <= manifest.warmup {
@@ -1893,6 +1895,12 @@ fn run_driver_mode(
     if manifest.runtime == dla_core::runtime::Runtime::Go && !res.timed_out {
         go_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
     }
+    if manifest.runtime == dla_core::runtime::Runtime::Rust
+        && manifest.mode == HarnessMode::Driver
+        && !res.timed_out
+    {
+        rust_cover_point(ctx, manifest, paths, mode, timeout, &mut run)?;
+    }
     let file: DumpFile = dumps::read_dumps(&dump);
     if file.bad_lines > 0 {
         run.limitations.push(format!(
@@ -1941,7 +1949,7 @@ fn run_driver_mode(
                 .detectors
                 .iter()
                 .flatten()
-                .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "label": label})),
+                .map(|d| json!({"lib": d.lib, "text": d.text, "site": d.site, "sites": d.sites, "label": label})),
         );
         let sites = if i == last || rec.raw_sites.is_some() {
             sites_of(rec, paths)
@@ -2067,6 +2075,450 @@ fn go_cover_point(
     Ok(())
 }
 
+/// Process counts of the allocation-stack points of a Rust driver: units `step * k`.
+const ALLOC_POINTS: u32 = 4;
+
+/// `--capture alloc` for a Rust driver. The driver counts allocations itself and the shim
+/// writes at process exit, so the stacks come from separate short processes (like the Go and
+/// Rust coverage points, the measured points stay as they are): the same binary
+/// (`line-tables-only` debug info) with the allocator shim preloaded and narrowed to it, run
+/// for `k = 1..=4` rounds of `step` units without a warm-up, key mode `fresh`. Each process
+/// leaves `out/p<k>-alloc/dump.jsonl` (the driver's records and the shim's exit record) and the
+/// shim's record is split out into `shim-dump.jsonl` next to it, which
+/// `dla summarize alloc-stack-diff` reads. Problems are limitations, never refusals.
+fn rust_alloc_points(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    timeout: Duration,
+    out: &mut RunOutput,
+) -> Result<(), Refusal> {
+    let shim = paths
+        .hdir
+        .join(super::AGENT)
+        .join(super::commands::shim_file());
+    if cfg!(windows) || !shim.is_file() {
+        out.limitations.push(
+            "--capture alloc needs the allocator shim in the harness's agent directory (cc builds it at dla harness gen; this harness has none: generate it again with cc on PATH)"
+                .to_owned(),
+        );
+        return Ok(());
+    }
+    // A crate with its own global allocator is not seen by the shim.
+    let mut stack = vec![paths.work.clone()];
+    let mut own_allocator = false;
+    let mut seen = 0;
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.filter_map(Result::ok) {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if p.is_dir() {
+                if name != "target" && !name.starts_with('.') {
+                    stack.push(p);
+                }
+                continue;
+            }
+            seen += 1;
+            if seen > 2000 || !name.ends_with(".rs") || name == "dla_harness.rs" {
+                continue;
+            }
+            if fs::read_to_string(&p).is_ok_and(|t| t.contains("#[global_allocator]")) {
+                own_allocator = true;
+            }
+        }
+    }
+    if own_allocator {
+        out.limitations.push(
+            "the crate sets a #[global_allocator]: the shim sees the system allocator only, so the stacks may miss what that allocator serves"
+                .to_owned(),
+        );
+    }
+    let Some(program) = manifest.run.argv.first() else {
+        return Ok(());
+    };
+    let base = Path::new(program)
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mode = KeyMode::Fresh;
+    let mut written = 0;
+    for k in 1..=ALLOC_POINTS {
+        let label = format!("p{k}-alloc");
+        let pe = PointEnv {
+            manifest,
+            paths,
+            label: label.clone(),
+            mode,
+            n: manifest.step,
+            purge: None,
+            rounds: k,
+            capture: None,
+            dumps: 0,
+        };
+        let dump = pe.dump_path();
+        if let Some(d) = dump.parent() {
+            fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
+        }
+        let _ = fs::remove_file(&dump);
+        let mut spec = pe.exec_spec(
+            timeout,
+            "",
+            &[
+                ("DLA_WARMUP", "0".to_owned()),
+                (
+                    super::commands::preload_var(),
+                    shim.to_string_lossy().into_owned(),
+                ),
+                ("DLA_SHIM_ONLY", base.clone()),
+            ],
+        );
+        spec.env.retain(|(k, _)| k != "DLA_SHIM_DISABLE");
+        spec.sample = false;
+        let command = spec.argv.join(" ");
+        spec.command = &command;
+        let res = exec(ctx, &spec)?;
+        out.logs.push(paths.rel(ctx, &spec.log));
+        if res.spawn_error.is_some() || res.timed_out || res.code != Some(0) {
+            out.limitations.push(format!(
+                "the allocation-stack run {label} did not complete (log {})",
+                paths.rel(ctx, &spec.log)
+            ));
+            continue;
+        }
+        if capture::split_shim_dump(&paths.out.join(&label), res.pid) == capture::ShimSplit::Written
+        {
+            written += 1;
+        }
+    }
+    if written < 3 {
+        out.limitations.push(format!(
+            "--capture alloc: {written} of {ALLOC_POINTS} allocation-stack runs left shim stacks (dla summarize alloc-stack-diff needs 3 or more; does the program use the system allocator?)"
+        ));
+    }
+    Ok(())
+}
+
+/// `rustc -vV` in `cwd`: `(host triple, LLVM major version)`.
+fn rustc_host_llvm(cwd: &Path, env: &[(String, String)]) -> Option<(String, Option<u32>)> {
+    let mut cmd = Command::new("rustc");
+    cmd.arg("-vV")
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let host = text
+        .lines()
+        .find_map(|l| l.strip_prefix("host: "))?
+        .to_owned();
+    let llvm = text
+        .lines()
+        .find_map(|l| l.strip_prefix("LLVM version: "))
+        .and_then(|v| v.split('.').next())
+        .and_then(|v| v.trim().parse().ok());
+    Some((host, llvm))
+}
+
+/// The major version in the first line of `<tool> --version` that names `LLVM version`.
+fn llvm_tool_major(tool: &Path) -> Option<u32> {
+    let out = Command::new(tool)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.split("LLVM version ").nth(1))
+        .and_then(|v| v.split('.').next())
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// `llvm-profdata` and `llvm-cov` of the toolchain that builds the harness
+/// (`<sysroot>/lib/rustlib/<host>/bin`, the `llvm-tools` component), else the ones on PATH
+/// when their LLVM major version is the one rustc was built with. `Err` is the limitation text.
+fn rust_llvm_tools(cwd: &Path, env: &[(String, String)]) -> Result<(PathBuf, PathBuf), String> {
+    let exe = if cfg!(windows) { ".exe" } else { "" };
+    let (host, llvm) = rustc_host_llvm(cwd, env).ok_or_else(|| {
+        "rustc did not report its host: coverage tools were not looked for".to_owned()
+    })?;
+    let mut sysroot = Command::new("rustc");
+    sysroot
+        .args(["--print", "sysroot"])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
+    for (k, v) in env {
+        sysroot.env(k, v);
+    }
+    if let Some(root) = sysroot
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    {
+        let bin = Path::new(&root).join("lib/rustlib").join(&host).join("bin");
+        let (prof, cov) = (
+            bin.join(format!("llvm-profdata{exe}")),
+            bin.join(format!("llvm-cov{exe}")),
+        );
+        if prof.is_file() && cov.is_file() {
+            return Ok((prof, cov));
+        }
+    }
+    let on_path = |name: &str| -> Option<PathBuf> {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths)
+            .map(|d| d.join(format!("{name}{exe}")))
+            .find(|p| p.is_file())
+    };
+    let (Some(prof), Some(cov)) = (on_path("llvm-profdata"), on_path("llvm-cov")) else {
+        return Err("no llvm-profdata and llvm-cov for the toolchain (rustup component add llvm-tools): the targets read unknown".to_owned());
+    };
+    match (llvm, llvm_tool_major(&cov), llvm_tool_major(&prof)) {
+        (Some(want), Some(c), Some(p)) if c == want && p == want => Ok((prof, cov)),
+        (want, c, _) => Err(format!(
+            "llvm-cov on PATH is LLVM {}, the toolchain's rustc uses LLVM {}: a profile of one cannot be read by the other (rustup component add llvm-tools): the targets read unknown",
+            c.map_or_else(|| "?".to_owned(), |v| v.to_string()),
+            want.map_or_else(|| "?".to_owned(), |v| v.to_string())
+        )),
+    }
+}
+
+/// A Rust driver run measures without coverage instrumentation, so the points are the
+/// uninstrumented program's. What the driver's hooks reach is read from one more, short
+/// process: the driver built again with `-C instrument-coverage` into its own target
+/// directory under the harness directory (`cov-build/`), run for one round of `step` units
+/// (no warm-up, no captures, no sampler), its `.profraw` merged with `llvm-profdata` and the
+/// functions that ran exported with `llvm-cov` into `cov/<label>.rust.json`. `dla trend` and
+/// the entry-point coverage read that file. Its failure, or tools that are missing or of
+/// another LLVM version, is a limitation (the targets read `unknown`), never a refusal.
+fn rust_cover_point(
+    ctx: &ToolCtx,
+    manifest: &HarnessManifest,
+    paths: &Paths,
+    mode: KeyMode,
+    timeout: Duration,
+    run: &mut ModeRun,
+) -> Result<(), Refusal> {
+    let label = format!("p1-{}-cover", mode.as_str());
+    let Some(build) = &manifest.build else {
+        return Ok(());
+    };
+    let cwd = cwd_of(paths, build);
+    let tokens = [
+        ("cov", paths.cov.to_string_lossy().into_owned()),
+        ("out", paths.out.to_string_lossy().into_owned()),
+    ];
+    let mut env = merged_env(&build.env, &tokens);
+    let tools = match rust_llvm_tools(&cwd, &env) {
+        Ok(t) => t,
+        Err(why) => {
+            run.limitations
+                .push(format!("the coverage run {label} was not made: {why}"));
+            return Ok(());
+        }
+    };
+    // The coverage build: the same command, its own target directory, instrumented.
+    let cov_target = paths.hdir.join("cov-build");
+    let old_target = env
+        .iter()
+        .find(|(k, _)| k == "CARGO_TARGET_DIR")
+        .map(|(_, v)| v.clone());
+    let flags = {
+        let old = env
+            .iter()
+            .find(|(k, _)| k == "RUSTFLAGS")
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var("RUSTFLAGS").ok())
+            .unwrap_or_default();
+        format!("{old} -C instrument-coverage").trim().to_owned()
+    };
+    env.retain(|(k, _)| k != "CARGO_TARGET_DIR" && k != "RUSTFLAGS");
+    env.push((
+        "CARGO_TARGET_DIR".to_owned(),
+        cov_target.to_string_lossy().into_owned(),
+    ));
+    env.push(("RUSTFLAGS".to_owned(), flags));
+    let build_log = paths.logs.join(format!("{label}-build.log"));
+    run.logs.push(paths.rel(ctx, &build_log));
+    let command = subst(&build.argv.join(" "), &tokens);
+    let res = exec(
+        ctx,
+        &ExecSpec {
+            argv: build.argv.iter().map(|a| subst(a, &tokens)).collect(),
+            cwd,
+            env,
+            log: build_log.clone(),
+            stderr_log: None,
+            timeout: Duration::from_secs(BUILD_TIMEOUT_SECS),
+            sample: false,
+            command: &command,
+            vgdb: None,
+        },
+    )?;
+    let build_rel = paths.rel(ctx, &build_log);
+    if res.spawn_error.is_some() || res.timed_out || res.code != Some(0) {
+        run.limitations.push(format!(
+            "the instrumented build for {label} failed (log {build_rel}): the targets read unknown"
+        ));
+        return Ok(());
+    }
+    let Some(program) = manifest.run.argv.first() else {
+        return Ok(());
+    };
+    let exe = match old_target.as_deref().and_then(|t| program.strip_prefix(t)) {
+        Some(rest) => format!("{}{rest}", cov_target.to_string_lossy()),
+        None => {
+            run.limitations.push(format!(
+                "the coverage run {label} was not made: the driver binary {program} is not in the build's target directory"
+            ));
+            return Ok(());
+        }
+    };
+    let pe = PointEnv {
+        manifest,
+        paths,
+        label: label.clone(),
+        mode,
+        n: manifest.step,
+        purge: None,
+        rounds: 1,
+        capture: None,
+        dumps: 0,
+    };
+    let dump = pe.dump_path();
+    if let Some(d) = dump.parent() {
+        fs::create_dir_all(d).map_err(|e| io_refusal(d, e))?;
+    }
+    fs::create_dir_all(&paths.cov).map_err(|e| io_refusal(&paths.cov, e))?;
+    let raw = |name: &str| paths.cov.join(format!("{label}{name}"));
+    if let Ok(rd) = fs::read_dir(&paths.cov) {
+        for e in rd.filter_map(Result::ok) {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.starts_with(&label) && (n.ends_with(".profraw") || n.ends_with(".profdata")) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+    let mut spec = pe.exec_spec(
+        timeout,
+        "",
+        &[
+            ("DLA_WARMUP", "0".to_owned()),
+            (
+                "LLVM_PROFILE_FILE",
+                paths
+                    .cov
+                    .join(format!("{label}-%p.profraw"))
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ],
+    );
+    spec.argv[0] = exe.clone();
+    spec.sample = false;
+    let command = spec.argv.join(" ");
+    spec.command = &command;
+    let res = exec(ctx, &spec)?;
+    let log_rel = paths.rel(ctx, &spec.log);
+    run.logs.push(log_rel.clone());
+    if let Some(e) = &res.spawn_error {
+        run.limitations
+            .push(format!("the coverage run {label} did not start: {e}"));
+        return Ok(());
+    }
+    if res.timed_out {
+        run.limitations.push(format!(
+            "the coverage run {label} did not finish in {} s and was killed (log {log_rel}): which entry points ran is not known",
+            timeout.as_secs()
+        ));
+    } else if res.code != Some(0) {
+        run.limitations.push(format!(
+            "the coverage run {label} exited with {} (log {log_rel}): which entry points ran may be incomplete",
+            res.code
+                .map_or_else(|| "a signal".to_owned(), |c| format!("code {c}"))
+        ));
+    }
+    let profraws: Vec<PathBuf> = fs::read_dir(&paths.cov)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&label) && n.ends_with(".profraw"))
+        })
+        .collect();
+    if profraws.is_empty() {
+        run.limitations.push(format!(
+            "the coverage run {label} wrote no profile (log {log_rel}): the targets read unknown"
+        ));
+        return Ok(());
+    }
+    let profdata = raw(".profdata");
+    let merged = Command::new(&tools.0)
+        .args(["merge", "-sparse"])
+        .args(&profraws)
+        .arg("-o")
+        .arg(&profdata)
+        .stdin(Stdio::null())
+        .output();
+    let tidy = |files: &[PathBuf]| {
+        for f in files {
+            let _ = fs::remove_file(f);
+        }
+    };
+    match merged {
+        Ok(o) if o.status.success() => {}
+        other => {
+            let why = match other {
+                Ok(o) => String::from_utf8_lossy(&o.stderr)
+                    .lines()
+                    .find(|l| l.contains("error") || l.contains("version"))
+                    .unwrap_or("it failed")
+                    .trim()
+                    .to_owned(),
+                Err(e) => e.to_string(),
+            };
+            tidy(&profraws);
+            run.limitations.push(format!(
+                "llvm-profdata could not merge the profile of {label}: {why}: the targets read unknown"
+            ));
+            return Ok(());
+        }
+    }
+    tidy(&profraws);
+    let exported = Command::new(&tools.1)
+        .arg("export")
+        .arg(&exe)
+        .arg(format!("-instr-profile={}", profdata.display()))
+        .arg("--ignore-filename-regex=/\\.cargo/|/\\.rustup/|/rustc/")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let _ = fs::remove_file(&profdata);
+    let doc = exported
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
+    let Some(doc) = doc else {
+        run.limitations.push(format!(
+            "llvm-cov could not export the profile of {label}: the targets read unknown"
+        ));
+        return Ok(());
+    };
+    let functions = cover::rust_export_functions(&doc, &paths.work);
+    let file = raw(cover::RUST_COVER_SUFFIX);
+    fs::write(&file, json!({"functions": functions}).to_string())
+        .map_err(|e| io_refusal(&file, e))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------
 // Detectors
 
@@ -2180,12 +2632,18 @@ pub fn run_points(
                 .to_owned(),
         );
     }
-    if !asked.is_empty() && capture::supported(manifest.runtime).is_empty() {
+    let rust_alloc = manifest.runtime == dla_core::runtime::Runtime::Rust && asked.alloc;
+    if rust_alloc && (asked.heap || asked.histogram || asked.jfr || asked.nonheap) {
+        out.limitations.push(
+            "--capture: rust harnesses write allocation stacks (alloc) only; the other kinds were not taken"
+                .to_owned(),
+        );
+    } else if !asked.is_empty() && !rust_alloc && capture::supported(manifest.runtime).is_empty() {
         out.limitations.push(format!(
             "--capture is available for jvm and node harnesses; {} writes no capture files (use --tool for rust and native code)",
             manifest.runtime.as_str()
         ));
-    } else if asked != opts.capture {
+    } else if asked != opts.capture && !rust_alloc {
         let dropped = CaptureSet {
             heap: asked.heap && !opts.capture.heap,
             histogram: asked.histogram && !opts.capture.histogram,
@@ -2417,6 +2875,28 @@ pub fn run_points(
         out.modes.push(mode);
         out.series.push(series.id.clone());
         usable_modes += 1;
+    }
+
+    if asked.alloc && matches!(manifest.runtime, dla_core::runtime::Runtime::Rust) {
+        if command_mode {
+            // The shim is preloaded in every measured process: its dumps hold the stacks.
+            let mut wrote = 0;
+            if let Ok(rd) = fs::read_dir(&paths.out) {
+                for e in rd.filter_map(Result::ok) {
+                    if capture::copy_native_shim_dump(&e.path()) {
+                        wrote += 1;
+                    }
+                }
+            }
+            if wrote == 0 {
+                out.limitations.push(
+                    "--capture alloc: no measured process wrote allocator shim stacks (is the shim preloaded, and does the program use the system allocator?)"
+                        .to_owned(),
+                );
+            }
+        } else if usable_modes > 0 {
+            rust_alloc_points(ctx, manifest, &paths, timeout, &mut out)?;
+        }
     }
 
     // Detector pass at the warm-up n: abort-type detectors would end a measured run.
@@ -2744,6 +3224,69 @@ fn run_loaded(
             ),
         ));
     }
+    // A second look is a different driver: one `VARIES.txt` line per target says what differs
+    // (the same file and wording as an entry-path harness), and the code of its hooks is not
+    // that of an earlier harness of the same targets.
+    if manifest.is_second_look() {
+        let varies_path = ctx.pointer(&format!(
+            "harness/{}/driver/{}",
+            manifest.id,
+            dla_core::harness::VARIES_FILE
+        ));
+        let lines = dla_core::harness::varies_lines(&ctx.run_dir, &manifest.id).len();
+        if lines < manifest.targets.len() {
+            return Err(Refusal::new(
+                dla_core::error::codes::VARIES_MISSING,
+                format!(
+                    "harness {} is a second look and {varies_path} has {lines} of {} lines (one per target; the placeholder lines do not count)",
+                    manifest.id,
+                    manifest.targets.len()
+                ),
+                format!(
+                    "one line per target in {varies_path}: what this driver does that the first did not"
+                ),
+                format!(
+                    "write one line per target in {varies_path} (for example: cancels the parent before the child, derives a child of a child), then dla harness run {} --mode both",
+                    manifest.id
+                ),
+            ));
+        }
+        if let Some(h) = dla_core::harness::same_driver_as_earlier(&ctx.run_dir, &manifest.id) {
+            return Err(Refusal::new(
+                dla_core::error::codes::INVALID_VALUE,
+                format!(
+                    "the hooks of harness {} are the same code as those of {h}, which declares the same targets: a second look needs a different driver",
+                    manifest.id
+                ),
+                format!(
+                    "hook bodies that differ from those of {h} (comments and whitespace do not count)"
+                ),
+                format!(
+                    "read the unit of {h} (harness/{h}/driver) and change what a unit does (other call order, derived-from-derived objects, cancelling or failing paths, overlapping lifetimes), then dla harness run {} --mode both",
+                    manifest.id
+                ),
+            ));
+        }
+        // The unit takes its sequence from the key: at least two calls of the choice helper in
+        // the driver's code (not in comments, not its definition). A fixed sequence runs one
+        // case for every unit.
+        let helper = dla_core::harness::choice_helper(manifest.runtime);
+        let calls = dla_core::harness::choice_calls(&ctx.run_dir, &manifest.id, helper);
+        if calls < 2 {
+            return Err(Refusal::new(
+                dla_core::error::codes::INVALID_VALUE,
+                format!(
+                    "the unit of harness {} calls {helper}(key, slot, n) {calls} time(s) (calls outside comments and the helper's own definition are counted): a second look takes at least two choices from the key, because a fixed sequence runs one case for every unit",
+                    manifest.id
+                ),
+                format!("at least two {helper}(key, slot, n) calls in the unit"),
+                format!(
+                    "write the unit as choices, as the recipe in the driver's block says: {helper}(key, 0, 3) for the depth of derivation, {helper}(key, 1, 4) for which object gets the ending call, {helper}(key, 2, 3) for when the intermediates are released, {helper}(key, 3, 2) for the order of releases, {helper}(key, 4, 2) for success or failure; then dla harness run {} --mode both",
+                    manifest.id
+                ),
+            ));
+        }
+    }
     let out = run_points(ctx, &manifest, opts)?;
     let partial = !out.partial.is_empty();
     let captured = !opts.capture.is_empty() || opts.tool.is_some();
@@ -2752,11 +3295,21 @@ fn run_loaded(
     if captured && opts.tool.is_none() {
         // A JVM harness with the allocator shim: the shim's exit records are a
         // type-histogram-diff input of their own.
-        let shim = capture::shim_dump_commands(
+        let mut shim = capture::shim_dump_commands(
             &harness_dir(&ctx.run_dir, &manifest.id).join(OUT),
             &manifest.id,
             &|p| ctx.pointer(p),
         );
+        // A Rust run asked for allocation stacks: that command comes first.
+        if manifest.runtime == dla_core::runtime::Runtime::Rust
+            && opts.capture.alloc
+            && let Some(i) = shim
+                .iter()
+                .position(|c| c.starts_with("dla summarize alloc-stack-diff"))
+        {
+            let c = shim.remove(i);
+            shim.insert(0, c);
+        }
         for list in [&mut commands, &mut compact] {
             let at = list
                 .iter()
@@ -2938,6 +3491,15 @@ fn run_loaded(
         m.remove("points");
         m.remove("series");
     }
+    // A driver whose units took choices from the key says how many combinations they took.
+    if let Some(line) = out
+        .series
+        .first()
+        .and_then(|s| dla_core::series::SeriesFile::load(&ctx.run_dir, s).ok())
+        .and_then(|s| dla_core::series::choices_line(&s).map(str::to_owned))
+    {
+        summary["choices"] = json!(line);
+    }
     if !out.ffi_sites.is_empty() {
         summary["ffi"] = json!(
             out.ffi_sites
@@ -2981,6 +3543,18 @@ fn run_loaded(
     if !out.env_reused.is_empty() {
         summary["env_reused"] = json!(out.env_reused);
     }
+    let planned = manifest.warmup + opts.iterations.unwrap_or(manifest.iterations) + opts.extra;
+    let attention = attention_lines(
+        &manifest,
+        &out,
+        planned,
+        &ledger,
+        &hdir_of_run.join(format!("executed-{first}.json")),
+    );
+    if !attention.is_empty() {
+        // `dla` prints it as the first key of the output.
+        summary["_attention"] = json!(attention);
+    }
     Ok((
         StageOutcome {
             evidence: vec![ev.to_string()],
@@ -2990,6 +3564,88 @@ fn run_loaded(
         },
         partial,
     ))
+}
+
+/// What the first bytes of `dla harness run` say, at most 3 lines of under about 160 characters,
+/// each starting with what to do: a detector hit with its site, a series too short for the gate
+/// (or one the process did not finish) and a driver that lowered its step or found the unit too
+/// slow, and coverage data that was not written.
+pub fn attention_lines(
+    manifest: &HarnessManifest,
+    out: &RunOutput,
+    planned: u32,
+    ledger: &dla_core::Ledger,
+    executed: &Path,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let first_series = out.series.first().map(String::as_str).unwrap_or("S<n>");
+    if let Some(hit) = out
+        .detectors
+        .iter()
+        .find(|d| d["site"].as_str().is_some_and(|s| !s.is_empty()))
+    {
+        let site = hit["site"].as_str().unwrap_or("");
+        let held = hit["sites"][0]["count"]
+            .as_u64()
+            .map_or(String::new(), |c| format!(" ({c} registered)"));
+        let finding = ledger
+            .findings()
+            .find(|f| f.site.as_deref() == Some(site))
+            .map_or(String::new(), |f| format!(", finding {}", f.id));
+        lines.push(clip(
+            &format!(
+                "READ THE DETECTOR HIT: listeners pile up at {site}{held}{finding}; dla trend {first_series} shows the rising column"
+            ),
+            160,
+        ));
+    }
+    let need = dla_stats::GateThresholds::default().min_points;
+    let measured = out.points.saturating_sub(manifest.warmup);
+    if out.tool.is_none() && !out.series.is_empty() && measured < need {
+        let cut = out.points < planned;
+        let mode = out.modes.first().map_or("fresh", |m| m.as_str());
+        lines.push(clip(
+            &format!(
+                "SERIES TOO SHORT ({measured} points after warm-up, the gate needs {need}{}): run dla harness run {} --mode {mode} without --iterations, then dla trend",
+                if cut { "; the process was cut" } else { "" },
+                manifest.id
+            ),
+            160,
+        ));
+    } else if out.tool.is_none() && out.points < planned && !out.series.is_empty() {
+        lines.push(clip(
+            &format!(
+                "PROCESS CUT: {} of {planned} points arrived; give the harness more time (timeout_secs in harness.json) or a cheaper unit before trusting the series",
+                out.points
+            ),
+            160,
+        ));
+    }
+    if let Some(l) = out.limitations.iter().find(|l| {
+        l.starts_with("the driver lowered its step") || l.starts_with("the unit is too slow")
+    }) {
+        lines.push(clip(&format!("DRIVER STEP: {l}"), 160));
+    }
+    if let Ok(text) = fs::read_to_string(executed)
+        && let Ok(doc) = serde_json::from_str::<Value>(&text)
+        && doc["kind"] == "none"
+        && let Some(note) = doc["note"].as_str().filter(|n| !n.is_empty())
+    {
+        let killed = out.exits.iter().any(|(_, c)| c.is_none());
+        lines.push(clip(
+            &format!(
+                "NO COVERAGE DATA: {note}{}; targets read unknown",
+                if killed {
+                    " (a process was killed before it could write it)"
+                } else {
+                    ""
+                }
+            ),
+            160,
+        ));
+    }
+    lines.truncate(3);
+    lines
 }
 
 #[cfg(test)]
@@ -3013,6 +3669,67 @@ mod test_hooks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_attention_lines_lead_with_a_detector_hit_a_short_series_and_missing_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dla_core::Ledger::create(dir.path()).unwrap();
+        let m = tests_support::manifest();
+        let executed = dir.path().join("executed-S1.json");
+        fs::write(
+            &executed,
+            json!({"kind": "none", "note": "no NODE_V8_COVERAGE data was written to cov/"})
+                .to_string(),
+        )
+        .unwrap();
+        let out = RunOutput {
+            series: vec!["S1".into()],
+            points: 5,
+            modes: vec![KeyMode::Fresh],
+            exits: vec![("p1-fresh".into(), None)],
+            detectors: vec![
+                json!({"lib": "node", "text": "MaxListenersExceededWarning: 11 error listeners", "site": "src/a.js:9", "sites": [{"site": "src/a.js:9", "count": 11}]}),
+            ],
+            limitations: vec![
+                "the driver lowered its step from 90 to 30 units per round after round 1: slow"
+                    .into(),
+            ],
+            ..RunOutput::default()
+        };
+        let lines = attention_lines(&m, &out, 9, &ledger, &executed);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[0].starts_with("READ THE DETECTOR HIT")
+                && lines[0].contains("src/a.js:9 (11 registered)"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].starts_with(
+                "SERIES TOO SHORT (4 points after warm-up, the gate needs 8; the process was cut)"
+            ),
+            "{lines:?}"
+        );
+        assert!(lines[2].starts_with("DRIVER STEP"), "{lines:?}");
+        assert!(lines.iter().all(|l| l.len() <= 160));
+        // Nothing to say: no lines.
+        let quiet = RunOutput {
+            series: vec!["S1".into()],
+            points: 9,
+            modes: vec![KeyMode::Fresh],
+            ..RunOutput::default()
+        };
+        assert!(attention_lines(&m, &quiet, 9, &ledger, &dir.path().join("none.json")).is_empty());
+        // Without room for three lines, coverage is the one left out.
+        let cov_only = RunOutput {
+            exits: vec![("p1-fresh".into(), None)],
+            ..quiet
+        };
+        let l = attention_lines(&m, &cov_only, 9, &ledger, &executed);
+        assert!(
+            l[0].starts_with("NO COVERAGE DATA") && l[0].contains("killed"),
+            "{l:?}"
+        );
+    }
 
     #[test]
     fn a_phase_note_keeps_the_first_line_and_bounds_it() {

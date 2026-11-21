@@ -316,3 +316,80 @@ fn kotlin_facade_and_companion_names_are_one_owner_with_the_census_names() {
         "src/a/b/A.kt:3"
     );
 }
+
+/// The lookup that normalizes every entry's owner each time, as `find_entry` first did.
+fn find_entry_by_normalizing_each_time<'e>(
+    entries: &'e [dla_core::census::CensusEntry],
+    owner: &str,
+) -> Option<&'e dla_core::census::CensusEntry> {
+    let want = attribution::canonical(owner)?;
+    let exact: Vec<_> = entries
+        .iter()
+        .filter(|e| attribution::canonical(&e.owner).as_deref() == Some(want.as_str()))
+        .collect();
+    if exact.len() == 1 {
+        return exact.first().copied();
+    }
+    if exact.len() > 1 {
+        return None;
+    }
+    let loose: Vec<_> = entries
+        .iter()
+        .filter(|e| attribution::owners_match(&e.owner, &want))
+        .collect();
+    if loose.len() == 1 {
+        loose.first().copied()
+    } else {
+        None
+    }
+}
+
+#[test]
+fn the_cached_lookup_finds_what_normalizing_every_owner_each_time_finds() {
+    let owners = [
+        "app.Holder.ITEMS",
+        "app.Svc.Companion.CACHE",
+        "app.AKt.top",
+        "app.Outer$Inner.map",
+        "app.Dup.x",
+        "other.Dup.x",
+        "app.Proxy$$SpringCGLIB$$0.cache",
+        "static:app.Holder.OTHER",
+        "thread:main",
+        "Audit.trail",
+        "shop.codec.Audit.trail",
+    ];
+    let json = json!(
+        owners
+            .iter()
+            .enumerate()
+            .map(|(i, o)| entry(o, &format!("a/F{i}.java:3"), &[]))
+            .collect::<Vec<_>>()
+    );
+    let entries: Vec<dla_core::census::CensusEntry> = serde_json::from_value(json).unwrap();
+    let canon = attribution::canonical_owners(&entries);
+    let wanted = [
+        "app.Holder.ITEMS",
+        "static:app.Holder.ITEMS",
+        "app.Svc.CACHE",
+        "app.pkg.AKt.top",
+        "app.top",
+        "app.Outer.Inner.map",
+        "Dup.x",
+        "app.Dup.x",
+        "app.Proxy.cache",
+        "Audit.trail",
+        "codec.Audit.trail",
+        "Holder.OTHER",
+        "ITEMS",
+        "no.such.Field",
+        "thread:main",
+    ];
+    for w in wanted {
+        let old = find_entry_by_normalizing_each_time(&entries, w).map(|e| e.site.clone());
+        let new = attribution::find_entry_with(&entries, &canon, w).map(|e| e.site.clone());
+        let public = attribution::find_entry(&entries, w).map(|e| e.site.clone());
+        assert_eq!(new, old, "{w}");
+        assert_eq!(public, old, "{w}");
+    }
+}

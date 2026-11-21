@@ -419,7 +419,7 @@ fn node_timers_are_counted_by_site_and_the_cleared_control_has_none() {
     let mut results = Vec::new();
     for name in ["node-socket-heartbeat", "node-socket-heartbeat-cleared"] {
         let fx = fixture(name, &["node"], &[1]);
-        let preload = fx.agent.join("dla-preload.js");
+        let preload = fx.agent.join("dla-preload.cjs");
         let mut m = manifest(
             Runtime::Node,
             &["node", "load.js", "--iterations", "{n}"],
@@ -512,7 +512,7 @@ fn node_probe_of_an_unenterable_root_writes_no_column_and_a_limitation() {
          for (let i = 0; i < n; i++) grow(i);\n",
     )
     .unwrap();
-    let preload = fx.agent.join("dla-preload.js");
+    let preload = fx.agent.join("dla-preload.cjs");
     let mut m = manifest(
         Runtime::Node,
         &["node", "run.js", "{n}"],
@@ -590,7 +590,7 @@ fn node_gc_purge_of_retained_growth_with_garbage_is_retained() {
          }\n",
     )
     .unwrap();
-    let preload = fx.agent.join("dla-preload.js");
+    let preload = fx.agent.join("dla-preload.cjs");
     let mut m = manifest(
         Runtime::Node,
         &["node", "grow.js", "{n}"],

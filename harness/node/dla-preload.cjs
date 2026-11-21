@@ -2,7 +2,8 @@
 
 // DLA measurement agent for Node.js processes.
 //
-// Loaded with NODE_OPTIONS='--require <abs path>/dla-preload.js' by `dla harness run`. It counts
+// Loaded with NODE_OPTIONS='--require <abs path>/dla-preload.cjs' by `dla harness run` (the .cjs
+// extension keeps it CommonJS in a package whose package.json says "type": "module"). It counts
 // live timer and event-listener registrations by the first stack frame inside DLA_PROJECT, exposes
 // the top-level bindings of probed modules, and writes one JSON record per dump to the file named by
 // DLA_HARNESS_OUT: an `exit` record from the process 'exit' event, `checkpoint` records when a
@@ -567,8 +568,81 @@ function scanTopLevel(source) {
   return names;
 }
 
+// ES modules: `module.registerHooks()` (Node 22.15+ and 23.5+) gives a synchronous in-thread `load`
+// hook. The source of a probed ES module gets one statement appended after its last line (no line of
+// the module moves) that hands the agent a function reading the module's live top-level bindings.
+const esmReaders = new Map(); // abs file -> (name) => value
+const esmHandOff = '__dlaEsm';
+
+function hasRegisterHooks() {
+  return typeof Module.registerHooks === 'function';
+}
+
+function esmAppendix(names) {
+  const cases = [...names].map((n) => `case ${JSON.stringify(n)}: return ${n};`).join(' ');
+  return `\n;globalThis.${esmHandOff}&&globalThis.${esmHandOff}(import.meta.url,function(n){switch(n){${cases}}});\n`;
+}
+
+function urlToPath(url) {
+  try {
+    return require('url').fileURLToPath(url);
+  } catch (_) {
+    return null;
+  }
+}
+
+function installEsmProbes() {
+  if (!hasRegisterHooks()) return;
+  Object.defineProperty(globalThis, esmHandOff, {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: (url, reader) => {
+      const file = urlToPath(url);
+      if (file !== null && typeof reader === 'function') esmReaders.set(file, reader);
+    },
+  });
+  Module.registerHooks({
+    load(url, context, nextLoad) {
+      const result = nextLoad(url, context);
+      try {
+        if (result.format !== 'module' || result.source == null || !url.startsWith('file:')) return result;
+        const file = urlToPath(url);
+        const entry = file === null ? undefined : probeFiles.get(file);
+        if (entry === undefined) return result;
+        const text = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
+        const names = new Set(entry.names);
+        if (entry.scan) for (const name of scanTopLevel(text)) names.add(name);
+        if (names.size === 0) return result;
+        return { ...result, source: text + esmAppendix(names) };
+      } catch (_) {
+        return result;
+      }
+    },
+  });
+}
+
+/** True when `file` loads as an ES module: .mjs, or .js under a package.json with "type": "module". */
+function isEsmFile(file) {
+  if (file.endsWith('.mjs')) return true;
+  if (!file.endsWith('.js')) return false;
+  let dir = path.dirname(file);
+  for (;;) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      return pkg !== null && typeof pkg === 'object' && pkg.type === 'module';
+    } catch (_) {
+      // no (readable) package.json here: look one level up
+    }
+    const up = path.dirname(dir);
+    if (up === dir) return false;
+    dir = up;
+  }
+}
+
 function installProbes() {
   if (probeFiles.size === 0) return;
+  installEsmProbes();
   const origCompile = Module.prototype._compile;
   if (typeof origCompile !== 'function') return;
   Module.prototype._compile = function (content, filename, ...rest) {
@@ -682,6 +756,10 @@ function sizeOf(value) {
   try {
     if (util.types.isMap(value) || util.types.isSet(value)) return value.size;
     if (Array.isArray(value)) return value.length;
+    // A plain object used as a table (`const seen = {}; seen[name] = true`): its key count. The walk
+    // counts objects only, so a table of primitives would read a constant 1 without this.
+    const proto = Object.getPrototypeOf(value);
+    if (proto === null || proto === Object.prototype) return Reflect.ownKeys(value).length;
   } catch (_) {
     // ignore
   }
@@ -781,13 +859,42 @@ function runProbes(limitations) {
   const deadline = Date.now() + PROBE_DEADLINE_MS;
   for (const spec of probeSpecs) {
     try {
+      const esm = esmReaders.get(spec.abs);
+      if (esm !== undefined) {
+        const names = spec.kind === 'nodebinding' ? [spec.name] : [...probeFiles.get(spec.abs).names];
+        for (const name of names) {
+          if (typeof name !== 'string' || !IDENT.test(name)) continue;
+          if (out.length >= MODULE_NAME_CAP * 4) break;
+          let value;
+          try {
+            value = esm(name);
+          } catch (err) {
+            if (spec.kind === 'nodebinding') {
+              out.push({ id: spec.id, name, path: `${spec.file}:${name}`, size: null, reachable: null, bytes: null, error: String(err && err.message) });
+            }
+            continue;
+          }
+          if (value === undefined && spec.kind === 'nodebinding') {
+            out.push({ id: spec.id, name, path: `${spec.file}:${name}`, size: null, reachable: null, bytes: null, error: 'binding not found at module top level' });
+            continue;
+          }
+          reportBinding(out, spec, name, value, deadline, spec.kind === 'nodebinding');
+        }
+        continue;
+      }
       const mod = Module._cache[spec.abs];
+      if (mod === undefined && !hasRegisterHooks() && isEsmFile(spec.abs)) {
+        const note = `module-level bindings of ES modules need Node 22.15+ or 23.5+ (module.registerHooks); this is Node ${process.versions.node}`;
+        out.push({ id: spec.id, name: spec.name || spec.file, path: spec.file, size: null, reachable: null, bytes: null, error: note });
+        if (!limitations.includes(note)) limitations.push(note);
+        continue;
+      }
       if (mod === undefined) {
-        out.push({ id: spec.id, name: spec.name || spec.file, path: spec.file, size: null, reachable: null, bytes: null, error: 'module not loaded (or loaded as an ES module)' });
+        out.push({ id: spec.id, name: spec.name || spec.file, path: spec.file, size: null, reachable: null, bytes: null, error: 'module not loaded' });
         continue;
       }
       if (typeof mod.__dlaProbe !== 'function') {
-        out.push({ id: spec.id, name: spec.name || spec.file, path: spec.file, size: null, reachable: null, bytes: null, error: 'module has no probe accessor (loaded before the agent, or as an ES module)' });
+        out.push({ id: spec.id, name: spec.name || spec.file, path: spec.file, size: null, reachable: null, bytes: null, error: 'module has no probe accessor (loaded before the agent)' });
         continue;
       }
       const names = spec.kind === 'nodebinding' ? [spec.name] : [...probeFiles.get(spec.abs).names];
@@ -1514,8 +1621,25 @@ function checkpoint(x, last = false) {
 }
 
 /** Record a library detector hit (for example a MaxListenersExceededWarning) in the next dump. */
-function detector(lib, text, site = null) {
-  detectors.push({ lib, text: String(text).slice(0, 400), site });
+function detector(lib, text, site = null, sites = null) {
+  const hit = { lib, text: String(text).slice(0, 400), site };
+  if (sites !== null) hit.sites = sites;
+  detectors.push(hit);
+}
+
+/**
+ * Where the listeners of the event a MaxListenersExceededWarning names were registered: the
+ * emitter's own records by project site, most first (at most 5).
+ */
+function warnedSites(warning) {
+  const rec = attached(warning.emitter, LISTENER_REC);
+  if (rec === undefined || warning.type === undefined) return null;
+  const list = rec.get(typeKey(warning.type));
+  if (list === undefined) return null;
+  const counts = new Map();
+  for (const entry of list) if (entry.site !== null) bump(counts, entry.site, 1);
+  const ordered = [...counts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 5);
+  return ordered.length === 0 ? null : ordered.map(([site, count]) => ({ site, count }));
 }
 
 function iterFromEnv() {
@@ -1535,7 +1659,15 @@ function init() {
   installProbes();
   process.on('warning', (warning) => {
     try {
-      if (warning && warning.name === 'MaxListenersExceededWarning') detector('node', `${warning.name}: ${warning.message}`);
+      if (warning && warning.name === 'MaxListenersExceededWarning') {
+        let sites = null;
+        try {
+          sites = warnedSites(warning);
+        } catch (_) {
+          sites = null;
+        }
+        detector('node', `${warning.name}: ${warning.message}`, sites === null ? null : sites[0].site, sites);
+      }
     } catch (_) {
       // ignore
     }
@@ -1560,4 +1692,10 @@ try {
   // the target runs unmeasured rather than broken
 }
 
-module.exports = { checkpoint, dump, detector, active: ACTIVE };
+/** A line for the limitations of every following record (the driver says what it changed). */
+function note(text) {
+  const line = String(text);
+  if (!probeLimitations.includes(line)) probeLimitations.push(line);
+}
+
+module.exports = { checkpoint, dump, detector, note, active: ACTIVE };

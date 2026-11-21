@@ -1303,6 +1303,13 @@ def checkpoint(x, last=False):
     dump("checkpoint", x, last)
 
 
+def note(text):
+    """A line for the limitations of every following record (a driver says what it changed)."""
+    line = str(text)
+    if line not in _cap_notes:
+        _cap_notes.append(line)
+
+
 def _exit_dump():
     try:
         if _checkpoint_written:

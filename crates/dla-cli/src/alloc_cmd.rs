@@ -137,6 +137,11 @@ struct ColumnResult {
     gc: Option<Gc>,
     favors: Favors,
     supports: Vec<String>,
+    /// What a purge that kept the growth left of a plateau, in words (the rises of the main
+    /// window against the extra window), when it had to be weighed.
+    note: Option<String>,
+    /// Points of the extra window that would let a held-back plateau stand.
+    points_needed: Option<u32>,
 }
 
 impl ColumnResult {
@@ -155,6 +160,9 @@ impl ColumnResult {
             m.insert("gc".into(), g.to_json());
         }
         m.insert("favors".into(), json!(self.favors));
+        if let Some(n) = &self.note {
+            m.insert("note".into(), json!(n));
+        }
         Value::Object(m)
     }
 
@@ -267,10 +275,44 @@ fn test_column(
     // A column whose purge reading cannot tell growth from retention: a retained purge never
     // contradicts its plateau (the reading stays in the result); against an undecided or
     // continuing plateau it counts as for any column.
-    let contradicts = !(pick::PURGE_CANNOT_CONTRADICT.contains(&name)
+    let contradicts = !((pick::PURGE_CANNOT_CONTRADICT.contains(&name)
+        || pick::purge_cannot_release(name))
         && plateau.verdict == PlateauVerdict::Plateau);
-    let (favors, supports) =
-        judge::combine(plateau.verdict, purge.as_ref().filter(|_| contradicts), gc);
+    // A purge that kept the growth says the growth is not headroom, not that it goes on: the
+    // plateau stands when the main window's rises, scaled to the extra window, say another
+    // would have shown (gauges only; a counter keeps its own rule).
+    let kept = contradicts
+        && plateau.verdict == PlateauVerdict::Plateau
+        && purge
+            .as_ref()
+            .is_some_and(|p| p.verdict == PurgeVerdict::Retained);
+    let rises = (kept && !counter)
+        .then(|| judge::rises(main, extra, warm_end(series, idx), plateau.noise?))
+        .flatten();
+    let (favors, supports) = judge::combine(
+        plateau.verdict,
+        purge.as_ref().filter(|_| contradicts),
+        gc,
+        rises.map(|r| r.expected),
+    );
+    let note = rises.map(|r| {
+        let main_part = format!(
+            "the purge kept the growth (held memory, not allocator or collector headroom); the main window rose {} time(s), so {:.1} rise(s) were expected in the extra window",
+            r.count, r.expected
+        );
+        if favors == Favors::NonLeak {
+            format!(
+                "{main_part}, none showed (at least {} are needed): the plateau stands",
+                judge::MIN_EXPECTED_RISES
+            )
+        } else {
+            let need = r.points_needed.map_or_else(
+                || "the main window shows no rise to scale from".to_owned(),
+                |n| format!("an extra window of {n} points would expect {}", judge::MIN_EXPECTED_RISES),
+            );
+            format!("{main_part}; too few to call the plateau ({need})")
+        }
+    });
     Some(ColumnResult {
         name: name.to_owned(),
         voting,
@@ -279,6 +321,8 @@ fn test_column(
         gc,
         favors,
         supports,
+        note,
+        points_needed: rises.and_then(|r| r.points_needed),
     })
 }
 
@@ -311,6 +355,10 @@ fn trend_of(
             if col.scope == ColumnScope::Container {
                 gate = GateVerdict::Fail;
                 gate_failed.push("container scope".to_owned());
+            }
+            if let Some(reason) = dla_core::series::not_a_growth_signal(&col.name) {
+                gate = GateVerdict::Fail;
+                gate_failed.push(reason.to_owned());
             }
             let mut candidates: Vec<FindingId> = Vec::new();
             let mut push = |f: &FindingId| {
@@ -879,6 +927,16 @@ fn cap_for_partial(
     }
 }
 
+/// A bound finding whose size probe was never read: a non-leak verdict (from columns that
+/// cannot see a step-growing container) is dropped; a leak verdict stands.
+fn cap_for_unread_probe(favors: Favors, supports: Vec<String>) -> (Favors, Vec<String>) {
+    if favors == Favors::NonLeak {
+        (Favors::Inconclusive, Vec::new())
+    } else {
+        (favors, supports)
+    }
+}
+
 fn key_mode(m: &HarnessManifest) -> KeyMode {
     match m.mode {
         HarnessMode::Driver => KeyMode::Fresh,
@@ -892,6 +950,54 @@ fn bad_harness_id(id: &str) -> Failure {
         "a harness ID such as H1",
         "dla alloc-test H1",
     )
+}
+
+/// The column whose reading decided the verdict: the bound finding's column, else the first
+/// voting column. A size probe (`probe:<path>`) decides by its own rise over the extra window,
+/// never by the whole-process byte columns, which a container that grows in steps leaves flat
+/// between two steps.
+fn decided_by(picked: &pick::Picked) -> Option<String> {
+    picked
+        .primary
+        .clone()
+        .or_else(|| picked.voting.first().cloned())
+}
+
+/// When `finding` has a Go field probe in the harness and the series has no column for it, the
+/// limitation that says so (and why), else `None`.
+fn unread_field_probe(
+    manifest: &HarnessManifest,
+    series: &SeriesFile,
+    finding: &Finding,
+) -> Option<String> {
+    use dla_core::harness::ProbeTarget;
+    let root = finding.root_id();
+    manifest.probes.iter().find_map(|p| {
+        let ProbeTarget::GoField {
+            package_dir,
+            type_name,
+            field,
+        } = &p.target
+        else {
+            return None;
+        };
+        if p.finding.as_ref() != Some(&root) && p.finding.as_ref() != Some(&finding.id) {
+            return None;
+        }
+        let path = format!("{package_dir}.{type_name}.{field}");
+        if series.column_index(&format!("probe:{path}")).is_some() {
+            return None;
+        }
+        let why = series
+            .limitations
+            .iter()
+            .find_map(|l| l.strip_prefix(&format!("probe {path}: ")))
+            .unwrap_or("it was never read");
+        Some(format!(
+            "size probe {} ({path}) of {root} has no readings ({why}), so the whole-process columns decide in its place, and a container that grows in steps reads flat between two steps there: the result cannot favour non-leak; call dlaTrack(<your {type_name}>) in setup of the driver and run again",
+            p.id
+        ))
+    })
 }
 
 /// Runs `dla alloc-test`.
@@ -1089,6 +1195,19 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         Some(Drift::Classes(note)) => limitations.push(note.clone()),
         None => {}
     }
+    // A Go field probe of the bound finding that was never read (nothing tracked, or a field
+    // with no length): the whole-process columns that decided in its place cannot show a
+    // step-growing container growing, so they never favour non-leak.
+    let unread = bound
+        .as_ref()
+        .and_then(|f| unread_field_probe(&manifest, &series, f));
+    let (favors, supports) = match &unread {
+        Some(note) => {
+            limitations.push(note.clone());
+            cap_for_unread_probe(favors, supports)
+        }
+        None => (favors, supports),
+    };
     // A run the deadline cut short measured less than it planned: whatever its columns
     // say, it never favours non-leak (and never confirms) on its own.
     let (favors, supports) = cap_for_partial(&partial, favors, supports);
@@ -1116,6 +1235,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
         "favors": favors,
         "supports": supports,
         "primary": picked.primary,
+        "decided_by": decided_by(&picked),
         "limitations": limitations,
         "columns": results.iter().map(|r| {
             let mut v = r.to_json();
@@ -1234,6 +1354,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
             extra,
         ),
     };
+    let next = say_how_long_a_held_plateau_needs(next, favors, &results, &picked);
     let mut out = Map::new();
     out.insert("ok".into(), json!(true));
     out.insert("command".into(), json!("alloc-test"));
@@ -1244,6 +1365,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     out.insert("supports".into(), json!(supports));
     out.insert("finding".into(), json!(a.finding));
     out.insert("basis".into(), json!(picked.basis));
+    out.insert("decided_by".into(), json!(decided_by(&picked)));
     out.insert("purge".into(), json!(purge_kind));
     if !env_reused.is_empty() {
         out.insert("env_reused".into(), json!(env_reused));
@@ -1279,22 +1401,38 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
 
 /// The growth evidence a `confirm` of `root` should cite: the newest passing one tied to it.
 fn growth_evidence(ledger: &Ledger, root: &Finding) -> Option<EvidenceId> {
-    ledger
-        .evidence()
-        .filter(|e| {
+    let growth = || {
+        ledger.evidence().filter(|e| {
             matches!(
                 e.kind,
                 EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries
             )
         })
+    };
+    // The newest one `ledger confirm` accepts: a passing column tied to the finding by the
+    // predicate the ledger uses (`tied_to_owner`).
+    let tied = growth()
         .filter_map(|e| {
             let g = GrowthSummary::from_result(&e.result)?;
             (g.passed_gate()
-                && g.best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
-                    .is_some())
+                && g.passed.iter().any(|c| {
+                    c.tied_to_owner(&root.id, root.site.as_deref(), root.owner.as_deref())
+                }))
             .then(|| e.evidence_id.clone())
         })
-        .last()
+        .last();
+    // Else the newest passing one, as before (its first column stands in for the tie).
+    tied.or_else(|| {
+        growth()
+            .filter_map(|e| {
+                let g = GrowthSummary::from_result(&e.result)?;
+                (g.passed_gate()
+                    && g.best_column_for(&root.id, root.site.as_deref(), root.owner.as_deref())
+                        .is_some())
+                .then(|| e.evidence_id.clone())
+            })
+            .last()
+    })
 }
 
 /// The newest `workload` evidence of harness `harness`.
@@ -1305,6 +1443,35 @@ fn workload_evidence(ledger: &Ledger, harness: &str) -> Option<EvidenceId> {
         .filter(|e| e.result.get("harness").and_then(Value::as_str) == Some(harness))
         .last()
         .map(|e| e.evidence_id.clone())
+}
+
+/// When a voting plateau was held back only because its window was too short to have shown
+/// another rise (see [`judge::combine`]), the doubled `--extra` of the printed command says how
+/// many extra points would reach the expectation.
+fn say_how_long_a_held_plateau_needs(
+    mut next: Vec<String>,
+    favors: Favors,
+    results: &[ColumnResult],
+    picked: &pick::Picked,
+) -> Vec<String> {
+    if favors != Favors::Inconclusive {
+        return next;
+    }
+    let needed = results
+        .iter()
+        .filter(|r| match &picked.primary {
+            Some(p) => &r.name == p,
+            None => r.voting,
+        })
+        .filter(|r| r.favors == Favors::Inconclusive)
+        .filter_map(|r| r.points_needed)
+        .max();
+    if let (Some(n), Some(cmd)) = (needed, next.iter_mut().find(|c| c.contains("--extra"))) {
+        cmd.push_str(&format!(
+            "   (the main window rose too few times for a plateau of this length to stand against the purge that kept the growth: {n} extra points would)"
+        ));
+    }
+    next
 }
 
 fn next_commands(
@@ -1372,15 +1539,21 @@ fn next_commands(
                 next.push(format!(
                     "dla ledger add --sibling-of {root} --origin hypothesis --hypothesis N-WARM --refute-if \"growth continues over the extra cycles\" --evidence {evidence}   (a leak needs a refuted non-leak sibling)"
                 ));
+                // The sibling that add creates is refuted by this same result; without that
+                // step the confirm below is refused.
+                next.push(format!(
+                    "dla ledger refute {root}.n1 --evidence {evidence}   (the sibling the add creates: use the id it prints)"
+                ));
             }
-            if !root_f.state.is_dispositioned() {
+            // A root that is open, or closed in a state the ledger lets go to `under_test`
+            // (`suspected_static_only`, `unresolved`), still gets its test and confirm.
+            let can_test = dla_core::machine::is_allowed(root_f.state, FindingState::UnderTest);
+            if !root_f.state.is_dispositioned() || can_test {
                 let growth = growth_evidence(ledger, root_f).map_or_else(
                     || "<growth evidence from dla trend>".to_owned(),
                     |e| e.to_string(),
                 );
-                if root_f.state == FindingState::Candidate
-                    && let Some(w) = workload_evidence(ledger, harness)
-                {
+                if can_test && let Some(w) = workload_evidence(ledger, harness) {
                     next.push(format!("dla ledger test {root} --evidence {w}"));
                 }
                 if root_f.holder.is_none() {
@@ -1410,6 +1583,162 @@ mod tests {
     };
 
     #[test]
+    fn the_growth_evidence_to_confirm_with_is_the_newest_tied_one_not_a_newer_whole_process_one() {
+        use dla_core::{
+            NewEvidence, NewFinding, Origin,
+            evidence::{Authority, EvidenceCoverage, Source, Tool},
+            state::{RunState, now_utc},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        RunState::init("/p", None, 3600, None, now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let ev = |result: Value| NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Static,
+            kind: EvidenceKind::GrowthSeries,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        };
+        l.add_evidence(ev(serde_json::json!({"n": 1}))).unwrap();
+        let last = |l: &Ledger| l.evidence().last().unwrap().evidence_id.clone();
+        let base = last(&l);
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![base]);
+        nf.site = Some("src/lib.rs:3".into());
+        l.add_finding(nf).unwrap();
+        // The tied stack evidence, then a newer whole-process trend that ties to nothing.
+        l.add_evidence(ev(serde_json::json!({"gate": "pass", "passed": [
+            {"column": "stack:f (src/lib.rs:6)", "finding": "F1", "site": "src/lib.rs:3"}]})))
+            .unwrap();
+        let tied = last(&l);
+        l.add_evidence(ev(serde_json::json!({"gate": "pass", "passed": [
+            {"column": "native.live_blocks"}]})))
+            .unwrap();
+        let root = l.finding(&"F1".parse().unwrap()).unwrap().clone();
+        assert_eq!(growth_evidence(&l, &root), Some(tied));
+        // Without a tied one the newest passing evidence is still named, as before.
+        let other = Finding {
+            id: "F9".parse().unwrap(),
+            site: None,
+            owner: None,
+            ..root.clone()
+        };
+        assert_eq!(growth_evidence(&l, &other), Some(last(&l)));
+    }
+
+    #[test]
+    fn a_root_closed_as_static_only_gets_refute_test_and_confirm_in_that_order() {
+        use dla_core::{
+            NewEvidence, NewFinding, Origin,
+            evidence::{Authority, EvidenceCoverage, Source, Tool},
+            finding::UnresolvedReason,
+            state::{RunState, now_utc},
+        };
+        let dir = tempfile::tempdir().unwrap();
+        RunState::init("/p", None, 3600, None, now_utc())
+            .unwrap()
+            .save(dir.path())
+            .unwrap();
+        let mut l = Ledger::create(dir.path()).unwrap();
+        let ev = |kind: EvidenceKind, result: Value| NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Static,
+            kind,
+            result,
+            raw: None,
+            coverage: EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        };
+        let last = |l: &Ledger| l.evidence().last().unwrap().evidence_id.clone();
+        l.add_evidence(ev(
+            EvidenceKind::CensusHolder,
+            serde_json::json!({"lang": "rust"}),
+        ))
+        .unwrap();
+        let census = last(&l);
+        l.add_evidence(ev(
+            EvidenceKind::Workload,
+            serde_json::json!({"harness": "H1", "mode": "driver"}),
+        ))
+        .unwrap();
+        let workload = last(&l);
+        l.add_evidence(ev(
+            EvidenceKind::GrowthSeries,
+            serde_json::json!({"gate": "pass", "passed": [
+                {"column": "stack:f (src/lib.rs:6)", "finding": "F1", "site": "src/lib.rs:3"}]}),
+        ))
+        .unwrap();
+        let growth = last(&l);
+        let mut nf = NewFinding::new(Origin::parse("census").unwrap(), vec![census.clone()]);
+        nf.site = Some("src/lib.rs:3".into());
+        l.add_finding(nf).unwrap();
+        let root: FindingId = "F1".parse().unwrap();
+        l.transition(
+            &root,
+            FindingState::SuspectedStaticOnly,
+            Some(UnresolvedReason::NotExercised),
+            Some("x".into()),
+            vec![census.clone()],
+            "t",
+        )
+        .unwrap();
+        // With no sibling yet: add it, refute it with this result, then test and confirm (a
+        // confirm without the refuted sibling is refused).
+        {
+            let f = l.finding(&root).unwrap().clone();
+            let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4);
+            let at = |needle: &str| {
+                next.iter()
+                    .position(|n| n.starts_with(needle))
+                    .unwrap_or(usize::MAX)
+            };
+            let add = at("dla ledger add --sibling-of F1 ");
+            let refute = at("dla ledger refute F1.n1 --evidence ");
+            let confirm = at(&format!("dla ledger confirm F1 --evidence {growth}"));
+            assert!(
+                add < refute && refute < confirm && confirm < next.len(),
+                "{next:?}"
+            );
+        }
+        let mut sib = NewFinding::new(Origin::parse("hypothesis").unwrap(), vec![census]);
+        sib.sibling_of = Some(root.clone());
+        sib.hypothesis = Some("N-WARM".into());
+        sib.refute_if = Some("keeps growing".into());
+        l.add_finding(sib).unwrap();
+        let f = l.finding(&root).unwrap().clone();
+        let next = next_commands(&l, Some(&f), "H1", Favors::Leak, &[], &last(&l), 4);
+        let at = |needle: &str| next.iter().position(|n| n.starts_with(needle));
+        let refute = at("dla ledger refute F1.n1").unwrap_or(usize::MAX);
+        let test = at(&format!("dla ledger test F1 --evidence {workload}")).unwrap_or(usize::MAX);
+        let confirm =
+            at(&format!("dla ledger confirm F1 --evidence {growth}")).unwrap_or(usize::MAX);
+        assert!(
+            refute < test && test < confirm && confirm < next.len(),
+            "{next:?}"
+        );
+    }
+
+    #[test]
     fn a_growing_required_column_holds_back_the_plateau_of_the_primary() {
         let result = |name: &str, voting: bool, favors: Favors| ColumnResult {
             name: name.to_owned(),
@@ -1425,6 +1754,8 @@ mod tests {
             gc: None,
             favors,
             supports: vec![format!("{name} supports")],
+            note: None,
+            points_needed: None,
         };
         let picked = pick::Picked {
             tested: vec!["jvm.nonheap_used".into(), "jvm.nmt.symbol".into()],
@@ -1479,6 +1810,8 @@ mod tests {
             gc: None,
             favors,
             supports: vec![],
+            note: None,
+            points_needed: None,
         }
     }
 
@@ -2817,6 +3150,122 @@ mod tests {
     }
 
     #[test]
+    fn a_retained_purge_does_not_contradict_the_plateau_of_a_column_no_purge_can_release() {
+        // `go.total` of a Go run that passed the first trend on the step of the heap growing
+        // into new arenas (a stair of 200 KB early in the window, flat after it): the runtime
+        // maps memory and never unmaps it, and the purge returns nothing of it. Its plateau
+        // stands; the reading stays. The same series under an ordinary column name is
+        // inconclusive (the test below).
+        for name in ["go.total", "os.vm_data", "os.vm_hwm"] {
+            let (favors, r) = stair_run(name);
+            assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{name}: {r:?}");
+            assert_eq!(
+                r.purge.as_ref().unwrap().verdict,
+                PurgeVerdict::Retained,
+                "{name}: {r:?}"
+            );
+            assert_eq!(r.favors, Favors::NonLeak, "{name}: {r:?}");
+            if name == "go.total" {
+                assert_eq!(favors, Favors::NonLeak, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn growth_that_continues_in_a_column_no_purge_can_release_still_reads_leak() {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("go.total")];
+        for (i, p) in s.points.iter_mut().enumerate() {
+            p.values = vec![Some(500e6), Some(10e6 + 400_000.0 * i as f64)];
+        }
+        let (_, results, _) = unbound_run(s, &["go.total"]);
+        let r = results.iter().find(|r| r.name == "go.total").unwrap();
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Continues, "{r:?}");
+        assert_eq!(r.favors, Favors::Leak, "{r:?}");
+    }
+
+    /// `os.rss_anon` on a flat 500 MB process: 2 warm-up points at 10 MB, 6 main points
+    /// `main` and the extra points `extra`, a purge that gives nothing back.
+    fn held_run(main: [f64; 6], extra: &[f64]) -> ColumnResult {
+        let mut s = series(&[]);
+        s.columns = vec![col("os.rss"), col("os.rss_anon")];
+        let ys: Vec<f64> = [10e6, 10e6]
+            .into_iter()
+            .chain(main)
+            .chain(extra.iter().copied())
+            .collect();
+        s.points = ys
+            .iter()
+            .enumerate()
+            .map(|(i, &y)| Point {
+                x: 1000.0 * (i as f64 + 1.0),
+                t_ms: i as u64,
+                values: vec![Some(500e6), Some(y)],
+            })
+            .collect();
+        let (_, mut results, _) = unbound_run(s, &["os.rss_anon"]);
+        let at = results
+            .iter()
+            .position(|r| r.name == "os.rss_anon")
+            .unwrap();
+        results.swap_remove(at)
+    }
+
+    #[test]
+    fn a_ramp_then_flat_with_a_retained_purge_reads_non_leak_and_says_the_growth_is_held() {
+        let r = held_run(
+            [12e6, 14e6, 16e6, 18e6, 20e6, 22e6],
+            &[22e6, 22.001e6, 22e6, 22.001e6, 22e6, 22.001e6],
+        );
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(
+            r.purge.as_ref().unwrap().verdict,
+            PurgeVerdict::Retained,
+            "{r:?}"
+        );
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        assert_eq!(r.supports, ["N-WARM", "N-HWM"]);
+        let note = r.note.as_deref().unwrap();
+        assert!(
+            note.contains("held memory, not allocator or collector headroom"),
+            "{note}"
+        );
+        assert!(note.contains("rose 6 time(s)"), "{note}");
+    }
+
+    #[test]
+    fn a_stair_that_rose_twice_reads_inconclusive_until_the_extra_window_doubles() {
+        let main = [10e6, 10e6, 14e6, 14e6, 18e6, 18e6];
+        let flat = |n: usize| -> Vec<f64> { (0..n).map(|i| 18e6 + 1e3 * (i % 2) as f64).collect() };
+        // Two rises over a main window as long as the extra window: two are expected, three
+        // are needed.
+        let r = held_run(main, &flat(6));
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Plateau, "{r:?}");
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        let n = r.points_needed.unwrap();
+        assert_eq!(n, 9, "{r:?}");
+        let note = r.note.as_deref().unwrap();
+        assert!(note.contains("9 points"), "{note}");
+        // The doubled window expects 4.4 and the same flat series reads non-leak.
+        let r = held_run(main, &flat(12));
+        assert_eq!(r.favors, Favors::NonLeak, "{r:?}");
+        // A single step needs far more (16 points): the number says so.
+        let r = held_run([10e6, 10e6, 10e6, 18e6, 18e6, 18e6], &flat(6));
+        assert_eq!(r.favors, Favors::Inconclusive, "{r:?}");
+        assert_eq!(r.points_needed, Some(16), "{r:?}");
+    }
+
+    #[test]
+    fn continuing_growth_with_a_retained_purge_still_reads_leak() {
+        let r = held_run(
+            [12e6, 14e6, 16e6, 18e6, 20e6, 22e6],
+            &[24e6, 26e6, 28e6, 30e6, 32e6, 34e6],
+        );
+        assert_eq!(r.plateau.verdict, PlateauVerdict::Continues, "{r:?}");
+        assert_eq!(r.favors, Favors::Leak, "{r:?}");
+    }
+
+    #[test]
     fn a_retained_purge_still_contradicts_the_plateau_of_an_ordinary_column() {
         let (favors, anon) = stair_run("os.rss_anon");
         assert_eq!(anon.plateau.verdict, PlateauVerdict::Plateau, "{anon:?}");
@@ -2948,5 +3397,53 @@ mod tests {
             "{:?}",
             j.limitations
         );
+    }
+    fn go_field_manifest(finding: &str) -> HarnessManifest {
+        serde_json::from_value(json!({
+            "id": "H1", "runtime": "go", "mode": "driver", "scratch": "harness/H1/work",
+            "run": {"argv": ["go", "test"], "cwd": "."}, "warmup": 2, "iterations": 6,
+            "step": 100, "key_modes": ["fresh"], "agent": "driver-go", "timeout_secs": 300,
+            "probes": [{"id": "P1", "finding": finding,
+                "target": {"kind": "go-field", "package_dir": "health",
+                           "type_name": "Server", "field": "statusMap"}}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_unread_size_probe_turns_non_leak_inconclusive_and_leaves_a_leak() {
+        let (f, s) = cap_for_unread_probe(Favors::NonLeak, vec!["N-WARM".into()]);
+        assert_eq!((f, s.len()), (Favors::Inconclusive, 0));
+        let (f, s) = cap_for_unread_probe(Favors::Leak, vec!["leak".into()]);
+        assert_eq!((f, s.len()), (Favors::Leak, 1));
+        assert_eq!(
+            cap_for_unread_probe(Favors::Inconclusive, vec![]).0,
+            Favors::Inconclusive
+        );
+    }
+
+    #[test]
+    fn a_go_field_probe_without_readings_bars_a_non_leak_verdict_and_says_why() {
+        let f = Finding::candidate(
+            FindingId::new(3),
+            dla_core::Origin::parse("residual").unwrap(),
+            vec![],
+        );
+        let m = go_field_manifest("F3");
+        // The series has no column for the probe: the note names it and the way out.
+        let mut s = series(&[]);
+        s.limitations.push(
+            "probe health.Server.statusMap: no tracked object of type Server: call dlaTrack(<your Server>) in setup"
+                .to_owned(),
+        );
+        let note = unread_field_probe(&m, &s, &f).unwrap();
+        assert!(note.contains("P1 (health.Server.statusMap)"), "{note}");
+        assert!(note.contains("no tracked object of type Server"), "{note}");
+        assert!(note.contains("cannot favour non-leak"), "{note}");
+        // With the column in the series, or for another finding, there is nothing to say.
+        let mut read = series(&[]);
+        read.columns[1] = col("probe:health.Server.statusMap");
+        assert!(unread_field_probe(&m, &read, &f).is_none());
+        assert!(unread_field_probe(&go_field_manifest("F9"), &s, &f).is_none());
     }
 }

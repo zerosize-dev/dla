@@ -150,14 +150,50 @@ pub enum ParseError {
 }
 
 /// Parses `source`. Syntax errors do not fail: the tree holds error nodes.
+///
+/// A source parsed again (the census reads each file for its holders, its usages, its
+/// callers and its sites) gets the tree of the first parse: a [`Tree`] copy shares its nodes,
+/// and a parse is a pure function of the language and the text. The cache lives on the
+/// thread, keyed by the language, the length and a 64-bit hash of the text, and holds trees
+/// for at most [`CACHE_BYTES`] bytes of source before it starts over.
 pub fn parse(lang: Lang, source: &str) -> Result<Tree, ParseError> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut h);
+    let key = (lang, source.len(), h.finish());
+    if let Some(t) = CACHE.with(|c| c.borrow().trees.get(&key).cloned()) {
+        return Ok(t);
+    }
     let mut parser = Parser::new();
     parser
         .set_language(&lang.language())
         .map_err(|e| ParseError::Grammar(lang.name(), e.to_string()))?;
-    parser
+    let tree = parser
         .parse(source, None)
-        .ok_or(ParseError::Failed(lang.name()))
+        .ok_or(ParseError::Failed(lang.name()))?;
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.bytes + source.len() > CACHE_BYTES {
+            c.trees.clear();
+            c.bytes = 0;
+        }
+        c.bytes += source.len();
+        c.trees.insert(key, tree.clone());
+    });
+    Ok(tree)
+}
+
+/// Source bytes whose trees [`parse`] keeps before it starts the cache over.
+pub const CACHE_BYTES: usize = 32 << 20;
+
+#[derive(Default)]
+struct ParseCache {
+    trees: std::collections::HashMap<(Lang, usize, u64), Tree>,
+    bytes: usize,
+}
+
+thread_local! {
+    static CACHE: std::cell::RefCell<ParseCache> = std::cell::RefCell::new(ParseCache::default());
 }
 
 /// One query capture.
@@ -243,6 +279,30 @@ mod tests {
         let caps = parse_and_capture(lang, src, query).unwrap();
         assert!(!caps.is_empty(), "no capture for {}", lang.name());
         caps[0].clone()
+    }
+
+    #[test]
+    fn a_source_parsed_again_gets_the_same_tree_and_a_changed_source_its_own() {
+        let a = "package p\n\nvar x = 1\n";
+        let b = "package p\n\nvar y = 2\n";
+        let t1 = parse(Lang::Go, a).unwrap();
+        let t2 = parse(Lang::Go, a).unwrap();
+        assert_eq!(t1.root_node().to_sexp(), t2.root_node().to_sexp());
+        let tb = parse(Lang::Go, b).unwrap();
+        assert_eq!(
+            tb.root_node().utf8_text(b.as_bytes()).unwrap(),
+            b,
+            "the tree of the second source reads its own text"
+        );
+        assert_eq!(
+            t2.root_node().end_byte(),
+            a.len(),
+            "and the first keeps its own"
+        );
+        // The same text in another language is another parse.
+        let py = parse(Lang::Python, "x = 1\n").unwrap();
+        let go_same = parse(Lang::Go, "x = 1\n").unwrap();
+        assert_ne!(py.root_node().kind(), go_same.root_node().kind());
     }
 
     #[test]

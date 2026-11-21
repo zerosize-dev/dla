@@ -92,6 +92,16 @@ string_enum! {
         /// caller controls (`dla harness gen --driver --entry`): growth in it shows that a
         /// caller can make new keys reach the holder.
         EntryPath = "entry-path",
+        /// A hook driver of at most three targets that an earlier harness declared and whose
+        /// code did not run there (`dla harness gen --next` when the best-ranked pending
+        /// candidate was missed). `focus.json` in the harness directory says which harness
+        /// missed each target.
+        Focus = "focus",
+        /// A focus harness for candidates that one flat run of one driver settled while
+        /// budget was left: a different driver (other orders, derived-from-derived objects,
+        /// failing and cancelling paths, overlapping lifetimes), with a `VARIES.txt` line per
+        /// target. `focus.json` names the earlier harness.
+        SecondLook = "second-look",
     }
 }
 
@@ -236,6 +246,17 @@ pub enum ProbeTarget {
         package_dir: String,
         /// Variable name.
         name: String,
+    },
+    /// A field of a Go struct type, read by reflection from the objects the driver registers
+    /// with `dlaTrack` (the engine sums the field's length over the tracked objects of the
+    /// type).
+    GoField {
+        /// Package directory.
+        package_dir: String,
+        /// The struct type's name.
+        type_name: String,
+        /// Field name.
+        field: String,
     },
 }
 
@@ -515,6 +536,16 @@ impl HarnessManifest {
     pub fn is_entry_path(&self) -> bool {
         self.purpose == Some(HarnessPurpose::EntryPath)
     }
+
+    /// True for a second-look harness (`purpose: second-look`).
+    pub fn is_second_look(&self) -> bool {
+        self.purpose == Some(HarnessPurpose::SecondLook)
+    }
+
+    /// True for a focus harness (`purpose: focus`).
+    pub fn is_focus(&self) -> bool {
+        self.purpose == Some(HarnessPurpose::Focus)
+    }
 }
 
 /// The file in the driver directory of an entry-path harness that says, in one line, what a
@@ -548,6 +579,148 @@ pub fn varies_line(run_dir: &Path, id: &str) -> Option<String> {
         return None;
     }
     Some(line.chars().take(VARIES_MAX).collect())
+}
+
+/// The lines of `VARIES.txt` of harness `id` that say something: not empty, not a `#` comment,
+/// not the placeholder, each cut to [`VARIES_MAX`] characters.
+pub fn varies_lines(run_dir: &Path, id: &str) -> Vec<String> {
+    let path = HarnessManifest::dir_in(run_dir, id)
+        .join("driver")
+        .join(VARIES_FILE);
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with(VARIES_PLACEHOLDER))
+        .map(|l| l.chars().take(VARIES_MAX).collect())
+        .collect()
+}
+
+/// The text `dla harness gen` writes in [`VARIES_FILE`] of a second-look harness: one
+/// placeholder line per target.
+pub fn second_look_varies_template(targets: &[FindingId]) -> String {
+    targets
+        .iter()
+        .map(|f| {
+            format!(
+                "{VARIES_PLACEHOLDER}: {f}: replace this whole line with one line that says what this driver does that the first driver of {f} did not (for example: cancels the parent before the child, derives a child of a child)\n"
+            )
+        })
+        .collect()
+}
+
+/// The name of the choice helper in the driver template of `rt`: `dla_choice(key, slot, n)` is
+/// choice number `slot` of `n` options from the digits of `key` in mixed radix.
+pub fn choice_helper(rt: Runtime) -> &'static str {
+    match rt {
+        Runtime::Python | Runtime::Native => "dla_choice",
+        Runtime::Node | Runtime::Go => "dlaChoice",
+        Runtime::Jvm | Runtime::Rust => "choice",
+    }
+}
+
+/// How many calls of the choice helper the driver files of harness `id` hold: lines that are
+/// not comments and not a definition (`def`, `fn`, `function`, `func`, `static`, `pub`,
+/// `private`), occurrences of the helper name followed by `(` and not part of a longer name.
+/// A unit that takes at least two choices from the key has at least two.
+pub fn choice_calls(run_dir: &Path, id: &str, helper: &str) -> usize {
+    let dir = HarnessManifest::dir_in(run_dir, id).join("driver");
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        if e.file_name() == VARIES_FILE {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(e.path()) else {
+            continue;
+        };
+        n += choice_calls_in(&text, helper);
+    }
+    n
+}
+
+/// [`choice_calls`] over one text.
+pub fn choice_calls_in(text: &str, helper: &str) -> usize {
+    let needle = format!("{helper}(");
+    let mut n = 0;
+    for line in text.lines() {
+        let l = line.trim();
+        if ["#", "//", "/*", "*"].iter().any(|c| l.starts_with(c))
+            || [
+                "def ",
+                "fn ",
+                "function ",
+                "func ",
+                "static ",
+                "pub ",
+                "private ",
+            ]
+            .iter()
+            .any(|d| l.starts_with(d))
+        {
+            continue;
+        }
+        let mut from = 0;
+        while let Some(at) = line[from..].find(&needle) {
+            let i = from + at;
+            let before = line[..i].chars().next_back();
+            if !before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                n += 1;
+            }
+            from = i + needle.len();
+        }
+    }
+    n
+}
+
+/// The code of the driver files of harness `id` with comments and whitespace removed: what
+/// two drivers are compared by (the generated block and the model's comments are not code).
+/// `None` when there is no driver directory.
+fn driver_code(run_dir: &Path, id: &str) -> Option<String> {
+    let dir = HarnessManifest::dir_in(run_dir, id).join("driver");
+    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.path())
+        .filter(|p| p.file_name().is_some_and(|n| n != VARIES_FILE))
+        .collect();
+    files.sort();
+    let mut out = String::new();
+    for f in files {
+        let Ok(text) = fs::read_to_string(&f) else {
+            continue;
+        };
+        for line in text.lines() {
+            let l = line.trim();
+            if l.is_empty() || ["#", "//", "/*", "*"].iter().any(|c| l.starts_with(c)) {
+                continue;
+            }
+            out.extend(l.chars().filter(|c| !c.is_whitespace()));
+        }
+        out.push('|');
+    }
+    Some(out)
+}
+
+/// The earlier harness of the same runtime that declares one of the targets of harness `id`
+/// and whose driver code (comments and whitespace aside) is the same as that of `id`.
+pub fn same_driver_as_earlier(run_dir: &Path, id: &str) -> Option<String> {
+    let me = HarnessManifest::load(run_dir, id).ok()?;
+    let mine = driver_code(run_dir, id)?;
+    let n = crate::series::numbered('H', id)?;
+    crate::gate::harness_ids(run_dir)
+        .into_iter()
+        .filter(|(k, _)| *k < n)
+        .filter_map(|(_, h)| {
+            let m = HarnessManifest::load(run_dir, &h).ok()?;
+            (m.runtime == me.runtime
+                && m.is_hook_driver()
+                && m.targets.iter().any(|t| me.targets.contains(t)))
+            .then_some(h)
+        })
+        .find(|h| driver_code(run_dir, h).is_some_and(|c| c == mine))
 }
 
 /// A digest of the files under `harness/<id>/driver/`: their relative paths and contents,
@@ -598,6 +771,10 @@ pub struct RunRecord {
     /// What a caller varies per unit, from the `VARIES.txt` of an entry-path harness when
     /// the run started.
     pub varies: Option<String>,
+    /// The detector hits of the run (`lib`, `text`, `site`, `sites`, `count`), as written.
+    pub detectors: Vec<Value>,
+    /// The limitation lines of the run.
+    pub limitations: Vec<String>,
 }
 
 /// The run record of harness `id` that wrote `series`.
@@ -629,6 +806,18 @@ pub fn run_record_of(run_dir: &Path, id: &str, series: &str) -> Option<RunRecord
                     .and_then(Value::as_str)
                     .map(str::to_owned),
                 varies: doc.get("varies").and_then(Value::as_str).map(str::to_owned),
+                detectors: doc
+                    .get("detectors")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                limitations: doc
+                    .get("limitations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect(),
             });
         }
     }
@@ -837,9 +1026,21 @@ pub struct DumpDetector {
     /// The log line or message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    /// Where it was raised.
+    /// Where it was raised (for a registration warning: the site holding most listeners).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
+    /// Sites that hold what the hit is about, with counts, most first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sites: Option<Vec<DetectorSite>>,
+}
+
+/// A site and how many of the things a detector hit counts it holds.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Default)]
+pub struct DetectorSite {
+    /// `file:line`.
+    pub site: String,
+    /// Count held there.
+    pub count: u64,
 }
 
 /// One JSON line of `out/<pid>.jsonl`. Only `dla_harness` and `phase` are required.

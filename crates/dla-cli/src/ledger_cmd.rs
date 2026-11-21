@@ -377,6 +377,19 @@ pub fn add(ctx: &Ctx, a: AddArgs) -> Res<Value> {
     nf.shape = a.shape;
     nf.locus = a.locus;
     nf.site = a.site;
+    // A finding added from growth evidence takes the site of the first passing column that
+    // names one (an allocation stack's first project frame) when none is given.
+    if nf.site.is_none() && a.origin == "growth-series" {
+        nf.site = nf.supports.iter().find_map(|e| {
+            ledger
+                .evidence_by_id(e)?
+                .result
+                .get("passed")?
+                .as_array()?
+                .iter()
+                .find_map(|c| c.get("site")?.as_str().map(str::to_owned))
+        });
+    }
     nf.amplifiers = a.amplifiers;
     nf.repair_class = a.repair_class;
     nf.explanation = match (a.explanation, a.explanation_tag) {
@@ -599,13 +612,36 @@ pub fn resolve(ctx: &Ctx, a: ResolveArgs) -> Res<Value> {
     let target = classify(&a.target)?;
     let mut ledger = open(ctx)?;
     match target {
-        Target::Finding(id) => resolve_finding(ctx, &mut ledger, id, a),
+        Target::Finding(id) => resolve_finding(ctx, &mut ledger, id, a, None),
         Target::OpenItem(id) => resolve_open_item(ctx, &mut ledger, id, a),
         Target::Checklist(item) => resolve_checklist(ctx, &mut ledger, item, a),
     }
 }
 
-fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs) -> Res<Value> {
+/// What `dla ledger close-rest` loads once and every refusal of [`resolve_finding`] reads in
+/// place of loading the run again for each finding: the run view as it was before the first
+/// close, its ranking and its queues. Closing a finding moves it from `candidate` to
+/// `unresolved` or `suspected_static_only`, which keeps it in the ranked set and leaves every
+/// other finding's runtime, rank and pending standing as it was, so the refusals read the
+/// same facts they would read from disk.
+pub(crate) struct Loaded<'a> {
+    /// The run as loaded before the first close.
+    pub view: &'a RunView,
+    /// [`dla_core::queue::ranked`] of the view.
+    pub ranked: &'a [dla_core::queue::Ranked],
+    /// [`dla_core::queue::queues`] of the view.
+    pub queues: &'a [dla_core::queue::RuntimeQueue],
+    /// [`dla_core::grown::grown_unmeasured`] of the view.
+    pub grown: &'a [dla_core::grown::Grown],
+}
+
+pub(crate) fn resolve_finding(
+    ctx: &Ctx,
+    ledger: &mut Ledger,
+    id: FindingId,
+    a: ResolveArgs,
+    loaded: Option<&Loaded<'_>>,
+) -> Res<Value> {
     let id = ledger.own_finding_id(&id);
     reject(
         "a finding",
@@ -629,10 +665,15 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
         }
     };
     let from = ledger.finding(&id).map(|f| f.state);
+    // A finding a passed growth column points at is decided by an alloc-test, not closed
+    // unmeasured; the floor rule (`time_budget`) and an aborted run keep their own.
+    if a.reason != Some(UnresolvedReason::TimeBudget) {
+        refuse_grown_unmeasured(ctx, &id, loaded)?;
+    }
     if let Some(reason) = a.reason {
-        refuse_target_pending(ctx, &id, reason)?;
-        refuse_unrun_harness(ctx, &id, reason)?;
-        refuse_no_harness(ctx, &id, reason)?;
+        refuse_target_pending(ctx, &id, reason, loaded)?;
+        refuse_unrun_harness(ctx, &id, reason, loaded)?;
+        refuse_no_harness(ctx, &id, reason, loaded)?;
         if reason == UnresolvedReason::TimeBudget {
             // After the ledger's own checks, so a missing remedy or an unknown finding is
             // reported as such, and before anything is written.
@@ -670,16 +711,36 @@ fn resolve_finding(ctx: &Ctx, ledger: &mut Ledger, id: FindingId, a: ResolveArgs
 /// Refuses to close a ranked candidate with `no_harness`, `not_exercised` or `time_budget`
 /// while its runtime's measurement queue is open and no workload has settled it: the fix is
 /// the batch command that targets the next candidates.
-fn refuse_target_pending(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> Res<()> {
+fn refuse_target_pending(
+    ctx: &Ctx,
+    id: &FindingId,
+    reason: UnresolvedReason,
+    loaded: Option<&Loaded<'_>>,
+) -> Res<()> {
     if !gate::closes_without_exercise(reason) {
         return Ok(());
     }
-    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let own;
+    let view = match loaded {
+        Some(l) => l.view,
+        None => {
+            own = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+            &own
+        }
+    };
     if !view.state.queue {
         return Ok(());
     }
-    let Some(r) = dla_core::queue::ranked(&view)
-        .into_iter()
+    let own_ranked;
+    let ranked: &[dla_core::queue::Ranked] = match loaded {
+        Some(l) => l.ranked,
+        None => {
+            own_ranked = dla_core::queue::ranked(view);
+            &own_ranked
+        }
+    };
+    let Some(r) = ranked
+        .iter()
         .find(|r| &r.id == id && r.state == FindingState::Candidate)
     else {
         return Ok(());
@@ -687,13 +748,45 @@ fn refuse_target_pending(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) ->
     let Some(runtime) = r.runtime.clone() else {
         return Ok(());
     };
-    let Some(q) = dla_core::queue::open_queue(&view, &runtime, ctx.worker.as_deref()) else {
+    let own_queue;
+    let q = match loaded {
+        Some(l) => l.queues.iter().find(|q| q.runtime == runtime && q.open()),
+        None => {
+            own_queue = dla_core::queue::open_queue(view, &runtime, ctx.worker.as_deref());
+            own_queue.as_ref()
+        }
+    };
+    let Some(q) = q else {
         return Ok(());
     };
     let Some((rank, tier)) = q.rank_of(id) else {
         return Ok(());
     };
     let (left, total) = q.minutes.unwrap_or((0, 0));
+    // A candidate a harness missed waits for a harness of its own (a focus harness).
+    if let Some(m) = q.missed.get(id) {
+        return Err(Failure::refuse(
+            core_codes::TARGET_PENDING,
+            format!(
+                "{id} cannot be closed with {reason}: it is ranked {rank} (tier {tier}) among the {runtime} candidates; {} did not reach it ({} {}), and it is given up only after a focus harness (at most 3 targets) missed it too; {left} of {total} budget minutes remain.",
+                m.harness,
+                m.verdict.as_str(),
+                m.detail
+            ),
+            format!(
+                "a focus harness for {id} (dla harness gen --next gives the best-ranked missed candidates a harness of their own), or an unresolved reason that says what it needs (env_unavailable, tool_missing, build_fails, privilege_declined)"
+            ),
+            format!(
+                "{} (the focus batch: the best-ranked pending candidate was missed), fill the hooks so each unit calls the writer function of each target with a new key, dla harness run <H> --mode both, dla trend S<n>; or dla ledger resolve {id} --as unresolved --reason env_unavailable --remedy \"<what it needs>\"{}",
+                q.batch_command,
+                if m.verdict == dla_core::trend::Verdict::Unknown {
+                    format!(". {id} read `unknown`: {}", dla_core::queue::NO_COVERAGE)
+                } else {
+                    String::new()
+                }
+            ),
+        ));
+    }
     Err(Failure::refuse(
         core_codes::TARGET_PENDING,
         format!(
@@ -702,7 +795,7 @@ fn refuse_target_pending(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) ->
         format!(
             "a workload whose units reach {id} (a harness that targets it, then dla trend), or the blocker of the {runtime} workload recorded"
         ),
-        dla_core::queue::steps(&q, &view.state.run_id),
+        dla_core::queue::steps(q, &view.state.run_id),
     ))
 }
 
@@ -767,18 +860,30 @@ fn has_harness_dir(run_dir: &Path) -> bool {
 /// Refuses to close `id` without exercising it (`no_harness`, `not_exercised`,
 /// `time_budget`) while a harness of its runtime was generated and never run and the
 /// budget has room to run it. The same rule feeds the final gate.
-fn refuse_unrun_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> Res<()> {
+fn refuse_unrun_harness(
+    ctx: &Ctx,
+    id: &FindingId,
+    reason: UnresolvedReason,
+    loaded: Option<&Loaded<'_>>,
+) -> Res<()> {
     if !gate::closes_without_exercise(reason) || !has_harness_dir(&ctx.run_dir) {
         return Ok(());
     }
-    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let own;
+    let view = match loaded {
+        Some(l) => l.view,
+        None => {
+            own = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+            &own
+        }
+    };
     let Some(finding) = view.ledger.finding(id) else {
         return Ok(());
     };
-    let Some(runtime) = gate::finding_runtime(&view, finding) else {
+    let Some(runtime) = gate::finding_runtime(view, finding) else {
         return Ok(());
     };
-    let Some(u) = gate::harness_not_run(&view, &runtime, ctx.worker.as_deref()) else {
+    let Some(u) = gate::harness_not_run(view, &runtime, ctx.worker.as_deref()) else {
         return Ok(());
     };
     Err(Failure::refuse(
@@ -810,7 +915,12 @@ fn refuse_unrun_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> 
 /// (`env_unavailable`, `build_fails`, `tool_missing`, `privilege_declined`) and a blocker
 /// recorded on `intake.workload` are never refused. The same rule feeds the final gate
 /// (`budget_left_unrevisited`).
-fn refuse_no_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> Res<()> {
+fn refuse_no_harness(
+    ctx: &Ctx,
+    id: &FindingId,
+    reason: UnresolvedReason,
+    loaded: Option<&Loaded<'_>>,
+) -> Res<()> {
     if !gate::closes_without_exercise(reason) {
         return Ok(());
     }
@@ -821,26 +931,43 @@ fn refuse_no_harness(ctx: &Ctx, id: &FindingId, reason: UnresolvedReason) -> Res
     if gate::budget_over_floor(&state, ctx.worker.as_deref()).is_none() {
         return Ok(());
     }
-    let Some(cov) = dla_core::coverage::CoverageManifest::load(&ctx.run_dir)? else {
-        return Ok(());
+    let own;
+    let view = match loaded {
+        Some(l) => {
+            if !l.view.coverage.as_ref().is_some_and(|c| {
+                c.workers
+                    .values()
+                    .any(|w| !w.entry_points.discovered.is_empty())
+            }) {
+                return Ok(());
+            }
+            l.view
+        }
+        None => {
+            let Some(cov) = dla_core::coverage::CoverageManifest::load(&ctx.run_dir)? else {
+                return Ok(());
+            };
+            if !cov
+                .workers
+                .values()
+                .any(|w| !w.entry_points.discovered.is_empty())
+            {
+                return Ok(());
+            }
+            let ledger = Ledger::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+            let mut v = RunView::new(state, ledger, Some(cov));
+            v.run_dir = Some(ctx.run_dir.clone());
+            own = v;
+            &own
+        }
     };
-    if !cov
-        .workers
-        .values()
-        .any(|w| !w.entry_points.discovered.is_empty())
-    {
-        return Ok(());
-    }
-    let ledger = Ledger::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
-    let mut view = RunView::new(state, ledger, Some(cov));
-    view.run_dir = Some(ctx.run_dir.clone());
     let Some(finding) = view.ledger.finding(id) else {
         return Ok(());
     };
-    let Some(runtime) = gate::finding_runtime(&view, finding) else {
+    let Some(runtime) = gate::finding_runtime(view, finding) else {
         return Ok(());
     };
-    let Some(n) = gate::harness_not_generated(&view, &runtime, ctx.worker.as_deref()) else {
+    let Some(n) = gate::harness_not_generated(view, &runtime, ctx.worker.as_deref()) else {
         return Ok(());
     };
     Err(Failure::refuse(
@@ -952,6 +1079,7 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
             format!("dla ledger resolve {item} --status answered --evidence E1"),
         )
     })?;
+    refuse_contradicted_workload_blocker(ctx, &item, status, a.reason)?;
     let line = ledger.answer_checklist(ChecklistAnswer {
         item: item.clone(),
         status,
@@ -967,6 +1095,76 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
         "seq": line.seq,
         "record": pointer(ctx, line.seq),
     }))
+}
+
+/// Refuses to close `id` (`unresolved` or `suspected_static_only`) while a passed growth
+/// column points at it and no alloc-test evidence is bound to it: the fix is the commands that
+/// decide it. An aborted run is not held to it.
+fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>>) -> Res<()> {
+    let own;
+    let own_grown;
+    let (view, grown): (&RunView, &[dla_core::grown::Grown]) = match loaded {
+        Some(l) => (l.view, l.grown),
+        None => {
+            own = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+            own_grown = dla_core::grown::grown_unmeasured(&own);
+            (&own, &own_grown)
+        }
+    };
+    if view.state.status == dla_core::state::RunStatus::Aborted {
+        return Ok(());
+    }
+    let Some(g) = grown.iter().find(|g| &g.finding == id) else {
+        return Ok(());
+    };
+    Err(Failure::refuse(
+        core_codes::GROWTH_NOT_MEASURED,
+        format!(
+            "{id} cannot be closed: its column {} of {} passed the growth gate, and no alloc-test is bound to it",
+            g.column, g.series
+        ),
+        format!(
+            "an alloc-test of {id} on {} (growth measured is decided, not closed)",
+            g.harness
+        ),
+        g.commands().join("   then   "),
+    ))
+}
+
+/// Refuses `intake.workload` as `unresolved` with a blocker reason (`tool_missing`,
+/// `env_unavailable`, `build_fails`, `privilege_declined`: the ones that close the measurement
+/// queue) when the run's own records contradict it: a harness ran and wrote a series for every
+/// runtime that has candidates. A probe that reads flat is a verdict about one target, not
+/// about the workload.
+fn refuse_contradicted_workload_blocker(
+    ctx: &Ctx,
+    item: &str,
+    status: AnswerStatus,
+    reason: Option<UnresolvedReason>,
+) -> Res<()> {
+    if item != "intake.workload"
+        || status != AnswerStatus::Unresolved
+        || !reason.is_some_and(gate::is_blocker_reason)
+    {
+        return Ok(());
+    }
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let Some((harness, series)) = gate::workload_ran(&view) else {
+        return Ok(());
+    };
+    let reason = reason.map_or(String::new(), |r| r.to_string());
+    Err(Failure::refuse(
+        core_codes::WORKLOAD_RAN,
+        format!(
+            "intake.workload cannot be recorded as {reason}: harness {harness} ran and wrote series {series}, so a workload can be run"
+        ),
+        format!(
+            "a blocker that the run's records do not contradict (no harness of a runtime with candidates ran), not {reason}"
+        ),
+        format!(
+            "a probe that reads flat is a verdict about one target, not about the workload: read dla trend {series} (its targets and next lines), give the target a unit that reaches it with a new key or a size reading, and run {harness} again; or measure the findings a passed column points at (dla ledger list, dla gate check --final)"
+        ),
+    ))
 }
 
 /// Runs `dla --worker <name> ledger done`: ends the worker's slice.

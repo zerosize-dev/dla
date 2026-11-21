@@ -69,8 +69,12 @@ pub struct GateReport {
     pub ok: bool,
     /// The stage name, or `final`.
     pub stage: String,
-    /// Number of missing items in total.
+    /// Number of actions that are missing: items that wait for the same thing count once.
     pub missing_total: usize,
+    /// How many further items wait on those actions (whole-process columns on an open item,
+    /// candidates on the queue, findings with one fix). The full list is in the stored file.
+    #[serde(default)]
+    pub missing_dependents: usize,
     /// The first [`SHOWN_MISSING`] items; the full list is in `<run>/gate/<stage>.json`.
     pub missing: Vec<Missing>,
     /// Where the full list is.
@@ -100,14 +104,131 @@ pub fn pointer_for(target: GateTarget) -> String {
     format!("gate/{}.json", target.name())
 }
 
+/// The missing items as actions: items that wait for the same thing are one line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actions {
+    /// One item per action, most urgent first: the measurement queue, findings whose column
+    /// grew, triggers, open items, findings still to close, the rest. A line that stands for others says how many
+    /// wait on it and names three of them.
+    pub list: Vec<Missing>,
+    /// How many items were folded into the lines of `list`.
+    pub dependents: usize,
+}
+
+/// Open item ids (`O13`, `jvm/O1`) named in a fix text.
+fn open_items_named(fix: &str) -> Vec<String> {
+    fix.split(|c: char| !(c.is_ascii_alphanumeric() || c == '/'))
+        .filter(|w| {
+            let n = w.rsplit('/').next().unwrap_or("");
+            n.len() > 1 && n.starts_with('O') && n[1..].bytes().all(|b| b.is_ascii_digit())
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Groups `all` into actions. A whole-process column or residual row whose fix names an open
+/// item that is itself listed waits on that open item; a finding whose fix is the batch
+/// command of a listed queue item waits on the queue; the rest with the same kind and fix are
+/// one action. Nothing is dropped: the full list stays in the stored gate file.
+pub fn actions(all: &[Missing]) -> Actions {
+    let mut list: Vec<(Missing, Vec<String>)> = Vec::new();
+    let mut place: Vec<usize> = Vec::new();
+    // Primary lines first: queue and open items (the lines others wait on) and every item that
+    // is neither a column, a residual row nor a finding.
+    for m in all {
+        if !matches!(m.kind.as_str(), "trend_column" | "residual" | "finding") {
+            list.push((m.clone(), Vec::new()));
+            place.push(list.len() - 1);
+        }
+    }
+    let find = |list: &[(Missing, Vec<String>)], pred: &dyn Fn(&Missing) -> bool| {
+        list.iter().position(|(m, _)| pred(m))
+    };
+    for m in all
+        .iter()
+        .filter(|m| matches!(m.kind.as_str(), "trend_column" | "residual" | "finding"))
+    {
+        let mut target: Option<usize> = None;
+        if m.kind != "finding" {
+            for o in open_items_named(&m.fix) {
+                target = find(&list, &|x| x.kind == "open_item" && x.id == o);
+                if target.is_some() {
+                    break;
+                }
+            }
+        } else {
+            target = find(&list, &|x| {
+                x.kind == "queue" && !m.fix.is_empty() && x.fix.starts_with(m.fix.as_str())
+            });
+        }
+        if target.is_none() {
+            target = find(&list, &|x| x.kind == m.kind && x.fix == m.fix);
+        }
+        match target {
+            Some(i) => list[i].1.push(m.id.clone()),
+            None => list.push((m.clone(), Vec::new())),
+        }
+    }
+    let rank = |m: &Missing| match m.kind.as_str() {
+        "queue" => 0,
+        "growth" => 1,
+        "finding" if m.fix.contains("alloc-test") => 1,
+        "trigger" => 2,
+        "open_item" => 3,
+        // Findings still to close come before the checklist and the other bookkeeping.
+        "finding" => 4,
+        _ => 5,
+    };
+    list.sort_by_key(|(m, _)| rank(m));
+    let dependents = list.iter().map(|(_, d)| d.len()).sum();
+    Actions {
+        list: list
+            .into_iter()
+            .map(|(mut m, deps)| {
+                if !deps.is_empty() {
+                    // Names of other things only: one finding with several items is not an
+                    // example of itself.
+                    let mut ex: Vec<&str> = Vec::new();
+                    for d in &deps {
+                        if *d != m.id && !ex.contains(&d.as_str()) {
+                            ex.push(d);
+                        }
+                    }
+                    let more = ex.len() > 3;
+                    ex.truncate(3);
+                    m.description = if ex.is_empty() {
+                        format!(
+                            "{} (+{} more item(s) with the same fix)",
+                            m.description,
+                            deps.len()
+                        )
+                    } else {
+                        format!(
+                            "{} (+{} waiting on it: {}{})",
+                            m.description,
+                            deps.len(),
+                            ex.join(", "),
+                            if more { ", ..." } else { "" }
+                        )
+                    };
+                }
+                m
+            })
+            .collect(),
+        dependents,
+    }
+}
+
 /// Evaluates a gate on `view`. `worker` limits the check to one worker's slice.
 pub fn evaluate(view: &RunView, target: GateTarget, worker: Option<&str>) -> GateReport {
     let all = missing(view, target, worker);
+    let acts = actions(&all);
     GateReport {
         ok: all.is_empty(),
         stage: target.name().to_owned(),
-        missing_total: all.len(),
-        missing: all.into_iter().take(SHOWN_MISSING).collect(),
+        missing_total: acts.list.len(),
+        missing_dependents: acts.dependents,
+        missing: acts.list.into_iter().take(SHOWN_MISSING).collect(),
         pointer: pointer_for(target),
     }
 }
@@ -171,6 +292,9 @@ fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
         for b in base.iter().filter(|b| b.kind == BlockingKind::Trigger) {
             out.0.push(from_blocking(b.clone()));
         }
+        for b in base.iter().filter(|b| b.kind == BlockingKind::Growth) {
+            out.0.push(from_blocking(b.clone()));
+        }
         coverage_contradiction_items(view, &mut out);
     }
     for b in base {
@@ -180,9 +304,16 @@ fn core_missing(view: &RunView, target: GateTarget) -> Vec<Missing> {
                 BlockingKind::Finding
                 | BlockingKind::OpenItem
                 | BlockingKind::Queue
-                | BlockingKind::Trigger => false,
+                | BlockingKind::Trigger
+                | BlockingKind::Growth => false,
             };
-        if keep && !(is_final && matches!(b.kind, BlockingKind::Queue | BlockingKind::Trigger)) {
+        if keep
+            && !(is_final
+                && matches!(
+                    b.kind,
+                    BlockingKind::Queue | BlockingKind::Trigger | BlockingKind::Growth
+                ))
+        {
             out.0.push(from_blocking(b));
         }
     }
@@ -556,7 +687,20 @@ pub fn write_back_accounting(
 
 /// A trend column that is not flat: its gate passed, or its shape is steady or stair.
 pub fn non_flat(c: &ColumnTrend) -> bool {
-    c.gate == GateVerdict::Pass || matches!(c.shape, TrendShape::Steady | TrendShape::Stair)
+    !not_a_growth_signal(c)
+        && (c.gate == GateVerdict::Pass
+            || matches!(c.shape, TrendShape::Steady | TrendShape::Stair))
+}
+
+/// A column that rises with the work whatever the program holds, so it never passes as growth
+/// and is not listed as "not flat": a cumulative time (`jvm.jit_seconds`) and the bytes the Go
+/// runtime has released to the operating system (`go.released`).
+pub fn not_a_growth_signal(c: &ColumnTrend) -> bool {
+    c.unit == crate::series::Unit::Seconds
+        || c.name
+            .strip_suffix(".pre_gc")
+            .unwrap_or(&c.name)
+            .eq("go.released")
 }
 
 fn evidence_for_column(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> Option<String> {
@@ -721,6 +865,32 @@ fn residual_covers(view: &RunView, series: &str, c: &ColumnTrend) -> bool {
     })
 }
 
+/// More series than this without a residual row make the gate name `dla gap --residual --all`.
+const ALL_ROWS_FROM: usize = 3;
+
+/// The series whose trend has a non-flat whole-process column or per-type count (which the
+/// residual rows account for) and that have no residual row of their own.
+fn series_without_row(view: &RunView) -> BTreeSet<&str> {
+    let has_row = |series: &str| {
+        view.coverage.as_ref().is_some_and(|c| {
+            c.residual
+                .iter()
+                .any(|r| r.series.as_deref() == Some(series))
+        })
+    };
+    view.trends
+        .iter()
+        .filter(|t| !view.gap_series.contains(&t.series))
+        .filter(|t| {
+            t.columns
+                .iter()
+                .any(|c| non_flat(c) && (is_whole_process(&c.name) || is_type_count(&c.name)))
+        })
+        .map(|t| t.series.as_str())
+        .filter(|s| !has_row(s))
+        .collect()
+}
+
 /// The fix for a whole-process column (or per-type count) that the residual accounting of
 /// `series` does not yet cover. Before the series has a gap row, `dla gap` writes it. Once
 /// it has one, running `dla gap` again only reopens or keeps items, so the fix lists the
@@ -729,12 +899,20 @@ fn residual_fix(view: &RunView, series: &str, c: &ColumnTrend) -> String {
     let gap = format!(
         "dla gap {series} --residual   (rows under the threshold, or over it with a resolved open item, account for the column)"
     );
+    // Many series without a row: one command writes them all.
+    let missing = series_without_row(view);
+    let all = (missing.len() > ALL_ROWS_FROM).then(|| {
+        format!(
+            "dla gap --residual --all   (writes the residual row of each of the {} series that have none, as dla gap <S> --residual does for one; rows under the threshold, or over it with a resolved open item, account for a column)",
+            missing.len()
+        )
+    });
     let Some(cov) = &view.coverage else {
-        return gap;
+        return all.unwrap_or(gap);
     };
     let rows = column_rows(cov, series, c);
     if rows.is_empty() {
-        return gap;
+        return all.unwrap_or(gap);
     }
     let open: Vec<(String, Region)> = rows
         .iter()
@@ -929,7 +1107,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                     format!("{}:{}", t.id, c.name),
                     format!(
                         "column {} of {} ({}) measures the whole process, is not flat and is never tied to a finding; it is accounted for by the residual rows, which are missing or over their threshold without a resolved open item",
-                        c.name,
+                        readable_column(&c.name),
                         t.id,
                         c.shape_name()
                     ),
@@ -984,7 +1162,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 format!("{}:{}", t.id, c.name),
                 format!(
                     "column {} of {} ({}) is not flat and {why}",
-                    c.name,
+                    readable_column(&c.name),
                     t.id,
                     c.shape_name()
                 ),
@@ -1027,6 +1205,7 @@ fn confirm(view: &RunView, out: &mut Out) {
         }
     }
     // A finding tied to growth that passed the gate must have been tested.
+    let grown = crate::grown::grown_unmeasured(view);
     for t in &view.trends {
         for c in t.columns.iter().filter(|c| c.gate == GateVerdict::Pass) {
             for f in tied_findings(view, t, c) {
@@ -1036,16 +1215,31 @@ fn confirm(view: &RunView, out: &mut Out) {
                         f.id.to_string(),
                         format!(
                             "finding {} is tied to growth that passed the gate ({} of {}) and was never tested",
-                            f.id, c.name, t.id
+                            f.id,
+                            readable_column(&c.name),
+                            t.id
                         ),
-                        format!(
-                            "dla ledger test {}   or   dla ledger resolve {} --as unresolved --reason not_exercised --remedy \"<text>\"",
-                            f.id, f.id
-                        ),
+                        // Growth the run measured is decided by an alloc-test, not closed.
+                        match grown.iter().find(|g| g.finding == f.id) {
+                            Some(g) => g.commands().join("   then   "),
+                            None => format!(
+                                "dla ledger test {}   or   dla ledger resolve {} --as unresolved --reason not_exercised --remedy \"<text>\"",
+                                f.id, f.id
+                            ),
+                        },
                     );
                 }
             }
         }
+    }
+}
+
+/// A column name for a person: a Go probe of a package in the project root has an empty
+/// package part (`probe:.ServiceConfig.Methods`), which reads as a typo.
+fn readable_column(name: &str) -> String {
+    match name.strip_prefix("probe:.") {
+        Some(rest) => format!("probe:(root package).{rest}"),
+        None => name.to_owned(),
     }
 }
 
@@ -1388,7 +1582,7 @@ pub fn closes_without_exercise(reason: UnresolvedReason) -> bool {
 
 /// The reasons that record a blocker on `intake.workload`. `inconclusive` is not one: it
 /// says a measurement could not decide, not that something stopped the harness.
-pub(crate) fn is_blocker_reason(reason: UnresolvedReason) -> bool {
+pub fn is_blocker_reason(reason: UnresolvedReason) -> bool {
     match reason {
         UnresolvedReason::EnvUnavailable
         | UnresolvedReason::ToolMissing
@@ -1398,6 +1592,33 @@ pub(crate) fn is_blocker_reason(reason: UnresolvedReason) -> bool {
         | UnresolvedReason::NotExercised
         | UnresolvedReason::TimeBudget
         | UnresolvedReason::Inconclusive => false,
+    }
+}
+
+/// The harness and series that contradict a blocker recorded on `intake.workload`: a series
+/// of a harness of this run exists for every runtime that has ranked candidates, so a workload
+/// could be run. `None` when some runtime with candidates never ran a harness (the blocker may
+/// be about it), or when there are no candidates.
+pub fn workload_ran(view: &RunView) -> Option<(String, String)> {
+    let run_dir = view.run_dir.as_deref()?;
+    let mut wanted: BTreeSet<String> = BTreeSet::new();
+    for r in crate::queue::ranked(view) {
+        wanted.insert(r.runtime?);
+    }
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut ran: std::collections::BTreeMap<String, (String, String)> = Default::default();
+    for (series, h) in &view.series_harness {
+        if let Ok(m) = crate::harness::HarnessManifest::load(run_dir, h) {
+            ran.entry(m.runtime.as_str().to_owned())
+                .or_insert((h.clone(), series.clone()));
+        }
+    }
+    if wanted.iter().all(|rt| ran.contains_key(rt)) {
+        wanted.iter().find_map(|rt| ran.get(rt).cloned())
+    } else {
+        None
     }
 }
 
@@ -1533,7 +1754,9 @@ pub fn budget_over_floor(
     worker: Option<&str>,
 ) -> Option<(u64, u64)> {
     use crate::state::RunStatus;
-    if matches!(state.status, RunStatus::Aborted | RunStatus::Incomplete) {
+    // An aborted run, or one a merge made incomplete, is over. A stop-hook stamp is not: the
+    // run goes on with the next command that works on it, so the time left decides.
+    if matches!(state.status, RunStatus::Aborted | RunStatus::Incomplete) && !state.stop_stamped() {
         return None;
     }
     let now = crate::state::now_utc();
@@ -2279,7 +2502,10 @@ fn worker_missing(view: &RunView, target: GateTarget, w: &str) -> Vec<Missing> {
         let keep = match b.kind {
             BlockingKind::Finding | BlockingKind::OpenItem => mine(&b.id),
             BlockingKind::Trigger => target == GateTarget::Final && mine(&b.id),
-            BlockingKind::ChecklistItem | BlockingKind::Integrity | BlockingKind::Queue => false,
+            BlockingKind::ChecklistItem
+            | BlockingKind::Integrity
+            | BlockingKind::Queue
+            | BlockingKind::Growth => false,
             BlockingKind::Run => true,
         };
         if keep {
@@ -2396,5 +2622,60 @@ mod in_run_column_tests {
         assert_eq!(rows[0].region, Region::Heap);
         // A column of no known region (the default arm) would be judged against every row.
         assert_eq!(column_rows(&cov, "S1", &trend_of("zz.unknown")).len(), 2);
+    }
+
+    fn view_with_series(n: u32, with_row: &[&str]) -> RunView {
+        let mut cov = CoverageManifest::new(None);
+        cov.residual = with_row
+            .iter()
+            .map(|s| ResidualRow {
+                series: Some((*s).to_owned()),
+                ..row(Region::Heap, 1.0)
+            })
+            .collect();
+        let state =
+            crate::state::RunState::init("/p", None, 3600, None, crate::state::now_utc()).unwrap();
+        let mut view = RunView::new(state, crate::Ledger::from_text("").unwrap(), Some(cov));
+        view.trends = (1..=n)
+            .map(|i| TrendReport {
+                schema_version: 1,
+                id: format!("T{i}"),
+                series: format!("S{i}"),
+                thresholds: dla_stats::GateThresholds::default(),
+                columns: vec![trend_of("os.rss")],
+                targets: vec![],
+            })
+            .collect();
+        view
+    }
+
+    #[test]
+    fn more_than_three_series_without_a_residual_row_name_the_one_command() {
+        let col = trend_of("os.rss");
+        let view = view_with_series(5, &[]);
+        let fix = residual_fix(&view, "S2", &col);
+        assert!(fix.starts_with("dla gap --residual --all"), "{fix}");
+        assert!(fix.contains("5 series"), "{fix}");
+        // Three or fewer: the command of the series; rows already written do not count.
+        let view = view_with_series(3, &[]);
+        assert!(residual_fix(&view, "S2", &col).starts_with("dla gap S2 --residual"));
+        let view = view_with_series(6, &["S1", "S2", "S3"]);
+        let fix = residual_fix(&view, "S4", &col);
+        assert!(fix.starts_with("dla gap S4 --residual"), "{fix}");
+    }
+
+    #[test]
+    fn released_bytes_and_cumulative_times_are_not_listed_as_not_flat() {
+        let col = |name: &str, unit: &str| -> ColumnTrend {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "unit": unit, "kind": "gauge", "region": "process",
+                "n": 8, "noise": 0.0, "rise": 100.0, "shape": "steady", "gate": "pass"
+            }))
+            .unwrap()
+        };
+        assert!(non_flat(&col("go.heap_live", "bytes")));
+        assert!(!non_flat(&col("go.released", "bytes")));
+        assert!(!non_flat(&col("go.released.pre_gc", "bytes")));
+        assert!(!non_flat(&col("jvm.jit_seconds", "seconds")));
     }
 }

@@ -1414,3 +1414,174 @@ fn hooks_json_names_real_gate_subcommands_and_covers_the_worker() {
         assert!(help.contains(sub), "{sub} in {help}");
     }
 }
+
+// ------------------------------------------------- a dla command is still running
+
+/// Registers `command` of the run as running with the process `pid`, started `minutes_ago`
+/// minutes ago, the way a long `dla` command registers itself.
+fn register_command(p: &P, command: &str, pid: u32, minutes_ago: i64) {
+    use dla_core::state::{ProcessKind, ProcessRecord, ProcessRole};
+    dla_core::RunState::update(&p.run_dir(), |s| {
+        s.processes.push(ProcessRecord {
+            pid,
+            start_time: dla_sample::os::process_start_time(pid),
+            kind: ProcessKind::Command,
+            command: command.to_owned(),
+            started_at: chrono::Utc::now() - chrono::Duration::minutes(minutes_ago),
+            stopped_at: None,
+            role: ProcessRole::Attached,
+            worker: None,
+            cleanup: Vec::new(),
+        });
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn stop_attempts(p: &P, n: usize) -> Vec<Out> {
+    (0..n)
+        .map(|_| p.hook(&["stop-hook"], &stop_json(p.path())))
+        .collect()
+}
+
+#[test]
+fn a_running_dla_command_blocks_the_stop_without_counting_or_stamping() {
+    let p = project("symptom");
+    let mut child = std::process::Command::new("sleep")
+        .arg("120")
+        .spawn()
+        .unwrap();
+    register_command(&p, "dla census", child.id(), 4);
+    for out in stop_attempts(&p, 5) {
+        let v = out.json();
+        assert_eq!(v["decision"], "block", "{out:?}");
+        let reason = v["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("`dla census` of this run is still running"),
+            "{reason}"
+        );
+        assert!(reason.contains("Wait for it"), "{reason}");
+        assert!(reason.contains("not counted"), "{reason}");
+    }
+    let st = p.state();
+    assert_eq!(st["status"], "active", "{st}");
+    assert!(
+        st["stop_blocks"].is_null() || st["stop_blocks"] == 0,
+        "{st}"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn a_registered_command_whose_process_is_gone_counts_as_not_running() {
+    let p = project("symptom");
+    let mut child = std::process::Command::new("sleep")
+        .arg("120")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    register_command(&p, "dla census", pid, 4);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let outs = stop_attempts(&p, 3);
+    assert_eq!(outs[0].json()["decision"], "block", "{:?}", outs[0]);
+    assert!(
+        !outs[0].json()["reason"]
+            .as_str()
+            .unwrap()
+            .contains("still running"),
+        "{:?}",
+        outs[0]
+    );
+    // The third attempt stamps, as it always did.
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+    assert_eq!(p.state()["status"], "incomplete");
+}
+
+#[test]
+fn a_command_running_past_the_limit_is_taken_for_hung() {
+    let p = project("symptom");
+    let mut child = std::process::Command::new("sleep")
+        .arg("120")
+        .spawn()
+        .unwrap();
+    register_command(&p, "dla census", child.id(), 45);
+    let outs = stop_attempts(&p, 3);
+    assert!(
+        !outs[0].json()["reason"]
+            .as_str()
+            .unwrap()
+            .contains("still running"),
+        "{:?}",
+        outs[0]
+    );
+    assert!(outs[2].allowed(), "{:?}", outs[2]);
+    assert_eq!(p.state()["status"], "incomplete");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn a_stamped_run_has_its_stamp_lifted_by_the_next_working_command_and_keeps_it_in_its_history() {
+    let p = project("symptom");
+    stop_attempts(&p, 3);
+    let st = p.state();
+    assert_eq!(st["status"], "incomplete", "{st}");
+    assert_eq!(st["stop_stamps"].as_array().unwrap().len(), 1, "{st}");
+    // Looking at the run does not lift it: status, gate check, report, ledger list, bundle.
+    p.ok(&["run", "status"]);
+    let _ = p.dla().args(["gate", "check", "--final"]).output().unwrap();
+    let _ = p.dla().arg("report").output().unwrap();
+    let _ = p.dla().args(["ledger", "list"]).output().unwrap();
+    assert_eq!(p.state()["status"], "incomplete", "{}", p.state());
+    // A command that works on the run lifts it before it does its work, whether or not it
+    // then writes to the ledger (this one fails: there is no such series).
+    let o = p.dla().args(["trend", "S9"]).output().unwrap();
+    assert_ne!(o.status.code(), Some(0));
+    let st = p.state();
+    assert_eq!(st["status"], "active", "{st}");
+    assert!(st["incomplete_reason"].is_null(), "{st}");
+    let stamp = &st["stop_stamps"][0];
+    assert!(stamp["lifted_at"].is_string(), "{st}");
+    assert!(
+        stamp["reason"].as_str().unwrap().contains("stop attempts"),
+        "{st}"
+    );
+}
+
+#[test]
+fn an_aborted_run_stays_aborted_whatever_runs_after() {
+    let p = project("symptom");
+    p.ok(&["run", "abort", "--reason", "x"]);
+    assert_eq!(p.state()["status"], "aborted");
+    let _ = p.dla().args(["trend", "S9"]).output().unwrap();
+    answer_intake(&p);
+    assert_eq!(p.state()["status"], "aborted", "{}", p.state());
+    assert!(p.state()["stop_stamps"].is_null(), "{}", p.state());
+}
+
+#[test]
+fn a_long_command_registers_itself_while_it_runs_and_marks_itself_stopped() {
+    let p = project("symptom");
+    let out = p.dla().arg("report").output().unwrap();
+    assert!(out.status.success() || out.status.code() == Some(2));
+    let st = p.state();
+    let rec = st["processes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "command")
+        .unwrap_or_else(|| panic!("no registered command: {st}"));
+    assert_eq!(rec["command"], "dla report");
+    assert_eq!(rec["role"], "attached");
+    assert!(rec["stopped_at"].is_string(), "{rec}");
+    // A command that is not on the list leaves nothing behind.
+    p.ok(&["run", "status"]);
+    assert_eq!(
+        p.state()["processes"].as_array().unwrap().len(),
+        1,
+        "{}",
+        p.state()
+    );
+}

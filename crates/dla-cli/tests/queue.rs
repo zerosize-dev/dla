@@ -411,6 +411,7 @@ fn next_declares_the_targets_prints_them_and_writes_the_block_in_the_driver() {
         "probe reads: size of shop.reg.Registry._by_key",
         "make every unit reach a writer so that it adds an entry whose key derives from the unit's key",
         "never reuse an earlier unit's key",
+        "a unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key)",
     ] {
         assert!(driver.contains(needle), "{needle}\n{driver}");
     }
@@ -596,9 +597,11 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         "one run-config record lists what was closed"
     );
 
-    // The one that grew is tested or closed by the caller; then nothing of the queue is left
-    // and the final gate asks for no finding.
-    let o = r.run(&[
+    // The one that grew is decided by an alloc-test, not closed: closing it is refused with
+    // the commands that decide it. With an alloc-test evidence bound to it (written directly
+    // here: a real alloc-test needs the built harness) the existing rules decide, and then
+    // nothing of the queue is left and the final gate asks for no finding.
+    let args = [
         "ledger",
         "resolve",
         &cached,
@@ -608,7 +611,32 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         "not_exercised",
         "--remedy",
         "x",
-    ]);
+    ];
+    let o = r.run(&args);
+    assert_eq!(o.json["error"]["code"], "growth-not-measured", "{}", o.text);
+    {
+        use dla_core::{Authority, EvidenceKind, Ledger, NewEvidence, Source, Tool};
+        let mut l = Ledger::load(&r.run_dir).unwrap();
+        l.add_evidence(NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Test,
+            kind: EvidenceKind::Discriminator,
+            result: serde_json::json!({"test": "plateau+purge", "favors": "leak", "supports": ["leak"], "finding": cached}),
+            raw: None,
+            coverage: dla_core::evidence::EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        })
+        .unwrap();
+    }
+    let o = r.run(&args);
     assert_eq!(o.code, 0, "{}", o.text);
     let left = r.missing();
     assert!(
@@ -625,7 +653,11 @@ fn verdicts_settle_candidates_and_close_rest_closes_the_rest() {
         ),
         "{md}"
     );
-    assert!(md.contains("- Targeted: H1 constant\n"), "{md}");
+    // (changed for the focus rule: the two drivers that missed it, one of a focused harness)
+    assert!(
+        md.contains("- Targeted: H1 constant; not reached (missed by two drivers, the focused harness H1 among them)\n"),
+        "{md}"
+    );
     assert!(
         md.contains("- Not targeted (tier 6, not ranked for measurement)\n"),
         "{md}"
@@ -873,4 +905,121 @@ fn a_flat_series_still_records_the_verdicts_of_its_declared_targets() {
         })
         .count();
     assert_eq!(out["reason"]["inconclusive"], measured, "{out} {rec}");
+}
+
+/// A target whose run had no coverage data (`unknown`) is not settled by it, and every text
+/// that shows its standing says what `unknown` means.
+#[test]
+fn an_unknown_verdict_does_not_settle_and_is_explained() {
+    let r = Run::new(&["--budget", "3h"]);
+    let registry = r.id_at("shop/reg.py:2");
+    r.ok(&["harness", "gen", "--lang", "python", "--driver", "--next"]);
+    r.fill("H1", "");
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    r.ok(&["trend", "S1"]);
+    // The registry's probe stayed flat; the stored report is read as if the run had no
+    // coverage data for it.
+    let path = r.run_dir.join("trend/T1.json");
+    let mut stored: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for t in stored["targets"].as_array_mut().unwrap() {
+        if t["finding"] == registry.as_str() {
+            t["verdict"] = Value::from("unknown");
+        }
+    }
+    fs::write(&path, stored.to_string()).unwrap();
+    const WHAT: &str = "the run has no coverage data, so whether its code ran is not known: run a second, different driver, or one with a size reading";
+
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["pending"], 2, "{st}");
+    let item = st["blocking"][0]["description"].as_str().unwrap();
+    assert!(
+        item.contains("had a driver run with no coverage data"),
+        "{item}"
+    );
+    let o = r.close(&registry, "not_exercised");
+    assert_eq!(o.json["error"]["code"], "target-pending", "{}", o.text);
+    assert!(
+        o.json["error"]["fix"].as_str().unwrap().contains(WHAT),
+        "{}",
+        o.text
+    );
+    let (_, lines) = r.list();
+    let line = lines.iter().find(|l| l["id"] == registry.as_str()).unwrap();
+    assert_eq!(line["verdict_note"], WHAT, "{line}");
+    assert!(line.get("settled_by").is_none(), "{line}");
+
+    // A workload blocker is refused while a harness ran (`workload-ran`); the way to the close is
+    // the floor of the time budget: the time is spent but for half a minute.
+    dla_core::RunState::update(&r.run_dir, |s| {
+        s.budget.deadline = dla_core::state::now_utc() + chrono::Duration::seconds(30);
+        Ok(())
+    })
+    .unwrap();
+    r.ok(&["ledger", "close-rest"]);
+    let record = fs::read_to_string(r.run_dir.join("ledger.jsonl")).unwrap();
+    assert!(record.contains(WHAT), "{}", record.len());
+    assert!(r.report().contains(&format!("H1 unknown ({WHAT})")));
+}
+
+fn stamp(r: &Run) {
+    dla_core::RunState::update(&r.run_dir, |s| {
+        s.stamp_stop(format!(
+            "{} 3 stop attempts with no ledger change: F1",
+            dla_core::gate::STOP_BLOCKED_REASON
+        ));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_stamped_run_with_time_left_keeps_its_queue_and_close_rest_lifts_the_stamp() {
+    let r = Run::new(&["--budget", "3h"]);
+    stamp(&r);
+    // The same queue and the same next command as a going run, and one field about the stamp.
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["open"], true, "{st}");
+    assert_eq!(st["queue"]["python"]["pending"], 3, "{st}");
+    assert_eq!(st["next_command"], BATCH, "{st}");
+    assert!(
+        st["stop_stamp"]
+            .as_str()
+            .unwrap()
+            .contains("lifts the stamp"),
+        "{st}"
+    );
+    // close-rest closes nothing a queue holds back, names the batch command, lifts the stamp.
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert_eq!(out["closed"], 0, "{out}");
+    assert_eq!(out["left_open"], 3, "{out}");
+    assert_eq!(out["batch_command"], BATCH, "{out}");
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["status"], "active", "{st}");
+    assert!(st.get("stop_stamp").is_none(), "{st}");
+    assert_eq!(st["queue"]["python"]["pending"], 3, "{st}");
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(r.run_dir.join("state.json")).unwrap()).unwrap();
+    assert!(state["stop_stamps"][0]["lifted_at"].is_string(), "{state}");
+}
+
+#[test]
+fn a_stamped_run_at_the_floor_closes_with_time_budget() {
+    let r = Run::new(&["--budget", "90s"]);
+    stamp(&r);
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["closed"], "floor", "{st}");
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert!(out["closed"].as_u64().unwrap() >= 3, "{out}");
+    assert_eq!(out["reason"]["time_budget"], out["closed"], "{out}");
+}
+
+#[test]
+fn an_aborted_run_keeps_its_queue_over_and_nothing_lifts_it() {
+    let r = Run::new(&["--budget", "3h"]);
+    r.ok(&["run", "abort", "--reason", "x"]);
+    let st = r.ok(&["run", "status"]);
+    assert_eq!(st["queue"]["python"]["closed"], "over", "{st}");
+    let out = r.ok(&["ledger", "close-rest"]);
+    assert_eq!(out["reason"]["time_budget"], 0, "{out}");
+    assert_eq!(r.ok(&["run", "status"])["status"], "aborted");
 }

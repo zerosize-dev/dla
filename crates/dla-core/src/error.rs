@@ -128,6 +128,11 @@ pub mod codes {
     /// `time_budget` was given while more than the shared floor of the budget is left and
     /// no command was refused with nothing smaller that fits.
     pub const TIME_LEFT: &str = "time-left";
+    /// A finding a passed growth column points at was closed without an alloc-test bound to it.
+    pub const GROWTH_NOT_MEASURED: &str = "growth-not-measured";
+    /// `intake.workload` was recorded as blocked although a harness of the run ran and wrote a
+    /// series for every runtime that has candidates.
+    pub const WORKLOAD_RAN: &str = "workload-ran";
     /// A candidate ranked for measurement was closed as not exercised while its runtime's
     /// queue is open.
     pub const TARGET_PENDING: &str = "target-pending";

@@ -478,8 +478,10 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         }
     };
     let StatusParts { rs, missing } = rs;
-    let total = missing.len();
-    let shown: Vec<_> = missing.iter().take(3).collect();
+    // Actions, not dependents: items that wait for the same thing are one line.
+    let acts = gate::actions(&missing);
+    let total = acts.list.len();
+    let shown: Vec<_> = acts.list.iter().take(3).collect();
     let revisit = revisit_entries(&view, ctx.worker.as_deref());
     let revisit_total = revisit.len();
     let mut out = json!({
@@ -491,6 +493,7 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
         "complete": rs.complete,
         "counts": rs.counts,
         "blocking_total": total,
+        "blocking_dependents": acts.dependents,
         "blocking": shown,
         "budget": extend::status_json(&view, ctx.worker.as_deref()),
         "record": ctx.pointer(STATE_FILE),
@@ -560,6 +563,11 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     if !triggers.is_empty() {
         out["triggers"] = Value::Object(triggers);
     }
+    if view.state.stop_stamped() {
+        out["stop_stamp"] = json!(
+            "the run carries a stop-hook stamp; the next command that works on it lifts the stamp"
+        );
+    }
     out["next_command"] = json!(queues.iter().find(|q| q.open()).map_or_else(
         || next_command(&view, &missing, &revisit, ctx.worker.as_deref()),
         |q| clip_command(&q.command)
@@ -582,7 +590,8 @@ pub fn run_status(ctx: &Ctx) -> Res<Value> {
     if truncated {
         out["truncated"] = Value::Bool(true);
     }
-    Ok(out)
+    // Fit it ourselves, by the order in `out::fit`, before the generic bound has to cut.
+    Ok(crate::out::fit(out, "blocking"))
 }
 
 /// The `triggers` object of `dla run status`: for each confirmed or strong leak-side finding
@@ -610,9 +619,23 @@ fn trigger_json(view: &RunView) -> serde_json::Map<String, Value> {
             Trigger::Reproduced { harness, varies } => {
                 json!({"trigger": trig.name(), "harness": harness, "varies": varies})
             }
+            Trigger::Direct {
+                harness,
+                varies,
+                writer,
+                ..
+            } => json!({
+                "trigger": trig.name(), "harness": harness, "varies": varies, "writer": writer,
+            }),
             Trigger::NotFound { runs } => json!({
                 "trigger": trig.name(),
                 "harnesses": runs.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(", "),
+            }),
+            Trigger::Unmeasured { runs } => json!({
+                "trigger": trig.name(),
+                "harnesses": runs.iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>().join(", "),
+                "verdicts": runs.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join(", "),
+                "not_checked": "the entry-path harnesses ran but nothing measured the holder there",
             }),
             Trigger::Unchecked => json!({"trigger": trig.name()}),
         };
@@ -646,6 +669,15 @@ fn queue_json(queues: &[dla_core::queue::RuntimeQueue]) -> Value {
         });
         if let Some(c) = q.closed {
             e["closed"] = json!(c);
+        }
+        if let Some(p) = &q.package {
+            e["package"] = json!(dla_core::queue::package_label(p));
+        }
+        if q.focus {
+            e["focus"] = json!(true);
+        }
+        if !q.second.is_empty() {
+            e["second_look"] = json!(true);
         }
         m.insert(q.runtime.clone(), e);
     }

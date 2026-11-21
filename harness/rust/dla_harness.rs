@@ -110,7 +110,46 @@ fn setup() -> State {
     todo!("DLA-HOOK setup has not been filled in")
 }
 
+// DLA-CHOICE-BEGIN
+static CHOICE_N: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8]; // the n of each slot seen so far
+
+/// Choice number `slot` of `n` options, from the digits of `key` in mixed radix. Deterministic, no
+/// allocation and no state beyond the n of each slot (8 slots): the combinations of the slots used
+/// in order 0, 1, 2, ... all occur within n0*n1*... keys and repeat evenly.
+fn choice(key: u64, slot: usize, n: u64) -> u64 {
+    let mut div = 1u64;
+    let mut j = 0;
+    while j < slot && j < 8 {
+        div = div.saturating_mul(CHOICE_N[j].load(Relaxed).max(1));
+        j += 1;
+    }
+    if slot < 8 {
+        CHOICE_N[slot].store(n, Relaxed);
+    }
+    (key / div) % n.max(1)
+}
+
+fn choices_note(done: u64) -> Option<String> {
+    let (mut slots, mut product) = (0u64, 1u64);
+    for n in &CHOICE_N {
+        let n = n.load(Relaxed);
+        if n > 0 {
+            slots += 1;
+            product = product.saturating_mul(n);
+        }
+    }
+    if slots == 0 {
+        return None;
+    }
+    let took = product.min(done);
+    let more = if product > took { format!(" (of {product} possible)") } else { String::new() };
+    Some(format!("the units took {took} combinations of {slots} choices{more}"))
+}
+// DLA-CHOICE-END
+
 fn unit(state: &mut State, i: u64, key: u64) {
+    // Choices: `choice(key, slot, n)` is choice number `slot` of `n` options, taken from the digits of `key` in mixed radix (all combinations of the slots occur within n1*n2*... keys).
+    // Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence.
     // DLA-HOOK unit: perform exactly one unit of the workload for `key` (derive request ids/names/payloads from `key` so a repeated key reproduces an earlier request); `i` is the 1-based unit number
     let _ = (state, i, key);
     todo!("DLA-HOOK unit has not been filled in")
@@ -204,6 +243,71 @@ fn values(state: &State) -> Vec<(&'static str, u64)> {
     v
 }
 
+/// Lines for the limitations of every following record: what the driver changed.
+static NOTES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn note(text: String) {
+    // Nested rather than a let chain: the driver must build on every edition.
+    if let Ok(mut notes) = NOTES.lock() {
+        if !notes.contains(&text) {
+            notes.push(text);
+        }
+    }
+}
+
+/// The smallest step the fitting leaves: with fewer units per round the per-round costs and the
+/// allocator noise swamp a leak of one entry per unit.
+const MIN_STEP: u64 = 10;
+
+/// Time limit of this process in seconds (`dla harness run` sets `DLA_TIME_LIMIT_SECS` from the
+/// harness timeout; 0 or unset = no fitting). Once `MIN_STEP` units of a round have run (inside the
+/// first round, so one slow round cannot outlast the limit before the first look) and after every
+/// round, the step of the round in progress and of the rounds left is lowered when the units left
+/// would not fit (margin: 15 percent and 5 seconds), never below `MIN_STEP`. `in_round` units of
+/// round `round` have run; `left` rounds follow it.
+#[allow(clippy::too_many_arguments)]
+fn fit(
+    limit: f64,
+    started: Instant,
+    loop_start: Instant,
+    round: u64,
+    total: u64,
+    in_round: u64,
+    done: u64,
+    step: &mut u64,
+    warned: &mut bool,
+) {
+    if limit <= 0.0 || done == 0 {
+        return;
+    }
+    let left = (total - round) as f64;
+    let per_unit = loop_start.elapsed().as_secs_f64() / done as f64;
+    let budget = limit * 0.85 - 5.0 - started.elapsed().as_secs_f64();
+    let need = |step: u64| per_unit * ((step - in_round.min(step)) as f64 + step as f64 * left);
+    if need(*step) <= budget {
+        return;
+    }
+    let units = (budget / per_unit).max(0.0) as u64;
+    let lowered = ((units + in_round) / (left as u64 + 1)).min(*step).max(MIN_STEP.min(*step));
+    if lowered < *step {
+        note(format!(
+            "the driver lowered its step from {} to {lowered} units per round in round {round} (after {in_round} units of it): one unit takes {:.1} ms and the {limit} s time limit would cut the process (the x axis is still the cumulative unit count)",
+            *step,
+            per_unit * 1000.0
+        ));
+        *step = lowered;
+    }
+    if !*warned && need(*step) > budget {
+        *warned = true;
+        note(format!(
+            "the unit is too slow for a series: even {} units per round (the floor) needs {:.0} s for the units left and {:.0} s remain; make the unit cheaper (one call, no sleeps, smaller payloads) or raise timeout_secs in harness.json",
+            *step,
+            need(*step),
+            budget.max(0.0)
+        ));
+    }
+}
+
 /// Appends one `checkpoint` record. On the last round `DLA_PURGE=trim` also trims the malloc heap
 /// and records the OS values before and after.
 fn checkpoint(state: &State, started: Instant, done: u64, last: bool) {
@@ -211,7 +315,7 @@ fn checkpoint(state: &State, started: Instant, done: u64, last: bool) {
         return;
     };
     let vals = values(state);
-    let mut limitations: Vec<String> = Vec::new();
+    let mut limitations: Vec<String> = NOTES.lock().map(|n| n.clone()).unwrap_or_default();
     let mut purge = String::new();
     let kind = env::var("DLA_PURGE").unwrap_or_default();
     if last && !kind.is_empty() && kind != "none" {
@@ -255,10 +359,15 @@ fn checkpoint(state: &State, started: Instant, done: u64, last: bool) {
 }
 
 fn main() {
-    let step = env::var("DLA_STEP")
+    let mut step: u64 = env::var("DLA_STEP")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(STEP);
+    let step_default = step;
+    let limit: f64 = env::var("DLA_TIME_LIMIT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
     let warmup: u64 = env::var("DLA_WARMUP")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -276,13 +385,30 @@ fn main() {
     let started = Instant::now();
     let mut state = setup();
     let total = warmup + rounds;
+    let loop_start = Instant::now();
+    let mut warned = false;
     let mut done = 0;
     for round in 1..=total {
-        for _ in 0..step {
+        let mut n = 0;
+        while n < step {
+            n += 1;
             done += 1;
             let key = if repeated { done % repeat } else { done };
             unit(&mut state, done, key);
+            if n == MIN_STEP.min(step_default) {
+                fit(limit, started, loop_start, round, total, n, done, &mut step, &mut warned);
+            }
+        }
+        // Nested rather than a let chain: the driver must build on every edition.
+        if round == total {
+            if let Some(line) = choices_note(done) {
+                note(line);
+            }
         }
         checkpoint(&state, started, done, round == total);
+        if round < total {
+            fit(limit, started, loop_start, round + 1, total, 0, done, &mut step, &mut warned);
+        }
     }
+    // The process ends when `main` returns: threads and servers of the units do not hold it.
 }

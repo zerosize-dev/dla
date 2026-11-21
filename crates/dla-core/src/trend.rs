@@ -326,8 +326,9 @@ pub fn probe_column_matches_owner(column: &str, owner: &str) -> bool {
 impl PassedColumn {
     /// True when the column is tied to the finding `id` with `site`: by its `finding`,
     /// by an equal site, or by listing the finding among its candidates. `dla trend`
-    /// lists as candidates only the findings at the column's site, in its enclosing
-    /// body, or with a census writer at exactly that site; a finding that only shares the file is
+    /// lists as candidates the findings at the column's site, in its enclosing body, or with a
+    /// census writer at exactly that site (for a per-site count column of listeners, timers or
+    /// goroutines: only the findings at that line); a finding that only shares the file is
     /// never listed, so this method does not re-check the candidates.
     pub fn tied_to(&self, id: &FindingId, site: Option<&str>) -> bool {
         let id = id.to_string();

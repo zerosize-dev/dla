@@ -39,6 +39,18 @@ pub(super) const CLASSES: &[&str] = &[
     "record_declaration",
 ];
 
+/// True for a column that counts the things made at one line: listeners, timers or goroutines
+/// by registration or creation site (`node.listeners@<site>`, `node.timers@<site>`,
+/// `go.goroutines@<site>`). Such a column says something about the registration or creation
+/// AT that line, so only a finding whose own site is that line is its candidate. The
+/// allocation-site columns of the native shim (`native.live_bytes@<site>`) are about where a
+/// holder is written and keep the writer rule.
+pub fn is_per_site_count(name: &str) -> bool {
+    let base = name.strip_suffix(".pre_gc").unwrap_or(name);
+    base.split_once('@')
+        .is_some_and(|(b, _)| !b.starts_with("native."))
+}
+
 /// Splits `file:line`, dropping a leading `./`.
 fn split(site: &str) -> Option<(String, u32)> {
     let (file, line) = site.rsplit_once(':')?;
@@ -145,7 +157,8 @@ impl<'a> Matcher<'a> {
     }
 
     /// The candidates of `c`: the finding it names (when the ledger has it), then the
-    /// findings at exactly its site, then those in the same enclosing body, then those
+    /// findings at exactly its site (for a per-site count column, [`is_per_site_count`], only
+    /// those), then those in the same enclosing body, then those
     /// with a census writer at exactly the site. A writer elsewhere in the site's body
     /// ties nothing. Findings that only share the file are never candidates.
     /// Leak-side findings only (an `N-*` hypothesis is not a candidate). Empty for a
@@ -185,6 +198,11 @@ impl<'a> Matcher<'a> {
             if *ff == file && *fl == line && !out.contains(id) {
                 out.push(id.clone());
             }
+        }
+        // A count of what one line made: a neighbour in the same function, or a finding that
+        // merely lists the line among the writers of its receiver, is not a candidate.
+        if is_per_site_count(&c.name) {
+            return out;
         }
         let body = self
             .tree(&file)
@@ -490,6 +508,53 @@ mod tests {
         // Without the census, nothing but the file is shared: no candidate.
         let mut bare = Matcher::new(project.path(), &ledger);
         assert!(bare.candidates(&trend_of("arena.rs:14", None)).is_empty());
+    }
+
+    #[test]
+    fn a_per_site_count_column_ties_only_to_the_findings_at_its_own_line() {
+        let project = tempfile::tempdir().unwrap();
+        let run = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("cache.go"), GO).unwrap();
+        // F3's holder is written at cache.go:10 (a writer line of its receiver), declared at :3.
+        write_census(
+            run.path(),
+            &[("Cache.hits", "cache.go:3", &["cache.go:10"])],
+        );
+        let mut ledger = ledger_with(&[
+            ("census", Some("cache.go:6")), // F1: in Put
+            ("census", Some("cache.go:5")), // F2: the func line of Put
+        ]);
+        finding_of(&mut ledger, "cache.go:3", "Cache.hits");
+        let mut m = Matcher::new(project.path(), &ledger).with_census(run.path());
+        let named = |name: &str, site: &str| {
+            let mut c = trend_of(site, None);
+            c.name = name.to_owned();
+            c
+        };
+        // A listener count at the line of F2: F2 only, not F1 (same function).
+        assert_eq!(
+            m.candidates(&named("node.listeners@cache.go:5", "cache.go:5")),
+            [FindingId::new(2)]
+        );
+        // A count at a line that is only a writer of F3's receiver: no candidate.
+        assert!(
+            m.candidates(&named("node.listeners@cache.go:10", "cache.go:10"))
+                .is_empty()
+        );
+        assert!(
+            m.candidates(&named("go.goroutines@cache.go:10", "cache.go:10"))
+                .is_empty()
+        );
+        // The same line for an allocation column keeps the writer rule.
+        assert_eq!(
+            m.candidates(&named("native.live_bytes@cache.go:10", "cache.go:10")),
+            [FindingId::new(3)]
+        );
+        // And a heap-style column at F2's line still lists the neighbour in the function.
+        assert_eq!(
+            m.candidates(&named("probe:Cache.entries", "cache.go:5")),
+            [FindingId::new(2), FindingId::new(1)]
+        );
     }
 
     /// A source of `lines` where each `(line, text)` replaces its line (1-based).

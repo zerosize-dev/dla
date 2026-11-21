@@ -739,6 +739,37 @@ pub fn split_shim_dump(label_dir: &Path, measured: Option<u32>) -> ShimSplit {
     ShimSplit::Written
 }
 
+/// For a native-only dump (a command-mode harness whose measured process has the shim preloaded,
+/// so the dump is the shim's own), copies the last exit record with stacks to
+/// `<label_dir>/shim-dump.jsonl`, where the summarize commands of [`shim_dump_commands`] read it.
+/// Returns whether a file was written; one that an earlier run left is removed first.
+pub fn copy_native_shim_dump(label_dir: &Path) -> bool {
+    let file = label_dir.join(SHIM_DUMP);
+    let _ = fs::remove_file(&file);
+    let Ok(text) = fs::read_to_string(label_dir.join("dump.jsonl")) else {
+        return false;
+    };
+    let mut last: Option<&str> = None;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let native = v
+            .get("runtime")
+            .and_then(|r| r.as_str())
+            .is_some_and(|r| r.eq_ignore_ascii_case("native"));
+        if native
+            && v.get("phase").and_then(|p| p.as_str()) == Some("exit")
+            && v.get("raw_sites")
+                .and_then(|r| r.as_object())
+                .is_some_and(|o| !o.is_empty())
+        {
+            last = Some(line);
+        }
+    }
+    last.is_some_and(|l| fs::write(&file, format!("{l}\n")).is_ok())
+}
+
 /// The `dla summarize type-histogram-diff` commands that read the shim records split out by
 /// [`split_shim_dump`] into `<out_dir>/<label>/shim-dump.jsonl` (one per series: fresh
 /// keys first, then the repeated control). A harness without a shim, or a native one whose

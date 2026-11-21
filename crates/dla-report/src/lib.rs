@@ -66,9 +66,13 @@ struct ReportStatus {
 /// `dla gate check --final` and `dla run status` use, so the three cannot disagree. The
 /// counts come from the findings and the checklist.
 fn gate_status(view: &RunView) -> ReportStatus {
-    let blocking = gate::missing(view, GateTarget::Final, None);
+    let all = gate::missing(view, GateTarget::Final, None);
+    // Actions, as the gate and the status show them: items that wait for the same thing are
+    // one line.
+    let complete = all.is_empty();
+    let blocking = gate::actions(&all).list;
     ReportStatus {
-        complete: blocking.is_empty(),
+        complete,
         blocking,
         counts: status(view).counts,
     }
@@ -252,9 +256,13 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
         let _ = writeln!(out, "{w}\n");
     }
     let _ = writeln!(out, "Time: {}\n", dla_core::timebudget::report_line(view));
+    if let Some(line) = history_line(view) {
+        let _ = writeln!(out, "History: {line}\n");
+    }
     let _ = writeln!(out, "Entry: {}\n", entry_line(view));
     let _ = writeln!(out, "Scope: {}\n", scope_line(view));
-    let mut line = findings_line(c);
+    let disputed = disputed_confirmed(view);
+    let mut line = findings_line(c, &disputed);
     if let Some(clause) = TRIGGERS.with(|t| t.borrow().as_ref().and_then(|f| f.clause())) {
         line.push_str("; ");
         line.push_str(&clause);
@@ -267,19 +275,77 @@ fn header(out: &mut String, view: &RunView, st: &ReportStatus) {
     }
 }
 
+/// The times the stop hook stamped the run incomplete and the run went on, for the report's
+/// history: the status says what the run is now, this what it was. `None` without a stamp.
+fn history_line(view: &RunView) -> Option<String> {
+    let lifted: Vec<String> = view
+        .state
+        .stop_stamps
+        .iter()
+        .filter_map(|s| {
+            s.lifted_at.map(|l| {
+                format!(
+                    "stamped incomplete by the stop hook at {} and lifted at {} when work went on",
+                    s.stamped_at.format("%H:%M:%SZ"),
+                    l.format("%H:%M:%SZ")
+                )
+            })
+        })
+        .collect();
+    (!lifted.is_empty()).then(|| lifted.join("; "))
+}
+
+/// The label the blind verifier read for each confirmed leak-side finding it reads as a
+/// non-leak (`N-*`) although the finding carries a leak label (or none): the latest verification
+/// of the finding decides. A disagreement between two leak labels is not one.
+fn disputed_label(view: &RunView, f: &Finding) -> Option<String> {
+    if f.state != FindingState::Confirmed || is_explanation(f) || f.archetype.starts_with("N-") {
+        return None;
+    }
+    view.ledger
+        .verifications(&f.id)
+        .last()
+        .filter(|v| v.label.starts_with("N-"))
+        .map(|v| v.label.clone())
+}
+
+/// [`disputed_label`] of every finding it applies to.
+fn disputed_confirmed(view: &RunView) -> Vec<String> {
+    view.ledger
+        .findings()
+        .filter(|f| view.ledger.merged_into(&f.id).is_none())
+        .filter_map(|f| disputed_label(view, f))
+        .collect()
+}
+
 /// The `Findings:` line. The leak hypotheses and the non-leak explanations (the `N-*`
 /// siblings) are counted apart: an explanation that held is `confirmed` on its side and
 /// its leak-side root is `refuted` on the other, so one test read as two leaks when the two
 /// were added together. When something was measured and no leak is confirmed or strong,
 /// the line says so in words.
-fn findings_line(c: &dla_core::view::StatusCounts) -> String {
+fn findings_line(c: &dla_core::view::StatusCounts, disputed: &[String]) -> String {
     let leak = c.by_state.minus(&c.non_leak);
     let n = &c.non_leak;
+    // A confirmed finding the blind verifier reads as a non-leak (`N-*`) is not plain
+    // "confirmed": it is counted apart, with what the verifier read.
+    let apart = disputed.len().min(leak.confirmed);
+    let mut labels: Vec<&str> = disputed.iter().map(String::as_str).collect();
+    labels.sort_unstable();
+    labels.dedup();
+    let confirmed = if apart > 0 {
+        format!(
+            "{}, confirmed but disputed by the verifier (reads {}) {apart}",
+            leak.confirmed - apart,
+            labels.join(", ")
+        )
+    } else {
+        leak.confirmed.to_string()
+    };
     let mut line = format!(
         "Findings: {} enumerated, {} dispositioned; leak hypotheses: confirmed {}, strong {}, refuted {}, suspected {}, unresolved {}; non-leak explanations: confirmed {}, refuted {}, suspected {}, unresolved {}",
         c.enumerated,
         c.dispositioned,
-        leak.confirmed,
+        confirmed,
         leak.strong,
         leak.refuted,
         leak.suspected_static_only,
@@ -737,6 +803,8 @@ fn findings(out: &mut String, view: &RunView) {
         let top = matches!(f.state, FindingState::Confirmed | FindingState::Strong);
         (
             u8::from(!top),
+            // Confirmed and disputed by the verifier: after the undisputed ones.
+            u8::from(disputed_label(view, f).is_some()),
             u8::from(top && !triggered(f)),
             rank(f.state),
             tier,
@@ -888,10 +956,12 @@ fn growth_line(view: &RunView, f: &Finding) -> Option<String> {
             bare.get_or_insert_with(|| e.evidence_id.clone());
             continue;
         };
+        // The column at the finding's own site is its growth before any other tied column.
         if let Some(c) = summary
             .passed
             .iter()
-            .find(|c| c.tied_to_owner(&f.id, f.site.as_deref(), f.owner.as_deref()))
+            .filter(|c| c.tied_to_owner(&f.id, f.site.as_deref(), f.owner.as_deref()))
+            .min_by_key(|c| f.site.is_none() || c.site.as_deref() != f.site.as_deref())
         {
             return Some(growth_text(c, &summary, &e.evidence_id));
         }

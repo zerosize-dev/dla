@@ -134,7 +134,11 @@ and no tied column) the region's primary column, else every column that passed t
 latest trend of the harness plus `os.rss`; a peak or a size no purge can give back (`os.vm_hwm`,
 `native.peak_bytes`, `os.vm_data`) is tested and reported, and votes only when nothing else
 can. The file-backed pages `os.rss_file` vote on their plateau test, but a retained purge reading
-of that column never contradicts a plateau (no purge gives file-backed pages back). For a JVM
+of that column never contradicts a plateau (no purge gives file-backed pages back); the same
+holds for those peaks and sizes and for `go.total` (everything the Go runtime has mapped: it only
+steps up, and a purge moves bytes inside it). `go.released` (heap the Go runtime handed back to
+the system) is recorded and shown but never passes the gate: a rise of it is memory given back,
+not memory held. For a JVM
 non-heap finding the primary is `jvm.nonheap_used`, which must plateau together with every
 `jvm.nmt.*` category that passed the gate in the latest trend and with `jvm.threads` and
 `os.threads` (when those passed the gate, or when the harness has no trend yet);
@@ -157,6 +161,15 @@ non-heap finding the primary is `jvm.nonheap_used`, which must plateau together 
   at most a fifth of the growth favors `leak`. In between is inconclusive. `--purge auto` picks the
   runtime's own purge (JVM `trim-native-heap`, Go `free-os-memory`, Python `trim` and `gc`, Node
   `gc`, Rust and native `trim`).
+  A purge that kept the growth says the growth is held memory, not allocator or collector
+  headroom; it does not say the growth goes on. A plateau with such a purge stands (favors
+  `non-leak`, N-WARM and N-HWM, and the result's `note` says the growth is held) when the main
+  window rose often enough that the extra window would have shown at least 3 more rises had the
+  growth gone on (rises = points that set a new maximum by more than the noise unit, counted
+  from the end of the warm-up; expected = rises x extra span / main span). Below 3 the plateau
+  window may be too short for a slow stair and the result is `inconclusive`; the `next` line
+  names how many extra points would reach 3, and the doubled `--extra` it prints converges.
+  Growth that continues still favors `leak` and a purge that released it `non-leak`.
 - **GC test**, when `.pre_gc` twins exist. A pre-GC series that passes the gate or shows a
   sawtooth while the post-GC series is flat favors `non-leak` and supports N-HEADROOM.
 - **Overall verdict.** Bound to a finding it is that finding's column verdict. Unbound, it is
@@ -258,8 +271,10 @@ on to the user. The `Findings:` line counts the leak hypotheses and the non-leak
 strong 0, refuted 13, suspected 9, unresolved 2; non-leak explanations: confirmed 13, refuted 0,
 suspected 0, unresolved 0; no leak confirmed`. A non-leak explanation that held is `confirmed` on its
 side and its leak-side root is `refuted`, so one test is not two leaks; the closing `no leak
-confirmed` appears when something was measured and no leak is confirmed or strong. Read the leak side
-for the verdict. For dynamic findings it prints:
+confirmed` appears when something was measured and no leak is confirmed or strong. A leak finding the
+blind verifier reads as an `N-*` label is counted `confirmed but disputed by the verifier (reads N-INTENT) D`
+and listed after the others: say it as "disputed", not as a confirmed leak. Read the leak side for the
+verdict. For dynamic findings it prints:
 
 - confirmed: `Growth: <column> <slope> <unit>/<axis> (<shape>, gate pass, E12)`, for example
   `Growth: probe:reports.builder.ReportBuilder.category_totals 36.73 count/n (steady, gate pass, E12)`;
@@ -273,11 +288,15 @@ for the verdict. For dynamic findings it prints:
   37 project classes loaded`): project code ran, the listed entry points were not the ones driven;
 - confirmed or strong leaks: a `Trigger:` line, and the `Findings:` line ends with the counts by trigger
   (`confirmed and strong by trigger: reproduced through the public API 1, no trigger found 1, trigger not
-  checked 0`); the findings section lists the reproduced ones first. `Trigger: reproduced through the
+  checked 0`); the findings section lists the reproduced ones first. `Trigger: grown only by calling the
+  registration function itself (<writer>) ...` (counted `grown only by calling the registration function
+  itself`) is a holder the unit fed by calling its writer: a leak only if run-time input reaches that call;
+  say it so, never "reproduced". `Trigger: reproduced through the
   public API in H5 (varies: <text>)` is a leak that real use can make grow. `Trigger: not found: it grows
   when the harness passes new keys to <writer function>; two workloads through the public API did not
-  grow it (H5: <varies>; H6: <varies>)` is an unbounded holder with no trigger found. `Trigger: not
-  checked (<why>)` says why: queue off, the time at the floor, a blocker, or no entry-path harness yet;
+  grow it (H5: <varies>; H6: <varies>)` is an unbounded holder with no trigger found (both runs measured the holder flat). `Trigger: not
+  checked: the entry-path harnesses H7 and H9 ran, but nothing measured the holder there (verdicts: ...)`
+  is no evidence either way. `Trigger: not checked (<why>)` says why: queue off, the time at the floor, a blocker, or no entry-path harness yet;
 - a `Queue:` line after `Coverage:`: how many of the ranked candidates were targeted by a workload and
   how they came out (`Queue: 24 of 121 ranked candidates targeted in 3 harnesses: grew 1, changed 3,
   executed 14, not reached 6; 97 not targeted`). "Not reached" is a candidate whose unit never reached

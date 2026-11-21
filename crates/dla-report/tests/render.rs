@@ -353,6 +353,23 @@ fn a_run_with_no_listed_entry_points_does_not_read_as_zero_of_zero() {
 }
 
 #[test]
+fn a_stamp_the_run_went_on_from_stays_in_its_history_not_its_status() {
+    let mut v = view("complete", None);
+    v.state.stop_stamps.push(dla_core::state::StopStamp {
+        stamped_at: "2026-01-01T10:00:00Z".parse().unwrap(),
+        reason: "r".into(),
+        lifted_at: Some("2026-01-01T10:05:00Z".parse().unwrap()),
+    });
+    let md = render_markdown(&v);
+    assert!(
+        md.contains("\nHistory: stamped incomplete by the stop hook at 10:00:00Z and lifted at 10:05:00Z when work went on\n"),
+        "{md}"
+    );
+    assert!(!md.contains("run is incomplete"), "{md}");
+    assert!(!render_markdown(&view("complete", None)).contains("History:"));
+}
+
+#[test]
 fn many_residual_rows_are_bounded_in_the_header_and_complete_in_a_section() {
     let mut rows = Vec::new();
     for n in 1..=48 {
@@ -1883,4 +1900,20 @@ mod coverage_warning_and_explained {
         ));
         assert!(!md.contains("## Explained, not leaks"), "{md}");
     }
+}
+
+#[test]
+fn the_column_at_the_findings_own_site_is_quoted_before_another_tied_column() {
+    // The first passing column lists F1 among its candidates (a column at another line); the
+    // column at F1's own site comes second and is the one the Growth line quotes.
+    let text = dynamic_text().replace(
+        r#""passed":[{"column":"os.rss","region":"process","slope":900.5,"unit":"bytes","shape":"steady"},{"column":"probe:Registry.listeners","region":"heap","site":"src/bus.go:12","finding":"F1","slope":412,"lo":380.25,"p":0.0001,"ratio":1.05,"shape":"steady","unit":"bytes"}]"#,
+        r#""passed":[{"column":"node.listeners@src/other.go:3","site":"src/other.go:3","candidates":["F1"],"slope":7,"unit":"count","shape":"steady"},{"column":"node.listeners@src/bus.go:12","site":"src/bus.go:12","slope":1,"unit":"count","shape":"steady"}]"#,
+    );
+    assert_ne!(text, dynamic_text());
+    let md = render_markdown(&view_of_text(&text));
+    assert!(
+        md.contains("- Growth: `node.listeners@src/bus.go:12` 1 count/n (steady, gate pass, E3)\n"),
+        "{md}"
+    );
 }

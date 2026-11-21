@@ -38,6 +38,11 @@ const MAX_INPUT: u64 = 32 * 1024 * 1024;
 /// session stop and stamps the run (or the worker) instead.
 pub const STOP_LIMIT: u32 = 3;
 
+/// How long a registered `dla` command may keep the stop hook from counting a stop attempt:
+/// the same command running for longer than this is taken for hung, and the hook goes back
+/// to counting attempts and stamping.
+pub const RUNNING_COMMAND_LIMIT_SECS: i64 = 30 * 60;
+
 /// The longest block reason handed back to the model, in bytes.
 const MAX_REASON: usize = 1000;
 
@@ -718,7 +723,11 @@ fn check_read(input: &Input, tool: &str, found: &Found) -> Option<String> {
 /// missing items. A worker's digest counts its own slice only, so a sibling's writes do not
 /// reset its counter.
 fn digest_of(view: &RunView, missing: &[Missing], worker: Option<&str>) -> String {
-    let mut ids: Vec<String> = missing
+    // Over the actions: a trend that finishes in the background adds columns that wait on an
+    // open item and changes nothing the model must do, so it does not restart the count.
+    let acts = gate::actions(missing);
+    let mut ids: Vec<String> = acts
+        .list
         .iter()
         .map(|m| format!("{}:{}", m.kind, m.id))
         .collect();
@@ -730,7 +739,23 @@ fn digest_of(view: &RunView, missing: &[Missing], worker: Option<&str>) -> Strin
         .map(|s| s.lines)
         .sum();
     let mut h = Sha256::new();
-    h.update(format!("{}:{slice_lines}:", view.ledger.lines().len()));
+    // The ledger's length counts what the model did (findings, answers, moves, open items, harness
+    // runs), not the trend and residual records that commands finishing in the background write.
+    let decided = view
+        .ledger
+        .lines()
+        .iter()
+        .filter(|l| {
+            !matches!(&l.record, dla_core::Record::Evidence(e)
+            if matches!(
+                e.kind,
+                dla_core::EvidenceKind::GrowthSeries
+                    | dla_core::EvidenceKind::UnitCountSeries
+                    | dla_core::EvidenceKind::Residual
+            ))
+        })
+        .count();
+    h.update(format!("{decided}:{slice_lines}:"));
     h.update(ids.join(","));
     hex::encode(h.finalize())
 }
@@ -808,10 +833,18 @@ fn block_reason(
         Some(w) => format!("dla --worker {w} gate check --final"),
         None => "dla gate check --final".to_owned(),
     };
+    // The model reads the count: it is the number of actions, not of everything that waits.
+    let acts = gate::actions(missing);
+    let missing = acts.list.as_slice();
     let mut s = format!(
-        "dla: {} item(s) are still missing before this {} can stop.",
+        "dla: {} item(s) are still missing before this {} can stop{}.",
         missing.len(),
-        if worker.is_some() { "worker" } else { "run" }
+        if worker.is_some() { "worker" } else { "run" },
+        if acts.dependents > 0 {
+            format!(" ({} more wait on them)", acts.dependents)
+        } else {
+            String::new()
+        }
     );
     if let Some(st) = state {
         s.push('\n');
@@ -865,11 +898,43 @@ fn stop(project_arg: Option<&Path>, input: &Input, subagent: bool) -> Result<Hoo
     stop_core(&found)
 }
 
+/// The `dla` command of the run that is still running (registered, its process alive and the
+/// same one, started less than [`RUNNING_COMMAND_LIMIT_SECS`] ago), as the block reason that
+/// tells the model to wait for it. `worker` limits it to that worker's commands.
+fn running_command(run_dir: &Path, worker: Option<&str>) -> Option<String> {
+    let state = RunState::load(run_dir).ok()?;
+    let now = state::now_utc();
+    let p = state.processes.iter().find(|p| {
+        p.kind == dla_core::state::ProcessKind::Command
+            && p.stopped_at.is_none()
+            && worker.is_none_or(|w| p.worker.as_deref() == Some(w))
+            && (now - p.started_at).num_seconds() < RUNNING_COMMAND_LIMIT_SECS
+            && dla_core::proc::is_alive(p.pid)
+            && (p.start_time.is_none()
+                || dla_core::proc::identity_matches(
+                    p,
+                    dla_sample::os::process_start_time(p.pid).as_deref(),
+                ))
+    })?;
+    let minutes = (now - p.started_at).num_seconds().max(0) / 60;
+    Some(format!(
+        "dla: `{}` of this run is still running (pid {}, started {}, {minutes} min ago). Wait for it in one command (`while kill -0 {} 2>/dev/null; do sleep 5; done`), then read its output and go on; this stop attempt is not counted.",
+        p.command,
+        p.pid,
+        p.started_at.format("%H:%M:%SZ"),
+        p.pid,
+    ))
+}
+
 fn stop_core(found: &Found) -> Result<HookOut, String> {
     let view = RunView::load(&found.run_dir).map_err(|e| format!("cannot load the run: {e}"))?;
     let missing = gate::missing(&view, GateTarget::Final, None);
     if missing.is_empty() {
         return Ok(HookOut::allow());
+    }
+    // A command of the run is still working: the run is not stalled. Nothing is counted.
+    if let Some(reason) = running_command(&found.run_dir, None) {
+        return Ok(HookOut::block(&reason));
     }
     let digest = digest_of(&view, &missing, None);
     let ids: Vec<String> = missing.iter().take(5).map(|m| m.id.clone()).collect();
@@ -882,8 +947,7 @@ fn stop_core(found: &Found) -> Result<HookOut, String> {
         s.stop_blocks = n;
         s.stop_block_digest = Some(digest.clone());
         if n >= STOP_LIMIT {
-            s.status = RunStatus::Incomplete;
-            s.incomplete_reason = Some(format!(
+            s.stamp_stop(format!(
                 "{} {STOP_LIMIT} stop attempts with no ledger change: {}",
                 gate::STOP_BLOCKED_REASON,
                 ids.join(", ")
@@ -915,6 +979,9 @@ fn stop_worker(found: &Found, worker: &str) -> Result<HookOut, String> {
     let missing = gate::missing(&view, GateTarget::Final, Some(worker));
     if missing.is_empty() {
         return Ok(HookOut::allow());
+    }
+    if let Some(reason) = running_command(&found.run_dir, Some(worker)) {
+        return Ok(HookOut::block(&reason));
     }
     let digest = digest_of(&view, &missing, Some(worker));
     // Release the slice lock before the state update.
@@ -1088,6 +1155,113 @@ mod tests {
         assert!(editable_rest("r1/harness/h1/driver/dlaharness.java"));
         assert!(!editable_rest("r1/harness/h1/out/x.json"));
         assert!(!editable_rest("r1/harness/hx/driver/a.py"));
+    }
+
+    fn item(kind: &str, id: &str, fix: &str) -> Missing {
+        Missing {
+            kind: kind.into(),
+            id: id.into(),
+            description: format!("{kind} {id}"),
+            fix: fix.into(),
+        }
+    }
+
+    /// One open item, a queue, and many items that wait on them.
+    fn waiting(columns: usize) -> Vec<Missing> {
+        let mut v = vec![
+            item(
+                "queue",
+                "go",
+                "dla harness gen --lang go --driver --next, fill the hooks",
+            ),
+            item("open_item", "O13", "dla ledger resolve O13 --by <F>"),
+        ];
+        for i in 0..columns {
+            v.push(item(
+                "trend_column",
+                &format!("T{i}:go.heap_live"),
+                "dla ledger resolve O13 --by <F>   ;   dla ledger resolve O14 --by <F>",
+            ));
+            v.push(item(
+                "residual",
+                &format!("S{i}"),
+                "dla ledger resolve O13 --by <F>",
+            ));
+            v.push(item(
+                "finding",
+                &format!("F{i}"),
+                "dla harness gen --lang go --driver --next",
+            ));
+        }
+        v
+    }
+
+    #[test]
+    fn items_that_wait_for_the_same_thing_are_one_action() {
+        let acts = gate::actions(&waiting(40));
+        // The queue, the open item: everything else waits on them.
+        let kinds: Vec<&str> = acts.list.iter().map(|m| m.kind.as_str()).collect();
+        assert_eq!(kinds, ["queue", "open_item"], "{acts:?}");
+        assert_eq!(acts.dependents, 120);
+        assert!(
+            acts.list[0]
+                .description
+                .contains("(+40 waiting on it: F0, F1, F2, ...)")
+        );
+        assert!(acts.list[1].description.contains("(+80 waiting on it: "));
+        // The block reason says the number of actions.
+        let r = block_reason(&waiting(40), None, None, std::path::Path::new("."));
+        assert!(r.contains("2 item(s) are still missing"), "{r}");
+        assert!(r.contains("120 more wait on them"), "{r}");
+        // An item that waits on nothing listed is its own action.
+        let mut v = waiting(2);
+        v.push(item(
+            "trend_column",
+            "T9:os.rss",
+            "dla ledger resolve O99 --by <F>",
+        ));
+        assert_eq!(gate::actions(&v).list.len(), 3);
+    }
+
+    #[test]
+    fn the_digest_follows_the_actions_and_what_was_done_not_the_dependents() {
+        use dla_core::{Authority, EvidenceKind, Ledger, NewEvidence, Source, Tool};
+        let state = RunState::init("/p", None, 3600, None, state::now_utc()).unwrap();
+        let mut ledger = Ledger::from_text("").unwrap();
+        let ev = |kind| NewEvidence {
+            source: Source::Repo {
+                commit: "c".into(),
+                path: None,
+            },
+            tool: Tool {
+                name: "t".into(),
+                version: "1".into(),
+            },
+            authority: Authority::Test,
+            kind,
+            result: json!({}),
+            raw: None,
+            coverage: dla_core::evidence::EvidenceCoverage::default(),
+            limitations: vec![],
+            unknowns: vec![],
+        };
+        ledger.add_evidence(ev(EvidenceKind::StaticHit)).unwrap();
+        let view = RunView::new(state.clone(), ledger, None);
+        let base = digest_of(&view, &waiting(10), None);
+        // More columns waiting on the same actions: the same digest.
+        assert_eq!(digest_of(&view, &waiting(60), None), base);
+        // An action gone: another digest.
+        let mut fewer = waiting(10);
+        fewer.retain(|m| m.kind != "open_item");
+        assert_ne!(digest_of(&view, &fewer, None), base);
+        // A trend finishing in the background does not change it; a harness run does.
+        let mut l2 = view.ledger.clone();
+        l2.add_evidence(ev(EvidenceKind::GrowthSeries)).unwrap();
+        let v2 = RunView::new(state.clone(), l2.clone(), None);
+        assert_eq!(digest_of(&v2, &waiting(10), None), base);
+        l2.add_evidence(ev(EvidenceKind::Workload)).unwrap();
+        let v3 = RunView::new(state, l2, None);
+        assert_ne!(digest_of(&v3, &waiting(10), None), base);
     }
 
     #[test]

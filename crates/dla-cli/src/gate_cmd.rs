@@ -119,11 +119,17 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     let mut report = gate::evaluate(&view, target, worker);
     let file = list_file(target, worker);
     report.pointer = ctx.pointer(&file);
+    // The full list stays in the file, unabridged; the count the reports lead with is the number
+    // of actions, and `actions` is the list grouped the way the output shows it.
+    let acts = gate::actions(&all);
     let full = json!({
         "ok": report.ok,
         "stage": report.stage,
         "worker": worker,
-        "missing_total": all.len(),
+        "missing_total": acts.list.len(),
+        "missing_dependents": acts.dependents,
+        "missing_items": all.len(),
+        "actions": acts.list,
         "missing": all,
         "checked_at": dla_core::state::now_utc(),
     });
@@ -149,8 +155,10 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
     };
     let sized_by_worker =
         worker.is_some_and(|w| view.state.budget.settled_workers.iter().any(|x| x == w));
-    if report.ok
-        && settles
+    // Sweep and census having run is enough to size it, whether this check passes or not
+    // (the core's own budget only: a worker's check follows the rule above).
+    let ready = worker.is_none() && crate::scope::sweep_and_census_ran(view.coverage.as_ref());
+    if ((report.ok && settles) || ready)
         && view.state.budget.auto
         && !view.state.budget.settled
         && !sized_by_worker
@@ -226,15 +234,23 @@ fn check(ctx: &Ctx, a: &CheckArgs) -> Res<GateOut> {
         .map(|m| format!(" First: {} ({}). Fix: {}", m.id, m.description, m.fix))
         .unwrap_or_default();
     Ok(GateOut::Raw {
-        stdout: crate::out::bound(out).to_string(),
+        stdout: crate::out::bound(crate::out::fit(out, "missing")).to_string(),
         stderr: format!(
-            "dla gate check --{}: {} item(s) missing.{first}",
+            "dla gate check --{}: {} item(s) missing{}.{first}",
             if matches!(target, GateTarget::Final) {
                 "final".to_owned()
             } else {
                 format!("stage {}", target.name())
             },
             report.missing_total,
+            if report.missing_dependents > 0 {
+                format!(
+                    " (and {} more that wait on them)",
+                    report.missing_dependents
+                )
+            } else {
+                String::new()
+            },
         ),
         code: 2,
     })

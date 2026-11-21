@@ -45,7 +45,8 @@ fn size(v: &Value) -> usize {
 /// values are cut only as a last step (hashes and paths stay whole): `ok` and `evidence`
 /// say what happened, `raw`, `summaries`, `artifacts` and `files` say where the full
 /// output is.
-const PROTECTED: [&str; 8] = [
+const PROTECTED: [&str; 9] = [
+    "_attention",
     "ok",
     "evidence",
     "raw",
@@ -61,6 +62,87 @@ const PROTECTED_STR: usize = 160;
 
 fn protected_copy(v: &Value, max_str: usize, max_arr: usize) -> Value {
     shrink(v, max_str, max_arr, &mut false)
+}
+
+/// What gives way first when a status-like object (a list of items to work on, and details
+/// around it) is too long for the bound. One place, one order; `fit` follows it:
+///
+/// 1. `DETAIL`: counts, per-record details and pointers that repeat what an item says, each
+///    dropped whole;
+/// 2. the later items of the list, from the end, while the first one (and `next_command`)
+///    would not fit whole;
+/// 3. `CONTEXT`: the triggers, the queue's per-runtime lines, the run's own pointers and, last,
+///    the counts by state.
+///
+/// The first item, `next_command`, the verdict and the totals are never touched here. Every
+/// cut is named in `left_out` (a dropped key, or "<list>: N more items"), so nothing reads as
+/// complete when it is not.
+const DETAIL: [&str; 8] = [
+    "revisit",
+    "harnesses_generated",
+    "harnesses_run",
+    "closed_static_only",
+    "budget_estimate",
+    "budget",
+    "stages_passed",
+    "actions",
+];
+const CONTEXT: [&str; 6] = ["triggers", "queue", "ledger", "report", "record", "counts"];
+
+/// Fits `v` (an object with an array `list` of items) into the bound by the order above, so
+/// the generic cut in `bound` has nothing to do. Returns `v` unchanged when it fits.
+pub fn fit(mut v: Value, list: &str) -> Value {
+    if size(&v) <= LIMIT {
+        return v;
+    }
+    let mut left: Vec<String> = Vec::new();
+    let fits = |v: &Value, left: &[String]| {
+        let mut t = v.clone();
+        if !left.is_empty() {
+            t["left_out"] = json!(left);
+        }
+        size(&t) <= LIMIT
+    };
+    for k in DETAIL {
+        if fits(&v, &left) {
+            break;
+        }
+        if v.as_object_mut().and_then(|o| o.remove(k)).is_some() {
+            left.push(k.to_owned());
+        }
+    }
+    let mut dropped = 0usize;
+    while !fits(&v, &left_with(&left, list, dropped)) {
+        let Some(Value::Array(a)) = v.get_mut(list) else {
+            break;
+        };
+        if a.len() <= 1 {
+            break;
+        }
+        a.pop();
+        dropped += 1;
+    }
+    for k in CONTEXT {
+        if fits(&v, &left_with(&left, list, dropped)) {
+            break;
+        }
+        if v.as_object_mut().and_then(|o| o.remove(k)).is_some() {
+            left.push(k.to_owned());
+        }
+    }
+    let left = left_with(&left, list, dropped);
+    if !left.is_empty() {
+        v["left_out"] = json!(left);
+    }
+    v
+}
+
+fn left_with(left: &[String], list: &str, dropped: usize) -> Vec<String> {
+    let mut l = left.to_vec();
+    if dropped > 0 {
+        l.insert(0, format!("{list}: {dropped} more item(s)"));
+    }
+    l
 }
 
 /// Returns `v` unchanged if it fits, else a truncated copy with `"truncated": true`.
@@ -187,5 +269,61 @@ mod tests {
         assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
         assert_eq!(b["raw"]["sha256"], "b".repeat(64));
         assert_eq!(b["evidence"], json!(["E1"]));
+    }
+
+    /// A status with many blocking items, a long queue item and a stop-stamp field.
+    fn status_like(n: usize, key: &str) -> Value {
+        let first = json!({
+            "id": "python", "kind": "queue",
+            "description": "2 candidate(s) of python are ranked for measurement and not targeted yet; 179 of 180 budget minutes remain. Next batch (all in package shop): F1, F2, F3, F4, F5, F6, F7, F8. 1 had a driver run with no coverage data; the second look names F9 (+94 waiting on it: F1, F4, F48, ...)",
+            "fix": "dla harness gen --lang python --driver --next, fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, dla trend S<n>",
+        });
+        let mut items = vec![first];
+        for i in 0..n {
+            items.push(json!({"id": format!("F{i}"), "kind": "finding",
+                "description": format!("finding F{i} is candidate and has no disposition"),
+                "fix": format!("dla ledger resolve F{i} --as unresolved --reason not_exercised --remedy \"<text>\"")}));
+        }
+        json!({
+            "ok": true, "run_id": "20260101-000000-abcd", key: items,
+            "blocking_total": n + 1, "blocking_dependents": 700,
+            "next_command": "dla harness gen --lang python --driver --next",
+            "stop_stamp": "the run carries a stop-hook stamp; the next command that works on it lifts the stamp",
+            "counts": {"by_state": {"candidate": 40, "confirmed": 3, "refuted": 9}},
+            "queue": {"python": {"command": "dla harness gen --lang python --driver --next", "eligible": 95, "next": ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"], "pending": 95}},
+            "triggers": {"F1": {"trigger": "reproduced", "harness": "H3", "varies": "the key of every request, a long line of text"}},
+            "revisit_total": 611, "harnesses_run": 61,
+        })
+    }
+
+    #[test]
+    fn fit_keeps_the_first_item_and_next_command_whole_and_names_what_it_dropped() {
+        for key in ["blocking", "missing"] {
+            let v = status_like(40, key);
+            let first = v[key][0].clone();
+            let out = bound(fit(v, key));
+            assert!(out.get("truncated").is_none(), "{out}");
+            assert!(serde_json::to_string(&out).unwrap().len() < MAX_OUTPUT_BYTES);
+            assert_eq!(out[key][0], first, "{out}");
+            assert_eq!(
+                out["next_command"],
+                "dla harness gen --lang python --driver --next"
+            );
+            assert_eq!(out["blocking_total"], 41);
+            let left = out["left_out"].to_string();
+            assert!(left.contains("more item(s)"), "{left}");
+            assert!(left.contains("harnesses_run"), "{left}");
+            // Details go before the later items: with room for them they stay.
+            assert!(
+                out[key].as_array().unwrap().len() > 1,
+                "later items kept while they fit: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn fit_leaves_a_value_that_fits_alone() {
+        let v = json!({"ok": true, "blocking": [{"id": "a"}]});
+        assert_eq!(fit(v.clone(), "blocking"), v);
     }
 }

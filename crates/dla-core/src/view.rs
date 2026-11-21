@@ -171,6 +171,9 @@ pub enum BlockingKind {
     /// A confirmed or strong leak-side finding grew when a harness fed it new keys, and
     /// nothing shows that a caller of the public API can do that.
     Trigger,
+    /// A finding a passed growth column points at (or a detector hit with a site) that no
+    /// alloc-test or measurement decided.
+    Growth,
 }
 
 /// One thing that must be dispositioned, with the command that does it.
@@ -302,18 +305,64 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             None => f.to_string(),
         })
         .collect();
+    let kind = if q.focus && q.missed.is_empty() && !q.second.is_empty() {
+        "Next batch (second look"
+    } else if q.focus {
+        "Next batch (focus"
+    } else {
+        "Next batch ("
+    };
     let next = if next.is_empty() {
         String::new()
     } else {
-        format!(" Next batch: {}.", next.join(", "))
+        match (&q.package, q.focus) {
+            (Some(p), _) => format!(
+                " {kind}{}all in package {}): {}.",
+                if q.focus { ", " } else { "" },
+                crate::queue::package_label(p),
+                next.join(", ")
+            ),
+            (None, true) => format!(" {kind}): {}.", next.join(", ")),
+            (None, false) => format!(" Next batch: {}.", next.join(", ")),
+        }
+    };
+    let missed_note = if q.missed.is_empty() && !q.second.is_empty() {
+        let ids: Vec<String> = q.second.keys().take(8).map(ToString::to_string).collect();
+        format!(
+            " Second look, a different driver for one flat run: {}.",
+            ids.join(", ")
+        )
+    } else if q.missed.is_empty() {
+        String::new()
+    } else {
+        let ids: Vec<String> = q.missed.keys().take(8).map(ToString::to_string).collect();
+        let more = q.missed.len().saturating_sub(8);
+        format!(
+            " Missed once: {}{}.",
+            ids.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        )
     };
     BlockingItem {
         kind: BlockingKind::Queue,
         id: q.runtime.clone(),
         description: format!(
-            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}",
+            "{} candidate(s) of {} are ranked for measurement and not targeted yet; {left} of {total} budget minutes remain.{next}{}{missed_note}",
             q.pending.len(),
-            q.runtime
+            q.runtime,
+            if q.no_coverage.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " {} candidate(s) had a driver run with no coverage data: {}.",
+                    q.no_coverage.len(),
+                    crate::queue::NO_COVERAGE
+                )
+            }
         ),
         fix: if let (Some(h), true) = (&q.in_flight, q.batch.is_empty()) {
             format!(
@@ -366,6 +415,10 @@ pub fn status(view: &RunView) -> ReportStatus {
     // Right after the queue: a leak that grew under direct injection and whose trigger is
     // not checked.
     blocking.extend(crate::trigger::items(view));
+    // Growth the run measured and nobody decided (a passed column points at the finding, a
+    // detector hit names a site): listed with the commands that decide it.
+    let grown = crate::grown::grown_unmeasured(view);
+    blocking.extend(crate::grown::items(view, &grown));
     let queue_on = view.state.queue && view.run_dir.is_some();
     let ranked: std::collections::BTreeMap<_, _> = if queue_on {
         crate::queue::ranked(view)
@@ -400,7 +453,9 @@ pub fn status(view: &RunView) -> ReportStatus {
                 .and_then(|r| r.runtime.as_ref())
                 .and_then(|rt| queues.iter().find(|q| &q.runtime == rt && q.open()))
                 .filter(|q| q.pending.contains(&f.id));
-            let fix = if let Some(q) = pending_in {
+            let fix = if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
+                g.commands().join("   then   ")
+            } else if let Some(q) = pending_in {
                 q.command.clone()
             } else if let Some(step) = step {
                 step

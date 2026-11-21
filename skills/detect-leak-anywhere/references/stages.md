@@ -123,7 +123,9 @@ A whole-process column (`os.*`, `cgroup.*`, `fd.*`, `jvm.*`, `go.*`, `node.*`, `
 `metric:*/total`) is never tied to a finding, whatever evidence a finding cites: no one holder explains it.
 A JVM type-count column (`jvm.class:<type>.count`) that ties to no finding (a generic type such as `byte[]`
 never ties) is accounted for the same way. `dla trend` and the gate print `dla gap S<n> --residual` for it
-until the series has a gap row; after that they point to its open item instead. A type count tied only to undispositioned findings still needs their disposition.
+until the series has a gap row; after that they point to its open item instead. When more than three
+series have no row the gate prints `dla gap --residual --all` instead: it writes the row of every series that has
+none, as the single command does, and prints the series above their threshold with their open items. A type count tied only to undispositioned findings still needs their disposition.
 The classify gate does not ask for it. The final gate accounts for it through the residual rows: run `dla gap
 S<n> --residual`; the column is covered when the rows of its region are under their threshold, or over it with
 a resolved open item. A resolved open item that names the column and its trend also covers it.
@@ -272,7 +274,9 @@ under the run directory and need tier 1.
      holders only when they share a writer function), up to 16 targets in all: a driver that exercises an
      owner reaches all of its state. The added ones carry `sibling_of` (the target they came with) in
      `summary.targets`, `harness.json` and the driver's block, and `dla run status` lists them in its
-     next batch. `--probe` keeps its limit of 8. It prints the targets in
+     next batch. `--probe` keeps its limit of 8. A Go batch is one package: the best-ranked candidate and
+     the pending candidates of its package directory, the driver written into that package
+     (`--next --package <dir>` picks the package; `references/go.md`). It prints the targets in
      `summary.targets` and writes them as a comment block at the top of the driver file above the first
      `DLA-HOOK`. A JVM project with JUnit tests and no driver support keeps its generation command
      (`dla harness gen --lang jvm --junit --next`).
@@ -284,7 +288,7 @@ under the run directory and need tier 1.
      key derives from `key`; `registration-table`: register through the public API once per unit and
      release only what a normal caller of that API releases; any other holder: make every unit run the
      code at the site. Read the writers' code and call them through the project's public API the way a
-     caller would. In fresh mode a unit never reuses an earlier unit's key.
+     caller would. In fresh mode a unit never reuses an earlier unit's key. A unit covers the life of the objects it touches: create, derive (also from derived objects), use, cancel or close, drop or release, and not always in the same order (vary it by key).
   3. Replace the body of `setup` (import the project, build what the units need) and of `unit` (one
      unit for this `key`, reaching every target in the block) in the driver file. Keep the comments.
   4. `dla harness run H<n> --mode both`, then `dla trend S<n>`. The output lists `targets` (the first 8
@@ -296,14 +300,24 @@ under the run directory and need tier 1.
      imported) and `not_executed` (its function or a writer never ran) mean the unit did not reach the
      target or reused a key: read `detail`, fix the unit, `dla harness run H<n> --mode both` once more
      (the same harness, or a new one with `dla harness gen ... --driver --probe F<n>` when the driver
-     must change shape). `executed` and `unknown` (no probe, or no coverage data: Rust, native, Python
-     before 3.12) settle the candidate after a driver run. A Go driver run does not belong to that list:
-     after its measured process `dla` runs the driver once more for one round in a short coverage process
-     (`-coverprofile` over the whole module or every module of the workspace), so a Go target without a
-     probe reads `executed` or `not_executed`, and `not_executed` keeps it open. A candidate settles when a verdict is `grew`
-     or `changed`, or after one driver run with `executed` or `unknown`, or after two driver runs
-     whose driver files differ, whatever the verdicts. A fixed command (command mode, JUnit) settles only
-     by `grew` or `changed`.
+     must change shape). `executed` (no probe, its code ran) settles the candidate after a driver run. `unknown`
+     (no probe and no coverage data: native, Python before 3.12, a Rust or Go run whose coverage
+     process failed) does not: the run has no coverage data, so whether its code ran is not known: run a
+     second, different driver, or one with a size reading. A Go or Rust driver run does not belong to that
+     list: after its measured process `dla` runs the driver once more for one round in a short coverage
+     process (Go: `-coverprofile` over the whole module or every module of the workspace; Rust: the driver
+     built again with `-C instrument-coverage` into `cov-build/`, read with the `llvm-profdata` and `llvm-cov`
+     of the toolchain), so a Go or Rust target without a probe reads `executed` or `not_executed`, and
+     `not_executed` keeps it open. A candidate settles when a verdict is `grew`
+     or `changed`, or after one driver run with `executed`. A target that a driver run MISSED (`constant`,
+     `not_loaded`, `not_executed` or `unknown`) stays pending and comes back in a FOCUS harness: when the
+     best-ranked pending candidate was missed, `--next` gives it and up to two more missed ones a harness
+     of their own (at most 3 targets, no siblings, no fresh candidates; the block names each target's
+     earlier harness and reason and the writer functions to call), and `dla trend` names the missed
+     targets first in `next`. A missed target is settled as not reached only when two different drivers
+     missed it and one of them was a focus harness; a target no driver can reach is given up with
+     `dla ledger resolve F --as unresolved --reason env_unavailable --remedy "<what it needs>"`, never
+     by closing it `not_exercised`. A candidate that one flat run of one driver settled (`executed`, nothing grew) is not done while budget is left: once no first-pass candidate is pending, `--next` gives the best-ranked of them a SECOND LOOK, a focus harness (3 targets, at most 3 such harnesses per runtime, one look per candidate) whose block lists what the first driver did not vary (other call orders, objects derived from derived objects three deep, cancelling or failing the parent first, overlapping lifetimes, a long-lived object reused next to a fresh one) and names the earlier harness. Write the unit as CHOICES taken from the key with the driver's helper (`dla_choice(key, slot, n)` in Python and C, `dlaChoice` in Node and Go, `choice` in Java and Rust): depth of derivation, which object gets the ending call, when the intermediates are released, the order of releases, success or failure; a fixed sequence runs one case for every unit, and a leak that needs another order never shows. Write one `VARIES.txt` line per target; `dla harness run` refuses hooks equal to the earlier harness's and a unit with fewer than two helper calls, and prints how many combinations the units took (`summary.choices`, also in `dla trend`). The helper is in every first-pass driver too: let order and depth come from the key. Two different drivers reading it flat settle it. A fixed command (command mode, JUnit) settles only by `grew` or `changed`.
   5. `dla run status` again. The queue still open: the next batch (step 1). The queue empty or closed:
      `dla ledger close-rest` (stage 7).
 - The trigger of a leak: who feeds the keys? A holder GROWS when new keys reach it (what the drivers
@@ -327,8 +341,12 @@ under the run directory and need tier 1.
   - `reproduced`: the finding has `grew` in the trend of an entry-path harness, or in a harness that runs
     the project's own workload (a fixed command or a JUnit repeat). The trigger text is the VARIES line.
   - `not_found`: two entry-path harnesses with different drivers targeted it, ran, were read with `dla
-    trend`, and it grew in neither. After the first without growth write a second, different one (other
-    entry points, other inputs, the rejected-input paths); the same driver twice does not count.
+    trend`, and measured the holder flat in both (verdict `constant`). After the first without growth
+    write a second, different one (other entry points, other inputs, the rejected-input paths); the same
+    driver twice does not count.
+  - `unmeasured`: two such runs, but at least one verdict is not `constant` (nothing read the holder's
+    size there: `executed`, `unknown`...). That is no evidence either way: the report says "not checked".
+    After one such run the item's fix asks for a size reading (a probe of the holder) and a rerun first.
   - `unchecked`: it grew only in drivers that are not entry-path.
   While the queue was on and more than the floor of the budget is left, a confirmed or strong leak-side
   finding that is `unchecked` gives an item of kind `trigger` in `dla run status`, the final gate and the
@@ -560,7 +578,7 @@ queue closed at the floor), except a finding a harness that declared it measured
 it prints list `inconclusive` beside the other two; and a remedy built from the finding's history ("targeted in H2 and H3, its
 holder did not change: write a unit that adds a new key to <owner>"; "ranked 143 (tier 4), not
 targeted: dla harness gen --driver --probe F143") unless you give one. It prints counts by
-disposition and the ids it left open, with the batch command; it never touches findings under test.
+disposition and the ids it left open, with the batch command; it never touches findings under test. A finding a passed growth column points at (or a trend gave `grew`) is never closed unmeasured: `close-rest` leaves it and prints, in order, the sibling, `dla ledger test <F> --evidence <workload evidence>` and `dla alloc-test <H> --finding <F>`; `ledger resolve` of it is refused (`growth-not-measured`) until an alloc-test evidence is bound to it, and the final gate lists it with those commands (a `finding` item, or a `growth` item for one already closed). A runtime detector hit with a site and no measurement verdict is listed the same way. `intake.workload` cannot be recorded as a blocker (`tool_missing`, `env_unavailable`, `build_fails`, `privilege_declined`) while a harness ran and wrote a series for every runtime with candidates (`workload-ran`); a flat probe is a verdict about one target.
 `dla ledger resolve F6 --as suspected_static_only --reason not_exercised --remedy "<text>" --evidence E4`
 (or `--as unresolved` when no static evidence exists) stays the way to close one finding by hand once its
 queue is empty or closed. A `target-pending` refusal says F6 is pending: run the batch command it
@@ -648,3 +666,7 @@ or something only the user can supply) or the deadline has passed, then judge th
 is no fixed number of rounds: ending with most of the budget unspent and entry points unexercised
 measured nothing. Never ask the user whether to continue while time is left. To stop early,
 `dla run abort --reason "<why>"` closes the run.
+
+The final gate, `dla gate check` and `dla run status` count actions, not dependents: `N item(s) missing (and D more that wait on them)`. A line that stands for others says `(+K waiting on it: A, B, C, ...)`: the whole-process columns and residual rows that wait for one open item are that open item's line, the queue candidates are the queue's line. Work the list from the top: queue, findings whose column grew, triggers, open items, findings, the rest. The stored gate file keeps every item.
+
+A finding a passed growth column points at is not closed without an alloc-test (`growth-not-measured`). The column points at the finding the trend lists and, for a finding added after the trend ran (from this very column), at the finding with the column's own `file:line`. When another finding of the same harness has an alloc-test that favored leak and is confirmed, strong or under test, and the two are duplicates by `dla ledger duplicate`'s own rule (the same owner or the same site), the fix line, `close-rest` and the final gate offer `dla ledger duplicate F --of G` first: the growth is then part of the measured finding, and the alloc-test route follows as the alternative for a leak of its own. Another site of the same leak with a different owner and file is not a duplicate by that rule, and needs its own alloc-test.

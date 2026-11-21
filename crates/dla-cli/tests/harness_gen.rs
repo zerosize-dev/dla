@@ -159,7 +159,7 @@ fn node_gen_resolves_the_script_and_the_preload() {
     assert!(
         env_of(&m["run"], "NODE_OPTIONS")
             .unwrap()
-            .contains("dla-preload.js")
+            .contains("dla-preload.cjs")
     );
     let probes: Value =
         serde_json::from_str(&fs::read_to_string(run_dir.join("harness/H1/probes.json")).unwrap())

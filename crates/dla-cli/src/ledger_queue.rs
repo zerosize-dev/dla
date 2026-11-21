@@ -14,7 +14,7 @@ use dla_core::{
 };
 use serde_json::{Value, json};
 
-use super::{ResolveArgs, ResolveAs, open, resolve_finding};
+use super::{Loaded, ResolveArgs, ResolveAs, open, resolve_finding};
 use crate::{ctx::Ctx, fail::Res, parse::parse_enum};
 
 /// Findings `dla ledger list` prints by default.
@@ -92,7 +92,13 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
         }
         let ann = view.ledger.annotation(id);
         let r = by_id.get(id);
-        let (qs, standing) = r.map_or(("not-eligible", None), |r| status_of(r, &ix, &queues));
+        let (mut qs, mut standing) =
+            r.map_or(("not-eligible", None), |r| status_of(r, &ix, &queues));
+        // A candidate one flat run settled that waits for a different driver is pending.
+        let second_q = queues.iter().find(|q| q.second.contains_key(id));
+        if second_q.is_some() {
+            (qs, standing) = ("pending", Some(Standing::Pending));
+        }
         let tier = r.map_or_else(|| rank::tier(f, ann), |r| r.tier);
         let mut e = json!({
             "id": id.to_string(),
@@ -128,15 +134,50 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             }
             e["harnesses"] = Value::Object(m);
         }
+        match (second_q, ix.second_look(id)) {
+            (Some(q), _) => {
+                e["second_look"] = json!(format!(
+                    "pending: one flat run of one driver ({}) settled it and budget is left; {} gives it a different driver",
+                    q.second[id].harness, q.batch_command
+                ));
+            }
+            (None, queue::SecondLook::Awaiting(h)) if r.is_some_and(|r| r.eligible()) => {
+                e["second_look"] = json!(format!(
+                    "after the first pass, if budget is left (one flat run of {h} settled it)"
+                ));
+            }
+            (None, queue::SecondLook::Done(h)) => {
+                e["second_look"] = json!(format!("done in {h}"));
+            }
+            _ => {}
+        }
         if dla_core::trigger::is_subject(&view, f) {
             e["trigger"] = json!(triggers.trigger(id).name());
+        }
+        if ix.best_verdict(id) == Some(Verdict::Unknown) {
+            e["verdict_note"] = json!(queue::NO_COVERAGE);
         }
         if let Some(Standing::Settled(why)) = standing {
             e["settled_by"] = json!(match why {
                 Why::Moved => "growth",
                 Why::Executed => "executed",
-                Why::TwoDrivers => "two_drivers",
+                Why::NotReached => "not_reached",
             });
+            if let Some(h) = ix.not_reached_in(id) {
+                e["not_reached_in"] = json!(format!(
+                    "missed by two different drivers, the focused harness {h} among them"
+                ));
+            }
+        } else if let Some(m) = ix.missed_in(id) {
+            // Missed once: it waits for a focus harness.
+            e["missed_in"] = json!(format!(
+                "{} {}: {}",
+                m.harness,
+                m.verdict.as_str(),
+                m.detail
+            ));
+            e["focus"] =
+                json!("pending: dla harness gen --driver --next gives it a harness of its own");
         }
         lines.push((f.state.as_str().to_owned(), e));
     }
@@ -222,9 +263,7 @@ fn default_remedy(
         }
         Some(Verdict::NotExecuted) => "its code did not run".to_owned(),
         Some(Verdict::Executed) => "its code ran and showed no growth".to_owned(),
-        Some(Verdict::Unknown) => {
-            "whether its code ran is not known: no coverage data for this run".to_owned()
-        }
+        Some(Verdict::Unknown) => queue::NO_COVERAGE.to_owned(),
         Some(Verdict::Changed) => "its holder changed but did not pass the growth gate".to_owned(),
         Some(Verdict::Grew) => "its holder grew".to_owned(),
         None => "no run of it was read with dla trend".to_owned(),
@@ -249,6 +288,15 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         ranked.iter().map(|r| (&r.id, r)).collect();
     let ix = Index::of(&view);
     let queues = queue::queues(&view, ctx.worker.as_deref());
+    // Loaded once: the refusals of `resolve` read these for every finding instead of loading
+    // the run again.
+    let grown = dla_core::grown::grown_unmeasured(&view);
+    let loaded = Loaded {
+        view: &view,
+        ranked: &ranked,
+        queues: &queues,
+        grown: &grown,
+    };
     let mut only: Option<Option<String>> = None;
     let mine = |f: &Finding| {
         ctx.worker
@@ -265,11 +313,23 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
         .collect();
     let mut closed: Vec<Closed1> = Vec::new();
     let mut left: Vec<(String, String)> = Vec::new();
+    // Closed with a miss on record and no focus harness that settled it: "missed once".
+    let mut missed_once = 0usize;
     for f in &candidates {
         let runtime = dla_core::gate::finding_runtime_with(&view, f, &mut only);
         let q = runtime
             .as_deref()
             .and_then(|rt| queues.iter().find(|q| q.runtime == rt));
+        // A candidate whose column grew is a lead to decide, not one to close: a passed
+        // column points at it and no alloc-test is bound to it. The commands are printed in
+        // order and each one is accepted as printed.
+        if let Some(g) = grown.iter().find(|g| g.finding == f.id) {
+            left.push((
+                f.id.to_string(),
+                format!("its column grew: {}", g.commands().join("   then   ")),
+            ));
+            continue;
+        }
         // Pending in an open queue: it waits for a measurement.
         if q.is_some_and(|q| q.open() && q.pending.contains(&f.id)) {
             let cmd = q.map(|q| q.command.clone()).unwrap_or_default();
@@ -282,11 +342,13 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             ));
             continue;
         }
-        // A candidate whose column grew is a lead to test, not one to close.
         if ix.best_verdict(&f.id) == Some(Verdict::Grew) {
             left.push((
                 f.id.to_string(),
-                format!("its column grew: dla ledger test {}", f.id),
+                format!(
+                    "its column grew: dla ledger test {} --evidence <workload evidence of the harness>, then dla alloc-test <H> --finding {}",
+                    f.id, f.id
+                ),
             ));
             continue;
         }
@@ -324,12 +386,17 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             evidence: Vec::new(),
             note: None,
         };
-        match resolve_finding(ctx, &mut ledger, f.id.clone(), args) {
-            Ok(_) => closed.push(Closed1 {
-                id: f.id.to_string(),
-                to,
-                reason,
-            }),
+        match resolve_finding(ctx, &mut ledger, f.id.clone(), args, Some(&loaded)) {
+            Ok(_) => {
+                if ix.missed_in(&f.id).is_some() && ix.standing(&f.id) == Standing::Pending {
+                    missed_once += 1;
+                }
+                closed.push(Closed1 {
+                    id: f.id.to_string(),
+                    to,
+                    reason,
+                });
+            }
             Err(e) => left.push((f.id.to_string(), e.refusal.message.clone())),
         }
     }
@@ -380,6 +447,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
                     "inconclusive": by_reason(UnresolvedReason::Inconclusive),
                     "time_budget": by_reason(UnresolvedReason::TimeBudget),
                     "left_open": left.len(),
+                    "missed_once_no_focus_harness": missed_once,
                     "ids": ids.join(","),
                 },
             }),
@@ -406,6 +474,7 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
             "inconclusive": by_reason(UnresolvedReason::Inconclusive),
             "time_budget": by_reason(UnresolvedReason::TimeBudget),
         },
+        "missed_once_no_focus_harness": missed_once,
         "left_open": left.len(),
         "left": left.iter().take(8).map(|(i, w)| json!({"id": i, "why": w})).collect::<Vec<_>>(),
         "record": record,

@@ -94,6 +94,10 @@ pub struct GenOptions {
     /// JVM, JUnit repeat: classes (`pkg.Class`) or methods (`pkg.Class#method`) to run, instead
     /// of the workload's test class.
     pub tests: Vec<String>,
+    /// Rust driver: crate features the driver build enables (`--features a,b`).
+    pub features: Vec<String>,
+    /// Rust driver: the driver build leaves the crate's default features out.
+    pub no_default_features: bool,
 }
 
 fn refuse(
@@ -905,10 +909,16 @@ fn write_agent(rt: Runtime, driver: bool, agent: &Path) -> Result<(), Refusal> {
             write(&agent.join("sitecustomize.py"), templates::PY_AGENT)?;
             write(&agent.join("dla_memray_leaks.py"), templates::PY_MEMRAY)
         }
-        Runtime::Node => write(&agent.join("dla-preload.js"), templates::NODE_AGENT),
+        Runtime::Node => write(&agent.join("dla-preload.cjs"), templates::NODE_AGENT),
         Runtime::Go => Ok(()),
         Runtime::Rust | Runtime::Native => {
-            if driver || cfg!(windows) {
+            if cfg!(windows) || (driver && rt == Runtime::Native) {
+                Ok(())
+            } else if driver {
+                // A Rust driver counts allocations itself; the shim is built for
+                // `dla harness run --capture alloc` only (allocation stacks), so a missing
+                // compiler is not a refusal here: that run says so.
+                let _ = compile_shim(agent);
                 Ok(())
             } else {
                 compile_shim(agent)
@@ -957,8 +967,11 @@ struct DriverBuild {
     extra_files: Vec<String>,
     tools: Vec<String>,
     gaps: Vec<String>,
-    /// Go: limit GoVar probes to this directory.
+    /// Go: limit GoVar and GoField probes to this directory.
     go_dir: Option<String>,
+    /// Lines about the driver itself, written under the first line of the target block
+    /// (Go: the package the driver is in).
+    block_notes: Vec<String>,
 }
 
 fn jvm_package_for(
@@ -1111,6 +1124,41 @@ fn fill_with(template: &str, base: &[(String, String)]) -> Result<String, Refusa
     })
 }
 
+/// True when the nearest `package.json` at or above `work/cwd` (not above `work`) says
+/// `"type": "module"`: every `.js` file under it is then an ES module.
+fn node_module_package(work: &Path, cwd: &str) -> bool {
+    let mut dir = work.join(if cwd == "." { "" } else { cwd });
+    loop {
+        if let Ok(text) = fs::read_to_string(dir.join("package.json")) {
+            return serde_json::from_str::<Value>(&text)
+                .ok()
+                .is_some_and(|v| v.get("type").and_then(Value::as_str) == Some("module"));
+        }
+        if dir == work || !dir.pop() || !dir.starts_with(work) {
+            return false;
+        }
+    }
+}
+
+/// The block line that tells the model to import (not require) ES modules in a Node driver: the
+/// project is a `"type": "module"` package, or the workload's file is a `.mjs`.
+fn node_module_note(work: &Path, cwd: &str, w: Option<&Workload>) -> Option<String> {
+    let mjs = w.is_some_and(|w| w.file.ends_with(".mjs"));
+    if node_module_package(work, cwd) {
+        Some(
+            "This project's package.json says \"type\": \"module\": its .js files are ES modules. Load them in the hooks with `await projectImport('<file>')` (a dynamic import(): the namespace object); `projectRequire` is for CommonJS files (.cjs, or a package without that type) and throws on an ES module."
+                .to_owned(),
+        )
+    } else if mjs {
+        Some(
+            "The workload's file is an .mjs ES module: load it in the hooks with `await projectImport('<file>')`; `projectRequire` is for CommonJS files and throws on an ES module."
+                .to_owned(),
+        )
+    } else {
+        None
+    }
+}
+
 /// Writes the driver template of the runtime and returns what the caller needs.
 fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
     let rt = d.opts.lang;
@@ -1124,6 +1172,7 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
         tools: Vec::new(),
         gaps: Vec::new(),
         go_dir: None,
+        block_notes: Vec::new(),
     };
     let driver_rel = |name: &str| format!("{DRIVER}/{name}");
     match rt {
@@ -1232,9 +1281,12 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
         }
         Runtime::Node => {
             let text = fill_with(templates::NODE_DRIVER, &vars)?;
-            write(&d.driver.join("dla-harness.js"), &text)?;
+            write(&d.driver.join("dla-harness.cjs"), &text)?;
             out.hooks = templates::hooks(&text);
-            out.edit = driver_rel("dla-harness.js");
+            out.edit = driver_rel("dla-harness.cjs");
+            if let Some(note) = node_module_note(d.work, d.cwd, d.workload) {
+                out.block_notes.push(note);
+            }
         }
         Runtime::Go => {
             let dir = go_package_dir_for(d.ctx, d.workload, d.opts.package.as_deref());
@@ -1260,6 +1312,10 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
                         "dla harness gen --lang go --driver --package <dir>",
                     )
                 })?;
+            out.block_notes.push(format!(
+                "The driver is in package {package} (directory {}): the hooks can read its unexported names and package variables, and no other package's.",
+                dla_core::queue::package_label(&dir)
+            ));
             vars.push(("PACKAGE".into(), package));
             let text = fill_with(templates::GO_DRIVER, &vars)?;
             write(&d.driver.join(templates::GO_DRIVER_FILE), &text)?;
@@ -1312,6 +1368,8 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
                 join_rel(&join_rel(cwd, "src/bin"), "dla_harness.rs"),
             ));
             out.spec.crate_dir = cwd.to_owned();
+            out.spec.features.clone_from(&d.opts.features);
+            out.spec.no_default_features = d.opts.no_default_features;
             if !rust_dhat_available() {
                 out.gaps.push(
                     "dhat-rs not available offline: counting-allocator driver used".to_owned(),
@@ -1410,7 +1468,19 @@ type DeclaredTargets = (
     Vec<FindingId>,
     Option<String>,
     std::collections::BTreeMap<FindingId, FindingId>,
+    Option<String>,
+    FocusFacts,
 );
+
+/// What a focus batch records: for each target the earlier run that missed it, and the text
+/// that says the batch is a focus batch and why (empty for a broad batch).
+#[derive(Debug, Default, Clone)]
+struct FocusFacts {
+    missed: std::collections::BTreeMap<FindingId, dla_core::queue::Miss>,
+    why: Option<String>,
+    /// A second look: the targets read `executed` flat in the earlier harness.
+    second: bool,
+}
 
 /// The findings a harness is generated to reach: the `--probe` findings, then (with
 /// `--next`) the next pending entries of the runtime's queue, at most [`MAX_TARGETS`] in all.
@@ -1426,6 +1496,10 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
     }
     let mut note = None;
     let mut siblings = std::collections::BTreeMap::new();
+    // Go: the package directory every declared candidate of `--next` is in, and so the one
+    // the driver is generated in.
+    let mut go_package: Option<String> = None;
+    let mut focus = FocusFacts::default();
     if let Some(n) = opts.next {
         if n > MAX_TARGETS || ids.len() + n > MAX_TARGETS {
             return Err(refuse(
@@ -1445,11 +1519,51 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
         }
         let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())
             .map_err(|e| e.to_refusal())?;
-        let (batch, sib) = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        let queue = dla_core::queue::queues(&view, ctx.worker.as_deref())
             .into_iter()
-            .find(|q| q.runtime == rt.as_str())
-            .map(|q| q.batch_for(&view, n))
-            .unwrap_or_default();
+            .find(|q| q.runtime == rt.as_str());
+        let mut skipped: Vec<String> = Vec::new();
+        let chosen = match &queue {
+            Some(q) if rt == Runtime::Go => go_batch(ctx, opts, &view, q, n, &ids, &mut skipped)?,
+            Some(q) => q.batch_for(&view, n),
+            None => Default::default(),
+        };
+        go_package = chosen.package.clone();
+        if chosen.focus
+            && let Some(q) = &queue
+        {
+            for f in &chosen.ids {
+                if let Some(m) = q.missed.get(f).or_else(|| q.second.get(f)) {
+                    focus.missed.insert(f.clone(), m.clone());
+                }
+            }
+            focus.second = chosen.second;
+            let first = chosen
+                .ids
+                .first()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let cap = if n > dla_core::queue::FOCUS_MAX {
+                format!(
+                    " --next {n} is capped at {} for a focus batch.",
+                    dla_core::queue::FOCUS_MAX
+                )
+            } else {
+                String::new()
+            };
+            focus.why = Some(if chosen.second {
+                format!(
+                    "second look: one flat run of one driver settled {first} and budget is left, so this harness holds it and at most {} more such candidates, alone, with a different driver (a VARIES.txt line per target is required).{cap}",
+                    dla_core::queue::FOCUS_MAX - 1
+                )
+            } else {
+                format!(
+                    "focus batch: the best-ranked pending candidate {first} was declared in an earlier harness and its code did not run there, so this harness holds it and at most {} more candidates that a harness missed, alone (no siblings, no fresh candidates).{cap}",
+                    dla_core::queue::FOCUS_MAX - 1
+                )
+            });
+        }
+        let (batch, sib) = (chosen.ids, chosen.siblings);
         let before = ids.len();
         // The first `n` by rank, then the siblings of their owners, up to the limit.
         for (k, f) in batch.into_iter().enumerate() {
@@ -1470,6 +1584,13 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
                 rt.as_str()
             ));
         }
+        if !skipped.is_empty() {
+            let mut text = skipped.join("; ");
+            if let Some(n) = note.take() {
+                text = format!("{n}; {text}");
+            }
+            note = Some(text);
+        }
     }
     if ids.len() - siblings.len() > MAX_TARGETS {
         return Err(refuse(
@@ -1485,7 +1606,110 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
             ),
         ));
     }
-    Ok((ids, note, siblings))
+    Ok((ids, note, siblings, go_package, focus))
+}
+
+/// A reason a Go package directory cannot hold the driver, or `None` when it can (or when
+/// `go` cannot be asked): a driver is a test file of the package, so the directory needs a
+/// non-test Go file that builds on this platform, and `go list` must read it.
+fn go_package_problem(project: &Path, dir: &str) -> Option<String> {
+    let abs = project.join(dir);
+    let has_file = fs::read_dir(&abs).ok().is_some_and(|rd| {
+        rd.flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.ends_with(".go") && !n.ends_with("_test.go")
+        })
+    });
+    if !has_file {
+        return Some("the directory has no non-test Go file".to_owned());
+    }
+    let out = Command::new("go")
+        .args(["list", "-f", "{{len .GoFiles}}", "."])
+        .current_dir(&abs)
+        .env("GOPROXY", "off")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let first = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        return Some(format!("go list fails there: {}", clip(first.trim(), 160)));
+    }
+    let n = String::from_utf8_lossy(&out.stdout);
+    (n.trim() == "0").then(|| "no Go file of it builds on this platform".to_owned())
+}
+
+/// The batch of a Go `--next`: one package. `--package <dir>` names it; with `--probe` and no
+/// `--package` it is the package of the first `--probe` finding; otherwise the package of the
+/// best-ranked pending candidate that can hold the driver, the ones before it being named in
+/// `skipped` (their candidates stay pending). Returns the package directory with the batch.
+fn go_batch(
+    ctx: &ToolCtx,
+    opts: &GenOptions,
+    view: &dla_core::RunView,
+    q: &dla_core::queue::RuntimeQueue,
+    n: usize,
+    probed: &[FindingId],
+    skipped: &mut Vec<String>,
+) -> Result<dla_core::queue::Batch, Refusal> {
+    use dla_core::queue::{go_package_dir, package_label};
+    let packages = q.packages(view);
+    let named = opts.package.as_deref().map(|p| {
+        let p = p.trim_start_matches("./").trim_end_matches('/');
+        if p == "." { "" } else { p }.to_owned()
+    });
+    let from_probe = || {
+        probed
+            .first()
+            .and_then(|f| view.ledger.finding(f))
+            .and_then(|f| f.site.as_deref())
+            .map(go_package_dir)
+    };
+    if let Some(p) = named.clone().or_else(from_probe) {
+        if !packages.contains(&p) {
+            if named.is_some() {
+                let list: Vec<&str> = packages.iter().take(6).map(|p| package_label(p)).collect();
+                return Err(refuse(
+                    codes::INVALID_VALUE,
+                    format!(
+                        "--next --package {}: no pending candidate of go has its site in that package",
+                        package_label(&p)
+                    ),
+                    "a package directory with a pending candidate",
+                    if list.is_empty() {
+                        "dla run status   (no candidate of go is waiting for a measurement)"
+                            .to_owned()
+                    } else {
+                        format!(
+                            "dla harness gen --lang go --driver --next --package <dir>   (packages with a pending candidate, best-ranked first: {}), or --next alone for the best-ranked one",
+                            list.join(", ")
+                        )
+                    },
+                ));
+            }
+            return Ok(dla_core::queue::Batch {
+                package: Some(p),
+                ..Default::default()
+            });
+        }
+        let mut b = q.batch_in_package(view, n, &p);
+        b.package = Some(p);
+        return Ok(b);
+    }
+    for p in &packages {
+        if let Some(why) = go_package_problem(&ctx.project, p) {
+            let b = q.batch_in_package(view, n, p);
+            skipped.push(format!(
+                "package {} cannot hold the driver ({why}): its {} best-ranked candidate(s) stay pending and are not targeted, and the next package by rank was taken",
+                package_label(p),
+                b.ids.len()
+            ));
+            continue;
+        }
+        let mut b = q.batch_in_package(view, n, p);
+        b.package = Some(p.clone());
+        return Ok(b);
+    }
+    Ok(Default::default())
 }
 
 /// The findings of `--entry`: refused before anything is created unless the harness is a hook
@@ -1634,6 +1858,29 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             format!("dla harness gen --lang jvm --junit --tests {t}"),
         ));
     }
+    if (!opts.features.is_empty() || opts.no_default_features)
+        && !(rt == Runtime::Rust && opts.driver)
+    {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            "--features and --no-default-features apply to the build of a Rust driver",
+            "--lang rust --driver",
+            "dla harness gen --lang rust --driver --features a,b",
+        ));
+    }
+    if let Some(f) = opts.features.iter().find(|f| {
+        f.is_empty()
+            || !f
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-/:+".contains(c))
+    }) {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            format!("--features {f:?} is not a crate feature name"),
+            "feature names of the crate, comma-separated",
+            "dla harness gen --lang rust --driver --features a,b",
+        ));
+    }
     if opts.iterations == 0 {
         return Err(refuse(
             codes::INVALID_VALUE,
@@ -1692,9 +1939,27 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
 
     // The targets: `--probe` findings, then the next pending queue entries. Refused before
     // anything is created. An entry-path harness declares its `--entry` findings.
-    let (asked_ids, next_note, siblings) = match entry_ids {
+    let (asked_ids, next_note, siblings, go_package, focus) = match entry_ids {
         None => resolve_targets(ctx, opts)?,
-        Some(ids) => (ids, None, std::collections::BTreeMap::new()),
+        Some(ids) => (
+            ids,
+            None,
+            std::collections::BTreeMap::new(),
+            None,
+            FocusFacts::default(),
+        ),
+    };
+    // A Go `--next` batch is one package: the driver is generated in it, as `--package` does.
+    let package_opts;
+    let opts = match go_package {
+        Some(p) if opts.package.is_none() && rt == Runtime::Go => {
+            package_opts = GenOptions {
+                package: Some(p),
+                ..opts.clone()
+            };
+            &package_opts
+        }
+        _ => opts,
     };
 
     // Tools first: nothing is created when one is missing.
@@ -1962,7 +2227,15 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         },
         probes: derived.probes.clone(),
         sibling_of: siblings.clone(),
-        purpose: (!opts.entry.is_empty()).then_some(dla_core::harness::HarnessPurpose::EntryPath),
+        purpose: if !opts.entry.is_empty() {
+            Some(dla_core::harness::HarnessPurpose::EntryPath)
+        } else if !focus.missed.is_empty() && focus.second {
+            Some(dla_core::harness::HarnessPurpose::SecondLook)
+        } else if !focus.missed.is_empty() {
+            Some(dla_core::harness::HarnessPurpose::Focus)
+        } else {
+            None
+        },
         targets: derived.targets.iter().map(|a| a.id.clone()).collect(),
         agent: agent_kind,
         detectors: det.on.clone(),
@@ -1977,6 +2250,19 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         captures: vec![],
     };
     manifest.save(&ctx.run_dir).map_err(|e| e.to_refusal())?;
+    if manifest.is_focus() || manifest.is_second_look() {
+        // Which earlier harness missed (or read flat) each target, and what its trend said.
+        let doc = json!({
+            "focus": true,
+            "missed_in": focus.missed.iter().map(|(f, x)| (f.to_string(), json!({
+                "harness": x.harness, "verdict": x.verdict.as_str(), "detail": x.detail,
+            }))).collect::<serde_json::Map<_, _>>(),
+        });
+        write(
+            &hdir.join("focus.json"),
+            &(serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"),
+        )?;
+    }
 
     // What each declared target needs, printed and written above the driver's first hook.
     let mut described = if derived.targets.is_empty() {
@@ -1990,11 +2276,20 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             &siblings,
         )
     };
+    if rt == Runtime::Rust {
+        targets::add_feature_gates(&ctx.project, &mut described, &opts.features);
+    }
     if manifest.is_entry_path() {
         targets::add_entry_facts(&ctx.project, rt, &mut described);
         write(
             &hdir.join(DRIVER).join(dla_core::harness::VARIES_FILE),
             &dla_core::harness::varies_template(),
+        )?;
+    }
+    if manifest.is_second_look() {
+        write(
+            &hdir.join(DRIVER).join(dla_core::harness::VARIES_FILE),
+            &dla_core::harness::second_look_varies_template(&manifest.targets),
         )?;
     }
     let mut block_in: Option<String> = None;
@@ -2011,7 +2306,21 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         )?;
         if let Some(info) = driver_info.as_ref().filter(|i| !i.edit.is_empty()) {
             let file = hdir.join(&info.edit);
-            if targets::write_block(&file, &id, &described).map_err(|e| io_refusal(&file, e))? {
+            let mut notes = info.block_notes.clone();
+            if manifest.is_second_look() {
+                notes.extend(targets::second_look_notes(
+                    &focus.missed,
+                    &derived.targets,
+                    dla_core::harness::choice_helper(rt),
+                ));
+            } else if manifest.is_focus() {
+                notes.extend(targets::focus_notes(&focus.missed, &derived.targets));
+            } else if opts.next.is_some() && !manifest.is_entry_path() {
+                notes.push(targets::broad_note(dla_core::harness::choice_helper(rt)));
+            }
+            if targets::write_block_with(&file, &id, &described, &notes)
+                .map_err(|e| io_refusal(&file, e))?
+            {
                 block_in = Some(info.edit.clone());
                 // The copies placed in the scratch project now carry the block too.
                 for (src, dest) in &info.sync {
@@ -2041,6 +2350,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         "files": copied.files,
         "ffi": ffi_info.as_ref().map(|f| format!("{}:{}", f.kind, f.library.as_deref().unwrap_or("?"))),
         "purpose": manifest.purpose.map(|p| p.as_str()),
+        "features": (!opts.features.is_empty()).then(|| opts.features.join(",")),
+        "no_default_features": opts.no_default_features.then_some(true),
     });
     let skipped_sources: u64 = copied.out_of_scope_sources.values().sum();
     if let Value::Object(m) = &mut result {
@@ -2076,18 +2387,49 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 json!(
                     described
                         .iter()
-                        .map(|t| json!({
-                            "finding": t.id,
-                            "site": t.site,
-                            "holder": t.holder,
-                            "owner": t.owner,
-                            "probe": t.probe.is_some(),
-                            "sibling_of": t.sibling_of,
-                            "to_do": clip(&t.instruction, 90),
-                        }))
+                        .map(|t| {
+                            let mut j = json!({
+                                "finding": t.id,
+                                "site": t.site,
+                                "holder": t.holder,
+                                "owner": t.owner,
+                                "probe": t.probe.is_some(),
+                                "sibling_of": t.sibling_of,
+                                "to_do": clip(&t.instruction, 90),
+                            });
+                            if let (Some(g), Value::Object(o)) = (&t.feature_gate, &mut j) {
+                                o.insert("feature_gate".into(), json!(g.text()));
+                            }
+                            j
+                        })
                         .collect::<Vec<_>>()
                 ),
             );
+            // One short note per set of features: the ids behind them and what to generate with.
+            let mut gated: std::collections::BTreeMap<Vec<String>, Vec<String>> =
+                std::collections::BTreeMap::new();
+            for t in &described {
+                if let Some(g) = t.feature_gate.as_ref().filter(|g| !g.enabled) {
+                    gated
+                        .entry(g.features.clone())
+                        .or_default()
+                        .push(t.id.to_string());
+                }
+            }
+            if !gated.is_empty() {
+                let notes: Vec<String> = gated
+                    .iter()
+                    .map(|(f, ids)| {
+                        format!(
+                            "{} behind feature {}: generate with --features {}",
+                            ids.join(","),
+                            f.join(", "),
+                            f.join(",")
+                        )
+                    })
+                    .collect();
+                m.insert("feature_note".into(), json!(notes.join("; ")));
+            }
             m.insert(
                 "targets_full".into(),
                 json!(match &block_in {
@@ -2103,8 +2445,28 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         if let Some(n) = &next_note {
             m.insert("next_note".into(), json!(n));
         }
+        if let Some(why) = &focus.why {
+            m.insert("focus".into(), json!(why));
+            m.insert(
+                "missed_in".into(),
+                json!(
+                    focus
+                        .missed
+                        .iter()
+                        .map(|(f, x)| (
+                            f.to_string(),
+                            json!(format!("{} {}", x.harness, x.verdict.as_str()))
+                        ))
+                        .collect::<serde_json::Map<_, _>>()
+                ),
+            );
+        }
     }
     if let (Some(info), Value::Object(m)) = (&driver_info, &mut summary) {
+        if let Some(dir) = &info.go_dir {
+            // Go: the driver is a test file of this package.
+            m.insert("package".into(), json!(dla_core::queue::package_label(dir)));
+        }
         if info.spec.junit.is_some() {
             let driver_file = ctx.pointer(&format!(
                 "harness/{id}/{DRIVER}/{}.java",
@@ -2139,6 +2501,11 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             "next".into(),
             json!(if junit.is_some() {
                 format!("dla harness run {id}")
+            } else if manifest.is_second_look() {
+                format!(
+                    "write a driver that differs from the one of the earlier harness (read its unit; follow the to-dos in the block), write one line per target in {} (what this driver does that the first did not), then dla harness run {id} --mode both",
+                    ctx.pointer(&format!("harness/{id}/{DRIVER}/{}", dla_core::harness::VARIES_FILE))
+                )
             } else if manifest.is_entry_path() {
                 format!(
                     "fill the hooks so that each unit calls only the project's public entry points with data a caller controls, write the one line of {} (what a caller varies per unit), then dla harness run {id} --mode both",
@@ -2286,5 +2653,28 @@ mod detector_tests {
             detectors(&ctx, Runtime::Node).on,
             ["MaxListenersExceededWarning"]
         );
+    }
+}
+
+#[cfg(test)]
+mod node_module_tests {
+    use super::*;
+
+    #[test]
+    fn a_module_package_is_found_from_the_workload_directory_upwards() {
+        let t = tempfile::tempdir().unwrap();
+        let work = t.path();
+        fs::create_dir_all(work.join("sub/deep")).unwrap();
+        assert!(!node_module_package(work, "sub/deep"), "no package.json");
+        assert_eq!(node_module_note(work, ".", None), None);
+        fs::write(work.join("package.json"), "{\"type\": \"module\"}").unwrap();
+        assert!(node_module_package(work, "."));
+        assert!(node_module_package(work, "sub/deep"));
+        let note = node_module_note(work, "sub", None).unwrap();
+        assert!(note.contains("projectImport"), "{note}");
+        // The nearest package.json decides: a CommonJS sub-package inside a module package.
+        fs::write(work.join("sub/package.json"), "{\"type\": \"commonjs\"}").unwrap();
+        assert!(!node_module_package(work, "sub/deep"));
+        assert!(node_module_package(work, "."));
     }
 }

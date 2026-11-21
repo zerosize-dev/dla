@@ -93,7 +93,12 @@ slice, `state.json`, `coverage.json`, `report.md`) whose length or hash differs 
 The Stop hook blocks the end of the turn while `dla gate check --final` fails. It blocks the first two
 stop attempts; at the third attempt with no change in the ledger it lets the stop through, stamps the run
 INCOMPLETE with the reason "stop hook let the stop through after 3 stop attempts with no ledger change"
-and the missing ids, and the report says so.
+and the missing ids, and the report says so. While a `dla` command of the run (census, sweep, harness run,
+trend, alloc-test, report, gap, intervene) is still running, a stop attempt is blocked with the command named
+and is not counted (a command running longer than 30 minutes is taken for hung). A stamp does not close the
+measurement queue: the time left decides, `dla run status` shows the queue and a `stop_stamp` field, and the next
+command that works on the run (not status, gate check, report, bundle or ledger list) lifts the stamp before it
+runs; the report keeps it in its `History:` line. An aborted run stays aborted.
 - A `harness_not_run` item means a generated harness was never run, or never built: run it (`dla harness run H<n>`; for one that did not build, fix the build error first; a run refused for time is not a run), or record why it cannot run on `intake.workload`, and ask the user first when only they can unblock it.
 - A `coverage_contradiction` item means iterations ran and no entry point was exercised: fill the DLA-HOOK bodies of the driver harness so it calls one and run it again; when the harness that produced the zero is a command harness or a JUnit repeat (no hooks), make a driver (`dla harness gen --lang <rt> --driver`), fill its hooks and run the harness it prints; when the harness did not build, fix the build error first; or record on `intake.workload` why it cannot. A `budget_left_unrevisited` item means findings were closed while the budget could still measure them: run the command in its fix, or record the blocker on `intake.workload`.
 - A `queue` item leads the list while a runtime still has pending ranked candidates: run its batch command (`dla harness gen --lang <rt> --driver --next`, fill the hooks, `dla harness run H<n> --mode both`, `dla trend S<n>`); once the queue is empty or closed, `dla ledger close-rest`.
@@ -151,6 +156,14 @@ rank, the minutes left and the fix.
   `unit` of the driver so each unit reaches the listed targets with a new key, `dla harness run H<n>
   --mode both`, `dla trend S<n>`, read `targets`. Never answer the refusal with another reason, a blocker
   reason you do not have, or a loop of `ledger resolve` calls.
+- A candidate settled by one flat run (`executed`) stays in the queue as a second look while budget is left and
+  the first pass is over: run the batch command, write a different unit (see the block), a `VARIES.txt` line per
+  target, run, trend. The unit takes at least two choices from the key with the driver's helper (the block gives the recipe; the run refuses fewer). Closing it is refused the same way until a different driver has looked.
+- A target a harness missed (`constant`, `not_loaded`, `not_executed`, `unknown`) is refused too, until a
+  focus harness (at most 3 targets) missed it as well with a different driver: the fix names the focus
+  batch (`--next` when it is the best-ranked pending candidate). Call the writer function the block names
+  with a new key; a target no driver can reach is given up with `--as unresolved --reason env_unavailable
+  --remedy "<what it needs>"` (a reason that says what blocks it is accepted as before).
 - When the queue is empty or closed, `dla ledger close-rest` closes the rest (`inconclusive` for a candidate a declared harness measured with verdict `constant`, `changed` or `executed`, else `not_exercised`, or `time_budget` at the floor). `dla ledger list` shows each
   candidate's queue status (`pending`, `settled`, `not-eligible`); never read `ledger.jsonl` by hand.
 - When no driver can be built or run for the runtime (no toolchain, the build fails, a privilege was

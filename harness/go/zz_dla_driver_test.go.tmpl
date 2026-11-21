@@ -18,6 +18,7 @@ import (
 	dlajson "encoding/json"
 	dlaos "os"
 	dlafilepath "path/filepath"
+	dlareflect "reflect"
 	dlaruntime "runtime"
 	dladebug "runtime/debug"
 	dlametrics "runtime/metrics"
@@ -272,8 +273,13 @@ func dlaBuild(phase string, x *int, last bool) map[string]any {
 			rec["purge"] = map[string]any{"kind": purge}
 		}
 	}
-	if dlaProbeHook != nil && !tick {
-		rec["probes"] = dlaProbeHook()
+	if !tick {
+		fieldProbes := dlaFieldProbeRecords(&notes)
+		if dlaProbeHook != nil {
+			rec["probes"] = append(dlaProbeHook(), fieldProbes...)
+		} else if len(fieldProbes) > 0 {
+			rec["probes"] = fieldProbes
+		}
 	}
 	if len(dlaDetectors) > 0 && !tick {
 		rec["detectors"] = dlaDetectors
@@ -565,6 +571,146 @@ func dlaCapture(phase string, notes *[]string) []map[string]any {
 	return out
 }
 
+// Field probes. dlaTrack registers an object the model built, so that every checkpoint can read
+// the size of a probed struct field of it by reflection (Len() of a map, slice, array, chan or
+// string; a pointer or interface field is followed one level; a sync.Map or a type with no
+// length is reported as size unknown). The engine HOLDS the tracked objects: tracking keeps an
+// object alive for the rest of the process, so track only long-lived objects (the services built
+// in setup), never one object per unit. The probes come from the go-field entries of the
+// probes.json named by DLA_HARNESS_PROBES (an object with a probes array, or the array itself). No unsafe: reflection reads Len() of an unexported field.
+
+var (
+	dlaTrackMu   dlasync.Mutex
+	dlaTracked   []any
+	dlaFieldSpec []dlaFieldProbe
+	dlaFieldRead bool
+)
+
+type dlaFieldProbe struct{ id, dir, typ, field string }
+
+// dlaTrack registers v (a pointer to a struct, or a struct) for the field probes.
+func dlaTrack(v any) {
+	if v == nil {
+		return
+	}
+	dlaTrackMu.Lock()
+	dlaTracked = append(dlaTracked, v)
+	dlaTrackMu.Unlock()
+}
+
+func dlaLoadFieldProbes(notes *[]string) []dlaFieldProbe {
+	if dlaFieldRead {
+		return dlaFieldSpec
+	}
+	dlaFieldRead = true
+	path := dlaEnv("DLA_HARNESS_PROBES")
+	if path == "" {
+		return nil
+	}
+	b, err := dlaos.ReadFile(path)
+	if err != nil {
+		*notes = append(*notes, "probes.json unreadable: "+err.Error())
+		return nil
+	}
+	type spec struct {
+		ID     string `json:"id"`
+		Target struct {
+			Kind       string `json:"kind"`
+			PackageDir string `json:"package_dir"`
+			TypeName   string `json:"type_name"`
+			Field      string `json:"field"`
+		} `json:"target"`
+	}
+	var list []spec
+	var doc struct {
+		Probes []spec `json:"probes"`
+	}
+	if err := dlajson.Unmarshal(b, &doc); err == nil {
+		list = doc.Probes
+	} else if err := dlajson.Unmarshal(b, &list); err != nil {
+		*notes = append(*notes, "probes.json unreadable: "+err.Error())
+		return nil
+	}
+	for _, p := range list {
+		if p.Target.Kind == "go-field" {
+			dlaFieldSpec = append(dlaFieldSpec, dlaFieldProbe{p.ID, p.Target.PackageDir, p.Target.TypeName, p.Target.Field})
+		}
+	}
+	return dlaFieldSpec
+}
+
+// dlaFieldSize is the entry count of a field, or the reason it has none.
+func dlaFieldSize(f dlareflect.Value) (int, string) {
+	if f.Kind() == dlareflect.Ptr || f.Kind() == dlareflect.Interface {
+		if f.IsNil() {
+			return 0, ""
+		}
+		f = f.Elem()
+	}
+	switch f.Kind() {
+	case dlareflect.Map, dlareflect.Slice, dlareflect.Array, dlareflect.Chan, dlareflect.String:
+		return f.Len(), ""
+	}
+	return 0, "type " + f.Type().String() + " has no length (a sync.Map or a struct): size unknown"
+}
+
+// dlaFieldProbeRecords reads every field probe over the tracked objects of its type.
+func dlaFieldProbeRecords(notes *[]string) []map[string]any {
+	specs := dlaLoadFieldProbes(notes)
+	if len(specs) == 0 {
+		return nil
+	}
+	dlaTrackMu.Lock()
+	objs := append([]any(nil), dlaTracked...)
+	dlaTrackMu.Unlock()
+	out := []map[string]any{}
+	for _, p := range specs {
+		size, found, problem := 0, 0, ""
+		for _, o := range objs {
+			v := dlareflect.ValueOf(o)
+			for v.Kind() == dlareflect.Ptr || v.Kind() == dlareflect.Interface {
+				if v.IsNil() {
+					break
+				}
+				v = v.Elem()
+			}
+			if v.Kind() != dlareflect.Struct {
+				continue
+			}
+			name := v.Type().Name()
+			if i := dlastrings.IndexByte(name, '['); i >= 0 {
+				name = name[:i]
+			}
+			if name != p.typ {
+				continue
+			}
+			f := v.FieldByName(p.field)
+			if !f.IsValid() {
+				continue
+			}
+			found++
+			n, why := dlaFieldSize(f)
+			if why != "" {
+				problem = why
+				continue
+			}
+			size += n
+		}
+		rec := map[string]any{"id": p.id, "name": p.typ + "." + p.field, "path": p.dir + "." + p.typ + "." + p.field,
+			"size": nil, "reachable": nil, "bytes": nil, "error": nil}
+		switch {
+		case found == 0:
+			rec["error"] = "no tracked object of type " + p.typ + ": call dlaTrack(<your " + p.typ + ">) in setup"
+		case problem != "":
+			rec["error"] = "field " + p.typ + "." + p.field + ": " + problem
+		default:
+			rec["size"] = size
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
 // DLA-ENGINE-END
 
 const (
@@ -590,17 +736,63 @@ func dlaIntEnv(name string, def int) int {
 
 // dlaSetup builds the objects under test once, before the first round.
 func dlaSetup() {
-	// DLA-HOOK setup: construct the services/caches/pools the workload needs and keep them in package-level variables (package-private API is usable here; use dlaT for t.TempDir or t.Fatal)
+	// DLA-HOOK setup: construct the services/caches/pools the workload needs and keep them in package-level variables (package-private API is usable here; use dlaT for t.TempDir or t.Fatal). For every field probe the targets block lists, pass the long-lived object that holds the field to dlaTrack(obj) here (or in dlaUnit for an object created later): the engine reads the field's size from it at every checkpoint
 	panic("DLA-HOOK setup has not been filled in")
 }
 
+// DLA-CHOICE-BEGIN
+var dlaChoiceN [8]int // the n of each slot seen so far: the radix of the later slots and the report
+
+// dlaChoice is choice number slot of n options, from the digits of key in mixed radix.
+// Deterministic, no allocation and no state beyond the n of each slot (8 slots): the combinations
+// of the slots used in order 0, 1, 2, ... all occur within n0*n1*... keys and repeat evenly.
+func dlaChoice(key, slot, n int) int {
+	div := 1
+	for j := 0; j < slot && j < 8; j++ {
+		if dlaChoiceN[j] > 0 {
+			div *= dlaChoiceN[j]
+		}
+	}
+	if slot >= 0 && slot < 8 {
+		dlaChoiceN[slot] = n
+	}
+	return (key / div) % n
+}
+
+func dlaChoicesNote(done int) string {
+	slots, product := 0, 1
+	for _, n := range dlaChoiceN {
+		if n > 0 {
+			slots++
+			product *= n
+		}
+	}
+	if slots == 0 {
+		return ""
+	}
+	took := product
+	if done < took {
+		took = done
+	}
+	more := ""
+	if product > took {
+		more = " (of " + dlastrconv.Itoa(product) + " possible)"
+	}
+	return "the units took " + dlastrconv.Itoa(took) + " combinations of " + dlastrconv.Itoa(slots) + " choices" + more
+}
+
+// DLA-CHOICE-END
+
 // dlaUnit performs one unit of work for key (i is the 1-based unit number).
 func dlaUnit(i, key int) {
+	// Choices: dlaChoice(key, slot, n) is choice number slot of n options, taken from the digits of key in mixed radix (all combinations of the slots occur within n1*n2*... keys).
+	// Write the unit as choices (depth, which object gets the ending call, when intermediates are released, the order of releases, success or failure), not as one fixed sequence.
 	// DLA-HOOK unit: perform exactly one unit of the workload for this key (derive request ids/names/payloads from key so a repeated key reproduces an earlier request)
 	panic("DLA-HOOK unit has not been filled in")
 }
 
 // dlaProbes reports package variables for the GoVar probes of probes.json: one record per variable.
+// Struct-field probes (go-field) need no code here: call dlaTrack(obj) in dlaSetup instead.
 func dlaProbes() []map[string]any {
 	// DLA-HOOK probes: return one dlaProbe(id, name, path, size) per probed package variable (id = the probe id from probes.json, path = "<package dir>.<name>", size = len(...) of the map/slice/chan or the entry count); leave the empty list when there are none
 	return nil
@@ -609,6 +801,56 @@ func dlaProbes() []map[string]any {
 // dlaProbe builds one probe record; size is the number of entries the variable holds.
 func dlaProbe(id, name, path string, size int) map[string]any {
 	return map[string]any{"id": id, "name": name, "path": path, "size": size, "reachable": nil, "bytes": nil, "error": nil}
+}
+
+// dlaMinStep is the smallest step the fitting leaves: with fewer units per round the per-round
+// costs (the forced collection and the checkpoint) and the heap noise swamp a leak of one entry
+// per unit.
+const dlaMinStep = 10
+
+// dlaLoopStart is when the rounds began (after setup): the time per unit is measured from it.
+var dlaLoopStart dlatime.Time
+
+func dlaFloat(v float64) string { return dlastrconv.FormatFloat(v, 'f', 1, 64) }
+
+// dlaFit lowers *step when the units left would not fit into the process's time limit
+// (DLA_TIME_LIMIT_SECS, set by `dla harness run`; 0 or unset = no fitting; 15 percent and 5 s of
+// margin). Called once dlaMinStep units of a round have run (inRound units of round `round`, so
+// one slow round cannot outlast the limit before the first look) and after every round (inRound
+// 0 of the next one); `left` rounds follow the one in progress. It never goes below dlaMinStep
+// and says what it did in the limitations.
+func dlaFit(limit float64, round, total, inRound, done int, step *int, warned *bool) {
+	if limit <= 0 || done == 0 {
+		return
+	}
+	left := total - round
+	spent := dlatime.Since(dlaStart).Seconds()
+	perUnit := dlatime.Since(dlaLoopStart).Seconds() / float64(done)
+	budget := limit*0.85 - 5 - spent
+	need := perUnit * float64(*step-inRound+*step*left)
+	if need <= budget {
+		return
+	}
+	units := int(budget / perUnit)
+	lowered := (units + inRound) / (left + 1)
+	if lowered > *step {
+		lowered = *step
+	}
+	floor := dlaMinStep
+	if *step < floor {
+		floor = *step
+	}
+	if lowered < floor {
+		lowered = floor
+	}
+	if lowered < *step {
+		dlaNotes = append(dlaNotes, "the driver lowered its step from "+dlastrconv.Itoa(*step)+" to "+dlastrconv.Itoa(lowered)+" units per round in round "+dlastrconv.Itoa(round)+" (after "+dlastrconv.Itoa(inRound)+" units of it): one unit takes "+dlaFloat(perUnit*1000)+" ms and the "+dlaFloat(limit)+" s time limit would cut the process (the x axis is still the cumulative unit count)")
+		*step = lowered
+	}
+	if need = perUnit * float64(*step-inRound+*step*left); !*warned && need > budget {
+		*warned = true
+		dlaNotes = append(dlaNotes, "the unit is too slow for a series: even "+dlastrconv.Itoa(*step)+" units per round (the floor) needs "+dlaFloat(need)+" s for the units left and "+dlaFloat(budget)+" s remain; make the unit cheaper (one call, no sleeps, smaller payloads) or raise timeout_secs in harness.json")
+	}
 }
 
 // TestDLADriver runs warm-up and measured rounds and writes a checkpoint after each.
@@ -624,6 +866,9 @@ func TestDLADriver(t *dlatesting.T) {
 	dlaSetup()
 	dlaProbeHook = dlaProbes
 	total := warmup + rounds
+	limit, _ := dlastrconv.ParseFloat(dlaEnv("DLA_TIME_LIMIT_SECS"), 64)
+	warned := false
+	dlaLoopStart = dlatime.Now()
 	done := 0
 	for round := 1; round <= total; round++ {
 		for n := 0; n < step; n++ {
@@ -633,9 +878,15 @@ func TestDLADriver(t *dlatesting.T) {
 				key = done % repeat
 			}
 			dlaUnit(done, key)
+			if n+1 == dlaMinStep && n+1 <= step {
+				dlaFit(limit, round, total, n+1, done, &step, &warned)
+			}
 		}
 		last := round == total
 		if last {
+			if line := dlaChoicesNote(done); line != "" {
+				dlaNotes = append(dlaNotes, line)
+			}
 			stop()
 			if dlaGoleakCheck != nil {
 				if report := dlaGoleakCheck(); report != "" {
@@ -648,5 +899,8 @@ func TestDLADriver(t *dlatesting.T) {
 		}
 		x := done
 		dlaDump("checkpoint", &x, last)
+		if !last {
+			dlaFit(limit, round+1, total, 0, done, &step, &warned)
+		}
 	}
 }

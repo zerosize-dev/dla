@@ -44,6 +44,8 @@ mod against;
 pub(crate) mod analysis;
 #[path = "trend/candidates.rs"]
 mod candidates;
+#[path = "trend/short.rs"]
+mod short;
 #[path = "trend/summary.rs"]
 mod summary;
 #[path = "trend/verdicts.rs"]
@@ -219,6 +221,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         ledger: &ledger,
         series: &main.series,
         columns: &cols,
+        too_short: short::is_short(&main.series, &th).then(|| short::points(&main.series, &th)),
     });
 
     // Persist the full report first: the evidence points at it.
@@ -318,7 +321,12 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
     }
     out.insert("evidence".into(), json!(ev));
     let all: Vec<&ColumnTrend> = cols.iter().collect();
-    let passed = summary::passing(&all);
+    let mut passed = summary::passing(&all);
+    // The column of a detector hit's registration site leads: its finding is the one the
+    // ledger lines below should name.
+    if let Some(site) = detector_site(ctx, &main.series) {
+        passed.sort_by_key(|c| c.site.as_deref() != Some(site.as_str()));
+    }
     out.insert(
         "passed".into(),
         Value::Array(
@@ -340,6 +348,10 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         out.insert("passed_more".into(), json!(passed.len() - 8));
     }
     out.insert("failed".into(), json!(cols.len() - passed.len()));
+    let short_cols = short::columns(&cols, &th);
+    if !short_cols.is_empty() {
+        out.insert("short".into(), short::json_list(&short_cols));
+    }
     if !target_verdicts.is_empty() {
         let (declared, rest): (Vec<_>, Vec<_>) = target_verdicts.iter().partition(|v| v.declared);
         out.insert(
@@ -404,8 +416,197 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         keys.as_ref(),
         a.finding.as_ref(),
     );
+    let mut next = next;
+    if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
+        next.insert(0, entry);
+    }
+    let counter_evidence = evidence
+        .iter()
+        .find(|(k, _)| *k == EvidenceKind::UnitCountSeries)
+        .or_else(|| evidence.first())
+        .map(|(_, e)| e.to_string());
+    if let Some(entry) = detector_entry(
+        ctx,
+        &ledger,
+        &main.series,
+        counter_evidence.as_deref(),
+        &passed,
+        &evidence,
+    ) {
+        next.insert(0, entry);
+    }
+    if !short_cols.is_empty() || short::is_short(&main.series, &th) {
+        let rerun = main
+            .series
+            .source
+            .harness
+            .as_deref()
+            .map(|h| format!("dla harness run {h} --mode {}", mode_name(&main.series)));
+        next.insert(
+            0,
+            short::next_line(
+                &ledger,
+                &short_cols,
+                short::points(&main.series, &th),
+                short::is_short(&main.series, &th),
+                rerun.as_deref(),
+            ),
+        );
+    }
     out.insert("next".into(), json!(next));
+    if let Some(line) = dla_core::series::choices_line(&main.series) {
+        out.insert("choices".into(), json!(line));
+    }
     Ok(Value::Object(out))
+}
+
+/// The registration site of the first detector hit with one, in the run that wrote `series`.
+fn detector_site(ctx: &Ctx, series: &dla_core::SeriesFile) -> Option<String> {
+    let h = series.source.harness.as_deref()?;
+    let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
+    rec.detectors.iter().find_map(|d| {
+        d["site"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+/// The `next` entry for a runtime detector hit of the run that wrote `series` whose registration
+/// site is known: the hit, the site, the finding at the site, and what to do with it. `None`
+/// when the run had no such hit.
+fn detector_entry(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    series: &dla_core::SeriesFile,
+    evidence: Option<&str>,
+    passed: &[&ColumnTrend],
+    growth_evidence: &[(EvidenceKind, EvidenceId)],
+) -> Option<String> {
+    let h = series.source.harness.as_deref()?;
+    let rec = dla_core::harness::run_record_of(&ctx.run_dir, h, &series.id)?;
+    let hit = rec
+        .detectors
+        .iter()
+        .find(|d| d["site"].as_str().is_some_and(|s| !s.is_empty()))?;
+    let site = hit["site"].as_str()?;
+    let held = hit["sites"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|s| s["count"].as_u64())
+        .map_or(String::new(), |c| format!(" ({c} registered there)"));
+    let at: Vec<FindingId> = ledger
+        .findings()
+        .filter(|f| f.site.as_deref() == Some(site))
+        .map(|f| f.id.clone())
+        .collect();
+    let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
+    let head = format!("DETECTOR HIT (listeners added at {site}{held})");
+    Some(match at.first() {
+        Some(f)
+            if m.targets.contains(f) || m.probes.iter().any(|p| p.finding.as_ref() == Some(f)) =>
+        {
+            format!(
+                "{head}: finding {f} is a target of {h}; follow the ledger lines for node.listeners@{site}, at full length"
+            )
+        }
+        // Decided already: nothing to measure there.
+        Some(f)
+            if ledger.finding(f).is_some_and(|x| {
+                matches!(
+                    x.state,
+                    FindingState::Confirmed | FindingState::Strong | FindingState::Refuted
+                )
+            }) =>
+        {
+            let state = ledger
+                .finding(f)
+                .map_or(String::new(), |x| x.state.to_string());
+            format!("{head}: finding {f} is already {state}")
+        }
+        // The column at the site passed in this series: the finding is measured, and what is
+        // left is to decide it, not to build another harness.
+        Some(f)
+            if passed.iter().any(|c| {
+                c.site.as_deref() == Some(site) && evidence_of(growth_evidence, c).is_some()
+            }) =>
+        {
+            let col = passed.iter().find(|c| {
+                c.site.as_deref() == Some(site) && evidence_of(growth_evidence, c).is_some()
+            })?;
+            let e = evidence_of(growth_evidence, col);
+            let root = ledger.finding(f).map_or_else(|| f.clone(), |x| x.root_id());
+            let has_sibling = ledger
+                .findings()
+                .any(|s| s.parent.as_ref() == Some(&root) && s.polarity() == Polarity::NonLeak);
+            let can_test = ledger.finding(&root).is_some_and(|r| {
+                matches!(
+                    r.state,
+                    FindingState::Candidate
+                        | FindingState::Unresolved
+                        | FindingState::SuspectedStaticOnly
+                )
+            });
+            let cmds = dla_core::grown::commands(
+                &root,
+                h,
+                e.as_deref(),
+                harness_evidence(ledger, series).as_deref(),
+                has_sibling,
+                can_test,
+            );
+            format!(
+                "{head}: {f} holds it and its column {} passed in this series: {}",
+                col.name,
+                cmds.join("   then   ")
+            )
+        }
+        Some(f) => format!(
+            "{head}: dla harness gen --lang {} --driver --probe {f}   # {f} holds it, {h} did not target it; copy the hooks of {h}",
+            m.runtime.as_str()
+        ),
+        None => {
+            let e = evidence.unwrap_or("<evidence>");
+            format!(
+                "{head}: dla ledger add --origin growth-series --evidence {e} --site {site} --holder registration-table   # no finding there; node.listeners@{site} then ties to it"
+            )
+        }
+    })
+}
+
+/// The first `next` entry of a hook-driver series of the measurement queue that missed some
+/// of its declared targets: their ids (at most 8, then a count) and the batch command that
+/// gives them a harness of their own. `None` for other series, or when the queue is off.
+fn missed_targets_entry(
+    ctx: &Ctx,
+    series: &dla_core::SeriesFile,
+    verdicts: &[dla_core::trend::TargetVerdict],
+) -> Option<String> {
+    let h = series.source.harness.as_deref()?;
+    let m = dla_core::HarnessManifest::load(&ctx.run_dir, h).ok()?;
+    if !m.is_hook_driver() || m.is_entry_path() {
+        return None;
+    }
+    let missed: Vec<String> = verdicts
+        .iter()
+        .filter(|v| v.declared && dla_core::queue::is_miss(v.verdict))
+        .map(|v| v.finding.to_string())
+        .collect();
+    if missed.is_empty() {
+        return None;
+    }
+    let shown: Vec<&str> = missed.iter().take(8).map(String::as_str).collect();
+    let more = if missed.len() > 8 {
+        format!(" and {} more", missed.len() - 8)
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{h} missed {} target(s): {}{more}; give them a harness of their own (3 at most): dla harness gen --lang {} --driver --next",
+        missed.len(),
+        shown.join(", "),
+        m.runtime.as_str()
+    ))
 }
 
 /// For the series of an entry-path harness: the trigger of each declared target now (the
@@ -425,7 +626,10 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
         return;
     };
     let t = Triggers::of(&view);
-    let (mut reproduced, mut unchecked, mut not_found) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut reproduced, mut unchecked, mut not_found, mut unmeasured) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut unread = Vec::new();
+    let mut direct: Vec<String> = Vec::new();
     if let Some(Value::Array(list)) = out.get_mut("targets") {
         for e in list {
             let Some(id) = e["finding"].as_str().map(str::to_owned) else {
@@ -438,17 +642,36 @@ fn entry_path_triggers(ctx: &Ctx, series: &dla_core::SeriesFile, out: &mut Map<S
             e["trigger"] = json!(trig.name());
             match trig {
                 Trigger::Reproduced { .. } => reproduced.push(id),
+                Trigger::Direct { .. } => direct.push(id),
                 Trigger::NotFound { .. } => not_found.push(id),
-                Trigger::Unchecked => unchecked.push(id),
+                Trigger::Unmeasured { .. } => unmeasured.push(id),
+                // One run that did not grow it: flat when measured, else not measured at all.
+                Trigger::Unchecked if e["verdict"] == "constant" => unchecked.push(id),
+                Trigger::Unchecked => unread.push(id),
             }
         }
     }
-    let next = if !unchecked.is_empty() {
+    let next = if !unmeasured.is_empty() {
+        format!(
+            "{} ran in two entry-path harnesses but nothing measured the holder there: give the harness a size reading (a probe of the holder), run it again, dla trend; the report says \"not checked\"",
+            unmeasured.join(", ")
+        )
+    } else if !unread.is_empty() {
+        format!(
+            "{} was not measured here (its verdict is not constant): give the harness a size reading (a probe of the holder; for Go track the object, see the driver's hook comment), run it again, dla trend; a flat holder is shown only by a size reading",
+            unread.join(", ")
+        )
+    } else if !unchecked.is_empty() {
         format!(
             "{} did not grow here: dla harness gen --lang {} --driver --entry {} for a second, different driver (other entry points, inputs, rejected-input paths), fill, VARIES.txt, run, trend",
             unchecked.join(", "),
             m.runtime.as_str(),
             unchecked.join(",")
+        )
+    } else if !direct.is_empty() {
+        format!(
+            "{} grew only because the unit calls the registration function itself: reach the holder through a run-time entry (a request, a message, a connection), not by calling the writer with new names",
+            direct.join(", ")
         )
     } else if !reproduced.is_empty() {
         format!(
@@ -669,6 +892,32 @@ fn suggestions(
                 // The gate never ties a whole-process column to a finding: the residual
                 // accounting covers it, so a `ledger add` would open a finding that can
                 // never be tied.
+                // A Rust harness has no size probe: the allocation stacks of
+                // `--capture alloc` are what name the site of the growth.
+                if series.source.runtime == Some(dla_core::runtime::Runtime::Rust)
+                    && let Some(h) = series.source.harness.as_deref()
+                    // Not again once this harness has allocation stacks of this run.
+                    && !ledger
+                        .path()
+                        .and_then(std::path::Path::parent)
+                        .map(|d| d.join("harness").join(h).join("out"))
+                        .and_then(|d| std::fs::read_dir(d).ok())
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .any(|e| {
+                            e.file_name().to_string_lossy().ends_with("-alloc")
+                                && e.path().join("shim-dump.jsonl").is_file()
+                        })
+                {
+                    let cmd = format!(
+                        "dla harness run {h} --mode fresh --capture alloc   # allocation stacks name the site of the growth of {}",
+                        c.name
+                    );
+                    if !next.iter().any(|n| n.contains("--capture alloc")) {
+                        next.push(cmd);
+                    }
+                }
                 let hint = if has_gap_row {
                     gap_row_hint(&series.id)
                 } else {

@@ -55,3 +55,37 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# The census compiles hundreds of regexes and parses every source file; in an unoptimized build
+# that is minutes on a large repository. These dependencies are optimized in every profile that
+# is not release (their code does not change what the census finds).
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3
+[profile.dev.package.memchr]
+opt-level = 3
+[profile.dev.package.tree-sitter]
+opt-level = 3
+[profile.dev.package.tree-sitter-java]
+opt-level = 3
+[profile.dev.package.tree-sitter-kotlin-ng]
+opt-level = 3
+[profile.dev.package.tree-sitter-go]
+opt-level = 3
+[profile.dev.package.tree-sitter-rust]
+opt-level = 3
+[profile.dev.package.tree-sitter-javascript]
+opt-level = 3
+[profile.dev.package.tree-sitter-typescript]
+opt-level = 3
+[profile.dev.package.tree-sitter-python]
+opt-level = 3
+[profile.dev.package.tree-sitter-c]
+opt-level = 3
+[profile.dev.package.tree-sitter-cpp]
+opt-level = 3
