@@ -234,10 +234,18 @@ fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<Str
 /// loop, so the text names the log tail and the usual cause, a service the tests need.
 fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
     let id = &manifest.id;
-    if manifest.is_test_loop() {
+    if manifest
+        .tools
+        .iter()
+        .any(|t| t == "junit-platform-launcher")
+    {
+        let fallback = if manifest.is_test_loop() {
+            format!(". {}", driver_fallback(manifest))
+        } else {
+            String::new()
+        };
         format!(
-            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\". {}",
-            driver_fallback(manifest)
+            "read the tail of the logs ({logs}); a JUnit repeat harness has no hooks to fill. If the tests need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<the service {id} needs>\"{fallback}"
         )
     } else {
         format!("read the logs, fix the harness or its hooks, then dla harness run {id}")
@@ -3034,8 +3042,14 @@ pub fn run_points(
             ),
             format!("at least one measured point; see {}", ctx.pointer(&log)),
             format!(
-                "fix the cause in the log, or regenerate with dla harness gen, then dla harness run {}",
-                manifest.id
+                "fix the cause in the log, or regenerate with dla harness gen, then dla harness run {}{}",
+                manifest.id,
+                // The queue stops offering a test loop that measured nothing.
+                if manifest.is_test_loop() && !manifest.targets.is_empty() {
+                    format!(". {}", driver_fallback(manifest))
+                } else {
+                    String::new()
+                }
             ),
         ));
     }
@@ -3730,9 +3744,28 @@ pub fn attention_lines(
         ));
     }
     if let Some(l) = out.limitations.iter().find(|l| {
-        l.starts_with("the driver lowered its step") || l.starts_with("the unit is too slow")
+        l.starts_with("the driver lowered its step")
+            || l.starts_with("the unit is too slow")
+            || l.starts_with("the test loop lowered its step")
+            || l.starts_with("the tests are too slow for a series")
     }) {
         lines.push(clip(&format!("DRIVER STEP: {l}"), 160));
+    }
+    // A test class the loop left out: the targets it was chosen for were not measured by it.
+    const DROPPED: &str = "dropped test class ";
+    let dropped: Vec<&str> = out
+        .limitations
+        .iter()
+        .filter_map(|l| l.find(DROPPED).map(|i| &l[i + DROPPED.len()..]))
+        .collect();
+    if let Some(first) = dropped.first() {
+        lines.push(clip(
+            &format!(
+                "TEST CLASS DROPPED ({}): {first}",
+                dropped.len()
+            ),
+            160,
+        ));
     }
     if out
         .limitations
@@ -3832,6 +3865,29 @@ mod tests {
         );
         assert!(lines[2].starts_with("DRIVER STEP"), "{lines:?}");
         assert!(lines.iter().all(|l| l.len() <= 160));
+        // The test loop's own limitations are shown too: a lowered step and a dropped class.
+        let loop_out = RunOutput {
+            series: vec!["S1".into()],
+            points: 9,
+            modes: vec![KeyMode::Fresh],
+            limitations: vec![
+                "the test loop lowered its step from 2 to 1 runs of the tests per round in round 1: slow".into(),
+                "dropped test class a.BrokenTests: none of its tests passed in the first run (x), so it is left out of the loop and the other classes are measured".into(),
+                "dropped test class a.SlowTests: it was 9.0 s of the 10.0 s a run of the tests takes".into(),
+            ],
+            ..RunOutput::default()
+        };
+        let lines = attention_lines(&m, &loop_out, 9, &ledger, &dir.path().join("none.json"));
+        assert!(
+            lines.iter().any(|l| l.starts_with("DRIVER STEP: the test loop lowered its step")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("TEST CLASS DROPPED (2): a.BrokenTests: none of its tests passed")),
+            "{lines:?}"
+        );
         // Nothing to say: no lines.
         let quiet = RunOutput {
             series: vec!["S1".into()],

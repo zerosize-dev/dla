@@ -176,6 +176,12 @@ pub fn bound(v: Value) -> Value {
                 if let Some(h) = orig.get(k) {
                     o.insert(k.to_owned(), h.clone());
                 }
+                // `dla harness gen` carries the hint inside its summary.
+                if let (Some(h), Some(Value::Object(sum))) =
+                    (orig.get("summary").and_then(|s| s.get(k)), o.get_mut("summary"))
+                {
+                    sum.insert(k.to_owned(), h.clone());
+                }
             }
         }
         if size(&s) <= LIMIT {
@@ -189,6 +195,12 @@ pub fn bound(v: Value) -> Value {
             for k in PROTECTED.iter().chain(&["record", "command"]) {
                 if let Some(x) = o.get(*k) {
                     keep.insert((*k).to_owned(), protected_copy(x, max_str, max_arr));
+                }
+            }
+            // The sentence that names the next step stays whole here too.
+            for k in KEPT_WHOLE {
+                if let Some(x) = o.get(k).or_else(|| o.get("summary").and_then(|s| s.get(k))) {
+                    keep.insert(k.to_owned(), x.clone());
                 }
             }
             if let Some(Value::Object(e)) = o.get("error") {
@@ -227,6 +239,36 @@ mod tests {
         assert!(text.len() < MAX_OUTPUT_BYTES, "{}", text.len());
         assert_eq!(b["truncated"], true);
         assert_eq!(b["ok"], false);
+    }
+
+    #[test]
+    fn the_sentences_that_name_the_next_step_are_never_cut() {
+        let hint = format!("this project has JUnit 5 tests: {} END", "x ".repeat(150));
+        let next = format!("347 candidates in 24 test-loop batches {} END", "y ".repeat(150));
+        // Shrunk: the top-level sentence and the one inside the summary stay whole.
+        let v = json!({
+            "ok": true,
+            "queue_next": next,
+            "summary": {"junit_hint": hint, "other": "z".repeat(900)},
+            "rows": vec!["a long text ".repeat(20); 40],
+        });
+        let b = bound(v);
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["truncated"], true);
+        assert_eq!(b["queue_next"], next);
+        assert_eq!(b["summary"]["junit_hint"], hint);
+        // The last resort keeps them too.
+        let mut o = Map::new();
+        o.insert("ok".into(), json!(true));
+        o.insert("queue_next".into(), json!(next));
+        o.insert("summary".into(), json!({"junit_hint": hint}));
+        for i in 0..400 {
+            o.insert(format!("key{i}"), json!(i));
+        }
+        let b = bound(Value::Object(o));
+        assert!(serde_json::to_string(&b).unwrap().len() < MAX_OUTPUT_BYTES);
+        assert_eq!(b["queue_next"], next);
+        assert_eq!(b["junit_hint"], hint);
     }
 
     #[test]

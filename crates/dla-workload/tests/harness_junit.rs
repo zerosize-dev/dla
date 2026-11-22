@@ -1548,6 +1548,15 @@ fn next_with_junit_and_a_probe_is_refused_and_explicit_tests_keep_the_old_meanin
     o.tests = vec!["leak.CacheTest".into()];
     gen_ok(&fx, &o);
     assert_eq!(manifest(&fx, "H1").targets.len(), 1);
+    // A bare `--next` of a hookless harness asks for 16, its own bound, and is taken; one more
+    // is refused, and the fix names the same kind of harness.
+    let fx = project(&gradle_java());
+    o.next = Some(16);
+    gen_ok(&fx, &o);
+    o.next = Some(17);
+    let r = gen_err(&fx, &o);
+    assert_eq!(r.code, "too-many-targets", "{r:?}");
+    assert!(r.fix.contains("--junit --tests") && r.fix.contains("--next 16"), "{r:?}");
 }
 
 #[test]
@@ -1603,6 +1612,37 @@ fn a_class_that_cannot_run_is_dropped_and_the_others_are_measured() {
             .limitations
             .iter()
             .any(|l| l.contains("dropped test class leak.BrokenTest")),
+        "{:?}",
+        series.limitations
+    );
+}
+
+#[test]
+fn a_test_that_fails_in_every_run_does_not_sink_the_tests_that_pass() {
+    if !tool_ready("gradle") {
+        return;
+    }
+    // One class, two tests: one passes and feeds the cache, one fails every time (a service it
+    // needs is not there). Every run has a failure; the runs are still measurements of the test
+    // that passed.
+    let mixed = "package leak;\n\nimport org.junit.jupiter.api.Test;\n\nclass MixedTest {\n    @Test\n    void passes() {\n        Cache.touch();\n    }\n\n    @Test\n    void needsAService() {\n        throw new IllegalStateException(\"Connection refused: kafka:9092\");\n    }\n}\n";
+    let mut files = gradle_java();
+    files.push(("src/test/java/leak/MixedTest.java", mixed));
+    let fx = project(&files);
+    let mut o = junit_opts();
+    o.tests = vec!["leak.CacheTest".into(), "leak.MixedTest".into()];
+    gen_ok(&fx, &o);
+    let Some(series) = run_harness(&fx) else {
+        return;
+    };
+    assert_eq!(series.points.len(), 9);
+    let log = run_log(&fx);
+    assert!(log.contains("failed_units=18"), "{log}");
+    assert!(!log.contains("DLA-JUNIT every unit failed"), "{log}");
+    assert!(!log.contains("dropped test class"), "{log}");
+    assert!(
+        series.limitations.iter().any(|l| l.contains("run 1 of the tests had 1 failure(s)")
+            && l.contains("Connection refused: kafka:9092")),
         "{:?}",
         series.limitations
     );

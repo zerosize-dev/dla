@@ -48,7 +48,9 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectMetho
  * whose tests passed (every test failed, or it failed before its tests ran: a service it needs is not
  * running) is dropped while another class passed: one class that cannot run must not sink the harness,
  * and the drop is printed and recorded as a limitation. A class that passes once and fails later is
- * kept. The loop also fits its rounds into the time limit of the process (DLA_TIME_LIMIT_SECS, set by
+ * kept. A run of the tests in which some tests fail and others pass is a measurement of the ones that
+ * passed (the first failure is recorded as a limitation); the process fails ("every unit failed") only
+ * when no test passed in any run. The loop also fits its rounds into the time limit of the process (DLA_TIME_LIMIT_SECS, set by
  * {@code dla harness run} from the harness timeout): once a unit has been timed the step is lowered
  * (never below one unit per round: the trend needs the points) and, when even that does not fit, the
  * slowest classes of the first unit are dropped (never the last one); both are recorded.
@@ -114,8 +116,15 @@ public final class DlaJUnitLoop {
     private static final double LIMIT_SECS = doubleEnv("DLA_TIME_LIMIT_SECS");
     private static int step;
     private static int done;
-    private static long unitNanos;
     private static long firstUnitNanos;
+    /**
+     * Time and count of the units since the set of classes last changed, the first unit of the process
+     * excluded (it holds the one-time costs: class loading, the Spring context).
+     */
+    private static long sinceNanos;
+    private static int sinceUnits;
+    /** The estimate of one unit right after the set of classes changed, in nanoseconds; 0: none. */
+    private static double estimateNanos;
     private static List<String> active;
     private static Map<String, Long> classNanos = new LinkedHashMap<>();
     private static boolean warned;
@@ -156,7 +165,10 @@ public final class DlaJUnitLoop {
             return false;
         }
         int left = total - round;
-        double perUnit = (done >= 2 ? (double) (unitNanos - firstUnitNanos) / (done - 1) : firstUnitNanos) / 1e9;
+        // The units measured since the classes last changed; right after a change, the estimate
+        // made then; before any second unit, the first one.
+        double perUnit = (sinceUnits > 0 ? (double) sinceNanos / sinceUnits
+            : estimateNanos > 0 ? estimateNanos : firstUnitNanos) / 1e9;
         double budget = LIMIT_SECS * 0.85 - 5 - uptimeSecs();
         double need = perUnit * ((double) step - inRound + (double) step * left);
         if (need <= budget) {
@@ -172,13 +184,15 @@ public final class DlaJUnitLoop {
         }
         need = perUnit * ((double) step - inRound + (double) step * left);
         boolean dropped = false;
-        // Only a steady-state reading (a second run) decides to drop a class: the first run holds
-        // the one-time costs (class loading, the Spring context).
-        if (need > budget && done >= 2) {
+        // Only a steady-state reading (a run after the first, with the classes as they are now)
+        // decides to drop a class: the first run holds the one-time costs (class loading, the
+        // Spring context), and right after a drop nothing has been measured without the class.
+        if (need > budget && sinceUnits >= 1) {
             long all = 0;
             for (long n : classNanos.values()) {
                 all += n;
             }
+            double share = 1.0;
             while (need > budget && distinct(active).size() > 1 && all > 0) {
                 String slowest = null;
                 for (String c : distinct(active)) {
@@ -191,13 +205,21 @@ public final class DlaJUnitLoop {
                 active = new ArrayList<>(active);
                 active.removeIf(x -> classOfSelector(x).equals(drop));
                 need = need * (1.0 - (double) n / all);
+                share = share * (1.0 - (double) n / all);
                 all -= n;
+                classNanos.remove(drop);
                 dropped = true;
                 String why = String.format(java.util.Locale.ROOT,
-                    "dropped test class %s: it was %.1f s of the %.1f s a run of the tests takes; the runs left of the other classes need about %.0f s of the %.0f s the %s s time limit leaves",
-                    drop, n / 1e9, perUnit, need, budget, Double.toString(LIMIT_SECS));
+                    "dropped test class %s: it was %.1f s of the %.1f s a run of the tests takes; the runs left of the other classes need about %.0f s of the %.0f s the %s s time limit leaves (left out from run %d on)",
+                    drop, n / 1e9, perUnit, need, budget, Double.toString(LIMIT_SECS), done + 1);
                 DlaDump.addLimitations(List.of(why));
                 System.err.println("DLA-JUNIT " + why);
+            }
+            if (dropped) {
+                // The next reading is of the classes that are left.
+                estimateNanos = Math.max(1.0, perUnit * 1e9 * share);
+                sinceNanos = 0;
+                sinceUnits = 0;
             }
         }
         if (!warned && need > budget) {
@@ -241,6 +263,16 @@ public final class DlaJUnitLoop {
             active = new ArrayList<>(active);
             active.removeIf(x -> classOfSelector(x).equals(c));
         }
+        if (!broken.isEmpty()) {
+            // The first run without the time of the classes that are gone (a connect timeout of a
+            // class that cannot run is not the time of a run of the others).
+            long gone = 0;
+            for (String c : broken) {
+                Long n = classNanos.remove(c);
+                gone += n == null ? 0 : n;
+            }
+            estimateNanos = Math.max(1.0, (double) (firstUnitNanos - gone));
+        }
         return !broken.isEmpty();
     }
 
@@ -257,6 +289,7 @@ public final class DlaJUnitLoop {
         step = stepDefault;
         done = 0;
         int failedUnits = 0;
+        int deadUnits = 0;
         long testsRun = 0;
         long abortedTests = 0;
         long skippedTests = 0;
@@ -278,10 +311,12 @@ public final class DlaJUnitLoop {
                 long took = System.nanoTime() - t0;
                 TestExecutionSummary summary = listener.getSummary();
                 done++;
-                unitNanos += took;
                 if (done == 1) {
                     firstUnitNanos = took;
                     classNanos = new LinkedHashMap<>(tally.nanos);
+                } else {
+                    sinceNanos += took;
+                    sinceUnits++;
                 }
                 if (done == 1 && summary.getTestsFoundCount() == 0) {
                     System.err.println("DLA-JUNIT no test found for " + String.join(", ", SELECT)
@@ -299,12 +334,21 @@ public final class DlaJUnitLoop {
                 testsRun += summary.getTestsStartedCount() - aborted;
                 if (summary.getTotalFailureCount() > 0) {
                     failedUnits++;
+                    // A unit in which nothing passed measured nothing; one in which other tests
+                    // passed is a measurement of those.
+                    if (summary.getTestsSucceededCount() == 0) {
+                        deadUnits++;
+                    }
                     if (firstFailure == null) {
                         firstFailure = describe(summary);
                         StringWriter w = new StringWriter();
                         summary.printFailuresTo(new PrintWriter(w), 25);
                         System.err.println("DLA-JUNIT first failing unit: " + done);
                         System.err.print(w);
+                        DlaDump.addLimitations(List.of("run " + done + " of the tests had "
+                            + summary.getTotalFailureCount() + " failure(s) (first: " + firstFailure
+                            + "): a failing test may stop before the code it was chosen for, so the tests that"
+                            + " passed are the measurement; the log counts the runs with a failure (failed_units)"));
                     }
                 }
                 boolean changed = false;
@@ -323,7 +367,7 @@ public final class DlaJUnitLoop {
                 request = requestOf(active);
             }
         }
-        int code = testsRun == 0 ? 3 : failedUnits == done ? 2 : 0;
+        int code = testsRun == 0 ? 3 : deadUnits == done ? 2 : 0;
         // The cause first, the summary line last: the log ends with the counts.
         if (testsRun == 0 && firstFailure != null) {
             System.err.println("DLA-JUNIT no test passed or failed: a class or test failed before any test ran: "

@@ -36,7 +36,7 @@ pub fn discover(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: DiscoverAr
 
 /// `--lang`, else the worker's own runtime (a worker's slice only speaks for its
 /// runtime, as `dla probe` does), else every detected runtime.
-fn effective_lang(explicit: Option<Runtime>, worker: Option<&str>) -> Option<Runtime> {
+pub(crate) fn effective_lang(explicit: Option<Runtime>, worker: Option<&str>) -> Option<Runtime> {
     explicit.or_else(|| worker.and_then(|w| w.parse::<Runtime>().ok()))
 }
 

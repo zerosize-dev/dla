@@ -1452,19 +1452,24 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
     let mut go_package: Option<String> = None;
     let mut focus = FocusFacts::default();
     if let Some(n) = opts.next {
-        if n > MAX_TARGETS || ids.len() + n > MAX_TARGETS {
+        if n > limit || ids.len() + n > limit {
             return Err(refuse(
                 codes::TOO_MANY_TARGETS,
                 format!(
-                    "{} target(s) were asked for (--probe {} and --next {n}); one harness declares at most {MAX_TARGETS}",
+                    "{} target(s) were asked for (--probe {} and --next {n}); one harness declares at most {limit}",
                     ids.len() + n,
                     ids.len()
                 ),
-                format!("at most {MAX_TARGETS} targets per harness"),
+                format!("at most {limit} targets per harness"),
                 format!(
-                    "dla harness gen --lang {} --driver --next {}",
+                    "dla harness gen --lang {} --{} --next {}",
                     rt.as_str(),
-                    MAX_TARGETS.saturating_sub(ids.len()).max(1)
+                    if opts.junit {
+                        "junit --tests <test classes>"
+                    } else {
+                        "driver"
+                    },
+                    limit.saturating_sub(ids.len()).max(1)
                 ),
             ));
         }
@@ -1602,6 +1607,19 @@ type TestLoopClass = (
     usize,
     Vec<(FindingId, dla_core::testloop::Via)>,
 );
+
+/// The name a chosen test class is printed by: its simple name, or the full one when another
+/// chosen class has the same simple name (two lines that read alike would look like one class
+/// chosen twice).
+fn shown_class(class: &str, all: &[&str]) -> String {
+    let simple = |c: &str| c.rsplit('.').next().unwrap_or(c).to_owned();
+    let mine = simple(class);
+    if all.iter().filter(|c| simple(c) == mine).count() > 1 {
+        class.to_owned()
+    } else {
+        mine
+    }
+}
 
 /// What the next test-loop batch chose, for the summary of `dla harness gen --junit --next`.
 #[derive(Debug)]
@@ -2608,7 +2626,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             if let Some(f) = &test_loop_facts {
                 // The output is bounded (2 KB): the tests and why, one line each; the rest is in
                 // `tests.json`.
-                let simple = |class: &str| class.rsplit('.').next().unwrap_or(class).to_owned();
+                let names: Vec<&str> = f.classes.iter().map(|c| c.0.as_str()).collect();
+                let simple = |class: &str| shown_class(class, &names);
                 m.insert(
                     "tests_chosen".into(),
                     json!(
@@ -2772,6 +2791,15 @@ fn jfr_available() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_chosen_test_class_is_shown_by_its_simple_name_unless_another_shares_it() {
+        let all = ["a.FooTests", "b.FooTests", "a.BarTests"];
+        assert_eq!(super::shown_class("a.FooTests", &all), "a.FooTests");
+        assert_eq!(super::shown_class("b.FooTests", &all), "b.FooTests");
+        assert_eq!(super::shown_class("a.BarTests", &all), "BarTests");
+        assert_eq!(super::shown_class("NoPackage", &["NoPackage"]), "NoPackage");
+    }
+
     #[cfg(unix)]
     #[test]
     fn cdylib_dirs_cover_crate_workspace_and_both_profiles() {

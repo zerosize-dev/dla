@@ -283,9 +283,11 @@ under the run directory and need tier 1.
      test class (up to 16 targets, 10 classes, 1000 tests, one module), chooses the classes and prints them
      with why, and needs nothing filled; the queue says "N candidates in M test-loop batches, nothing to
      write; then K candidates need a driver" everywhere it names the next step. A growing target goes the
-     usual way; a flat reading (`executed`, `constant`) is one reading and gets the second look by a
-     hand-written harness; `not_loaded` and `not_executed` are a miss and get a focus harness; a batch
-     that cannot build or whose tests all fail prints the driver command for its targets.
+     usual way; a flat reading (`executed`, `constant`) is one reading, and the best-ranked of them (at
+     most 9 for a runtime) get the second look by a hand-written harness once the first pass is done;
+     `not_loaded` and `not_executed` are a miss and get a focus harness; a batch that cannot build or
+     in which no test passes prints the driver command for its targets. `dla census --lang jvm` writes
+     the workload discovery result when the run has none, so the test loop needs no step of its own.
   2. Read the target block of the driver. Per target it gives the finding, site, holder, owner, the rule's
      message, up to 3 writers and 3 removers (`file:line` with the enclosing function), what its probe
      reads (or "no probe: tied by allocation stacks or type counts"), a `key:` line when the census says the key of the holder comes from the caller (the holder grows only when each unit passes a key it has not seen: a key compared by value is built from the unit's key, a key compared by identity must be a fresh object per unit; the line says what makes a fresh one in the driver's language and that a method reference, a lambda that captures nothing or a module-level function is one object for the whole run), and one instruction by holder:

@@ -176,8 +176,16 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
                 m.verdict.as_str(),
                 m.detail
             ));
-            e["focus"] =
-                json!("pending: dla harness gen --driver --next gives it a harness of its own");
+            e["focus"] = json!(format!(
+                "pending: {} gives it a harness of its own",
+                queues
+                    .iter()
+                    .find(|q| q.pending.contains(id))
+                    .map_or_else(
+                        || "dla harness gen --driver --next".to_owned(),
+                        |q| q.missed_command(id)
+                    )
+            ));
         }
         lines.push((f.state.as_str().to_owned(), e));
     }
@@ -499,9 +507,14 @@ pub fn close_rest(ctx: &Ctx, a: CloseRestArgs) -> Res<Value> {
     });
     if let Some(q) = queues.iter().find(|q| q.open()) {
         out["batch_command"] = json!(q.command);
-        if let Some(line) = q.test_loop_line() {
-            out["next"] = json!(line);
-        }
+    }
+    // The test loop of any open queue, not only of the first one.
+    if let Some(line) = queues
+        .iter()
+        .filter(|q| q.open())
+        .find_map(|q| q.test_loop_line())
+    {
+        out["next"] = json!(line);
     }
     if left.len() > 8 {
         out["left_more"] = json!(left.len() - 8);

@@ -37,10 +37,15 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   else by the test using it; at most 16 targets, 10 classes, 1000 tests and one module per harness, so
   a run is about two minutes; the 16 because each target keeps 3 probe columns inside the 64 of a
   series), prints the tests chosen and why (`tests_chosen`, `tests.json`), and declares them with their
-  probes; nothing to fill. Candidates with no test class wait for `--driver --next`. A class none of
+  probes; nothing to fill. `dla census --lang jvm` writes the workload discovery result itself when
+  the run has none, so the test loop is offered without a separate `dla workload discover`.
+  Candidates with no test class wait for `--driver --next`. A class none of
   whose tests passes in the first run is dropped while another passed, and the loop lowers its step and
   drops the slowest classes when the runs would not fit the time limit (600 s for a batch); both are
-  limitations of the series. If the batch cannot build or every test fails, the output prints the
+  limitations of the series, `dla harness run` names them first (`TEST CLASS DROPPED`), and a flat
+  reading of a target whose chosen classes were all dropped reads `not_executed`, a miss. A run in
+  which some tests fail and others pass is a measurement of the ones that passed (the first failure
+  is a limitation). If the batch cannot build or no test passes in any run, the output prints the
   driver command for the same targets and they are not counted as measured. Pick the test classes that exercise the
   target by name and by import (`--tests`), with `--probe F` for the finding. When the project's own tests start the application
   (`@SpringBootTest`), use `--junit` with such an integration test: it is one JVM and the Spring test

@@ -807,3 +807,34 @@ flat test-loop readings get only 9 second looks.
   library at start-up" (tree of 0302e2b, no trailers), pushed to main and the dev branch.
   It is NOT in the published preview.3 (that is cc003a0). CI on main at 20ee96e starts by
   itself; not waited for unless the next snapshot needs it.
+
+## State 2026-11-22 (after the fresh builder's report on the test-loop-first queue, brief T2)
+
+- Builder af9e65679252b2b82 finished (report: u65/report.md): suite 3165 passed, real tree 24 test-loop
+  batches in about 23 min, F160 `confirmed` by the printed route.
+- My own check (u66/): whole suite on the builder's tree running/ran (u66/test-all.log); a 3-reviewer
+  Sonnet workflow (wf_d80d932a-5e6) read the diff; my reading found more.
+- Fixes I made on top (all uncommitted, NOT yet built or tested when this note was written):
+  1. `testloop.rs` pick(): classes of one pick are of one module and fit MAX_TESTS together (+ unit test).
+  2. `trend/verdicts.rs`: flat reading of a test-loop target whose chosen classes (harness/H/tests.json)
+     were all dropped (series limitation `dropped test class X: ...`) reads `not_executed` (+ test).
+  3. `census_cmd.rs`: `dla census --lang jvm` writes the workload discovery result when the run has none
+     (spring-6 never ran `dla workload discover`, so the test loop would never have been offered)
+     (+ CLI test at the end of crates/dla-cli/tests/queue.rs).
+  4. `DlaJUnitHarness.java`: a run with failing AND passing tests is kept (exit 2 only when no test passed
+     in any run; first failure is a limitation); timing after a drop is measured again (sinceNanos,
+     estimateNanos); drop limitation says from which run (+ test a_test_that_fails_in_every_run_...).
+  5. `gen.rs`: bare `--junit --tests X --next` takes 16 (bound was 8); `tests_chosen` prints the full
+     class name when two share a simple name.
+  6. `queue.rs`: `command_for` returns `dla harness run H` for a candidate of the generated test-loop
+     harness; `missed_command` (used by ledger refuse and ledger list).
+  7. `run.rs`: attention lines show the test loop's limitations (`TEST CLASS DROPPED (n)`), the
+     no-usable-point failure prints the driver fallback for a test loop.
+  8. `out.rs`: `junit_hint`/`queue_next` kept whole, also nested under `summary` and in the last resort.
+  9. `ledger_queue.rs`: close-rest `next` from any open queue.
+  10. docs jvm.md, stages.md (second look cap 9, census discovery, failing tests, dropped class).
+- Commit message draft: wip-notes/commit-message-6.txt. VERIFY row still to extend.
+- Next: build, run the new tests, my marker mutations, whole suite again (prune first), snapshot WITH CI,
+  commit, push, then the real run spring-7.
+- Open points not changed: close-rest closes flat test-loop readings before any second look (cap 9);
+  status says "not targeted yet" for missed ones; a model may tire of 24 batches of 3 commands each.

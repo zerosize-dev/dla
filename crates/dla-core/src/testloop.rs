@@ -435,15 +435,26 @@ impl TestIndex {
             .filter(small)
             .collect();
         by_name.sort_by_key(|(_, c)| (c.stem.len(), c.tests, c.file.clone()));
-        if !by_name.is_empty() {
-            return Some(Pick {
-                owner,
-                classes: by_name
-                    .into_iter()
-                    .take(PER_NAME)
-                    .map(|(i, _)| (*i, Via::Name))
-                    .collect(),
-            });
+        if let Some((_, first)) = by_name.first() {
+            // The classes of one pick are of one module and fit one harness together: a harness
+            // runs the classes of one module, and a pick that does not fit alone would never
+            // run. The closest name decides the module.
+            let cwd = first.cwd.clone();
+            let mut tests = 0;
+            let classes: Vec<(usize, Via)> = by_name
+                .into_iter()
+                .filter(|(_, c)| c.cwd == cwd)
+                .filter(|(_, c)| {
+                    let fits = tests + c.tests <= MAX_TESTS;
+                    if fits {
+                        tests += c.tests;
+                    }
+                    fits
+                })
+                .take(PER_NAME)
+                .map(|(i, _)| (*i, Via::Name))
+                .collect();
+            return Some(Pick { owner, classes });
         }
         let mut by_mention: Vec<&(usize, &TestClass)> = all
             .iter()
@@ -648,6 +659,35 @@ mod tests {
             class("src/test/java/a/LazyBigTests.java", MAX_TESTS + 1, &[]),
         ]);
         assert!(ix.pick("src/main/java/a/Lazy.java").is_none());
+    }
+
+    #[test]
+    fn the_classes_of_one_pick_are_of_one_module_and_fit_one_harness() {
+        // The closest name is in module m1; the other name match is in m2 and is left out.
+        let mut a = class("m1/src/test/java/a/LazyTests.java", 5, &[]);
+        a.cwd = "m1".into();
+        let mut b = class("m2/src/test/java/a/LazyUnitTests.java", 3, &[]);
+        b.cwd = "m2".into();
+        let ix = index(vec![a, b]);
+        let p = ix.pick("m1/src/main/java/a/Lazy.java").unwrap();
+        assert_eq!(p.classes, vec![(0, Via::Name)]);
+        let order = vec![(FindingId::new(1), Some(p))];
+        let plan = plan(&ix, &order);
+        assert_eq!(plan.batches.len(), 1);
+        assert!(plan.batches[0].classes.iter().all(|c| c.cwd == "m1"));
+
+        // Two name matches that hold more tests together than one harness runs: the closest
+        // alone, and the candidate is in a batch, not sent to a driver.
+        let ix = index(vec![
+            class("src/test/java/a/LazyTests.java", 600, &[]),
+            class("src/test/java/a/LazyUnitTests.java", 600, &[]),
+        ]);
+        let p = ix.pick("src/main/java/a/Lazy.java").unwrap();
+        assert_eq!(p.classes, vec![(0, Via::Name)]);
+        let plan = plan(&ix, &[(FindingId::new(1), Some(p))]);
+        assert_eq!(plan.batches.len(), 1);
+        assert!(plan.driver.is_empty());
+        assert_eq!(plan.batches[0].tests(), 600);
     }
 
     #[test]

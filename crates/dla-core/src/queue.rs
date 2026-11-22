@@ -771,6 +771,8 @@ pub struct RuntimeQueue {
     pub in_flight: Option<String>,
     /// True when `in_flight` is a test-loop harness: nothing to fill, only to run.
     pub in_flight_test_loop: bool,
+    /// The pending candidates the harness in flight declares.
+    pub in_flight_ids: Vec<FindingId>,
     /// The command that makes the next batch: the test loop while a test-loop batch is left,
     /// else the driver.
     pub batch_command: String,
@@ -800,11 +802,23 @@ impl RuntimeQueue {
     pub fn command_for(&self, id: &FindingId) -> String {
         if self.test_loop.batches.is_empty()
             || self.test_loop.batches.iter().any(|b| b.ids.contains(id))
+            // Declared by the test-loop harness that is generated and not run yet: run it.
+            || (self.in_flight_test_loop && self.in_flight_ids.contains(id))
         {
             self.command.clone()
         } else {
             batch_command(&self.runtime, false)
         }
+    }
+
+    /// The command that gives the missed candidate `id` a harness of its own: the test loop's
+    /// while a test-loop batch holds it (a hook driver missed it and its test class has not
+    /// run yet), else a driver's.
+    pub fn missed_command(&self, id: &FindingId) -> String {
+        batch_command(
+            &self.runtime,
+            self.test_loop.batches.iter().any(|b| b.ids.contains(id)),
+        )
     }
 
     /// The sentence that names the next step with the test loop first while a test-loop batch
@@ -987,6 +1001,8 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                     .as_ref()
                     .is_some_and(|h| ix.declared_by.get(p).is_some_and(|v| v.contains(h)))
             };
+            let in_flight_ids: Vec<FindingId> =
+                pending.iter().filter(|p| in_flight_of(p)).cloned().collect();
             // The test loop first: the pending candidates that have a test class and no
             // test-loop harness yet, in batches (see `testloop`).
             let mut test_loop = crate::testloop::Plan::default();
@@ -1086,6 +1102,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 in_flight_test_loop: in_flight
                     .as_ref()
                     .is_some_and(|h| ix.test_loops.contains(h)),
+                in_flight_ids,
                 in_flight,
                 batch_command,
                 test_loop: if closed.is_some() {
@@ -1198,6 +1215,8 @@ impl ReportFacts {
                     r.eligible()
                         && r.runtime.as_deref() == Some("jvm")
                         && index.targeted_in(&r.id).is_empty()
+                        // A growth a harness's trend tied to it settled it: no test loop needed.
+                        && index.standing(&r.id) == Standing::Pending
                 })
                 .map(|r| {
                     let file = view
@@ -2545,6 +2564,34 @@ mod tests {
     }
 
     #[test]
+    fn a_missed_candidate_is_told_the_command_that_gives_it_a_harness() {
+        // Missed by a hook driver; its test class has not run: the test loop is its harness.
+        let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+        ran(
+            &run,
+            "H1",
+            &[1],
+            "a driver",
+            "S1",
+            &[(1, Verdict::NotExecuted)],
+        );
+        let q = jvm_queue(&run);
+        assert!(q.missed.contains_key(&FindingId::new(1)));
+        assert_eq!(
+            q.missed_command(&FindingId::new(1)),
+            "dla harness gen --lang jvm --junit --next"
+        );
+        // Missed by the test loop: a driver.
+        let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
+        test_loop_harness(&run, "H1", &[1]);
+        read(&run, "H1", "S1", &[(1, Verdict::NotLoaded)]);
+        assert_eq!(
+            jvm_queue(&run).missed_command(&FindingId::new(1)),
+            "dla harness gen --lang jvm --driver --next"
+        );
+    }
+
+    #[test]
     fn a_test_loop_miss_and_a_focus_miss_are_two_drivers_and_settle_the_candidate() {
         let (run, _p) = jvm_run(&[("src/test/java/a/AaaTests.java", JUNIT5)], &["Aaa"]);
         test_loop_harness(&run, "H1", &[1]);
@@ -2589,6 +2636,10 @@ mod tests {
         let q = jvm_queue(&run);
         assert!(q.in_flight_test_loop);
         assert_eq!(q.command, "dla harness run H1");
+        // Its own candidate is told to run it, not to write a driver, while another test-loop
+        // batch is still planned; the planned one is told the queue's command too.
+        assert_eq!(q.command_for(&FindingId::new(1)), "dla harness run H1");
+        assert_eq!(q.command_for(&FindingId::new(2)), "dla harness run H1");
         // The other candidate is still planned, so the sentence counts it.
         assert_eq!(q.test_loop.candidates(), 1);
         let item = crate::view::queue_item(&q);
@@ -2628,6 +2679,31 @@ mod tests {
                 "{reason}"
             );
         }
+    }
+
+    #[test]
+    fn a_candidate_settled_by_a_tied_growth_is_not_counted_for_the_test_loop_in_the_report() {
+        let (run, _p) = jvm_run(
+            &[
+                ("src/test/java/a/AaaTests.java", JUNIT5),
+                ("src/test/java/a/BbbTests.java", JUNIT5),
+                ("src/test/java/a/CccTests.java", JUNIT5),
+            ],
+            &["Aaa", "Bbb", "Ccc"],
+        );
+        // H1 declares F2 only; its trend ties a growth to F1, which no harness declared.
+        test_loop_harness(&run, "H1", &[2]);
+        read(
+            &run,
+            "H1",
+            "S1",
+            &[(1, Verdict::Grew), (2, Verdict::Executed)],
+        );
+        let line = ReportFacts::of(&run.reload()).unwrap().line().unwrap();
+        assert!(
+            line.contains("(1 in 1 test-loop batch, nothing to write;"),
+            "{line}"
+        );
     }
 
     #[test]

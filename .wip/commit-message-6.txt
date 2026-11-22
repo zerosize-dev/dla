@@ -1,0 +1,41 @@
+The project's own tests are the first pass of a JVM queue
+
+A JVM project with JUnit 5 tests was asked for a hand-written driver per
+batch of eight candidates. On a library with 388 ranked candidates that is
+about fifty drivers, and a run stopped after a few of them without reaching
+the documented leak, which the project's own tests reach.
+
+The queue of a JVM project now starts with the test loop: `dla harness gen
+--lang jvm --junit --next` takes the next ranked candidates that have a test
+class, chooses the classes (by name, else by mention), and runs them in a
+loop in one JVM with nothing to fill. A harness holds at most 16 targets, 10
+test classes, 1000 tests and the classes of one module. Status, the gate,
+trend, close-rest and the report say how many candidates are in how many
+test-loop batches and how many need a driver after.
+
+Readings:
+- a target that grew goes on as before (sibling, test, alloc-test, confirm);
+- a flat reading (`executed`, `constant`) is one reading, as from a driver;
+- `not_loaded`, `not_executed` and `unknown` are a miss and get a focus
+  harness;
+- a batch that cannot build, or in which no test passes in any run, prints
+  the driver command for its targets and they are not counted as measured.
+
+The loop itself:
+- drops a class none of whose tests passed in the first run while another
+  class passed; a flat reading of a target whose chosen classes were all
+  dropped reads `not_executed`;
+- keeps a run in which some tests fail and others pass, and records the
+  first failure as a limitation; before, one test that failed in every run
+  made the whole harness fail;
+- fits its runs into the time limit (600 s for a batch) by lowering the step
+  and then dropping the slowest classes, measured again after each drop.
+
+`dla census --lang jvm` writes the workload discovery result when the run
+has none: the queue reads the tests from it, and a run that skipped `dla
+workload discover` was never offered the loop.
+
+Also: `dla trend` names the column of a declared target first; the report
+line does not count a candidate a tied growth settled as waiting for the
+loop; a bare `--next` with `--junit --tests` takes 16; the sentences that
+name the next step are never cut from a bounded output.
