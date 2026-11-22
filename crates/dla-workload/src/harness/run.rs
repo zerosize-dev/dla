@@ -3760,10 +3760,7 @@ pub fn attention_lines(
         .collect();
     if let Some(first) = dropped.first() {
         lines.push(clip(
-            &format!(
-                "TEST CLASS DROPPED ({}): {first}",
-                dropped.len()
-            ),
+            &format!("TEST CLASS DROPPED ({}): {first}", dropped.len()),
             160,
         ));
     }
@@ -3879,13 +3876,14 @@ mod tests {
         };
         let lines = attention_lines(&m, &loop_out, 9, &ledger, &dir.path().join("none.json"));
         assert!(
-            lines.iter().any(|l| l.starts_with("DRIVER STEP: the test loop lowered its step")),
+            lines
+                .iter()
+                .any(|l| l.starts_with("DRIVER STEP: the test loop lowered its step")),
             "{lines:?}"
         );
         assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with("TEST CLASS DROPPED (2): a.BrokenTests: none of its tests passed")),
+            lines.iter().any(|l| l
+                .starts_with("TEST CLASS DROPPED (2): a.BrokenTests: none of its tests passed")),
             "{lines:?}"
         );
         // Nothing to say: no lines.

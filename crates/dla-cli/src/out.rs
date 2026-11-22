@@ -177,9 +177,10 @@ pub fn bound(v: Value) -> Value {
                     o.insert(k.to_owned(), h.clone());
                 }
                 // `dla harness gen` carries the hint inside its summary.
-                if let (Some(h), Some(Value::Object(sum))) =
-                    (orig.get("summary").and_then(|s| s.get(k)), o.get_mut("summary"))
-                {
+                if let (Some(h), Some(Value::Object(sum))) = (
+                    orig.get("summary").and_then(|s| s.get(k)),
+                    o.get_mut("summary"),
+                ) {
                     sum.insert(k.to_owned(), h.clone());
                 }
             }
@@ -244,7 +245,10 @@ mod tests {
     #[test]
     fn the_sentences_that_name_the_next_step_are_never_cut() {
         let hint = format!("this project has JUnit 5 tests: {} END", "x ".repeat(150));
-        let next = format!("347 candidates in 24 test-loop batches {} END", "y ".repeat(150));
+        let next = format!(
+            "347 candidates in 24 test-loop batches {} END",
+            "y ".repeat(150)
+        );
         // Shrunk: the top-level sentence and the one inside the summary stay whole.
         let v = json!({
             "ok": true,

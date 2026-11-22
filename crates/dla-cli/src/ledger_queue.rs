@@ -178,13 +178,10 @@ pub fn list(ctx: &Ctx, a: ListArgs) -> Res<String> {
             ));
             e["focus"] = json!(format!(
                 "pending: {} gives it a harness of its own",
-                queues
-                    .iter()
-                    .find(|q| q.pending.contains(id))
-                    .map_or_else(
-                        || "dla harness gen --driver --next".to_owned(),
-                        |q| q.missed_command(id)
-                    )
+                queues.iter().find(|q| q.pending.contains(id)).map_or_else(
+                    || "dla harness gen --driver --next".to_owned(),
+                    |q| q.missed_command(id)
+                )
             ));
         }
         lines.push((f.state.as_str().to_owned(), e));

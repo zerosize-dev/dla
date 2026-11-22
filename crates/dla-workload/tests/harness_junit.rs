@@ -1556,7 +1556,10 @@ fn next_with_junit_and_a_probe_is_refused_and_explicit_tests_keep_the_old_meanin
     o.next = Some(17);
     let r = gen_err(&fx, &o);
     assert_eq!(r.code, "too-many-targets", "{r:?}");
-    assert!(r.fix.contains("--junit --tests") && r.fix.contains("--next 16"), "{r:?}");
+    assert!(
+        r.fix.contains("--junit --tests") && r.fix.contains("--next 16"),
+        "{r:?}"
+    );
 }
 
 #[test]
@@ -1641,8 +1644,11 @@ fn a_test_that_fails_in_every_run_does_not_sink_the_tests_that_pass() {
     assert!(!log.contains("DLA-JUNIT every unit failed"), "{log}");
     assert!(!log.contains("dropped test class"), "{log}");
     assert!(
-        series.limitations.iter().any(|l| l.contains("run 1 of the tests had 1 failure(s)")
-            && l.contains("Connection refused: kafka:9092")),
+        series
+            .limitations
+            .iter()
+            .any(|l| l.contains("run 1 of the tests had 1 failure(s)")
+                && l.contains("Connection refused: kafka:9092")),
         "{:?}",
         series.limitations
     );

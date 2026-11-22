@@ -1001,8 +1001,11 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                     .as_ref()
                     .is_some_and(|h| ix.declared_by.get(p).is_some_and(|v| v.contains(h)))
             };
-            let in_flight_ids: Vec<FindingId> =
-                pending.iter().filter(|p| in_flight_of(p)).cloned().collect();
+            let in_flight_ids: Vec<FindingId> = pending
+                .iter()
+                .filter(|p| in_flight_of(p))
+                .cloned()
+                .collect();
             // The test loop first: the pending candidates that have a test class and no
             // test-loop harness yet, in batches (see `testloop`).
             let mut test_loop = crate::testloop::Plan::default();

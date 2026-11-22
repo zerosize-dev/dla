@@ -1031,7 +1031,11 @@ fn an_aborted_run_keeps_its_queue_over_and_nothing_lifts_it() {
 fn a_jvm_census_discovers_the_tests_so_the_queue_starts_with_the_test_loop() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    write(root, "pom.xml", "<project><modelVersion>4.0.0</modelVersion></project>\n");
+    write(
+        root,
+        "pom.xml",
+        "<project><modelVersion>4.0.0</modelVersion></project>\n",
+    );
     write(root, "mvnw", "#!/bin/sh\n");
     write(
         root,
