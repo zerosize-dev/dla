@@ -58,5 +58,25 @@ one cause in the library: a module-level object stores an import error and
 raises it again on every use, each raise adds the caller's stack to the
 stored error, and those frames keep every pytest session alive.
 
-Not seen yet: an agent taking this route by itself. The loop was run on
+A second unattended run on that library, made before the hints of the
+next paragraph existed, found the documented leak without the loop. The Python
+worker took the driver batch, because the worker instructions named that
+command literally and nothing it read named the loop command. Its own
+driver units made the leaking call, the site column of the calling line
+passed, and the worker added the finding, confirmed it, reproduced it
+through the public API and named the C function that never releases the
+reference. The run took 18 minutes.
+
+So that a worker that skips `dla run status` still learns the order: the
+worker instructions say to run the command the queue prints, the census
+note and `dla ledger list` name the queue's command, and a Python hook
+driver generated while the loop is still the first step carries
+`pytest_hint`, which the output bound never cuts.
+
+One test of the site columns asserted exactly two blocks per call. Two
+CI interpreters gave 397 and 398 of 400: a list object taken from the
+interpreter's free list keeps the allocation site of its first use. The
+test now accepts 5 percent below two per call.
+
+Not seen yet: an agent running the loop by itself. The loop was run on
 Linux only.
