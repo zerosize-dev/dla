@@ -43,6 +43,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # The tests of the Python test loop run the project's tests with pytest and skip without
+      # it. The Linux runner gets it for the system interpreter, so the loop is tested here.
+      - name: pytest for the Python test-loop tests
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-pytest
       - name: Test
         run: cargo test --workspace --no-fail-fast
 

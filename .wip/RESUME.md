@@ -1066,3 +1066,25 @@ flat test-loop readings get only 9 second looks.
 - Builder Y (Sonnet, background agent aab0b0d685f8d5184, scratch u78) works on py-test-loop-brief.md in the shared tree on top of W1 and X. Do not run cargo or edit the tree while it runs.
 - Disk: freed old scratch (u18/pillow, u24/bin, u20/X2, u8chk-K4/r2, two old run dirs in u72/pillow/.dla); 5.5 GB free.
 - After Y: verify (rerun tests, own mutations, real-tree check incl. the queue's first command and the refusal without pytest), whole suite, clippy, schema check, snapshot WITHOUT [skip ci] and wait for CI, then three commits to main (messages 9, 10 and one to write for Y), push main and main:dev/wonderful-mccarthy-algc5s, refresh /root/dla-real plugin and bin, run pillow-2 with --py-venv python3.12.
+
+## State at about 19:30 UTC 2026-11-22
+
+- main is still 29cb6f6 (0.9.0-preview.4). Three changes wait in the working tree, all on wip/progress.
+- Trees for the three commits: W1 = snapshot 8253583 (message commit-message-9.txt), X = snapshot 7633949
+  (commit-message-10.txt; 9d3ef27 has the same tree), Y+Z+ci.yml = the final snapshot (commit-message-11.txt, to write).
+- Builder Y (pytest loop) reported; builder Z (brief py-census-discovery-brief.md) closed the gap that made Y inert:
+  `dla census --lang python` writes the workload discovery result when the run has none and the project has Python
+  test files (no candidate condition for Python; the JVM branch is unchanged and still has the joined_sites hole).
+- My checks of Y+Z so far: ten own mutations (scratchpad u79/mut.py, Q1..Q10) each failed a named test and are reverted;
+  the new and changed targets pass with pytest on PATH; forbidden-name scan clean; fmt clean.
+- CI: added `sudo apt-get install -y python3-pytest` to the Linux leg of the test job (the loop tests skip without pytest).
+- Real tree (u72/pillow, run 20261122-191401-d847): after probe, sweep, census only, `dla run status` names
+  `dla harness gen --lang python --pytest`; gen selected 158 test paths; the loop run was started 19:14:37.
+- Still to do: read the loop's trend; whole suite on the combined tree; clippy; schema check; snapshot without
+  [skip ci]; CI; three commits; push main and main:dev/wonderful-mccarthy-algc5s; refresh /root/dla-real; run pillow-2.
+- Not caused by the new work: two gc.freeze tests of harness_capture_python fail under the uv-managed CPython 3.12.13
+  (it starts with gc.get_freeze_count() == 375); they pass on CI's interpreters.
+- Open items to tell the owner: the Python test-directory rule is case sensitive (a `Tests/` helper file gets a site
+  column); the JVM census does not write the discovery when it only joins the sweep's sites; the loop is an order of
+  the queue, not a gate rule; pytest loop untested on macOS and Windows; a pytest-loop series holds many growing
+  lines that are the test suite's own (12 columns, more without a column).
