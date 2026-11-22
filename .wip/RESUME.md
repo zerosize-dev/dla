@@ -641,3 +641,13 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Running: `<sp>/u59/verify.sh` -> `<sp>/u59/verify.log` (fmt, clippy, schema, workspace
   tests). Then: `dla-bench dynamic --only go-` once on the final tree, a new frozen
   snapshot WITH CI, commit to main with `commit-message-4.txt` (already extended).
+
+## State 2026-11-22 02:10 UTC
+
+- Final tree checked: fmt, clippy (workspace, all targets, -D warnings), `dla schema --check`,
+  `cargo test --workspace --no-fail-fast`: 166 binaries ok, 3132 passed, 0 failed
+  (`<sp>/u59/test-all.log`); `dla-bench dynamic --only go-`: 8/8 pass (`<sp>/u59/go.log`).
+- Fifth frozen snapshot made WITH CI (id in `<sp>/u59/tree-sha`). When green:
+  `bash <sp>/wip-notes/commit-snapshot-tree.sh <sha> <sp>/wip-notes/commit-message-4.txt`,
+  check no trailers, push main and main:dev/wonderful-mccarthy-algc5s, then the
+  0.9.0-preview.3 bump and release.
