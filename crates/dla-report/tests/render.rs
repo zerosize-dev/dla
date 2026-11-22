@@ -42,6 +42,7 @@ fn gate_complete_view() -> RunView {
                 note: None,
                 reason: Some(UnresolvedReason::ToolMissing),
                 remedy: Some("no target".into()),
+                runtime: None,
             })
             .unwrap();
     }

@@ -99,8 +99,8 @@ and is not counted (a command running longer than 30 minutes is taken for hung).
 measurement queue: the time left decides, `dla run status` shows the queue and a `stop_stamp` field, and the next
 command that works on the run (not status, gate check, report, bundle or ledger list) lifts the stamp before it
 runs; the report keeps it in its `History:` line. An aborted run stays aborted.
-- A `harness_not_run` item means a generated harness was never run, or never built: run it (`dla harness run H<n>`; for one that did not build, fix the build error first; a run refused for time is not a run), or record why it cannot run on `intake.workload`, and ask the user first when only they can unblock it.
-- A `coverage_contradiction` item means iterations ran and no entry point was exercised: fill the DLA-HOOK bodies of the driver harness so it calls one and run it again; when the harness that produced the zero is a command harness or a JUnit repeat (no hooks), make a driver (`dla harness gen --lang <rt> --driver`), fill its hooks and run the harness it prints; when the harness did not build, fix the build error first; or record on `intake.workload` why it cannot. A `budget_left_unrevisited` item means findings were closed while the budget could still measure them: run the command in its fix, or record the blocker on `intake.workload`.
+- A `harness_not_run` item means a generated harness was never run, or never built: run it (`dla harness run H<n>`; for one that did not build, fix the build error first; a run refused for time is not a run), or record why it cannot run on `intake.workload` with `--runtime <rt>` (the runtime of the harness; it closes the queue of that runtime only), and ask the user first when only they can unblock it.
+- A `coverage_contradiction` item means iterations ran and no entry point was exercised: fill the DLA-HOOK bodies of the driver harness so it calls one and run it again; when the harness that produced the zero is a command harness or a JUnit repeat (no hooks), make a driver (`dla harness gen --lang <rt> --driver`), fill its hooks and run the harness it prints; when the harness did not build, fix the build error first; or record on `intake.workload` why it cannot (with `--runtime <rt>`). A `budget_left_unrevisited` item means findings were closed while the budget could still measure them: run the command in its fix, or record the blocker on `intake.workload` with `--runtime <rt>`.
 - A `queue` item leads the list while a runtime still has pending ranked candidates: run its batch command (`dla harness gen --lang <rt> --driver --next`, fill the hooks, `dla harness run H<n> --mode both`, `dla trend S<n>`); once the queue is empty or closed, `dla ledger close-rest`.
 - Remedy: do not wait for it. Run `dla gate check --final`, fix the items it prints, or resolve each with
   `dla ledger resolve <F> --as unresolved --reason <r> --remedy "<text>"`, then `dla report`.
@@ -169,8 +169,13 @@ rank, the minutes left and the fix.
   candidate's queue status (`pending`, `settled`, `not-eligible`); never read `ledger.jsonl` by hand.
 - When no driver can be built or run for the runtime (no toolchain, the build fails, a privilege was
   declined): `dla ledger resolve intake.workload --status unresolved --reason
-  <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy "<what blocks it>"`. That closes
-  the queue of the runtime; use it only when it is true.
+  <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy "<what blocks it>" --runtime <rt>`.
+  The blocker names one runtime and closes the queue of that runtime only; the queues of the other
+  runtimes stay open and `dla ledger close-rest` leaves their candidates pending. `--runtime` is required
+  when more than one runtime has ranked candidates. It is refused (`workload-ran`) for a runtime whose
+  harness already wrote a series: that workload ran. A runtime that cannot be driven by its own tools
+  (C extension modules that only Python loads) is driven through the runtime that loads them, not
+  recorded as blocked while that runtime's queue is open. Use it only when it is true.
 - Record: the batch you ran. A `constant`, `not_loaded` or `not_executed` target is run once more with a
   fixed unit; two driver runs with different driver files settle a candidate whatever the verdicts.
 

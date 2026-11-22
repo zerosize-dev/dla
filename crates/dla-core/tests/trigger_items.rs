@@ -238,8 +238,8 @@ fn at_the_floor_nothing_is_asked() {
     assert!(items(dir.path()).is_empty());
     let view = RunView::load(dir.path()).unwrap();
     assert_eq!(
-        dla_core::trigger::unchecked_because(&view),
-        Some("not enough time was left: the budget was at the floor")
+        dla_core::trigger::unchecked_because(&view, Some("go")),
+        Some("not enough time was left: the budget was at the floor".to_owned())
     );
 }
 
@@ -258,9 +258,68 @@ fn a_workload_blocker_asks_nothing() {
         note: None,
         reason: Some(dla_core::UnresolvedReason::EnvUnavailable),
         remedy: Some("no toolchain".into()),
+        runtime: None,
     })
     .unwrap();
     write_main(dir.path(), &l);
+    assert!(items(dir.path()).is_empty());
+}
+
+/// Records a blocker on `intake.workload`, for `runtime` or for none.
+fn blocker(dir: &Path, runtime: Option<&str>) {
+    let mut l = Ledger::load(dir).unwrap();
+    l.answer_checklist(dla_core::ChecklistAnswer {
+        item: "intake.workload".into(),
+        status: dla_core::AnswerStatus::Unresolved,
+        evidence: vec![],
+        note: None,
+        reason: Some(dla_core::UnresolvedReason::BuildFails),
+        remedy: Some("needs an embedding driver".into()),
+        runtime: runtime.map(String::from),
+    })
+    .unwrap();
+    write_main(dir, &l);
+}
+
+#[test]
+fn a_blocker_of_another_runtime_does_not_excuse_a_finding_of_an_open_runtime() {
+    let dir = run();
+    harness(dir.path(), "H1", false);
+    ran(dir.path(), "S1", "H1", "aa", Verdict::Grew);
+    blocker(dir.path(), Some("native"));
+    let view = RunView::load(dir.path()).unwrap();
+    assert_eq!(
+        dla_core::trigger::unchecked_because(&view, Some("go")),
+        None
+    );
+    assert_eq!(items(dir.path()).len(), 1, "the go finding is still asked");
+}
+
+#[test]
+fn a_blocker_of_the_runtime_of_the_finding_names_the_runtime() {
+    let dir = run();
+    harness(dir.path(), "H1", false);
+    ran(dir.path(), "S1", "H1", "aa", Verdict::Grew);
+    blocker(dir.path(), Some("go"));
+    let view = RunView::load(dir.path()).unwrap();
+    assert_eq!(
+        dla_core::trigger::unchecked_because(&view, Some("go")),
+        Some("intake.workload records a blocker for go".to_owned())
+    );
+    assert!(items(dir.path()).is_empty());
+}
+
+#[test]
+fn a_blocker_that_names_no_runtime_still_excuses_every_runtime() {
+    let dir = run();
+    harness(dir.path(), "H1", false);
+    ran(dir.path(), "S1", "H1", "aa", Verdict::Grew);
+    blocker(dir.path(), None);
+    let view = RunView::load(dir.path()).unwrap();
+    assert_eq!(
+        dla_core::trigger::unchecked_because(&view, Some("go")),
+        Some("intake.workload records a blocker".to_owned())
+    );
     assert!(items(dir.path()).is_empty());
 }
 

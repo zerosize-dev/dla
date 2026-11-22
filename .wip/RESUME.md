@@ -984,3 +984,29 @@ flat test-loop readings get only 9 second looks.
   to a finding at ImageFont.py:580). Next: read the reports, verify the key claims, write builder
   briefs (blocker per runtime first; then Python test loop; then residual capture rule; native
   under a host runtime).
+
+## 2026-11-22, about 14:10 UTC
+- Workflow wf_1364df94-59b finished: five reports saved as wip-notes/map-blocker.md,
+  map-residual.md, map-testloop.md, map-native-host.md, pillow-by-hand.md (originals u74/0..4.md).
+  Key facts: `workload_ran` refusal exists but only when EVERY runtime has a series; Closed::Blocked
+  is computed once for all runtimes. By hand the tool reaches ImageFont.py:580 through residual ->
+  `--capture alloc` -> `summarize alloc-stack-diff` -> `ledger add --origin residual` -> sibling ->
+  test -> alloc-test -> refute; `ledger confirm` then needs a holder (holder-required); the
+  documented kind for "nothing holds it, native code kept a reference" is native-handle/global-ref.
+  Per-site count columns (`node.listeners@site`, groups in the record) are the existing shape to
+  reuse. No candidate of the census lies in ImageFont.py or ImageDraw.py. Whole Pillow suite: 32 s
+  per run outside the harness (3736 tests). System python3 (3.13) has no pytest.
+- Plan (sequential Sonnet builders in the shared tree, I verify each, one CI at the end, then
+  real run pillow-2):
+  W1 blocker per runtime: brief wip-notes/blocker-runtime-brief.md, scratch u75. STARTED (agent
+     a2f8ebd3daf968625, background).
+  X  `py.blocks@<file:line>` columns for Python driver runs + add command + L-OWNERSHIP region
+     heap: brief wip-notes/py-site-columns-brief.md, scratch u76. Start after W1 is verified.
+  Y  `dla harness gen --lang python --pytest` (hookless loop over the project's tests, first
+     command of a Python queue): brief wip-notes/py-test-loop-brief.md, scratch u77. After X.
+  Later (not briefed): W3 residual open item cannot be closed `inconclusive` while budget remains
+     and no capture or site columns attribute it; W4 C sources of a CPython extension are offered a
+     C driver (after W1 a native blocker closes only native).
+- CI on main 29cb6f6: 14 of 15 jobs green at 13:34, dynamic acceptance still running; waiter
+  writes u71/ci-wait.out. Release 0.9.0-preview.4 not dispatched yet.
+- Disk: deleted /root/dla-real/pillow-1 (evidence kept in u36/pillow-1) and u70/bin.

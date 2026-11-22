@@ -1,0 +1,157 @@
+REPORT: unexplained growth (residual rows, open items) and the route from a growing Python allocation site to a finding. Read-only; no cargo run. Paths are relative to /home/user/dla unless absolute. "not found" = I looked and did not find it.
+
+1. RESIDUAL ROWS AND OPEN ITEMS
+- Entry: crates/dla-cli/src/gap_cmd.rs:145-158. `dla gap S<n> --residual` runs gap/residual.rs `run` (:340) on the picked series, with the gap series derived from it if any (:153).
+- `--residual --all`: gap_cmd.rs:163-230. It runs the same `residual::run` for every non-gap series that has no coverage residual row yet (:174-184). A series with no byte column is skipped as "residual-unavailable" (:199). Its `next` text is at :224-228.
+- Total per region (residual.rs:225-254):
+  - Heap total is the Theil-Sen slope of the first available column in HEAP = jvm.heap_used, go.heap_live, node.heap_used, py.traced, native.live_bytes (:24-30, :111). For Python this is py.traced.
+  - Non-heap uses only jvm.nonheap_used or go.stacks (:32, :112), so Python has no non-heap row.
+  - Off-heap uses gap.unexplained from the derived gap series, else node.external (:113-119).
+- Attributed (:131-222): only findings in state Confirmed or Strong count.
+  - They need growth-series or unit-count-series evidence from THIS series (:152-167).
+  - They need a passing column tied to the finding by finding id, equal site, candidates or owner probe (:168-172, trend.rs:333-344).
+  - The column must be bytes (:183). Counts are "growth measured as a count; bytes not attributed" (:211-216).
+  - The sum is capped at the total (:239).
+- residual = max(0, total - attributed). threshold = max(0.25*total, 3*noise/span) (:240-251). over() = residual > threshold (:66).
+- Open item creation (:372-394, :462-487):
+  - Region over threshold and no still-open item of that region -> Action::Open.
+  - open_item_for (:283-289) reuses the lowest open item whose opened_by is "dla gap --residual" and whose text names the same region. It matches by region only, not by series. In the evidence run all of S1..S7 therefore point at O1.
+  - Under threshold with an open item: resolved `--by` the citing finding (:381-382, :489-492). With no credited finding it is left open with a limitation (:383-389).
+- The `fix` text, i.e. the item text (:479-485):
+  "unexplained growth: {human(residual)} {unit} in {region} ({series}); {advice}add a hypothesis (dla ledger add --origin residual --evidence {ev} ...) or record it unresolved".
+  - advice = "attribute it first: " + capture_advice + "; then ".
+  - capture_advice (:603-613) is "dla harness run {H}{ --mode m} --capture {kinds}   # {what}". H and mode come from the series source (src.source.harness, src.source.mode); kinds and what come from capture_kinds (:562-599).
+  - Python heap = "alloc,histogram" with "allocation stacks name the site, type counts the types" (:589-592). Python non-heap and off-heap = "nonheap".
+  - A non-heap region with a harness gets another text, "add a hypothesis (... --region non-heap ...), give it an N-WARM sibling ..." (:466-473).
+- `next` per over-threshold row (:512-533) repeats the capture advice for THAT series' harness plus "dla ledger resolve {id} --as unresolved --reason inconclusive --remedy \"<text>\"   (it was measured, so the reason is inconclusive)" (:527-529). The item text itself names only the harness of the series that opened it.
+- Rows are written to coverage.json via set_residual (:496-510), and one `residual` evidence is added (:429-446).
+
+2. WHAT `dla ledger resolve O<n> --as unresolved --reason inconclusive --remedy T` CHECKS TODAY
+- CLI, crates/dla-cli/src/ledger_cmd.rs:989-1071:
+  - It rejects --status, --note and --evidence (:991-998).
+  - --by cannot combine with --as, --reason or --remedy (:999-1006).
+  - --reason and --remedy are required (:1009-1026).
+  - Only reason time_budget gets extra checks (:1050-1063: check_open_item_resolution plus refuse_time_left).
+- Ledger rules, crates/dla-core/src/ledger.rs:1335-1382:
+  - The item must exist and be unresolved.
+  - The remedy must be non-empty after trim (:1354).
+  - Reason inconclusive needs schema 7 and open_item_measured (:1366-1375). Otherwise it refuses with machine::inconclusive_refusal (machine.rs:778-789, code MEASUREMENT_REQUIRED).
+- open_item_measured (ledger.rs:1386-1393) is true when opened_by == RESIDUAL_OPENED_BY, which is what `dla gap --residual` writes, or when the item's finding has a tied measurement (machine.rs:680-738). So every residual open item always counts as measured and `inconclusive` is always accepted.
+- No rule found that refuses it while budget remains and no allocation capture exists for the series' harness. I grepped the open-item path, `gap/residual.rs` and gate `final_items`.
+  - The gate (gate.rs:1547-1574) only asks that a residual row over its threshold has a resolved open item (residual_item_resolved :1509-1527). Any resolution counts, and the remedy text is never inspected.
+  - gate.rs:2573 (budget_left_unrevisited) looks only at FINDINGS closed with no_harness, not_exercised or time_budget; open items are not looked at.
+  - residual_item_fix (gate.rs:963-977) prints only the "--as unresolved --reason <supported> --remedy" line for heap/off-heap. Only non-heap gets an alloc route (nonheap_alloc_route :982-986).
+- The earlier similar fix, as it exists in code (task list #64 and #68 name it; I did not check git history):
+  - grown.rs:1-110 and :170-279 define "measured growth not decided". A passing growth column (not whole-process) that points at a finding, with no alloc-test evidence bound to that finding, makes the finding "grown".
+  - ledger_cmd.rs:1105-1134 `refuse_grown_unmeasured` refuses `ledger resolve` of such a FINDING with code GROWTH_NOT_MEASURED: "cannot be closed: its column {c} of {S} passed the growth gate, and no alloc-test is bound to it". It is called at ledger_cmd.rs:672-674, except for time_budget and aborted runs. close-rest also leaves such findings (grown.rs doc :3-8).
+  - Per-site count columns tie only to findings at exactly their own site: trend.rs:327-338 (tied_to doc) and grown.rs:195-206 (column_site, exact site match).
+  - This rule covers findings only. Open items, including residual ones, are not covered.
+  - Related text: ledger_cmd.rs:847, "(the reason is inconclusive when a measurement is tied to it, else not_exercised)".
+
+3. PYTHON ALLOCATION CAPTURE
+- Files and env: harness/python/sitecustomize.py:550-563 (doc), :565-570 (caps), :659-662 (dir DLA_CAPTURE_DIR/<pid>/).
+  - alloc: py-<n>.alloc.json, written by `_capture_tracemalloc` (:692-762).
+  - alloc: py-1.memray.json when memray imports in the target's interpreter and DLA_PY_MEMRAY != 0 (:765-846).
+  - histogram: py-<n>.types.json, 300 types by count, from `_capture_types` (:850-867).
+  - nonheap: py-<n>.nonheap.json.
+- tracemalloc starts at start-up (:108-114). DLA_TRACEMALLOC_FRAMES defaults to 10 with alloc or nonheap (:4).
+- alloc.json content: {"dla_pyalloc":1, pid, t_ms, frames, traced, traced_peak, stacks_total, stacks:[{size,count,frames:[[file,line] innermost first]}]} (:747-756).
+  - Stacks whose innermost frame is in tracemalloc, importlib or "<unknown>", or that pass through the agent's own files, are dropped (:715-721).
+  - Frame files are shown project-relative (:743, :586-608).
+  - The first capture keeps the top 150 by size and records a baseline of ALL stacks (:726-732).
+  - Later captures keep the top 100 by growth since the first plus the top 50 by size (:733-739).
+- When captured (`_capture_now`, :1058-1088):
+  - Command mode (phase != checkpoint) captures once per process at its final record.
+  - Driver mode counts checkpoints and takes the heavy captures per `_dump_here` (:676-687).
+    - total = warmup+rounds. If total <= DLA_CAPTURE_DUMPS (default 4) every checkpoint is captured.
+    - Otherwise the checkpoints are first = max(warmup,1), last = total, and dumps-2 evenly spaced between.
+  - The `last` checkpoint always captures (final, :1084-1087).
+- Rust side, listing the commands: crates/dla-workload/src/harness/capture.rs:596-619.
+  - `.types.json` -> `dla summarize type-histogram-diff <paths>`.
+  - `.alloc.json` -> `dla summarize alloc-stack-diff <paths>`; `.memray.json` is a separate command.
+  - Capture count is bounded by capture_dumps (run.rs:116, :1654, :1894).
+- Rust side, reading: crates/dla-cli/src/summarize/py_tracemalloc.rs.
+  - sniff on "dla_pyalloc" (:162-164). Parser :106-144. Files up to 32 MiB, 2000 stacks, 32 frames (:28-32).
+  - The adapter is Op::AllocStackDiff, Authority::Live, runtime Python, region Heap (:150-183).
+  - Limitation text (:188): "tracemalloc sees allocations made after it started ... and only through Python's allocators; memory a C extension takes with malloc is not in it".
+- Diff: summarize/alloc_stack.rs `run_diff_axis` (:280-903).
+  - Stacks are grouped by their first 8 frames (:348-362). A stack's site is its first frame inside the project (:363-376, resolver().frame_site).
+  - Stacks are ranked by last minus first live bytes (:438-457).
+  - The raw file is a new alloc/A<n> file via emit::next_alloc, up to 200 stacks (:460-516).
+  - The `alloc-stack` evidence has top rows {at, site, d_bytes, d_blocks, root?}, at most 8 (:573-632). The printed body's "top" holds up to 5 (:674-690).
+  - With 3 or more captures and live bytes it also writes a growth-series evidence (MIN_DUMPS) with columns "stack:<label>" (:765-769, :820-837). With fewer than 3 it writes gate fail "captures < 3" (:695-717).
+- What names the top growing stacks: those `top` rows ("at", "site", "d_bytes") in the summarize output and the alloc-stack evidence, plus the stack: columns of the growth series.
+- No `dla alloc ...` listing command found. alloc_cmd.rs / main.rs:116 only has `dla alloc-test <H> --finding F` (discriminator test, needs a finding).
+
+4. ROUTE FROM "STACK X GROWS" TO A FINDING WHEN NO CANDIDATE HAS THAT SITE
+- Tie of a Python stack, alloc_stack.rs:134-156. Python stacks have no root path, so the stack ties only through findings_at_site (summarize/tie.rs:304-316). That means a finding whose own `site` string, or recorded writer, EQUALS the stack's first project frame "file:line". Removers never count.
+  - Ties are computed against the ledger at summarize time (:563-612, :725), so the finding must already exist.
+  - A growing stack tied to nothing yields (:897) "the growing stacks tie to no finding: ... (dla census so a holder exists there)".
+  - Auto-candidates are created only for stacks with a root owner (:728-762). Python never has one, so no finding is auto-added.
+- Add: `dla ledger add --origin residual --evidence E<residual or alloc-stack> --site FILE:LINE --holder <kind> --region heap [--owner T] [--shape] ...` (flags ledger_cmd.rs:162-218). "residual" is a valid origin (dla-core/src/finding.rs:195-241). I found no origin-specific requirement. Evidence is documented as "at least one is required" (:168).
+- Then: `dla summarize alloc-stack-diff <3+ alloc.json> [--finding F]` gives a growth-series whose stack column ties by site.
+- Under test (machine.rs:1087-1141): a workload evidence naming a harness, plus an N-* sibling (`ledger add --sibling-of`).
+- Confirm (machine.rs:1169-1246 + M5 rule :1013-1063):
+  - Needs a cited passing growth record (is_passing_growth :374-382: authority test/live/dump, gate pass). An alloc-stack record alone cannot confirm.
+  - A passing column of it must be tied to the finding by finding id, equal site, candidates or owner probe (trend.rs:333-344), else GROWTH_NOT_TIED.
+  - Needs a site (:1194), a holder (:1215-1222) and a refuted non-leak sibling (:1229-1244; the discriminator comes from `dla alloc-test H --finding F`).
+- Strong (:860-1009) additionally needs a second, independent class: a retention record naming the holder, or an intervention. An alloc-stack counts only if names_holder, i.e. a root path naming the owner (holders.rs:264-290, machine.rs:812-822: "a bare allocation stack is not retention").
+- Final gate: gate.rs:1428-1455 wants holder AND (site or owner) on confirmed findings; gate.rs:1576+ wants an explanation (explain.rs:226, :588 HOLDER_REQUIRED).
+- Holder vocabulary (finding.rs:75-92), 8 kinds only: static/global, registration-table, container-field, thread-local, blocked-stack, closure/continuation, native-handle/global-ref, cycle-only. There is no "unknown" or "none".
+- Label (labels.rs:658-672): every L-* archetype row in data/archetypes.toml has a non-empty holders list, so a finding without a holder gets no L-* label. N-* rows have empty holders (look-alikes). Only UNCLASSIFIED remains, and it needs --note (labels.rs:503-515).
+  - L-COLLECT (static/global, container-field; heap): [growth-series, alloc-stack] is one OR alternative (toml:37-39).
+  - L-CYCLE (cycle-only; heap): [growth-series, alloc-stack] (toml:90-93).
+  - L-HANDLE (native-handle/global-ref; off-heap, non-heap): [growth-series, alloc-stack] (toml:27-30).
+  - L-OWNERSHIP (native-handle/global-ref; off-heap): [growth-series, alloc-stack] or [growth-series, intervention] (toml:99-102).
+  - I did not find a region check in the holder test at labels.rs:658-672.
+- EXACT STOP for a leak whose only location is a project Python allocation line calling into C (no container, no holder):
+  - `ledger add --origin residual --site <line>` is accepted without a holder.
+  - The site tie of the stack column to that finding works.
+  - `confirm` stops at machine.rs:1215-1222 "cannot be confirmed without a holder" (hint: `dla ledger annotate F --holder <holder> [--owner]`). The caller must invent one of the 8 kinds.
+  - The next stop is the refuted N-* sibling (:1229) and the alloc-test.
+  - Labelling stops at labels.rs:658 until a holder is set; otherwise UNCLASSIFIED with --note.
+  - Strong stops at second_class_gap (machine.rs:812-822), because an alloc-stack without root path is "not retention".
+  - The data is also thin: tracemalloc lists only Python-allocator memory and Python frames (py_tracemalloc.rs:188). Here the leaked int is a Python int allocated by C, which tracemalloc did see at ImageFont.py:580 per the background.
+
+5. WHAT THE SKILL TELLS THE AGENT (skills/detect-leak-anywhere/references/)
+- evidence-and-report.md:234-260 ("## Residual"):
+  - "A region above the threshold opens an open item ("unexplained growth: 2360 bytes/n in heap (S1)"); resolve it by adding a hypothesis (`dla ledger add --origin residual --evidence E14 ...`) or by recording it unresolved."
+  - It lists py.traced among the heap columns (:241-243) and says "py.traced sees only Python allocations made after tracemalloc started" (:259-260). It says nothing about capturing allocation stacks before recording it unresolved.
+- stages.md:
+  - :400-404: "`dla gap S1 --residual` totals growth, subtracts what confirmed findings explain and opens an open item for the rest."
+  - :389: "Python: `--capture histogram,alloc,nonheap` (type counts, tracemalloc stacks and memray ...)".
+  - :468: the alloc-stack-diff row, "growth by allocation stack, site is the first project frame".
+  - :483: "For a finding with no holder, `needed` prints the annotate command; run it and summarize again."
+  - :577 and :621-622: only the NON-HEAP residual has an evidence route ("A non-heap residual is decided before any close: add a finding for it (`--origin residual --region non-heap`), an `N-WARM` sibling, then `dla alloc-test H --finding F`").
+  - :613-615: "`inconclusive` (it was measured and the measurement cannot decide ...; the ledger needs a measurement tied to the finding ... or a residual, non-heap or capture record it already cites ..."
+- python.md:
+  - :31-37: "Raw captures: `dla harness run H1 --capture histogram,alloc,nonheap` ... A run with `alloc` is for attribution, not for the trend".
+  - :55-57: "`py-tracemalloc` ... tie by the stack's first project frame; ... (a `py.type:*` count that ties to no finding has no residual route: it needs its own disposition)".
+  - :64-70 blind spots: "Only collector-tracked objects are visible: extension modules, native libraries and pymalloc pools returned late are outside object-graph tools." and "Reference-count errors in C extensions show only as native growth."
+- No paragraph tells the agent that a heap residual needs the alloc capture before `inconclusive`, nor how to make a finding for a stack with no candidate and no holder.
+
+6. EVIDENCE RUN (/tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad/u36/pillow-1/dla)
+- gap/ holds residual-S1..S7-E27..E33.json. Every file has one row: region heap, column py.traced, credits [], attributed 0.0, residual = total, open_item "O1", unit bytes/iteration.
+  - S1 (H1 fresh): 6.665, threshold 2.249
+  - S2 (H1 repeated): 3.465, thr 1.719
+  - S3 (H2 fresh): 278.6, thr 69.64
+  - S4 (H2 repeated): 4.848, thr 1.212
+  - S5, S6, S7 (alloc-test, H2): 277.68, 277.75, 277.65, thr about 69.4
+  - Limitations per file: "F12/F13/F17: growth evidence is from S3, not Sx; not subtracted" (S3 itself: "growth measured as a count; bytes not attributed"), plus "off-heap: no gap series for Sx; run dla gap Sx first".
+- ledger.jsonl, residual evidence lines 1706-1713 (E27-E33, ts 12:50:37-38). O1 is line 1707:
+  {"type":"open_item","id":"O1","text":"unexplained growth: 6.7 bytes/iteration in heap (S1); attribute it first: dla harness run H1 --mode fresh --capture alloc,histogram   # allocation stacks name the site, type counts the types; then add a hypothesis (dla ledger add --origin residual --evidence E27 ...) or record it unresolved","opened_by":"dla gap --residual"}
+- O1 is the only residual item, shared by S1..S7 (region-only matching). O2, O3 and O4 are NOT residual: they are verifier disagreement items, opened by "dla ledger verify":
+  - O2 (line 1715) on F12, O3 (1717) on F17, O4 (1719) on F13.
+  - Each says: "holder: finding static/global vs verifier registration-table; label: finding L-COLLECT vs verifier N-INTENT".
+- Exact resolve records (lines 1720-1723, ts 12:51:01-02):
+  - O1: {"type":"open_item_resolved","id":"O1","resolution":{"unresolved":{"reason":"inconclusive","remedy":"residual heap growth of ~6.7 B/unit in the image workload not attributed; capture with dla harness run H1 --capture alloc,histogram"}}}
+  - O2, O3, O4: reason inconclusive, remedy "verifier reads the registry as bounded by distinct plugin ids (N-INTENT); only direct injection of fresh keys was tested, no public caller trigger found" (O2's remedy is the same text).
+  - transcript.jsonl line 208 is the single command that wrote them: `dla ledger resolve O1 --as unresolved --reason inconclusive --remedy "..." | head -c 200; for O in O2 O3 O4 ...`.
+- The resolves were accepted although no capture existed. report.md:7 says "Measured: 2 harness runs, 7 series, 0 captures", and harness/H1 and H2 have no out/ capture dir.
+- Earlier steps (line 1137, transcript.jsonl line 148):
+  - intake.workload recorded as {"status":"unresolved","reason":"build_fails","remedy":"native candidates in src/*.c need a CPython-embedding C driver (Python.h, Pillow extension module build); build one or run the Python workload under heaptrack/valgrind"}.
+  - close-rest output: {"closed":567,"as":{"suspected_static_only":563,"unresolved":4},"reason":{"inconclusive":4,"not_exercised":563,"time_budget":0},"left":[],"missed_once_no_focus_harness":6}.
+  - `dla run status` printed python and native queues each as 'closed': 'blocked'.
+  - The residual rows were written afterwards, by `gap --residual --all` at line 153.
+- report.md:1039-1047 ("Residual by series") lists S1..S7 as "ABOVE THRESHOLD, see O1".
+- No residual-origin finding (F with origin "residual") was added in this run: not found in the ledger.

@@ -256,6 +256,11 @@ pub struct ResolveArgs {
     /// Checklist items: free-text note.
     #[arg(long)]
     note: Option<String>,
+    /// intake.workload with --status unresolved: the runtime the answer is about (python,
+    /// native, jvm, ...). A blocker reason closes the queue of this runtime only; it is
+    /// required when more than one runtime has ranked candidates.
+    #[arg(long)]
+    runtime: Option<String>,
 }
 
 const BY: &str = "dla ledger resolve";
@@ -651,6 +656,7 @@ pub(crate) fn resolve_finding(
             ("--status", a.status.is_some()),
             ("--by", a.by.is_some()),
             ("--note", a.note.is_some()),
+            ("--runtime", a.runtime.is_some()),
         ],
     )?;
     let to = match a.disposition {
@@ -779,7 +785,7 @@ fn refuse_target_pending(
                 "a focus harness for {id} (dla harness gen --next gives the best-ranked missed candidates a harness of their own), or an unresolved reason that says what it needs (env_unavailable, tool_missing, build_fails, privilege_declined)"
             ),
             format!(
-                "{} (the focus batch: the best-ranked pending candidate was missed), fill the hooks so each unit calls the writer function of each target with a new key, dla harness run <H> --mode both, dla trend S<n>; or dla ledger resolve {id} --as unresolved --reason env_unavailable --remedy \"<what it needs>\"{}",
+                "{} (the focus batch: the best-ranked pending candidate was missed), fill the hooks so each unit calls the writer function of each target with a new key, dla harness run <H> --mode both, dla trend S<n>; or dla ledger resolve {id} --as unresolved --reason env_unavailable --remedy \"<what it needs>\"; or, when no driver can reach the {runtime} candidates at all, dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" --runtime {runtime} (that closes the queue of {runtime} only){}",
                 q.missed_command(id),
                 if m.verdict == dla_core::trend::Verdict::Unknown {
                     format!(". {id} read `unknown`: {}", dla_core::queue::NO_COVERAGE)
@@ -899,13 +905,14 @@ fn refuse_unrun_harness(
             u.minutes_total
         ),
         format!(
-            "{} {}, or its blocker recorded on intake.workload",
+            "{} {}, or its blocker recorded on intake.workload with --runtime {}",
             u.id,
             if u.build_failed {
                 "built and run"
             } else {
                 "run"
-            }
+            },
+            u.runtime
         ),
         u.fix(&view.state.run_id),
     ))
@@ -994,6 +1001,7 @@ fn resolve_open_item(ctx: &Ctx, ledger: &mut Ledger, id: OpenItemId, a: ResolveA
             ("--status", a.status.is_some()),
             ("--note", a.note.is_some()),
             ("--evidence", !a.evidence.is_empty()),
+            ("--runtime", a.runtime.is_some()),
         ],
     )?;
     if a.by.is_some() && (a.disposition.is_some() || a.reason.is_some() || a.remedy.is_some()) {
@@ -1081,7 +1089,19 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
             format!("dla ledger resolve {item} --status answered --evidence E1"),
         )
     })?;
-    refuse_contradicted_workload_blocker(ctx, &item, status, a.reason)?;
+    if a.runtime.is_some() && (item != "intake.workload" || status != AnswerStatus::Unresolved) {
+        return Err(Failure::refuse(
+            codes::UNSUPPORTED_FLAG,
+            format!(
+                "--runtime does not apply to {item} with --status {status}: only intake.workload with --status unresolved names a runtime",
+                status = status.as_str()
+            ),
+            "--runtime only on `intake.workload --status unresolved`",
+            "dla ledger resolve intake.workload --status unresolved --reason <env_unavailable|tool_missing|build_fails|privilege_declined> --remedy \"<text>\" --runtime <runtime>",
+        ));
+    }
+    let runtime = workload_blocker_runtime(ctx, &item, status, a.reason, a.runtime.as_deref())?;
+    refuse_contradicted_workload_blocker(ctx, &item, status, a.reason, runtime.as_deref())?;
     let line = ledger.answer_checklist(ChecklistAnswer {
         item: item.clone(),
         status,
@@ -1089,6 +1109,7 @@ fn resolve_checklist(ctx: &Ctx, ledger: &mut Ledger, item: String, a: ResolveArg
         note: a.note,
         reason: a.reason,
         remedy: a.remedy,
+        runtime,
     })?;
     Ok(json!({
         "ok": true,
@@ -1133,17 +1154,93 @@ fn refuse_grown_unmeasured(ctx: &Ctx, id: &FindingId, loaded: Option<&Loaded<'_>
     ))
 }
 
-/// Refuses `intake.workload` as `unresolved` with a blocker reason (`tool_missing`,
-/// `env_unavailable`, `build_fails`, `privilege_declined`: the ones that close the measurement
-/// queue) when the run's own records contradict it: a harness ran and wrote a series for every
-/// runtime that has candidates. A probe that reads flat is a verdict about one target, not
-/// about the workload.
+/// The runtime a workload answer is stored with. For `intake.workload` as `unresolved`:
+/// `--runtime` must name a runtime of the run (one with ranked candidates or one the probe
+/// detected). With a blocker reason (`tool_missing`, `env_unavailable`, `build_fails`,
+/// `privilege_declined`: the ones that close a measurement queue) the runtime is required
+/// when more than one runtime has ranked candidates, implied when exactly one has, and left
+/// out when none has. Any other answer returns `--runtime` as given.
+fn workload_blocker_runtime(
+    ctx: &Ctx,
+    item: &str,
+    status: AnswerStatus,
+    reason: Option<UnresolvedReason>,
+    given: Option<&str>,
+) -> Res<Option<String>> {
+    if item != "intake.workload" || status != AnswerStatus::Unresolved {
+        return Ok(None);
+    }
+    let blocker = reason.is_some_and(gate::is_blocker_reason);
+    if given.is_none() && !blocker {
+        return Ok(None);
+    }
+    let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
+    let queues = dla_core::queue::queues(&view, ctx.worker.as_deref());
+    let with_candidates: Vec<String> = queues.iter().map(|q| q.runtime.clone()).collect();
+    let mut valid: std::collections::BTreeSet<String> = with_candidates.iter().cloned().collect();
+    if let Some(c) = &view.coverage {
+        valid.extend(c.workers.keys().cloned());
+    }
+    let pending = |rt: &str| {
+        queues
+            .iter()
+            .find(|q| q.runtime == rt)
+            .map_or(0, |q| q.pending.len())
+    };
+    let list = |names: &mut dyn Iterator<Item = &String>| {
+        names
+            .map(|r| format!("{r} ({} pending)", pending(r)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let reason_name = reason.map_or("<reason>".to_owned(), |r| r.to_string());
+    let fix_for = |rt: &str| {
+        format!(
+            "dla ledger resolve intake.workload --status unresolved --reason {reason_name} --remedy \"<text>\" --runtime {rt}"
+        )
+    };
+    if let Some(rt) = given {
+        if !valid.contains(rt) {
+            let names = valid.iter().cloned().collect::<Vec<_>>().join(", ");
+            return Err(Failure::refuse(
+                core_codes::INVALID_VALUE,
+                format!("--runtime {rt} is not a runtime of this run"),
+                format!("one of: {names}"),
+                fix_for(valid.iter().next().map_or("<runtime>", String::as_str)),
+            ));
+        }
+        return Ok(Some(rt.to_owned()));
+    }
+    match with_candidates.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        many => Err(Failure::refuse(
+            codes::MISSING_ARGUMENT,
+            format!(
+                "--runtime is required: a blocker closes the queue of one runtime, and {} runtimes have ranked candidates ({})",
+                many.len(),
+                list(&mut many.iter())
+            ),
+            "--runtime <the runtime the blocker is about>",
+            fix_for(&many[0]),
+        )),
+    }
+}
+
+/// Refuses `intake.workload` as `unresolved` with a blocker reason for `runtime` when the
+/// run's own records contradict it: a harness of that runtime ran and wrote a series. A probe
+/// that reads flat is a verdict about one target, not about the workload. A blocker for a
+/// runtime whose harnesses wrote no series is accepted whatever the other runtimes did.
 fn refuse_contradicted_workload_blocker(
     ctx: &Ctx,
     item: &str,
     status: AnswerStatus,
     reason: Option<UnresolvedReason>,
+    runtime: Option<&str>,
 ) -> Res<()> {
+    let Some(runtime) = runtime else {
+        return Ok(());
+    };
     if item != "intake.workload"
         || status != AnswerStatus::Unresolved
         || !reason.is_some_and(gate::is_blocker_reason)
@@ -1151,17 +1248,17 @@ fn refuse_contradicted_workload_blocker(
         return Ok(());
     }
     let view = RunView::load_for(&ctx.run_dir, ctx.worker.as_deref())?;
-    let Some((harness, series)) = gate::workload_ran(&view) else {
+    let Some((harness, series)) = gate::workload_ran(&view, runtime) else {
         return Ok(());
     };
     let reason = reason.map_or(String::new(), |r| r.to_string());
     Err(Failure::refuse(
         core_codes::WORKLOAD_RAN,
         format!(
-            "intake.workload cannot be recorded as {reason}: harness {harness} ran and wrote series {series}, so a workload can be run"
+            "intake.workload cannot be recorded as {reason} for {runtime}: harness {harness} ran and wrote series {series}, so a {runtime} workload can be run"
         ),
         format!(
-            "a blocker that the run's records do not contradict (no harness of a runtime with candidates ran), not {reason}"
+            "a blocker that the run's records do not contradict (no harness of {runtime} wrote a series), not {reason}"
         ),
         format!(
             "a probe that reads flat is a verdict about one target, not about the workload: read dla trend {series} (its targets and next lines), give the target a unit that reaches it with a new key or a size reading, and run {harness} again; or measure the findings a passed column points at (dla ledger list, dla gate check --final)"

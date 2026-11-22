@@ -587,18 +587,21 @@ pub fn is_subject(view: &RunView, f: &Finding) -> bool {
 }
 
 /// Why the trigger of a finding that is not shown could not be checked, when it cannot be:
-/// the queue is off, the time is at the floor, or the workload is recorded as blocked.
-pub fn unchecked_because(view: &RunView) -> Option<&'static str> {
+/// the queue is off, the time is at the floor, or the workload is recorded as blocked for the
+/// runtime of the finding (`runtime`; `None` when it has none: only a blocker that names no
+/// runtime counts then). A blocker recorded for another runtime says nothing about it.
+pub fn unchecked_because(view: &RunView, runtime: Option<&str>) -> Option<String> {
     if !view.state.queue {
-        return Some("the run was started with --queue off");
+        return Some("the run was started with --queue off".to_owned());
     }
     if gate::budget_over_floor(&view.state, None).is_none() {
-        return Some("not enough time was left: the budget was at the floor");
+        return Some("not enough time was left: the budget was at the floor".to_owned());
     }
-    if gate::workload_unresolved(view, true) {
-        return Some("intake.workload records a blocker");
-    }
-    None
+    let a = gate::workload_answer(view, true, runtime.unwrap_or(""))?;
+    Some(match &a.runtime {
+        Some(rt) => format!("intake.workload records a blocker for {rt}"),
+        None => "intake.workload records a blocker".to_owned(),
+    })
 }
 
 /// The items of kind `trigger`: one per confirmed or strong leak-side finding whose trigger
@@ -607,7 +610,7 @@ pub fn unchecked_because(view: &RunView) -> Option<&'static str> {
 /// with every such finding of the runtime; after one entry-path harness without growth it
 /// asks for a second, different one.
 pub fn items(view: &RunView) -> Vec<BlockingItem> {
-    if view.run_dir.is_none() || unchecked_because(view).is_some() {
+    if view.run_dir.is_none() {
         return Vec::new();
     }
     let t = Triggers::of(view);
@@ -621,7 +624,11 @@ pub fn items(view: &RunView) -> Vec<BlockingItem> {
         {
             continue;
         }
-        let Some(rt) = gate::finding_runtime_with(view, f, &mut only) else {
+        let rt = gate::finding_runtime_with(view, f, &mut only);
+        if unchecked_because(view, rt.as_deref()).is_some() {
+            continue;
+        }
+        let Some(rt) = rt else {
             continue;
         };
         open.push((f.id.clone(), rt));
@@ -737,7 +744,8 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
             )
         }
         Trigger::Unchecked => {
-            let why = unchecked_because(view).map_or_else(
+            let rt = gate::finding_runtime(view, f);
+            let why = unchecked_because(view, rt.as_deref()).map_or_else(
                 || {
                     let none = t.entry_runs_without_growth(&f.id);
                     if let Some((h, _, v)) = none
@@ -759,7 +767,7 @@ pub fn line(view: &RunView, t: &Triggers, f: &Finding) -> String {
                         "no harness series that grew is tied to it".to_owned()
                     }
                 },
-                str::to_owned,
+                |w| w,
             );
             format!("not checked ({why})")
         }

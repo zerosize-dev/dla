@@ -266,6 +266,7 @@ fn a_checklist_answer_refuses_inconclusive() {
         note: None,
         reason: Some(R::Inconclusive),
         remedy: Some("x".into()),
+        runtime: None,
     }));
     assert_eq!(r.code, codes::INVALID_VALUE);
     assert!(r.message.contains("not measured"), "{}", r.message);
@@ -277,6 +278,7 @@ fn a_checklist_answer_refuses_inconclusive() {
         note: None,
         reason: Some(R::Inconclusive),
         remedy: None,
+        runtime: None,
     }));
     assert_eq!(r.code, codes::INVALID_VALUE);
     assert!(!r.fix.contains("--reason inconclusive"), "{}", r.fix);
@@ -288,6 +290,7 @@ fn a_checklist_answer_refuses_inconclusive() {
         note: None,
         reason: Some(R::EnvUnavailable),
         remedy: Some("x".into()),
+        runtime: None,
     })
     .unwrap();
 }

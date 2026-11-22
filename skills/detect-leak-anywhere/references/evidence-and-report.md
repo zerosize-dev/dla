@@ -318,7 +318,7 @@ verdict. For dynamic findings it prints:
   when every harness that ran is a JUnit repeat (it has no hooks: the step says how many entry points the
   project's tests reach), when only a command harness ran, or when `dla harness gen` would refuse for lack of a workload with an
   iteration argument. When `intake.workload` records a blocker, the line ends `Blocked: ...` with its
-  reason and remedy instead of a step. The warning is skipped only after iterations, when the exercised
+  reason (and the runtime, when the answer names one) and remedy instead of a step. The warning is skipped only after iterations, when the exercised
   entry points of the runtime cannot be measured (Rust and native, or a Python without
   `sys.monitoring`); with no iteration recorded it stands for those too;
 - a `## Explained, not leaks` section after `## Findings`: the confirmed `N-*` explanations (warm-up,
