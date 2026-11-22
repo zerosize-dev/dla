@@ -941,3 +941,19 @@ flat test-loop readings get only 9 second looks.
 - Next small fix: site agreement accepts a verifier site in the same function as the finding's site
   or a writer (crates/dla-core/src/verify.rs agrees_site_among; known sites are collected in
   crates/dla-cli/src/ledger_m6.rs). Then commit b3b5ff4 when its CI is green (commit-message-7.txt).
+- CI on b3b5ff4 (run 45008367756), first attempt: 14 jobs green, dynamic acceptance FAILED on one
+  fixture: jvm-pool-warmup (non-leak): T1 of S1 passed os.rss / os.rss_anon / os.vm_hwm /
+  jvm.nonheap_used with a stair shape, the unbound alloc-test then read Leak on os.rss, no rule-out.
+  Log kept: u68/ci-first-attempt-failed.raw. Locally the same build passes that fixture 3 of 3
+  (u70/pool-*.json: only os.vm_hwm passes, jvm.heap_used decides non-leak). Nothing in this change
+  touches a command-mode JVM run's memory; read as a runner-noise flake of an RSS-decided
+  alloc-test. Failed job re-queued (rerun_failed_jobs) at about 11:25 UTC; waiter below.
+  If it fails again on the same fixture: treat as real, compare S1 columns with a b4b9a42 build.
+- On top of b3b5ff4 in the tree (snapshot 60682a4, no CI yet): same-function site rule for
+  `ledger verify` (+ test, 2 mutations seen failing, VERIFY row); commit message
+  wip-notes/commit-message-8.txt. Needs its own CI after b3b5ff4 is committed.
+- Plan change (about 11:35 UTC): one CI run on the combined tree (b3b5ff4 + same-function site rule)
+  instead of two in sequence; this cancels the re-queued job of b3b5ff4. Ninth frozen snapshot id in
+  u70/tree-sha-ci; waiter writes u70/ci-wait.out; local whole suite u70/verify.out. When green:
+  commit 7 = tree of b3b5ff4 (commit-message-7.txt), commit 8 = tree of the ninth snapshot
+  (commit-message-8.txt), push main and dev branch, then version 0.9.0-preview.4 and the release.
