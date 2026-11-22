@@ -273,6 +273,18 @@ fn one(inp: &Inputs<'_>, m: &HarnessManifest, f: &FindingId) -> TargetVerdict {
             dla_core::harness::ProbeTarget::NodeModule { file } => file.clone(),
             dla_core::harness::ProbeTarget::NodeBinding { file, name } => format!("{file} {name}"),
             dla_core::harness::ProbeTarget::JvmStatic { class, field } => {
+                // The agent found the class and it has no static field of that name (the
+                // holder is an initialiser, `<clinit>`, or an instance field): the class
+                // loaded, so the reading is the coverage's, not "never loaded".
+                let said = format!("probe {class}.{field}: no such field");
+                if inp.series.limitations.iter().any(|l| l == &said) {
+                    let mut v = coverage_verdict(inp, f);
+                    v.detail = format!(
+                        "{class} loaded and has no static field {field}: the holder is not a static field, so its size is not measured; {}",
+                        v.detail
+                    );
+                    return v;
+                }
                 format!("{class}.{field}")
             }
             dla_core::harness::ProbeTarget::JvmClass { class } => {
@@ -1100,5 +1112,37 @@ mod tests {
         );
         assert_eq!(v[0].verdict, Verdict::NotLoaded, "{v:?}");
         assert!(v[0].detail.contains("shop.Cart"), "{}", v[0].detail);
+    }
+
+    #[test]
+    fn a_jvm_static_probe_of_a_field_the_class_does_not_have_gives_the_coverage_verdict() {
+        // The holder's owner is the class initialiser: the class loaded, and it has no static
+        // field `<clinit>` to read.
+        let (s, _) = jvm_scene(json!(["shop.Cart"]));
+        let m = manifest(
+            json!([{"id": "P1", "finding": "F3", "site": "Cart.java:2",
+                    "target": {"kind": "jvm-static", "class": "shop.Cart", "field": "<clinit>"}}]),
+            &["F3"],
+        );
+        let cols = || vec![Col::gauge("os.rss", &[5.0; 9])];
+        let v = verdicts_lim(
+            &s,
+            &m,
+            cols(),
+            |_| {},
+            None,
+            &["probe shop.Cart.<clinit>: no such field"],
+        );
+        assert_eq!(v[0].verdict, Verdict::Executed, "{v:?}");
+        assert!(
+            v[0].detail.starts_with(
+                "shop.Cart loaded and has no static field <clinit>: the holder is not a static field, so its size is not measured; "
+            ),
+            "{}",
+            v[0].detail
+        );
+        // Without that statement of the agent nothing says the class loaded.
+        let v = verdicts_lim(&s, &m, cols(), |_| {}, None, &[]);
+        assert_eq!(v[0].verdict, Verdict::NotLoaded, "{v:?}");
     }
 }

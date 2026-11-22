@@ -888,7 +888,7 @@ public final class DlaDump {
                 } else if (kind.equals("jvmclass")) {
                     for (Field f : c.getDeclaredFields()) {
                         if (probeField(f)) {
-                            out.add(probeOne(id, c, f, lim));
+                            out.add(probeOne(id, cname, f, lim));
                         }
                     }
                 } else if (kind.equals("jvmstatic")) {
@@ -900,7 +900,7 @@ public final class DlaDump {
                         out.add(probeRecord(id, fname, cname + "." + fname, null, 0, 0, null, "no such field"));
                     }
                     if (f != null) {
-                        out.add(probeOne(id, c, f, lim));
+                        out.add(probeOne(id, cname, f, lim));
                     }
                 }
             } catch (Throwable t) {
@@ -927,10 +927,31 @@ public final class DlaDump {
         return m;
     }
 
+    /**
+     * The names a probe's class can have in the JVM. A probe spells a nested class as the source
+     * does ({@code pkg.Outer.Inner}); the JVM names it {@code pkg.Outer$Inner}. The name as given
+     * comes first, then the name with its dots turned into '$' from the right, one more each time.
+     */
+    static List<String> binaryNames(String name) {
+        List<String> names = new ArrayList<>();
+        String n = name;
+        while (true) {
+            names.add(n);
+            int dot = n.lastIndexOf('.');
+            if (dot < 0) {
+                return names;
+            }
+            n = n.substring(0, dot) + '$' + n.substring(dot + 1);
+        }
+    }
+
     private static Class<?> findClass(String name, Map<String, Class<?>> loaded) {
-        Class<?> c = loaded.get(name);
-        if (c != null) {
-            return c;
+        List<String> names = binaryNames(name);
+        for (String n : names) {
+            Class<?> c = loaded.get(n);
+            if (c != null) {
+                return c;
+            }
         }
         if (inst != null) {
             // A class that is not loaded holds nothing, and loading it here would make the probe
@@ -938,11 +959,13 @@ public final class DlaDump {
             return null;
         }
         ClassLoader[] loaders = {Thread.currentThread().getContextClassLoader(), ClassLoader.getSystemClassLoader()};
-        for (ClassLoader l : loaders) {
-            try {
-                return Class.forName(name, false, l);
-            } catch (Throwable ignored) {
-                // try the next loader
+        for (String n : names) {
+            for (ClassLoader l : loaders) {
+                try {
+                    return Class.forName(n, false, l);
+                } catch (Throwable ignored) {
+                    // try the next loader
+                }
             }
         }
         return null;
@@ -957,8 +980,9 @@ public final class DlaDump {
             || Number.class.isAssignableFrom(t) || t == Boolean.class || t == Character.class);
     }
 
-    private static Map<String, Object> probeOne(String id, Class<?> c, Field f, List<String> lim) {
-        String path = c.getName() + "." + f.getName();
+    /** {@code cname} is the class as the probe spells it: the record and its column keep that name. */
+    private static Map<String, Object> probeOne(String id, String cname, Field f, List<String> lim) {
+        String path = cname + "." + f.getName();
         try {
             f.setAccessible(true);
             Object v = f.get(null);

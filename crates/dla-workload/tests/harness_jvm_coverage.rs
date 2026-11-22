@@ -211,7 +211,9 @@ public final class Main {
         System.out.println(a.hashCode() + b.hashCode());
     }
 
-    static final class Helper {}
+    static final class Helper {
+        static final java.util.List<Object> SEEN = new java.util.ArrayList<>();
+    }
 }
 "#;
 
@@ -533,6 +535,33 @@ fn a_probe_never_loads_a_class_into_the_coverage() {
     // The probe says the class was not loaded rather than reading it.
     let text = last["probes"].to_string();
     assert!(text.contains("class not loaded: zz.shop.Never"), "{text}");
+}
+
+#[test]
+fn a_probe_finds_a_nested_class_and_keeps_the_name_the_probe_gave() {
+    if !have_jdk() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    let probes = dir.path().join("probes.json");
+    // A probe spells a nested class as the source does (`Main.Helper`); the JVM names it
+    // `Main$Helper`. Both probe kinds find it, and the record keeps the probe's spelling, which
+    // is what the ledger's owner and the column match use.
+    fs::write(
+        &probes,
+        r#"{"probes":[{"id":"P1","target":{"kind":"jvm-static","class":"zz.shop.Main.Helper","field":"SEEN"}},{"id":"P2","target":{"kind":"jvm-class","class":"zz.shop.Main.Helper"}}]}"#,
+    )
+    .unwrap();
+    let recs = run_driver_cut(dir.path(), &root, None, false, Some(&probes));
+    let text = recs[3].1["probes"].to_string();
+    assert!(!text.contains("class not loaded"), "{text}");
+    assert!(!text.contains("Main$Helper"), "{text}");
+    assert_eq!(
+        text.matches("zz.shop.Main.Helper.SEEN").count(),
+        2,
+        "one record per probe: {text}"
+    );
 }
 
 #[test]

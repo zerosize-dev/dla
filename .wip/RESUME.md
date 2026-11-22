@@ -878,3 +878,30 @@ flat test-loop readings get only 9 second looks.
   ("The project's own tests are the first pass of a JVM queue"), pushed main and
   main:dev/wonderful-mccarthy-algc5s; no trailers, no .wip. The working tree now holds only the
   brief-U builder's edits (unverified).
+
+## State 2026-11-22 about 08:50 UTC
+
+- Brief U builder (a3f4e9db453f2bcd3) done: bundle test-loop/tests.json (classes CHOSEN for the
+  finding), trigger varies names them, verifier.md cache rule + test-loop paragraph, JvmClass probe
+  without a column on a loaded class -> coverage verdict. Suite 3180 passed. NOT yet verified by me.
+- My own additions on top (tested: harness_jvm_coverage 9/9, verdicts 16/16): JVM agent finds a
+  nested class (`Outer.Inner` -> `Outer$Inner`, DlaDump.binaryNames/findClass) and keeps the probe's
+  spelling in records; JvmStatic "no such field" (e.g. `<clinit>` owners) -> coverage verdict;
+  verifier.md test-loop paragraph extended (same tests every round; find the call; entry-path
+  constant does not explain growth under tests).
+- Verifier model check on the replayed evidence (/root/dla-real/vbase, vrun.py, plugin copy
+  /root/dla-real/plugin-u, binary /root/dla-real/bin-u/dla): v160-1 and v160-2 both N-INTENT again.
+- MEASURED (scratch run /root/dla-real/attr/project, harnesses H1..H9 = each class of the batch
+  alone): the feeder of TypedPropertyPaths.resolved is KPropertyReferenceUnitTests (Kotlin, 13.3
+  entries per run, steady); PropertyReferenceUnitTests constant at 267; TypedPropertyPathUnitTests
+  one step in bytes; KTypedPropertyPathUnitTests constant at 1; five others not loaded. So the
+  classes chosen for F160 by name are not the feeders: brief U's bundle and trigger text mislead.
+- Brief V (wip-notes/attribution-brief.md): attribution per test class during
+  `dla alloc-test H --finding F` (DLA_ATTRIBUTE in the JUnit loop), stored at
+  harness/H/attribution-F.json; trigger and bundle use measured feeders or say "not measured".
+  Given to a fresh Sonnet builder (see below for its id). Report comes as its final message.
+- After brief V: verify everything myself in one pass (U + mine + V): tests, mutations, whole
+  suite; verifier model check again (F160 x3 expecting a leak label with the Kotlin caller; F436 x3
+  expecting N-INTENT to stay); VERIFY rows; snapshot WITH CI; commit; then real rerun spring-8.
+- Scratch to delete when done: /root/dla-real/attr, /root/dla-real/vbase, /root/dla-real/v160-*,
+  /root/dla-real/plugin-u, /root/dla-real/bin-u.
