@@ -173,9 +173,7 @@ rank, the minutes left and the fix.
   The blocker names one runtime and closes the queue of that runtime only; the queues of the other
   runtimes stay open and `dla ledger close-rest` leaves their candidates pending. `--runtime` is required
   when more than one runtime has ranked candidates. It is refused (`workload-ran`) for a runtime whose
-  harness already wrote a series: that workload ran. A runtime that cannot be driven by its own tools
-  (C extension modules that only Python loads) is driven through the runtime that loads them, not
-  recorded as blocked while that runtime's queue is open. Use it only when it is true.
+  harness already wrote a series: that workload ran. Use it only when it is true.
 - Record: the batch you ran. A `constant`, `not_loaded` or `not_executed` target is run once more with a
   fixed unit; two driver runs with different driver files settle a candidate whatever the verdicts.
 
