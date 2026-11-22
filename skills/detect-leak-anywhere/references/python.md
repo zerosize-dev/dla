@@ -55,6 +55,31 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   a test runner grows on its own), refute the loser, `dla ledger confirm`. The final gate lists a growing
   `py.blocks@` column that ties to no dispositioned finding, and `dla ledger resolve` refuses to close a
   finding whose column passed until an alloc-test is bound to it.
+- The project's own tests in a loop (`dla harness gen --lang python --pytest [--tests a,b]`): a leak that
+  nothing holds (a reference an extension module never releases) has no static candidate and shows only as an
+  allocation line that grows under a broad workload; the broadest workload a project has is its own tests.
+  The harness runs every test file the workload discovery lists under the working directory that has the
+  most of them (files under another directory are named in a gap line and left out), or the files and
+  directories of `--tests` (no `file::test` ids), with `pytest.main` in one process, again and again; the
+  driver is hookless (nothing to fill) and declares no target. A round is one run of the tests (step 1,
+  1 warm-up and 8 measured runs, 1800 s). The project's addopts are cleared (`-o addopts=`) and
+  the cache and xdist plugins are off, so the run stays in this process. After the first run it drops a
+  file none of whose tests passed when another file had one (`dropped test file ...`), stops when no test
+  passed (`DLA-PYTEST` line, exit 2) or no test was found (exit 3), drops the slowest files until the series fits
+  the time limit and gives no point when one file alone does not fit. It needs pytest in the harness
+  interpreter (`python3` on PATH: `python3 -m pip install pytest`, or put the `bin` directory of a virtual
+  environment that has pytest and the project first on PATH for the `dla` commands; without it the command
+  is refused and the queue goes on with the driver batches) and the project importable in place:
+  the scratch copy is made when the harness is generated and keeps the extension modules built in place
+  (untracked `*.so`, `*.pyd` or `*.dylib` files next to Python sources), so build first
+  (`python3 -m pip install -e .`, or `python3 setup.py build_ext --inplace`) and then generate; if
+  the tests import the project from somewhere else the loop stops with a `DLA-PYTEST` line that says so.
+  Read its series with `dla trend`: the columns are the `py.blocks@<file:line>` sites that grew (test files
+  and the harness never count), and a site no finding is at gets the `dla ledger add ... --site ...` command.
+  A finding made that way is decided with a small driver of its own, not with an alloc-test on the loop (which
+  re-runs the whole suite per run): `dla harness gen --lang python --driver --probe F` with a unit that calls the
+  function of that line, `dla harness run`, `dla trend`, `dla alloc-test` on that harness. The loop declares no
+  candidate, so a candidate of the queue still needs its driver (hooks to fill).
 - Purges: `trim` (glibc `malloc_trim` through ctypes) and `gc`.
 - Raw captures: `dla harness run H1 --capture histogram,alloc,nonheap`. `histogram` writes
   `py-<n>.types.json` (300 types by instance count), `alloc` writes `py-<n>.alloc.json` (tracemalloc live

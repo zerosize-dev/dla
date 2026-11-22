@@ -298,6 +298,11 @@ pub struct Index {
     /// The test-loop harnesses whose attempt failed (they did not build, or every unit
     /// failed): they are not run again, and what they declared waits for a driver.
     test_loop_failed: std::collections::BTreeSet<String>,
+    /// The pytest-loop harnesses (any state), oldest first.
+    pytest_loops: Vec<String>,
+    /// True when `dla harness gen --lang python --pytest` was refused in this run (pytest does
+    /// not import in the harness interpreter): a failed attempt of the loop, with no harness.
+    pytest_refused: bool,
 }
 
 impl Index {
@@ -307,6 +312,7 @@ impl Index {
         let Some(run_dir) = view.run_dir.as_deref() else {
             return ix;
         };
+        ix.pytest_refused = crate::harness::HarnessAttempt::pytest_loop_refused(run_dir);
         let mut manifests: BTreeMap<String, HarnessManifest> = BTreeMap::new();
         for (_, h) in gate::harness_ids(run_dir) {
             let Ok(m) = HarnessManifest::load(run_dir, &h) else {
@@ -327,6 +333,9 @@ impl Index {
             }
             for t in &m.targets {
                 ix.declared_by.entry(t.clone()).or_default().push(h.clone());
+            }
+            if m.is_pytest_loop() && m.runtime == crate::runtime::Runtime::Python {
+                ix.pytest_loops.push(h.clone());
             }
             if m.is_test_loop() {
                 ix.test_loops.insert(h.clone());
@@ -379,6 +388,28 @@ impl Index {
             }
         }
         ix
+    }
+
+    /// Python: the first command of the queue while the project's own tests have not run in a
+    /// loop: `dla harness gen --lang python --pytest` until a pytest-loop harness exists, then
+    /// `dla harness run <H>` while one is generated and not run. `None` once a pytest-loop
+    /// harness wrote a series, or an attempt of the loop failed (the refusal of the
+    /// generation, a failed run, a run with no usable point).
+    pub fn pytest_loop_step(&self) -> Option<String> {
+        if self.pytest_loops.iter().any(|h| self.run.contains(h)) {
+            return None;
+        }
+        if let Some(h) = self
+            .pytest_loops
+            .iter()
+            .find(|h| !self.test_loop_failed.contains(*h))
+        {
+            return Some(format!("dla harness run {h}"));
+        }
+        if self.pytest_refused || !self.pytest_loops.is_empty() {
+            return None;
+        }
+        Some(PYTEST_LOOP_COMMAND.to_owned())
     }
 
     /// True when the harness has a series.
@@ -782,8 +813,17 @@ pub struct RuntimeQueue {
     /// made. While it holds a batch, `batch` is the first one and `batch_command` makes it.
     pub test_loop: crate::testloop::Plan,
     /// The command to run next: the batch command, or the run of the harness in flight when
-    /// every pending candidate is already declared by it.
+    /// every pending candidate is already declared by it; for a Python queue that has test
+    /// files, first the project's own tests in a loop (`py_loop`).
     pub command: String,
+    /// Python: the first step, the project's own tests in a loop (`dla harness gen --lang
+    /// python --pytest`, or the run of the loop's harness once generated), nothing to write.
+    /// `None` when the project has no Python test file, once a pytest loop wrote a series or
+    /// failed, and while the queue is not open. It is an order, not a gate rule: `command`
+    /// is this step while it is `Some`, and `after_loop` is the command the queue goes on with.
+    pub py_loop: Option<String>,
+    /// What `command` would be without the Python test loop.
+    pub after_loop: String,
     /// Why the queue is closed; `None` while it is open.
     pub closed: Option<Closed>,
     /// Whole minutes of budget left and in total, when known.
@@ -800,6 +840,10 @@ impl RuntimeQueue {
     /// a test-loop batch holds it, the driver's when a test-loop batch is left that does not
     /// (the candidate has no test class the loop can run), else the queue's next command.
     pub fn command_for(&self, id: &FindingId) -> String {
+        if self.py_loop.is_some() {
+            // The loop declares no target: the candidate's own command is the driver's.
+            return self.after_loop.clone();
+        }
         if self.test_loop.batches.is_empty()
             || self.test_loop.batches.iter().any(|b| b.ids.contains(id))
             // Declared by the test-loop harness that is generated and not run yet: run it.
@@ -897,6 +941,9 @@ impl RuntimeQueue {
     }
 }
 
+/// The Python test loop: the project's own tests in a loop in one process, nothing to write.
+pub const PYTEST_LOOP_COMMAND: &str = "dla harness gen --lang python --pytest";
+
 /// The command that makes the next batch of `runtime`: the project's own tests in a loop
 /// (`test_loop`, JVM) while a test-loop batch is left, else a driver with hooks.
 pub fn batch_command(runtime: &str, test_loop: bool) -> String {
@@ -931,6 +978,10 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
         by_rt.entry(rt.clone()).or_default().push(r);
     }
     let budget = gate::budget_over_floor(&view.state, worker);
+    let py_tests = by_rt
+        .contains_key("python")
+        .then(|| crate::testloop::python_tests_of(view, worker))
+        .flatten();
     let tindex = by_rt
         .contains_key("jvm")
         .then(|| crate::testloop::TestIndex::of(view, worker))
@@ -1064,7 +1115,7 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                 None => (batch, siblings, focus),
             };
             let batch_command = batch_command(&runtime, !test_loop.batches.is_empty());
-            let command = match (&in_flight, batch.is_empty()) {
+            let after_loop = match (&in_flight, batch.is_empty()) {
                 (Some(h), _) if ix.test_loops.contains(h) => format!("dla harness run {h}"),
                 (Some(h), true) => format!("dla harness run {h} --mode both"),
                 _ => batch_command.clone(),
@@ -1090,6 +1141,14 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
             } else {
                 None
             };
+            // Python: the project's own tests in a loop come first, for an open queue of a run
+            // that has Python test files (see `Index::pytest_loop_step`).
+            let py_loop = if runtime == "python" && closed.is_none() && py_tests.is_some() {
+                ix.pytest_loop_step()
+            } else {
+                None
+            };
+            let command = py_loop.clone().unwrap_or_else(|| after_loop.clone());
             RuntimeQueue {
                 runtime,
                 eligible,
@@ -1116,6 +1175,8 @@ pub fn queues(view: &RunView, worker: Option<&str>) -> Vec<RuntimeQueue> {
                     test_loop
                 },
                 command,
+                py_loop,
+                after_loop,
                 closed,
                 minutes: budget,
             }
@@ -1161,6 +1222,16 @@ pub fn steps(q: &RuntimeQueue, run_id: &str) -> String {
         );
     }
     let driver = batch_command(&q.runtime, false);
+    if let Some(first) = &q.py_loop {
+        let how = if first.starts_with("dla harness run") {
+            format!("{first}, dla trend S<n>")
+        } else {
+            format!("{first}, dla harness run <H>, dla trend S<n>")
+        };
+        return format!(
+            "First the project's own tests in a loop, nothing to write: {how}; a line of the project that grows there gets a finding (the trend prints the command). The loop declares no target, so the candidates still need their drivers: {driver}, fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. {resolve}"
+        );
+    }
     if !q.test_loop.batches.is_empty() {
         return format!(
             "{}. Next: {} (it chooses the test classes from the owner classes of the candidates and prints which and why; nothing to fill), dla harness run <H>, then dla trend S<n>. {} After the test loop, for the candidates that need a driver: {driver}, fill the hooks so each unit reaches the listed targets with a new key, dla harness run <H> --mode both, then dla trend S<n>. {resolve}",
@@ -2724,5 +2795,265 @@ mod tests {
             ),
             "{line}"
         );
+    }
+
+    // -- The pytest loop: the first step of a Python queue -----------------------------------
+
+    /// Lists `files` as Python test workloads (working directory `.`) of the run.
+    fn py_tests(run: &Run, files: &[&str]) {
+        let workloads: Vec<_> = files
+            .iter()
+            .map(|f| {
+                json!({
+                    "id": format!("python:test:{f}"), "kind": "test", "runtime": "python",
+                    "command": format!("python3 -m pytest -q {f}"), "cwd": ".", "file": f,
+                    "rank": 1,
+                })
+            })
+            .collect();
+        std::fs::create_dir_all(run.dir.path().join("workload")).unwrap();
+        std::fs::write(
+            run.dir.path().join("workload").join("workloads.json"),
+            json!({"schema_version": 1, "workloads": workloads, "entry_points": []}).to_string(),
+        )
+        .unwrap();
+    }
+
+    /// A pytest-loop harness: a driver that lists the loop's tool and declares no target.
+    fn pytest_harness(run: &Run, h: &str) {
+        let mut m = manifest(h, &[], true);
+        m.tools.push(crate::harness::PYTEST_TOOL.to_owned());
+        run.harness(&m);
+    }
+
+    fn py_queue(run: &Run) -> RuntimeQueue {
+        queues(&run.reload(), None).remove(0)
+    }
+
+    #[test]
+    fn an_open_python_queue_with_test_files_starts_with_the_pytest_loop() {
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py", "tests/test_b.py"]);
+        let q = py_queue(&run);
+        assert!(q.open());
+        assert_eq!(q.command, "dla harness gen --lang python --pytest");
+        assert_eq!(q.py_loop.as_deref(), Some(q.command.as_str()));
+        // The loop declares no candidate: the batch and the candidates' own command stay a driver.
+        assert_eq!(
+            q.batch_command,
+            "dla harness gen --lang python --driver --next"
+        );
+        assert_eq!(q.command_for(&FindingId::new(1)), q.batch_command);
+        assert_eq!(q.batch.len(), 2);
+        let text = steps(&q, "r");
+        assert!(
+            text.starts_with("First the project's own tests in a loop, nothing to write: dla harness gen --lang python --pytest, dla harness run <H>, dla trend S<n>; a line of the project that grows there gets a finding (the trend prints the command)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("dla harness gen --lang python --driver --next"),
+            "{text}"
+        );
+        let item = crate::view::queue_item(&q);
+        assert!(
+            item.fix
+                .starts_with("dla harness gen --lang python --pytest, dla harness run <H>"),
+            "{}",
+            item.fix
+        );
+        // It is an order, not a gate item of its own: one queue item, the fix is its text.
+        assert_eq!(item.kind, crate::view::BlockingKind::Queue);
+    }
+
+    #[test]
+    fn a_python_queue_without_test_files_never_shows_the_loop() {
+        let (run, view) = Run::new(2);
+        let q = &queues(&view, None)[0];
+        assert!(q.py_loop.is_none());
+        assert_eq!(q.command, q.batch_command);
+        // Discovery lists a main and no test file.
+        std::fs::create_dir_all(run.dir.path().join("workload")).unwrap();
+        std::fs::write(
+            run.dir.path().join("workload").join("workloads.json"),
+            json!({"schema_version": 1, "workloads": [{
+                "id": "python:main:run.py", "kind": "main", "runtime": "python",
+                "command": "python3 run.py", "cwd": ".", "file": "run.py", "rank": 1
+            }], "entry_points": []})
+            .to_string(),
+        )
+        .unwrap();
+        let q = py_queue(&run);
+        assert!(q.py_loop.is_none() && q.command == q.batch_command);
+        assert!(!steps(&q, "r").contains("First the project's own tests"));
+    }
+
+    #[test]
+    fn a_closed_or_blocked_python_queue_never_shows_the_loop() {
+        let (run, view) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        let mut off = run.reload();
+        off.state.queue = false;
+        let q = &queues(&off, None)[0];
+        assert_eq!(q.closed, Some(Closed::Off));
+        assert!(q.py_loop.is_none());
+        let mut late = run.reload();
+        late.state.budget.deadline = crate::state::now_utc() - chrono::Duration::minutes(1);
+        let q = &queues(&late, None)[0];
+        assert_eq!(q.closed, Some(Closed::Floor));
+        assert!(q.py_loop.is_none());
+        // Every candidate settled: the queue is empty.
+        run.harness(&manifest("H1", &[1, 2], true));
+        run.series("S1", "H1");
+        run.trend("T1", "S1", &[(1, Verdict::Grew), (2, Verdict::Grew)]);
+        let q = py_queue(&run);
+        assert_eq!(q.closed, Some(Closed::Empty));
+        assert!(q.py_loop.is_none());
+        // A blocker recorded for the runtime closes it.
+        let (run, view2) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        let mut l = Ledger::load(run.dir.path()).unwrap();
+        l.answer_checklist(crate::checklist::ChecklistAnswer {
+            item: "intake.workload".into(),
+            status: crate::checklist::AnswerStatus::Unresolved,
+            evidence: Vec::new(),
+            note: None,
+            reason: Some(crate::finding::UnresolvedReason::EnvUnavailable),
+            remedy: Some("a service".into()),
+            runtime: Some("python".into()),
+        })
+        .unwrap();
+        let q = py_queue(&run);
+        assert_eq!(q.closed, Some(Closed::Blocked));
+        assert!(q.py_loop.is_none());
+        let _ = (view, view2);
+    }
+
+    #[test]
+    fn the_loop_is_first_until_a_pytest_loop_wrote_a_series_and_then_the_driver_batch_follows() {
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        // Generated, not run: run it.
+        pytest_harness(&run, "H1");
+        let q = py_queue(&run);
+        assert_eq!(q.command, "dla harness run H1");
+        assert_eq!(q.py_loop.as_deref(), Some("dla harness run H1"));
+        assert!(!q.in_flight_test_loop, "it declares no target");
+        assert!(steps(&q, "r").starts_with("First the project's own tests in a loop, nothing to write: dla harness run H1, dla trend S<n>;"));
+        assert!(
+            crate::view::queue_item(&q)
+                .fix
+                .starts_with("dla harness run H1, dla trend S<n>"),
+            "{}",
+            crate::view::queue_item(&q).fix
+        );
+        // A run refused for time says nothing about the tests: still to run.
+        use crate::harness::{AttemptOutcome, HarnessAttempt};
+        let attempt = |reason: &str| HarnessAttempt {
+            harness: "H1".into(),
+            started_at: HarnessAttempt::now(),
+            finished_at: HarnessAttempt::now(),
+            outcome: AttemptOutcome::Failed,
+            reason: Some(reason.into()),
+            message: None,
+        };
+        attempt("time_budget").save(run.dir.path()).unwrap();
+        assert_eq!(py_queue(&run).command, "dla harness run H1");
+        // It wrote a series: the driver batch, exactly as without the loop.
+        run.series("S1", "H1");
+        let q = py_queue(&run);
+        assert!(q.py_loop.is_none());
+        assert_eq!(q.command, "dla harness gen --lang python --driver --next");
+        assert_eq!(q.command, q.batch_command);
+        assert!(!steps(&q, "r").contains("First the project's own tests"));
+        // The loop's series settles no candidate: both are still pending.
+        assert_eq!(q.pending.len(), 2);
+    }
+
+    #[test]
+    fn a_failed_attempt_of_the_loop_lets_the_queue_go_on() {
+        use crate::harness::{AttemptOutcome, HarnessAttempt};
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        pytest_harness(&run, "H1");
+        for reason in ["harness-failed", "no_harness", "build_fails"] {
+            HarnessAttempt {
+                harness: "H1".into(),
+                started_at: HarnessAttempt::now(),
+                finished_at: HarnessAttempt::now(),
+                outcome: AttemptOutcome::Failed,
+                reason: Some(reason.into()),
+                message: None,
+            }
+            .save(run.dir.path())
+            .unwrap();
+            let q = py_queue(&run);
+            assert!(q.py_loop.is_none(), "{reason}");
+            assert_eq!(
+                q.command, "dla harness gen --lang python --driver --next",
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_generation_is_a_failed_attempt_and_a_later_generation_still_counts() {
+        let (run, _) = Run::new(2);
+        py_tests(&run, &["tests/test_a.py"]);
+        assert_eq!(
+            py_queue(&run).command,
+            "dla harness gen --lang python --pytest"
+        );
+        crate::harness::HarnessAttempt::save_pytest_loop_refusal(
+            run.dir.path(),
+            "tool_missing",
+            "pytest does not import",
+        )
+        .unwrap();
+        let q = py_queue(&run);
+        assert!(q.py_loop.is_none());
+        assert_eq!(q.command, "dla harness gen --lang python --driver --next");
+        // Pytest was installed since and the loop generated: it is to run, and then it counts.
+        pytest_harness(&run, "H1");
+        assert_eq!(py_queue(&run).command, "dla harness run H1");
+        run.series("S1", "H1");
+        let q = py_queue(&run);
+        assert!(q.py_loop.is_none());
+        assert_eq!(q.command, q.batch_command);
+    }
+
+    #[test]
+    fn the_pytest_loop_is_a_test_loop_and_not_a_hook_driver() {
+        let mut m = manifest("H1", &[], true);
+        assert!(m.is_hook_driver() && !m.is_test_loop() && !m.is_pytest_loop());
+        m.tools.push(crate::harness::PYTEST_TOOL.to_owned());
+        assert!(m.is_test_loop() && m.is_pytest_loop() && !m.is_hook_driver());
+        let mut j = manifest("H2", &[], true);
+        j.tools.push(crate::harness::JUNIT_TOOL.to_owned());
+        assert!(j.is_test_loop() && !j.is_pytest_loop() && !j.is_hook_driver());
+        // A command-mode harness is neither.
+        let mut c = manifest("H3", &[], false);
+        c.tools.push(crate::harness::PYTEST_TOOL.to_owned());
+        assert!(!c.is_test_loop() && !c.is_hook_driver());
+    }
+
+    #[test]
+    fn the_python_test_files_are_those_of_the_working_directory_with_the_most() {
+        let report: crate::workload::WorkloadReport = serde_json::from_value(json!({
+            "schema_version": 1,
+            "workloads": [
+                {"id": "a", "kind": "test", "runtime": "python", "command": "x", "cwd": ".", "file": "tests/test_a.py", "rank": 1},
+                {"id": "b", "kind": "test", "runtime": "python", "command": "x", "cwd": "svc", "file": "svc/tests/test_b.py", "rank": 1},
+                {"id": "c", "kind": "test", "runtime": "python", "command": "x", "cwd": "svc", "file": "svc/tests/test_c.py", "rank": 1},
+                {"id": "d", "kind": "main", "runtime": "python", "command": "x", "cwd": ".", "file": "run.py", "rank": 1},
+                {"id": "e", "kind": "test", "runtime": "jvm", "command": "x", "cwd": ".", "file": "T.java", "rank": 1},
+            ],
+            "entry_points": []
+        }))
+        .unwrap();
+        let t = crate::testloop::python_tests(&report).unwrap();
+        assert_eq!(t.cwd, "svc");
+        assert_eq!(t.files, ["svc/tests/test_b.py", "svc/tests/test_c.py"]);
+        assert_eq!(t.elsewhere, [(".".to_owned(), 1)]);
+        assert_eq!(t.local("svc/tests/test_b.py"), "tests/test_b.py");
     }
 }

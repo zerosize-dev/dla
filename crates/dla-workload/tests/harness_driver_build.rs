@@ -95,6 +95,7 @@ fn driver_opts(workload: Option<&str>) -> GenOptions {
         auto_probes: false,
         package: None,
         junit: false,
+        pytest: false,
         tests: Vec::new(),
         features: Vec::new(),
         no_default_features: false,

@@ -118,6 +118,22 @@ fn run_driver(
     rounds: u32,
     env: &[(&str, &str)],
 ) -> SeriesFile {
+    run_driver_named(fx, "dla_harness.py", setup, unit, step, warmup, rounds, env)
+}
+
+/// [`run_driver`] with the driver file under another name (`dla_pytest_loop.py`, the loop over
+/// the project's own tests, is a harness file too).
+#[allow(clippy::too_many_arguments)]
+fn run_driver_named(
+    fx: &Fx,
+    name: &str,
+    setup: &str,
+    unit: &str,
+    step: u64,
+    warmup: u32,
+    rounds: u32,
+    env: &[(&str, &str)],
+) -> SeriesFile {
     let tmpl = fs::read_to_string(fx.agent.join("dla_harness.py")).unwrap();
     let driver = tmpl
         .replace("@@DLA_STEP@@", &step.to_string())
@@ -133,9 +149,9 @@ fn run_driver(
             unit,
         );
     fs::create_dir_all(fx.hdir.join("driver")).unwrap();
-    fs::write(fx.hdir.join("driver/dla_harness.py"), &driver).unwrap();
+    fs::write(fx.hdir.join("driver").join(name), &driver).unwrap();
     // The same driver inside the project: a harness file that lies in the project is not counted.
-    fs::write(fx.work.join("dla_harness.py"), &driver).unwrap();
+    fs::write(fx.work.join(name), &driver).unwrap();
     let mut env_vars = vec![(
         "PYTHONPATH".to_owned(),
         format!("{}:{}", fx.agent.display(), fx.work.display()),
@@ -155,10 +171,7 @@ fn run_driver(
         run: CommandSpec {
             argv: vec![
                 "python3".into(),
-                fx.work
-                    .join("dla_harness.py")
-                    .to_string_lossy()
-                    .into_owned(),
+                fx.work.join(name).to_string_lossy().into_owned(),
             ],
             cwd: ".".into(),
             env: env_vars,
@@ -505,4 +518,59 @@ fn counting_the_sites_does_not_make_a_run_without_a_leak_read_as_growth() {
         "py.traced rose by {rise} bytes"
     );
     assert!(block_columns(&s).is_empty(), "{:?}", block_columns(&s));
+}
+
+#[test]
+fn the_pytest_loop_driver_is_a_harness_file_too() {
+    if !have_python() {
+        return;
+    }
+    let fx = fixture();
+    project(&fx);
+    // The driver keeps an object per unit in its own hook; the project holds a copy of the
+    // driver named as the pytest loop is: neither has a column.
+    let s = run_driver_named(&fx, "dla_pytest_loop.py", SETUP, UNIT, 50, 1, 6, &[]);
+    let line = line_of(STORE, "# KEEP");
+    assert_eq!(
+        block_columns(&s),
+        [format!("py.blocks@store.py:{line}")],
+        "only the keeping line of the project has a column"
+    );
+}
+
+/// The file-name rule of the agent's test-file test, one file per rule, in a directory named
+/// `Tests` (a capital T: not a test directory by the rule, as in the library this was found on),
+/// next to a file that is not a test file. Every file keeps one object per call.
+#[test]
+fn the_file_name_rule_of_a_test_file_holds_without_a_test_directory() {
+    if !have_python() {
+        return;
+    }
+    let fx = fixture();
+    let keep = "KEPT = []\n\n\ndef keep(i):\n    KEPT.append(object())  # KEEP\n";
+    for f in [
+        "Tests/test_prefix.py",
+        "Tests/suffix_test.py",
+        "Tests/conftest.py",
+        "Tests/helper.py",
+    ] {
+        write(&fx, f, keep);
+    }
+    write(&fx, "Tests/__init__.py", "");
+    let setup = "import importlib\n    _state['mods'] = [importlib.import_module('Tests.' + n) for n in ('test_prefix', 'suffix_test', 'conftest', 'helper')]";
+    let s = run_driver(
+        &fx,
+        setup,
+        "for m in _state['mods']:\n        m.keep(i)",
+        50,
+        1,
+        4,
+        &[],
+    );
+    let line = line_of(keep, "# KEEP");
+    assert_eq!(
+        block_columns(&s),
+        [format!("py.blocks@Tests/helper.py:{line}")],
+        "only the file that is no test file by its name has a column"
+    );
 }

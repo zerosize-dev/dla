@@ -42,11 +42,11 @@ DLA diagnoses memory leaks: it measures, attributes and reports, and never edits
 
 ## Invoking the binary
 
-While the plugin is enabled, `dla` is on the Bash tool's PATH; confirm with `command -v dla`, else use `${CLAUDE_PLUGIN_ROOT}/bin/dla`. This skill passes values as arguments, not environment variables. `dla <cmd> --help` gives the exact flags of the installed release; never guess a flag. When a command named in these files does not exist, record that item `unresolved` with reason `tool_missing` and a remedy naming the command.
+With the plugin enabled, `dla` is on the Bash tool's PATH; confirm with `command -v dla`, else use `${CLAUDE_PLUGIN_ROOT}/bin/dla`. This skill passes values as arguments, not environment variables. `dla <cmd> --help` gives the exact flags; never guess a flag. A command named in these files that does not exist: record that item `unresolved`, reason `tool_missing`, remedy naming it.
 
 ## Stage checklist
 
-Copy into your notes (see `references/stages.md`). Run `dla gate check --stage <s>` at the end of a stage (cumulative; it lists what is missing and records the pass).
+Copy into your notes (`references/stages.md`). Run `dla gate check --stage <s>` at the end of a stage (cumulative; lists what is missing, records the pass).
 
 ```
 - [ ] 1. Intake checklist and consent            gate: intake
@@ -54,6 +54,7 @@ Copy into your notes (see `references/stages.md`). Run `dla gate check --stage <
 - [ ] 3. Static sweep and holder census          gate: sweep
         end with dla ledger list: the candidates in rank order
 - [ ] 4. Classify growth (harness, trend)        gate: classify
+        Python tests: first dla harness gen --lang python --pytest
         while dla run status shows an open `queue`, one batch after another:
         dla harness gen --lang <rt> --driver --next; fill setup and unit so each unit reaches every
         target of the driver's target block with a new key; dla harness run H<n> --mode both;

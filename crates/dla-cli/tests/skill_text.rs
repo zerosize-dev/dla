@@ -608,3 +608,71 @@ fn the_references_teach_the_python_allocation_site_columns_and_their_route() {
         "evidence-and-report.md"
     );
 }
+
+#[test]
+fn the_references_teach_the_pytest_loop_as_the_first_pass_of_a_python_queue() {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let skill = read("skills/detect-leak-anywhere/SKILL.md");
+    let readme = read("harness/python/README.md");
+    let verifier = read("agents/verifier.md");
+    for want in [
+        "The project's own tests in a loop (`dla harness gen --lang python --pytest [--tests a,b]`)",
+        "again and again",
+        "declares no target",
+        "pytest in the harness interpreter",
+        "python3 -m pip install pytest",
+        "`bin` directory of a virtual environment",
+        "the scratch copy is made when the harness is generated and keeps the extension modules built in place",
+        "`python3 setup.py build_ext --inplace`",
+        "`DLA-PYTEST` line",
+        "`dropped test file ...`",
+        "`dla harness gen --lang python --driver --probe F`",
+        "re-runs the whole suite per run",
+        "a candidate of the queue still needs its driver",
+    ] {
+        assert!(python.contains(want), "python.md lacks: {want}");
+    }
+    for want in [
+        "A Python project with test files starts the same way, with one loop over all of them: `dla harness gen --lang python --pytest`",
+        "`--tests a,b` for files or directories; no candidate, no target, nothing to fill",
+        "goes on with the driver batches once it wrote a series or an attempt failed",
+    ] {
+        assert!(stages.contains(want), "stages.md lacks: {want}");
+    }
+    assert!(
+        stages.contains(
+            "a Python test loop lists the test files that ran and measures nothing per file"
+        ),
+        "stages.md: the bundle of a Python test loop"
+    );
+    assert!(
+        skill.contains("Python tests: first dla harness gen --lang python --pytest"),
+        "SKILL.md lacks the pytest loop in checklist item 4"
+    );
+    for want in [
+        "`dla_pytest_loop.py`",
+        "`-o addopts=`",
+        "`DLA-PYTEST the tests import <name> from <path>, which is outside the project: ...`",
+        "`dropped test file <path>: none of its tests passed in the first run (first failure: ...)`",
+        "`the tests are too slow for a series`",
+        "`DLA-PYTEST summary: units= tests_run= files= dropped= failed_units= first_failure=`",
+    ] {
+        assert!(
+            readme.contains(want),
+            "harness/python/README.md lacks: {want}"
+        );
+    }
+    assert!(
+        verifier.contains("`test_files_run`") && verifier.contains("`dropped_files`"),
+        "agents/verifier.md does not say what a Python bundle lists"
+    );
+}

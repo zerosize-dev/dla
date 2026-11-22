@@ -139,6 +139,8 @@ struct Run {
     declared: BTreeSet<FindingId>,
     /// The harness is a test loop (the project's own JUnit tests in a loop).
     test_loop: bool,
+    /// The harness is the pytest loop (a Python project): no per-class attribution exists for it.
+    pytest_loop: bool,
     /// What the loop measured per test class for each finding it was asked about
     /// (`dla alloc-test <H> --finding <F>`).
     attributed: BTreeMap<FindingId, crate::testloop::Attributed>,
@@ -153,7 +155,14 @@ fn test_loop_varies(
     harness: &str,
     id: &FindingId,
     attributed: Option<&crate::testloop::Attributed>,
+    pytest_loop: bool,
 ) -> String {
+    if pytest_loop {
+        // `dla alloc-test` attributes a holder to test classes of a JVM loop only.
+        return format!(
+            "the project's own tests in {harness}; which test file feeds it is not measured"
+        );
+    }
     let Some(a) = attributed else {
         return format!(
             "the project's own tests in {harness}; which test class feeds it is not measured (dla alloc-test {harness} --finding {id})"
@@ -178,6 +187,32 @@ fn test_loop_varies(
     );
     if a.parallel {
         out.push_str("; the tests ran in parallel, so the figures of the classes overlap");
+    }
+    out
+}
+
+/// The leak-side findings whose own site is the line of a passed allocation-site column
+/// (`py.blocks@<file:line>`) of `report`.
+fn grown_at_site_columns(view: &RunView, report: &crate::trend::TrendReport) -> Vec<FindingId> {
+    use crate::{grown, series::Unit};
+    let mut out = Vec::new();
+    for c in report.columns.iter().filter(|c| {
+        c.gate == dla_stats::GateVerdict::Pass
+            && c.unit != Unit::Seconds
+            && grown::is_alloc_site_column(&c.name)
+    }) {
+        let Some(site) = grown::column_site(c) else {
+            continue;
+        };
+        for f in view.ledger.findings().filter(|f| {
+            f.site.as_deref().map(str::trim) == Some(site)
+                && f.polarity() == crate::finding::Polarity::Leak
+                && !f.id.is_sibling()
+        }) {
+            if !out.contains(&f.id) {
+                out.push(f.id.clone());
+            }
+        }
     }
     out
 }
@@ -271,16 +306,29 @@ impl Triggers {
                     .ok()
                     .and_then(|f| f.source.mode)
                     != Some(crate::series::KeyMode::Repeated),
-                verdicts: report
-                    .map(|r| {
-                        r.targets
-                            .iter()
-                            .map(|v| (v.finding.clone(), v.verdict))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                verdicts: {
+                    let mut v: BTreeMap<FindingId, Verdict> = report
+                        .map(|r| {
+                            r.targets
+                                .iter()
+                                .map(|v| (v.finding.clone(), v.verdict))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    // The pytest loop declares no target: a finding at a line whose allocation-site
+                    // column passed in its series grew in it.
+                    if m.is_pytest_loop()
+                        && let Some(r) = report
+                    {
+                        for f in grown_at_site_columns(view, r) {
+                            v.entry(f).or_insert(Verdict::Grew);
+                        }
+                    }
+                    v
+                },
                 declared: m.targets.iter().cloned().collect(),
                 test_loop: m.is_test_loop(),
+                pytest_loop: m.is_pytest_loop(),
                 attributed: if m.is_test_loop() {
                     m.targets
                         .iter()
@@ -392,7 +440,11 @@ impl Triggers {
     pub fn test_loop_harnesses(&self, id: &FindingId) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for r in self.runs.iter().filter(|r| {
-            r.test_loop && r.declared.contains(id) && r.verdicts.get(id) == Some(&Verdict::Grew)
+            r.test_loop
+                // The pytest loop declares no target: a finding at a line that grew there is tied
+                // by the line's column, and the trend reports its verdict.
+                && (r.declared.contains(id) || r.pytest_loop)
+                && r.verdicts.get(id) == Some(&Verdict::Grew)
         }) {
             if !out.contains(&r.harness) {
                 out.push(r.harness.clone());
@@ -473,7 +525,7 @@ impl Triggers {
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
                 varies: if r.test_loop {
-                    test_loop_varies(&r.harness, id, r.attributed.get(id))
+                    test_loop_varies(&r.harness, id, r.attributed.get(id), r.pytest_loop)
                 } else {
                     format!(
                         "the project's workload {}",

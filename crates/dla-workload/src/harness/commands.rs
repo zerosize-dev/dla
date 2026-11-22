@@ -831,6 +831,9 @@ fn plan_native(w: &Workload, iter_arg: Option<&str>, layout: &Layout) -> Plan {
     }
 }
 
+/// The file name of the pytest loop driver in the driver directory.
+pub const PYTEST_LOOP_FILE: &str = "dla_pytest_loop.py";
+
 /// What a driver-mode harness needs from the caller beyond the workload.
 #[derive(Debug, Clone, Default)]
 pub struct DriverSpec {
@@ -848,6 +851,9 @@ pub struct DriverSpec {
     pub no_default_features: bool,
     /// JVM: run the project's own JUnit 5 tests in a loop (no hooks, see [`JunitSpec`]).
     pub junit: Option<JunitSpec>,
+    /// Python: run the project's own tests with pytest in a loop (no hooks): the driver file
+    /// is [`PYTEST_LOOP_FILE`].
+    pub pytest_loop: bool,
     /// JVM: the project's Gradle or Maven build resolves the driver's class path (the main
     /// runtime class path, see [`ClasspathSet::Main`]) instead of the workload's classes
     /// directory; the hooks driver is compiled and run against it.
@@ -1090,7 +1096,14 @@ pub fn plan_driver(
         }
         Runtime::Python => {
             let mut run = CommandSpec {
-                argv: vec!["python3".into(), driver("dla_harness.py")],
+                argv: vec![
+                    "python3".into(),
+                    driver(if spec.pytest_loop {
+                        PYTEST_LOOP_FILE
+                    } else {
+                        "dla_harness.py"
+                    }),
+                ],
                 cwd: cwd.to_owned(),
                 env: Vec::new(),
             };

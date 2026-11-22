@@ -251,10 +251,15 @@ fn failed(why: impl Into<String>, missing: impl Into<String>, fix: impl Into<Str
 fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
     let id = &manifest.id;
     let rt = manifest.runtime.as_str();
+    if manifest.is_pytest_loop() {
+        return format!(
+            "read the tail of the logs ({logs}); the pytest loop has no hooks to fill. The reason is the DLA-PYTEST line of the log. If the tests import the project from outside it, build or install the project in place (python3 -m pip install -e . , or python3 setup.py build_ext --inplace for extension modules) and run dla harness gen --lang python --pytest again (the scratch copy is made at generation); if they need a service that is not running (a database, a broker, a cache), start it and dla harness run {id}; if it cannot be started, record dla ledger resolve intake.workload --status unresolved --reason env_unavailable --remedy \"<what {id} needs>\" --runtime {rt} (that closes the queue of {rt} only). The other way on is a driver with hooks: dla harness gen --lang python --driver --next"
+        );
+    }
     if manifest
         .tools
         .iter()
-        .any(|t| t == "junit-platform-launcher")
+        .any(|t| t == dla_core::harness::JUNIT_TOOL)
     {
         let fallback = if manifest.is_test_loop() {
             format!(". {}", driver_fallback(manifest))
@@ -267,6 +272,22 @@ fn harness_failed_fix(manifest: &HarnessManifest, logs: &str) -> String {
     } else {
         format!("read the logs, fix the harness or its hooks, then dla harness run {id}")
     }
+}
+
+/// The reason line of a pytest loop that stopped: the first `DLA-PYTEST` line of its log that
+/// is not an output block, a drop or the summary.
+fn pytest_reason(logs: &[(String, PathBuf)]) -> Option<String> {
+    logs.iter().find_map(|(_, path)| {
+        let text = fs::read_to_string(path).ok()?;
+        text.lines()
+            .find(|l| {
+                l.starts_with("DLA-PYTEST ")
+                    && !l.starts_with("DLA-PYTEST summary")
+                    && !l.starts_with("DLA-PYTEST output of unit")
+                    && !l.starts_with("DLA-PYTEST dropped test file")
+            })
+            .map(|l| clip(l, 600))
+    })
 }
 
 /// What to do for the targets of a test-loop harness that could not measure them (it did not
@@ -1863,6 +1884,18 @@ fn run_command_mode(
     Ok(run)
 }
 
+/// The seconds a driver process is estimated to take, from the pace of an earlier series of the
+/// harness. The pytest loop fits its own rounds into the timeout (it lowers its step and drops
+/// files), so `predicted`, which counts every planned run of the tests, overstates it: the
+/// process cannot outlast the timeout.
+fn driver_estimate(manifest: &HarnessManifest, predicted: f64, timeout: Duration) -> f64 {
+    if manifest.is_pytest_loop() {
+        predicted.min(timeout.as_secs_f64())
+    } else {
+        predicted
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_driver_mode(
     ctx: &ToolCtx,
@@ -1882,7 +1915,7 @@ fn run_driver_mode(
     let planned = manifest.step.saturating_mul(u64::from(total_rounds)) as f64;
     let (timeout, capped) = match allow {
         Some(a) => {
-            let estimate = pace.predict(planned);
+            let estimate = driver_estimate(manifest, pace.predict(planned), timeout);
             if a.usable() < 1.0 || (!pace.is_empty() && estimate > a.usable()) {
                 if first_process {
                     return Err(too_long_driver(ctx, manifest, opts, a, pace, estimate));
@@ -2880,11 +2913,17 @@ pub fn run_points(
                 "every measured process of mode {} exited with a non-zero code ({codes}); no series was written for it",
                 mode.as_str()
             ));
+            let reason = if manifest.is_pytest_loop() {
+                pytest_reason(&run.scan_logs)
+            } else {
+                None
+            };
             harness_failed.get_or_insert_with(|| {
                 failed(
                     format!(
-                        "every measured process of mode {} exited with a non-zero code ({codes}): the harness itself failed, so no series was written",
-                        mode.as_str()
+                        "every measured process of mode {} exited with a non-zero code ({codes}): the harness itself failed, so no series was written{}",
+                        mode.as_str(),
+                        reason.map_or_else(String::new, |r| format!("; {r}"))
                     ),
                     format!("a harness that runs to completion; see the logs {logs}"),
                     harness_failed_fix(manifest, &logs),
@@ -3796,18 +3835,20 @@ pub fn attention_lines(
     }) {
         lines.push(clip(&format!("DRIVER STEP: {l}"), 160));
     }
-    // A test class the loop left out: the targets it was chosen for were not measured by it.
-    const DROPPED: &str = "dropped test class ";
-    let dropped: Vec<&str> = out
-        .limitations
-        .iter()
-        .filter_map(|l| l.find(DROPPED).map(|i| &l[i + DROPPED.len()..]))
-        .collect();
-    if let Some(first) = dropped.first() {
-        lines.push(clip(
-            &format!("TEST CLASS DROPPED ({}): {first}", dropped.len()),
-            160,
-        ));
+    // A test class (JUnit loop) or test file (pytest loop) the loop left out: the targets it was
+    // chosen for were not measured by it, and what it runs is smaller than the suite.
+    for (marker, label) in [
+        ("dropped test class ", "TEST CLASS DROPPED"),
+        ("dropped test file ", "TEST FILE DROPPED"),
+    ] {
+        let dropped: Vec<&str> = out
+            .limitations
+            .iter()
+            .filter_map(|l| l.find(marker).map(|i| &l[i + marker.len()..]))
+            .collect();
+        if let Some(first) = dropped.first() {
+            lines.push(clip(&format!("{label} ({}): {first}", dropped.len()), 160));
+        }
     }
     if out
         .limitations
@@ -3949,6 +3990,106 @@ mod tests {
             l[0].starts_with("NO COVERAGE DATA") && l[0].contains("killed"),
             "{l:?}"
         );
+    }
+
+    #[test]
+    fn a_dropped_test_file_of_the_pytest_loop_is_an_attention_line_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dla_core::Ledger::create(dir.path()).unwrap();
+        let m = tests_support::manifest();
+        let out = RunOutput {
+            series: vec!["S1".into()],
+            points: 9,
+            modes: vec![KeyMode::Fresh],
+            limitations: vec![
+                "the test loop lowered its step from 2 to 1 runs of the tests per round in round 1: slow".into(),
+                "dropped test file tests/test_broken.py: none of its tests passed in the first run (first failure: tests/test_broken.py::test_one: AssertionError), so it is left out of the loop and the other files are measured".into(),
+                "dropped test file tests/test_slow.py: it took 9.0 s of 10.0 s per run and the series would not fit 30 s (left out from run 2 on)".into(),
+            ],
+            ..RunOutput::default()
+        };
+        let lines = attention_lines(&m, &out, 9, &ledger, &dir.path().join("none.json"));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("DRIVER STEP: the test loop lowered its step")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with(
+                "TEST FILE DROPPED (2): tests/test_broken.py: none of its tests passed"
+            )),
+            "{lines:?}"
+        );
+        let slow = RunOutput {
+            limitations: vec![
+                "the tests are too slow for a series: even 1 run per round of 1 test file(s) needs 99 s".into(),
+            ],
+            ..out
+        };
+        let lines = attention_lines(&m, &slow, 9, &ledger, &dir.path().join("none.json"));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("DRIVER STEP: the tests are too slow for a series")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_fix_of_a_failed_pytest_loop_names_the_in_place_build_and_the_driver_not_hooks() {
+        let mut m = tests_support::manifest();
+        m.runtime = dla_core::runtime::Runtime::Python;
+        m.mode = HarnessMode::Driver;
+        m.tools.push(dla_core::harness::PYTEST_TOOL.to_owned());
+        let fix = harness_failed_fix(&m, "harness/H1/logs/p1-fresh.log");
+        for want in [
+            "the pytest loop has no hooks to fill",
+            "DLA-PYTEST line",
+            "python3 -m pip install -e .",
+            "setup.py build_ext --inplace",
+            "dla harness gen --lang python --driver --next",
+            "--runtime python",
+        ] {
+            assert!(fix.contains(want), "{want} missing from {fix}");
+        }
+        assert!(!fix.contains("JUnit"), "{fix}");
+        // The JUnit loop keeps its own text.
+        m.tools = vec![dla_core::harness::JUNIT_TOOL.to_owned()];
+        assert!(harness_failed_fix(&m, "x").contains("a JUnit repeat harness has no hooks"));
+    }
+
+    #[test]
+    fn the_reason_line_of_a_pytest_loop_is_the_first_line_that_is_no_output_drop_or_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("p1-fresh.log");
+        fs::write(
+            &log,
+            "noise\nDLA-PYTEST output of unit 1\nDLA-PYTEST dropped test file a.py: x\nDLA-PYTEST the tests are too slow for a series: even 1 run\nDLA-PYTEST summary: units=1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            pytest_reason(&[("p1-fresh".into(), log)]).as_deref(),
+            Some("DLA-PYTEST the tests are too slow for a series: even 1 run")
+        );
+        let quiet = dir.path().join("q.log");
+        fs::write(&quiet, "DLA-PYTEST summary: units=9\n").unwrap();
+        assert_eq!(pytest_reason(&[("q".into(), quiet)]), None);
+    }
+
+    #[test]
+    fn the_estimate_of_a_pytest_loop_is_bounded_by_its_timeout_and_other_drivers_are_not() {
+        let mut m = tests_support::manifest();
+        m.mode = HarnessMode::Driver;
+        let limit = Duration::from_secs(1800);
+        // A hook driver or a JUnit loop: the pace's figure stands.
+        assert_eq!(driver_estimate(&m, 5000.0, limit), 5000.0);
+        m.tools.push(dla_core::harness::JUNIT_TOOL.to_owned());
+        assert_eq!(driver_estimate(&m, 5000.0, limit), 5000.0);
+        // The pytest loop lowers its own step and drops files to fit the timeout.
+        m.tools = vec![dla_core::harness::PYTEST_TOOL.to_owned()];
+        assert_eq!(driver_estimate(&m, 5000.0, limit), 1800.0);
+        assert_eq!(driver_estimate(&m, 300.0, limit), 300.0);
     }
 
     #[test]

@@ -722,8 +722,8 @@ fn entry_path_files(
 /// At most this many test-loop harnesses go into a bundle.
 const MAX_TEST_LOOP_HARNESSES: usize = 2;
 
-/// `test-loop/<H>/tests.json` for each test-loop harness that targeted the finding and in whose
-/// trend it grew. With the attribution `dla alloc-test <H> --finding <F>` stored, it names the
+/// `test-loop/<H>/tests.json` for each test-loop harness that targeted the finding (a pytest
+/// loop declares none: it counts when the finding grew in it) and in whose trend it grew. With the attribution `dla alloc-test <H> --finding <F>` stored, it names the
 /// test classes that fed the holder (with the entries each added per run) and the classes that
 /// ran and added nothing; without it, the classes that ran, and says which of them feeds the
 /// holder was not measured. A finding with no such harness gets nothing.
@@ -743,6 +743,29 @@ fn test_loop_files(
         .into_iter()
         .take(MAX_TEST_LOOP_HARNESSES)
     {
+        // The pytest loop: the test files it ran, no per-file figures (nothing measures which
+        // file feeds a holder).
+        if dla_core::HarnessManifest::load(&tc.run_dir, &h).is_ok_and(|m| m.is_pytest_loop()) {
+            let (ran, dropped) =
+                dla_core::testloop::pytest_files_of(&tc.run_dir, &h).unwrap_or_default();
+            let mut doc = json!({
+                "harness": h,
+                "test_files_run": ran,
+                "note": if ran.is_empty() {
+                    "these tests ran in a loop (pytest, one process) while the holder grew; the files that ran were not recorded, and which of them feeds the holder was not measured"
+                } else {
+                    "these test files ran in a loop (pytest, one process) while the holder grew; which of them feeds the holder was not measured"
+                },
+            });
+            if !dropped.is_empty() {
+                doc["dropped_files"] = json!(dropped);
+            }
+            scrub_ties(&mut doc, needles, false);
+            let name = format!("test-loop/{h}/tests.json");
+            write(&name, to_pretty_json(&doc).as_bytes())?;
+            out.push(json!({"harness": h, "files": [name]}));
+            continue;
+        }
         let files = dla_core::testloop::classes_of(&tc.run_dir, &h);
         let with_file = |class: &str| -> Value {
             let mut v = json!({"class": class});

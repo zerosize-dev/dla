@@ -25,22 +25,29 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CensusArgs) -> 
         dla_census::census(&tc, a.lang),
     )?;
     let found = |k: &str| out[k].as_u64().unwrap_or(0) > 0;
-    if a.lang == Runtime::Jvm
-        && (found("candidates") || found("skipped_duplicates"))
-        && let Some(note) = discover_for_the_queue(ctx, &tc)
+    // A JVM census that found no candidate needs no test loop. A Python census may find none new
+    // when `dla sweep` already listed them, and the queue is made of those too.
+    if (a.lang == Runtime::Python
+        || (a.lang == Runtime::Jvm && (found("candidates") || found("skipped_duplicates"))))
+        && let Some(note) = discover_for_the_queue(ctx, &tc, a.lang)
     {
         out["workloads"] = json!(note);
     }
     Ok(out)
 }
 
-/// The measurement queue of a JVM project starts with the project's own tests in a loop, and it
+/// The measurement queue of a JVM or Python project starts with the project's own tests in a loop
+/// (`dla harness gen --lang jvm --junit --next`, `dla harness gen --lang python --pytest`), and it
 /// reads the tests from the workload discovery result. A run that has none gets one here,
 /// exactly as `dla workload discover` would write it (files are read, nothing is run), so the
 /// first pass does not depend on a step the caller may skip. Returns the line the census
 /// output carries; `None` when a result is already there or discovery was refused (the census
 /// stands either way, and `dla workload discover` says why).
-fn discover_for_the_queue(ctx: &Ctx, tc: &dla_core::toolctx::ToolCtx) -> Option<String> {
+fn discover_for_the_queue(
+    ctx: &Ctx,
+    tc: &dla_core::toolctx::ToolCtx,
+    census_lang: Runtime,
+) -> Option<String> {
     let file = tc
         .run_dir
         .join("workload")
@@ -50,8 +57,13 @@ fn discover_for_the_queue(ctx: &Ctx, tc: &dla_core::toolctx::ToolCtx) -> Option<
     }
     let lang = crate::workload_cmd::effective_lang(None, ctx.worker.as_deref());
     let found = dla_workload::discover(tc, lang).ok()?;
+    let who = if census_lang == Runtime::Python {
+        "Python"
+    } else {
+        "JVM"
+    };
     Some(format!(
-        "discovered for the measurement queue ({} workload(s), evidence {}): the queue of a JVM project starts with the project's own tests; dla workload discover repeats it",
+        "discovered for the measurement queue ({} workload(s), evidence {}): the queue of a {who} project starts with the project's own tests; dla workload discover repeats it",
         found.summary["workloads"].as_u64().unwrap_or(0),
         found.evidence.join(", ")
     ))

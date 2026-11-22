@@ -115,6 +115,7 @@ fn junit_opts() -> GenOptions {
         auto_probes: true,
         package: None,
         junit: true,
+        pytest: false,
         tests: Vec::new(),
         features: Vec::new(),
         no_default_features: false,
@@ -1576,6 +1577,7 @@ fn more_than_eight_targets_are_declared_by_a_hookless_harness_and_never_by_a_dri
         &GenOptions {
             driver: true,
             junit: false,
+            pytest: false,
             tests: Vec::new(),
             ..o.clone()
         },

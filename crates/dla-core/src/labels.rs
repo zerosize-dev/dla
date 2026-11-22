@@ -109,8 +109,10 @@ pub fn entry_sha256(e: &Entry) -> String {
 /// The command that produces evidence of `kind`, for refusal text.
 pub fn producer_hint(kind: EvidenceKind, finding: &FindingId) -> String {
     match kind {
+        // `dla trend <S>` writes the growth-series record; `--finding` needs `--against <S2>`
+        // (it binds a keys discriminator), so it is not part of this command.
         EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => format!(
-            "dla harness run <H>, dla trend <S> --finding {finding}   (a passing column tied to {finding})"
+            "dla harness run <H>, dla trend <S>   (a passing column tied to {finding} by its site, a probe or the finding itself: the growth-series record of the trend names it)"
         ),
         EvidenceKind::RetentionPath => format!(
             "dla harness run <H> --capture heap, dla summarize heap-graph <dumps> --finding {finding}   (native: the vgdb chain)"
@@ -140,9 +142,7 @@ pub fn producer_hint(kind: EvidenceKind, finding: &FindingId) -> String {
 /// A short form of [`producer_hint`]: the command alone, for `--suggest` rows.
 pub fn producer_command(kind: EvidenceKind, finding: &FindingId) -> String {
     match kind {
-        EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => {
-            format!("dla trend <S> --finding {finding}")
-        }
+        EvidenceKind::GrowthSeries | EvidenceKind::UnitCountSeries => "dla trend <S>".to_owned(),
         EvidenceKind::RetentionPath => {
             format!("dla summarize heap-graph <dumps> --finding {finding}")
         }
@@ -1162,4 +1162,31 @@ pub fn suggest(
     };
     rows.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.id.cmp(&b.id)));
     Ok(rows)
+}
+
+#[cfg(test)]
+mod producer_tests {
+    use super::*;
+
+    #[test]
+    fn the_growth_series_command_is_one_that_runs() {
+        // `dla trend <S> --finding F` is refused without `--against <S2>`: the growth-series
+        // record comes from the plain trend, and it names the finding by the column's site.
+        let f = FindingId::new(3);
+        for kind in [EvidenceKind::GrowthSeries, EvidenceKind::UnitCountSeries] {
+            assert_eq!(producer_command(kind, &f), "dla trend <S>");
+            let hint = producer_hint(kind, &f);
+            assert!(
+                hint.starts_with("dla harness run <H>, dla trend <S>   ("),
+                "{hint}"
+            );
+            assert!(!hint.contains("--finding"), "{hint}");
+        }
+        // The discriminator's own route keeps `--finding` next to `--against`.
+        let d = producer_hint(EvidenceKind::Discriminator, &f);
+        assert!(
+            d.contains("dla trend <S> --against <S2> --finding F3"),
+            "{d}"
+        );
+    }
 }

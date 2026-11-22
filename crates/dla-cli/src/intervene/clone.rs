@@ -15,7 +15,7 @@ use dla_core::{
     harness::{HARNESS_DIR, HarnessManifest},
     toolctx::ToolCtx,
 };
-use dla_workload::harness::{AGENT, DRIVER, PROBES, WORK, harness_dir, scratch::copy_tree};
+use dla_workload::harness::{AGENT, DRIVER, PROBES, WORK, harness_dir, scratch::copy_tree_for};
 use serde_json::Value;
 
 /// The clone.
@@ -134,7 +134,8 @@ pub fn clone_harness(tc: &ToolCtx, src: &HarnessManifest) -> Result<Cloned, Refu
     let marker = to.join(dla_core::harness::CLONE_MARKER);
     fs::write(&marker, &src.id).map_err(|e| io(&marker, e))?;
     let work = to.join(WORK);
-    let files = copy_tree(&from.join(WORK), &work, &tc.project).map_err(|e| io(&work, e))?;
+    let files = copy_tree_for(&from.join(WORK), &work, &tc.project, Some(src.runtime))
+        .map_err(|e| io(&work, e))?;
     manifest.save(&tc.run_dir).map_err(|e| e.to_refusal())?;
     Ok(Cloned {
         manifest,
