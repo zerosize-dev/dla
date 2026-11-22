@@ -1195,6 +1195,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     let event = purge_event(&series);
     let mut limitations: Vec<String> = series.limitations.clone();
     limitations.extend(out.gaps.iter().cloned());
+    limitations.extend(picked.note.clone());
     if opts.attribute.is_some() && attribution.is_none() {
         limitations.push(
             "which test class feeds the holder was not measured: the loop wrote no attribution file (see the run log)"
@@ -1883,6 +1884,7 @@ mod tests {
             primary: Some("jvm.nonheap_used".into()),
             required: vec!["jvm.nmt.symbol".into()],
             basis: String::new(),
+            note: None,
         };
         // The pools plateau and Symbol keeps rising: inconclusive, and the column is named.
         let results = [

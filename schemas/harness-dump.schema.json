@@ -65,6 +65,30 @@
         "null"
       ]
     },
+    "group_capped": {
+      "description": "The bases of `group_counts` whose site list was cut at the agent's bound: a site missing\nfrom such a record may exist with a smaller count, so its absence is not a zero.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "group_counts": {
+      "description": "Counts of every site of a grouped counter, written by each record of a driver run (the\nPython agent's `py.blocks`): base name to site to count. Unlike `groups`, the series\nbuilder chooses which sites become columns, from the records of the whole run.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
     "groups": {
       "description": "Grouped counters: base name to site to value.",
       "type": [

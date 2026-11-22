@@ -26,7 +26,7 @@
 //! The manifest's `run.env` is merged over the inherited environment (`JAVA_TOOL_OPTIONS`
 //! and `NODE_OPTIONS` appended with a space; `PYTHONPATH`, `LD_PRELOAD` and
 //! `DYLD_INSERT_LIBRARIES` prepended with the path separator), then `DLA_HARNESS_OUT`,
-//! `DLA_HARNESS_PROBES`, `DLA_PROJECT`, `DLA_PROJECT_PACKAGES` (JVM: the packages the scratch
+//! `DLA_HARNESS_PROBES`, `DLA_PROJECT`, `DLA_SOURCE_ROOT` (Python: the project the scratch copy was made from), `DLA_PROJECT_PACKAGES` (JVM: the packages the scratch
 //! copy's sources declare), `DLA_ITER`, `DLA_TICK_MS`, `DLA_PURGE` (last point
 //! only, command mode) and, in driver mode, `DLA_KEY_MODE`, `DLA_STEP`, `DLA_WARMUP`,
 //! `DLA_ROUNDS` (the measured rounds: `iterations + extra`), `DLA_REPEAT` are set. Tokens
@@ -809,6 +809,9 @@ struct Paths {
     probes: Option<PathBuf>,
     /// JVM: the packages the scratch copy's sources declare (`DLA_PROJECT_PACKAGES`).
     packages: Option<String>,
+    /// Python: the project the scratch copy was made from (`DLA_SOURCE_ROOT`). A library
+    /// installed in editable mode runs from there, not from the copy.
+    source: Option<String>,
 }
 
 impl Paths {
@@ -838,8 +841,13 @@ impl Paths {
         let packages = (manifest.runtime == dla_core::runtime::Runtime::Jvm)
             .then(|| cover::jvm_project_packages(&work))
             .filter(|p| !p.is_empty());
+        let source = (manifest.runtime == dla_core::runtime::Runtime::Python)
+            .then(|| ctx.project.canonicalize().ok())
+            .flatten()
+            .map(|p| dla_core::paths::plain(p).to_string_lossy().into_owned());
         Ok(Self {
             packages,
+            source,
             out: hdir.join(OUT),
             logs: hdir.join(LOGS),
             cov: hdir.join(COV),
@@ -1141,6 +1149,9 @@ impl PointEnv<'_> {
         );
         if let Some(p) = &self.paths.packages {
             set("DLA_PROJECT_PACKAGES", p.clone());
+        }
+        if let Some(p) = &self.paths.source {
+            set("DLA_SOURCE_ROOT", p.clone());
         }
         set("DLA_ITER", self.n.to_string());
         set("DLA_TICK_MS", "100".to_owned());
@@ -4290,6 +4301,7 @@ mod tests {
             cov: dir.join("cov"),
             probes: None,
             packages: None,
+            source: None,
         }
     }
 

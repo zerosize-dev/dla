@@ -564,3 +564,47 @@ fn every_text_that_offers_the_workload_blocker_names_the_runtime() {
         );
     }
 }
+
+#[test]
+fn the_references_teach_the_python_allocation_site_columns_and_their_route() {
+    // Line breaks do not matter: every text is read with its whitespace collapsed.
+    let read = |p: &str| {
+        fs::read_to_string(root().join(p))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let python = read("skills/detect-leak-anywhere/references/python.md");
+    let stages = read("skills/detect-leak-anywhere/references/stages.md");
+    let report = read("skills/detect-leak-anywhere/references/evidence-and-report.md");
+    // What the columns count, where they exist and how they tie.
+    for want in [
+        "`py.blocks@<file:line>`",
+        "(driver runs only)",
+        "ties to the finding whose own site is that line and to no other",
+        "dla ledger add --origin growth-series --evidence E --site <file:line> --region heap --holder <kind>",
+        "native-handle/global-ref",
+        "`dla alloc-test H --finding F`",
+        "not by `py.traced`",
+    ] {
+        assert!(python.contains(want), "python.md lacks: {want}");
+    }
+    // The blind spot says what shows and what does not.
+    assert!(
+        !python.contains("Reference-count errors in C extensions show only as native growth"),
+        "the old blind spot is still there"
+    );
+    assert!(
+        python.contains(
+            "shows as a growing `py.blocks@` site, at the line that calls into the extension"
+        ) && python.contains("Memory the extension takes with `malloc` does not"),
+        "python.md does not correct the blind spot"
+    );
+    // The two general references name the Python columns where they describe per-site counts.
+    assert!(stages.contains("`py.blocks@<file:line>`"), "stages.md");
+    assert!(
+        report.contains("`py.blocks@<file:line>`"),
+        "evidence-and-report.md"
+    );
+}

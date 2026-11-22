@@ -35,6 +35,9 @@ Every column has a unit (`bytes`, `count`, `ratio`, `seconds`), a kind, a region
   site); **finding**: the finding it was probed for.
 - A series has at most 64 columns. Grouped and per-type columns beyond that are dropped, lowest
   growth first, and the drop is written to `limitations`.
+- A per-site count column (`node.listeners@`, `node.timers@`, `go.goroutines@`, and the Python
+  `py.blocks@<file:line>` of driver runs) counts what one line made, so it ties only to a finding whose
+  own site is that line.
 
 ### Column names
 
@@ -46,9 +49,9 @@ Every column has a unit (`bytes`, `count`, `ratio`, `seconds`), a kind, a region
 | JVM | `jvm.heap_used`, `jvm.heap_committed`, `jvm.nonheap_used`, `jvm.nmt_committed`, `jvm.nmt.<category>`, `jvm.threads`, `jvm.classes_loaded`, `jvm.classes_unloaded`, `jvm.jit_seconds` |
 | Go | `go.heap_live`, `go.heap_objects`, `go.total`, `go.released`, `go.stacks`, `go.goroutines` |
 | Node | `node.heap_used`, `node.heap_total`, `node.external`, `node.array_buffers` |
-| Python | `py.traced`, `py.gc_objects` |
+| Python | `py.traced`, `py.gc_objects`; driver runs: `py.blocks@<file:line>` (live traced blocks allocated at one project line, only the sites that grew) |
 | Rust, native | `native.live_bytes`, `native.live_blocks`, `native.peak_bytes` |
-| Grouped counters | `<base>@<file:line>`, for example `go.goroutines@internal/notify/subscription.go:33`, `node.timers@src/heartbeat.js:15`, `native.live_bytes@src/decoder.c:29` |
+| Grouped counters | `<base>@<file:line>`, for example `go.goroutines@internal/notify/subscription.go:33`, `node.timers@src/heartbeat.js:15`, `py.blocks@src/render/font.py:580`, `native.live_bytes@src/decoder.c:29` |
 | Holder probes | `probe:<target>` (entry or reachable-object count, a counter), `probe:<target>.bytes` (a gauge, when the runtime can estimate bytes) and, for a JVM class loader, `probe:<target>.classes` (the classes it defined) |
 | Type counts | `jvm.class:<name>.count`, `py.type:<name>.count` (top types by growth) |
 | Gap | `gap.accounted`, `gap.unexplained` |

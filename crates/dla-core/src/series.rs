@@ -757,6 +757,9 @@ pub fn column_meta(name: &str) -> ColumnMeta {
         // Objects `gc.freeze()` moved into the permanent generation, by the site that froze them
         // (a count, not bytes: the bound alloc-test must not apply its byte minimum to it).
         "py.gc_frozen" => meta(Count, Counter, Heap, false, true),
+        // The live blocks tracemalloc traces, by the project line that allocated them (a count:
+        // the same reason).
+        "py.blocks" => meta(Count, Counter, Heap, false, true),
         // Allocator (Rust, native, shim).
         "native.live_bytes" | "native.peak_bytes" | "native.free_bytes" | "native.arena_bytes" => {
             meta(Bytes, Gauge, Heap, true, false)

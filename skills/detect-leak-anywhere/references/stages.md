@@ -428,7 +428,10 @@ For each passed column tied to a candidate `F3`:
   --owner X`; the heap-graph output lists the owners), and merge the old one into it with
   `dla ledger duplicate F3 --of F7` (a duplicate needs the same owner or the same site), or resolve the old one.
 - The passing column must be tied to `F3`: its probe (`probe:<owner>`), a group column at its site,
-  or a column that lists it under `candidates`. A refusal `growth-not-tied` means the growth you cite
+  or a column that lists it under `candidates`. A per-site count column (`node.listeners@`, `node.timers@`,
+  `go.goroutines@`, the Python `py.blocks@<file:line>`) ties only to the finding whose own site is that line;
+  when none is there, `dla trend` prints the `dla ledger add ... --site <file:line>` that makes it (for
+  `py.blocks@`; the final gate prints it too). A refusal `growth-not-tied` means the growth you cite
   belongs to another holder or to the whole process (`os.rss`, heap totals). Then add a probe for
   `F3`'s holder and rerun the harness, or resolve `F3` `suspected_static_only` with a remedy; never
   confirm one holder from another holder's growth. If `confirm` succeeds with a `warning` that the tied

@@ -41,7 +41,8 @@ pub(super) const CLASSES: &[&str] = &[
 
 /// True for a column that counts the things made at one line: listeners, timers or goroutines
 /// by registration or creation site (`node.listeners@<site>`, `node.timers@<site>`,
-/// `go.goroutines@<site>`). Such a column says something about the registration or creation
+/// `go.goroutines@<site>`) and the live blocks allocated at one line (`py.blocks@<site>`). Such
+/// a column says something about the registration or creation
 /// AT that line, so only a finding whose own site is that line is its candidate. The
 /// allocation-site columns of the native shim (`native.live_bytes@<site>`) are about where a
 /// holder is written and keep the writer rule.
@@ -543,6 +544,16 @@ mod tests {
         );
         assert!(
             m.candidates(&named("go.goroutines@cache.go:10", "cache.go:10"))
+                .is_empty()
+        );
+        // The blocks allocated at one line of a Python driver run tie the same way: F2 at its
+        // own line, nothing at the line of a writer, and not the neighbour in the function.
+        assert_eq!(
+            m.candidates(&named("py.blocks@cache.go:5", "cache.go:5")),
+            [FindingId::new(2)]
+        );
+        assert!(
+            m.candidates(&named("py.blocks@cache.go:10", "cache.go:10"))
                 .is_empty()
         );
         // The same line for an allocation column keeps the writer rule.

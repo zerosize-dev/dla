@@ -758,7 +758,23 @@ fn tied_findings<'a>(view: &'a RunView, t: &TrendReport, c: &ColumnTrend) -> Vec
     let mut ids: Vec<FindingId> = Vec::new();
     ids.extend(c.finding.iter().cloned());
     ids.extend(c.candidates.iter().cloned());
-    if let Some(ev) = evidence_for_column(view, t, c)
+    // A count of what one line allocated ties to the findings at that line and to no other: a
+    // finding that cites the growth evidence of the series (it covers every count column of
+    // the trend) is not tied to it by that.
+    let at_line = crate::grown::is_alloc_site_column(&c.name);
+    if at_line && let Some(site) = crate::grown::column_site(c) {
+        ids.extend(
+            view.ledger
+                .findings()
+                .filter(|f| {
+                    f.polarity() == crate::finding::Polarity::Leak
+                        && f.site.as_deref().map(str::trim) == Some(site)
+                })
+                .map(|f| f.id.clone()),
+        );
+    }
+    if !at_line
+        && let Some(ev) = evidence_for_column(view, t, c)
         && let Ok(eid) = ev.parse::<crate::ids::EvidenceId>()
     {
         ids.extend(
@@ -1214,10 +1230,20 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
                 continue;
             }
             let fix = match evidence_for_column(view, t, c) {
-                Some(e) => format!(
-                    "dla ledger add --origin growth-series --evidence {e}   # column {}",
-                    c.name
-                ),
+                // An allocation-site count that no finding is at: the add command names the line.
+                Some(e) => tied
+                    .is_empty()
+                    .then(|| {
+                        crate::grown::column_site(c)
+                            .and_then(|site| crate::grown::site_column_add(&c.name, site, &e))
+                    })
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        format!(
+                            "dla ledger add --origin growth-series --evidence {e}   # column {}",
+                            c.name
+                        )
+                    }),
                 None => format!("dla trend {}", t.series),
             };
             let why = if tied.is_empty() {

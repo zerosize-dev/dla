@@ -109,11 +109,13 @@ pub fn parse_record(line: &str) -> Option<Rec> {
             }
         }
     }
-    if let Some(Value::Object(g)) = obj.get_mut("groups") {
-        g.retain(|_, v| v.is_object());
-        for v in g.values_mut() {
-            if let Value::Object(m) = v {
-                m.retain(|_, x| x.is_number());
+    for key in ["groups", "group_counts"] {
+        if let Some(Value::Object(g)) = obj.get_mut(key) {
+            g.retain(|_, v| v.is_object());
+            for v in g.values_mut() {
+                if let Value::Object(m) = v {
+                    m.retain(|_, x| x.is_number());
+                }
             }
         }
     }
@@ -147,6 +149,8 @@ pub fn parse_record(line: &str) -> Option<Rec> {
                 "detectors",
                 "limitations",
                 "purge",
+                "group_counts",
+                "group_capped",
                 "groups",
                 "values_pre_gc",
                 "values_in_run",

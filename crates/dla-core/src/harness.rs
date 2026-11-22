@@ -1307,6 +1307,15 @@ pub struct HarnessDump {
     /// Grouped counters: base name to site to value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<BTreeMap<String, BTreeMap<String, f64>>>,
+    /// Counts of every site of a grouped counter, written by each record of a driver run (the
+    /// Python agent's `py.blocks`): base name to site to count. Unlike `groups`, the series
+    /// builder chooses which sites become columns, from the records of the whole run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_counts: Option<BTreeMap<String, BTreeMap<String, f64>>>,
+    /// The bases of `group_counts` whose site list was cut at the agent's bound: a site missing
+    /// from such a record may exist with a smaller count, so its absence is not a zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_capped: Option<Vec<String>>,
     /// Unsymbolized allocation stacks from the allocator shim: stack key to
     /// `{live_bytes, live_blocks, allocs, frames: [{a, m, o}]}` (hex strings), kept as
     /// JSON because its shape belongs to the shim.
