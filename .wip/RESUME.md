@@ -853,3 +853,11 @@ flat test-loop readings get only 9 second looks.
   cp target/debug/dla /root/dla-real/bin/dla; refresh /root/dla-real/plugin from the snapshot;
   nohup setsid python3 /root/dla-real/run.py spring-7 /root/dla-real/src/spring-data-commons
   /root/dla-real/prompt-generic.txt --timeout 9000 --max-turns 600 --warm-m2 /root/dla-real/m2warm
+- 06:45 UTC: whole suite on the final tree: 166 binaries, 3174 passed, 0 failed, 5 ignored; fmt, clippy,
+  schema check clean (u66/verify2.out, u66/test-all.log). CI on main 20ee96e: green (run 44987646797).
+- 06:47 UTC: real plugin run spring-7 started on the seventh frozen build (snapshot 55f31eb: binary
+  /root/dla-real/bin/dla = target/debug/dla of that tree, plugin copy refreshed from it and compared).
+  Waiter: until /root/dla-real/spring-7/run.json exists. Timeline: python3 /root/dla-real/tl.py
+  /root/dla-real/spring-7/transcript.jsonl 40. Evidence to keep: <sp>/u36/spring-7 (run.json,
+  transcript.jsonl, the run dir .dla without scratch copies), then delete /root/dla-real/spring-7.
+- CI on 55f31eb: run 44993841579, in progress at 06:47.
