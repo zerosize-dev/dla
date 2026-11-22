@@ -33,9 +33,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CensusArgs) -> 
         Runtime::Python => true,
         _ => false,
     };
-    if wanted
-        && let Some(note) = discover_for_the_queue(ctx, &tc, a.lang)
-    {
+    if wanted && let Some(note) = discover_for_the_queue(ctx, &tc, a.lang) {
         out["workloads"] = json!(note);
     }
     Ok(out)

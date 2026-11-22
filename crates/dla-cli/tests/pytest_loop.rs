@@ -654,7 +654,7 @@ fn a_discovery_that_is_already_there_is_not_rewritten_by_the_python_census() {
 }
 
 #[test]
-fn the_python_census_without_a_candidate_writes_no_discovery() {
+fn the_python_census_writes_the_discovery_even_when_it_found_no_candidate() {
     let (_d, p, census) = census_only(&[], |p| {
         write(p, "app/__init__.py", "");
         write(p, "app/pure.py", "def add(a, b):\n    return a + b\n");
@@ -666,6 +666,16 @@ fn the_python_census_without_a_candidate_writes_no_discovery() {
     });
     assert_eq!(census["candidates"], 0, "{census}");
     assert_eq!(census["skipped_duplicates"], 0, "{census}");
-    assert!(!discovery_file(&p).exists());
-    assert!(census.get("workloads").is_none(), "{census}");
+    assert!(discovery_file(&p).is_file(), "{census}");
+    assert!(census["workloads"].is_string(), "{census}");
+}
+
+#[test]
+fn the_usual_order_probe_sweep_census_offers_the_loop_when_the_census_only_joins_the_sweep() {
+    // On the plain project the sweep raises the candidate and the census adds none.
+    let (_d, p, census) = census_only(&[], |p| project(p, true));
+    assert_eq!(census["candidates"], 0, "{census}");
+    assert_eq!(census["skipped_duplicates"], 0, "{census}");
+    assert!(discovery_file(&p).is_file(), "{census}");
+    assert_eq!(queue_command(&p), LOOP_FIRST);
 }
