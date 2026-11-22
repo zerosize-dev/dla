@@ -975,3 +975,12 @@ flat test-loop readings get only 9 second looks.
   - Run pillow-1 started 12:47 UTC: frozen plugin and binary = main at 29cb6f6
     (`dla 0.9.0-preview.4`), model claude-sonnet-5-5, timeout 9000 s, 600 turns.
     Driver log /root/dla-real/pillow-1.driver.log.
+- pillow-1 ENDED (219 s, 40 turns): COMPLETE report, no leak; note wip-notes/real-run-plugin-pillow-1.md
+  (five causes: one intake.workload blocker closes every queue; C driver offered for a CPython
+  extension; no test loop for Python; residual open items closed inconclusive without a capture;
+  the model built the extension itself). Evidence u36/pillow-1.
+- Workflow wf_1364df94-59b (Sonnet, read-only): four code maps (blocker, residual, testloop,
+  native-host) and one hand-driven experiment on Pillow in u73 (pytest unit, alloc capture, route
+  to a finding at ImageFont.py:580). Next: read the reports, verify the key claims, write builder
+  briefs (blocker per runtime first; then Python test loop; then residual capture rule; native
+  under a host runtime).
