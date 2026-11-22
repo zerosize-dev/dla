@@ -761,3 +761,36 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
   (task btvg9i2c0) and the builder on brief T (resumed by message; its partial edits, about
   1240 lines over 15 files, were in the tree with no marker). `main` and the release are
   untouched: main = cc003a0, `v0.9.0-preview.3` published.
+
+## State 2026-11-22 (brief T, interim hand-back of the builder)
+
+Builder a349aef413818803c handed back EARLY; no `<sp>/u64/report.md` yet. Its own background
+test run (`cargo test -p dla-workload --test harness_junit`, log `<sp>/u64/hj.log`) was
+still going; it may resume by itself.
+
+In the tree, uncommitted, about 1680 lines, builds, NOT checked by me yet:
+- new `crates/dla-core/src/testloop.rs`: test class by name (owner name or its singular at a
+  camel-case boundary, 2 per candidate at most), else by mention (1). MAX_TARGETS 16,
+  MAX_CLASSES 10, MAX_TESTS 1000, one module per harness; `plan()` cuts batches by rank.
+- `queue.rs`: `RuntimeQueue.test_loop`; `batch_command` is `--junit --next` while test-loop
+  batches are left, else `--driver --next`; a test-loop reading now counts as a driver
+  reading (flat = one flat reading, not_loaded/not_executed/unknown = a miss); a failed
+  test-loop attempt sends its targets to the driver pool.
+- texts name the test loop first with the count in the gate/stop-hook queue item,
+  `run status`, close-rest, trend (`queue_next`), the report's Queue line.
+- `gen`: `--junit --next` takes the first test batch, prints `tests_chosen`.
+- `DlaJUnitHarness.java`: a class with no passing test in the first run is dropped while
+  another passed; the loop lowers its step and drops the slowest classes to fit the time.
+- `run.rs`: on build failure or "every unit failed" of a test-loop harness the fix ends
+  with the driver command for the same targets.
+- trend: columns of declared targets lead (`summary::declared_first`).
+Real tree (copy `<sp>/u64/spring`): "347 candidates in 24 test-loop batches, nothing to
+write; then 41 candidates need a driver"; a batch of 16 targets, 9 classes, 151 tests took
+about 45 s and read F160 `grew`.
+
+NOT done by the builder: fmt/clippy/full tests/schema/skill text after the last edits;
+mutations for the gen, run.rs and Java tests; the six batches in order and the printed
+route to `confirmed`; the time for all batches; item 7 (bench fixtures that would now get
+a test-loop batch); the report file. Its own open points: `ledger list` and schema outputs
+for the new fields; the second look is capped at 9 candidates a runtime, so hundreds of
+flat test-loop readings get only 9 second looks.

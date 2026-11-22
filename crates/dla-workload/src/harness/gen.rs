@@ -1476,6 +1476,20 @@ fn resolve_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<DeclaredTargets, 
         let mut skipped: Vec<String> = Vec::new();
         let chosen = match &queue {
             Some(q) if rt == Runtime::Go => go_batch(ctx, opts, &view, q, n, &ids, &mut skipped)?,
+            // `--junit --tests ... --next`: the tests are the caller's, so the candidates are the
+            // next pending ones in rank order, test-loop batches included.
+            Some(q) if opts.junit => dla_core::queue::Batch {
+                ids: q
+                    .test_loop
+                    .batches
+                    .iter()
+                    .flat_map(|b| b.ids.iter())
+                    .chain(q.declarable.iter())
+                    .take(n)
+                    .cloned()
+                    .collect(),
+                ..Default::default()
+            },
             Some(q) => q.batch_for(&view, n),
             None => Default::default(),
         };

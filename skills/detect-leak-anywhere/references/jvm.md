@@ -31,7 +31,17 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   self-attach to current VM`, every unit fails): when the test class path holds `mockito-core` with a
   `Premain-Class` entry (version 5 and newer), else `byte-buddy-agent`, the build step adds it as a
   `-javaagent` of the loop's JVM next to DLA's own agent; the run output says so (`startup_agent`) and
-  the manifest lists it in `tools` (`startup-agent:<jar>`). Pick the test classes that exercise the
+  the manifest lists it in `tools` (`startup-agent:<jar>`). The test loop is the first pass of the queue
+  on a JVM project with JUnit 5 tests: `dla harness gen --lang jvm --junit --next` takes the next
+  ranked candidates that have a test class (by the test class's name holding the owner class's name,
+  else by the test using it; at most 16 targets, 10 classes, 1000 tests and one module per harness, so
+  a run is about two minutes; the 16 because each target keeps 3 probe columns inside the 64 of a
+  series), prints the tests chosen and why (`tests_chosen`, `tests.json`), and declares them with their
+  probes; nothing to fill. Candidates with no test class wait for `--driver --next`. A class none of
+  whose tests passes in the first run is dropped while another passed, and the loop lowers its step and
+  drops the slowest classes when the runs would not fit the time limit (600 s for a batch); both are
+  limitations of the series. If the batch cannot build or every test fails, the output prints the
+  driver command for the same targets and they are not counted as measured. Pick the test classes that exercise the
   target by name and by import (`--tests`), with `--probe F` for the finding. When the project's own tests start the application
   (`@SpringBootTest`), use `--junit` with such an integration test: it is one JVM and the Spring test
   context cache keeps the context across repetitions, so growth comes from the code under test;

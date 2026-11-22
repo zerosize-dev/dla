@@ -278,8 +278,14 @@ under the run directory and need tier 1.
      the pending candidates of its package directory, the driver written into that package
      (`--next --package <dir>` picks the package; `references/go.md`). It prints the targets in
      `summary.targets` and writes them as a comment block at the top of the driver file above the first
-     `DLA-HOOK`. A JVM project with JUnit tests and no driver support keeps its generation command
-     (`dla harness gen --lang jvm --junit --next`).
+     `DLA-HOOK`. A JVM project with JUnit 5 tests starts with the
+     test loop: `dla harness gen --lang jvm --junit --next` takes the next ranked candidates that have a
+     test class (up to 16 targets, 10 classes, 1000 tests, one module), chooses the classes and prints them
+     with why, and needs nothing filled; the queue says "N candidates in M test-loop batches, nothing to
+     write; then K candidates need a driver" everywhere it names the next step. A growing target goes the
+     usual way; a flat reading (`executed`, `constant`) is one reading and gets the second look by a
+     hand-written harness; `not_loaded` and `not_executed` are a miss and get a focus harness; a batch
+     that cannot build or whose tests all fail prints the driver command for its targets.
   2. Read the target block of the driver. Per target it gives the finding, site, holder, owner, the rule's
      message, up to 3 writers and 3 removers (`file:line` with the enclosing function), what its probe
      reads (or "no probe: tied by allocation stacks or type counts"), a `key:` line when the census says the key of the holder comes from the caller (the holder grows only when each unit passes a key it has not seen: a key compared by value is built from the unit's key, a key compared by identity must be a fresh object per unit; the line says what makes a fresh one in the driver's language and that a method reference, a lambda that captures nothing or a module-level function is one object for the whole run), and one instruction by holder:
