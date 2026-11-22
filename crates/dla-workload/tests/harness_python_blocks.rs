@@ -390,10 +390,14 @@ fn a_block_made_inside_a_library_function_is_counted_at_the_project_line_when_th
         .unwrap_or_else(|| panic!("{:?}", block_columns(&two)));
     let v = two.values(i);
     assert!(v.iter().all(Option::is_some), "{v:?}");
-    assert_eq!(
-        v[4].unwrap() - v[0].unwrap(),
-        4.0 * 50.0 * 2.0,
-        "two blocks per call: {v:?}"
+    // Two blocks per call: the list object and its item array. The count is not exact on every
+    // interpreter build: a list object taken from the interpreter's free list keeps the
+    // allocation site of its first use, so a few per checkpoint are counted at another line
+    // (397 and 398 of 400 were measured). The band is 5 percent below two per call.
+    let rise = v[4].unwrap() - v[0].unwrap();
+    assert!(
+        (380.0..=400.0).contains(&rise),
+        "about two blocks per call: {v:?}"
     );
     // With one frame (the default of a driver run) the innermost frame is in the library: no
     // site, and the limitation line says so.
