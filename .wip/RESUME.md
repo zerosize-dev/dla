@@ -673,3 +673,9 @@ notes without a CI run; a later snapshot without it always gets a commit, so a C
 - Open: a real plugin rerun on spring with a frozen build that has this change (does the
   model find the factory form from the line?). A Kotlin unit for the JVM driver stays a
   separate decision for the owner.
+- 02:53 UTC: real plugin run spring-6 started (sixth frozen build = snapshot 4a72a50, binary
+  copy `<sp>/u61/bin/dla` = `/root/dla-real/bin/dla`, plugin refreshed from 4a72a50). Waiter
+  in background. Question: does the model use the `key:` line to make a fresh key (the
+  factory form) for the finding at TypedPropertyPaths.java:53? Whole suite on that tree:
+  3134 passed, 0 failed (`<sp>/u61/test-all.log`).
+- CI on ecbbe4e still running at 02:53 (waiter buvegduus, logs `<sp>/u59/ci`).
