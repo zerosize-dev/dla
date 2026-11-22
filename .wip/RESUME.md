@@ -1059,3 +1059,10 @@ flat test-loop readings get only 9 second looks.
 - Reworded harness/python/README.md depth table row (it named an API of the evidence library).
 - commit-message-10.txt written for X. Brief Y updated (scratch u78, section "What brief X left you", item 7 a/b/c).
 - Next: my own `dla-bench dynamic --only python` result (u77/dyn-python.log), snapshot, start builder Y.
+
+## 2026-11-22 about 18:50 UTC: builder Y started
+
+- My own `dla-bench dynamic --only python`: 9/9 pass (u77/dyn-python.log), 13 min.
+- Builder Y (Sonnet, background agent aab0b0d685f8d5184, scratch u78) works on py-test-loop-brief.md in the shared tree on top of W1 and X. Do not run cargo or edit the tree while it runs.
+- Disk: freed old scratch (u18/pillow, u24/bin, u20/X2, u8chk-K4/r2, two old run dirs in u72/pillow/.dla); 5.5 GB free.
+- After Y: verify (rerun tests, own mutations, real-tree check incl. the queue's first command and the refusal without pytest), whole suite, clippy, schema check, snapshot WITHOUT [skip ci] and wait for CI, then three commits to main (messages 9, 10 and one to write for Y), push main and main:dev/wonderful-mccarthy-algc5s, refresh /root/dla-real plugin and bin, run pillow-2 with --py-venv python3.12.
