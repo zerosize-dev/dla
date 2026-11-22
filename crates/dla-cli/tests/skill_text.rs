@@ -382,6 +382,7 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
                 "`harness-not-generated`",
                 "`coverage_contradiction`",
                 "`test-loop/<H>/tests.json`",
+                "`dla census --lang python` writes it too when the run has none and the project has Python test files",
                 "the classes that ran and added nothing",
                 "`budget_left_unrevisited`",
                 "`next_command`",

@@ -58,7 +58,8 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
 - The project's own tests in a loop (`dla harness gen --lang python --pytest [--tests a,b]`): a leak that
   nothing holds (a reference an extension module never releases) has no static candidate and shows only as an
   allocation line that grows under a broad workload; the broadest workload a project has is its own tests.
-  The harness runs every test file the workload discovery lists under the working directory that has the
+  `dla census --lang python` writes the workload discovery result when the run has none and the project has
+  test files, so no separate `dla workload discover` is needed. The harness runs every test file the workload discovery lists under the working directory that has the
   most of them (files under another directory are named in a gap line and left out), or the files and
   directories of `--tests` (no `file::test` ids), with `pytest.main` in one process, again and again; the
   driver is hookless (nothing to fill) and declares no target. A round is one run of the tests (step 1,

@@ -288,7 +288,9 @@ under the run directory and need tier 1.
      `not_loaded` and `not_executed` are a miss and get a focus harness; a batch that cannot build or
      in which no test passes prints the driver command for its targets. `dla census --lang jvm` writes
      the workload discovery result when the run has none, so the test loop needs no step of its own.
-     A Python project with test files starts the same way, with one loop over all of them:
+     `dla census --lang python` writes it too when the run has none and the project has Python test files
+     (a project without test files gets no discovery result from the census). A Python project with test
+     files starts the same way, with one loop over all of them:
      `dla harness gen --lang python --pytest` (`--tests a,b` for files or directories; no candidate, no
      target, nothing to fill) runs the project's own tests with pytest again and again in one process; a
      line of the project that grows there (`py.blocks@<file:line>`) gets a finding with the command `dla trend`

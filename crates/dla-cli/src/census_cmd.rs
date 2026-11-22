@@ -25,8 +25,15 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CensusArgs) -> 
         dla_census::census(&tc, a.lang),
     )?;
     let found = |k: &str| out[k].as_u64().unwrap_or(0) > 0;
-    if matches!(a.lang, Runtime::Jvm | Runtime::Python)
-        && (found("candidates") || found("skipped_duplicates"))
+    // A JVM run gets the result when the census found candidates; a Python run whenever the
+    // discovery lists a test file, because the sweep alone can raise the candidates the queue
+    // works on and the census then only joins its sites.
+    let wanted = match a.lang {
+        Runtime::Jvm => found("candidates") || found("skipped_duplicates"),
+        Runtime::Python => true,
+        _ => false,
+    };
+    if wanted
         && let Some(note) = discover_for_the_queue(ctx, &tc, a.lang)
     {
         out["workloads"] = json!(note);

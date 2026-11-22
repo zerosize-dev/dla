@@ -534,12 +534,28 @@ fn a_failed_run_of_the_loop_lets_the_queue_go_on_with_the_driver() {
     assert_eq!(queue_command(&p), DRIVER);
 }
 
+/// The project of the loop tests with a module the census reads candidates from that the sweep
+/// does not report: a handler list and a thread that appends to a list of its own.
+fn project_with_census_candidates(dir: &Path, with_tests: bool) {
+    project(dir, with_tests);
+    write(
+        dir,
+        "shop/hooks.py",
+        "import atexit\nimport threading\n\n_handlers = []\n\n\ndef hook(f):\n    atexit.register(f)\n    _handlers.append(f)\n\n\nclass Pool:\n    def __init__(self):\n        self.items = []\n        self.t = threading.Thread(target=self.run)\n\n    def run(self):\n        self.items.append(1)\n",
+    );
+}
+
 /// `run init`, probe, sweep and census, with no `workload discover`.
-fn census_only(setup: impl FnOnce(&Path)) -> (tempfile::TempDir, PathBuf, Value) {
+fn census_only(
+    init_flags: &[&str],
+    setup: impl FnOnce(&Path),
+) -> (tempfile::TempDir, PathBuf, Value) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("project");
     setup(&p);
-    ok(&p, &["run", "init", "--session-id", "t"]);
+    let mut init = vec!["run", "init", "--session-id", "t"];
+    init.extend_from_slice(init_flags);
+    ok(&p, &init);
     ok(&p, &["probe"]);
     ok(&p, &["sweep", "--lang", "python"]);
     let census = ok(&p, &["census", "--lang", "python"]);
@@ -560,8 +576,9 @@ fn discovery_file(project: &Path) -> PathBuf {
 
 #[test]
 fn the_python_census_writes_the_discovery_when_the_project_has_test_files() {
-    let (_d, p, census) = census_only(|p| project(p, true));
-    assert!(discovery_file(&p).is_file());
+    let (_d, p, census) = census_only(&[], |p| project_with_census_candidates(p, true));
+    assert!(census["candidates"].as_u64().unwrap() > 0, "{census}");
+    assert!(discovery_file(&p).is_file(), "{census}");
     let note = census["workloads"]
         .as_str()
         .unwrap_or_else(|| panic!("{census}"));
@@ -579,33 +596,28 @@ fn the_python_census_writes_the_discovery_when_the_project_has_test_files() {
 
 #[test]
 fn the_python_census_of_a_project_without_test_files_writes_no_discovery() {
-    let (_d, p, census) = census_only(|p| project(p, false));
+    let (_d, p, census) = census_only(&[], |p| project_with_census_candidates(p, false));
+    assert!(census["candidates"].as_u64().unwrap() > 0, "{census}");
     assert!(!discovery_file(&p).exists());
     assert!(census.get("workloads").is_none(), "{census}");
     assert_eq!(queue_command(&p), DRIVER);
-    // A finding is still closed with a reason that needs no exercise, as before.
-    let gate = dla(&p, &["gate", "check", "--final"]);
-    let id = gate.json["missing"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|m| m["id"].as_str())
-        .find(|id| id.starts_with('F') || id.starts_with("f-"))
-        .map(str::to_owned);
-    let ledger = ok(&p, &["ledger", "list"]);
-    let id = id.or_else(|| {
-        ledger["findings"]
-            .as_array()
-            .and_then(|f| f.first())
-            .and_then(|f| f["id"].as_str().map(str::to_owned))
+}
+
+#[test]
+fn a_finding_of_a_python_project_without_test_files_is_still_closed_without_an_exercise() {
+    // As in the gate flow test: the queue is off, so only the ledger rule is in play.
+    let (_d, p, census) = census_only(&["--queue", "off"], |p| {
+        project_with_census_candidates(p, false)
     });
-    let id = id.unwrap_or_else(|| panic!("no finding: {} {ledger}", gate.text));
+    assert!(census["candidates"].as_u64().unwrap() > 0, "{census}");
+    assert!(!discovery_file(&p).exists());
+    let id = "F1";
     let r = dla(
         &p,
         &[
             "ledger",
             "resolve",
-            &id,
+            id,
             "--as",
             "unresolved",
             "--reason",
@@ -622,7 +634,7 @@ fn the_python_census_of_a_project_without_test_files_writes_no_discovery() {
 fn a_discovery_that_is_already_there_is_not_rewritten_by_the_python_census() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("project");
-    project(&p, true);
+    project_with_census_candidates(&p, true);
     ok(&p, &["run", "init", "--session-id", "t"]);
     ok(&p, &["probe"]);
     ok(&p, &["sweep", "--lang", "python"]);
@@ -636,13 +648,14 @@ fn a_discovery_that_is_already_there_is_not_rewritten_by_the_python_census() {
     );
     let before = fs::read(&file).unwrap();
     let census = ok(&p, &["census", "--lang", "python"]);
+    assert!(census["candidates"].as_u64().unwrap() > 0, "{census}");
     assert!(census.get("workloads").is_none(), "{census}");
     assert_eq!(fs::read(&file).unwrap(), before);
 }
 
 #[test]
 fn the_python_census_without_a_candidate_writes_no_discovery() {
-    let (_d, p, census) = census_only(|p| {
+    let (_d, p, census) = census_only(&[], |p| {
         write(p, "app/__init__.py", "");
         write(p, "app/pure.py", "def add(a, b):\n    return a + b\n");
         write(
