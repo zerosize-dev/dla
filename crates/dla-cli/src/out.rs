@@ -261,7 +261,15 @@ mod tests {
         assert_eq!(b["truncated"], true);
         assert_eq!(b["queue_next"], next);
         assert_eq!(b["summary"]["junit_hint"], hint);
-        // The last resort keeps them too.
+    }
+
+    #[test]
+    fn the_last_resort_keeps_the_sentences_that_name_the_next_step() {
+        let hint = format!("this project has JUnit 5 tests: {} END", "x ".repeat(150));
+        let next = format!(
+            "347 candidates in 24 test-loop batches {} END",
+            "y ".repeat(150)
+        );
         let mut o = Map::new();
         o.insert("ok".into(), json!(true));
         o.insert("queue_next".into(), json!(next));
