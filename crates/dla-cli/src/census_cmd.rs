@@ -51,7 +51,7 @@ fn discover_for_the_queue(ctx: &Ctx, tc: &dla_core::toolctx::ToolCtx) -> Option<
     let lang = crate::workload_cmd::effective_lang(None, ctx.worker.as_deref());
     let found = dla_workload::discover(tc, lang).ok()?;
     Some(format!(
-        "discovered for the measurement queue ({} workloads, evidence {}): the queue of a JVM project starts with the project's own tests; dla workload discover repeats it",
+        "discovered for the measurement queue ({} workload(s), evidence {}): the queue of a JVM project starts with the project's own tests; dla workload discover repeats it",
         found.summary["workloads"].as_u64().unwrap_or(0),
         found.evidence.join(", ")
     ))
