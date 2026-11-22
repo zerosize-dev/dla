@@ -1595,17 +1595,20 @@ fn junit_hint_text(ctx: &ToolCtx) -> String {
     }
 }
 
+/// A chosen test class: fully qualified name, file, tests, and the candidates it was taken for.
+type TestLoopClass = (
+    String,
+    String,
+    usize,
+    Vec<(FindingId, dla_core::testloop::Via)>,
+);
+
 /// What the next test-loop batch chose, for the summary of `dla harness gen --junit --next`.
 #[derive(Debug)]
 struct TestLoopFacts {
     /// The test classes, in the order they run: fully qualified name, file, tests, and the
     /// candidates each was taken for.
-    classes: Vec<(
-        String,
-        String,
-        usize,
-        Vec<(FindingId, dla_core::testloop::Via)>,
-    )>,
+    classes: Vec<TestLoopClass>,
     /// What the queue says about the rest.
     sentence: String,
     /// Targets the batch had that `--next N` left for the next one.

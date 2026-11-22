@@ -1649,7 +1649,11 @@ fn the_loop_fits_its_runs_into_the_time_limit_by_lowering_the_step_and_dropping_
     o.tests = vec!["leak.CacheTest".into(), "leak.SlowTest".into()];
     gen_ok(&fx, &o);
     let mut m = manifest(&fx, "H1");
-    m.timeout_secs = 40;
+    // The loop keeps 15 percent and 5 s of the limit back and counts the JVM's uptime: 9 runs of
+    // 2.5 s (22.5 s) fit a 40 s limit, so nothing would be dropped there. At 24 s the budget is
+    // about 15 s less the start of the JVM, the 8 runs left after the step is lowered to one
+    // need about 20 s, and the class that sleeps must go.
+    m.timeout_secs = 24;
     m.save(&fx.ctx.run_dir).unwrap();
     let Some(series) = run_harness(&fx) else {
         return;

@@ -802,3 +802,8 @@ flat test-loop readings get only 9 second looks.
   suite, the missing marker mutations, the six real-tree batches with the printed route for
   the documented finding, the report-only points (bench fixtures, second-look cap, ledger
   list and schemas), docs. Report `<sp>/u65/report.md`. After it: my own check.
+- 05:15 UTC: CI on the sixth frozen snapshot 0302e2b green, all 15 jobs (run 44983516013).
+  `main` = 20ee96e "Say when a key comes from the caller; let the test loop load the mocking
+  library at start-up" (tree of 0302e2b, no trailers), pushed to main and the dev branch.
+  It is NOT in the published preview.3 (that is cc003a0). CI on main at 20ee96e starts by
+  itself; not waited for unless the next snapshot needs it.

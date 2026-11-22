@@ -903,6 +903,7 @@ fn gap_row_hint(series: &str) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn suggestions(
     ledger: &Ledger,
     has_gap_row: bool,
