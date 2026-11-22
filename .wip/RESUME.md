@@ -1128,3 +1128,21 @@ flat test-loop readings get only 9 second looks.
 - Builder U (dispatch-budget-brief.md) is working in the tree on top of 658c800: auto budget in dispatched runs,
   gate fixes loop-first. Its work is a FOURTH commit (message 12 to write) and needs its own CI round.
 - After U: builder for task 78 (coverage under editable install), then pillow-3 (task 79).
+
+## State at about 22:55 UTC 2026-11-22
+
+- CI round 2 (run 45075458294 on 658c800): every job green except dynamic acceptance, still running.
+- Candidate for the twelfth frozen snapshot: faae7f6145f68e7874bd7ff788299a0d1106de84 = 658c800 + builder U (auto budget
+  in dispatched runs: scope.rs budget_ready/settle_auto_budget, gate_cmd.rs; loop-first gate fixes: view.rs
+  status_for, gate.rs NoHarness::fix_with) + my correction (a generated harness keeps its run command; queue.rs test
+  expects the loop first) + builder V (agent coverage records files under DLA_SOURCE_ROOT) + two VERIFY rows.
+  Local: whole suite 3291 passed 0 failed; pytest-dependent targets pass with the venv; clippy, schema, fmt clean;
+  own mutations Q13..Q15 each failed a named test. commit-message-12.txt is written.
+- Do NOT push a non-skip snapshot before CI round 2 completes (it would cancel the run).
+- When round 2 is green: commit 8253583 (message 9), 7633949 (message 10), 658c800 (message 11) to main, push main
+  and main:dev/wonderful-mccarthy-algc5s; then push faae7f6's tree as the twelfth frozen snapshot (non-skip) for CI
+  round 3; when green, commit it with message 12.
+- pillow-3 started 22:51:30 with the plugin and binary of faae7f6 (waiter prints the report head). pillow-2's report,
+  state, ledger and transcript are kept in /root/dla-real/pillow-2-keep.
+- Builder U's last Bash call was denied by the permission system (a chained command with a background run); I did
+  not repeat it for the builder; my own standard checks found and fixed two failing queue tests.
