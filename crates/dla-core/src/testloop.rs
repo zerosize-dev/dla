@@ -49,6 +49,60 @@ pub const PER_NAME: usize = 2;
 /// The test classes taken for one candidate by mention, when none matches by name.
 pub const PER_MENTION: usize = 1;
 
+/// One test class that a test-loop harness chose for a finding, from `harness/<H>/tests.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chosen {
+    /// The fully qualified class name.
+    pub class: String,
+    /// Project-relative source file.
+    pub file: String,
+    /// The tests it holds.
+    pub tests: u64,
+    /// How it was chosen for the finding: `name` or `mention`.
+    pub by: String,
+}
+
+impl Chosen {
+    /// The class name without its package.
+    pub fn simple_name(&self) -> &str {
+        self.class.rsplit('.').next().unwrap_or(&self.class)
+    }
+}
+
+/// The test classes the harness `harness` chose for `id`, in the order of `tests.json`. Empty
+/// when the file is missing, unreadable, or names no class for the finding.
+pub fn chosen_for(run_dir: &Path, harness: &str, id: &FindingId) -> Vec<Chosen> {
+    let path = crate::HarnessManifest::dir_in(run_dir, harness).join("tests.json");
+    let Some(doc) = fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    else {
+        return Vec::new();
+    };
+    let want = id.to_string();
+    let mut out = Vec::new();
+    for c in doc["classes"].as_array().into_iter().flatten() {
+        let Some(class) = c["class"].as_str() else {
+            continue;
+        };
+        let Some(by) = c["for"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|f| f["finding"].as_str() == Some(want.as_str()))
+        else {
+            continue;
+        };
+        out.push(Chosen {
+            class: class.to_owned(),
+            file: c["file"].as_str().unwrap_or_default().to_owned(),
+            tests: c["tests"].as_u64().unwrap_or(0),
+            by: by["by"].as_str().unwrap_or_default().to_owned(),
+        });
+    }
+    out
+}
+
 /// The rule, in one sentence, as `dla harness gen --junit --next` prints it.
 pub fn rule() -> String {
     format!(

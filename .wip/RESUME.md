@@ -861,3 +861,16 @@ flat test-loop readings get only 9 second looks.
   /root/dla-real/spring-7/transcript.jsonl 40. Evidence to keep: <sp>/u36/spring-7 (run.json,
   transcript.jsonl, the run dir .dla without scratch copies), then delete /root/dla-real/spring-7.
 - CI on 55f31eb: run 44993841579, in progress at 06:47.
+- 07:41 UTC: spring-7 stopped by me (kill -TERM of its process group id, exit 143, 54 min). Result:
+  documented leak F160 found, measured and confirmed through the test loop; the verifier then
+  disputed it as N-INTENT. Note: wip-notes/real-run-plugin-spring-7.md. Evidence <sp>/u36/spring-7;
+  /root/dla-real/spring-7 deleted.
+- Brief U (wip-notes/verifier-testloop-brief.md) given to a Sonnet builder (agent a3f4e9db453f2bcd3,
+  background, report to <sp>/u67/report.md): bundle carries the tests of a test-loop finding,
+  verifier rule for caches with identity keys and weak/soft references, trigger line names the
+  chosen tests, JvmClass probe without a column on a loaded class gives the coverage verdict.
+  Its edits come on top of the frozen tree 55f31eb and are NOT in it.
+- After it reports: verify myself (tests, my mutations, whole suite), then a model check of the
+  verifier on the replayed evidence <sp>/u67/proj (bundle F160 and, as a control, F436), 3 runs each.
+- CI on 55f31eb (run 44993841579): 14 of 15 green at 07:43, dynamic acceptance still running
+  (waiter writes u66/ci-wait.out). When green: commit-snapshot-tree.sh 55f31eb... commit-message-6.txt.

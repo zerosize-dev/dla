@@ -44,7 +44,7 @@ pub enum Trigger {
         /// The harness that showed it.
         harness: String,
         /// What a caller varies per unit: the `VARIES.txt` line of an entry-path harness, or
-        /// `the project's workload <id>`.
+        /// `the project's workload <id>`, or `the project's own tests <classes>` for a test loop.
         varies: String,
     },
     /// The holder grew in an entry-path harness whose unit calls the holder's own writer, and
@@ -137,6 +137,8 @@ struct Run {
     fresh: bool,
     verdicts: BTreeMap<FindingId, Verdict>,
     declared: BTreeSet<FindingId>,
+    /// The simple names of the test classes a test-loop harness chose, by finding.
+    tests: BTreeMap<FindingId, Vec<String>>,
 }
 
 /// What the stored trend reports and harness records say about triggers.
@@ -237,6 +239,20 @@ impl Triggers {
                     })
                     .unwrap_or_default(),
                 declared: m.targets.iter().cloned().collect(),
+                tests: if m.is_test_loop() {
+                    m.targets
+                        .iter()
+                        .map(|f| {
+                            let names = crate::testloop::chosen_for(run_dir, h, f)
+                                .iter()
+                                .map(|c| c.simple_name().to_owned())
+                                .collect();
+                            (f.clone(), names)
+                        })
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                },
             });
         }
         t
@@ -404,10 +420,13 @@ impl Triggers {
         if let Some(r) = self.runs.iter().filter(|r| r.own_workload).find(grew) {
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
-                varies: format!(
-                    "the project's workload {}",
-                    r.workload.as_deref().unwrap_or(&r.harness)
-                ),
+                varies: match r.tests.get(id).filter(|t| !t.is_empty()) {
+                    Some(names) => format!("the project's own tests {}", names.join(", ")),
+                    None => format!(
+                        "the project's workload {}",
+                        r.workload.as_deref().unwrap_or(&r.harness)
+                    ),
+                },
             };
         }
         // The first run of each of two harnesses whose drivers differ, the ones that measured
