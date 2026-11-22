@@ -1286,10 +1286,11 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: AllocTestArgs) 
     let ctx = DriftCtx {
         extra,
         command: manifest.mode == HarnessMode::Command,
+        // The drift text names jvm.* columns and `harness gen --junit`: the JVM loop only.
         junit: manifest
             .tools
             .iter()
-            .any(|t| t == "junit-platform-launcher"),
+            .any(|t| t == dla_core::harness::JUNIT_TOOL),
         partial: !partial.is_empty(),
     };
     let drift = agent_drift(&results, &picked, favors, &a.harness, ctx);

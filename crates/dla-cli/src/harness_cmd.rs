@@ -106,10 +106,17 @@ pub struct GenArgs {
     /// jvm:test:<file>` to choose). The tests must not need to be told an iteration count.
     #[arg(long)]
     junit: bool,
+    /// Python: run the project's own tests with pytest in a loop in one process (a driver with
+    /// no hooks to fill and no candidate to name). Without --tests: every test file the workload
+    /// discovery lists under the working directory that has the most of them. Needs pytest in the
+    /// harness interpreter (`python3` on PATH) and the project importable in place.
+    #[arg(long)]
+    pytest: bool,
     /// With --junit: the classes or methods to run, `pkg.Class` or `pkg.Class#method`,
     /// comma-separated or repeated (default: the workload's test class). A parameterized test is
-    /// `pkg.Class#method(java.lang.String,int)`.
-    #[arg(long, value_name = "CLASS[#METHOD],..")]
+    /// `pkg.Class#method(java.lang.String,int)`. With --pytest: test files or directories,
+    /// relative to the working directory (node ids with `::` are not supported).
+    #[arg(long, value_name = "CLASS[#METHOD],..|PATH,..")]
     tests: Vec<String>,
     /// Rust driver: crate features the driver build enables, comma-separated or repeated
     /// (`cargo build --features a,b`). A target in a module the crate gates behind a feature
@@ -232,6 +239,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: HarnessCmd) -> 
                 auto_probes: g.probes == ProbesChoice::Auto,
                 package: g.package,
                 junit: g.junit,
+                pytest: g.pytest,
                 tests: g.tests.iter().flat_map(|t| split_selectors(t)).collect(),
                 features: g.features,
                 no_default_features: g.no_default_features,

@@ -40,6 +40,9 @@ pub struct Grown {
     pub growth: Option<String>,
     /// The latest `workload` evidence of the harness.
     pub workload: Option<String>,
+    /// The harness is a pytest loop (the project's own tests): an alloc-test on it re-runs the
+    /// whole test suite per run.
+    pub pytest_loop: bool,
     /// Whether the finding has a non-leak sibling.
     pub has_sibling: bool,
     /// A finding of the same harness whose alloc-test favours leak and that this finding is a
@@ -79,11 +82,15 @@ impl Grown {
                     | FindingState::Unresolved
                     | FindingState::SuspectedStaticOnly
             ),
+            self.pytest_loop,
         )
     }
 }
 
-/// The commands that decide the growth of `finding` measured by harness `harness`.
+/// The commands that decide the growth of `finding` measured by harness `harness`. When the
+/// series comes from a pytest loop (`pytest_loop`), the alloc-test is not run on that harness
+/// first: it re-runs the whole test suite per run (minutes), so a small driver of its own for
+/// the line comes first (seconds per run), and the alloc-test is on that harness.
 pub fn commands(
     finding: &FindingId,
     harness: &str,
@@ -91,6 +98,7 @@ pub fn commands(
     workload: Option<&str>,
     has_sibling: bool,
     can_test: bool,
+    pytest_loop: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
     if !has_sibling {
@@ -105,7 +113,18 @@ pub fn commands(
             workload.unwrap_or("<workload evidence of the harness>")
         ));
     }
-    out.push(format!("dla alloc-test {harness} --finding {finding}"));
+    if pytest_loop {
+        out.push(format!(
+            "dla harness gen --lang python --driver --probe {finding}   (a small driver of its own for the line: a unit that calls the function of that line; a run takes seconds, where an alloc-test on {harness} re-runs the whole test suite per run, minutes)"
+        ));
+        out.push("dla harness run <H>".to_owned());
+        out.push("dla trend <S>".to_owned());
+        out.push(format!(
+            "dla alloc-test <H> --finding {finding}   (on the harness just made, not on {harness})"
+        ));
+    } else {
+        out.push(format!("dla alloc-test {harness} --finding {finding}"));
+    }
     out
 }
 
@@ -288,6 +307,10 @@ pub fn grown_unmeasured(view: &RunView) -> Vec<Grown> {
                     })
                     .last()
                     .map(|e| e.evidence_id.to_string()),
+                pytest_loop: view.run_dir.as_deref().is_some_and(|d| {
+                    crate::harness::HarnessManifest::load(d, harness)
+                        .is_ok_and(|m| m.is_pytest_loop())
+                }),
                 has_sibling: view
                     .ledger
                     .findings()
@@ -449,4 +472,33 @@ pub fn items(view: &RunView, grown: &[Grown]) -> Vec<BlockingItem> {
         });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pytest_loop_growth_is_decided_on_a_small_driver_of_its_own_first() {
+        let f = FindingId::new(2);
+        let plain = commands(&f, "H1", Some("E8"), Some("E6"), true, true, false);
+        assert_eq!(plain.last().unwrap(), "dla alloc-test H1 --finding F2");
+        let loop_cmds = commands(&f, "H1", Some("E8"), Some("E6"), true, true, true);
+        assert_eq!(
+            &loop_cmds[1..],
+            [
+                "dla harness gen --lang python --driver --probe F2   (a small driver of its own for the line: a unit that calls the function of that line; a run takes seconds, where an alloc-test on H1 re-runs the whole test suite per run, minutes)",
+                "dla harness run <H>",
+                "dla trend <S>",
+                "dla alloc-test <H> --finding F2   (on the harness just made, not on H1)",
+            ]
+        );
+        // The alloc-test on the loop itself is not refused, only not the first thing printed.
+        assert!(loop_cmds[0].starts_with("dla ledger test F2"));
+        assert!(
+            !loop_cmds
+                .iter()
+                .any(|c| c == "dla alloc-test H1 --finding F2")
+        );
+    }
 }

@@ -84,6 +84,7 @@ fn opts(rt: Runtime) -> GenOptions {
         auto_probes: true,
         package: None,
         junit: false,
+        pytest: false,
         tests: Vec::new(),
         features: Vec::new(),
         no_default_features: false,

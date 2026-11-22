@@ -24,6 +24,8 @@ enum Kind {
     Command,
     /// The project's own JUnit tests in a loop (no hooks).
     TestLoop,
+    /// The project's own tests with pytest in a loop (no hooks, no target).
+    PytestLoop,
 }
 
 fn evidence() -> NewEvidence {
@@ -82,6 +84,10 @@ impl Run {
         }
         if matches!(kind, Kind::TestLoop) {
             text["tools"] = json!(["junit-platform-launcher"]);
+            text["workload"] = json!("W2");
+        }
+        if matches!(kind, Kind::PytestLoop) {
+            text["tools"] = json!(["pytest-loop"]);
             text["workload"] = json!("W2");
         }
         if matches!(kind, Kind::Command) {
@@ -639,4 +645,50 @@ fn without_census_facts_on_the_writer_neither_reading_is_given() {
         run.triggers().trigger(&f(1)),
         Trigger::Reproduced { .. }
     ));
+}
+
+/// A trend report of series `series` with one allocation-site column `py.blocks@<site>` that
+/// passed (`pass`) or not, and no target verdict.
+fn site_column_trend(run: &Run, series: &str, site: &str, pass: bool) {
+    let r: TrendReport = serde_json::from_value(json!({
+        "id": format!("T{}", &series[1..]), "series": series,
+        "thresholds": serde_json::to_value(dla_stats::GateThresholds::default()).unwrap(),
+        "columns": [{
+            "name": format!("py.blocks@{site}"), "unit": "count", "kind": "gauge", "region": "heap",
+            "site": site, "candidates": [], "n": 8, "noise": 0.0, "rise": 16.0,
+            "shape": "steady", "gate": if pass { "pass" } else { "fail" },
+        }],
+    }))
+    .unwrap();
+    r.save(run.dir.path()).unwrap();
+}
+
+#[test]
+fn a_finding_at_a_line_that_grew_in_the_pytest_loop_has_the_trigger_of_the_project_tests() {
+    let run = Run::new(2);
+    run.harness("H1", Kind::PytestLoop, &[]);
+    run.run("S1", "H1", "aa", None, None);
+    site_column_trend(&run, "S1", "pkg/m1.py:3", true);
+    let t = run.triggers();
+    // F1 is at the line: the loop never declared it, and the column ties it. The text does not
+    // offer the alloc-test, which measures test classes of a JVM loop.
+    assert_eq!(
+        varies_of(&t, 1),
+        "the project's own tests in H1; which test file feeds it is not measured"
+    );
+    assert_eq!(t.test_loop_harnesses(&f(1)), ["H1"]);
+    // F2 is at another line: nothing grew for it in the loop.
+    assert!(t.test_loop_harnesses(&f(2)).is_empty());
+    assert!(!matches!(t.trigger(&f(2)), Trigger::Reproduced { .. }));
+}
+
+#[test]
+fn a_site_column_that_did_not_pass_gives_no_trigger() {
+    let run = Run::new(1);
+    run.harness("H1", Kind::PytestLoop, &[]);
+    run.run("S1", "H1", "aa", None, None);
+    site_column_trend(&run, "S1", "pkg/m1.py:3", false);
+    let t = run.triggers();
+    assert!(t.test_loop_harnesses(&f(1)).is_empty());
+    assert!(!matches!(t.trigger(&f(1)), Trigger::Reproduced { .. }));
 }

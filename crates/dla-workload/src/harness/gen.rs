@@ -55,6 +55,9 @@ const DEFAULT_REPEAT: u64 = 64;
 const JVM_DRIVER_CLASS: &str = "DlaLoop";
 /// Default units (runs of the selected tests) per round of a JUnit repeat harness.
 const JUNIT_STEP: u64 = 2;
+/// Default units (runs of the project's tests) per round of the pytest loop: a run of the
+/// whole test suite is seconds, not milliseconds.
+const PYTEST_STEP: u64 = 1;
 /// Default timeout of one measured JUnit repeat process: a Spring context start is paid once
 /// and every later unit is a repeat.
 const JUNIT_TIMEOUT_SECS: u64 = 1800;
@@ -96,8 +99,12 @@ pub struct GenOptions {
     /// JVM: run the project's own JUnit 5 tests in a loop (implies driver mode; no hooks).
     pub junit: bool,
     /// JVM, JUnit repeat: classes (`pkg.Class`) or methods (`pkg.Class#method`) to run, instead
-    /// of the workload's test class.
+    /// of the workload's test class. Python, pytest loop: the test files or directories, relative
+    /// to the working directory.
     pub tests: Vec<String>,
+    /// Python: run the project's own tests with pytest in a loop (implies driver mode; no
+    /// hooks, no target).
+    pub pytest: bool,
     /// Rust driver: crate features the driver build enables (`--features a,b`).
     pub features: Vec<String>,
     /// Rust driver: the driver build leaves the crate's default features out.
@@ -430,6 +437,201 @@ fn junit_lang_check(opts: &GenOptions) -> Result<(), Refusal> {
     ))
 }
 
+// ---------------------------------------------------------------------------------------
+// pytest loop
+// ---------------------------------------------------------------------------------------
+
+/// What the pytest loop runs.
+#[derive(Debug, Clone)]
+struct PytestPick {
+    /// One test workload of the working directory: the harness runs in its directory.
+    workload: Workload,
+    /// The files or directories to run, relative to the working directory.
+    tests: Vec<String>,
+    /// Lines about the choice, for the manifest's gaps.
+    gaps: Vec<String>,
+}
+
+/// `--pytest` is for Python projects.
+fn pytest_lang_check(opts: &GenOptions) -> Result<(), Refusal> {
+    if opts.lang == Runtime::Python {
+        return Ok(());
+    }
+    Err(refuse(
+        codes::INVALID_VALUE,
+        format!(
+            "--pytest is for Python projects, not {}",
+            opts.lang.as_str()
+        ),
+        "--lang python",
+        "dla harness gen --lang python --pytest",
+    ))
+}
+
+/// The driver command a refusal of the pytest loop names as the other way on.
+const PYTHON_DRIVER_COMMAND: &str = "dla harness gen --lang python --driver --next";
+
+/// The `python3` the harness runs with: the first one on `PATH`.
+fn python3_on_path() -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "python3.exe"
+    } else {
+        "python3"
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
+/// True when pytest imports in the interpreter the Python harnesses use (`python3` on `PATH`).
+fn pytest_imports(dir: &Path) -> bool {
+    Command::new("python3")
+        .args(["-c", "import pytest"])
+        .current_dir(dir)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// The refusal for a pytest loop whose interpreter has no pytest. It is recorded as a failed
+/// attempt of the loop (the queue then goes on with the driver batches).
+fn pytest_missing(ctx: &ToolCtx) -> Refusal {
+    let interpreter = python3_on_path().map_or_else(
+        || "python3 (not found on PATH)".to_owned(),
+        |p| format!("python3 at {}", p.display()),
+    );
+    let why = format!(
+        "pytest does not import in the harness interpreter ({interpreter}), so the pytest loop cannot run the project's tests"
+    );
+    let fix = format!(
+        "install it with python3 -m pip install pytest; an interpreter that already has pytest and the project (a virtual environment) can be used by putting its bin directory first on PATH for the dla commands (PATH=<venv>/bin:$PATH dla harness gen --lang python --pytest); or take the other way on, a driver with hooks: {PYTHON_DRIVER_COMMAND}"
+    );
+    // The refusal stands even when the record cannot be written.
+    let _ = dla_core::harness::HarnessAttempt::save_pytest_loop_refusal(
+        &ctx.run_dir,
+        "tool_missing",
+        &why,
+    );
+    refuse(TOOL_MISSING, why, "pytest in the harness interpreter", fix)
+}
+
+/// `--pytest`: the test files to run and the working directory (see
+/// [`dla_core::testloop::python_tests`]), the workload discovery run first when the run has none.
+fn pytest_pick(ctx: &ToolCtx, opts: &GenOptions) -> Result<PytestPick, Refusal> {
+    pytest_lang_check(opts)?;
+    if let Some(t) = opts.tests.iter().find(|t| t.contains("::")) {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            format!(
+                "--tests {t}: pytest node ids (file::test) are not supported, only files and directories"
+            ),
+            "test files or directories relative to the working directory",
+            "dla harness gen --lang python --pytest --tests tests/test_a.py,tests/unit",
+        ));
+    }
+    if let Some(t) = opts
+        .tests
+        .iter()
+        .find(|t| t.is_empty() || t.starts_with('/') || t.split('/').any(|p| p == ".."))
+    {
+        return Err(refuse(
+            codes::INVALID_VALUE,
+            format!("--tests {t:?} is not a path inside the working directory"),
+            "test files or directories relative to the working directory",
+            "dla harness gen --lang python --pytest --tests tests/test_a.py,tests/unit",
+        ));
+    }
+    let report = match load_workloads(ctx)? {
+        Some(r) => r,
+        None => {
+            // As `dla census --lang jvm` does for the JVM test loop: files are read, nothing is run.
+            let lang = ctx
+                .worker
+                .as_deref()
+                .and_then(|w| w.parse::<Runtime>().ok());
+            crate::discover(ctx, lang)?;
+            load_workloads(ctx)?.ok_or_else(|| {
+                refuse(
+                    codes::MISSING_EVIDENCE,
+                    "no workload discovery result in this run",
+                    format!("workload/{}", crate::report_file(ctx.worker.as_deref())),
+                    "dla workload discover --lang python",
+                )
+            })?
+        }
+    };
+    let Some(found) = dla_core::testloop::python_tests(&report) else {
+        return Err(refuse(
+            WORKLOAD_REQUIRED,
+            "the workload discovery of this run lists no Python test file, so the pytest loop has nothing to run",
+            "a Python test file (test_*.py, *_test.py, or a file under a tests directory)",
+            format!("{PYTHON_DRIVER_COMMAND}   (a driver with hooks)"),
+        ));
+    };
+    let mut gaps = Vec::new();
+    for (dir, n) in &found.elsewhere {
+        gaps.push(format!(
+            "pytest loop: {n} test file(s) under {dir} left out: the loop runs the {} test file(s) of one working directory, {}",
+            found.files.len(),
+            found.cwd
+        ));
+    }
+    let workload = report
+        .workloads
+        .iter()
+        .find(|w| {
+            w.runtime == Runtime::Python
+                && w.kind == WorkloadKind::Test
+                && w.cwd == found.cwd
+                && found.files.contains(&w.file)
+        })
+        .cloned()
+        .ok_or_else(|| {
+            refuse(
+                WORKLOAD_REQUIRED,
+                "no Python test workload to run",
+                "a Python test workload",
+                "dla workload discover --lang python",
+            )
+        })?;
+    let tests: Vec<String> = if opts.tests.is_empty() {
+        found.files.iter().map(|f| found.local(f)).collect()
+    } else {
+        let base = ctx
+            .project
+            .join(if found.cwd == "." { "" } else { &found.cwd });
+        let mut out = Vec::new();
+        for t in &opts.tests {
+            let t = t.trim_start_matches("./").trim_end_matches('/').to_owned();
+            if !base.join(&t).exists() {
+                return Err(refuse(
+                    codes::INVALID_VALUE,
+                    format!(
+                        "--tests {t}: no such file or directory under the working directory {}",
+                        found.cwd
+                    ),
+                    "test files or directories relative to the working directory",
+                    format!(
+                        "dla harness gen --lang python --pytest --tests <paths under {}>",
+                        found.cwd
+                    ),
+                ));
+            }
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+        out
+    };
+    if !pytest_imports(&ctx.run_dir) {
+        return Err(pytest_missing(ctx));
+    }
+    Ok(PytestPick {
+        workload,
+        tests,
+        gaps,
+    })
+}
+
 /// Decides whether this harness is a JUnit repeat and, if so, what it runs. `Ok(None)` for
 /// every other harness.
 fn junit_pick(
@@ -440,11 +642,11 @@ fn junit_pick(
     // Only `--junit` makes a JUnit repeat: an explicit `--driver` is always the plain driver
     // with hooks, also when its workload is a JUnit 5 test file.
     if !opts.junit {
-        if let Some(t) = opts.tests.first() {
+        if let Some(t) = opts.tests.first().filter(|_| !opts.pytest) {
             return Err(refuse(
                 codes::INVALID_VALUE,
-                format!("--tests {t} applies to the JUnit repeat driver only"),
-                "--junit",
+                format!("--tests {t} applies to the JUnit repeat driver and the pytest loop only"),
+                "--junit or --pytest",
                 format!("dla harness gen --lang jvm --junit --tests {t}"),
             ));
         }
@@ -1044,6 +1246,8 @@ struct DriverCtx<'a> {
     cwd: &'a str,
     step: u64,
     junit: Option<&'a JunitPick>,
+    /// The pytest loop (Python): what it runs.
+    pytest: Option<&'a PytestPick>,
     /// A plain JVM driver whose class path the project's build resolves.
     main_build: Option<&'a JunitPick>,
 }
@@ -1208,6 +1412,27 @@ fn build_driver(d: &DriverCtx<'_>) -> Result<DriverBuild, Refusal> {
                 );
                 out.gaps.extend(m.gaps.iter().cloned());
             }
+        }
+        Runtime::Python if d.pytest.is_some() => {
+            let p = d.pytest.ok_or_else(|| {
+                refuse(
+                    codes::TOOL_FAILED,
+                    "pytest loop without a selection",
+                    "a pytest selection",
+                    "report this as a dla bug",
+                )
+            })?;
+            // The paths as a Python list literal: JSON strings are valid Python string literals.
+            let items: Vec<String> = p
+                .tests
+                .iter()
+                .map(|t| serde_json::to_string(t).unwrap_or_else(|_| "\"\"".to_owned()))
+                .collect();
+            vars.push(("TESTS".into(), format!("[{}]", items.join(", "))));
+            let text = fill_with(templates::PY_PYTEST_LOOP, &vars)?;
+            write(&d.driver.join(commands::PYTEST_LOOP_FILE), &text)?;
+            out.spec.pytest_loop = true;
+            out.tools.push(dla_core::harness::PYTEST_TOOL.to_owned());
         }
         Runtime::Python => {
             let text = fill_with(templates::PY_DRIVER, &vars)?;
@@ -1600,6 +1825,21 @@ fn junit_hint_text(ctx: &ToolCtx) -> String {
     }
 }
 
+/// What a Python hook driver's output says while the first step of the queue, the project's own
+/// tests in a loop, has not run: the command the queue gives for that step. `None` when the
+/// queue has no such step (no test files, the loop wrote a series or failed, the queue is
+/// closed or blocked).
+fn pytest_hint_text(ctx: &ToolCtx) -> Option<String> {
+    let view = dla_core::RunView::load_for(&ctx.run_dir, ctx.worker.as_deref()).ok()?;
+    let step = dla_core::queue::queues(&view, ctx.worker.as_deref())
+        .into_iter()
+        .find(|q| q.runtime == "python" && q.open())?
+        .py_loop?;
+    Some(format!(
+        "this project has Python test files and the first step of the queue has not run: {step} runs the project's own tests in a loop with nothing to fill; run it and read its trend before you fill these hooks"
+    ))
+}
+
 /// A chosen test class: fully qualified name, file, tests, and the candidates it was taken for.
 type TestLoopClass = (
     String,
@@ -1831,11 +2071,11 @@ fn insert_unit_skeleton(file: &Path, rt: Runtime) -> std::io::Result<()> {
 fn entry_targets(ctx: &ToolCtx, opts: &GenOptions) -> Result<Vec<FindingId>, Refusal> {
     use dla_core::harness::MAX_TARGETS;
     let lang = opts.lang.as_str();
-    if !opts.driver || opts.junit {
+    if !opts.driver || opts.junit || opts.pytest {
         return Err(refuse(
             codes::INVALID_VALUE,
             "--entry writes a hook driver whose units call the project's entry points",
-            "--driver (and no --junit)",
+            "--driver (and no --junit or --pytest)",
             format!("dla harness gen --lang {lang} --driver --entry <F>"),
         ));
     }
@@ -1951,6 +2191,27 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     } else {
         opts
     };
+    // `--pytest`: a driver with no hooks (the project's own tests); it declares no target of its
+    // own, and `--probe` may still add some.
+    let pytest_opts;
+    let opts = if opts.pytest {
+        pytest_lang_check(opts)?;
+        if opts.junit || opts.next.is_some() || !opts.entry.is_empty() {
+            return Err(refuse(
+                codes::INVALID_VALUE,
+                "--pytest runs the project's own tests and declares no candidate: it cannot be combined with --junit, --next or --entry",
+                "--pytest alone (or with --probe, --tests, --step, --iterations)",
+                "dla harness gen --lang python --pytest",
+            ));
+        }
+        pytest_opts = GenOptions {
+            driver: true,
+            ..opts.clone()
+        };
+        &pytest_opts
+    } else {
+        opts
+    };
     // `--junit --next`: the queue's next test-loop batch chooses the targets and the tests.
     let test_loop_opts;
     let mut test_loop_facts: Option<TestLoopFacts> = None;
@@ -1976,8 +2237,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     {
         return Err(refuse(
             codes::INVALID_VALUE,
-            format!("--tests {t} applies to the JUnit repeat driver only"),
-            "--junit",
+            format!("--tests {t} applies to the JUnit repeat driver and the pytest loop only"),
+            "--junit or --pytest",
             format!("dla harness gen --lang jvm --junit --tests {t}"),
         ));
     }
@@ -2022,8 +2283,16 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             format!("dla harness gen --lang {lang} --iter-arg \"--iterations {{n}}\""),
         ));
     }
+    let pytest = if opts.pytest {
+        Some(pytest_pick(ctx, opts)?)
+    } else {
+        None
+    };
     let report = load_workloads(ctx)?;
-    let workload = choose_workload(ctx, report.as_ref(), opts, !opts.driver)?;
+    let workload = match &pytest {
+        Some(p) => Some(p.workload.clone()),
+        None => choose_workload(ctx, report.as_ref(), opts, !opts.driver)?,
+    };
     let junit = junit_pick(ctx, opts, workload.as_ref())?;
     // A hook driver on a project that has JUnit 5 tests: name the variant with nothing to fill.
     let junit_hint = (junit.is_none()
@@ -2034,6 +2303,10 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
                 .any(|w| w.runtime == rt && junit_problem(&ctx.project, w).is_none())
         }))
     .then(|| junit_hint_text(ctx));
+    // A Python hook driver written while the queue's first step, the test loop, has not run.
+    let pytest_hint = (opts.driver && !opts.pytest && rt == Runtime::Python)
+        .then(|| pytest_hint_text(ctx))
+        .flatten();
     let iter_arg = opts
         .iter_arg
         .clone()
@@ -2128,7 +2401,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     }
 
     let scope = ctx.scope()?;
-    let copied = scratch::copy_project_scoped(&ctx.project, &work, scope.as_ref())
+    let copied = scratch::copy_project_for(&ctx.project, &work, scope.as_ref(), Some(rt))
         .map_err(|e| io_refusal(&work, e))?;
     for (r, n) in &copied.out_of_scope_sources {
         dla_census::record_out_of_scope(ctx, *r, *n)?;
@@ -2148,6 +2421,14 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         gaps.push("no allocator shim on Windows: only OS-level columns are measured".to_owned());
     }
     gaps.extend(det.notes.iter().cloned());
+    if let Some(p) = &pytest {
+        gaps.extend(p.gaps.iter().cloned());
+        gaps.push(format!(
+            "pytest loop: {} test path(s) run in one process from {} with the harness interpreter (python3 on PATH)",
+            p.tests.len(),
+            p.workload.cwd
+        ));
+    }
     if let Some(f) = &test_loop_facts {
         gaps.push(format!(
             "test loop (--junit --next): {} test class(es) with {} tests, chosen for {} target(s): {}",
@@ -2177,6 +2458,8 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         .unwrap_or_else(|| {
             if junit.is_some() {
                 JUNIT_STEP
+            } else if pytest.is_some() {
+                PYTEST_STEP
             } else {
                 choose_step(default_count, opts.warmup, opts.iterations)
             }
@@ -2252,6 +2535,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             cwd,
             step,
             junit: junit.as_ref(),
+            pytest: pytest.as_ref(),
             main_build: main_build.as_ref(),
         };
         let info = build_driver(&dctx)?;
@@ -2357,7 +2641,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         warmup: opts.warmup,
         iterations: opts.iterations,
         step,
-        key_modes: if junit.is_some() {
+        key_modes: if junit.is_some() || pytest.is_some() {
             // A JUnit repeat has no keys: one series, labelled like the first key mode of a
             // driver so `dla alloc-test` and `dla trend` read it the same way.
             vec![KeyMode::Fresh]
@@ -2384,7 +2668,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
         gaps: gaps.clone(),
         timeout_secs: if junit.is_some() && test_loop_facts.is_some() {
             TEST_LOOP_TIMEOUT_SECS
-        } else if junit.is_some() {
+        } else if junit.is_some() || pytest.is_some() {
             JUNIT_TIMEOUT_SECS
         } else {
             TIMEOUT_SECS
@@ -2615,7 +2899,32 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             // Go: the driver is a test file of this package.
             m.insert("package".into(), json!(dla_core::queue::package_label(dir)));
         }
-        if info.spec.junit.is_some() {
+        if info.spec.pytest_loop {
+            artifacts.push(ctx.pointer(&format!(
+                "harness/{id}/{DRIVER}/{}",
+                commands::PYTEST_LOOP_FILE
+            )));
+            m.insert("hooks".into(), json!(info.hooks));
+            m.insert("pytest".into(), json!(true));
+            m.insert(
+                "tests".into(),
+                json!(match pytest.as_ref() {
+                    Some(p) if p.tests.len() > 6 => format!(
+                        "{} test paths from {}: {} ... {}",
+                        p.tests.len(),
+                        p.workload.cwd,
+                        p.tests[..2].join(", "),
+                        p.tests[p.tests.len() - 1]
+                    ),
+                    Some(p) => format!("{} from {}", p.tests.join(", "), p.workload.cwd),
+                    None => String::new(),
+                }),
+            );
+            m.insert(
+                "instructions".into(),
+                json!("nothing to fill: the driver runs the project's own tests in a loop; run it"),
+            );
+        } else if info.spec.junit.is_some() {
             let driver_file = ctx.pointer(&format!(
                 "harness/{id}/{DRIVER}/{}.java",
                 commands::JUNIT_DRIVER_CLASS
@@ -2711,6 +3020,9 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
             if let Some(hint) = junit_hint {
                 m.insert("junit_hint".into(), json!(hint));
             }
+            if let Some(hint) = pytest_hint {
+                m.insert("pytest_hint".into(), json!(hint));
+            }
         }
         if !info.extra_files.is_empty() {
             m.insert("also".into(), json!(info.extra_files));
@@ -2719,7 +3031,7 @@ pub fn generate(ctx: &ToolCtx, opts: &GenOptions) -> Result<StageOutcome, Refusa
     if let Value::Object(m) = &mut summary {
         m.insert(
             "next".into(),
-            json!(if junit.is_some() {
+            json!(if junit.is_some() || pytest.is_some() {
                 format!("dla harness run {id}")
             } else if manifest.is_second_look() {
                 format!(

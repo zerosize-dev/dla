@@ -26,6 +26,8 @@ pub const PY_AGENT: &str = include_str!("../../../../harness/python/sitecustomiz
 pub const PY_MEMRAY: &str = include_str!("../../../../harness/python/dla_memray_leaks.py");
 /// Python driver template.
 pub const PY_DRIVER: &str = include_str!("../../../../harness/python/dla_harness.py");
+/// Python pytest loop: the project's own tests in a loop, no hooks.
+pub const PY_PYTEST_LOOP: &str = include_str!("../../../../harness/python/dla_pytest_loop.py");
 /// pytest-memray variant of the Python driver.
 pub const PY_PYTEST: &str = include_str!("../../../../harness/python/test_dla_harness.py");
 /// Node preload agent.
@@ -134,11 +136,13 @@ mod tests {
             ("REPEAT", "64"),
             ("CRATE", "demo"),
             ("SELECT", "\"shop.CartTest\""),
+            ("TESTS", "[\"tests/test_a.py\"]"),
         ];
         for t in [
             JVM_DRIVER,
             JVM_JUNIT_DRIVER,
             PY_DRIVER,
+            PY_PYTEST_LOOP,
             PY_PYTEST,
             NODE_DRIVER,
             GO_WRAPPER,

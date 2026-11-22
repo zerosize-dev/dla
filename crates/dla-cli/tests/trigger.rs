@@ -651,6 +651,99 @@ fn write_attribution(r: &Run, h: &str, finding: &str, classes: &[(&str, i64, i64
     .unwrap();
 }
 
+/// The manifest of `h` turned into a pytest loop (its tool), with the file the loop records of the
+/// test files it ran and dropped.
+fn make_pytest_loop(r: &Run, h: &str, ran: &[&str], dropped: &[&str]) {
+    let dir = r.run_dir.join("harness").join(h);
+    let p = dir.join("harness.json");
+    let mut m: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+    m["tools"] = json!(["pytest-loop"]);
+    fs::write(&p, m.to_string()).unwrap();
+    let out = dir.join("out/p1-fresh");
+    fs::create_dir_all(&out).unwrap();
+    fs::write(
+        out.join("pytest-files.json"),
+        json!({"files": ran, "dropped": dropped}).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_bundle_and_the_trigger_of_a_pytest_loop_finding_list_the_test_files_and_measure_none() {
+    let r = Run::new(&["--budget", "3h", "--queue", "off"]);
+    let (cache, table) = (r.id_at("app/router.py:11"), r.id_at("app/sessions.py:1"));
+    let g = r.ok(&[
+        "harness", "gen", "--lang", "python", "--driver", "--probe", &cache, "--probe", &table,
+    ]);
+    let workload = g["evidence"][0].as_str().unwrap().to_owned();
+    r.fill("H1", CACHE_SETUP, DIRECT_UNIT);
+    r.ok(&["harness", "run", "H1", "--mode", "both"]);
+    let t = r.ok(&["trend", "S1"]);
+    let growth = t["evidence"].as_array().unwrap().clone();
+    r.confirm(&cache, &workload, &growth);
+    make_pytest_loop(
+        &r,
+        "H1",
+        &["tests/test_router.py", "tests/test_sessions.py"],
+        &["tests/test_broken.py"],
+    );
+    let b = r.ok(&["bundle", &cache]);
+    let dir = r.dir.path().join(b["dir"].as_str().unwrap());
+    let doc: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("test-loop/H1/tests.json")).unwrap())
+            .unwrap();
+    assert_eq!(doc["harness"], "H1", "{doc}");
+    assert_eq!(
+        doc["test_files_run"],
+        json!(["tests/test_router.py", "tests/test_sessions.py"]),
+        "{doc}"
+    );
+    assert_eq!(
+        doc["dropped_files"],
+        json!(["tests/test_broken.py"]),
+        "{doc}"
+    );
+    // No per-file figure and no class list: nothing measures which file feeds the holder.
+    for absent in ["fed_by", "classes_run", "ran_and_added_nothing", "per_run"] {
+        assert!(doc.get(absent).is_none(), "{absent} in {doc}");
+    }
+    let note = doc["note"].as_str().unwrap();
+    assert!(
+        note.contains("pytest") && note.contains("not measured"),
+        "{note}"
+    );
+    let index: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+    assert_eq!(
+        index["test_loop"][0]["files"][0], "test-loop/H1/tests.json",
+        "{index}"
+    );
+    // The trigger line: the project's own tests, and no alloc-test hint (it measures JVM classes).
+    let md = r.report();
+    assert!(
+        md.contains(
+            "reproduced through the public API in H1 (varies: the project's own tests in H1; which test file feeds it is not measured)"
+        ),
+        "{md}"
+    );
+    assert!(
+        !md.contains(&format!("dla alloc-test H1 --finding {cache}")),
+        "{md}"
+    );
+    // The loop recorded no files: the bundle says so and still writes the file.
+    fs::remove_file(r.run_dir.join("harness/H1/out/p1-fresh/pytest-files.json")).unwrap();
+    let b = r.ok(&["bundle", &cache]);
+    let dir = r.dir.path().join(b["dir"].as_str().unwrap());
+    let doc: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("test-loop/H1/tests.json")).unwrap())
+            .unwrap();
+    assert_eq!(doc["test_files_run"], json!([]), "{doc}");
+    assert!(
+        doc["note"].as_str().unwrap().contains("were not recorded"),
+        "{doc}"
+    );
+}
+
 #[test]
 fn the_bundle_and_the_trigger_of_a_test_loop_finding_name_what_was_measured_to_feed_it() {
     let r = Run::new(&["--budget", "3h", "--queue", "off"]);

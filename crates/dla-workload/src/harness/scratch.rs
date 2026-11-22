@@ -5,7 +5,7 @@
 //! [`crate::model::SKIP_DIRS`] and `.dla`), plus whatever generation drops in.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -38,6 +38,9 @@ pub struct CopyReport {
     pub out_of_scope: usize,
     /// Non-test source files among them, by runtime.
     pub out_of_scope_sources: BTreeMap<Runtime, u64>,
+    /// Python harness: built extension modules (untracked `*.so`, `*.pyd`, `*.dylib` next to
+    /// Python sources) that were kept.
+    pub extensions_kept: usize,
 }
 
 /// Directories skipped wherever they are: they never hold project sources.
@@ -153,6 +156,20 @@ fn keeps_for_build(scope: &Scope, rel: &Path, slash: &str) -> bool {
 /// keep their modification times. Symlinks are recreated as they are on Unix and skipped
 /// elsewhere. `dla intervene` clones a harness's `work/` this way. Returns the files copied.
 pub fn copy_tree(src: &Path, dest: &Path, project: &Path) -> std::io::Result<usize> {
+    copy_tree_for(src, dest, project, None)
+}
+
+/// Like [`copy_tree`], for the clone of a harness of `runtime`: a Python harness keeps the built
+/// extension modules its copy holds (see [`copy_project_for`]), because a clone has no build step
+/// either.
+pub fn copy_tree_for(
+    src: &Path,
+    dest: &Path,
+    project: &Path,
+    runtime: Option<Runtime>,
+) -> std::io::Result<usize> {
+    let python = runtime == Some(Runtime::Python);
+    let mut py_dirs: HashMap<PathBuf, bool> = HashMap::new();
     fs::create_dir_all(dest)?;
     let (files, _left_out) = walk_files(src);
     let from_git = git_files(project).is_some();
@@ -163,7 +180,9 @@ pub fn copy_tree(src: &Path, dest: &Path, project: &Path) -> std::io::Result<usi
     };
     let mut copied = 0;
     for rel in files {
-        if is_dropped_build_output(&rel, from_git, &tracked) {
+        let extension =
+            python && is_python_extension(&rel) && holds_python_sources(src, &rel, &mut py_dirs);
+        if !extension && is_dropped_build_output(&rel, from_git, &tracked) {
             continue;
         }
         let from = src.join(&rel);
@@ -198,6 +217,89 @@ pub fn copy_project_scoped(
     dest: &Path,
     scope: Option<&Scope>,
 ) -> std::io::Result<CopyReport> {
+    copy_project_for(project, dest, scope, None)
+}
+
+/// True for a built extension module of a Python package: a file named `*.so`, `*.pyd` or
+/// `*.dylib` (`_native.cpython-312-x86_64-linux-gnu.so` included).
+fn is_python_extension(rel: &Path) -> bool {
+    rel.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["so", "pyd", "dylib"].contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// True when the directory of `rel` holds a Python source file of the project.
+fn holds_python_sources(project: &Path, rel: &Path, cache: &mut HashMap<PathBuf, bool>) -> bool {
+    let dir = rel.parent().map(Path::to_path_buf).unwrap_or_default();
+    *cache.entry(dir.clone()).or_insert_with(|| {
+        fs::read_dir(project.join(&dir)).is_ok_and(|rd| {
+            rd.flatten()
+                .any(|e| e.path().extension().is_some_and(|x| x == "py"))
+        })
+    })
+}
+
+/// The built extension modules a Python project's git listing does not hold: untracked files
+/// git ignores (the usual state of a `build_ext --inplace`) next to Python sources. Virtual
+/// environments, installed packages, hidden directories and the root-level build directories
+/// are not the project.
+fn ignored_python_extensions(
+    project: &Path,
+    listed: &HashSet<PathBuf>,
+    cache: &mut HashMap<PathBuf, bool>,
+) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::new()];
+    let mut seen = 0usize;
+    while let Some(rel) = stack.pop() {
+        let Ok(rd) = fs::read_dir(project.join(&rel)) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > MAX_FILES * 4 {
+                return out;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let name = e.file_name();
+            let name_s = name.to_string_lossy();
+            let child = rel.join(&name);
+            if ft.is_dir() {
+                if name_s.starts_with('.')
+                    || SKIP_ANYWHERE.contains(&name_s.as_ref())
+                    || ["site-packages", "dist-packages"].contains(&name_s.as_ref())
+                    || (rel.as_os_str().is_empty() && skip_at_root(&name_s))
+                    || e.path().join("pyvenv.cfg").is_file()
+                {
+                    continue;
+                }
+                stack.push(child);
+            } else if ft.is_file()
+                && is_python_extension(&child)
+                && !listed.contains(&child)
+                && holds_python_sources(project, &child, cache)
+            {
+                out.push(child);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Like [`copy_project_scoped`], for a harness of `runtime`. A Python harness has no build step,
+/// so the built extension modules of the project (untracked `*.so`, `*.pyd` or `*.dylib` files
+/// that lie in a directory holding Python sources) are kept: left out, a package whose
+/// extension modules were built in place would fail at import in the copy. Another runtime's
+/// copy is unchanged: there the build step recreates the objects and libraries.
+pub fn copy_project_for(
+    project: &Path,
+    dest: &Path,
+    scope: Option<&Scope>,
+    runtime: Option<Runtime>,
+) -> std::io::Result<CopyReport> {
+    let python = runtime == Some(Runtime::Python);
+    let mut py_dirs: HashMap<PathBuf, bool> = HashMap::new();
     fs::create_dir_all(dest)?;
     let (files, from_git, left_out) = match git_files(project) {
         Some(f) => (f, true, Vec::new()),
@@ -241,9 +343,16 @@ pub fn copy_project_scoped(
                 continue;
             }
         }
+        // A Python harness has no build step: the built extension modules stay.
+        let extension = python
+            && is_python_extension(&rel)
+            && holds_python_sources(project, &rel, &mut py_dirs);
+        if extension && !tracked.contains(&rel) {
+            report.extensions_kept += 1;
+        }
         // Build outputs of another tree: rebuilt in the copy, never copied. Outside git
         // every library counts as shipped; in git only the tracked ones do.
-        if is_dropped_build_output(&rel, from_git, &tracked) {
+        if !extension && is_dropped_build_output(&rel, from_git, &tracked) {
             objects += 1;
             continue;
         }
@@ -278,10 +387,38 @@ pub fn copy_project_scoped(
         }
         report.files += 1;
     }
+    if python && from_git {
+        let listed: HashSet<PathBuf> = git_files(project).unwrap_or_default().into_iter().collect();
+        for rel in ignored_python_extensions(project, &listed, &mut py_dirs) {
+            if is_dla_path(&rel) {
+                continue;
+            }
+            if let Some(scope) = scope {
+                let slash = dla_core::paths::to_slash(&rel);
+                if rel.components().count() > 1 && !scope.includes(&slash) {
+                    continue;
+                }
+            }
+            let (src, to) = (project.join(&rel), dest.join(&rel));
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if copy_file(&src, &to).is_ok() {
+                report.extensions_kept += 1;
+                report.files += 1;
+            }
+        }
+    }
     for (why, n) in reasons {
         report
             .gaps
             .push(format!("scratch copy: {n} path(s) not copied ({why})"));
+    }
+    if report.extensions_kept > 0 {
+        report.gaps.push(format!(
+            "scratch copy: {} built extension module(s) kept (untracked *.so, *.pyd or *.dylib files next to Python sources: a Python harness has no build step)",
+            report.extensions_kept
+        ));
     }
     if objects > 0 {
         report.gaps.push(format!(

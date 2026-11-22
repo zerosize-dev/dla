@@ -207,6 +207,9 @@ impl Run {
 }
 
 const BATCH: &str = "dla harness gen --lang python --driver --next";
+/// The project has test files, so the first step of its queue is the project's own tests in a
+/// loop (nothing to write); the driver batch follows it.
+const LOOP: &str = "dla harness gen --lang python --pytest";
 
 #[test]
 fn a_candidate_cannot_be_closed_unmeasured_and_the_gate_and_status_lead_with_the_queue() {
@@ -233,7 +236,13 @@ fn a_candidate_cannot_be_closed_unmeasured_and_the_gate_and_status_lead_with_the
         assert_ne!(o.code, 0, "{reason}: {}", o.text);
         assert_eq!(o.json["error"]["code"], "target-pending", "{}", o.text);
         let fix = o.json["error"]["fix"].as_str().unwrap();
-        assert!(fix.starts_with(BATCH), "{fix}");
+        assert!(
+            fix.starts_with(&format!(
+                "First the project's own tests in a loop, nothing to write: {LOOP}, "
+            )),
+            "{fix}"
+        );
+        assert!(fix.contains(BATCH), "{fix}");
         assert!(fix.contains("dla trend S<n>"), "{fix}");
         assert!(fix.contains("dla ledger resolve intake.workload"), "{fix}");
         let msg = o.json["error"]["message"].as_str().unwrap();
@@ -247,7 +256,7 @@ fn a_candidate_cannot_be_closed_unmeasured_and_the_gate_and_status_lead_with_the
     // The status and the final gate lead with one queue item and say the batch command.
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["blocking"][0]["kind"], "queue", "{st}");
-    assert_eq!(st["next_command"], BATCH, "{st}");
+    assert_eq!(st["next_command"], LOOP, "{st}");
     let q = &st["queue"]["python"];
     assert_eq!(q["open"], true, "{st}");
     assert_eq!(q["pending"], 2, "{st}");
@@ -261,7 +270,8 @@ fn a_candidate_cannot_be_closed_unmeasured_and_the_gate_and_status_lead_with_the
             .contains("candidate(s) of python are ranked for measurement and not targeted yet"),
         "{missing:?}"
     );
-    assert!(missing[0]["fix"].as_str().unwrap().starts_with(BATCH));
+    assert!(missing[0]["fix"].as_str().unwrap().starts_with(LOOP));
+    assert!(missing[0]["fix"].as_str().unwrap().contains(BATCH));
     // The item of a pending candidate carries the same batch command, never the close.
     let item = missing.iter().find(|m| m["kind"] == "finding").unwrap();
     assert!(item["fix"].as_str().unwrap().starts_with(BATCH), "{item}");
@@ -419,11 +429,18 @@ fn next_declares_the_targets_prints_them_and_writes_the_block_in_the_driver() {
     // empty, so the status names the harness to fill and run.
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["pending"], 3, "{st}");
+    // The loop stays the queue's first command until it has run; the driver H1 is still named
+    // by the item of the candidate it declares.
+    assert_eq!(st["next_command"], LOOP, "{st}");
     assert!(
-        st["next_command"]
-            .as_str()
+        st["blocking"]
+            .as_array()
             .unwrap()
-            .contains("dla harness run H1 --mode both"),
+            .iter()
+            .any(|b| b["kind"] == "finding"
+                && b["fix"]
+                    .as_str()
+                    .is_some_and(|f| f.contains("dla harness run H1 --mode both"))),
         "{st}"
     );
     // --next again has nothing to declare and says so.
@@ -980,7 +997,7 @@ fn a_stamped_run_with_time_left_keeps_its_queue_and_close_rest_lifts_the_stamp()
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["queue"]["python"]["open"], true, "{st}");
     assert_eq!(st["queue"]["python"]["pending"], 3, "{st}");
-    assert_eq!(st["next_command"], BATCH, "{st}");
+    assert_eq!(st["next_command"], LOOP, "{st}");
     assert!(
         st["stop_stamp"]
             .as_str()
@@ -992,7 +1009,7 @@ fn a_stamped_run_with_time_left_keeps_its_queue_and_close_rest_lifts_the_stamp()
     let out = r.ok(&["ledger", "close-rest"]);
     assert_eq!(out["closed"], 0, "{out}");
     assert_eq!(out["left_open"], 3, "{out}");
-    assert_eq!(out["batch_command"], BATCH, "{out}");
+    assert_eq!(out["batch_command"], LOOP, "{out}");
     let st = r.ok(&["run", "status"]);
     assert_eq!(st["status"], "active", "{st}");
     assert!(st.get("stop_stamp").is_none(), "{st}");

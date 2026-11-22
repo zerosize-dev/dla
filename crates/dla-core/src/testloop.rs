@@ -49,6 +49,94 @@ pub const PER_NAME: usize = 2;
 /// The test classes taken for one candidate by mention, when none matches by name.
 pub const PER_MENTION: usize = 1;
 
+/// The Python test files the pytest loop runs: the test workloads of the Python runtime
+/// that share one working directory, the one with the most of them (a tie goes to the
+/// shorter directory name, then to the first in name order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PyTests {
+    /// The working directory, project-relative (`.` for the root).
+    pub cwd: String,
+    /// The test files of that directory, project-relative, in name order.
+    pub files: Vec<String>,
+    /// Test files under another working directory: `(directory, files)`; the loop leaves
+    /// them out.
+    pub elsewhere: Vec<(String, usize)>,
+}
+
+impl PyTests {
+    /// A file as the loop names it: relative to its working directory, `/`-separated.
+    pub fn local(&self, file: &str) -> String {
+        if self.cwd == "." || self.cwd.is_empty() {
+            return file.to_owned();
+        }
+        file.strip_prefix(self.cwd.trim_end_matches('/'))
+            .map(|r| r.trim_start_matches('/'))
+            .unwrap_or(file)
+            .to_owned()
+    }
+}
+
+/// The Python test files of a workload discovery result; `None` when it lists none.
+pub fn python_tests(report: &WorkloadReport) -> Option<PyTests> {
+    let mut by_cwd: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for w in &report.workloads {
+        if w.runtime == Runtime::Python && w.kind == WorkloadKind::Test {
+            by_cwd
+                .entry(w.cwd.clone())
+                .or_default()
+                .push(w.file.clone());
+        }
+    }
+    let cwd = by_cwd
+        .iter()
+        .max_by(|a, b| {
+            a.1.len()
+                .cmp(&b.1.len())
+                .then_with(|| b.0.len().cmp(&a.0.len()))
+                .then_with(|| b.0.cmp(a.0))
+        })
+        .map(|(c, _)| c.clone())?;
+    let mut files = by_cwd.remove(&cwd).unwrap_or_default();
+    files.sort();
+    files.dedup();
+    let elsewhere = by_cwd.into_iter().map(|(c, f)| (c, f.len())).collect();
+    Some(PyTests {
+        cwd,
+        files,
+        elsewhere,
+    })
+}
+
+/// The Python test files of the run's workload discovery result (`worker`: the worker whose
+/// slice it is); `None` when there is no result or it lists no Python test file.
+pub fn python_tests_of(view: &RunView, worker: Option<&str>) -> Option<PyTests> {
+    let run_dir = view.run_dir.as_deref()?;
+    let file = worker.map_or_else(|| "workloads.json".to_owned(), |w| format!("{w}.json"));
+    let text = fs::read_to_string(run_dir.join("workload").join(file)).ok()?;
+    python_tests(&serde_json::from_str::<WorkloadReport>(&text).ok()?)
+}
+
+/// The test files a pytest loop ran and the ones it dropped, as the loop recorded them next to
+/// its dump (`harness/<H>/out/<label>/pytest-files.json`); `None` when it recorded none.
+pub fn pytest_files_of(run_dir: &Path, harness: &str) -> Option<(Vec<String>, Vec<String>)> {
+    let out = crate::HarnessManifest::dir_in(run_dir, harness).join("out");
+    let mut labels: Vec<_> = fs::read_dir(out).ok()?.flatten().collect();
+    labels.sort_by_key(|e| e.file_name());
+    labels.into_iter().find_map(|e| {
+        let text = fs::read_to_string(e.path().join("pytest-files.json")).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let list = |k: &str| -> Vec<String> {
+            v.get(k)
+                .and_then(|a| a.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.as_str().map(str::to_owned))
+                .collect()
+        };
+        Some((list("files"), list("dropped")))
+    })
+}
+
 /// The file name of the attribution of `finding` inside a harness directory.
 pub fn attribution_file(finding: &str) -> String {
     format!("attribution-{finding}.json")

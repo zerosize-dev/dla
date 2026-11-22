@@ -471,7 +471,45 @@ pub struct HarnessAttempt {
     pub message: Option<String>,
 }
 
+/// `harness/pytest-loop-attempt.json`: the attempt record of a pytest loop that no harness
+/// directory holds, because `dla harness gen --lang python --pytest` refused (pytest does not
+/// import in the harness interpreter). The queue reads it like the `attempt.json` of a failed
+/// test loop: the loop was tried, so the queue goes on with the driver batches.
+pub const PYTEST_ATTEMPT_FILE: &str = "pytest-loop-attempt.json";
+
 impl HarnessAttempt {
+    /// `<run_dir>/harness/pytest-loop-attempt.json`.
+    pub fn pytest_loop_path(run_dir: &Path) -> PathBuf {
+        run_dir.join(HARNESS_DIR).join(PYTEST_ATTEMPT_FILE)
+    }
+
+    /// Writes the record of a refused pytest-loop generation (a failed attempt).
+    pub fn save_pytest_loop_refusal(
+        run_dir: &Path,
+        reason: &str,
+        message: &str,
+    ) -> Result<(), Error> {
+        let path = Self::pytest_loop_path(run_dir);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
+        }
+        let now = Self::now();
+        let rec = HarnessAttempt {
+            harness: "pytest-loop".to_owned(),
+            started_at: now.clone(),
+            finished_at: now,
+            outcome: AttemptOutcome::Failed,
+            reason: Some(reason.to_owned()),
+            message: Some(message.to_owned()),
+        };
+        write_atomic(&path, to_pretty_json(&rec).as_bytes())
+    }
+
+    /// True when a pytest-loop generation was refused in this run.
+    pub fn pytest_loop_refused(run_dir: &Path) -> bool {
+        Self::pytest_loop_path(run_dir).is_file()
+    }
+
     /// The current time as the timestamps of this record are written.
     pub fn now() -> String {
         crate::state::now_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
@@ -523,19 +561,33 @@ pub fn hooks_unfilled(run_dir: &Path, id: &str) -> bool {
 /// its units are fixed and its verdicts settle only by growth.
 pub const JUNIT_TOOL: &str = "junit-platform-launcher";
 
-impl HarnessManifest {
-    /// True for a driver whose units the model writes (hooks to fill), as opposed to a
-    /// command or a JUnit repeat, which run a fixed command.
-    pub fn is_hook_driver(&self) -> bool {
-        self.mode == HarnessMode::Driver && !self.tools.iter().any(|t| t == JUNIT_TOOL)
-    }
-}
+/// The tool a pytest loop lists (`dla harness gen --lang python --pytest`): the project's own
+/// tests in one process, in a loop, with no hooks.
+pub const PYTEST_TOOL: &str = "pytest-loop";
 
 impl HarnessManifest {
-    /// True for a test-loop harness: the project's own JUnit 5 tests in a loop, no hooks
-    /// (`dla harness gen --lang jvm --junit`).
+    /// True for a driver whose units the model writes (hooks to fill), as opposed to a
+    /// command or a test loop, which run the project's own tests.
+    pub fn is_hook_driver(&self) -> bool {
+        self.mode == HarnessMode::Driver && !self.names_a_test_loop_tool()
+    }
+
+    /// True for a test-loop harness: the project's own tests in a loop, no hooks (a JUnit 5
+    /// loop, `dla harness gen --lang jvm --junit`, or a pytest loop, `dla harness gen --lang
+    /// python --pytest`).
     pub fn is_test_loop(&self) -> bool {
-        self.mode == HarnessMode::Driver && self.tools.iter().any(|t| t == JUNIT_TOOL)
+        self.mode == HarnessMode::Driver && self.names_a_test_loop_tool()
+    }
+
+    /// True for the pytest loop: a test loop of a Python project.
+    pub fn is_pytest_loop(&self) -> bool {
+        self.mode == HarnessMode::Driver && self.tools.iter().any(|t| t == PYTEST_TOOL)
+    }
+
+    fn names_a_test_loop_tool(&self) -> bool {
+        self.tools
+            .iter()
+            .any(|t| t == JUNIT_TOOL || t == PYTEST_TOOL)
     }
 }
 

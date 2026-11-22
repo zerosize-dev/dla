@@ -820,6 +820,37 @@ fn run_status_counts_harnesses_and_static_only_closes_and_names_the_next_command
 
 // ------------------------------------------------------------------
 
+/// A pytest loop: a driver whose manifest names the pytest loop and which has no hooks. (The
+/// scene is a JVM run; the gate reads the manifest's tools, not the language.)
+fn pytest_loop_manifest(r: &Run, id: &str) {
+    harness_manifest_with(r, id, HarnessMode::Driver, &["pytest-loop"]);
+}
+
+#[test]
+fn a_pytest_loop_has_no_hooks_either_so_the_step_makes_a_hook_driver() {
+    // The only harness that ran is a test loop that reached none of 225 entry points.
+    let r = scene();
+    r.close("F1", "not_exercised");
+    coverage(&r, 225, 0, Some(750), 37);
+    pytest_loop_manifest(&r, "H1");
+    ran_attempt(&r, "H1");
+    let fix = r.items("coverage_contradiction")[0].2.clone();
+    assert!(
+        fix.contains("the project's tests reach 0 of 225 entry points")
+            && fix.contains("fill the DLA-HOOK bodies of the harness it prints")
+            && !fix.contains("DLA-HOOK bodies of H1")
+            && !fix.contains("dla harness run H1"),
+        "{fix}"
+    );
+    // Once a hook driver H2 exists, it is the one to fill and run, never the loop.
+    harness_manifest(&r, "H2");
+    let fix = r.items("coverage_contradiction")[0].2.clone();
+    assert!(
+        fix.contains("fill the DLA-HOOK bodies of H2") && !fix.contains("DLA-HOOK bodies of H1"),
+        "{fix}"
+    );
+}
+
 #[test]
 fn a_junit_repeat_has_no_hooks_so_the_step_makes_a_hook_driver() {
     // The only harness that ran is a JUnit repeat that reached none of 225 entry points.

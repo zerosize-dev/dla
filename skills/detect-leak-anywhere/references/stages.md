@@ -267,7 +267,7 @@ under the run directory and need tier 1.
   `dla run status` prints a `queue` object per runtime (eligible, settled, pending, the ids of the
   next batch, the `command`, and `open` or the reason it is not open: floor reached, workload
   blocked, empty). While a queue is open, work it in batches of 8 targets by rank, plus the siblings of their owners (16 at most):
-  1. `dla harness gen --lang <rt> --driver --next` (the command in `queue`; `--next N` takes fewer).
+  1. `dla harness gen --lang <rt> --driver --next` (the command in `queue`, the one `dla run status` prints for the queue; `--next N` takes fewer; a Python hook driver generated before the test loop ran carries `pytest_hint`, which names the loop command).
      It declares the next pending candidates as targets of the harness, same as `--probe F<n>` for each
      (at most 8 targets by rank per harness, more is refused `too-many-targets`), then also every
      other pending candidate of the same owner (fields of one struct or class, same file; module-level
@@ -288,6 +288,15 @@ under the run directory and need tier 1.
      `not_loaded` and `not_executed` are a miss and get a focus harness; a batch that cannot build or
      in which no test passes prints the driver command for its targets. `dla census --lang jvm` writes
      the workload discovery result when the run has none, so the test loop needs no step of its own.
+     `dla census --lang python` writes it too when the run has none and the project has Python test files
+     (a project without test files gets no discovery result from the census). A Python project with test
+     files starts the same way, with one loop over all of them:
+     `dla harness gen --lang python --pytest` (`--tests a,b` for files or directories; no candidate, no
+     target, nothing to fill) runs the project's own tests with pytest again and again in one process; a
+     line of the project that grows there (`py.blocks@<file:line>`) gets a finding with the command `dla trend`
+     prints. It needs pytest in the harness interpreter (`python3` on PATH) and the project importable in place;
+     `references/python.md` says how. The queue names it first and goes on with the driver batches once it wrote a
+     series or an attempt failed.
   2. Read the target block of the driver. Per target it gives the finding, site, holder, owner, the rule's
      message, up to 3 writers and 3 removers (`file:line` with the enclosing function), what its probe
      reads (or "no probe: tied by allocation stacks or type counts"), a `key:` line when the census says the key of the holder comes from the caller (the holder grows only when each unit passes a key it has not seen: a key compared by value is built from the unit's key, a key compared by identity must be a fresh object per unit; the line says what makes a fresh one in the driver's language and that a method reference, a lambda that captures nothing or a module-level function is one object for the whole run), and one instruction by holder:
@@ -431,7 +440,7 @@ For each passed column tied to a candidate `F3`:
   or a column that lists it under `candidates`. A per-site count column (`node.listeners@`, `node.timers@`,
   `go.goroutines@`, the Python `py.blocks@<file:line>`) ties only to the finding whose own site is that line;
   when none is there, `dla trend` prints the `dla ledger add ... --site <file:line>` that makes it (for
-  `py.blocks@`; the final gate prints it too). A refusal `growth-not-tied` means the growth you cite
+  `py.blocks@`; the final gate prints it too, and both name the lines largest growth first, so the first commands are for the lines that grow most). A refusal `growth-not-tied` means the growth you cite
   belongs to another holder or to the whole process (`os.rss`, heap totals). Then add a probe for
   `F3`'s holder and rerun the harness, or resolve `F3` `suspected_static_only` with a remedy; never
   confirm one holder from another holder's growth. If `confirm` succeeds with a `warning` that the tied
@@ -563,7 +572,8 @@ bundle holds raw evidence and up to four code excerpts around frames that the ev
 hold the site, the hypothesis, the label or the explanation. The bundle of a finding that grew in the test loop
 also carries `test-loop/<H>/tests.json`: the test classes that fed the holder in the loop, with the entries each
 added per run, and the classes that ran and added nothing (measured by `dla alloc-test <H> --finding F3`; without
-that run it lists the classes that ran and says which of them feeds the holder was not measured). The verifier states a site, holder and
+that run it lists the classes that ran and says which of them feeds the holder was not measured; a Python test loop lists the
+test files that ran and measures nothing per file). The verifier states a site, holder and
 mechanism in words, decides from them whether the owner would call this a defect, picks an ID or
 UNCLASSIFIED and runs `dla ledger verify`. A verifier that reads the finding as bounded, intended or
 proportional to load records the matching `N-*` ID; the ledger accepts it, the label disagrees and the open

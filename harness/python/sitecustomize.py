@@ -1225,6 +1225,8 @@ def _freeze_record(rec, limitations):
 _BLOCKS_SITES_CAP = 5000  # sites kept per checkpoint (the largest counts), so memory stays bounded
 _BLOCKS_TEST_DIRS = frozenset(("test", "tests", "__tests__", "__mocks__", "testing", "spec", "specs"))
 _blocks = {"own": {}, "files": {}}  # file name -> answer caches: they fill once
+# The drivers the harness writes: the generic hook driver and the pytest loop (the project's own tests).
+_DRIVER_FILES = ("dla_harness.py", "dla_pytest_loop.py")
 
 
 def _is_test_rel(rel):
@@ -1245,14 +1247,15 @@ def _is_test_rel(rel):
 
 def _harness_file(filename):
     """True for a file of the harness: the agent's directory (which also holds the driver the
-    harness copied there) and the main script when it is the driver."""
+    harness copied there) and the main script when it is a driver (`dla_harness.py`, or
+    `dla_pytest_loop.py`, the loop over the project's own tests)."""
     got = _blocks["own"].get(filename)
     if got is None:
         real = os.path.realpath(filename)
         got = real.startswith(os.path.realpath(_HERE) + os.sep)
         if not got:
             main = getattr(sys.modules.get("__main__"), "__file__", None)
-            got = bool(main) and os.path.basename(main) == "dla_harness.py" and real == os.path.realpath(main)
+            got = bool(main) and os.path.basename(main) in _DRIVER_FILES and real == os.path.realpath(main)
         if len(_blocks["own"]) < 20000:
             _blocks["own"][filename] = got
     return got

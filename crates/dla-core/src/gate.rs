@@ -1098,6 +1098,21 @@ fn covered_by_open_item(view: &RunView, t: &TrendReport, c: &ColumnTrend) -> boo
     })
 }
 
+/// The columns with the allocation-site columns put in order of their Sen slope, the larger
+/// first, in the places the site columns already hold: the items for the lines that grow most
+/// come first, and the other columns keep their order and their place.
+fn site_columns_largest_first(mut cols: Vec<&ColumnTrend>) -> Vec<&ColumnTrend> {
+    let slots: Vec<usize> = (0..cols.len())
+        .filter(|&i| crate::grown::is_alloc_site_column(&cols[i].name))
+        .collect();
+    let mut sites: Vec<&ColumnTrend> = slots.iter().map(|&i| cols[i]).collect();
+    sites.sort_by(|a, b| a.larger_slope_first(b));
+    for (slot, c) in slots.into_iter().zip(sites) {
+        cols[slot] = c;
+    }
+    cols
+}
+
 fn classify(view: &RunView, is_final: bool, out: &mut Out) {
     if !probes_and_sweeps(view) {
         return;
@@ -1126,7 +1141,7 @@ fn classify(view: &RunView, is_final: bool, out: &mut Out) {
         if view.gap_series.contains(&t.series) {
             continue;
         }
-        for c in t.columns.iter().filter(|c| non_flat(c)) {
+        for c in site_columns_largest_first(t.columns.iter().filter(|c| non_flat(c)).collect()) {
             if is_whole_process(&c.name) {
                 // Never tied to a finding. The classify stage leaves it to the final gate,
                 // which takes the residual accounting, an open item, or, for the total of
@@ -2214,15 +2229,11 @@ fn runtime_has_harness(run_dir: &Path, runtime: &str) -> bool {
     })
 }
 
-/// The named tool a JUnit repeat harness lists in its manifest: such a harness is a
-/// driver that runs the project's own tests and has no DLA-HOOK bodies to fill.
-const JUNIT_TOOL: &str = "junit-platform-launcher";
-
-/// True when harness `h` of `runtime` is a JUnit repeat (its manifest names the JUnit
-/// launcher).
-pub(crate) fn is_junit_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
+/// True when harness `h` of `runtime` is a test loop (a JUnit repeat or a pytest loop: its
+/// manifest says the harness runs the project's own tests and has no DLA-HOOK bodies to fill).
+pub(crate) fn is_test_loop_harness(run_dir: &Path, runtime: &str, h: &str) -> bool {
     crate::harness::HarnessManifest::load(run_dir, h)
-        .is_ok_and(|m| m.runtime.as_str() == runtime && m.tools.iter().any(|t| t == JUNIT_TOOL))
+        .is_ok_and(|m| m.runtime.as_str() == runtime && m.is_test_loop())
 }
 
 /// True when harness `h` is the treated clone `dla intervene` made: it keeps its source's
@@ -2245,18 +2256,15 @@ fn is_intervention_clone(view: &RunView, h: &str) -> bool {
 }
 
 /// The harnesses of `runtime` that are drivers with DLA-HOOK bodies to fill, oldest
-/// first. A JUnit repeat is a driver too, but it has no hooks, so it is passed over, and
+/// first. A test loop is a driver too, but it has no hooks, so it is passed over, and
 /// so is the edited clone of an intervention.
 fn hook_drivers_in(view: &RunView, run_dir: &Path, runtime: &str) -> Vec<HarnessId> {
     harness_ids(run_dir)
         .into_iter()
         .filter(|(_, id)| {
             !is_intervention_clone(view, id)
-                && crate::harness::HarnessManifest::load(run_dir, id).is_ok_and(|m| {
-                    m.runtime.as_str() == runtime
-                        && m.mode == crate::harness::HarnessMode::Driver
-                        && !m.tools.iter().any(|t| t == JUNIT_TOOL)
-                })
+                && crate::harness::HarnessManifest::load(run_dir, id)
+                    .is_ok_and(|m| m.runtime.as_str() == runtime && m.is_hook_driver())
         })
         .map(|(_, id)| id)
         .collect()
@@ -2367,7 +2375,7 @@ fn driver_step(view: &RunView, runtime: &str) -> String {
             "fill the DLA-HOOK bodies of {h} so its driver calls the entry points, then dla harness run {h}"
         );
     }
-    // The tests' own count is only the answer when a JUnit repeat ran and no other
+    // The tests' own count is only the answer when a test loop ran and no other
     // harness of the runtime did.
     let junit_only = dir.is_some_and(|d| {
         let ran: Vec<HarnessId> = harness_ids(d)
@@ -2379,7 +2387,7 @@ fn driver_step(view: &RunView, runtime: &str) -> String {
                     && harness_ran(view, d, id)
             })
             .collect();
-        !ran.is_empty() && ran.iter().all(|id| is_junit_harness(d, runtime, id))
+        !ran.is_empty() && ran.iter().all(|id| is_test_loop_harness(d, runtime, id))
     });
     if junit_only && let Some(w) = view.coverage.as_ref().and_then(|c| c.workers.get(runtime)) {
         return format!(

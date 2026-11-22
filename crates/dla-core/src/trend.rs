@@ -82,6 +82,18 @@ pub struct ColumnTrend {
     pub gate_failed: Vec<String>,
 }
 
+impl ColumnTrend {
+    /// Orders by the Sen slope, the larger first; a column without a slope comes last.
+    pub fn larger_slope_first(&self, other: &Self) -> std::cmp::Ordering {
+        match (self.sen, other.sen) {
+            (Some(a), Some(b)) => b.slope.total_cmp(&a.slope),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
 /// `trend/T<n>.json`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct TrendReport {

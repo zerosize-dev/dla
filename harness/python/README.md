@@ -5,6 +5,7 @@
 | `sitecustomize.py` | agent; must be first on `PYTHONPATH` (the harness directory) |
 | `dla_memray_leaks.py` | helper that turns a memray capture into bounded JSON; run with the target's interpreter, written next to the agent |
 | `dla_harness.py` | loop driver template |
+| `dla_pytest_loop.py` | loop driver over the project's own tests (`dla harness gen --lang python --pytest`): no hooks |
 | `test_dla_harness.py` | pytest-memray variant of the driver; skipped unless `pytest_memray` imports |
 
 ## Run
@@ -178,6 +179,41 @@ which the harness merges.
 pytest-memray; DLA keeps the test output as raw evidence. The standard-library driver is the
 fallback, and the missing pytest-memray is a recorded coverage gap.
 
+### The pytest loop (`dla_pytest_loop.py`)
+
+`dla harness gen --lang python --pytest [--tests a,b]` writes a driver with nothing to fill. One unit is one
+`pytest.main` of the selected test files in this process, run from the working directory of the tests with the
+directory first on `sys.path` (and `<cwd>/src` when that directory holds a package or a module). A small plugin
+counts, per test file, the tests that passed, failed and were skipped and the time they took. The arguments keep
+the run quiet and in this process: `-o addopts=` (the project's own addopts may ask for parallel workers or a
+coverage plugin), `-p no:cacheprovider`, `-p no:xdist`, `-q`, `--tb=short` and `--rootdir <cwd>`; what pytest and
+the tests print goes to a temporary file and only a bounded head of it reaches the harness log (the first run, and
+the first later run with a failure). `SystemExit` of a test is caught. Rounds as the generic driver
+(`DLA_WARMUP`, `DLA_ROUNDS`, `DLA_STEP`, a checkpoint after each round) with a step of at least 1; the default step is 1.
+
+After the first run the driver:
+
+1. checks where the code comes from: every top-level package or module the project defines (under the working
+   directory or its `src/`) that the tests imported must lie under the scratch copy (`DLA_PROJECT`) or under
+   the project it was made from (`DLA_SOURCE_ROOT`); otherwise it stops with exit code 3 and the `DLA-PYTEST the tests import
+   <name> from <path>, which is outside the project: ...` line. The scratch copy is made when the harness is generated
+   (`dla harness gen`), not at each run, and keeps the built extension modules (untracked `*.so`, `*.pyd` and
+   `*.dylib` files in a directory that holds Python sources); build the project in place before generating;
+2. drops a file none of whose tests passed when another file had a passing test (limitation `dropped test file
+   <path>: none of its tests passed in the first run (first failure: ...)`); no test found stops with exit 3
+   (also when every test was skipped), no test passed in any file stops with exit 2; a later run with failing tests is
+   counted and its first failure recorded once; exit 2 also when no test passed in any run;
+3. estimates the whole series (warm-up plus rounds) from the time of the first run and, when it does not fit
+   `DLA_TIME_LIMIT_SECS` (margin 15 percent and 5 seconds), lowers the step (not below 1) and drops the slowest
+   files until it fits (limitation `dropped test file <path>: it took <t> s of <unit> s per run and the series would
+   not fit <limit> s`); when one file alone does not fit it stops with `the tests are too slow for a series` and exit 3,
+   so the run reports no usable point. A reading of a single run holds the one-time costs (the imports), so this stop
+   waits for the second run unless one run alone is over the budget. Timing restarts after a drop.
+
+It records the files it runs in `pytest-files.json` next to the dump (the bundle of a finding lists them) and ends
+with `DLA-PYTEST summary: units= tests_run= files= dropped= failed_units= first_failure=` on stderr. The driver file
+counts as a harness file: its lines have no `py.blocks@` column.
+
 ### Placeholders
 
 | Placeholder | Where | Meaning |
@@ -186,6 +222,7 @@ fallback, and the missing pytest-memray is a recorded coverage gap.
 | `@@DLA_WARMUP@@` | both | warm-up rounds (default for `DLA_WARMUP`) |
 | `@@DLA_ROUNDS@@` | both | measured rounds (default for `DLA_ROUNDS`) |
 | `@@DLA_REPEAT@@` | `dla_harness.py` | repeated key space size (default for `DLA_REPEAT`) |
+| `@@DLA_TESTS@@` | `dla_pytest_loop.py` | the test files or directories to run, a Python list literal |
 
 ### Hooks
 

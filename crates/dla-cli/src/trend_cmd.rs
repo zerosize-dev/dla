@@ -436,6 +436,13 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
                 .any(|r| r.residual > r.threshold && r.open_item.is_none());
             !rows.is_empty() && (open_item || !orphan)
         });
+    let pytest_loop = main
+        .series
+        .source
+        .harness
+        .as_deref()
+        .and_then(|h| dla_core::HarnessManifest::load(&ctx.run_dir, h).ok())
+        .is_some_and(|m| m.is_pytest_loop());
     let next = suggestions(
         &ledger,
         has_gap_row,
@@ -445,6 +452,7 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: TrendArgs) -> R
         keys.as_ref(),
         a.finding.as_ref(),
         &declared,
+        pytest_loop,
     );
     let mut next = next;
     if let Some(entry) = missed_targets_entry(ctx, &main.series, &target_verdicts) {
@@ -601,6 +609,7 @@ fn detector_entry(
                 harness_evidence(ledger, series).as_deref(),
                 has_sibling,
                 can_test,
+                m.is_pytest_loop(),
             );
             format!(
                 "{head}: {f} holds it and its column {} passed in this series: {}",
@@ -913,6 +922,7 @@ fn suggestions(
     keys: Option<&Keys>,
     bound: Option<&FindingId>,
     declared: &[FindingId],
+    pytest_loop: bool,
 ) -> Vec<String> {
     let mut next: Vec<String> = Vec::new();
     let mut seen_roots: Vec<FindingId> = Vec::new();
@@ -955,7 +965,17 @@ fn suggestions(
                     next.push(format!("dla ledger test {root} --evidence {harness}"));
                 }
                 if let Some(h) = series.source.harness.as_deref() {
-                    next.push(format!("dla alloc-test {h} --finding {root}"));
+                    if pytest_loop {
+                        // An alloc-test on the loop re-runs the whole test suite per run.
+                        next.push(format!(
+                            "dla harness gen --lang python --driver --probe {root}   # a small driver of its own for the line: a unit that calls the function of that line; a run takes seconds, where an alloc-test on {h} re-runs the whole test suite per run (minutes)"
+                        ));
+                        next.push(format!(
+                            "dla harness run <H>, dla trend <S>, then dla alloc-test <H> --finding {root}   # on the harness just made"
+                        ));
+                    } else {
+                        next.push(format!("dla alloc-test {h} --finding {root}"));
+                    }
                 }
             }
             // The total of a summarize-made series is the sum of its group columns: the

@@ -272,10 +272,27 @@ pub fn build_report(
 /// Reads files only; a failed `dla probe --build` is recorded as a coverage gap, not
 /// an error.
 pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Refusal> {
+    match discover_when(ctx, lang, |_| true)? {
+        Some(done) => Ok(done),
+        None => unreachable!("the predicate accepts every report"),
+    }
+}
+
+/// [`discover`] that writes only when `wanted` accepts the report it built: the project is
+/// scanned once, and when `wanted` says no nothing is written, no evidence record is added and
+/// no stage directory is created (`Ok(None)`).
+pub fn discover_when(
+    ctx: &ToolCtx,
+    lang: Option<Runtime>,
+    wanted: impl FnOnce(&WorkloadReport) -> bool,
+) -> Result<Option<StageOutcome>, Refusal> {
     let st = ctx.static_scope()?;
     let scan = Scan::scoped(&ctx.project, st.scope, &st.defaults);
     let failed = failed_builds(ctx);
     let (report, runtimes) = build_report(&scan, lang, &failed);
+    if !wanted(&report) {
+        return Ok(None);
+    }
 
     let dir = ctx.stage_dir("workload")?;
     let name = report_file(ctx.worker.as_deref());
@@ -371,7 +388,7 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
     })
     .map_err(|e| e.to_refusal())?;
 
-    Ok(StageOutcome {
+    Ok(Some(StageOutcome {
         evidence: vec![ev.to_string()],
         candidates: 0,
         skipped_duplicates: 0,
@@ -380,7 +397,7 @@ pub fn discover(ctx: &ToolCtx, lang: Option<Runtime>) -> Result<StageOutcome, Re
             ctx.pointer("coverage.json"),
         ],
         summary: result,
-    })
+    }))
 }
 
 fn runtime_of_entry(scan: &Scan, id: &str) -> Option<Runtime> {
@@ -872,6 +889,50 @@ mod tests {
         assert!(
             found.iter().any(|e| e.starts_with("vendor/lib/server.py")),
             "{found:?}"
+        );
+    }
+
+    #[test]
+    fn discover_when_writes_only_when_the_predicate_accepts_the_report() {
+        let d = tempfile::tempdir().unwrap();
+        go_project(d.path());
+        let ctx = run_ctx(d.path(), None);
+        let evidence = |c: &ToolCtx| {
+            c.ledger()
+                .unwrap()
+                .evidence()
+                .filter(|e| e.kind == EvidenceKind::Workload)
+                .count()
+        };
+        let file = ctx.run_dir.join("workload/workloads.json");
+
+        let mut asked = 0;
+        let none = discover_when(&ctx, Some(Runtime::Go), |r| {
+            asked += 1;
+            assert_eq!(r.workloads.len(), 2);
+            false
+        })
+        .unwrap();
+        assert!(none.is_none());
+        assert_eq!(asked, 1);
+        assert!(!file.exists(), "no report file");
+        assert!(!ctx.run_dir.join("workload").exists(), "no stage directory");
+        assert_eq!(evidence(&ctx), 0, "no evidence record");
+
+        let done = discover_when(&ctx, Some(Runtime::Go), |_| true)
+            .unwrap()
+            .expect("written");
+        assert_eq!(done.evidence.len(), 1);
+        assert_eq!(evidence(&ctx), 1);
+        let via_when = fs::read_to_string(&file).unwrap();
+
+        let e = tempfile::tempdir().unwrap();
+        go_project(e.path());
+        let ctx2 = run_ctx(e.path(), None);
+        discover(&ctx2, Some(Runtime::Go)).unwrap();
+        assert_eq!(
+            fs::read_to_string(ctx2.run_dir.join("workload/workloads.json")).unwrap(),
+            via_when
         );
     }
 

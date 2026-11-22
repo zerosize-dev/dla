@@ -388,6 +388,16 @@ pub fn queue_item(q: &crate::queue::RuntimeQueue) -> BlockingItem {
             format!(
                 "dla harness run {h} (the project's own tests in a loop; nothing to fill), dla trend S<n>"
             )
+        } else if let Some(first) = &q.py_loop {
+            format!(
+                "{first}{}, dla trend S<n>   (first the project's own tests in a loop, nothing to write; a line of the project that grows there gets a finding, the trend prints the command; then, for the candidates: {}, fill the hooks, dla harness run <H> --mode both, dla trend S<n>)",
+                if first.starts_with("dla harness run") {
+                    ""
+                } else {
+                    ", dla harness run <H>"
+                },
+                crate::queue::batch_command(&q.runtime, false)
+            )
         } else if test_batch {
             format!(
                 "{}, dla harness run <H>, dla trend S<n>   (the project's own tests in a loop; nothing to fill; then, for the candidates that need a driver: {}, fill the hooks, dla harness run <H> --mode both, dla trend S<n>)",
