@@ -923,3 +923,13 @@ flat test-loop readings get only 9 second looks.
 - Next: whole suite (u68/verify.sh -> u68/verify.out, test-all.log), eighth frozen snapshot WITH CI,
   commit with commit-snapshot-tree.sh + commit-message-7.txt, push main and dev branch, then real
   rerun spring-8 on that build.
+- Whole suite on the eighth frozen tree b3b5ff4: 166 binaries, 3190 passed, 0 failed, 5 ignored; fmt,
+  clippy, schema clean (u68/verify.out). CI on b3b5ff4: waiter writes u68/ci-wait.out.
+  CI on main b4b9a42: green (run 45000472735).
+- 09:55 UTC: real rerun spring-8 started on the eighth frozen build (binary /root/dla-real/bin/dla,
+  plugin from b3b5ff4). Watcher bb5nyj5a3 fires when the verifier's reading of F160 is in the
+  transcript (or run.json exists). Then: copy evidence to <sp>/u36/spring-8 (run.json, transcript,
+  run dir without harness work/out and workload/), stop the run by its process group id if it is
+  only writing drivers, delete /root/dla-real/spring-8, write wip-notes/real-run-plugin-spring-8.md.
+- Scratch deleted: /root/dla-real/attr, attr2, vbase*, v160-*, v436-*, plugin-u, bin-u. Verifier
+  records kept in <sp>/u68/verifier/, vrun.py in wip-notes/.
