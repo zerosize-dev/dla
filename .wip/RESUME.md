@@ -1146,3 +1146,24 @@ flat test-loop readings get only 9 second looks.
   state, ledger and transcript are kept in /root/dla-real/pillow-2-keep.
 - Builder U's last Bash call was denied by the permission system (a chained command with a background run); I did
   not repeat it for the builder; my own standard checks found and fixed two failing queue tests.
+
+## State at about 23:55 UTC 2026-11-22
+
+- main = 471f809 (three commits: 6f84d64 blocker per runtime, 89ec249 site columns, 471f809 Python test loop), pushed to
+  main and dev/wonderful-mccarthy-algc5s after CI round 2 (run 45075458294) was all green. CI on main is running.
+- Twelfth frozen snapshot 264e93d267435d5c3f5edb16e1106658569e5330 (budget with workers, loop-first gate fixes,
+  coverage from the source tree, two VERIFY rows) is in CI round 3 (waiter output u79/ci12). When green: commit with
+  commit-message-12.txt, push main and the dev branch, wait for CI on main, then Version 0.9.0-preview.5 (files:
+  .claude-plugin/marketplace.json, .claude-plugin/plugin.json, Cargo.toml, Cargo.lock) and release.yml with publish.
+- pillow-3 (plugin of faae7f6 = the twelfth snapshot's tree): FOUND. 3358 s. The python worker ran the loop first
+  (`harness gen --lang python --pytest`), the budget was sized to 3h by both workers (2 runtimes, 570 candidates),
+  F278 at src/PIL/ImageFont.py:580 added from the loop's trend, confirmed, labelled L-OWNERSHIP (growth 301 blocks per
+  run of the suite), report top without the false coverage warning (558 of 739 entry points exercised).
+  Weak points: status INCOMPLETE (87 open, 55 of 180 minutes used); no finding verified (the verifier stage did not
+  run); the mechanism text blames the image handed to the C call, not the int reference (pillow-2 named the exact C
+  line); 10 other findings confirmed are registries fed with new keys by the driver (F17 EXTENSION and similar),
+  8 of them with "Trigger: not checked"; the worker first wrapped the loop run in `timeout 560` and lost 9 minutes.
+  Kept files: /root/dla-real/pillow-3-keep (report, state, ledger, gate, T1, transcript).
+- The disk filled during pillow-3 (34 harness copies of the project, 3 GB); freed. Delete a real run's work directory
+  after keeping its small files.
+- Real-project score: aiohttp, grpc-go, axios, tokio-util, spring-data-commons, Pillow found; Jetty not run.
