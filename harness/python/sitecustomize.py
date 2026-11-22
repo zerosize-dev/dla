@@ -14,7 +14,8 @@ DLA_TRACEMALLOC_FRAMES, DLA_PY_MEMRAY=0 to leave memray out of `alloc`. The modu
 into the target.
 
 Driver mode also counts the live traced blocks per allocation site at every checkpoint (see
-"py.blocks" below): the last checkpoint carries the series of the sites that grew.
+"py.blocks" below): each checkpoint record carries its own counts, and the agent keeps nothing
+between checkpoints that grows with their number; `dla harness run` picks the columns.
 """
 
 import atexit
@@ -1208,16 +1209,22 @@ def _freeze_record(rec, limitations):
 #
 # At each checkpoint, after the forced collections, the live blocks tracemalloc traces are counted
 # by site: the first frame, from the innermost outward, that lies in the project and is neither a
-# test file nor a file of the harness (the agent, the driver). The agent learns only at the end
-# which sites grew, so the counts of every checkpoint stay in memory (one small dict each) and the
-# last checkpoint's record carries `group_series`: for the sites that grew most, one count per
-# checkpoint, with the x of each. A site grew when its count at the last checkpoint is above its
-# count at the first checkpoint after the warm-up. At most _BLOCKS_MAX_SITES sites get a series.
+# test file nor a file of the harness (the agent, the driver). The record carries these counts as
+# `group_counts: {"py.blocks": {site: blocks}}` and nothing is kept for the next checkpoint (but the
+# file-name cache, which fills once), so the agent's own bookkeeping cannot read as growth. The
+# series builder picks the sites that grew. At most _BLOCKS_SITES_CAP sites are written per record
+# (the largest counts); a record that hit the bound lists `py.blocks` in `group_capped`.
+#
+# Order inside a checkpoint: the snapshot and the grouping run right after the two collections and
+# BEFORE py.traced, py.traced_peak and the OS values are read, at every checkpoint alike. The
+# snapshot's transient memory (freed at once, but the allocator keeps part of it) is then in every
+# reading, the warm-up checkpoints' and the first measured one's included, so the first measured
+# point is not cheaper than the later ones. The counts dict of the checkpoint lives until its
+# record is written: it weighs the same on every point of a run whose number of sites is stable.
 
-_BLOCKS_MAX_SITES = 12
 _BLOCKS_SITES_CAP = 5000  # sites kept per checkpoint (the largest counts), so memory stays bounded
 _BLOCKS_TEST_DIRS = frozenset(("test", "tests", "__tests__", "__mocks__", "testing", "spec", "specs"))
-_blocks = {"xs": [], "snaps": [], "ms": [], "failed": None, "capped": False, "own": {}, "files": {}}
+_blocks = {"own": {}, "files": {}}  # file name -> answer caches: they fill once
 
 
 def _is_test_rel(rel):
@@ -1303,15 +1310,14 @@ def _count_blocks():
                 break
         if site is not None:
             counts[site] = counts.get(site, 0) + st.count
-    if len(counts) > _BLOCKS_SITES_CAP:
-        counts = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:_BLOCKS_SITES_CAP])
-        _blocks["capped"] = True
-    return counts
+    capped = len(counts) > _BLOCKS_SITES_CAP
+    if capped:
+        counts = dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:_BLOCKS_SITES_CAP])
+    return counts, capped
 
 
-def _blocks_checkpoint(x, last, limitations):
-    """Counts the blocks at a driver checkpoint; at the last one returns the `group_series` table
-    (or None, with a limitation, when the columns cannot be built)."""
+def _blocks_checkpoint(limitations):
+    """Counts the blocks now; returns `(counts, capped)`, or None with a limitation when it cannot."""
     try:
         import tracemalloc
 
@@ -1322,40 +1328,14 @@ def _blocks_checkpoint(x, last, limitations):
     except BaseException:
         pass
     try:
-        t0 = _now_ms()
-        counts = _count_blocks()
-        _blocks["snaps"].append(counts)
-        _blocks["xs"].append(x)
-        _blocks["ms"].append(_now_ms() - t0)
-    except BaseException as exc:
-        _blocks["failed"] = _blocks["failed"] or repr(exc)
-    if not last:
-        return None
-    try:
-        if _blocks["failed"]:
+        counts, capped = _count_blocks()
+        if capped:
             limitations.append(
-                f"reduced record: py.blocks could not be counted ({_blocks['failed']}), so the allocation-site columns are missing"
+                f"py.blocks keeps the {_BLOCKS_SITES_CAP} sites with the most blocks at this checkpoint: a site below them has no reading here"
             )
-            return None
-        snaps, xs = _blocks["snaps"], _blocks["xs"]
-        first = min(max(_int_env("DLA_WARMUP", 0), 0), len(snaps) - 1)
-        if len(snaps) - first < 2 or any(v is None for v in xs):
-            return None
-        a, b = snaps[first], snaps[-1]
-        grown = sorted(
-            ((b[site] - a.get(site, 0), site) for site in b if b[site] > a.get(site, 0)),
-            key=lambda g: (-g[0], g[1]),
-        )
-        if _blocks["capped"]:
-            limitations.append(f"py.blocks keeps the {_BLOCKS_SITES_CAP} sites with the most blocks at each checkpoint")
-        if len(grown) > _BLOCKS_MAX_SITES:
-            limitations.append(f"{len(grown) - _BLOCKS_MAX_SITES} more allocation sites grew and have no column")
-        sites = {site: [s.get(site, 0) for s in snaps] for _, site in grown[:_BLOCKS_MAX_SITES]}
-        if not sites:
-            return None
-        return {"py.blocks": {"x": xs, "sites": sites, "ms": _blocks["ms"]}}
+        return counts, capped
     except BaseException as exc:
-        limitations.append(f"reduced record: py.blocks could not be read: {exc!r}, so the allocation-site columns are missing")
+        limitations.append(f"reduced record: py.blocks could not be counted ({exc!r}), so the allocation-site columns are missing")
         return None
 
 
@@ -1399,26 +1379,29 @@ def _build(phase, x, last):
         gc.collect()
         gc.collect()
     values = {}
+    # The blocks are counted before any figure of this record is read (see "py.blocks").
+    counted = None
+    if phase == "checkpoint":
+        if _traced() is None:
+            limitations.append("tracemalloc not tracing: the py.blocks columns are unavailable")
+        else:
+            counted = _blocks_checkpoint(limitations)
     traced = _traced()
     if traced is not None:
         values["py.traced"] = traced[0]
         values["py.traced_peak"] = traced[1]
     else:
         limitations.append("tracemalloc not tracing: py.traced unavailable")
-    series = None
-    if phase == "checkpoint":
-        if traced is None:
-            limitations.append("tracemalloc not tracing: the py.blocks columns are unavailable")
-        else:
-            series = _blocks_checkpoint(x, last, limitations)
     objs = None if tick else gc.get_objects()
     values["py.gc_objects"] = len(objs) if objs is not None else len(gc.get_objects())
     values["py.gc_collections"] = sum(s.get("collections", 0) for s in gc.get_stats())
     os_own = _os_values()
     values.update(os_own)
     rec["values"] = values
-    if series:
-        rec["group_series"] = series
+    if counted is not None:
+        rec["group_counts"] = {"py.blocks": counted[0]}
+        if counted[1]:
+            rec["group_capped"] = ["py.blocks"]
     if pre is not None:
         rec["values_pre_gc"] = pre
     if want_purge:

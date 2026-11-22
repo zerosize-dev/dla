@@ -6,15 +6,15 @@ uncommitted work from two earlier briefs (W1: the workload blocker per runtime; 
 count columns `py.blocks@<file:line>` for Python driver runs); build on it, do not revert it.
 
 Scratchpad (sp): /tmp/claude-0/-home-user-dla/f6814273-1d53-58fc-a01a-0b3a3a3915ac/scratchpad
-Your scratch directory: <sp>/u77 (create it). You cannot write a report file with the Write tool:
+Your scratch directory: <sp>/u78 (create it). You cannot write a report file with the Write tool:
 give the report as your final message (you may also write it with a shell redirect to
-<sp>/u77/report.md).
+<sp>/u78/report.md).
 
 ## Hard rules
 
 - No `git commit`, `git stash`, `git checkout`, `git reset`, `git restore` in /home/user/dla.
-- Never kill a process by name. No `rm -rf "$VAR/..."`: only literal paths, only under <sp>/u77.
-- Use the shared `target/` directory only (`cargo ... -j 2`). Disk is tight (about 5 GB free):
+- Never kill a process by name. No `rm -rf "$VAR/..."`: only literal paths, only under <sp>/u78.
+- Use the shared `target/` directory only (`cargo ... -j 2`). Disk is tight (about 4 GB free):
   run `bash <sp>/wip-notes/prune-superseded.sh` before a whole-suite run.
 - Nothing in the repository may name a model, an AI assistant, or any third-party skill collection.
   No attribution lines. Plain technical English, short sentences. Do not name the project of the
@@ -38,7 +38,7 @@ candidate. It shows only as an allocation line that grows under a broad workload
 workload a project has is its own tests. Measured by hand on a Python library with C extension
 modules (<sp>/u72: `loop.py`, and the note <sp>/wip-notes/real-run-plugin-pillow-1.md): two of its
 test files run with `pytest.main` in a loop in one process show the documented leak as the top
-growing project line, about 145 blocks per round, in 17 seconds; the whole suite (157 files, 3736
+growing project line, about 126 to 145 blocks per round, in 17 seconds; the whole suite (157 files, 3736
 tests) takes 32 seconds per run outside the harness. In the real unattended run the agent wrote
 its own driver units, never called the leaking function, and found nothing.
 
@@ -47,6 +47,19 @@ JUnit loop; code map with file:line and what is JVM-only: <sp>/u74/2.md, read it
 the Python counterpart in its simplest useful form: one loop over the project's test files, with
 no declared targets, offered first. The by-name choice of test classes per candidate (the JVM
 plan) is NOT part of this brief; Python candidate batches stay hook drivers.
+
+## What brief X left you (read the code, these are pointers)
+
+- Python driver runs write `py.blocks@<file:line>` columns: live traced blocks whose first
+  project frame that is neither a test file nor a harness file is that line
+  (harness/python/sitecustomize.py, the section "py.blocks"; crates/dla-workload/src/harness/
+  build.rs picks the sites that grew). A harness file is a file of the agent's directory or the
+  generic driver `dla_harness.py`: your new loop driver must count as a harness file too, and
+  the files of pytest are outside the project anyway. Add a test for it.
+- `dla harness run` passes `DLA_SOURCE_ROOT` (the project the scratch copy was made from) to a
+  Python harness; a library installed in editable mode runs from there and its lines count.
+- `dla trend` prints the `dla ledger add ... --site <file:line> --region heap --holder <kind>`
+  command for a passing site column that no finding is at; the final gate lists it.
 
 ## The change
 
@@ -191,11 +204,11 @@ plan) is NOT part of this brief; Python candidate batches stay hook drivers.
 - `cargo fmt --all`, `cargo clippy -j 2 --workspace --all-targets -- -D warnings`,
   `./target/debug/dla schema --check`.
 - The benchmark's dynamic acceptance for the Python fixtures must still pass with your build:
-  `DLA_PLUGIN_ROOT=/home/user/dla ./target/debug/dla-bench dynamic --only python --dla-bin ./target/debug/dla --json <sp>/u77/dynamic-python.json`
+  `DLA_PLUGIN_ROOT=/home/user/dla ./target/debug/dla-bench dynamic --only python --dla-bin ./target/debug/dla --json <sp>/u78/dynamic-python.json`
   (build `dla-bench` with `cargo build -j 2 -p dla-bench` first if it is not built; if the
   command line differs, read `dla-bench dynamic --help`). Report the result per fixture.
 - The whole suite once at the end (prune first):
-  `cargo test -j 2 --no-fail-fast --workspace > <sp>/u77/test-all.log 2>&1`; count the
+  `cargo test -j 2 --no-fail-fast --workspace > <sp>/u78/test-all.log 2>&1`; count the
   `^test result:` lines and the failures from the log (about 17 minutes).
 - Real tree, no model. The library is at <sp>/u72/pillow (scratch; a git checkout with `.venv`,
   Python 3.12, the library installed editable from this tree, pytest installed). Environment:
