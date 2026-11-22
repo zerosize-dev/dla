@@ -44,7 +44,7 @@ pub enum Trigger {
         /// The harness that showed it.
         harness: String,
         /// What a caller varies per unit: the `VARIES.txt` line of an entry-path harness, or
-        /// `the project's workload <id>`.
+        /// `the project's workload <id>`, or `the project's own tests <classes>` for a test loop.
         varies: String,
     },
     /// The holder grew in an entry-path harness whose unit calls the holder's own writer, and
@@ -137,6 +137,49 @@ struct Run {
     fresh: bool,
     verdicts: BTreeMap<FindingId, Verdict>,
     declared: BTreeSet<FindingId>,
+    /// The harness is a test loop (the project's own JUnit tests in a loop).
+    test_loop: bool,
+    /// What the loop measured per test class for each finding it was asked about
+    /// (`dla alloc-test <H> --finding <F>`).
+    attributed: BTreeMap<FindingId, crate::testloop::Attributed>,
+}
+
+/// At most this many feeders are named in a trigger line.
+const MAX_FEEDERS_NAMED: usize = 3;
+
+/// What a test loop's own tests vary, for a holder that grew in it: the classes the loop
+/// measured feeding it, or the plain statement that this is not measured.
+fn test_loop_varies(
+    harness: &str,
+    id: &FindingId,
+    attributed: Option<&crate::testloop::Attributed>,
+) -> String {
+    let Some(a) = attributed else {
+        return format!(
+            "the project's own tests in {harness}; which test class feeds it is not measured (dla alloc-test {harness} --finding {id})"
+        );
+    };
+    let feeders = a.fed_by();
+    if feeders.is_empty() {
+        return format!(
+            "the project's own tests; no single test class added entries per run in {harness}"
+        );
+    }
+    let named = &feeders[..feeders.len().min(MAX_FEEDERS_NAMED)];
+    let names: Vec<&str> = named.iter().map(|f| f.simple_name()).collect();
+    let mut text = names.join(", ");
+    if feeders.len() > named.len() {
+        text = format!("{text} and {} more", feeders.len() - named.len());
+    }
+    let figures: Vec<String> = named.iter().map(|f| f.per_run_text()).collect();
+    let mut out = format!(
+        "the project's own tests {text} ({} entries per run)",
+        figures.join(", ")
+    );
+    if a.parallel {
+        out.push_str("; the tests ran in parallel, so the figures of the classes overlap");
+    }
+    out
 }
 
 /// What the stored trend reports and harness records say about triggers.
@@ -237,6 +280,17 @@ impl Triggers {
                     })
                     .unwrap_or_default(),
                 declared: m.targets.iter().cloned().collect(),
+                test_loop: m.is_test_loop(),
+                attributed: if m.is_test_loop() {
+                    m.targets
+                        .iter()
+                        .filter_map(|f| {
+                            crate::testloop::read_attribution(run_dir, h, f).map(|a| (f.clone(), a))
+                        })
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                },
             });
         }
         t
@@ -333,6 +387,20 @@ impl Triggers {
         v
     }
 
+    /// The test-loop harnesses that targeted `id` and in whose read trend it grew, each once,
+    /// in series order.
+    pub fn test_loop_harnesses(&self, id: &FindingId) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for r in self.runs.iter().filter(|r| {
+            r.test_loop && r.declared.contains(id) && r.verdicts.get(id) == Some(&Verdict::Grew)
+        }) {
+            if !out.contains(&r.harness) {
+                out.push(r.harness.clone());
+            }
+        }
+        out
+    }
+
     /// The first writer function an entry-path harness named for `id`.
     pub fn writer_function(&self, id: &FindingId) -> Option<&str> {
         self.writer.get(id).map(String::as_str)
@@ -404,10 +472,14 @@ impl Triggers {
         if let Some(r) = self.runs.iter().filter(|r| r.own_workload).find(grew) {
             return Trigger::Reproduced {
                 harness: r.harness.clone(),
-                varies: format!(
-                    "the project's workload {}",
-                    r.workload.as_deref().unwrap_or(&r.harness)
-                ),
+                varies: if r.test_loop {
+                    test_loop_varies(&r.harness, id, r.attributed.get(id))
+                } else {
+                    format!(
+                        "the project's workload {}",
+                        r.workload.as_deref().unwrap_or(&r.harness)
+                    )
+                },
             };
         }
         // The first run of each of two harnesses whose drivers differ, the ones that measured

@@ -719,6 +719,95 @@ fn entry_path_files(
     Ok(out)
 }
 
+/// At most this many test-loop harnesses go into a bundle.
+const MAX_TEST_LOOP_HARNESSES: usize = 2;
+
+/// `test-loop/<H>/tests.json` for each test-loop harness that targeted the finding and in whose
+/// trend it grew. With the attribution `dla alloc-test <H> --finding <F>` stored, it names the
+/// test classes that fed the holder (with the entries each added per run) and the classes that
+/// ran and added nothing; without it, the classes that ran, and says which of them feeds the
+/// holder was not measured. A finding with no such harness gets nothing.
+fn test_loop_files(
+    tc: &ToolCtx,
+    id: &FindingId,
+    needles: &Needles,
+    write: &dyn Fn(&str, &[u8]) -> Written,
+) -> Result<Vec<Value>, Failure> {
+    let Ok(view) = dla_core::RunView::load(&tc.run_dir) else {
+        return Ok(Vec::new());
+    };
+    let triggers = dla_core::trigger::Triggers::of(&view);
+    let mut out = Vec::new();
+    for h in triggers
+        .test_loop_harnesses(id)
+        .into_iter()
+        .take(MAX_TEST_LOOP_HARNESSES)
+    {
+        let files = dla_core::testloop::classes_of(&tc.run_dir, &h);
+        let with_file = |class: &str| -> Value {
+            let mut v = json!({"class": class});
+            if let Some((_, f)) = files.iter().find(|(c, f)| c == class && !f.is_empty()) {
+                v["file"] = json!(f);
+            }
+            v
+        };
+        let mut doc = match dla_core::testloop::read_attribution(&tc.run_dir, &h, id) {
+            Some(a) => {
+                let fed: Vec<Value> = a
+                    .fed_by()
+                    .iter()
+                    .map(|f| {
+                        let mut v = with_file(&f.class);
+                        v["per_run"] = json!((f.per_run * 10.0).round() / 10.0);
+                        v
+                    })
+                    .collect();
+                let flat: Vec<Value> = a.ran_flat().iter().map(|c| with_file(&c.class)).collect();
+                let stepped: Vec<Value> = a
+                    .stepped()
+                    .iter()
+                    .map(|c| {
+                        let mut v = with_file(&c.class);
+                        v["entries"] = json!(c.later_runs);
+                        v["in_runs"] = json!(c.grew_in);
+                        v
+                    })
+                    .collect();
+                let mut doc = json!({
+                    "harness": h,
+                    "holder": a.probe,
+                    "later_runs": a.later_runs,
+                    "fed_by": fed,
+                    "ran_and_added_nothing": flat,
+                    "note": "the figures were measured per test class while the tests ran in a loop: the entries a class added to the holder, per run of the tests after the first",
+                });
+                if !stepped.is_empty() {
+                    // A late one-time fill, not a feed: entries added in a few runs only.
+                    doc["added_in_a_few_runs_only"] = Value::Array(stepped);
+                }
+                if a.parallel {
+                    doc["parallel"] =
+                        json!("the tests ran in parallel: the figures of the classes overlap");
+                }
+                doc
+            }
+            None => json!({
+                "harness": h,
+                "classes_run": files
+                    .iter()
+                    .map(|(c, _)| with_file(c))
+                    .collect::<Vec<_>>(),
+                "note": "these test classes ran in a loop while the holder grew; which of them feeds the holder was not measured",
+            }),
+        };
+        scrub_ties(&mut doc, needles, false);
+        let name = format!("test-loop/{h}/tests.json");
+        write(&name, to_pretty_json(&doc).as_bytes())?;
+        out.push(json!({"harness": h, "files": [name]}));
+    }
+    Ok(out)
+}
+
 fn build(
     tc: &ToolCtx,
     ledger: &dla_core::Ledger,
@@ -822,6 +911,10 @@ fn build(
     let entry = entry_path_files(tc, id, &needles, &write)?;
     if !entry.is_empty() {
         index["entry_path"] = Value::Array(entry);
+    }
+    let tests = test_loop_files(tc, id, &needles, &write)?;
+    if !tests.is_empty() {
+        index["test_loop"] = Value::Array(tests);
     }
     if let Some(o) = owner {
         index["owner"] = json!(o);

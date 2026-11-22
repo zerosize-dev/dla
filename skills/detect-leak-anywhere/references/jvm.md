@@ -39,6 +39,9 @@ Archetype rows (what to look for, how to confirm, how to rule out): read `refere
   series), prints the tests chosen and why (`tests_chosen`, `tests.json`), and declares them with their
   probes; nothing to fill. `dla census --lang jvm` writes the workload discovery result itself when
   the run has none, so the test loop is offered without a separate `dla workload discover`.
+  `dla alloc-test <H> --finding F` on a test loop also measures which test class feeds the finding's static
+  holder (`fed_by` and `ran_flat` in its output, `attribution-F.json` in the harness directory): the trigger
+  line and the bundle name those classes, never the ones the queue chose by name.
   Candidates with no test class wait for `--driver --next`. A class none of
   whose tests passes in the first run is dropped while another passed, and the loop lowers its step and
   drops the slowest classes when the runs would not fit the time limit (600 s for a batch); both are

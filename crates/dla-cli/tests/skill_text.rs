@@ -381,6 +381,8 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
                 "no fixed number of rounds",
                 "`harness-not-generated`",
                 "`coverage_contradiction`",
+                "`test-loop/<H>/tests.json`",
+                "the classes that ran and added nothing",
                 "`budget_left_unrevisited`",
                 "`next_command`",
                 "reads as non-leak:",
@@ -412,6 +414,7 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
             vec![
                 "never run `gradle`, `mvn` or",
                 "`java -cp` to print or assemble one",
+                "`fed_by` and `ran_flat`",
                 "`build_fails`",
             ],
         ),
@@ -431,6 +434,11 @@ fn the_references_state_the_loop_the_final_items_and_the_closing_message() {
                 "whether the owner would call this a defect",
                 "reads as non-leak:",
                 "DISAGREES: reads as non-leak",
+                "`test-loop/` directory",
+                "`fed_by`",
+                "`ran_and_added_nothing`",
+                "`classes_run`",
+                "compared by identity",
             ],
         ),
     ] {

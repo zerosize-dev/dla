@@ -49,6 +49,181 @@ pub const PER_NAME: usize = 2;
 /// The test classes taken for one candidate by mention, when none matches by name.
 pub const PER_MENTION: usize = 1;
 
+/// The file name of the attribution of `finding` inside a harness directory.
+pub fn attribution_file(finding: &str) -> String {
+    format!("attribution-{finding}.json")
+}
+
+/// `<run_dir>/harness/<H>/attribution-<F>.json`: where `dla alloc-test <H> --finding <F>` keeps
+/// what the test loop measured per test class, and where the trigger and the bundle read it.
+pub fn attribution_path(run_dir: &Path, harness: &str, id: &FindingId) -> std::path::PathBuf {
+    crate::HarnessManifest::dir_in(run_dir, harness).join(attribution_file(&id.to_string()))
+}
+
+/// What one test class added to a holder while the tests ran in a loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassFigure {
+    /// The fully qualified class name.
+    pub class: String,
+    /// Objects added during the first run of the tests (the one-time fill).
+    pub first_run: i64,
+    /// Objects added during all the later runs together.
+    pub later_runs: i64,
+    /// The later runs in which the class added objects; `None` when the file does not say.
+    pub grew_in: Option<u64>,
+    /// The loop left the class out after the first run.
+    pub dropped: bool,
+}
+
+/// A test class that fed the holder, with the objects it added per run of the tests.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Feeder {
+    /// The fully qualified class name.
+    pub class: String,
+    /// Later-runs sum divided by the number of later runs.
+    pub per_run: f64,
+}
+
+impl Feeder {
+    /// The class name without its package.
+    pub fn simple_name(&self) -> &str {
+        simple(&self.class)
+    }
+
+    /// `13.3`, `13`: one decimal, none when it is a whole number.
+    pub fn per_run_text(&self) -> String {
+        let t = format!("{:.1}", self.per_run);
+        t.strip_suffix(".0").map_or(t.clone(), str::to_owned)
+    }
+}
+
+fn simple(class: &str) -> &str {
+    class.rsplit(['.', '$']).next().unwrap_or(class)
+}
+
+/// The figures a test loop measured per test class for one holder
+/// (`harness/<H>/attribution-<F>.json`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attributed {
+    /// The holder, `<class>#<field>`.
+    pub probe: String,
+    /// The runs of the tests after the first.
+    pub later_runs: u64,
+    /// The tests ran in parallel: the figures of the classes overlap.
+    pub parallel: bool,
+    /// Every class that ran, in the order it ran.
+    pub classes: Vec<ClassFigure>,
+}
+
+impl Attributed {
+    /// Parses the file the loop wrote. `None` when it is not that document.
+    pub fn parse(text: &str) -> Option<Self> {
+        let doc: serde_json::Value = serde_json::from_str(text).ok()?;
+        let probe = doc["probe"].as_str()?.to_owned();
+        let later_runs = doc["later_runs"].as_u64()?;
+        let classes = doc["classes"]
+            .as_array()?
+            .iter()
+            .filter_map(|c| {
+                Some(ClassFigure {
+                    class: c["class"].as_str()?.to_owned(),
+                    first_run: c["first_run"].as_i64().unwrap_or(0),
+                    later_runs: c["later_runs"].as_i64().unwrap_or(0),
+                    grew_in: c["grew_in"].as_u64(),
+                    dropped: c["dropped"].as_bool().unwrap_or(false),
+                })
+            })
+            .collect();
+        Some(Self {
+            probe,
+            later_runs,
+            parallel: doc["parallel"].as_bool().unwrap_or(false),
+            classes,
+        })
+    }
+
+    /// True when the class added objects in the later runs and did so in more than half of
+    /// them (a file that does not count the runs is taken at its sum): it feeds the holder. A
+    /// class that added in a few runs only filled something late, a step and not a feed.
+    fn feeds(&self, c: &ClassFigure) -> bool {
+        c.later_runs > 0 && c.grew_in.is_none_or(|g| g * 2 > self.later_runs)
+    }
+
+    /// The classes that feed the holder (see [`Self::feeds`]), largest per run first (ties by
+    /// name). Empty when there was no later run.
+    pub fn fed_by(&self) -> Vec<Feeder> {
+        if self.later_runs == 0 {
+            return Vec::new();
+        }
+        let mut v: Vec<Feeder> = self
+            .classes
+            .iter()
+            .filter(|c| self.feeds(c))
+            .map(|c| Feeder {
+                class: c.class.clone(),
+                per_run: c.later_runs as f64 / self.later_runs as f64,
+            })
+            .collect();
+        v.sort_by(|a, b| {
+            b.per_run
+                .total_cmp(&a.per_run)
+                .then_with(|| a.class.cmp(&b.class))
+        });
+        v
+    }
+
+    /// The classes that added objects in a few of the later runs only (at most half): a late
+    /// one-time fill, not a feed.
+    pub fn stepped(&self) -> Vec<&ClassFigure> {
+        if self.later_runs == 0 {
+            return Vec::new();
+        }
+        self.classes
+            .iter()
+            .filter(|c| c.later_runs > 0 && !self.feeds(c))
+            .collect()
+    }
+
+    /// The classes that ran in the later runs and added nothing there (a dropped class had no
+    /// later run, so it is not one of them).
+    pub fn ran_flat(&self) -> Vec<&ClassFigure> {
+        if self.later_runs == 0 {
+            return Vec::new();
+        }
+        self.classes
+            .iter()
+            .filter(|c| c.later_runs <= 0 && !c.dropped)
+            .collect()
+    }
+}
+
+/// The attribution of `id` in harness `harness`, or `None` when the file is missing or unreadable.
+pub fn read_attribution(run_dir: &Path, harness: &str, id: &FindingId) -> Option<Attributed> {
+    Attributed::parse(&fs::read_to_string(attribution_path(run_dir, harness, id)).ok()?)
+}
+
+/// Every class of the harness's `tests.json` with its source file (empty when it has none).
+pub fn classes_of(run_dir: &Path, harness: &str) -> Vec<(String, String)> {
+    let path = crate::HarnessManifest::dir_in(run_dir, harness).join("tests.json");
+    let Some(doc) = fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    else {
+        return Vec::new();
+    };
+    doc["classes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            Some((
+                c["class"].as_str()?.to_owned(),
+                c["file"].as_str().unwrap_or_default().to_owned(),
+            ))
+        })
+        .collect()
+}
+
 /// The rule, in one sentence, as `dla harness gen --junit --next` prints it.
 pub fn rule() -> String {
     format!(
@@ -586,6 +761,33 @@ mod tests {
 
     fn index(classes: Vec<TestClass>) -> TestIndex {
         TestIndex { classes }
+    }
+
+    #[test]
+    fn a_class_that_added_in_a_few_runs_only_is_a_step_and_not_a_feeder() {
+        let a = Attributed::parse(
+            r#"{"probe":"a.Cache#BY_KEY","later_runs":33,"classes":[
+                {"class":"a.FeedsTests","first_run":455,"later_runs":479,"grew_in":33},
+                {"class":"a.StepsTests","first_run":967,"later_runs":9,"grew_in":1},
+                {"class":"a.FlatTests","first_run":266,"later_runs":0,"grew_in":0},
+                {"class":"a.OldFileTests","first_run":0,"later_runs":5}]}"#,
+        )
+        .unwrap();
+        let fed: Vec<String> = a.fed_by().into_iter().map(|f| f.class).collect();
+        // A file that does not count the runs is taken at its sum.
+        assert_eq!(fed, ["a.FeedsTests", "a.OldFileTests"]);
+        let stepped: Vec<&str> = a.stepped().iter().map(|c| c.class.as_str()).collect();
+        assert_eq!(stepped, ["a.StepsTests"]);
+        let flat: Vec<&str> = a.ran_flat().iter().map(|c| c.class.as_str()).collect();
+        assert_eq!(flat, ["a.FlatTests"]);
+        // Exactly half of the runs is not "more than half".
+        let half = Attributed::parse(
+            r#"{"probe":"a.Cache#BY_KEY","later_runs":4,"classes":[
+                {"class":"a.HalfTests","first_run":0,"later_runs":8,"grew_in":2}]}"#,
+        )
+        .unwrap();
+        assert!(half.fed_by().is_empty());
+        assert_eq!(half.stepped().len(), 1);
     }
 
     #[test]

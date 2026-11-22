@@ -65,6 +65,7 @@ public final class DlaJUnitLoop {
         final Map<String, int[]> counts = new LinkedHashMap<>();
         final Map<String, Long> nanos = new LinkedHashMap<>();
         private final Map<String, Long> started = new LinkedHashMap<>();
+        private final Map<String, Long> heldBefore = new LinkedHashMap<>();
         final Map<String, String> firstFailure = new LinkedHashMap<>();
 
         /** The class an identifier belongs to, and whether the identifier is that class itself. */
@@ -83,6 +84,9 @@ public final class DlaJUnitLoop {
             String[] c = classOf(id);
             if (c != null && !c[1].isEmpty()) {
                 started.put(c[0], System.nanoTime());
+                if (ATTRIBUTE_CLASS != null) {
+                    heldBefore.put(c[0], DlaDump.reachableFromStatic(ATTRIBUTE_CLASS, ATTRIBUTE_FIELD));
+                }
             }
         }
 
@@ -110,6 +114,82 @@ public final class DlaJUnitLoop {
             if (!c[1].isEmpty() && started.containsKey(c[0])) {
                 nanos.merge(c[0], System.nanoTime() - started.get(c[0]), Long::sum);
             }
+            if (!c[1].isEmpty() && heldBefore.containsKey(c[0])) {
+                // The objects the class added to the holder while it ran; a negative reading (the
+                // class is not loaded yet) counts as 0. The first run of the tests holds the
+                // one-time fill and is kept apart from the later runs.
+                long after = Math.max(0, DlaDump.reachableFromStatic(ATTRIBUTE_CLASS, ATTRIBUTE_FIELD));
+                long added = after - Math.max(0, heldBefore.remove(c[0]));
+                long[] sums = attributed.computeIfAbsent(c[0], k -> new long[3]);
+                sums[done == 0 ? 0 : 1] += added;
+                // A class that feeds the holder adds in run after run; one that fills something
+                // late adds once. The count of the later runs it added in tells them apart.
+                if (done != 0 && added > 0) {
+                    sums[2]++;
+                }
+            }
+        }
+    }
+
+    /**
+     * Which test class feeds a static holder (DLA_ATTRIBUTE = {@code class#field}, DLA_ATTRIBUTE_OUT =
+     * the file the figures are written to). Both unset: nothing is read and nothing is written.
+     */
+    private static final String ATTRIBUTE = System.getenv("DLA_ATTRIBUTE");
+    private static final String ATTRIBUTE_OUT = System.getenv("DLA_ATTRIBUTE_OUT");
+    private static final String ATTRIBUTE_CLASS = attributeSplit(0);
+    private static final String ATTRIBUTE_FIELD = attributeSplit(1);
+    /**
+     * Per test class: {sum of the first run, sum of the later runs, the later runs it added in}, in
+     * the order the classes ran.
+     */
+    private static final Map<String, long[]> attributed = new LinkedHashMap<>();
+    private static final Set<String> droppedClasses = new LinkedHashSet<>();
+
+    private static String attributeSplit(int part) {
+        if (ATTRIBUTE == null || ATTRIBUTE_OUT == null || ATTRIBUTE_OUT.isEmpty()) {
+            return null;
+        }
+        int i = ATTRIBUTE.lastIndexOf('#');
+        if (i <= 0 || i == ATTRIBUTE.length() - 1) {
+            return null;
+        }
+        return part == 0 ? ATTRIBUTE.substring(0, i) : ATTRIBUTE.substring(i + 1);
+    }
+
+    private static void writeAttribution(int later, boolean parallel) {
+        if (ATTRIBUTE_CLASS == null) {
+            return;
+        }
+        try {
+            Map<String, Object> doc = new LinkedHashMap<>();
+            doc.put("probe", ATTRIBUTE_CLASS + "#" + ATTRIBUTE_FIELD);
+            doc.put("later_runs", (long) later);
+            if (parallel) {
+                doc.put("parallel", true);
+                doc.put("note", "the tests run in parallel (junit.jupiter.execution.parallel.enabled): the figures of the classes overlap");
+            }
+            List<Object> classes = new ArrayList<>();
+            for (Map.Entry<String, long[]> e : attributed.entrySet()) {
+                Map<String, Object> c = new LinkedHashMap<>();
+                c.put("class", e.getKey());
+                c.put("first_run", e.getValue()[0]);
+                c.put("later_runs", e.getValue()[1]);
+                c.put("grew_in", e.getValue()[2]);
+                if (droppedClasses.contains(e.getKey())) {
+                    c.put("dropped", true);
+                }
+                classes.add(c);
+            }
+            doc.put("classes", classes);
+            doc.put("dropped", new ArrayList<>(droppedClasses));
+            java.nio.file.Path out = java.nio.file.Path.of(ATTRIBUTE_OUT);
+            if (out.getParent() != null) {
+                java.nio.file.Files.createDirectories(out.getParent());
+            }
+            java.nio.file.Files.writeString(out, DlaDump.Json.write(doc) + "\n", java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            System.err.println("DLA-JUNIT could not write " + ATTRIBUTE_OUT + ": " + t);
         }
     }
 
@@ -214,6 +294,7 @@ public final class DlaJUnitLoop {
                     drop, n / 1e9, perUnit, need, budget, Double.toString(LIMIT_SECS), done + 1);
                 DlaDump.addLimitations(List.of(why));
                 System.err.println("DLA-JUNIT " + why);
+                droppedClasses.add(drop);
             }
             if (dropped) {
                 // The next reading is of the classes that are left.
@@ -260,6 +341,7 @@ public final class DlaJUnitLoop {
                 + "), so it is left out of the loop and the other classes are measured";
             DlaDump.addLimitations(List.of(why));
             System.err.println("DLA-JUNIT " + why);
+            droppedClasses.add(c);
             active = new ArrayList<>(active);
             active.removeIf(x -> classOfSelector(x).equals(c));
         }
@@ -393,6 +475,9 @@ public final class DlaJUnitLoop {
                 + " failed_units=" + failedUnits
                 + (firstFailure == null ? "" : " first_failure=" + firstFailure));
         System.err.flush();
+        boolean parallel = request.getConfigurationParameters()
+            .get("junit.jupiter.execution.parallel.enabled").map(Boolean::parseBoolean).orElse(false);
+        writeAttribution(Math.max(0, done - 1), parallel);
         // Not a plain return: an application started by the tests may leave non-daemon threads.
         System.exit(code);
     }
