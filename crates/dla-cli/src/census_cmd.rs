@@ -25,9 +25,9 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CensusArgs) -> 
         dla_census::census(&tc, a.lang),
     )?;
     let found = |k: &str| out[k].as_u64().unwrap_or(0) > 0;
-    if a.lang == Runtime::Jvm
+    if matches!(a.lang, Runtime::Jvm | Runtime::Python)
         && (found("candidates") || found("skipped_duplicates"))
-        && let Some(note) = discover_for_the_queue(ctx, &tc)
+        && let Some(note) = discover_for_the_queue(ctx, &tc, a.lang)
     {
         out["workloads"] = json!(note);
     }
@@ -37,10 +37,21 @@ pub fn run(ctx: &Ctx, project: &Path, data: Option<&PathBuf>, a: CensusArgs) -> 
 /// The measurement queue of a JVM project starts with the project's own tests in a loop, and it
 /// reads the tests from the workload discovery result. A run that has none gets one here,
 /// exactly as `dla workload discover` would write it (files are read, nothing is run), so the
-/// first pass does not depend on a step the caller may skip. Returns the line the census
-/// output carries; `None` when a result is already there or discovery was refused (the census
-/// stands either way, and `dla workload discover` says why).
-fn discover_for_the_queue(ctx: &Ctx, tc: &dla_core::toolctx::ToolCtx) -> Option<String> {
+/// first pass does not depend on a step the caller may skip.
+///
+/// The queue of a Python project starts with the loop only when the discovery lists a Python
+/// test file, so for Python the result is written only then: a project without test files keeps
+/// a run with no discovery result, and the ledger rule that a discovery result turns on does
+/// not start to apply to it.
+///
+/// Returns the line the census output carries; `None` when a result is already there, nothing
+/// was written or discovery was refused (the census stands either way, and `dla workload
+/// discover` says why).
+fn discover_for_the_queue(
+    ctx: &Ctx,
+    tc: &dla_core::toolctx::ToolCtx,
+    lang: Runtime,
+) -> Option<String> {
     let file = tc
         .run_dir
         .join("workload")
@@ -48,10 +59,20 @@ fn discover_for_the_queue(ctx: &Ctx, tc: &dla_core::toolctx::ToolCtx) -> Option<
     if file.exists() {
         return None;
     }
-    let lang = crate::workload_cmd::effective_lang(None, ctx.worker.as_deref());
-    let found = dla_workload::discover(tc, lang).ok()?;
+    let python = lang == Runtime::Python;
+    let found = dla_workload::discover_when(
+        tc,
+        crate::workload_cmd::effective_lang(None, ctx.worker.as_deref()),
+        |report| !python || dla_core::testloop::python_tests(report).is_some(),
+    )
+    .ok()??;
+    let tail = if python {
+        "the queue of a Python project that has test files starts with the project's own tests"
+    } else {
+        "the queue of a JVM project starts with the project's own tests"
+    };
     Some(format!(
-        "discovered for the measurement queue ({} workload(s), evidence {}): the queue of a JVM project starts with the project's own tests; dla workload discover repeats it",
+        "discovered for the measurement queue ({} workload(s), evidence {}): {tail}; dla workload discover repeats it",
         found.summary["workloads"].as_u64().unwrap_or(0),
         found.evidence.join(", ")
     ))

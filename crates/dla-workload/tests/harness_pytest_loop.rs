@@ -555,6 +555,31 @@ fn the_loop_runs_with_no_edit_and_the_keeping_line_rises_per_run() {
 }
 
 #[test]
+fn the_loop_clears_the_addopts_of_the_project() {
+    let _g = lock();
+    if !have_pytest() {
+        return;
+    }
+    // The project's own configuration asks for an option no plugin knows: pytest refuses to start
+    // with it, so the loop only runs when it clears addopts for its own pytest calls.
+    let fx = project_with(
+        &leak_project(&[(
+            "pytest.ini",
+            "[pytest]\naddopts = --no-such-option-of-any-plugin\n",
+        )]),
+        true,
+    );
+    gen_ok(&fx, &opts());
+    let out = run_ok(&fx, "H1", &RunOptions::default());
+    let s = series_of(&fx, &out);
+    let line = line_of(STORE, "# KEEP");
+    let vals = column(&s, &format!("py.blocks@pkg/store.py:{line}"));
+    assert_eq!(vals.len(), 9, "{vals:?}");
+    assert!(vals.iter().all(Option::is_some), "{vals:?}");
+    assert_eq!(s.points.len(), 9);
+}
+
+#[test]
 fn a_project_where_every_test_fails_is_a_failed_harness_with_the_reason() {
     let _g = lock();
     if !have_pytest() {
